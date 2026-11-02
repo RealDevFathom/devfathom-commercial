@@ -114,5 +114,15 @@
    "verdict": "PASS",
    "details": "098316e48 changes only client-side presentation. Pharmacy menus are built from the same permission-filtered visibleNavigation output, and leftover entries go to Settings, so nothing is dropped or added. The new ADMIN/MEMBER test checks that the hrefs equal visibleNavigation. Role, module and vertical gates are unchanged. There are no server, API, SQL, auth, storage or secret changes, and the e2e edits only change selectors. No vulnerabilities found."
   }
+ },
+ "1162": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "First review FAIL (Sign out was disabled whenever the 30-second cart read went stale, so ending a sale took extra clicks), fixed in 06512703f: only in-progress work blocks Sign out, a cached non-OPEN bill signs out in one click, and missing, loading, stale-open or wrong-sale reads ask first. Its re-review found the new reason text flashing and reflowing the header on every add-to-cart, fixed in 6dbe145dc: the reason now shows only for payment and recovery blocks. Suite 137/137; the new tests fail on the earlier code. The browser visual QA matrix was not run"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Neither fix commit adds data, network, storage or auth paths. Sign out stays blocked during any in-flight payment work (signOutBlocked = busy) and signOutFromCounter still rechecks its in-flight refs, so a payment-recovery block cannot be skipped. The visible reason only appears while Sign out is disabled. The payment sandbox removal from the original PR is unchanged"
+  }
  }
 }

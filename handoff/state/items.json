@@ -367,14 +367,14 @@
   "pr": 1162,
   "dev": "DEV-41",
   "branch": "codex/dev-41-recover-20261102",
-  "head": "06512703fee07ad5ffdca109495b84d8bcfcef88",
+  "head": "6dbe145dc038abcdb9c3623520e0e3e1ffdedad8",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks not queued"
+  "fix": "6dbe145dc038abcdb9c3623520e0e3e1ffdedad8",
+  "next": "re-check queued for fix 6dbe145dc0; then `python3 handoff/scripts/compose.py 1162` and post comments/1162.md"
  },
  {
   "pr": 1161,
@@ -394,13 +394,13 @@
   "dev": "DEV-98",
   "branch": "codex/dev-98-recover-20261102",
   "head": "37efd2c1372d3e42a32a2106267185f39a192450",
-  "status": "in progress",
+  "status": "done",
   "qa": "PASS",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1160#issuecomment-6587355151",
   "fix": "37efd2c1372d3e42a32a2106267185f39a192450",
-  "next": "re-check queued for fix 37efd2c137; then `python3 handoff/scripts/compose.py 1160` and post comments/1160.md"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1160#issuecomment-6587355151)"
  },
  {
   "pr": 1157,
@@ -1171,16 +1171,16 @@
  },
  {
   "pr": 945,
-  "dev": "GH#708",
+  "dev": "DEV-100",
   "branch": "inky/issue-708",
   "head": "563fe97150a06548696c736a3957fcfd09b0ea3d",
-  "status": "not started",
-  "qa": null,
-  "security": null,
+  "status": "in progress",
+  "qa": "PASS",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 52 and QA/Security review queued in a review workflow"
+  "next": "wait for machine checks queued at position 52"
  },
  {
   "pr": 942,
@@ -1210,16 +1210,16 @@
  },
  {
   "pr": 940,
-  "dev": "GH#718",
+  "dev": "DEV-91",
   "branch": "inky/issue-718",
   "head": "ab37e1eb7a9cabe2da25deb0b1b824e51aac7e65",
-  "status": "not started",
+  "status": "in progress",
   "qa": null,
-  "security": null,
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 55 and QA/Security review queued in a review workflow"
+  "next": "wait for machine checks queued at position 55 and QA/Security review running"
  },
  {
   "pr": 934,

@@ -1,6 +1,6 @@
 # PR review handoff log
 
-_Generated 2026-11-02 20:06 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
+_Generated 2026-11-02 20:12 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
 
 ## Resume here
 
@@ -13,9 +13,9 @@ _Generated 2026-11-02 20:06 UTC from the live run state by `handoff/scripts/gen-
 ## Progress
 
 - Scope: every open PR into develop without a QA+Security verdict comment: group 1 #1172-#1194 (22, plus #1223 and #1224 opened during the run; #1225 is this tracking PR and is not reviewed), group 2 #1148-#1166 (18), group 3 the other 127 (pharmacy first). 118 older PRs already had verdict comments and are out of scope.
-- Status: done 33 · in progress 58 · blocked 0 · not started 78 (of 169)
-- Machine-check queue (130 left, two lanes, runs serially per lane): 1157 1155 1156 1152 1118 1117 1120 1116 1114 1101 1087 1086 1072 1068 1061 1060 1056 1050 1008 1006 1005 1004 1003 1002 1001 1000 999 998 997 996 995 994 993 986 985 984 983 982 966 965 …
-- Last finished checks: #1164@019e8894, #1150@bc698680, #1119@3d56d691, #1120@94d20521, #1166@4d41f842, #1163@7b48d2db
+- Status: done 34 · in progress 59 · blocked 0 · not started 76 (of 169)
+- Machine-check queue (130 left, two lanes, runs serially per lane): 1162 1155 1156 1152 1118 1117 1120 1116 1114 1101 1087 1086 1072 1068 1061 1060 1056 1050 1008 1006 1005 1004 1003 1002 1001 1000 999 998 997 996 995 994 993 986 985 984 983 982 966 965 …
+- Last finished checks: #1150@bc698680, #1119@3d56d691, #1120@94d20521, #1166@4d41f842, #1163@7b48d2db, #1160@37efd2c1
 
 ### Posted verdicts
 
@@ -47,6 +47,7 @@ _Generated 2026-11-02 20:06 UTC from the live run state by `handoff/scripts/gen-
 | #1164 | DEV-108 | PASS | PASS | PASS | 019e88945f | https://github.com/RealDevFathom/devfathom-commercial/pull/1164#issuecomment-6586437849 |
 | #1163 | DEV-97 | PASS | PASS | PASS | 7b48d2dbb7 | https://github.com/RealDevFathom/devfathom-commercial/pull/1163#issuecomment-6587210488 |
 | #1161 | DEV-94 | PASS | PASS | PASS | 7013e12df3 | https://github.com/RealDevFathom/devfathom-commercial/pull/1161#issuecomment-6586424269 |
+| #1160 | DEV-98 | PASS | PASS | PASS | 37efd2c137 | https://github.com/RealDevFathom/devfathom-commercial/pull/1160#issuecomment-6587355151 |
 | #1154 | DEV-315 | PASS | PASS | PASS |  | https://github.com/RealDevFathom/devfathom-commercial/pull/1154#issuecomment-6585868111 |
 | #1153 | DEV-61 | PASS | PASS | PASS |  | https://github.com/RealDevFathom/devfathom-commercial/pull/1153#issuecomment-6585868983 |
 | #1151 | DEV-38 | PASS | PASS | PASS |  | https://github.com/RealDevFathom/devfathom-commercial/pull/1151#issuecomment-6585877060 |
@@ -338,14 +339,14 @@ _Generated 2026-11-02 20:06 UTC from the live run state by `handoff/scripts/gen-
 - Decisions: qa verdict set to PASS by hand: At 7b48d2dbb, openDrawer requires pharmacy:counter. The four server and test files match a1ed98277 exactly, and the only other change is the CASH/CARD dispense-only tender FORBIDDEN test. Locally, open-drawer, branch-scope and counter-receipt-auth passed 97/97 and counter-console 117/117; with the g | security verdict set to PASS by hand: 7b48d2dbb closes the openDrawer gap. The same can('pharmacy:counter') decision that tender and the UI use now runs as middleware before scopeFor, so a dispense-only pharmacist gets FORBIDDEN before any branch read or drawer write. capabilityProcedure keeps the active-session, password and demo guard | F1 (qa) confirmed by skeptics: Unmet issue requirement: DEV-97 asks to 'enforce server-side (drawer/tender capability), with FORBIDDEN tests for the pharmacist role'. In develop plus this PR, openDrawer is still a plain protectedProcedure whose only c | SEC-1163-1 (security) confirmed by skeptics: The issue asks for the drawer and tender capability to be enforced on the server, with FORBIDDEN tests for the pharmacist role. This PR only hides the controls in the UI. The drawer mutations are still plain protectedPro
 
 ### #1162 · DEV-41 · in progress
-- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1162 · branch `codex/dev-41-recover-20261102` · head `06512703fe` · group 2
+- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1162 · branch `codex/dev-41-recover-20261102` · head `6dbe145dc0` · group 2
 - Title: DEV-41: Restore direct Counter sign-out and remove payment sandbox
-- Verdicts: machine pending · QA FAIL · Security PASS
-- Done so far: QA+Security reviews complete
-- Next step: wait for machine checks not queued
+- Verdicts: machine pending · QA PASS · Security PASS
+- Done so far: fix commit 6dbe145dc0 (06512703f lets a stale bill read sign out in one click; 6dbe145dc shows the sign-out reason only for payment and recovery blocks; first run on 87130c9b05 failed on nothing (machine checks passed; the fixes are for the QA finding)); QA+Security reviews complete
+- Next step: re-check queued for fix 6dbe145dc0; then `python3 handoff/scripts/compose.py 1162` and post comments/1162.md
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1162` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1162`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
-- Decisions: F1 (qa) confirmed by skeptics: Sign out depends on whether the cart read is fresh, not only on payment state. counterCart uses staleTime 30_000 (line 495) and nothing refetches it on a timer (refetchOnWindowFocus is false in trpc-provider). So 30 s af
+- Decisions: qa verdict set to PASS by hand: First review FAIL (Sign out was disabled whenever the 30-second cart read went stale, so ending a sale took extra clicks), fixed in 06512703f: only in-progress work blocks Sign out, a cached non-OPEN bill signs out in one click, and missing, loading, stale-open or wrong-sale reads ask first. Its re- | security verdict set to PASS by hand: Neither fix commit adds data, network, storage or auth paths. Sign out stays blocked during any in-flight payment work (signOutBlocked = busy) and signOutFromCounter still rechecks its in-flight refs, so a payment-recovery block cannot be skipped. The visible reason only appears while Sign out is di | F1 (qa) confirmed by skeptics: Sign out depends on whether the cart read is fresh, not only on payment state. counterCart uses staleTime 30_000 (line 495) and nothing refetches it on a timer (refetchOnWindowFocus is false in trpc-provider). So 30 s af
 
 ### #1161 · DEV-94 · done
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1161 · branch `codex/dev-94-recover-20261102` · head `7013e12df3` · group 2
@@ -357,14 +358,14 @@ _Generated 2026-11-02 20:06 UTC from the live run state by `handoff/scripts/gen-
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts) | note: NEW typecheck error in the PR's new tests/postgres-backup.test.ts: TS2741 Property 'NODE_ENV' is missing in the env object passed as ProcessEnv.
 - Decisions: qa verdict set to PASS by hand: The PR adds encrypted pg_dump-to-S3 and guarded restore scripts, a nightly systemd timer runbook and fake-command tests; the encryption, checksum, archive-check, source/target guard and migration-probe paths are handled and tested (26 tests pass). The one QA failure, a new TS2741 because the test en | F1 (qa) confirmed by skeptics: The new test file adds a typecheck error. `env` is typed as NodeJS.ProcessEnv, but it is assigned an object literal that has no NODE_ENV. Next.js adds NODE_ENV to ProcessEnv as a required property, so `tsc --noEmit` (the
 
-### #1160 · DEV-98 · in progress
+### #1160 · DEV-98 · done
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1160 · branch `codex/dev-98-recover-20261102` · head `37efd2c137` · group 2
 - Title: DEV-98: Configure emergency-supply caps by jurisdiction
-- Verdicts: machine pending · QA PASS · Security PASS
-- Done so far: fix commit 37efd2c137 (keeps the in-force branch profile when its rule set has closed and adds the cap test; first run on d832236d94 failed on nothing (machine checks passed; the fix is for QA/Security findings)); QA+Security reviews complete
-- Next step: re-check queued for fix 37efd2c137; then `python3 handoff/scripts/compose.py 1160` and post comments/1160.md
-- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1160` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1160`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
-- Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
+- Verdicts: machine PASS · QA PASS · Security PASS
+- Done so far: checks on 37efd2c137: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 1373 passed / 22 failed in 8 files; build exit 0; fix commit 37efd2c137 (keeps the in-force branch profile when its rule set has closed and adds the cap test; first run on d832236d94 failed on nothing (machine checks passed; the fix is for QA/Security findings)); QA+Security reviews complete; verdict comment https://github.com/RealDevFathom/devfathom-commercial/pull/1160#issuecomment-6587355151
+- Next step: none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1160#issuecomment-6587355151)
+- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1160` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1160`; tests `bunx vitest related --run src/lib/pharmacy/controlled-register.test.ts src/lib/pharmacy/controlled-register.ts src/lib/platform/commands.ts src/server/routers/pharmacy-sales.controlled-actor.test.ts src/server/routers/pharmacy-sales.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
+- Known failures: also fail on develop/merge-base (pre-existing): src/lib/pharmacy/counter-evidence.db.test.ts, src/lib/pharmacy/duplicate-salt-acknowledgement.db.test.ts, src/lib/pharmacy/stock-ledger.db.test.ts, src/lib/platform/commands.opportunity-convert.test.ts, src/lib/platform/commands.organization-create.test.ts, src/server/routers/pharmacy-offline.db.test.ts, src/server/routers/pharmacy-sales.drawer-close.db.test.ts, tests/vertical-foundation.test.ts | env-only (gate runtime role lacks CREATE ROLE; pass as superuser): src/lib/pharmacy/counter-evidence.db.test.ts, src/server/routers/pharmacy-sales.drawer-close.db.test.ts | typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
 - Decisions: qa verdict set to PASS by hand: QA-1 is resolved in 37efd2c. The emergency-supply lookup no longer filters on the rule set's effective window, so it uses the same in-force org/branch profile as assertStoredBranchMayOperate. A closed rule set version no longer drops the province cap or nulls the audit. The new router test checks th | security verdict set to PASS by hand: 37efd2c only removes a relation filter. The profile lookup is still scoped by organizationId and branchId inside the tenant transaction, and it reads the bound rule set the same way the PLAT-02 gate does. The pharmacy:dispense check, the PIN witness with lockout, the advisory-lock eligibility check  | QA-1 (qa) confirmed by skeptics: The emergency-supply policy lookup adds a nested `jurisdictionRuleSet` effective-window filter to the in-force branch profile query. When a branch's in-force profile still points to a rule set version that has since been
 
 ### #1157 · DEV-62 · in progress
@@ -907,12 +908,12 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 946` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/946`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
-### #945 · GH#708 · not started
+### #945 · DEV-100 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/945 · branch `inky/issue-708` · head `563fe97150` · group 3
 - Title: feat(#708): [Pharmacy][P0] Sindh cash-memo receipt mode (Drug rules r.18)
-- Verdicts: machine pending · QA pending · Security pending
-- Done so far: 
-- Next step: wait for machine checks queued at position 52 and QA/Security review queued in a review workflow
+- Verdicts: machine pending · QA PASS (partial) · Security PASS (partial)
+- Done so far: QA+Security reviews complete
+- Next step: wait for machine checks queued at position 52
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 945` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/945`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -934,12 +935,12 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 941` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/941`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
-### #940 · GH#718 · not started
+### #940 · DEV-91 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/940 · branch `inky/issue-718` · head `ab37e1eb7a` · group 3
 - Title: feat(#718): [Pharmacy][P1] Non-drug retail items with promo eligibility
-- Verdicts: machine pending · QA pending · Security pending
+- Verdicts: machine pending · QA pending · Security PASS (partial)
 - Done so far: 
-- Next step: wait for machine checks queued at position 55 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 55 and QA/Security review running
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 940` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/940`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 

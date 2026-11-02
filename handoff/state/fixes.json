@@ -106,5 +106,11 @@
   "initialSha": "7365a9b98d3cd89733a2d9492bdb89b86f33c864",
   "what": "groups the pharmacy owner's desktop navigation, separates the 'Current' label, updates the e2e spec",
   "initialFailure": "1 regression: sidebar.test.tsx 'marks the active group and destination...' fails (no menuitem 'Inventory Current')"
+ },
+ "1162": {
+  "sha": "6dbe145dc038abcdb9c3623520e0e3e1ffdedad8",
+  "initialSha": "87130c9b0503ecf362f86922ae5edb36a8683213",
+  "what": "06512703f lets a stale bill read sign out in one click; 6dbe145dc shows the sign-out reason only for payment and recovery blocks",
+  "initialFailure": "nothing (machine checks passed; the fixes are for the QA finding)"
  }
 }
