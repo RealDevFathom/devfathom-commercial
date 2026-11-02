@@ -2,6 +2,10 @@ import { fireEvent, render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
+  enabledModules: ['pharmacy-counter'],
+  sessionStatus: 'authenticated',
+  sessionRevoked: false,
+  organizationId: 'org',
   loading: false,
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
@@ -19,20 +23,20 @@ const mocks = vi.hoisted(() => ({
 const WORKSPACE_ZONE = 'Asia/Tokyo';
 vi.mock('next-auth/react', () => ({
   useSession: () => ({
-    status: 'authenticated',
+    status: mocks.sessionStatus,
     data: {
       user: {
         id: 'owner',
         role: mocks.role,
-        organizationId: 'org',
+        organizationId: mocks.organizationId,
         status: 'ACTIVE',
-        sessionRevoked: false,
+        sessionRevoked: mocks.sessionRevoked,
       },
     },
   }),
 }));
 vi.mock('@/components/entitlements-provider', () => ({
-  useEntitlements: () => ({ organizationId: 'org', enabledModules: ['pharmacy-counter'] }),
+  useEntitlements: () => ({ organizationId: 'org', enabledModules: mocks.enabledModules }),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -86,6 +90,10 @@ afterEach(() => {
 beforeEach(() => {
   mocks.zone = WORKSPACE_ZONE;
   mocks.role = 'ADMIN';
+  mocks.enabledModules = ['pharmacy-counter'];
+  mocks.sessionStatus = 'authenticated';
+  mocks.sessionRevoked = false;
+  mocks.organizationId = 'org';
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
@@ -195,8 +203,51 @@ describe('day-close console', () => {
   it('shows permission denial for a non-administrator', () => {
     mocks.role = 'MEMBER';
     render(<PharmacyDayCloseConsole />);
-    expect(screen.getByText(/Sign in as a pharmacy administrator/)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'This day-close screen requires administrator access. Ask your workspace administrator to review your day-close access and pharmacy:close permission.'
+    );
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+  it('names the missing counter module for an administrator', () => {
+    mocks.enabledModules = [];
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'The Pharmacy Counter module (pharmacy-counter) is not enabled for this workspace. Ask your workspace administrator to enable it for day close.'
+    );
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+  it('preserves session recovery guidance instead of requesting a permission grant', () => {
+    mocks.sessionRevoked = true;
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Your session has ended. Please sign in again.'
+    );
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('asks a signed-out operator to sign in to the pharmacy workspace', () => {
+    mocks.sessionStatus = 'unauthenticated';
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Sign in to this pharmacy workspace to reconcile and close a day.'
+    );
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('does not blame permission while access is loading', () => {
+    mocks.sessionStatus = 'loading';
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('status')).toHaveTextContent('Checking day-close access…');
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('asks an operator in another workspace to sign in to this pharmacy', () => {
+    mocks.organizationId = 'other-org';
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Sign in to this pharmacy workspace to reconcile and close a day.'
+    );
+    expect(mocks.previewInput).not.toHaveBeenCalled();
   });
   it('shows loading and retryable errors', () => {
     mocks.loading = true;
