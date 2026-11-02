@@ -40,5 +40,8 @@
  ],
  "1086": [
   "11 test failures caused by the PR vs its merge-base 16a2a3705a (PR is 438 behind develop and conflicts with it in abac/index.ts, pharmacy-sales.ts and its tests): pharmacy-sales.open-drawer.test.ts (5), pharmacy-sales.branch-scope.test.ts (4), pharmacy-sales.counter-receipt-auth.test.ts (2). The new drawer authorization rejects earlier (FORBIDDEN / 'Branch is outside your scope') than these tests expect (BAD_REQUEST / CONFLICT), and their mocks lack pharmacyBranch.findFirst. Overlaps #1163, which now gates openDrawer on pharmacy:counter. Lint errors all already exist at the merge-base."
+ ],
+ "1068": [
+  "REGRESSION: 5 tests in the existing tests/finance-insights-ai-independence.test.ts fail on the PR and pass on develop with 'TRPCError: ctx.db.$transaction is not a function'. The PR's pharmacy-reports.ts now calls ctx.db.$transaction in the command-centre path, and that suite's mocked db has no $transaction. Either extend the mock or avoid the transaction there, whichever matches the real tenant db contract."
  ]
 }
