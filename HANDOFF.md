@@ -1,6 +1,6 @@
 # HANDOFF — claude-labelled Linear batch
 
-Last updated: 2026-11-02 22:06 UTC · Branch: `saad/nice-thompson-99m17p` · PR:
+Last updated: 2026-11-02 22:10 UTC · Branch: `saad/nice-thompson-99m17p` · PR:
 [RealDevFathom/devfathom-commercial#1223](https://github.com/RealDevFathom/devfathom-commercial/pull/1223)
 (into `develop`, open, not merged)
 
@@ -36,10 +36,13 @@ DEV-576 is done and deployed to develop. It lives on PR #1238, branch
 - **#1223:** a reply to the security review is posted
   (https://github.com/RealDevFathom/devfathom-commercial/pull/1223#issuecomment-6589646259),
   with a re-run requested.
-- **Next:**
-  1. Record the tsc result.
-  2. Update the PR #1223 body: the batch, the fixes, and the visual QA item for the meetings
-     End date field.
+- **Full tsc at `bc50cd65`:** only the 4 baseline errors develop also has.
+- **PR #1223 body:** rewritten at 22:10 UTC with both batches, the fixes, the open decision and
+  the follow-ups.
+- **Remaining on this PR:**
+  - Security finding 1 (needs the user's decision).
+  - The Studio visual QA for the meetings End date field.
+  - The QA/Security re-run.
 - **Waiting on the user:** security finding 1. The append-only trigger on `audit_logs`
   conflicts with #1165's retention DELETE. Proposal: a narrow carve-out under
   `app.retention_purge_organization_id`.
