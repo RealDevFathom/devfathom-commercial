@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentProps } from 'react';
 
@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   khataAccounts: vi.fn(),
   khataStatement: vi.fn(),
   signIn: vi.fn(),
+  signOutEverything: vi.fn(),
   receiptRefetch: vi.fn(),
   drawerStatusInvalidate: vi.fn(),
   session: {
@@ -52,6 +53,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('next-auth/react', () => ({ useSession: () => mocks.session, signIn: mocks.signIn }));
+vi.mock('@/lib/auth/sign-out', () => ({ signOutEverything: mocks.signOutEverything }));
 vi.mock('@/components/entitlements-provider', () => ({
   useEntitlements: () => mocks.entitlements,
 }));
@@ -157,6 +159,9 @@ vi.mock('./counter-search-results', () => ({
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
 vi.mock('./counter-upsell-suggestions', () => ({ CounterUpsellSuggestions: () => null }));
 vi.mock('./counter-unit-toggle', () => ({ CounterUnitToggle: () => null }));
+vi.mock('./payment-sandbox-panel', () => ({
+  PaymentSandboxPanel: () => <button type="button">Payment sandbox</button>,
+}));
 
 import { PharmacyCounterConsole } from './counter-console';
 import {
@@ -356,6 +361,7 @@ beforeEach(() => {
     { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 100000 },
   ]);
   mocks.signIn.mockResolvedValue({ ok: true });
+  mocks.signOutEverything.mockReset().mockResolvedValue(undefined);
   window.localStorage.clear();
 });
 
@@ -696,6 +702,271 @@ function savedAttempt(): TenderAttempt {
     draft: { amount: ' 00125.50 ', cashReceived: '200.00' },
   };
 }
+
+describe('PharmacyCounterConsole sign out (DEV-41)', () => {
+  it('signs out an idle counter immediately without changing a sale', async () => {
+    render(<PharmacyCounterConsole />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    await waitFor(() => expect(mocks.signOutEverything).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(mocks.mutations.transition).not.toHaveBeenCalled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('keeps the open sale when sign out is cancelled', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sign out with an open sale?' });
+    expect(mocks.signOutEverything).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeEnabled();
+    expect(mocks.signOutEverything).not.toHaveBeenCalled();
+    expect(mocks.mutations.transition).not.toHaveBeenCalled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('signs out only after confirming an open sale without cancelling it', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const remove = vi.spyOn(Storage.prototype, 'removeItem');
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sign out with an open sale?' });
+    expect(mocks.signOutEverything).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out' }));
+    await waitFor(() => expect(mocks.signOutEverything).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.transition).not.toHaveBeenCalled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalledWith(tenderAttemptStorageKey(scope));
+  });
+
+  it('does not ask for open-sale confirmation on a completed bill', async () => {
+    mocks.queries.counterCart!.data = cart({
+      status: 'COMPLETED',
+      receiptNumber: 42,
+      totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    await waitFor(() => expect(mocks.signOutEverything).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('signs out a completed bill in one click after its read goes stale', async () => {
+    Object.assign(mocks.queries.counterCart!, {
+      isStale: true,
+      data: cart({
+        status: 'COMPLETED',
+        receiptNumber: 42,
+        totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+      }),
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const button = screen.getByRole('button', { name: 'Sign out' });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    await waitFor(() => expect(mocks.signOutEverything).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('keeps an open-sale confirmation available when the bill read goes stale', async () => {
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sign out with an open sale?' });
+    mocks.queries.counterCart!.isStale = true;
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const confirm = within(dialog).getByRole('button', { name: 'Sign out' });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mocks.signOutEverything).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.transition).not.toHaveBeenCalled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('blocks the open-sale confirmation when a payment attempt starts while it is open', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sign out with an open sale?' });
+    const attempt = savedAttempt();
+    persistTenderAttempt(attempt);
+    fireEvent(window, new StorageEvent('storage', { key: null }));
+    const confirm = within(dialog).getByRole('button', { name: 'Sign out' });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(mocks.signOutEverything).not.toHaveBeenCalled();
+    expect(readTenderAttempt(scope)).toEqual({ status: 'pending', attempt });
+    expect(mocks.mutations.transition).not.toHaveBeenCalled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('shows a failed sign out and allows retry without changing the sale', async () => {
+    mocks.signOutEverything.mockRejectedValueOnce(new Error('Sign out failed'));
+    render(<PharmacyCounterConsole />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    await screen.findByText('Sign out could not finish. Please try again.');
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    await waitFor(() => expect(mocks.signOutEverything).toHaveBeenCalledTimes(2));
+    expect(mocks.mutations.transition).not.toHaveBeenCalled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('omits the developer payment sandbox even when the branch offers it', () => {
+    mocks.queries.counterBranches!.data = {
+      branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
+      paymentSandboxAvailable: true,
+    };
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByRole('button', { name: 'Payment sandbox' })).not.toBeInTheDocument();
+  });
+
+  it('blocks sign out while payment is pending and preserves an unconfirmed attempt', async () => {
+    let reject!: (error: Error) => void;
+    mocks.mutations.tender!.mockImplementation(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        })
+    );
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    enterPayment();
+    const stored = readTenderAttempt(scope);
+    expect(stored.status).toBe('pending');
+    const button = screen.getByRole('button', { name: 'Sign out' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription(
+      'Finish the current step or payment check to sign out.'
+    );
+    fireEvent.click(button);
+    expect(mocks.signOutEverything).not.toHaveBeenCalled();
+    await act(async () => reject(new Error('Connection lost')));
+    await screen.findByText(/Payment outcome is unknown/);
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(mocks.signOutEverything).not.toHaveBeenCalled();
+    expect(readTenderAttempt(scope)).toEqual(stored);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(mocks.mutations.transition).not.toHaveBeenCalled();
+  });
+
+  it('blocks sign out until an accepted payment has a confirmed bill refresh', async () => {
+    mocks.refetch.mockRejectedValue(new Error('Read failed'));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    enterPayment();
+    await screen.findByText(/Payment recorded, but the bill refresh is incomplete/);
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    expect(mocks.signOutEverything).not.toHaveBeenCalled();
+    expect(readTenderAttempt(scope).status).toBe('pending');
+  });
+
+  it('keeps restored recovery data through an in-flight and unconfirmed outcome read', async () => {
+    const attempt = savedAttempt();
+    persistTenderAttempt(attempt);
+    let resolve!: (value: { status: 'UNKNOWN'; replayUnsafe: true }) => void;
+    mocks.outcomeQuery.mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        })
+    );
+    render(<PharmacyCounterConsole />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check payment outcome' }));
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    await act(async () => resolve({ status: 'UNKNOWN', replayUnsafe: true }));
+    await screen.findByText(/Payment is still unconfirmed/);
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeDisabled();
+    expect(mocks.signOutEverything).not.toHaveBeenCalled();
+    expect(readTenderAttempt(scope)).toEqual({ status: 'pending', attempt });
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it.each(['open drawer', 'add to cart'])(
+    'disables sign out without a header reason while %s is pending',
+    async (action) => {
+      mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+      mocks.mutations.openDrawer!.mockImplementationOnce(() => new Promise(() => {}));
+      mocks.mutations.addLine!.mockImplementationOnce(() => new Promise(() => {}));
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      if (action === 'open drawer') {
+        fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+        await waitFor(() => expect(mocks.mutations.openDrawer).toHaveBeenCalled());
+      } else {
+        const search = screen.getByLabelText('Scan or search');
+        fireEvent.change(search, { target: { value: '123456' } });
+        fireEvent.keyDown(search, { key: 'Enter' });
+        await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalled());
+      }
+      const button = screen.getByRole('button', { name: 'Sign out' });
+      expect(button).toBeDisabled();
+      expect(button).not.toHaveAccessibleDescription();
+      expect(
+        screen.queryByText('Finish the current step or payment check to sign out.')
+      ).not.toBeInTheDocument();
+    }
+  );
+
+  it('shows the sign-out reason while a restored payment attempt needs recovery', () => {
+    persistTenderAttempt(savedAttempt());
+    render(<PharmacyCounterConsole />);
+    const button = screen.getByRole('button', { name: 'Sign out' });
+    expect(button).toBeDisabled();
+    expect(
+      screen.getByText('Finish the current step or payment check to sign out.')
+    ).toBeInTheDocument();
+    expect(button).toHaveAccessibleDescription(
+      'Finish the current step or payment check to sign out.'
+    );
+  });
+
+  it.each(['missing', 'loading', 'fetching', 'stale', 'placeholder', 'wrong-sale'])(
+    'asks before signing out while the active sale read is %s',
+    async (state) => {
+      const current = mocks.queries.counterCart!;
+      if (state === 'missing') current.data = undefined;
+      if (state === 'loading') Object.assign(current, { isLoading: true, isSuccess: false });
+      if (state === 'fetching') current.isFetching = true;
+      if (state === 'stale') current.isStale = true;
+      if (state === 'placeholder') current.isPlaceholderData = true;
+      if (state === 'wrong-sale') current.data = cart({ saleId: 'sale-other' });
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(screen.getByRole('button', { name: 'Sign out' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+      await screen.findByRole('dialog', { name: 'Sign out with an open sale?' });
+      expect(mocks.signOutEverything).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['Enter', ' '])(
+    'keeps %s native to sign out and locks counter actions while the helper is pending',
+    async (key) => {
+      let resolve!: () => void;
+      mocks.signOutEverything.mockImplementation(
+        () =>
+          new Promise<void>((done) => {
+            resolve = done;
+          })
+      );
+      render(<PharmacyCounterConsole />);
+      const button = screen.getByRole('button', { name: 'Sign out' });
+      button.focus();
+      expect(fireEvent.keyDown(button, { key })).toBe(true);
+      fireEvent.keyUp(button, { key });
+      fireEvent.click(button);
+      fireEvent.click(button);
+      expect(mocks.signOutEverything).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('button', { name: 'Signing out…' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Open drawer' })).toBeDisabled();
+      expect(screen.getByLabelText('Scan or search')).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+      expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      await act(async () => resolve());
+    }
+  );
+});
 
 describe('PharmacyCounterConsole durable tender recovery', () => {
   it('persists and reads back before dispatching money', async () => {
@@ -1121,6 +1392,55 @@ it.each([404, 200])(
     );
   }
 );
+
+it('blocks sign out through owner payment authentication and submits only once (DEV-41)', async () => {
+  Object.assign(mocks.session.data.user, { email: 'owner@example.test' });
+  mocks.khataAccounts.mockResolvedValue([
+    { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 0 },
+  ]);
+  let resolveFetch!: (response: Response) => void;
+  const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(
+    () =>
+      new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      })
+  );
+  let resolveSignIn!: (result: { ok: true }) => void;
+  mocks.signIn.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveSignIn = resolve;
+      })
+  );
+  render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+  await screen.findByText(/Ledger balance/);
+  fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
+  fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
+    target: { value: 'test-only-password' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const signOut = screen.getByRole('button', { name: 'Sign out' });
+  expect(signOut).toBeDisabled();
+  fireEvent.click(signOut);
+  expect(mocks.signOutEverything).not.toHaveBeenCalled();
+  expect(mocks.mutations.tender).not.toHaveBeenCalled();
+
+  await act(async () => resolveFetch(new Response(null, { status: 404 })));
+  expect(mocks.signIn).toHaveBeenCalledTimes(1);
+  expect(signOut).toBeDisabled();
+  fireEvent.click(signOut);
+  fireEvent.click(screen.getByRole('button', { name: 'Taking payment…' }));
+  expect(mocks.signOutEverything).not.toHaveBeenCalled();
+  expect(mocks.mutations.tender).not.toHaveBeenCalled();
+
+  await act(async () => resolveSignIn({ ok: true }));
+  await screen.findByText('Payment recorded.');
+  expect(mocks.mutations.tender).toHaveBeenCalledTimes(1);
+  expect(mocks.mutations.transition).not.toHaveBeenCalled();
+  expect(mocks.signOutEverything).not.toHaveBeenCalled();
+});
 
 describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
   const openDrawer = {

@@ -5,6 +5,7 @@ import { browserUuid } from '@/lib/browser-uuid';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { signIn, useSession } from 'next-auth/react';
+import { signOutEverything } from '@/lib/auth/sign-out';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { isModuleGranted } from '@/lib/module-catalog';
@@ -44,6 +45,14 @@ import {
 import { CounterUnitToggle } from './counter-unit-toggle';
 import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
 import { Button, buttonVariants } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/ui/page-header';
@@ -65,7 +74,6 @@ import {
   type CounterKeymapPresetKey,
 } from '@/lib/pharmacy/counter-keymap';
 import { COUNTER_ERROR_MESSAGES, counterErrorMessage } from '@/lib/pharmacy/counter-messages';
-import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import { previewSaleLine, type SaleUnitKind } from '@/lib/pharmacy/counter-pricing';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
@@ -336,6 +344,9 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const signOutInFlight = useRef(false);
+  const signOutButtonRef = useRef<HTMLButtonElement>(null);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
   const [refreshingTenderBill, setRefreshingTenderBill] = useState(false);
@@ -698,6 +709,49 @@ function ScopedPharmacyCounterConsole({
     attempt !== null ||
     checkingOutcome;
   const lineCount = cart?.lines.length ?? 0;
+  // Only in-progress work blocks sign out; bill freshness decides whether to confirm.
+  const signOutBlocked = busy;
+  // Explain only long-lived payment and recovery blocks; short actions just disable the button.
+  const signOutReason =
+    pending === 'tender' ||
+    pending === 'ownerAuthentication' ||
+    attempt !== null ||
+    unknownTender ||
+    tenderReadRequired ||
+    checkingOutcome ||
+    refreshingTenderBill ||
+    storageError
+      ? 'Finish the current step or payment check to sign out.'
+      : null;
+
+  async function signOutFromCounter(confirmed = false) {
+    // Recheck on confirmation: payment recovery can change while the dialog is open.
+    if (
+      signOutBlocked ||
+      signOutInFlight.current ||
+      tenderInFlight.current ||
+      outcomeInFlight.current ||
+      attemptRef.current
+    )
+      return;
+    // Ask unless this sale's cached bill is known not to be open; a missing or wrong-sale read asks.
+    const knownClosed = currentBill && cart.status !== 'OPEN';
+    if (!confirmed && saleId && !knownClosed) {
+      setConfirmSignOut(true);
+      return;
+    }
+    signOutInFlight.current = true;
+    setPending('signOut');
+    try {
+      await signOutEverything();
+    } catch {
+      setNotice({ tone: 'danger', message: 'Sign out could not finish. Please try again.' });
+    } finally {
+      signOutInFlight.current = false;
+      setPending(null);
+      setConfirmSignOut(false);
+    }
+  }
 
   const refreshTenderBill = useCallback(
     async (resolution = tenderOutcome?.status) => {
@@ -1112,30 +1166,40 @@ function ScopedPharmacyCounterConsole({
   }, [branchId, saleId, utils]);
   const reauthenticateOwner = useCallback(
     async (password: string, totp: string) => {
-      const response = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ email: accountEmail, password }),
-      });
-      let result;
-      if (response.status === 404) {
-        result = await signIn('credentials', {
-          email: accountEmail,
-          password,
-          totp,
-          redirect: false,
+      if (signOutInFlight.current || tenderInFlight.current)
+        throw new Error('Another counter action is in progress');
+      // The login request can recreate a session, so it must finish before sign out.
+      tenderInFlight.current = true;
+      setPending('ownerAuthentication');
+      try {
+        const response = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ email: accountEmail, password }),
         });
-      } else {
-        if (!response.ok) throw new Error('Owner re-authentication failed');
-        const body = (await response.json()) as {
-          organizations?: Array<{ id: string; ssoEnforced?: boolean }>;
-        };
-        if (!body.organizations?.some((row) => row.id === organizationId && !row.ssoEnforced))
-          throw new Error('Current workspace is not eligible');
-        result = await signIn('login-intent', { organizationId, totp, redirect: false });
+        let result;
+        if (response.status === 404) {
+          result = await signIn('credentials', {
+            email: accountEmail,
+            password,
+            totp,
+            redirect: false,
+          });
+        } else {
+          if (!response.ok) throw new Error('Owner re-authentication failed');
+          const body = (await response.json()) as {
+            organizations?: Array<{ id: string; ssoEnforced?: boolean }>;
+          };
+          if (!body.organizations?.some((row) => row.id === organizationId && !row.ssoEnforced))
+            throw new Error('Current workspace is not eligible');
+          result = await signIn('login-intent', { organizationId, totp, redirect: false });
+        }
+        if (!result?.ok || result.error) throw new Error('Owner re-authentication failed');
+      } finally {
+        tenderInFlight.current = false;
+        setPending(null);
       }
-      if (!result?.ok || result.error) throw new Error('Owner re-authentication failed');
     },
     [accountEmail, organizationId]
   );
@@ -1200,6 +1264,7 @@ function ScopedPharmacyCounterConsole({
         busy ||
         blocked ||
         billState !== 'ready' ||
+        signOutInFlight.current ||
         tenderInFlight.current ||
         attemptRef.current
       ) {
@@ -1603,12 +1668,13 @@ function ScopedPharmacyCounterConsole({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      // Native tender controls own Enter/Space; the counter's Enter shortcut
-      // must not also add a staged medicine when payment is activated.
+      // Native payment and sign-out controls must not also add a staged medicine.
       if (
         (event.key === 'Enter' || event.key === ' ') &&
         event.target instanceof Node &&
-        (tenderRef.current?.contains(event.target) || event.target === autoPrintRef.current)
+        (tenderRef.current?.contains(event.target) ||
+          event.target === autoPrintRef.current ||
+          signOutButtonRef.current?.contains(event.target))
       )
         return;
       if (!shouldHandleCounterKey(event, document.querySelector('[role="dialog"]') !== null))
@@ -1842,8 +1908,61 @@ function ScopedPharmacyCounterConsole({
               Open drawer
             </Button>
           )}
+          {signOutReason ? (
+            <p id="counter-sign-out-reason" className="text-xs text-text-muted">
+              {signOutReason}
+            </p>
+          ) : null}
+          <Button
+            ref={signOutButtonRef}
+            type="button"
+            variant="outline"
+            size="touch"
+            disabled={signOutBlocked}
+            title={signOutReason ?? undefined}
+            aria-describedby={signOutReason ? 'counter-sign-out-reason' : undefined}
+            onClick={() => void signOutFromCounter()}
+          >
+            {pending === 'signOut' ? 'Signing out…' : 'Sign out'}
+          </Button>
         </div>
       </header>
+
+      <Dialog
+        open={confirmSignOut}
+        onOpenChange={(open) => {
+          if (!open && !signOutInFlight.current) setConfirmSignOut(false);
+        }}
+      >
+        <DialogContent showCloseButton={false} finalFocus={signOutButtonRef}>
+          <DialogHeader>
+            <DialogTitle>Sign out with an open sale?</DialogTitle>
+            <DialogDescription>
+              This sale is still open. Signing out will leave it unfinished; it will not cancel
+              the sale or change any payment. Cancel to stay at the counter.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="touch"
+              disabled={pending === 'signOut'}
+              onClick={() => setConfirmSignOut(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="touch"
+              disabled={signOutBlocked}
+              onClick={() => void signOutFromCounter(true)}
+            >
+              {pending === 'signOut' ? 'Signing out…' : 'Sign out'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="flex min-h-8 shrink-0 items-center px-2">
         {notice ? (
@@ -2189,17 +2308,6 @@ function ScopedPharmacyCounterConsole({
                 Physical printing is not confirmed.
               </p>
             </div>
-            {branchesQuery.data?.paymentSandboxAvailable && saleId ? (
-              <PaymentSandboxPanel
-                key={`${branchId}:${saleId}`}
-                branchId={branchId}
-                saleId={saleId}
-                deviceId={counterDeviceId()}
-                businessDate={todayBusinessDate()}
-                disabled={busy || blocked}
-                onRecorded={refreshCart}
-              />
-            ) : null}
             <CounterTenderPanel
               key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
               ref={tenderRef}
