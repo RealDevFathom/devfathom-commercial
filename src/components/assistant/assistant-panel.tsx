@@ -6,7 +6,12 @@ import { useReducedMotion } from 'motion/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { Button } from '@/components/ui/button';
 import { assistantEntry, type AssistantEntry } from './assistant-suggestions';
-import { hasSettledToolStep } from './assistant-history';
+import {
+  clearConversation,
+  hasSettledToolStep,
+  readConversation,
+  saveConversation,
+} from './assistant-history';
 import { useChat } from '@ai-sdk/react';
 import {
   DefaultChatTransport,
@@ -89,7 +94,8 @@ export function AssistantPanel() {
   const { data: session, status } = useSession();
   const entry = assistantEntry(entitlements, session?.user, status);
   // Match the shell's live-session identity boundary. Remount before rendering
-  // another tenant/user/access context; never reuse or persist their messages.
+  // another tenant/user/access context. The conversation store is keyed by the
+  // same value, so another context never reads this one's messages.
   const contextKey = JSON.stringify([
     entitlements.organizationId,
     entitlements.vertical,
@@ -102,7 +108,14 @@ export function AssistantPanel() {
     status,
     entry.canChat,
   ]);
-  return <AssistantConversation key={contextKey} entry={entry} />;
+  return (
+    <AssistantConversation
+      key={contextKey}
+      contextKey={contextKey}
+      entry={entry}
+      sessionLoading={status === 'loading'}
+    />
+  );
 }
 
 // The transport owns a lifecycle gate read only by request/event callbacks.
@@ -148,7 +161,15 @@ const prefersTouch = () =>
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 
-function AssistantConversation({ entry }: { entry: AssistantEntry }) {
+function AssistantConversation({
+  contextKey,
+  entry,
+  sessionLoading,
+}: {
+  contextKey: string;
+  entry: AssistantEntry;
+  sessionLoading: boolean;
+}) {
   const { open, setOpen } = useAssistant();
   const [input, setInput] = useState('');
   const [emptyHint, setEmptyHint] = useState(false);
@@ -163,9 +184,11 @@ function AssistantConversation({ entry }: { entry: AssistantEntry }) {
   const reducedMotion = useReducedMotion();
 
   const [conversation] = useState(() => createConversationTransport(entry.canChat));
+  const [restored] = useState(() => (entry.canChat ? readConversation(contextKey) : []));
 
   const { messages, sendMessage, regenerate, status, stop, clearError, addToolApprovalResponse } =
     useChat({
+      messages: restored,
       transport: conversation.transport,
       onError: (error) => {
         if (!conversation.isActive()) return;
@@ -197,8 +220,17 @@ function AssistantConversation({ entry }: { entry: AssistantEntry }) {
     return () => {
       conversation.deactivate();
       void stop();
+      // Switching Ask Fathom off ends the conversation, not only the panel.
+      if (useAssistant.getState().askFathomEnabled === false) clearConversation();
     };
   }, [conversation, stop]);
+
+  // A usable context owns the tab's conversation; an ended or unusable session
+  // drops it; a session that is still loading leaves it untouched.
+  useEffect(() => {
+    if (entry.canChat) saveConversation(contextKey, messages);
+    else if (!sessionLoading) clearConversation();
+  }, [contextKey, entry.canChat, messages, sessionLoading]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {

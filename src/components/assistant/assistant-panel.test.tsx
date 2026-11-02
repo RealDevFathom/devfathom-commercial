@@ -20,11 +20,20 @@ vi.mock('@ai-sdk/react', async (importOriginal) => {
   return {
     ...actual,
     useChat: (options: Parameters<typeof actual.useChat>[0]) =>
-      actual.useChat({ ...options, messages: fixtures.messages }),
+      actual.useChat({
+        ...options,
+        // Seeded tool states win; otherwise keep the panel's restored history.
+        messages: fixtures.messages.length
+          ? fixtures.messages
+          : options && 'messages' in options
+            ? options.messages
+            : undefined,
+      }),
   };
 });
 
 import { AssistantPanel } from './assistant-panel';
+import { clearConversation } from './assistant-history';
 
 const user: Session['user'] = {
   id: 'synthetic-user-a',
@@ -135,7 +144,8 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock);
   Element.prototype.scrollTo = scrollTo;
   scrollTo.mockClear();
-  useAssistant.setState({ open: true });
+  clearConversation();
+  useAssistant.setState({ ...useAssistant.getInitialState(), open: true });
 });
 afterEach(() => {
   cleanup();
@@ -562,6 +572,70 @@ describe('Ask Fathom lifecycle and keyboard', () => {
     fireEvent.keyDown(box, { key: 'Escape' });
     await waitFor(() => expect(useAssistant.getState().open).toBe(false));
     await waitFor(() => expect(launcher).toHaveFocus());
+  });
+  it('keeps the conversation when the panel remounts in the same session (DEV-604)', async () => {
+    const view = render(panel());
+    enter('Remembered question');
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    act(() => useAssistant.setState({ open: false }));
+    view.unmount();
+    act(() => useAssistant.setState({ open: true }));
+    render(panel());
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    expect(userBubbles('Remembered question')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('keeps the conversation while the session briefly reloads (DEV-604)', async () => {
+    const view = render(panel());
+    enter('Kept through loading');
+    await screen.findByText('Synthetic answer');
+    fixtures.session.mockReturnValue({ data: null, status: 'loading' });
+    view.rerender(panel());
+    expect(screen.queryByText('Kept through loading')).not.toBeInTheDocument();
+    fixtures.session.mockReturnValue({ data: { user }, status: 'authenticated' });
+    view.rerender(panel());
+    expect(await screen.findByText('Kept through loading')).toBeVisible();
+  });
+  it('never restores a conversation for another user (DEV-604)', async () => {
+    const view = render(panel());
+    enter('Private question');
+    await screen.findByText('Synthetic answer');
+    view.unmount();
+    fixtures.session.mockReturnValue({
+      data: { user: { ...user, id: 'synthetic-user-b' } },
+      status: 'authenticated',
+    });
+    const other = render(panel());
+    expect(screen.queryByText('Private question')).not.toBeInTheDocument();
+    other.unmount();
+    // The other identity replaced the tab's slot, so the first user starts fresh too.
+    fixtures.session.mockReturnValue({ data: { user }, status: 'authenticated' });
+    render(panel());
+    expect(screen.queryByText('Private question')).not.toBeInTheDocument();
+  });
+  it('discards the conversation when Ask Fathom is switched off (DEV-604)', async () => {
+    const view = render(panel());
+    enter('Before switch-off');
+    await screen.findByText('Synthetic answer');
+    act(() => useAssistant.setState({ askFathomEnabled: false, open: false }));
+    view.unmount();
+    act(() => useAssistant.setState({ askFathomEnabled: true, open: true }));
+    render(panel());
+    expect(screen.queryByText('Before switch-off')).not.toBeInTheDocument();
+  });
+  it('restores an interrupted question ready to retry (DEV-604, DEV-592)', async () => {
+    pendingFetch();
+    const view = render(panel());
+    enter('Interrupted question');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    view.unmount();
+    fetchMock.mockImplementation(async () => answer());
+    render(panel());
+    expect(userBubbles('Interrupted question')).toHaveLength(1);
+    expect(screen.getByText('This question has not been answered yet.')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    expect(userBubbles('Interrupted question')).toHaveLength(1);
   });
   it('follows the current theme through tokens when reopened (DEV-598)', async () => {
     try {
