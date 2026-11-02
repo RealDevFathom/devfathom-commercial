@@ -1,12 +1,19 @@
 'use client';
 
-import { Loader2, UserRoundPlus } from 'lucide-react';
+import { useState, useSyncExternalStore } from 'react';
+import { Loader2, UserRoundPlus, X } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import { toast } from 'sonner';
 
 import { useEntitlements } from '@/components/entitlements-provider';
+import { Button } from '@/components/ui/button';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { trpc } from '@/lib/trpc';
+
+function subscribeToDismissal(onChange: () => void) {
+  window.addEventListener('storage', onChange);
+  return () => window.removeEventListener('storage', onChange);
+}
 
 /**
  * WHA-1181 — organizations activated before administrators were provisioned a
@@ -31,6 +38,21 @@ export function AdministratorStaffProfileCallout() {
   const { data: session } = useSession();
   const entitlements = useEntitlements();
   const utils = trpc.useUtils();
+  const dismissalKey = session?.user?.id
+    ? `devfathom:staff-profile-dismissed:${session.user.organizationId}:${session.user.id}`
+    : null;
+  const [dismissedFor, setDismissedFor] = useState<string | null>(null);
+  const persistedDismissal = useSyncExternalStore(
+    subscribeToDismissal,
+    () => {
+      try {
+        return dismissalKey ? window.localStorage.getItem(dismissalKey) === '1' : false;
+      } catch {
+        return false;
+      }
+    },
+    () => true
+  );
 
   const isRestaurantAdministrator =
     isModuleGranted('restaurant-core', entitlements.enabledModules) &&
@@ -55,7 +77,14 @@ export function AdministratorStaffProfileCallout() {
   // Loading and error both render nothing. A shell-level strip that flashes on
   // every navigation, or that reports its own failure, would be more noise than
   // the quiet 403 state it exists to replace.
-  if (!isRestaurantAdministrator || !data || data.hasProfile) return null;
+  if (
+    !isRestaurantAdministrator ||
+    !data ||
+    data.hasProfile ||
+    persistedDismissal ||
+    (dismissalKey && dismissedFor === dismissalKey)
+  )
+    return null;
 
   return (
     <div
@@ -70,18 +99,37 @@ export function AdministratorStaffProfileCallout() {
           anything.
         </span>
       </span>
-      <button
-        type="button"
-        disabled={provision.isPending}
-        aria-busy={provision.isPending}
-        onClick={() => provision.mutate()}
-        className="inline-flex h-8 shrink-0 items-center gap-2 self-start bg-abyss-900 px-3 font-semibold text-paper-white transition-colors hover:bg-abyss-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 sm:self-auto"
-      >
-        {provision.isPending ? (
-          <Loader2 aria-hidden="true" className="h-3.5 w-3.5 motion-safe:animate-spin" />
-        ) : null}
-        {provision.isPending ? 'Setting up…' : 'Set up now'}
-      </button>
+      <div className="flex shrink-0 items-center gap-2 self-start sm:self-auto">
+        <Button
+          type="button"
+          disabled={provision.isPending}
+          aria-busy={provision.isPending}
+          onClick={() => provision.mutate()}
+        >
+          {provision.isPending ? (
+            <Loader2 aria-hidden="true" className="h-3.5 w-3.5 motion-safe:animate-spin" />
+          ) : null}
+          {provision.isPending ? 'Setting up…' : 'Set up now'}
+        </Button>
+        {dismissalKey && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Dismiss staff profile reminder"
+            onClick={() => {
+              setDismissedFor(dismissalKey);
+              try {
+                window.localStorage.setItem(dismissalKey, '1');
+              } catch {
+                // Storage may be blocked; dismissal still lasts for this mounted workspace.
+              }
+            }}
+          >
+            <X aria-hidden="true" />
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

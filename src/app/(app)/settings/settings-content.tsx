@@ -107,7 +107,7 @@ export function SettingsContent() {
   const isAdmin = session?.user?.role === 'ADMIN';
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="min-w-0 w-full space-y-6">
       <PageHeader
         eyebrow="WORKSPACE"
         heading="Settings"

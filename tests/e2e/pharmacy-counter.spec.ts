@@ -81,12 +81,18 @@ test('pharmacy-only navigation exposes pharmacy destinations and excludes Restau
 }) => {
   await signIn(page);
   const navigation = page.getByRole('navigation', { name: 'Primary navigation' });
-  await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeVisible();
-  await expect(navigation.getByRole('link', { name: 'Counter' })).toBeVisible();
-  await expect(navigation.getByRole('link', { name: 'Regulatory profile' })).toBeVisible();
-  await expect(navigation.getByRole('link', { name: 'Point of sale' })).toHaveCount(0);
-  await expect(navigation.getByRole('link', { name: 'Kitchen display' })).toHaveCount(0);
-  await expect(navigation.getByRole('link', { name: 'Restaurant staff' })).toHaveCount(0);
+  await pressControl(navigation.getByRole('button', { name: /^Sell/ }));
+  // Menu popups render in a body portal, so query from page, not navigation.
+  await expect(page.getByRole('menuitem', { name: 'Counter' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  // Ungrouped destinations land in Settings, so a leaked Restaurant entry would appear here.
+  await pressControl(navigation.getByRole('button', { name: /^Settings/ }));
+  await expect(page.getByRole('menuitem', { name: 'Onboarding' })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'Regulatory profile' })).toBeVisible();
+  for (const name of ['Point of sale', 'Kitchen display', 'Restaurant staff']) {
+    await expect(page.getByRole('menuitem', { name })).toHaveCount(0);
+  }
+  await page.keyboard.press('Escape');
 });
 
 /**

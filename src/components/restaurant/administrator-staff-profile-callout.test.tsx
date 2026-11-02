@@ -3,10 +3,12 @@
  * administrator was provisioned a `RestaurantStaffProfile`.
  */
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  session: { user: { role: 'ADMIN' } } as { user?: { role?: string } } | null,
+  session: null as {
+    user?: { id?: string; organizationId?: string; role?: string };
+  } | null,
   enabledModules: ['restaurant-core'] as string[],
   profileQuery: vi.fn(),
   provisionMutation: vi.fn(),
@@ -36,13 +38,51 @@ const cta = { name: 'Set up now' };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.session = { user: { role: 'ADMIN' } };
+  window.localStorage.clear();
+  mocks.session = { user: { id: 'admin-a', organizationId: 'org-a', role: 'ADMIN' } };
   mocks.enabledModules = ['restaurant-core'];
   mocks.profileQuery.mockReturnValue({ data: { hasProfile: false, status: null } });
   mocks.provisionMutation.mockReturnValue({ mutate: vi.fn(), isPending: false });
 });
 
+afterEach(() => vi.restoreAllMocks());
+
 describe('AdministratorStaffProfileCallout', () => {
+  it('keeps a dismissed reminder hidden after remounting for the same administrator', () => {
+    const view = render(<AdministratorStaffProfileCallout />);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss staff profile reminder' }));
+    expect(screen.queryByText('Set up your staff profile')).not.toBeInTheDocument();
+    view.unmount();
+
+    render(<AdministratorStaffProfileCallout />);
+    expect(screen.queryByText('Set up your staff profile')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { id: 'admin-b', organizationId: 'org-a' },
+    { id: 'admin-a', organizationId: 'org-b' },
+  ])('does not share dismissal with $id in $organizationId', (identity) => {
+    const view = render(<AdministratorStaffProfileCallout />);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss staff profile reminder' }));
+    mocks.session = { user: { ...identity, role: 'ADMIN' } };
+
+    view.rerender(<AdministratorStaffProfileCallout />);
+    expect(screen.getByRole('button', cta)).toBeEnabled();
+  });
+
+  it('still dismisses for this mount when browser storage is blocked', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('Storage blocked');
+    });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('Storage blocked');
+    });
+    render(<AdministratorStaffProfileCallout />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss staff profile reminder' }));
+    expect(screen.queryByText('Set up your staff profile')).not.toBeInTheDocument();
+  });
+
   it('offers the setup step to an administrator of a restaurant workspace with no profile', () => {
     render(<AdministratorStaffProfileCallout />);
 

@@ -16,6 +16,7 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Briefcase,
   Video,
   StickyNote,
@@ -54,6 +55,13 @@ import {
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { FathomMark } from '@/components/brand/logo';
 import { usePreferences } from '@/components/preferences-provider';
@@ -853,10 +861,124 @@ export function Sidebar({
   );
 }
 
+const RESTAURANT_MENU_ROUTES = {
+  Sell: [
+    '/dashboard',
+    '/pos',
+    '/kds',
+    '/restaurant/floor',
+    '/restaurant/orders',
+    '/restaurant/catering',
+    '/restaurant/delivery',
+    '/restaurant/promotions',
+    '/restaurant/loyalty',
+  ],
+  Stock: [
+    '/restaurant/inventory',
+    '/restaurant/catalog',
+    '/restaurant/menus',
+    '/restaurant/menu-import',
+  ],
+  Buy: ['/restaurant/purchasing'],
+  Reports: [
+    '/restaurant/money',
+    '/restaurant/reports',
+    '/restaurant/insights',
+    '/restaurant/sop/reports',
+    '/restaurant/sop/oversight',
+  ],
+};
+
+const PHARMACY_MENU_ROUTES = {
+  Sell: [
+    '/dashboard',
+    '/pharmacy/counter',
+    '/pharmacy/counter/close',
+    '/pharmacy/prescriptions',
+    '/pharmacy/pharmacist-queue',
+    '/pharmacy/substitution',
+    '/pharmacy/loyalty',
+    '/pharmacy/marketing',
+  ],
+  Stock: ['/pharmacy/inventory', '/pharmacy/medicines', '/pharmacy/controlled-register'],
+  Buy: ['/pharmacy/purchasing'],
+  Reports: ['/pharmacy/reports', '/pharmacy/finance'],
+};
+
+const MENU_ROUTES_BY_VERTICAL = {
+  RESTAURANT: { group: 'Restaurant', routes: RESTAURANT_MENU_ROUTES },
+  PHARMACY: { group: 'Pharmacy', routes: PHARMACY_MENU_ROUTES },
+} as const;
+
 export function TopNavigation() {
   const { icons } = usePreferences();
+  const { vertical } = useEntitlements();
   const { bestMatch, filteredNav, indexByHref } = useVisibleNavigation();
   const numbered = icons !== 'architectural';
+
+  const menus = vertical
+    ? MENU_ROUTES_BY_VERTICAL[vertical as keyof typeof MENU_ROUTES_BY_VERTICAL]
+    : undefined;
+  if (menus && filteredNav.some((item) => item.group === menus.group)) {
+    // Group only admitted destinations; shared workspace links remain reachable in Settings.
+    const groupedHrefs = new Set(Object.values(menus.routes).flat());
+    const groups = [
+      ...Object.entries(menus.routes).map(([label, hrefs]) => ({
+        label,
+        items: filteredNav.filter((item) => hrefs.includes(item.href)),
+      })),
+      { label: 'Settings', items: filteredNav.filter((item) => !groupedHrefs.has(item.href)) },
+    ].filter((group) => group.items.length > 0);
+
+    return (
+      <div className="studio-navigation hidden border-b border-border-subtle bg-card lg:block">
+        <nav
+          aria-label="Primary navigation"
+          className="mx-auto flex h-14 w-full max-w-[1540px] items-center gap-1 px-8"
+        >
+          {groups.map(({ label, items }) => {
+            const current = items.find((item) => item.href === bestMatch);
+            return (
+              <DropdownMenu key={label}>
+                <DropdownMenuTrigger
+                  render={<Button variant="ghost" />}
+                  aria-label={current ? `${label}: ${current.label}` : label}
+                  aria-current={current ? 'true' : undefined}
+                  className={cn(
+                    'h-9 gap-2 rounded-full px-3.5 text-xs font-medium',
+                    current &&
+                      'bg-primary text-primary-foreground hover:bg-primary-hover hover:text-primary-foreground'
+                  )}
+                >
+                  {label}
+                  <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="min-w-64">
+                  {items.map((item) => (
+                    <DropdownMenuItem
+                      key={item.href}
+                      render={<Link href={item.href} scroll={false} />}
+                      nativeButton={false}
+                      aria-current={item.href === bestMatch ? 'page' : undefined}
+                      className="min-h-9 aria-[current=page]:bg-muted aria-[current=page]:font-semibold"
+                    >
+                      {item.label}
+                      {item.href === bestMatch && (
+                        <>
+                          {' '}
+                          <span className="ml-auto text-xs text-text-muted">Current</span>
+                        </>
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            );
+          })}
+        </nav>
+      </div>
+    );
+  }
 
   return (
     <div className="studio-navigation hidden border-b border-border-subtle bg-card lg:block">
