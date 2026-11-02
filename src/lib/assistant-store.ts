@@ -50,6 +50,9 @@ export function assistantAvailabilityMessage(
   if (confirmed && state.unavailableReason === 'AI_NOT_CONFIGURED') {
     return 'Ask Fathom is unavailable because no AI provider is configured for this environment.';
   }
+  if (confirmed && state.unavailableReason === 'AI_UNAVAILABLE') {
+    return 'Ask Fathom is unavailable right now. Try again later.';
+  }
   return 'Ask Fathom chat availability is being checked. Try again shortly.';
 }
 

@@ -46,7 +46,8 @@ export async function loadProviderAPIKey(
   if (!source) return null;
   if (source.kind === 'local-env') return env[source.envName]?.trim() || null;
 
-  const cacheKey = `${source.region}|${source.secretId}`;
+  // The extracted key depends on the provider (one secret may hold both keys).
+  const cacheKey = `${provider}|${source.region}|${source.secretId}`;
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > now) return cached.value;
   const pending = inflight.get(cacheKey);

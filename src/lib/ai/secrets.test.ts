@@ -67,6 +67,24 @@ describe('loadProviderAPIKey', () => {
     expect(reader).toHaveBeenCalledWith('devfathom/staging/anthropic-api-key', 'ap-southeast-1');
   });
 
+  it("extracts each provider's key when both providers share one secret", async () => {
+    const reader = vi.fn(async () => ({
+      SecretString: '{"ANTHROPIC_API_KEY":"anthropic-key","OPENAI_API_KEY":"openai-key"}',
+    }));
+    __setSecretsReaderForTests(reader);
+    const shared = {
+      ...SECRET_ENV,
+      OPENAI_API_KEY_SECRET_ID: SECRET_ENV.ANTHROPIC_API_KEY_SECRET_ID,
+    };
+    const [anthropic, openai] = await Promise.all([
+      loadProviderAPIKey('anthropic', shared, 0),
+      loadProviderAPIKey('openai', shared, 0),
+    ]);
+    expect(anthropic).toBe('anthropic-key');
+    expect(openai).toBe('openai-key');
+    await expect(loadProviderAPIKey('openai', shared, 1_000)).resolves.toBe('openai-key');
+  });
+
   it('refreshes after the cache window', async () => {
     const reader = vi.fn(async () => ({ SecretString: 'k' }));
     __setSecretsReaderForTests(reader);

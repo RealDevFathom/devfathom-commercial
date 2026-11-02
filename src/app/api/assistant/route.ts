@@ -17,7 +17,6 @@ import { assistantVertical } from '@/lib/ai/context';
 import { rateLimit } from '@/lib/rate-limit';
 import { logAIProviderUnavailable, readAskFathomAvailability } from '@/lib/ai/ask-fathom-settings';
 import { createAIModel } from '@/lib/ai/provider';
-import { readRoutedAvailability } from '@/lib/ai/router';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
@@ -137,12 +136,12 @@ async function respond(req: Request) {
   }
   // The routed chain can also be off (SuperAdmin switch) or have every candidate
   // at its monthly spend cap: answer with the same unavailable state before streaming.
-  if (check.provider.provider === 'auto') {
-    const routed = await readRoutedAvailability();
-    if (!routed.available) {
-      console.error('ASSISTANT_PROVIDER_UNAVAILABLE', { reason: routed.reason, provider: 'auto' });
-      return Response.json({ error: UNAVAILABLE }, { status: 503 });
-    }
+  if (check.routed && !check.routed.available) {
+    console.error('ASSISTANT_PROVIDER_UNAVAILABLE', {
+      reason: check.routed.reason,
+      provider: 'auto',
+    });
+    return Response.json({ error: UNAVAILABLE }, { status: 503 });
   }
   const entitlements = await resolveOrganizationEntitlements(organization.id, tenantDb);
 

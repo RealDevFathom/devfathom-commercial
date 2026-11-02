@@ -10,8 +10,15 @@ export type AskFathomSettings = {
   askFathomEnabled: boolean;
 };
 
-/** Company switch first: an administrator can act on it; provider setup is an operator task. */
-export type AskFathomUnavailableReason = 'COMPANY_DISABLED' | 'AI_NOT_CONFIGURED';
+/**
+ * Company switch first: an administrator can act on it; provider setup is an operator task.
+ * AI_UNAVAILABLE: the routed chain is configured but cannot answer now (SuperAdmin switch
+ * set to Disabled, or every candidate provider at its monthly cap).
+ */
+export type AskFathomUnavailableReason =
+  'COMPANY_DISABLED' | 'AI_NOT_CONFIGURED' | 'AI_UNAVAILABLE';
+
+export type RoutedAvailability = { available: true } | { available: false; reason: string };
 
 export type AskFathomAvailability = AskFathomSettings & {
   available: boolean;
@@ -37,13 +44,16 @@ export async function readAskFathomSettings(
 /** Combine company policy with provider readiness. Every Ask Fathom gate derives from this. */
 export function askFathomAvailability(
   settings: AskFathomSettings,
-  provider: AIProviderReadiness
+  provider: AIProviderReadiness,
+  routed?: RoutedAvailability | null
 ): AskFathomAvailability {
   const unavailableReason: AskFathomUnavailableReason | null = !settings.askFathomEnabled
     ? 'COMPANY_DISABLED'
-    : provider.ready
-      ? null
-      : 'AI_NOT_CONFIGURED';
+    : !provider.ready
+      ? 'AI_NOT_CONFIGURED'
+      : routed && !routed.available
+        ? 'AI_UNAVAILABLE'
+        : null;
   return {
     organizationId: settings.organizationId,
     askFathomEnabled: settings.askFathomEnabled,
@@ -61,11 +71,28 @@ export async function readAskFathomAvailability(
   db: Pick<ScopedDb, 'organization'>,
   organizationId: string,
   env: Env = process.env
-): Promise<{ availability: AskFathomAvailability; provider: AIProviderReadiness } | null> {
+): Promise<{
+  availability: AskFathomAvailability;
+  provider: AIProviderReadiness;
+  routed: RoutedAvailability | null;
+} | null> {
   const settings = await readAskFathomSettings(db, organizationId);
   if (!settings) return null;
   const provider = readAIProviderReadiness(env);
-  return { availability: askFathomAvailability(settings, provider), provider };
+  const routed = await readRoutedAvailabilityFor(provider, env);
+  return { availability: askFathomAvailability(settings, provider, routed), provider, routed };
+}
+
+/**
+ * The routed chain's live state (SuperAdmin switch and monthly caps), or null when the
+ * routed chain is not the selected provider. Loaded lazily so this module stays light.
+ */
+export async function readRoutedAvailabilityFor(
+  provider: AIProviderReadiness,
+  env: Env = process.env
+): Promise<RoutedAvailability | null> {
+  if (!provider.ready || provider.provider !== 'auto') return null;
+  return (await import('./router')).readRoutedAvailability(env);
 }
 
 /** Server-side diagnostic for an unconfigured provider: setting names only, never values. */

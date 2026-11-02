@@ -470,7 +470,7 @@ export const aiSettingsRouter = router({
         // unique key makes the pre-image and its audit row truthful.
         await db.$queryRawUnsafe(
           'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-          `${key.provider}\u0000${key.model}\u0000${key.effectiveFrom.toISOString()}`
+          JSON.stringify([key.provider, key.model, key.effectiveFrom.toISOString()])
         );
         const before = await db.aIModelPrice.findUnique({
           where: { provider_model_effectiveFrom: key },

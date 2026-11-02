@@ -602,6 +602,10 @@ describe('AI model prices', () => {
       effectiveFrom: new Date('2026-01-01T00:00:00Z'),
     });
     expect(mocks.queryRaw.mock.calls[0]?.[0]).toContain('pg_advisory_xact_lock');
+    // PostgreSQL text cannot hold a NUL byte, so the lock key is a JSON tuple.
+    const lockKey = mocks.queryRaw.mock.calls[0]?.[1] as string;
+    expect(lockKey).not.toContain('\u0000');
+    expect(JSON.parse(lockKey)).toEqual(['openai', 'gpt-5.4', '2026-01-01T00:00:00.000Z']);
     expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.priceFindUnique.mock.invocationCallOrder[0]!
     );

@@ -6,6 +6,7 @@ import { Prisma } from '@/generated/prisma/client';
 import {
   askFathomAvailability,
   readAskFathomAvailability,
+  readRoutedAvailabilityFor,
   readAskFathomSettings,
 } from '@/lib/ai/ask-fathom-settings';
 import { readAIProviderReadiness } from '@/lib/ai/provider';
@@ -108,9 +109,11 @@ export const organizationAdminRouter = router({
         operation: 'UPDATE',
         description: `${saved.askFathomEnabled ? 'Enabled' : 'Disabled'} company Ask Fathom chat`,
       });
+      const provider = readAIProviderReadiness();
       return askFathomAvailability(
         { organizationId: saved.id, askFathomEnabled: saved.askFathomEnabled },
-        readAIProviderReadiness()
+        provider,
+        await readRoutedAvailabilityFor(provider)
       );
     }),
 
