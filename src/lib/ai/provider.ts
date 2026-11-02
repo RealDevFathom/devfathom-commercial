@@ -4,49 +4,117 @@ import { createAzure } from '@ai-sdk/azure';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createVertex } from '@ai-sdk/google-vertex';
 import { createGroq } from '@ai-sdk/groq';
+import { createOpenAI } from '@ai-sdk/openai';
 import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import type { LanguageModel } from 'ai';
+
+import { API_KEY_SECRET_ID_ENV, apiKeySource } from './ai-credentials';
 import {
-  getDefaultModelId,
-  type AIModelOverrides,
+  bedrockRegion,
+  envProviderOrder,
+  isRoutedProvider,
   type TieredAIProviderName,
 } from './model-defaults';
-import type { AITier } from './tiers';
+import { createRoutedLanguageModel } from './routed-model';
+import { getTierForFeature, type AITier } from './tiers';
 
 type Env = Record<string, string | undefined>;
-export type AIProviderName = 'azure' | 'groq' | 'google' | 'vertex' | 'anthropic' | 'bedrock';
+
+/** Explicit-only providers with their original single-model path. Never routed. */
+export type LegacyAIProviderName = 'azure' | 'groq' | 'google' | 'vertex';
+/** `auto` is the routed chain (Anthropic → OpenAI → Bedrock by default). */
+export type AIProviderName = LegacyAIProviderName | TieredAIProviderName | 'auto';
+
+const LEGACY_PROVIDERS: ReadonlySet<string> = new Set(['azure', 'groq', 'google', 'vertex']);
+
+export type AISelector =
+  | { kind: 'disabled' }
+  | { kind: 'invalid' }
+  | { kind: 'legacy'; provider: LegacyAIProviderName }
+  /** `preferred` comes first in the chain; `explicit` is false when AI_PROVIDER is unset. */
+  | { kind: 'routed'; preferred: TieredAIProviderName | null; explicit: boolean };
+
+/**
+ * AI_PROVIDER:
+ *   unset / `auto`                 → routed chain, if any routed provider is configured
+ *   `anthropic` / `openai` / `bedrock` → routed chain with that provider first
+ *   `azure` / `groq` / `google` / `vertex` → the legacy single-provider path, unchanged
+ *   `disabled`                     → off
+ */
+export function readAISelector(env: Env = process.env): AISelector {
+  const selector = env.AI_PROVIDER?.trim().toLowerCase();
+  if (selector === 'disabled') return { kind: 'disabled' };
+  if (selector && LEGACY_PROVIDERS.has(selector)) {
+    return { kind: 'legacy', provider: selector as LegacyAIProviderName };
+  }
+  if (!selector || selector === 'auto') return { kind: 'routed', preferred: null, explicit: !!selector };
+  if (isRoutedProvider(selector)) return { kind: 'routed', preferred: selector, explicit: true };
+  return { kind: 'invalid' };
+}
+
+/**
+ * Whether a routed provider has what it needs to be attempted. Configuration only:
+ * no network call, no secret read. Anthropic and OpenAI need a Secrets Manager
+ * secret id (or, outside production, a plain key). Bedrock authenticates with the
+ * instance role and needs only its region set.
+ */
+export function isRoutedProviderConfigured(provider: TieredAIProviderName, env: Env = process.env) {
+  if (provider === 'bedrock') {
+    return (
+      Boolean(env.BEDROCK_REGION?.trim() || env.AI_BEDROCK_REGION?.trim()) ||
+      env.AI_PROVIDER?.trim().toLowerCase() === 'bedrock'
+    );
+  }
+  return apiKeySource(provider, env) !== null;
+}
+
+/** The configured routed providers, preferred first, then AI_PROVIDER_ORDER. */
+export function configuredRoutedProviders(env: Env = process.env): TieredAIProviderName[] {
+  const selector = readAISelector(env);
+  const order = envProviderOrder(env);
+  const preferred = selector.kind === 'routed' ? selector.preferred : null;
+  const chain = preferred ? [preferred, ...order.filter((name) => name !== preferred)] : order;
+  return chain.filter((name) => isRoutedProviderConfigured(name, env));
+}
 
 export type AIAvailability =
   | { available: true; provider: AIProviderName }
   | { available: false; reason: 'DISABLED' | 'INVALID_PROVIDER' | 'NOT_CONFIGURED' };
 
-/** Selector gate; Anthropic also requires its API key, while other health is checked later. */
+/** Configuration gate. `available` does not assert provider health, spend or SuperAdmin state. */
 export function readAIAvailability(env: Env = process.env): AIAvailability {
-  const provider = env.AI_PROVIDER?.trim().toLowerCase();
-  if (!provider || provider === 'disabled') return { available: false, reason: 'DISABLED' };
-  switch (provider) {
-    case 'azure':
-    case 'groq':
-    case 'google':
-    case 'vertex':
-    case 'bedrock':
-      return { available: true, provider };
-    case 'anthropic':
-      return env.ANTHROPIC_API_KEY?.trim()
-        ? { available: true, provider }
-        : { available: false, reason: 'NOT_CONFIGURED' };
-    default:
+  const selector = readAISelector(env);
+  switch (selector.kind) {
+    case 'disabled':
+      return { available: false, reason: 'DISABLED' };
+    case 'invalid':
       return { available: false, reason: 'INVALID_PROVIDER' };
+    case 'legacy':
+      return { available: true, provider: selector.provider };
+    case 'routed':
+      if (configuredRoutedProviders(env).length) return { available: true, provider: 'auto' };
+      // Unset with nothing configured keeps develop's historic meaning: AI off.
+      return { available: false, reason: selector.explicit ? 'NOT_CONFIGURED' : 'DISABLED' };
   }
 }
 
+export type AIUnavailableReason =
+  | 'DISABLED'
+  | 'INVALID_PROVIDER'
+  | 'NOT_CONFIGURED'
+  /** Every candidate provider has reached its monthly spend cap. */
+  | 'CAPPED'
+  /** Every candidate provider was attempted and failed. */
+  | 'PROVIDERS_FAILED';
+
 export class AIUnavailableError extends Error {
   constructor(
-    readonly reason: 'DISABLED' | 'INVALID_PROVIDER' | 'NOT_CONFIGURED',
-    message = 'AI is currently unavailable.'
+    readonly reason: AIUnavailableReason,
+    message = 'AI is currently unavailable.',
+    options?: { cause?: unknown }
   ) {
-    super(message);
+    super(message, options);
     this.name = 'AIUnavailableError';
   }
 }
@@ -55,15 +123,14 @@ export type AIConfig =
   | { provider: 'azure'; model: string; resourceName: string }
   | { provider: 'groq'; model: string; apiKey: string }
   | { provider: 'google'; model: string; apiKey: string }
-  | { provider: 'anthropic'; model: string; apiKey: string }
-  | { provider: 'bedrock'; model: string; region: string }
   | {
       provider: 'vertex';
       model: string;
       apiKey?: string;
       project?: string;
       location?: string;
-    };
+    }
+  | { provider: 'auto'; model: 'auto'; preferred: TieredAIProviderName | null; chain: TieredAIProviderName[] };
 
 export type AIModelSelection = {
   model: LanguageModel;
@@ -72,58 +139,153 @@ export type AIModelSelection = {
   providerOptions?: Record<string, Record<string, boolean>>;
 };
 
-function required(env: Env, name: string, provider: AIProviderName): string {
-  const value = env[name]?.trim();
-  if (!value) throw new Error(`[ai:${provider}] ${name} is required.`);
-  return value;
+export type AIProviderReadiness =
+  | { ready: true; provider: AIProviderName; modelId: string }
+  | {
+      ready: false;
+      reason: 'DISABLED' | 'INVALID_PROVIDER' | 'MISSING_CONFIG' | 'INVALID_MODEL';
+      provider: AIProviderName | null;
+      /** Environment variable names only; values are never read into this result. */
+      missing: string[];
+      invalid: string[];
+    };
+
+// A model id starts with a letter or digit and carries no whitespace, quotes or
+// template syntax, so an unexpanded placeholder such as `${AI_MODEL}` is refused.
+const MODEL_ID = /^[A-Za-z0-9][\w.:/@+-]{0,255}$/;
+
+function present(env: Env, name: string): boolean {
+  return Boolean(env[name]?.trim());
+}
+
+/** Settings each legacy provider needs beyond AI_PROVIDER and AI_MODEL, in the order they are read. */
+const LEGACY_PROVIDER_SETTINGS: Record<LegacyAIProviderName, (env: Env) => string[]> = {
+  azure: () => ['AZURE_OPENAI_RESOURCE_NAME'],
+  groq: () => ['GROQ_API_KEY'],
+  google: () => ['GOOGLE_GENERATIVE_AI_API_KEY'],
+  // An API key replaces the project/location pair.
+  vertex: (env) =>
+    present(env, 'GOOGLE_VERTEX_API_KEY') ? [] : ['GOOGLE_VERTEX_PROJECT', 'GOOGLE_VERTEX_LOCATION'],
+};
+
+/** What a routed provider needs, named for the readiness report. */
+function routedProviderSettingNames(provider: TieredAIProviderName): string[] {
+  return provider === 'bedrock' ? ['BEDROCK_REGION'] : [API_KEY_SECRET_ID_ENV[provider]];
+}
+
+/**
+ * Whether the selected provider has every setting it needs to be called.
+ * Configuration only: it makes no network call and does not prove the provider
+ * is healthy, under its spend cap, or enabled by the SuperAdmin switch.
+ */
+export function readAIProviderReadiness(env: Env = process.env): AIProviderReadiness {
+  const selector = readAISelector(env);
+  if (selector.kind === 'routed') {
+    if (configuredRoutedProviders(env).length) return { ready: true, provider: 'auto', modelId: 'auto' };
+    if (!selector.explicit) {
+      return { ready: false, reason: 'DISABLED', provider: null, missing: ['AI_PROVIDER'], invalid: [] };
+    }
+    const wanted = selector.preferred ? [selector.preferred] : envProviderOrder(env);
+    return {
+      ready: false,
+      reason: 'MISSING_CONFIG',
+      provider: selector.preferred ?? 'auto',
+      missing: wanted.flatMap(routedProviderSettingNames),
+      invalid: [],
+    };
+  }
+  if (selector.kind === 'disabled') {
+    return { ready: false, reason: 'DISABLED', provider: null, missing: ['AI_PROVIDER'], invalid: [] };
+  }
+  if (selector.kind === 'invalid') {
+    return { ready: false, reason: 'INVALID_PROVIDER', provider: null, missing: [], invalid: ['AI_PROVIDER'] };
+  }
+  const provider = selector.provider;
+  const model = env.AI_MODEL?.trim() ?? '';
+  const missing = [
+    ...(model ? [] : ['AI_MODEL']),
+    ...LEGACY_PROVIDER_SETTINGS[provider](env).filter((name) => !present(env, name)),
+  ];
+  if (missing.length) return { ready: false, reason: 'MISSING_CONFIG', provider, missing, invalid: [] };
+  if (!MODEL_ID.test(model)) {
+    return { ready: false, reason: 'INVALID_MODEL', provider, missing: [], invalid: ['AI_MODEL'] };
+  }
+  return { ready: true, provider, modelId: model };
 }
 
 export function readAIConfig(env: Env = process.env): AIConfig {
   const availability = readAIAvailability(env);
   if (!availability.available) throw new AIUnavailableError(availability.reason);
-  const provider = availability.provider;
-  const model = required(env, 'AI_MODEL', provider);
+  const selector = readAISelector(env);
+  if (selector.kind === 'routed') {
+    return {
+      provider: 'auto',
+      model: 'auto',
+      preferred: selector.preferred,
+      chain: configuredRoutedProviders(env),
+    };
+  }
+  const provider = availability.provider as LegacyAIProviderName;
+  // The same readiness rule gates Ask Fathom, so the factory cannot accept what it refuses.
+  const readiness = readAIProviderReadiness(env);
+  if (!readiness.ready) {
+    const [name, problem] = readiness.missing.length
+      ? [readiness.missing[0], 'required']
+      : [readiness.invalid[0], 'invalid'];
+    throw new Error(`[ai:${provider}] ${name} is ${problem}.`);
+  }
+  const model = readiness.modelId;
 
   switch (provider) {
     case 'azure':
       return {
         provider,
         model,
-        resourceName: required(env, 'AZURE_OPENAI_RESOURCE_NAME', provider),
+        resourceName: env.AZURE_OPENAI_RESOURCE_NAME!.trim(),
       };
     case 'groq':
-      return { provider, model, apiKey: required(env, 'GROQ_API_KEY', provider) };
+      return { provider, model, apiKey: env.GROQ_API_KEY!.trim() };
     case 'google':
-      return {
-        provider,
-        model,
-        apiKey: required(env, 'GOOGLE_GENERATIVE_AI_API_KEY', provider),
-      };
-    case 'anthropic':
-      return { provider, model, apiKey: required(env, 'ANTHROPIC_API_KEY', provider) };
-    case 'bedrock':
-      return {
-        provider,
-        model,
-        region: env.AI_BEDROCK_REGION?.trim() || env.AWS_REGION?.trim() || 'ap-southeast-1',
-      };
+      return { provider, model, apiKey: env.GOOGLE_GENERATIVE_AI_API_KEY!.trim() };
     case 'vertex': {
       const apiKey = env.GOOGLE_VERTEX_API_KEY?.trim();
       if (apiKey) return { provider, model, apiKey };
       return {
         provider,
         model,
-        project: required(env, 'GOOGLE_VERTEX_PROJECT', provider),
-        location: required(env, 'GOOGLE_VERTEX_LOCATION', provider),
+        project: env.GOOGLE_VERTEX_PROJECT!.trim(),
+        location: env.GOOGLE_VERTEX_LOCATION!.trim(),
       };
     }
   }
 }
 
-export function createAIModel(env: Env = process.env): AIModelSelection {
+export type CreateAIModelOptions = {
+  /** Model tier; defaults to the feature's tier, or `standard`. */
+  tier?: AITier;
+  /** Stable feature identifier, recorded with routed spend. */
+  feature?: string;
+  /** Attribution only; never a tenancy boundary for the platform ledger. */
+  organizationId?: string | null;
+};
+
+export function createAIModel(env: Env = process.env, options: CreateAIModelOptions = {}): AIModelSelection {
   const config = readAIConfig(env);
 
   switch (config.provider) {
+    case 'auto': {
+      const tier = options.tier ?? (options.feature ? getTierForFeature(options.feature) : 'standard');
+      return {
+        model: createRoutedLanguageModel({
+          tier,
+          feature: options.feature ?? 'unattributed',
+          organizationId: options.organizationId ?? null,
+          env: env === process.env ? undefined : env,
+        }),
+        provider: 'auto',
+        modelId: `auto:${tier}`,
+      };
+    }
     case 'azure': {
       const tokenProvider = getBearerTokenProvider(
         new DefaultAzureCredential(),
@@ -149,43 +311,37 @@ export function createAIModel(env: Env = process.env): AIModelSelection {
         provider: config.provider,
         modelId: config.model,
       };
-    case 'anthropic':
-      return {
-        model: createAnthropic({ apiKey: config.apiKey })(config.model),
-        provider: config.provider,
-        modelId: config.model,
-      };
-    case 'bedrock':
-      return {
-        model: createAmazonBedrock({
-          region: config.region,
-          credentialProvider: fromNodeProviderChain(),
-        })(config.model),
-        provider: config.provider,
-        modelId: config.model,
-      };
     case 'vertex': {
       const vertex = createVertex(
-        config.apiKey
-          ? { apiKey: config.apiKey }
-          : { project: config.project, location: config.location }
+        config.apiKey ? { apiKey: config.apiKey } : { project: config.project, location: config.location }
       );
       return { model: vertex(config.model), provider: config.provider, modelId: config.model };
     }
   }
 }
 
-/** Selects a tier model without requiring the legacy, global AI_MODEL setting. */
-export function getModelForTier(
-  provider: TieredAIProviderName,
-  tier: AITier,
-  overrides?: AIModelOverrides,
-  env: Env = process.env
-): LanguageModel {
-  const model = getDefaultModelId(provider, tier, overrides);
-  if (provider === 'anthropic') {
-    return createAnthropic({ apiKey: required(env, 'ANTHROPIC_API_KEY', provider) })(model);
+/**
+ * One concrete routed-provider model. Anthropic and OpenAI need the key the
+ * caller resolved (from Secrets Manager); Bedrock uses the default AWS credential
+ * chain (the EC2 instance / task role) and never static keys.
+ */
+export function createTieredModel(input: {
+  provider: TieredAIProviderName;
+  modelId: string;
+  apiKey?: string | null;
+  env?: Env;
+}) {
+  switch (input.provider) {
+    case 'anthropic':
+      if (!input.apiKey) throw new AIUnavailableError('NOT_CONFIGURED');
+      return createAnthropic({ apiKey: input.apiKey })(input.modelId);
+    case 'openai':
+      if (!input.apiKey) throw new AIUnavailableError('NOT_CONFIGURED');
+      return createOpenAI({ apiKey: input.apiKey })(input.modelId);
+    case 'bedrock':
+      return createAmazonBedrock({
+        region: bedrockRegion(input.env ?? process.env),
+        credentialProvider: fromNodeProviderChain(),
+      })(input.modelId);
   }
-  const region = env.AI_BEDROCK_REGION?.trim() || env.AWS_REGION?.trim() || 'ap-southeast-1';
-  return createAmazonBedrock({ region, credentialProvider: fromNodeProviderChain() })(model);
 }

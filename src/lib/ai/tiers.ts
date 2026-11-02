@@ -9,13 +9,21 @@ export type AIFeature =
   | 'whatsapp'
   | 'retention'
   | 'analytics'
-  | 'periodic-owner-reports';
+  | 'periodic-owner-reports'
+  | 'ask-fathom'
+  | 'pharmacy.marketing-assistance'
+  | 'pharmacy-rx-ocr'
+  | 'restaurant-menu-vision';
 
 const FEATURE_TIERS: Readonly<Partial<Record<AIFeature, AITier>>> = {
   growth: 'standard',
   'growth-recommendations': 'standard',
   'restaurant-growth': 'standard',
   'pharmacy-marketing-assistance': 'standard',
+  'pharmacy.marketing-assistance': 'standard',
+  'ask-fathom': 'standard',
+  'pharmacy-rx-ocr': 'standard',
+  'restaurant-menu-vision': 'standard',
   whatsapp: 'standard',
   retention: 'standard',
   analytics: 'standard',
