@@ -556,7 +556,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on codex/DEV-211-inventory-branch-authorization for: machine-check failure listed below"
+  "next": "push one fix commit on codex/DEV-211-inventory-branch-authorization for: F1 src/server/routers/pharmacy-inventory.ts:155 Keep scopeFor's previous behaviour (active tenant branch only). Add a dedicated helper, for example assignedScopeFor(ctx, branch), that runs scopeFor and then t; F2 docs/already-fixed-470.md:1 Remove docs/already-fixed-470.md and the `/error.log` .gitignore line from the branch.; machine-check failure listed below"
  },
  {
   "pr": 1119,
@@ -569,7 +569,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1119`, then post comments/1119.md via the poster workflow"
+  "next": "push one fix commit on codex/DEV-116-cash-flow-evidence for: F1 src/app/(app)/pharmacy/accounts/cash-flow/page.test.tsx:43 Add one page.test.tsx case. Mock evidence as [{...evidenceRow(0), lines: [{accountCode:'CASH', side:'DEBIT', amountMinor: BigInt('900719925474099312')}, {accoun"
  },
  {
   "pr": 1118,
@@ -582,7 +582,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on codex/DEV-117-balance-sheet-coverage for: machine-check failure listed below"
+  "next": "push one fix commit on codex/DEV-117-balance-sheet-coverage for: F1 src/app/(app)/pharmacy/accounts/balance-sheet/balance-sheet-report.test.tsx:48 In the first BalanceSheetReport test, replace the 'Equation reconciled' assertion with `expect(html).toContain('Posted equation balanced')`, `expect(html).toCon; F2 src/app/(app)/pharmacy/accounts/balance-sheet/balance-sheet-report.tsx:102 Add a case to balance-sheet-report.test.tsx with CUSTOMER_WALLET closing 100 and SUPPLIER_WALLET closing -100 (PKR). Assert the HTML contains 'Posted equation b; machine-check failure listed below"
  },
  {
   "pr": 1117,
@@ -595,7 +595,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on codex/DEV-118-profit-loss-coverage for: machine-check failure listed below"
+  "next": "push one fix commit on codex/DEV-118-profit-loss-coverage for: F1 src/lib/pharmacy/accounts/profit-loss.coverage.test.ts:21 Only if the owner keeps this PR rather than closing it (see F2): replace every `Nn` literal in profit-loss.coverage.test.ts with `BigInt(N)`, for example `debit; F2 src/lib/pharmacy/accounts/profit-loss.ts:98 close as superseded; machine-check failure listed below"
  },
  {
   "pr": 1116,
@@ -604,11 +604,11 @@
   "head": "7cf6f2fb1c1c7ca3eaecdd4ad344987eadc21642",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on codex/DEV-135-supplier-claim-journal for: machine-check failure listed below"
+  "next": "`python3 handoff/scripts/compose.py 1116`, then post comments/1116.md via the poster workflow"
  },
  {
   "pr": 1114,
@@ -617,7 +617,7 @@
   "head": "8247167eb6dce7b61ea17b029721697264863fb4",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
@@ -634,7 +634,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on codex/DEV-198-day-close-currency for: machine-check failure listed below"
+  "next": "push one fix commit on codex/DEV-198-day-close-currency for: F1 src/components/pharmacy/counter/day-close-console.currency.test.ts:8 Delete day-close-console.currency.test.ts. In day-close-console.test.tsx, add tenderTotals: [{ type: 'CASH', amountMinor: 12500, refundMinor: 0, netMinor: 12500; machine-check failure listed below"
  },
  {
   "pr": 1087,
@@ -643,11 +643,11 @@
   "head": "c6acae6d8df1783a3b14baa456f3b25201e9408d",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on codex/DEV-199-emergency-supply-lock for: machine-check failure listed below"
+  "next": "`python3 handoff/scripts/compose.py 1087`, then post comments/1087.md via the poster workflow"
  },
  {
   "pr": 1086,
@@ -660,7 +660,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on codex/DEV-279-cash-drawer-authorization for: machine-check failure listed below"
+  "next": "push one fix commit on codex/DEV-279-cash-drawer-authorization for: F1 src/server/routers/pharmacy-sales.branch-scope.test.ts:57 In branch-scope.test.ts and drawer-close.db.test.ts, change the expected refusal for openDrawer, drawerMovement and closeDrawer from NOT_IN_WORKSPACE to OUTSIDE; F2 src/server/routers/pharmacy-sales.ts:275 Leave the receipt and tender path's capability family and decision unchanged. Add the canonical counter requirement only for the three drawer mutations, for exa; machine-check failure listed below"
  },
  {
   "pr": 1072,
@@ -669,7 +669,7 @@
   "head": "d9a63c46ac089280ec50f7ee93d67bf53a45252e",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
@@ -686,7 +686,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on codex/DEV-322-command-centre-khata for: machine-check failure listed below"
+  "next": "push one fix commit on codex/DEV-322-command-centre-khata for: F1 tests/finance-insights-ai-independence.test.ts:112 Give the fixture a pass-through transaction so it matches both production facades (createTenantDb and the nested withTenantDb proxy), e.g. after the db literal:; machine-check failure listed below"
  },
  {
   "pr": 1061,
@@ -699,7 +699,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1061`, then post comments/1061.md via the poster workflow"
+  "next": "push one fix commit on codex/linear-mention-dev-138-qa]-sev2]-restaurant-reports-wast for: QA-1061-01 src/lib/restaurant/reports.ts:1374 No code change on this branch. The owner should relink this PR to a dedicated issue for develop's broken typecheck in these 4 test files; the changes are correc"
  },
  {
   "pr": 1060,
@@ -712,7 +712,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1060`, then post comments/1060.md via the poster workflow"
+  "next": "push one fix commit on codex/linear-mention-dev-170-qa]-sev2]-shifts-cancelling-an-in for: F1 src/lib/restaurant/shifts.ts:358 In cancelShift, read the CLOCK_IN/CLOCK_OUT adjustments where breakId is null and compute effective attendance. Lock the shift row first, as workforce commands ; F2 src/components/pharmacy/counter/counter-console.test.tsx:92 Land the four fixture repairs once, under a dedicated develop-typecheck repair issue/PR. Either #1060 or #1061 can carry it under that issue. Once develop typec"
  },
  {
   "pr": 1056,
@@ -721,7 +721,7 @@
   "head": "45a00ae883694138a388f3f645473eb5d7baae23",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
@@ -747,7 +747,7 @@
   "head": "cb4468aab76a34031fca349a3f1b197d17c8ea3a",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
@@ -777,7 +777,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on fix/vertical-leak-404 for: machine-check failure listed below"
+  "next": "push one fix commit on fix/vertical-leak-404 for: F1 src/app/tenant-not-found.tsx:14 In not-found.tsx, work out the product's shared sign-in URL server-side. The apex of PLATFORM_BASE_DOMAIN classifies as 'shared' in host-routing.ts, so `https:/; F2 src/app/(app)/settings/settings-content.tsx:936 Do not offer category toggles that nothing sends. For PHARMACY, either hide the notification matrix (the approach open PR #986 takes for DEV-8) or show a one-li; machine-check failure listed below"
  },
  {
   "pr": 1004,
@@ -790,7 +790,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1004`, then post comments/1004.md via the poster workflow"
+  "next": "push one fix commit on fix/dark-mode-tokens for: F1 src/lib/tenant-brand.ts:66 In hoverColor, compute contrast(hover, contrastColor(hex)). If it is below 4.5, mix 16% away from the foreground instead (toward #000000 when the foreground is ; F2 src/app/globals.css:1726 Re-point the hover token for text-role uses in dark as well. Either add `.hover\\:text-primary-hover` to the :is() list and declare `--primary-hover: var(--text-"
  },
  {
   "pr": 1003,
@@ -803,7 +803,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on fix/counter-responsive for: machine-check failure listed below"
+  "next": "push one fix commit on fix/counter-responsive for: F1 src/components/pharmacy/dispensing/field.test.tsx:25 Query the file input in a way that does not depend on the hint text, for example `screen.getByLabelText(/^Prescription image/)` (a literal regex, which semgrep ; F2 src/components/layout/sidebar.tsx:871 Remove commit b68b1b046 from this branch: restore sidebar.tsx and sidebar.test.tsx to develop and delete the desktop-rail wrap paragraph from docs/design-system; F3 src/app/(app)/pharmacy/inventory/page.tsx:252 Restore develop's always-rendered Physical count card and row classes (drop showPhysicalCount, the conditional class and the four 'Physical count card' tests). ; machine-check failure listed below"
  },
  {
   "pr": 1002,
@@ -816,7 +816,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1002`, then post comments/1002.md via the poster workflow"
+  "next": "push one fix commit on feat/reports-csv-export for: F1 src/app/api/pharmacy/reports/export/route.ts:41 In route.ts, map UNAUTHORIZED to 401, FORBIDDEN to 403 and BAD_REQUEST to 400 (keeping the message). Return the generic 'Pharmacy report export failed.' with 50"
  },
  {
   "pr": 1001,
@@ -829,7 +829,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on fix/reports-ops-screens for: machine-check failure listed below"
+  "next": "push one fix commit on fix/reports-ops-screens for: F1 src/lib/pharmacy/onboarding-checklist.ts:121 Point OPENING_STOCK_READINESS at OPENING_IMPORT_ROUTE ('/pharmacy/inventory/import') with linkLabel 'Import opening stock' and matching todo copy. Optionally me; F2 src/components/pharmacy/inventory/opening-import.ts:136 Make the links and copy match what the destinations can actually do. For example, label the first 'Open medicine catalogue and packs' (/pharmacy/medicines) and ; machine-check failure listed below"
  },
  {
   "pr": 1000,
@@ -842,7 +842,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1000`, then post comments/1000.md via the poster workflow"
+  "next": "push one fix commit on fix/team-members-zero for: F1 src/app/(app)/team/team-content.tsx:279 In StaffProfilesOffNotice, show each user's role next to the title. Use `inviteCopyForVertical(useEntitlements().vertical).baseRoleLabels[user.role]` (pharmacy:; F2 src/app/(app)/team/team-content.tsx:422 In AddMemberModal onSuccess, also call `utils.organizationAdmin.overview.invalidate()`. Optionally call `router.refresh()` so the server-rendered activeSeats he"
  },
  {
   "pr": 999,
@@ -855,7 +855,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on fix/owner-copy-sweep for: machine-check failure listed below"
+  "next": "push one fix commit on fix/owner-copy-sweep for: F1 src/app/(app)/pharmacy/reports/page.test.tsx:172 Keep the plural logic in a form that typechecks, e.g. `const count: number = report.metrics.length;` then `{count} {count === 1 ? 'report' : 'reports'} \u00b7`. Alte; F2 src/app/(app)/pharmacy/finance/page.tsx:456 Replace these eyebrows with plain words, e.g. 'Money movement', 'Tax profile \u00b7 accountant approval' and 'Upload reference rows'. Add FIN and MED to the requirem; F3 src/app/(app)/pharmacy/purchasing/orders/page.tsx:1203 Map the policy to plain words on the page, e.g. `approval.policy === SEGREGATION_OF_DUTIES_POLICY ? 'the two-person approval rule' : 'the approval rule'`, and h; F4 src/app/(app)/pharmacy/reports/repeat-purchasing/page.tsx:78 Show the cutoff as a readable UTC date and time, e.g. a `type=\"datetime-local\"` input whose value is `asOf.slice(0,16)`. Turn the submitted value back into an I; F5 src/app/(app)/pharmacy/marketing/basket-panel.tsx:107 Format these with the existing helpers: formatReportWindow(from, cutoff) for the windows and formatDisplayDateTime(freshAt) for fresh-at. Do the same on the fis; F6 src/components/pharmacy/medicine-pack-setup.tsx:174 Use the wording the PR already uses elsewhere: 'Strength / form' for presentation, and 'single units' or 'units (e.g. tablets)' for base units. Optionally add '; F7 src/app/(app)/dashboard/pharmacy-dashboard-content.tsx:276 Pass a zone: the workspace timezone where available (counter: workspaceZone; dashboard: expose organization timezone on a query it already uses), or on client c; F8 src/components/layout/sidebar.tsx:911 Revert the sidebar.tsx pill hunk and its new sidebar.test.tsx case from this PR. Handle the blank-pill-while-loading bug in its own issue that changes the tenan; machine-check failure listed below"
  },
  {
   "pr": 998,
@@ -868,7 +868,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 998`, then post comments/998.md via the poster workflow"
+  "next": "push one fix commit on fix/counter-cashier-copy for: F1 src/components/pharmacy/counter/counter-console.tsx:1001 When an add is sent from the scan field (barcode Enter in addBarcode, or Enter to addToCart), clear the field right away with `setQuery('')` and keep the submit; F2 src/components/pharmacy/counter/counter-console.tsx:925 Once a scan's add or pack authentication has been sent, do not let edits to the scan field cancel it; cancel only on a branch switch or unmount. If it does get ; F3 src/server/routers/pharmacy-sales.ts:1725 Return a separate display flag for the batch map that stays true for dispensing staff, e.g. `counterManager || can(subject, 'pharmacy:dispense', \u2026)`, and pass t"
  },
  {
   "pr": 997,
@@ -881,7 +881,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 997`, then post comments/997.md via the poster workflow"
+  "next": "push one fix commit on fix/returns-lookup-scope for: F1 src/app/(app)/pharmacy/purchasing/returns/page.tsx:152 Run git revert c89b74bd8 on fix/returns-lookup-scope, removing the page.tsx and page.test.tsx changes. Then drop the 'QA batch 4: Purchasing returns permission "
  },
  {
   "pr": 996,
@@ -894,7 +894,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "push one fix commit on fix/manager-only-campaigns-close for: machine-check failure listed below"
+  "next": "push one fix commit on fix/manager-only-campaigns-close for: F1 src/lib/vertical-catalog.ts:807 Keep the Pharmacist template at ['pharmacy:dispense', 'pharmacy:catalogue-review'], with pharmacy:close still removed. Delete the INSERT ... 'pharmacy:counter' ; machine-check failure listed below"
  },
  {
   "pr": 995,
@@ -907,7 +907,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 995`, then post comments/995.md via the poster workflow"
+  "next": "push one fix commit on fix/catalogue-edit-review for: F1 src/app/(app)/pharmacy/medicines/page.tsx:19 Make the review queue reachable by its required reviewers within this PR. Render `<CatalogueChangeReview />` in the non-ADMIN branch of src/app/(app)/pharmacy/m"
  },
  {
   "pr": 994,
@@ -933,7 +933,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 1"
+  "next": "push one fix commit on fix/publish-creates-pack for: F1 src/server/routers/pharmacy-medicine.ts:778 Remove the nesting feature from this PR: the addInnerPackLevel procedure, the Outer pack select and its split preview, the intro sentence, splitPackTotal, PACK_; F2 src/lib/pharmacy/onboarding.ts:323 In onboarding.owner-operator.test.ts, add a case with medicinePublicationEntry.count=1 and packLevel.count=0 and expect blocking to contain MEDICINE_CATALOG_REA"
  },
  {
   "pr": 986,
@@ -946,7 +946,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 2"
+  "next": "wait for machine checks queued at position 1"
  },
  {
   "pr": 985,
@@ -959,7 +959,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 3"
+  "next": "wait for machine checks queued at position 2"
  },
  {
   "pr": 984,
@@ -972,7 +972,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 4"
+  "next": "wait for machine checks queued at position 3"
  },
  {
   "pr": 983,
@@ -985,7 +985,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 5"
+  "next": "wait for machine checks queued at position 4"
  },
  {
   "pr": 982,
@@ -998,7 +998,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 6"
+  "next": "wait for machine checks queued at position 5"
  },
  {
   "pr": 966,
@@ -1007,11 +1007,11 @@
   "head": "f368fcc2c75f53e862ca8b715fedae73a37bb190",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 7"
+  "next": "wait for machine checks queued at position 6"
  },
  {
   "pr": 965,
@@ -1024,7 +1024,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 8"
+  "next": "wait for machine checks queued at position 7"
  },
  {
   "pr": 960,
@@ -1033,11 +1033,11 @@
   "head": "7aff998867c823506f29f95e9e6b6552478730bd",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 9"
+  "next": "wait for machine checks queued at position 8"
  },
  {
   "pr": 959,
@@ -1050,7 +1050,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 10"
+  "next": "wait for machine checks queued at position 9"
  },
  {
   "pr": 956,
@@ -1063,7 +1063,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 11"
+  "next": "wait for machine checks queued at position 10"
  },
  {
   "pr": 955,
@@ -1076,7 +1076,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 12"
+  "next": "wait for machine checks queued at position 11"
  },
  {
   "pr": 954,
@@ -1089,7 +1089,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 13"
+  "next": "wait for machine checks queued at position 12"
  },
  {
   "pr": 953,
@@ -1102,7 +1102,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 14"
+  "next": "wait for machine checks queued at position 13"
  },
  {
   "pr": 951,
@@ -1115,7 +1115,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 15"
+  "next": "wait for machine checks queued at position 14"
  },
  {
   "pr": 950,
@@ -1124,11 +1124,11 @@
   "head": "5c33b2dffe409bc3c4addad7198963836d0cea94",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 16"
+  "next": "wait for machine checks queued at position 15"
  },
  {
   "pr": 949,
@@ -1141,7 +1141,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 17"
+  "next": "wait for machine checks queued at position 16"
  },
  {
   "pr": 947,
@@ -1154,7 +1154,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 18"
+  "next": "wait for machine checks queued at position 17"
  },
  {
   "pr": 946,
@@ -1167,7 +1167,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 19"
+  "next": "wait for machine checks queued at position 18"
  },
  {
   "pr": 945,
@@ -1180,7 +1180,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 20"
+  "next": "wait for machine checks queued at position 19"
  },
  {
   "pr": 942,
@@ -1193,7 +1193,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 21"
+  "next": "wait for machine checks queued at position 20"
  },
  {
   "pr": 941,
@@ -1206,7 +1206,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 22"
+  "next": "wait for machine checks queued at position 21"
  },
  {
   "pr": 940,
@@ -1219,7 +1219,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 23"
+  "next": "wait for machine checks queued at position 22"
  },
  {
   "pr": 934,
@@ -1228,11 +1228,11 @@
   "head": "0403b5b68a5421c25a4a88bdddfc62a8d564678f",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 24"
+  "next": "wait for machine checks queued at position 23"
  },
  {
   "pr": 929,
@@ -1245,7 +1245,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 25"
+  "next": "wait for machine checks queued at position 24"
  },
  {
   "pr": 915,
@@ -1258,7 +1258,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 26"
+  "next": "wait for machine checks queued at position 25"
  },
  {
   "pr": 855,
@@ -1267,11 +1267,11 @@
   "head": "6ba261a37855f77ac0ca7f0933be16f2e96877b2",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 27"
+  "next": "wait for machine checks queued at position 26"
  },
  {
   "pr": 814,
@@ -1284,7 +1284,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 28"
+  "next": "wait for machine checks queued at position 27"
  },
  {
   "pr": 812,
@@ -1297,7 +1297,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 29"
+  "next": "wait for machine checks queued at position 28"
  },
  {
   "pr": 811,
@@ -1310,7 +1310,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 30"
+  "next": "wait for machine checks queued at position 29"
  },
  {
   "pr": 805,
@@ -1323,7 +1323,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 31"
+  "next": "wait for machine checks queued at position 30"
  },
  {
   "pr": 776,
@@ -1336,7 +1336,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 32"
+  "next": "wait for machine checks queued at position 31"
  },
  {
   "pr": 769,
@@ -1349,7 +1349,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 33"
+  "next": "wait for machine checks queued at position 32"
  },
  {
   "pr": 241,
@@ -1362,7 +1362,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 34"
+  "next": "wait for machine checks queued at position 33"
  },
  {
   "pr": 132,
@@ -1375,7 +1375,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 35"
+  "next": "wait for machine checks queued at position 34"
  },
  {
   "pr": 66,
@@ -1384,11 +1384,11 @@
   "head": "b6820a067c11aa3891c6d0f75327ffad095c97d4",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 36"
+  "next": "wait for machine checks queued at position 35"
  },
  {
   "pr": 63,
@@ -1401,7 +1401,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 37"
+  "next": "wait for machine checks queued at position 36"
  },
  {
   "pr": 37,
@@ -1410,11 +1410,11 @@
   "head": "1fae9603a725698bf137ce9bdb38106a8842fd50",
   "status": "in progress",
   "qa": "FAIL",
-  "security": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 38"
+  "next": "wait for machine checks queued at position 37"
  },
  {
   "pr": 1171,
@@ -1427,7 +1427,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 39"
+  "next": "wait for machine checks queued at position 38"
  },
  {
   "pr": 1170,
@@ -1440,7 +1440,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 40"
+  "next": "wait for machine checks queued at position 39"
  },
  {
   "pr": 1169,
@@ -1453,7 +1453,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 41"
+  "next": "wait for machine checks queued at position 40"
  },
  {
   "pr": 1067,
@@ -1466,7 +1466,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 42"
+  "next": "wait for machine checks queued at position 41"
  },
  {
   "pr": 1066,
@@ -1479,7 +1479,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 43"
+  "next": "wait for machine checks queued at position 42"
  },
  {
   "pr": 1065,
@@ -1492,7 +1492,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 44"
+  "next": "wait for machine checks queued at position 43"
  },
  {
   "pr": 1064,
@@ -1505,7 +1505,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 45"
+  "next": "wait for machine checks queued at position 44"
  },
  {
   "pr": 1063,
@@ -1518,7 +1518,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 46"
+  "next": "wait for machine checks queued at position 45"
  },
  {
   "pr": 1062,
@@ -1531,7 +1531,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 47"
+  "next": "wait for machine checks queued at position 46"
  },
  {
   "pr": 1059,
@@ -1544,7 +1544,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 48"
+  "next": "wait for machine checks queued at position 47"
  },
  {
   "pr": 1058,
@@ -1557,7 +1557,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 49"
+  "next": "wait for machine checks queued at position 48"
  },
  {
   "pr": 1057,
@@ -1570,7 +1570,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 50"
+  "next": "wait for machine checks queued at position 49"
  },
  {
   "pr": 1055,
@@ -1583,7 +1583,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 51"
+  "next": "wait for machine checks queued at position 50"
  },
  {
   "pr": 1054,
@@ -1596,7 +1596,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 52"
+  "next": "wait for machine checks queued at position 51"
  },
  {
   "pr": 1053,
@@ -1609,7 +1609,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 53"
+  "next": "wait for machine checks queued at position 52"
  },
  {
   "pr": 1052,
@@ -1622,7 +1622,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 54"
+  "next": "wait for machine checks queued at position 53"
  },
  {
   "pr": 1051,
@@ -1635,7 +1635,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 55"
+  "next": "wait for machine checks queued at position 54"
  },
  {
   "pr": 1007,
@@ -1648,7 +1648,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 56"
+  "next": "wait for machine checks queued at position 55"
  },
  {
   "pr": 964,
@@ -1661,7 +1661,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 57"
+  "next": "wait for machine checks queued at position 56"
  },
  {
   "pr": 963,
@@ -1674,7 +1674,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 58"
+  "next": "wait for machine checks queued at position 57"
  },
  {
   "pr": 962,
@@ -1687,7 +1687,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 59"
+  "next": "wait for machine checks queued at position 58"
  },
  {
   "pr": 961,
@@ -1700,7 +1700,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 60"
+  "next": "wait for machine checks queued at position 59"
  },
  {
   "pr": 906,
@@ -1713,7 +1713,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 61"
+  "next": "wait for machine checks queued at position 60"
  },
  {
   "pr": 903,
@@ -1726,7 +1726,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 62"
+  "next": "wait for machine checks queued at position 61"
  },
  {
   "pr": 902,
@@ -1739,7 +1739,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 63"
+  "next": "wait for machine checks queued at position 62"
  },
  {
   "pr": 888,
@@ -1752,7 +1752,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 64"
+  "next": "wait for machine checks queued at position 63"
  },
  {
   "pr": 887,
@@ -1765,7 +1765,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 65"
+  "next": "wait for machine checks queued at position 64"
  },
  {
   "pr": 886,
@@ -1778,7 +1778,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 66"
+  "next": "wait for machine checks queued at position 65"
  },
  {
   "pr": 882,
@@ -1791,7 +1791,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 67"
+  "next": "wait for machine checks queued at position 66"
  },
  {
   "pr": 875,
@@ -1804,7 +1804,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 68"
+  "next": "wait for machine checks queued at position 67"
  },
  {
   "pr": 872,
@@ -1817,7 +1817,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 69"
+  "next": "wait for machine checks queued at position 68"
  },
  {
   "pr": 864,
@@ -1830,7 +1830,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 70"
+  "next": "wait for machine checks queued at position 69"
  },
  {
   "pr": 863,
@@ -1843,7 +1843,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 71"
+  "next": "wait for machine checks queued at position 70"
  },
  {
   "pr": 862,
@@ -1856,7 +1856,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 72"
+  "next": "wait for machine checks queued at position 71"
  },
  {
   "pr": 854,
@@ -1869,7 +1869,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 73"
+  "next": "wait for machine checks queued at position 72"
  },
  {
   "pr": 853,
@@ -1882,7 +1882,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 74"
+  "next": "wait for machine checks queued at position 73"
  },
  {
   "pr": 850,
@@ -1895,7 +1895,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 75"
+  "next": "wait for machine checks queued at position 74"
  },
  {
   "pr": 841,
@@ -1908,7 +1908,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 76"
+  "next": "wait for machine checks queued at position 75"
  },
  {
   "pr": 838,
@@ -1921,7 +1921,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 77"
+  "next": "wait for machine checks queued at position 76"
  },
  {
   "pr": 305,
@@ -1934,7 +1934,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 78"
+  "next": "wait for machine checks queued at position 77"
  },
  {
   "pr": 304,
@@ -1947,7 +1947,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 79"
+  "next": "wait for machine checks queued at position 78"
  },
  {
   "pr": 286,
@@ -1960,7 +1960,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 80"
+  "next": "wait for machine checks queued at position 79"
  },
  {
   "pr": 275,
@@ -1973,7 +1973,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 81"
+  "next": "wait for machine checks queued at position 80"
  },
  {
   "pr": 262,
@@ -1986,7 +1986,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 82"
+  "next": "wait for machine checks queued at position 81"
  },
  {
   "pr": 261,
@@ -1999,7 +1999,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 83"
+  "next": "wait for machine checks queued at position 82"
  },
  {
   "pr": 259,
@@ -2012,7 +2012,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 84"
+  "next": "wait for machine checks queued at position 83"
  },
  {
   "pr": 253,
@@ -2025,7 +2025,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 85"
+  "next": "wait for machine checks queued at position 84"
  },
  {
   "pr": 212,
@@ -2038,7 +2038,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 86"
+  "next": "wait for machine checks queued at position 85"
  },
  {
   "pr": 149,
@@ -2051,7 +2051,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 87"
+  "next": "wait for machine checks queued at position 86"
  },
  {
   "pr": 146,
@@ -2064,7 +2064,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 88"
+  "next": "wait for machine checks queued at position 87"
  },
  {
   "pr": 145,
@@ -2077,7 +2077,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 89"
+  "next": "wait for machine checks queued at position 88"
  },
  {
   "pr": 144,
@@ -2090,7 +2090,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 90"
+  "next": "wait for machine checks queued at position 89"
  },
  {
   "pr": 140,
@@ -2103,7 +2103,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 91"
+  "next": "wait for machine checks queued at position 90"
  },
  {
   "pr": 136,
@@ -2116,7 +2116,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 92"
+  "next": "wait for machine checks queued at position 91"
  },
  {
   "pr": 133,
@@ -2129,7 +2129,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 93"
+  "next": "wait for machine checks queued at position 92"
  },
  {
   "pr": 105,
@@ -2142,7 +2142,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 94"
+  "next": "wait for machine checks queued at position 93"
  },
  {
   "pr": 104,
@@ -2155,7 +2155,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 95"
+  "next": "wait for machine checks queued at position 94"
  },
  {
   "pr": 59,
@@ -2168,7 +2168,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 96"
+  "next": "wait for machine checks queued at position 95"
  },
  {
   "pr": 57,
@@ -2181,19 +2181,19 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 97"
+  "next": "wait for machine checks queued at position 96"
  },
  {
   "pr": 56,
-  "dev": "?",
+  "dev": "none (no DEV-<n> or GitHub issue cited; Linear searches for onboarding/docs/architecture/contributing/auth-and-roles/separation-of-duties found no matching issue)",
   "branch": "docs/dev-onboarding-architecture",
   "head": "a98f887528b7d102fac358fb79d8d98ff1b35a68",
-  "status": "not started",
-  "qa": null,
-  "security": null,
+  "status": "in progress",
+  "qa": "FAIL",
+  "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 98 and QA/Security review queued in a review workflow"
+  "next": "wait for machine checks queued at position 97"
  }
 ]

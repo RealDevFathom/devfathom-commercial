@@ -55,5 +55,8 @@
  ],
  "999": [
   "REGRESSION: existing test src/app/(app)/pharmacy/reports/page.test.tsx 'pharmacy report catalog filters carries all supported filters and exposes the metric contract' fails on the PR (no text /1 report \u00b7/) and passes on develop; the copy sweep changed the report-count label the test asserts. Other failing related tests also fail on develop or only under the gate runtime DB role."
+ ],
+ "996": [
+  "PR-introduced failure in its new tests/pharmacy-pharmacist-backfill.db.test.ts: the suite's beforeAll fails with 'duplicate key value violates unique constraint organization_roles_organizationId_key_key' on a gate-equivalent migrated+seeded DB, so all 4 tests are skipped/failed (same with a superuser role). The fixture inserts a role that already exists for its organization; make the fixture use unique org/role keys or upsert."
  ]
 }
