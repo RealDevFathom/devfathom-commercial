@@ -361,6 +361,59 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+describe('PharmacyCounterConsole receipt scrolling', () => {
+  it('keeps a settled receipt at natural height inside the responsive workspace', () => {
+    mocks.queries.counterCart!.data = cart({
+      status: 'COMPLETED',
+      receiptNumber: 42,
+      totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+    });
+    render(<PharmacyCounterConsole initialBranchId="branch-a" initialSaleId="sale-a" />);
+
+    expect(screen.getByText('Settled')).toBeInTheDocument();
+    const receipt = screen
+      .getByRole('heading', { name: 'Receipt' })
+      .closest('[data-slot="section-card"]');
+    expect(receipt).toHaveClass('shrink-0');
+    expect(receipt).not.toHaveClass('max-h-24');
+    expect(receipt).not.toHaveClass('shrink');
+    expect(receipt).not.toHaveClass('overflow-y-auto');
+
+    const workspace = screen.getByRole('region', { name: 'Counter workspace' });
+    expect(workspace).toHaveClass(
+      'overflow-y-auto', 'auto-rows-max', 'md:auto-rows-auto', 'md:overflow-hidden'
+    );
+    const stack = screen.getByRole('region', { name: 'Cart, tender and receipt' });
+    expect(stack).toContainElement(receipt);
+    expect(stack).toHaveClass('md:min-h-0', 'md:overflow-y-auto');
+    expect(stack).not.toHaveClass('overflow-hidden');
+    expect(stack).not.toHaveClass('overflow-y-auto');
+  });
+
+  it('names every scroll region and makes it keyboard focusable with visible focus', () => {
+    render(<PharmacyCounterConsole initialBranchId="branch-a" initialSaleId="sale-a" />);
+
+    for (const name of [
+      'Counter workspace',
+      'Sale entry',
+      'Cart, tender and receipt',
+      'Customer and prescription',
+    ]) {
+      const region = screen.getByRole('region', { name });
+      expect(region).toHaveAttribute('tabindex', '0');
+      expect(region).toHaveClass('focus-visible:ring-2', 'focus-visible:ring-ring/50');
+      region.focus();
+      expect(region).toHaveFocus();
+    }
+    for (const name of ['Sale entry', 'Customer and prescription']) {
+      const region = screen.getByRole('region', { name });
+      expect(region).toHaveClass('md:min-h-0', 'md:overflow-y-auto');
+      expect(region).not.toHaveClass('min-h-0');
+      expect(region).not.toHaveClass('overflow-y-auto');
+    }
+  });
+});
+
 describe('PharmacyCounterConsole authoritative bill state', () => {
   it.each([
     'missing',

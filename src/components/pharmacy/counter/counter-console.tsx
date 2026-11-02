@@ -1882,8 +1882,18 @@ function ScopedPharmacyCounterConsole({
         ) : null}
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
-        <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">
+      <div
+        role="region"
+        aria-label="Counter workspace"
+        tabIndex={0}
+        className="grid min-h-0 flex-1 auto-rows-max grid-cols-1 gap-2 overflow-y-auto p-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 md:auto-rows-auto md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] md:overflow-hidden"
+      >
+        <div
+          role="region"
+          aria-label="Sale entry"
+          tabIndex={0}
+          className="space-y-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 md:col-start-1 md:min-h-0 md:overflow-y-auto"
+        >
           <SectionCard compact eyebrow="POS-02" title="Scan and search">
             <div className="space-y-2">
               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -2124,10 +2134,15 @@ function ScopedPharmacyCounterConsole({
           </SectionCard>
         </div>
 
-        <div className="flex min-h-0 flex-col gap-2 overflow-hidden md:col-start-2 md:row-span-2">
+        <div
+          role="region"
+          aria-label="Cart, tender and receipt"
+          tabIndex={0}
+          className="flex flex-col gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 md:col-start-2 md:row-span-2 md:min-h-0 md:overflow-y-auto"
+        >
           <SectionCard
             compact
-            className="min-h-0 flex-1 overflow-y-auto"
+            className="shrink-0"
             eyebrow="POS-03"
             title="Cart and FEFO allocation"
             actions={
@@ -2245,7 +2260,7 @@ function ScopedPharmacyCounterConsole({
 
           <SectionCard
             compact
-            className="min-h-0 max-h-24 shrink overflow-y-auto"
+            className="shrink-0"
             eyebrow="POS-08"
             title="Receipt"
           >
@@ -2288,7 +2303,12 @@ function ScopedPharmacyCounterConsole({
           </SectionCard>
         </div>
 
-        <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">
+        <div
+          role="region"
+          aria-label="Customer and prescription"
+          tabIndex={0}
+          className="space-y-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 md:col-start-1 md:min-h-0 md:overflow-y-auto"
+        >
           <SectionCard
             compact
             eyebrow="CRM-L01"
