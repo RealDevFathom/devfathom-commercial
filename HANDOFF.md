@@ -4,16 +4,16 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 
 ## Resume here
 
-- **Item:** DEV-258 (per-organization invoice numbers).
-- **Single next action:** none pending. PR #1226 is waiting on QA's runtime retest and on human review.
-  When either reports back, handle the comments or failures on the PR and record the verdict in the table
-  below. Never merge the PR.
-- Safety-net check-ins on the PR:
-  - #1 at 19:54 UTC found nothing new: no check runs, no review threads or reviews, and `develop` still
-    at `47518cb`, so no conflict.
-  - #2 is scheduled for about 23:56 UTC (scheduled task `trig_01NcrHjiUmWySt3ZTwjcHJyq`).
-  - Stop after 3 empty check-ins in a row.
+- **DEV-258 is PAUSED** (2026-11-02 ~20:45 UTC) on Saad's instruction. Top priority moved to DEV-618, the
+  counter screens redesign, on PR #1240, branch
+  `codex/linear-mention-dev-618-redesign-counter-screens-to-match-s`. The live handoff log is now
+  `HANDOFF.md` on that branch.
+- **To resume DEV-258:** PR #1226 is complete and waiting on QA's runtime retest and human review. Re-read
+  the PR (checks, review threads, comments, mergeability against `develop`) and handle anything new.
+  Re-arm a safety-net check-in. Never merge.
 - **Uncommitted / half-written:** nothing.
+- The safety-net check-in `trig_01NcrHjiUmWySt3ZTwjcHJyq` was deleted when DEV-258 was paused. This session
+  is still subscribed to PR #1226, so GitHub events will still arrive.
 
 ## Items
 
@@ -23,7 +23,7 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 - GitHub issue: https://github.com/RealDevFathom/devfathom-commercial/issues/441
 - Branch: `saad/exciting-ramanujan-w973fo`
 - PR: [#1226](https://github.com/RealDevFathom/devfathom-commercial/pull/1226), `saad/exciting-ramanujan-w973fo` into `develop`. Open and not merged.
-- Status: **in review** (the build check is still running)
+- Status: **paused** (in review: PR complete, waiting on QA and human review)
 
 #### Done so far
 
