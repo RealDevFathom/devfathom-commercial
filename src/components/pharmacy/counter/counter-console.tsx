@@ -709,16 +709,12 @@ function ScopedPharmacyCounterConsole({
     attempt !== null ||
     checkingOutcome;
   const lineCount = cart?.lines.length ?? 0;
-  const signOutBlocked =
-    busy ||
-    (saleId !== null &&
-      (!currentBill ||
-        !cartQuery.isSuccess ||
-        cartQuery.isLoading ||
-        cartQuery.isFetching ||
-        cartQuery.isError ||
-        cartQuery.isStale ||
-        cartQuery.isPlaceholderData));
+  // Only in-progress work blocks sign out; bill freshness decides whether to confirm.
+  const signOutBlocked = busy;
+  const signOutReason =
+    signOutBlocked && pending !== 'signOut'
+      ? 'Finish the current step or payment check to sign out.'
+      : null;
 
   async function signOutFromCounter(confirmed = false) {
     // Recheck on confirmation: payment recovery can change while the dialog is open.
@@ -730,7 +726,9 @@ function ScopedPharmacyCounterConsole({
       attemptRef.current
     )
       return;
-    if (!confirmed && saleId && cart?.status === 'OPEN') {
+    // Ask unless this sale's cached bill is known not to be open; a missing or wrong-sale read asks.
+    const knownClosed = currentBill && cart.status !== 'OPEN';
+    if (!confirmed && saleId && !knownClosed) {
       setConfirmSignOut(true);
       return;
     }
@@ -1902,17 +1900,19 @@ function ScopedPharmacyCounterConsole({
               Open drawer
             </Button>
           )}
+          {signOutReason ? (
+            <p id="counter-sign-out-reason" className="text-xs text-text-muted">
+              {signOutReason}
+            </p>
+          ) : null}
           <Button
             ref={signOutButtonRef}
             type="button"
             variant="outline"
             size="touch"
             disabled={signOutBlocked}
-            title={
-              signOutBlocked
-                ? 'Finish the current action and verify the bill and any payment outcome before signing out.'
-                : undefined
-            }
+            title={signOutReason ?? undefined}
+            aria-describedby={signOutReason ? 'counter-sign-out-reason' : undefined}
             onClick={() => void signOutFromCounter()}
           >
             {pending === 'signOut' ? 'Signing out…' : 'Sign out'}

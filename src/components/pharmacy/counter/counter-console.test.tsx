@@ -751,7 +751,24 @@ describe('PharmacyCounterConsole sign out (DEV-41)', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('rechecks the bill before allowing an open-sale confirmation', async () => {
+  it('signs out a completed bill in one click after its read goes stale', async () => {
+    Object.assign(mocks.queries.counterCart!, {
+      isStale: true,
+      data: cart({
+        status: 'COMPLETED',
+        receiptNumber: 42,
+        totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+      }),
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const button = screen.getByRole('button', { name: 'Sign out' });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    await waitFor(() => expect(mocks.signOutEverything).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('keeps an open-sale confirmation available when the bill read goes stale', async () => {
     const view = render(
       <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
     );
@@ -760,10 +777,27 @@ describe('PharmacyCounterConsole sign out (DEV-41)', () => {
     mocks.queries.counterCart!.isStale = true;
     view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     const confirm = within(dialog).getByRole('button', { name: 'Sign out' });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mocks.signOutEverything).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.transition).not.toHaveBeenCalled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('blocks the open-sale confirmation when a payment attempt starts while it is open', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sign out with an open sale?' });
+    const attempt = savedAttempt();
+    persistTenderAttempt(attempt);
+    fireEvent(window, new StorageEvent('storage', { key: null }));
+    const confirm = within(dialog).getByRole('button', { name: 'Sign out' });
     expect(confirm).toBeDisabled();
     fireEvent.click(confirm);
     expect(mocks.signOutEverything).not.toHaveBeenCalled();
+    expect(readTenderAttempt(scope)).toEqual({ status: 'pending', attempt });
     expect(mocks.mutations.transition).not.toHaveBeenCalled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
   });
 
   it('shows a failed sign out and allows retry without changing the sale', async () => {
@@ -801,6 +835,9 @@ describe('PharmacyCounterConsole sign out (DEV-41)', () => {
     expect(stored.status).toBe('pending');
     const button = screen.getByRole('button', { name: 'Sign out' });
     expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription(
+      'Finish the current step or payment check to sign out.'
+    );
     fireEvent.click(button);
     expect(mocks.signOutEverything).not.toHaveBeenCalled();
     await act(async () => reject(new Error('Connection lost')));
@@ -847,8 +884,8 @@ describe('PharmacyCounterConsole sign out (DEV-41)', () => {
   });
 
   it.each(['missing', 'loading', 'fetching', 'stale', 'placeholder', 'wrong-sale'])(
-    'blocks sign out while the active sale read is %s',
-    (state) => {
+    'asks before signing out while the active sale read is %s',
+    async (state) => {
       const current = mocks.queries.counterCart!;
       if (state === 'missing') current.data = undefined;
       if (state === 'loading') Object.assign(current, { isLoading: true, isSuccess: false });
@@ -857,10 +894,10 @@ describe('PharmacyCounterConsole sign out (DEV-41)', () => {
       if (state === 'placeholder') current.isPlaceholderData = true;
       if (state === 'wrong-sale') current.data = cart({ saleId: 'sale-other' });
       render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-      expect(screen.getByRole('button', { name: 'Sign out' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Sign out' })).toBeEnabled();
       fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+      await screen.findByRole('dialog', { name: 'Sign out with an open sale?' });
       expect(mocks.signOutEverything).not.toHaveBeenCalled();
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     }
   );
 
