@@ -88,6 +88,9 @@ function enter(text = 'Find my notes') {
   fireEvent.change(screen.getByLabelText('Your question'), { target: { value: text } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 }
+function asRole(role: string) {
+  fixtures.session.mockReturnValue({ data: { user: { ...user, role } }, status: 'authenticated' });
+}
 function tool(part: Record<string, unknown>, text?: string) {
   fixtures.messages = [
     {
@@ -142,9 +145,14 @@ describe('Ask Fathom context and suggestions', () => {
       'RESTAURANT',
       ['restaurant-core', 'notes'],
       'Your restaurant workspace',
-      'Find notes I can access',
+      'What can you help me with?',
     ],
-    ['PHARMACY', ['pharmacy-core', 'notes'], 'Your pharmacy workspace', 'Find notes I can access'],
+    [
+      'PHARMACY',
+      ['pharmacy-core', 'notes'],
+      'Your pharmacy workspace',
+      'What can you help me with?',
+    ],
   ] as const)('uses canonical %s context', (vertical, modules, heading, suggestion) => {
     render(panel(entitlement(vertical, [...modules])));
     expect(screen.getByRole('heading', { name: heading })).toBeVisible();
@@ -153,33 +161,45 @@ describe('Ask Fathom context and suggestions', () => {
     expect(
       screen.queryByRole('button', { name: /financ|revenue|profit/i })
     ).not.toBeInTheDocument();
-    if (vertical !== 'AGENCY')
+    if (vertical !== 'AGENCY') {
       expect(screen.queryByRole('button', { name: /projects|tasks/i })).not.toBeInTheDocument();
+      // The server composes notes and meetings tools for Agency workspaces only.
+      expect(screen.queryByRole('button', { name: /notes|meetings/i })).not.toBeInTheDocument();
+    }
   });
   it('describes existing Restaurant and Catering reports only under the canonical core entitlement', () => {
+    asRole('ADMIN');
     const view = render(panel(entitlement('RESTAURANT', ['restaurant-core'])));
     expect(screen.getByText(/Restaurant and Catering reports/)).toBeVisible();
+    expect(screen.getByRole('button', { name: "What were today's settled sales?" })).toBeVisible();
     expect(screen.queryByRole('button', { name: /catering/i })).not.toBeInTheDocument();
     view.rerender(panel(entitlement('RESTAURANT', [])));
     expect(screen.getByText(/Restaurant reports are not enabled/)).toBeVisible();
     expect(screen.queryByText(/Catering/)).not.toBeInTheDocument();
   });
-  it('describes the existing Pharmacy report tool only when entitled', () => {
+  it('offers restaurant staff POS how-to examples instead of reports', () => {
+    render(panel(entitlement('RESTAURANT', ['restaurant-core', 'restaurant-pos'])));
+    expect(
+      screen.getByRole('button', { name: 'How do I split a bill at checkout?' })
+    ).toBeVisible();
+    expect(screen.queryByText(/Catering reports/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /sales|refund/i })).not.toBeInTheDocument();
+  });
+  it('describes the Pharmacy report tool to the owner only when entitled', () => {
+    asRole('ADMIN');
     const view = render(panel(entitlement('PHARMACY', ['pharmacy-reports'])));
-    expect(screen.getByText(/Report access is checked when you ask/)).toBeVisible();
+    expect(screen.getByText(/today's sales, expiring or low stock/)).toBeVisible();
     view.rerender(panel(entitlement('PHARMACY', [])));
     expect(screen.getByText(/Pharmacy reports are not enabled/)).toBeVisible();
   });
   it.each(['EMPLOYEE', 'HR', 'ADMIN'])(
     'does not infer financial grants from the %s role',
     (role) => {
-      fixtures.session.mockReturnValue({
-        data: { user: { ...user, role } },
-        status: 'authenticated',
-      });
+      asRole(role);
       render(panel(entitlement('AGENCY', ['finance'])));
-      expect(screen.queryByRole('button', { name: /finance/i })).not.toBeInTheDocument();
-      expect(screen.getByText(/No suggested actions/)).toBeVisible();
+      expect(screen.queryByRole('button', { name: /financ/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'What can you help me with?' })).toBeEnabled();
+      expect(screen.queryByText(/No suggested actions/)).not.toBeInTheDocument();
     }
   );
   it.each(['loading', 'unauthenticated'] as const)(
@@ -221,11 +241,11 @@ describe('Ask Fathom request and result states', () => {
   });
   it('sends an entitled suggestion through the SDK and shows its response', async () => {
     render(panel());
-    fireEvent.click(screen.getByRole('button', { name: 'Find notes I can access' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show my open tasks' }));
     expect(await screen.findByText('Synthetic answer')).toBeVisible();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).messages[0].parts[0].text).toBe(
-      'Find notes I can access'
+      'Show my open tasks'
     );
     expect(screen.getByLabelText('Your question')).toHaveValue('');
   });
