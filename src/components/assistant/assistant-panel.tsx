@@ -324,6 +324,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
             <textarea
               ref={inputRef}
               id="assistant-question"
+              dir="auto"
               disabled={!entry.canChat || requestError === 'permission'}
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -335,7 +336,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
               }}
               rows={1}
               placeholder="Ask about your workspace…"
-              className="max-h-32 min-h-[44px] min-w-0 flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+              className="max-h-32 min-h-[44px] min-w-0 flex-1 resize-none bg-transparent text-sm text-foreground outline-none [unicode-bidi:plaintext] placeholder:text-muted-foreground"
             />
             {busy ? (
               <Button
@@ -424,7 +425,13 @@ function MessageBubble({
         {parts.map((part, i) => {
           if (part.type === 'text' && part.text) {
             return isUser ? (
-              <p key={i} className="whitespace-pre-wrap break-words text-current">
+              // DEV-599: each line takes its direction from its first strong
+              // character, so Urdu with embedded Latin and numbers stays in order.
+              <p
+                key={i}
+                dir="auto"
+                className="whitespace-pre-wrap break-words text-current [unicode-bidi:plaintext]"
+              >
                 {part.text}
               </p>
             ) : (
@@ -553,7 +560,7 @@ function StatusChip({
       )}
     >
       {icon}
-      {text}
+      <span dir="auto">{text}</span>
     </div>
   );
 }
@@ -582,7 +589,9 @@ function ApprovalCard({
         {fields.map(([k, v]) => (
           <div key={k} className="flex gap-2">
             <dt className="w-16 shrink-0 text-muted-foreground">{k}</dt>
-            <dd className="min-w-0 break-words text-foreground">{v}</dd>
+            <dd dir="auto" className="min-w-0 break-words text-foreground">
+              {v}
+            </dd>
           </div>
         ))}
       </dl>

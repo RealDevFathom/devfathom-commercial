@@ -298,6 +298,20 @@ describe('Ask Fathom request and result states', () => {
     expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+  it("lays out mixed Urdu and English by each paragraph's first strong character (DEV-599)", async () => {
+    const mixed = 'آج کی سیل کتنی ہے؟ Panadol 500mg کے 1,250 units اور PKR 45,300 کی ریفنڈ';
+    fetchMock.mockImplementation(async () => answer(mixed));
+    render(panel());
+    const box = screen.getByLabelText('Your question');
+    expect(box).toHaveAttribute('dir', 'auto');
+    expect(box).toHaveClass('[unicode-bidi:plaintext]');
+    enter(mixed);
+    await waitFor(() => expect(screen.getAllByText(mixed)).toHaveLength(2));
+    const [question, reply] = screen.getAllByText(mixed);
+    expect(question).toHaveAttribute('dir', 'auto');
+    expect(question).toHaveClass('[unicode-bidi:plaintext]');
+    expect(reply).toHaveAttribute('dir', 'auto');
+  });
   it.each([true, false])('sends explicit approval=%s and waits for a result', async (approved) => {
     tool({ state: 'approval-requested', approval: { id: 'approval' } });
     pendingFetch();
