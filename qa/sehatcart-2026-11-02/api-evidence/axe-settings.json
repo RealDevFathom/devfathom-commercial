@@ -1,0 +1,39 @@
+{
+ "route": "/settings",
+ "role": "cashier",
+ "at": "2026-11-03 00:43:28 PKT",
+ "violations": [
+  {
+   "id": "aria-toggle-field-name",
+   "impact": "serious",
+   "n": 18,
+   "help": "ARIA toggle fields must have an accessible name",
+   "sample": [
+    "<span data-checked=\"\" role=\"switch\" tabindex=\"0\" id=\"base-ui-_r_0_\" aria-checked=\"true\" data-slot=\"switch\" data-size=\"sm\" class=\"peer group/switch re...\">",
+    "<span data-checked=\"\" role=\"switch\" tabindex=\"0\" id=\"base-ui-_r_3_\" aria-checked=\"true\" data-slot=\"switch\" data-size=\"sm\" class=\"peer group/switch re...\">",
+    "<span data-checked=\"\" role=\"switch\" tabindex=\"0\" id=\"base-ui-_r_6_\" aria-checked=\"true\" data-slot=\"switch\" data-size=\"sm\" class=\"peer group/switch re...\">",
+    "<span data-checked=\"\" role=\"switch\" tabindex=\"0\" id=\"base-ui-_r_9_\" aria-checked=\"true\" data-slot=\"switch\" data-size=\"sm\" class=\"peer group/switch re...\">"
+   ]
+  },
+  {
+   "id": "color-contrast",
+   "impact": "serious",
+   "n": 1,
+   "help": "Elements must meet minimum color contrast ratio thresholds",
+   "sample": [
+    "<span data-slot=\"eyebrow\" class=\"eyebrow eyebrow-accent\">WORKSPACE</span>"
+   ]
+  },
+  {
+   "id": "label",
+   "impact": "critical",
+   "n": 3,
+   "help": "Form elements must have labels",
+   "sample": [
+    "<input type=\"password\" class=\"w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20\" value=\"",
+    "<input type=\"password\" class=\"w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20\" value=\"",
+    "<input type=\"password\" class=\"w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20\" value=\""
+   ]
+  }
+ ]
+}
