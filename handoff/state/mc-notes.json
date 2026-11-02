@@ -19,5 +19,11 @@
  ],
  "1163": [
   "Related tests: 2 DB test files fail (pharmacy-sales.drawer-close.db branch refusals x2, duplicate-salt-acknowledgement.db prisma create); identical failures on develop (pre-existing). 516 other related tests pass."
+ ],
+ "1155": [
+  "REGRESSION: src/components/layout/sidebar.test.tsx 'Restaurant desktop navigation groups marks the active group and destination, opens by keyboard and restores focus on Escape' fails on the PR (no menuitem 'Inventory Current') and passes on develop."
+ ],
+ "1161": [
+  "NEW typecheck error in the PR's new tests/postgres-backup.test.ts: TS2741 Property 'NODE_ENV' is missing in the env object passed as ProcessEnv."
  ]
 }

@@ -4,6 +4,7 @@
 # usage: retry-tests.sh <pr> [ref]
 set -u
 S=${HANDOFF_STATE:-/tmp/claude-0/-home-user-devfathom-commercial/1e96b9b3-08d2-5173-abc1-832d8f57aab3/scratchpad}
+H=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)  # sibling helper scripts
 N=$1; REF=${2:-pr/$N}
 DIRC=$(readlink -f $S/checks/$N/latest)
 SUM=$DIRC/summary.json
@@ -17,7 +18,7 @@ runset() { # dir label db [super]
   ( cd "$dir"; source $S/gate.env
     for v in $(grep -o '^export [A-Z0-9_]*' $S/gate.env | cut -d' ' -f2); do val="${!v}"; [[ "$val" == *"/devfathom_gate_test"* ]] && export "$v=${val//\/devfathom_gate_test//$db}"; done
     export OWNER_URL="postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/$db"
-    bash $S/mkdb.sh "$db" "$dir" > $OUT/$label.db.log 2>&1
+    bash $H/mkdb.sh "$db" "$dir" > $OUT/$label.db.log 2>&1
     [ "${1:-}" = super ] && export DATABASE_URL="postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/$db" TEST_DATABASE_URL="postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/$db"
     present=(); for f in "${FILES[@]}"; do [ -f "$f" ] && present+=("$f"); done
     printf '%s\n' "${present[@]}" > $OUT/$label.present

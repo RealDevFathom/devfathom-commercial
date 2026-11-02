@@ -3,7 +3,7 @@
 import json, os, re, subprocess, sys
 
 S = __import__('os').environ.get('HANDOFF_STATE', '/tmp/claude-0/-home-user-devfathom-commercial/1e96b9b3-08d2-5173-abc1-832d8f57aab3/scratchpad')
-REPO = "/home/user/devfathom-commercial"
+REPO = __import__("os").environ.get("REPO", "/home/user/devfathom-commercial")
 n = sys.argv[1]
 os.makedirs(f"{S}/comments", exist_ok=True)
 
@@ -29,7 +29,7 @@ s = jload(f"{cdir}/summary.json")
 if not s:
     sys.exit(f"no machine-check summary for {n} at head {head}")
 retry = jload(f"{cdir}/retry.json")
-fmt = json.loads(subprocess.check_output(["python3", "-I", f"{S}/format-check.py", f"pr/{n}"], text=True))
+fmt = json.loads(subprocess.check_output(["python3", "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "format-check.py"), f"pr/{n}"], text=True))
 
 parts, fail = [], []
 # deps / db
@@ -57,7 +57,10 @@ else:
     parts.append(f"typecheck: no new errors (`tsc --noEmit` exits {tc['exit']} only on the {tc['errors']} errors already on develop in test files)")
 # lint + format
 lint = s["lint"]
-if lint["errors"]:
+if lint.get("parseError") or (lint["exit"] != 0 and not lint["errors"]):
+    fail.append("lint")
+    parts.append(f"ESLint did not complete (exit {lint['exit']}, no report)")
+elif lint["errors"]:
     fail.append("lint")
     parts.append(f"ESLint FAIL: {lint['errors']} error(s): " + "; ".join(m[:140] for m in lint["errorMessages"][:4]))
 else:
@@ -72,7 +75,12 @@ elif fmt["checked"]:
                  + (f" ({len(pre)} already unformatted on develop)" if pre else ""))
 # tests
 t = s["tests"]
-if t["codeFilesChanged"] == 0:
+vlog = open(f"{cdir}/vitest.log").read() if os.path.exists(f"{cdir}/vitest.log") else ""
+no_tests = "No test files found" in vlog
+if t["codeFilesChanged"] and (t.get("parseError") and not no_tests or (t["exit"] != 0 and not t["failedFiles"] and not no_tests)):
+    fail.append("tests")
+    parts.append(f"related tests did not complete (`vitest related` exit {t['exit']}, no usable report)")
+elif t["codeFilesChanged"] == 0:
     parts.append("tests: no code files changed, so no related tests")
 elif t["files"] == 0:
     parts.append("tests: `vitest related` found no tests for the changed files")

@@ -1,6 +1,6 @@
 # usage: format-check.py <ref> [<pr>] -> prints JSON {checked:[...], unformatted:[...]} for files changed by ref vs merge-base with develop
 import json, subprocess, sys, re
-REPO="/home/user/devfathom-commercial"
+REPO = __import__("os").environ.get("REPO", "/home/user/devfathom-commercial")
 ref=sys.argv[1]
 mb=subprocess.check_output(["git","-C",REPO,"merge-base","origin/develop",ref],text=True).strip()
 files=subprocess.check_output(["git","-C",REPO,"diff","--name-only","--diff-filter=d",mb,ref],text=True).split()

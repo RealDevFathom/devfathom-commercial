@@ -4,6 +4,7 @@
 # Writes $S/checks/<pr>/<sha>/{summary.json,*.log}
 set -u
 S=${HANDOFF_STATE:-/tmp/claude-0/-home-user-devfathom-commercial/1e96b9b3-08d2-5173-abc1-832d8f57aab3/scratchpad}
+H=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)  # sibling helper scripts
 LANE=$1; LANEDB=$2; N=$3; REF=${4:-pr/$N}
 cd "$LANE" || exit 2
 export PGPASSWORD=gate-postgres-ci-only
@@ -39,7 +40,7 @@ for v in $(grep -o '^export [A-Z0-9_]*' $S/gate.env | cut -d' ' -f2); do
   val="${!v}"; [[ "$val" == *"/devfathom_gate_test"* ]] && export "$v=${val//\/devfathom_gate_test//$LANEDB}"
 done
 OWNER_URL="postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/$LANEDB"
-bash "$S/mkdb.sh" "$LANEDB" "$LANE" > "$OUT/db.log" 2>&1; MIGRATE=$?
+bash "$H/mkdb.sh" "$LANEDB" "$LANE" > "$OUT/db.log" 2>&1; MIGRATE=$?
 if grep -q '^prisma/seed' "$OUT/changed.txt"; then
   DATABASE_URL="$OWNER_URL" MIGRATION_DATABASE_URL="$OWNER_URL" bunx prisma db seed >> "$OUT/db.log" 2>&1; SEED=$?
 else SEED=0; fi
@@ -123,5 +124,5 @@ if $BUILD!=0:
 json.dump(s,open(os.path.join(out,"summary.json"),"w"),indent=1)
 PY
 ln -sfn "$OUT" "$S/checks/$N/latest"
-if [ "$TESTS" != 0 ]; then flock "$S/laneC.lock" bash "$S/retry-tests.sh" "$N" "$SHA" > "$OUT/retry.out" 2>&1; fi
+if [ "$TESTS" != 0 ]; then flock "$S/laneC.lock" bash "$H/retry-tests.sh" "$N" "$SHA" > "$OUT/retry.out" 2>&1; fi
 echo "PR $N $SHA retry=[$(tail -1 "$OUT/retry.out" 2>/dev/null)] tc=$TC(new $(wc -l < $OUT/typecheck.new)) lint=$LINT tests=$TESTS build=$BUILD secs=$(( $(date +%s) - START ))"

@@ -16,7 +16,7 @@ def jload(p, d=None):
 
 
 def git(*a):
-    return subprocess.run(["git", "-C", "/home/user/devfathom-commercial", *a], capture_output=True, text=True).stdout.strip()
+    return subprocess.run(["git", "-C", __import__("os").environ.get("REPO", "/home/user/devfathom-commercial"), *a], capture_output=True, text=True).stdout.strip()
 
 
 # ---------- items in scope
@@ -222,6 +222,7 @@ md += ["", "## Rules in force", "",
        "- Verdict comment format: `Machine checks: PASS/FAIL (details). QA: PASS/FAIL (details). Security: PASS/FAIL (details).` plus the Claude Code footer.",
        "- Machine checks count only failures the PR introduces. The 4 typecheck errors already on develop, test failures that also fail on develop or the merge-base, and suites that only fail because the gate runtime DB role lacks CREATE ROLE are reported but are not counted against the PR. Prettier counts only for files the PR newly leaves unformatted (develop already has 141 unformatted files in the gate's set).",
        "", "## How to resume (environment)", "",
+       "0. `export REPO=<clone path> HANDOFF_STATE=<state dir>` (scripts default to this run's paths).",
        "1. `git fetch --unshallow origin || true; git fetch origin '+refs/pull/*/head:refs/remotes/pr/*'` (PR heads are read as `pr/<n>`).",
        "2. Local gate-equivalent Postgres 16 on 127.0.0.1:55432 (password `gate-postgres-ci-only`): `bash handoff/scripts/setup-db.sh` creates the cluster, roles, `devfathom_gate_test`, migrates, seeds, and makes `devfathom_gate_template`.",
        "3. Worktrees: `git worktree add --detach $HANDOFF_STATE/laneA origin/develop` (likewise laneB, laneC for retries, fixD for fixes), then `bun install --frozen-lockfile` in each. Export `HANDOFF_STATE` to the directory holding those worktrees, `gate.env`, `baseline/typecheck.errors`, `checks/`, `queue.txt`.",
