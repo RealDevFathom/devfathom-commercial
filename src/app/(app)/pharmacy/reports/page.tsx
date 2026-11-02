@@ -91,8 +91,7 @@ export default async function PharmacyReportsPage({
         } else if (
           !isModuleGranted('pharmacy-reports', ctx.entitlements.enabledModules) &&
           (error.message === 'Pharmacy reports are not licensed.' ||
-            error.message ===
-              `The ${moduleName} module is not enabled for this organization.`)
+            error.message === `The ${moduleName} module is not enabled for this organization.`)
         ) {
           detail =
             'The Pharmacy Reports module is not enabled for this workspace. Ask your workspace administrator to enable it.';

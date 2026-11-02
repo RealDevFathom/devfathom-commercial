@@ -185,7 +185,10 @@ describe('pharmacy report catalog filters', () => {
 
   it.each([
     new Error('Database unavailable'),
-    new TRPCError({ code: 'FORBIDDEN', message: 'Change your temporary password before continuing.' }),
+    new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Change your temporary password before continuing.',
+    }),
   ])('does not describe an unrelated report failure as missing access (%s)', async (error) => {
     reportModules.enabled = [];
     reportBranches.mockRejectedValueOnce(error);
