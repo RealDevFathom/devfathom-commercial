@@ -1,29 +1,25 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
+import { parseMeetingProviderIdentity } from '@/lib/meetings/provider-identity';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { NormalizedMeetingEvent } from './types';
 
 type OccurrenceRef = { id: string; organizationId: string };
 
 function participantIdentityAttribution(identity: string) {
-  const separator = identity.indexOf(':');
-  if (separator === -1) {
+  const parsed = parseMeetingProviderIdentity(identity);
+  if (!parsed) return null;
+  const { namespace, value } = parsed;
+  if (namespace === 'legacy') {
     // Preserve support for identities created before admission began namespacing them.
-    return { where: { OR: [{ id: identity }, { userId: identity }] }, userId: null };
+    return { where: { OR: [{ id: value }, { userId: value }] }, userId: null };
   }
 
-  const namespace = identity.slice(0, separator);
-  const value = identity.slice(separator + 1);
-  if (!value) return null;
   if (namespace === 'usr') {
     return { where: { userId: value }, userId: value };
   }
-  if (namespace === 'gst') {
-    return { where: { id: value }, userId: null };
-  }
-
-  return null;
+  return { where: { id: value }, userId: null };
 }
 
 export async function resolveProviderRoom(roomName: string): Promise<OccurrenceRef | null> {

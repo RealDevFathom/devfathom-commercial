@@ -5,6 +5,7 @@ import { AccessToken, type VideoGrant } from 'livekit-server-sdk';
 import { canAccessMeeting } from '@/lib/authz';
 import type { MeetingParticipantRole } from '@/generated/prisma/client';
 import type { MeetingAdmission } from './admission-contract';
+import { createMeetingProviderIdentity } from './provider-identity';
 import { organizationForMeetingPublicId } from '@/lib/auth/anonymous-tenant';
 import {
   isTenantLifecycleAccessible,
@@ -173,7 +174,7 @@ export async function admitToMeeting(input: {
         (occurrence.meeting.createdById === sessionUser.id ? 'HOST' : 'ATTENDEE');
       return {
         occurrence,
-        identity: `usr:${sessionUser.id}`,
+        identity: createMeetingProviderIdentity('usr', sessionUser.id),
         displayName: 'Member',
         role,
       };
@@ -211,7 +212,7 @@ export async function admitToMeeting(input: {
     if (participant.lobbyStatus === 'WAITING') return WAITING;
     return {
       occurrence,
-      identity: `gst:${participant.id}`,
+      identity: createMeetingProviderIdentity('gst', participant.id),
       displayName: participant.displayName,
       role: participant.roleOverride ?? 'ATTENDEE',
     };
