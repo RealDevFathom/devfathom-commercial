@@ -1,0 +1,29 @@
+{
+  "issue": 504,
+  "linearIssue": "DEV-214",
+  "archive": "archive/wip/WHA-66-dirty",
+  "tip": "ff3bdd153ad614b949919d89618b510f5d11b122",
+  "decision": "obsolete",
+  "supersedes": [272],
+  "rationale": "Do not restore or cherry-pick the archived worktree snapshot. Its deletions remove restaurant inventory and purchasing implementations, router registration, authorization and module gates, order-close recipe consumption, and M6 acceptance coverage that develop maintains. Retain the current implementation and preserve the archive as historical evidence.",
+  "supersededPrContext": "The supplied #272 mapping is unrelated: that PR concerns agency project lead demotion, not WHA-66 archive recovery.",
+  "commits": [
+    {
+      "sha": "ff3bdd153ad614b949919d89618b510f5d11b122",
+      "disposition": "obsolete",
+      "evidence": [
+        "src/lib/restaurant/inventory.ts",
+        "src/lib/restaurant/purchasing.ts",
+        "src/lib/restaurant/orders.ts",
+        "src/server/routers/restaurant-inventory.ts",
+        "src/server/routers/restaurant-purchasing.ts",
+        "src/server/routers/_app.ts",
+        "src/lib/abac/policies.ts",
+        "src/lib/module-catalog.ts",
+        "tests/restaurant-m6-acceptance.test.ts",
+        "tests/restaurant-m6-governance.test.ts",
+        "tests/restaurant-m6-rls.test.ts"
+      ]
+    }
+  ]
+}
