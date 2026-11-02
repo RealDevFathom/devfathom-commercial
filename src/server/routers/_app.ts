@@ -5,6 +5,7 @@ import { hotelPropertyRouter } from './hotel-property';
 import { hotelRatesRouter } from './hotel-rates';
 import { restaurantPromotionsRouter } from './restaurant-promotions';
 import { platformHealthRouter } from './platform-health';
+import { platformAIUsageRouter } from './platform-ai-usage';
 import { pharmacyOfflineRouter } from './pharmacy-offline';
 import { dashboardRouter } from './dashboard';
 import { projectsRouter } from './projects';
@@ -77,6 +78,7 @@ export const appRouter = router({
   hotelRates: hotelRatesRouter,
   restaurantPromotions: restaurantPromotionsRouter,
   platformHealth: platformHealthRouter,
+  platformAIUsage: platformAIUsageRouter,
   pharmacyOffline: pharmacyOfflineRouter,
   dashboard: dashboardRouter,
   projects: projectsRouter,

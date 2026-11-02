@@ -10701,9 +10701,32 @@ model PlatformUser {
   sessions                             PlatformSession[]
   recoveryCodes                        PlatformRecoveryCode[]
   restaurantActivationAcknowledgements RestaurantActivationAcknowledgement[]
+  platformNotifications                 PlatformNotification[]
 
   @@index([role, active])
   @@map("platform_users")
+}
+
+model PlatformNotification {
+  id             String   @id @default(cuid())
+  platformUserId String
+  type           String
+  title          String
+  message        String
+  isRead         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  platformUser PlatformUser @relation(fields: [platformUserId], references: [id], onDelete: Cascade)
+
+  @@index([platformUserId, isRead, createdAt(sort: Desc)])
+  @@map("platform_notifications")
+}
+
+model AIBudgetAlertMonth {
+  month     String   @id
+  createdAt DateTime @default(now())
+
+  @@map("ai_budget_alert_months")
 }
 
 model PlatformRecoveryCode {
