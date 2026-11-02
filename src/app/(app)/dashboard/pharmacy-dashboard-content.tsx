@@ -15,6 +15,8 @@ import { isModuleGranted } from '@/lib/module-catalog';
 import {
   PHARMACY_WIDGET_REGISTRY,
   pharmacyDashboardDefault,
+  type PharmacyDashboardAccess,
+  type PharmacyDashboardLink,
   type PharmacyDashboardPreference,
 } from '@/lib/pharmacy/dashboard';
 import { trpc } from '@/lib/trpc';
@@ -32,6 +34,11 @@ type CommandQuery = {
   isLoading: boolean;
   refetch: () => unknown;
 };
+const isDenied = (error: { data?: { code?: string | null } | null } | null | undefined) =>
+  ['FORBIDDEN', 'UNAUTHORIZED'].includes(error?.data?.code ?? '');
+/** The command centre is the owner's only when the viewer is the owner (DEV-602). */
+const commandCentreHeading = (role: string | null | undefined) =>
+  role === 'ADMIN' ? 'Owner command centre' : 'Operations command centre';
 const formatMetric = (key: string, value: number | null) =>
   value == null
     ? '—'
@@ -78,7 +85,7 @@ function WidgetState({
       </div>
     );
   if (query.error) {
-    const denied = ['FORBIDDEN', 'UNAUTHORIZED'].includes(query.error.data?.code ?? '');
+    const denied = isDenied(query.error);
     return (
       <div role={denied ? 'status' : 'alert'} className="space-y-3">
         <StatusPill status={denied ? 'Restricted' : 'Unavailable'} tone="warning" />
@@ -135,14 +142,63 @@ function WidgetState({
   );
 }
 
-export function PharmacyDashboardContent({ role }: { role: string | null | undefined }) {
+export function PharmacyDashboardContent({
+  role,
+  access,
+}: {
+  role: string | null | undefined;
+  /** Resolved on the server from the viewer's own grants (DEV-602). */
+  access: PharmacyDashboardAccess;
+}) {
   // Every command-centre read is a Pharmacy Reports procedure, and each one refuses a workspace
   // without that module (FORBIDDEN). Ask them nothing there, as the counter does for its module.
   const { enabledModules } = useEntitlements();
+  // Each read — and the layout save — also needs reports:operational. A cashier or a pharmacist
+  // lacks it, so their dashboard asks Pharmacy Reports nothing and starts from their own tools.
+  if (!access.reports) return <RoleWorkspace tools={access.tools} />;
   return isModuleGranted('pharmacy-reports', enabledModules) ? (
-    <OwnerCommandCentre role={role} />
+    <CommandCentre role={role} />
   ) : (
     <ReportsNotInPackage role={role} />
+  );
+}
+
+/** A viewer without report access: their working pages, and no owner layout to edit. */
+function RoleWorkspace({ tools }: { tools: readonly PharmacyDashboardLink[] }) {
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="Pharmacy workspace"
+        heading="Today’s work"
+        description="Start from the tools your role uses. Shop reports and the owner command centre open for owners and report viewers."
+      />
+      <SectionCard
+        eyebrow="Your tools"
+        title={tools.length ? 'Where to start' : 'No pharmacy tools assigned'}
+        titleLevel={2}
+      >
+        {tools.length ? (
+          <ul className="grid gap-3 md:grid-cols-2">
+            {tools.map((tool) => (
+              <li key={tool.key}>
+                <Link
+                  href={tool.href}
+                  className="block rounded-[var(--radius-sm)] border border-border-subtle p-4 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <span className="block font-medium text-text-strong">{tool.label}</span>
+                  <span className="mt-1 block text-sm text-text-muted">{tool.detail}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p role="status" className="max-w-2xl text-sm leading-6 text-text-body">
+            Your role does not include a pharmacy tool yet. Ask your workspace administrator to
+            assign the role you work in.
+          </p>
+        )}
+      </SectionCard>
+    </div>
   );
 }
 
@@ -152,7 +208,7 @@ function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
     <div className="space-y-5">
       <PageHeader
         eyebrow="Pharmacy workspace"
-        heading="Owner command centre"
+        heading={commandCentreHeading(role)}
         description="Live operational signals with visible source, freshness and permission boundaries."
       />
       <SectionCard
@@ -183,7 +239,7 @@ function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
   );
 }
 
-function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
+function CommandCentre({ role }: { role: string | null | undefined }) {
   const utils = trpc.useUtils();
   const branches = trpc.pharmacyReports.branches.useQuery(undefined, { retry: false });
   const catalog = trpc.pharmacyReports.catalog.useQuery(undefined, { retry: false });
@@ -199,6 +255,8 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
     enabled: Boolean(branches.data?.branches.length),
     retry: false,
   }) as unknown as CommandQuery;
+  // A refusal is correct denial (the grant changed since this page rendered), not a failed load.
+  const branchesDenied = isDenied(branches.error);
   const layout = editing ? draft : (preferences.data ?? fallback);
   const begin = () => {
     const next = structuredClone(preferences.data ?? fallback);
@@ -233,13 +291,15 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
     <div className="space-y-5">
       <PageHeader
         eyebrow="Pharmacy workspace"
-        heading="Owner command centre"
+        heading={commandCentreHeading(role)}
         description="Live operational signals with visible source, freshness and permission boundaries."
         actions={
-          <Button variant="outline" onClick={begin}>
-            <Pencil aria-hidden />
-            Edit dashboard
-          </Button>
+          branchesDenied ? null : (
+            <Button variant="outline" onClick={begin}>
+              <Pencil aria-hidden />
+              Edit dashboard
+            </Button>
+          )
         }
       />
       <SectionCard
@@ -268,14 +328,16 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
         <p className="mt-3 font-mono text-xs text-text-muted">
           {command.data
             ? `As of ${new Date(command.data.freshness.asOf).toLocaleString()} · ${command.data.freshness.source}`
-            : branches.error
-              ? 'Branches could not be loaded.'
-              : branches.data?.branches.length === 0
-                ? 'Waiting for a reportable branch.'
-                : 'Loading today’s figures…'}
+            : branchesDenied
+              ? 'Shop reports are not open to your account.'
+              : branches.error
+                ? 'Branches could not be loaded.'
+                : branches.data?.branches.length === 0
+                  ? 'Waiting for a reportable branch.'
+                  : 'Loading today’s figures…'}
         </p>
       </SectionCard>
-      {editing ? (
+      {editing && !branchesDenied ? (
         <SectionCard
           eyebrow="Edit mode"
           title="Widget layout"
@@ -351,7 +413,17 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
           ) : null}
         </SectionCard>
       ) : null}
-      {branches.error ? (
+      {branchesDenied ? (
+        <SectionCard title="Shop reports are not open to you" titleLevel={2}>
+          <div role="status" className="space-y-3">
+            <StatusPill status="Restricted" tone="warning" />
+            <p className="text-sm text-text-body">
+              Your account cannot read shop reports, so no figures are shown. Ask your workspace
+              administrator if your work needs them.
+            </p>
+          </div>
+        </SectionCard>
+      ) : branches.error ? (
         <SectionCard title="Command centre unavailable">
           <div role="alert" className="space-y-3">
             <StatusPill status="Unavailable" tone="warning" />
