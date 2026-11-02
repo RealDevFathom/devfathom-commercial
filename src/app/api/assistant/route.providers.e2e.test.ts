@@ -67,7 +67,7 @@ const ENV = {
   AWS_PROFILE: '',
 };
 
-type Outcome = 'ok' | 'fail';
+type Outcome = 'ok' | 'fail' | 'auth';
 type Call = { url: string; headers: Headers; body: Record<string, unknown> };
 
 const sse = (events: Array<Record<string, unknown> & { type: string }>, named: boolean) =>
@@ -225,8 +225,12 @@ async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         );
   }
   if (url.startsWith('https://api.openai.com/')) {
-    return outcomes.openai === 'ok'
-      ? openaiStream('Hello from OpenAI')
+    if (outcomes.openai === 'ok') return openaiStream('Hello from OpenAI');
+    return outcomes.openai === 'auth'
+      ? Response.json(
+          { error: { message: 'Incorrect API key provided', type: 'invalid_request_error' } },
+          { status: 401 }
+        )
       : Response.json(
           { error: { message: 'Server error', type: 'server_error' } },
           { status: 500 }
@@ -345,14 +349,16 @@ describe('Ask Fathom through the routed providers (offline end to end)', () => {
   });
 
   it('falls back to the Bedrock global profile from ap-southeast-1, signed by the AWS credential chain, with personal data masked', async () => {
+    // Anthropic 529 is retried once (2 calls); an OpenAI 401 is an auth stop and is not
+    // retried (1 call); Bedrock is the 4th and last model call this turn may make.
     outcomes.anthropic = 'fail';
-    outcomes.openai = 'fail';
+    outcomes.openai = 'auth';
     const response = await ask(
       'What did the customer on 0300-1234567 (ayesha@example.com, CNIC 35202-1234567-1) buy for PKR 12,450 today?'
     );
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('Hello from Bedrock');
-    expect(calls.map(providerOf)).toEqual(['api', 'api', 'api', 'api', 'bedrock-runtime']);
+    expect(calls.map(providerOf)).toEqual(['api', 'api', 'api', 'bedrock-runtime']);
     const bedrock = calls.at(-1)!;
     expect(bedrock.url).toBe(
       `https://bedrock-runtime.ap-southeast-1.amazonaws.com/model/${encodeURIComponent('global.anthropic.claude-sonnet-5-5')}/converse-stream`
@@ -369,6 +375,21 @@ describe('Ask Fathom through the routed providers (offline end to end)', () => {
     expect(JSON.stringify(calls[0].body)).toContain('0300-1234567');
     expect(JSON.stringify(calls[2].body)).toContain('0300-1234567');
     expect(recorded.map((row) => row.provider)).toEqual(['bedrock']);
+  });
+
+  it('stops at four model calls per turn when every failure is retried', async () => {
+    // Anthropic 529 and OpenAI 500 are both retried once: four calls, then the turn limit.
+    outcomes.anthropic = 'fail';
+    outcomes.openai = 'fail';
+    const response = await ask();
+    expect(await response.text()).not.toContain('Hello from Bedrock');
+    expect(calls.map((call) => call.url)).toEqual([
+      'https://api.anthropic.com/v1/messages',
+      'https://api.anthropic.com/v1/messages',
+      'https://api.openai.com/v1/responses',
+      'https://api.openai.com/v1/responses',
+    ]);
+    expect(recorded).toEqual([]);
   });
 
   it('follows the SuperAdmin switch: Bedrock forced first, with the SuperAdmin tier model', async () => {
