@@ -1,8 +1,10 @@
 import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TRPCError } from '@trpc/server';
 
 const actor = vi.hoisted(() => ({ role: 'ADMIN' }));
 const signalStaff = vi.hoisted(() => ({ userId: 'cashier_1' as string | undefined }));
+const expiryError = vi.hoisted(() => ({ value: null as Error | null }));
 
 const commandCentre = vi.fn(async () => ({
   freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
@@ -70,32 +72,35 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
           estimateConfidence: null,
         },
       ],
-      expiryAdvice: async () => [
-        {
-          lotId: 'lot-1',
-          branchId: 'b1',
-          medicineName: 'High-value medicine',
-          batchNumber: 'B-1',
-          supplierId: 'supplier-1',
-          supplierName: 'Supplier',
-          stockLocationId: 'location-1',
-          onHandUnits: 90,
-          unitCostMinor: 500,
-          expiresAt: new Date('2026-10-05T00:00:00Z'),
-          soldUnits: 10,
-          historyDays: 30,
-          returnWindowDays: 45,
-          coldChain: false,
-          classification: 'RETURNABLE',
-          observedUnitsPerDay: 0.33,
-          projectedClearAt: new Date('2027-06-01T00:00:00Z'),
-          returnWindowStartsAt: new Date('2026-08-21T00:00:00Z'),
-          valueAtRiskMinor: 40_000,
-          projectedUnsoldUnits: 80,
-          proposalAllowed: true,
-          explanation: 'Observed 10 units over 30 days; projected clear after expiry.',
-        },
-      ],
+      expiryAdvice: async () => {
+        if (expiryError.value) throw expiryError.value;
+        return [
+          {
+            lotId: 'lot-1',
+            branchId: 'b1',
+            medicineName: 'High-value medicine',
+            batchNumber: 'B-1',
+            supplierId: 'supplier-1',
+            supplierName: 'Supplier',
+            stockLocationId: 'location-1',
+            onHandUnits: 90,
+            unitCostMinor: 500,
+            expiresAt: new Date('2026-10-05T00:00:00Z'),
+            soldUnits: 10,
+            historyDays: 30,
+            returnWindowDays: 45,
+            coldChain: false,
+            classification: 'RETURNABLE',
+            observedUnitsPerDay: 0.33,
+            projectedClearAt: new Date('2027-06-01T00:00:00Z'),
+            returnWindowStartsAt: new Date('2026-08-21T00:00:00Z'),
+            valueAtRiskMinor: 40_000,
+            projectedUnsoldUnits: 80,
+            proposalAllowed: true,
+            explanation: 'Observed 10 units over 30 days; projected clear after expiry.',
+          },
+        ];
+      },
       proposeExpiryReturn: async () => ({}),
       refreshAnomalies: async () => ({ evaluated: 1, signals: [] }),
       acknowledgeAnomaly: async () => ({}),
@@ -141,6 +146,7 @@ describe('pharmacy report catalog filters', () => {
   beforeEach(() => {
     actor.role = 'ADMIN';
     signalStaff.userId = 'cashier_1';
+    expiryError.value = null;
   });
 
   it('carries all supported filters and exposes the metric contract', async () => {
@@ -196,6 +202,30 @@ describe('pharmacy report catalog filters', () => {
       screen.queryByRole('link', { name: 'Open related audit trail' })
     ).not.toBeInTheDocument();
   });
+
+  it('explains expiry loading failures without presenting them as permission restrictions', async () => {
+    expiryError.value = new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'private detail' });
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Expiry advice could not load. Apply the filters again to retry. No stock or supplier-return data was changed.'
+    );
+    expect(screen.queryByText(/Financial report and owner permissions/)).not.toBeInTheDocument();
+    expect(screen.queryByText('private detail')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create draft proposal' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply filters' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Selected period at a glance' })).toBeVisible();
+  });
+
+  it.each(['FORBIDDEN', 'UNAUTHORIZED'] as const)(
+    'keeps %s expiry access restrictions separate from loading failures',
+    async (code) => {
+      expiryError.value = new TRPCError({ code });
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+      expect(screen.getByText(/Financial report and owner permissions/)).toBeVisible();
+      expect(screen.queryByText(/Expiry advice could not load/)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Create draft proposal' })).not.toBeInTheDocument();
+    }
+  );
 
   it('links signals without staff attribution to the supported audit search filter', async () => {
     signalStaff.userId = undefined;

@@ -21,6 +21,20 @@ it('admits only explicit disposable loopback payment simulation', () => {
     expect(paymentSandboxAdmitted({ ...env, DATABASE_URL: url })).toBe(false);
   expect(paymentSandboxAdmitted({ ...env, PHARMACY_PAYMENT_SANDBOX_ADMITTED: '' })).toBe(false);
 });
+it('rejects production even with the sandbox flag and disposable database admitted', () => {
+  const env = {
+    PHARMACY_PAYMENT_SANDBOX_ADMITTED: 'true',
+    DATABASE_URL: 'postgresql://fixture@localhost:55625/wha1364_business_disposable_20261008',
+  };
+  expect(paymentSandboxAdmitted({ ...env, NODE_ENV: 'production' })).toBe(false);
+  expect(paymentSandboxAdmitted({ ...env, NODE_ENV: 'development' })).toBe(true);
+  expect(paymentSandboxAdmitted({ ...env, NODE_ENV: 'test' })).toBe(true);
+
+  vi.stubEnv('NODE_ENV', 'production');
+  vi.stubEnv('PHARMACY_PAYMENT_SANDBOX_ADMITTED', env.PHARMACY_PAYMENT_SANDBOX_ADMITTED);
+  vi.stubEnv('DATABASE_URL', env.DATABASE_URL);
+  expect(paymentSandboxAdmitted()).toBe(false);
+});
 it('never automatically resends an unknown operation', () => {
   expect(() => nextSandboxPaymentState('UNKNOWN', 'APPROVED', 'RETRY')).toThrow(
     'RECONCILIATION_REQUIRED'

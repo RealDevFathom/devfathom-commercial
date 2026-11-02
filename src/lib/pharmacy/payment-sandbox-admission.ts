@@ -1,10 +1,12 @@
 export function paymentSandboxAdmitted(
-  env: { PHARMACY_PAYMENT_SANDBOX_ADMITTED?: string; DATABASE_URL?: string } = {
+  env: { NODE_ENV?: string; PHARMACY_PAYMENT_SANDBOX_ADMITTED?: string; DATABASE_URL?: string } = {
+    NODE_ENV: process.env.NODE_ENV,
     PHARMACY_PAYMENT_SANDBOX_ADMITTED: process.env.PHARMACY_PAYMENT_SANDBOX_ADMITTED,
     DATABASE_URL: process.env.DATABASE_URL,
   }
 ) {
-  if (env.PHARMACY_PAYMENT_SANDBOX_ADMITTED !== 'true') return false;
+  if (env.NODE_ENV === 'production' || env.PHARMACY_PAYMENT_SANDBOX_ADMITTED !== 'true')
+    return false;
   try {
     const url = new URL(env.DATABASE_URL ?? '');
     return (

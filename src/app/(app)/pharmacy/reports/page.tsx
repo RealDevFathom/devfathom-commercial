@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
+import { TRPCError } from '@trpc/server';
 
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -112,6 +113,7 @@ export default async function PharmacyReportsPage({
   let digest: Awaited<ReturnType<typeof caller.digestOverview>> | null = null;
   let anomalies: Awaited<ReturnType<typeof caller.anomalySignals>> | null = null;
   let expiryAdvice: Awaited<ReturnType<typeof caller.expiryAdvice>> | null = null;
+  let expiryAdviceError = false;
   let authenticationFlags: Awaited<ReturnType<typeof caller.packAuthenticationFlags>> | null = null;
   let reportError = false;
   let marketing: Awaited<ReturnType<typeof caller.marketing>> | null = null;
@@ -151,6 +153,11 @@ export default async function PharmacyReportsPage({
     if (digestResult.status === 'fulfilled') digest = digestResult.value;
     if (anomalyResult.status === 'fulfilled') anomalies = anomalyResult.value;
     if (expiryResult.status === 'fulfilled') expiryAdvice = expiryResult.value;
+    else
+      expiryAdviceError = !(
+        expiryResult.reason instanceof TRPCError &&
+        ['FORBIDDEN', 'UNAUTHORIZED'].includes(expiryResult.reason.code)
+      );
     if (authenticationResult.status === 'fulfilled')
       authenticationFlags = authenticationResult.value;
   }
@@ -575,6 +582,17 @@ export default async function PharmacyReportsPage({
                   No future-expiry lots with available stock match this scope.
                 </p>
               )}
+            </SectionCard>
+          ) : expiryAdviceError ? (
+            <SectionCard
+              eyebrow="Could not load"
+              title="Expiry and supplier-return advisor"
+              titleLevel={2}
+            >
+              <p className="text-sm text-text-muted" role="alert">
+                Expiry advice could not load. Apply the filters again to retry. No stock or
+                supplier-return data was changed.
+              </p>
             </SectionCard>
           ) : (
             <SectionCard
