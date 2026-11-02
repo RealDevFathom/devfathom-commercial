@@ -1,0 +1,88 @@
+{
+  "branchName": "SehatCart Test Branch",
+  "businessDate": "2026-11-02T00:00:00.000Z",
+  "drawers": [
+    {
+      "id": "cmvzku23u01dk4oqr1mdwtjsf",
+      "deviceId": "QA-20261102-FUNC-DEVICE",
+      "status": "CLOSED",
+      "openedAt": "2026-11-02T18:12:53.418Z",
+      "openedBy": "QA Cashier",
+      "expectedMinor": 0,
+      "countedMinor": 0
+    },
+    {
+      "id": "cmvzl3amh01mt4oqrdow3lxfi",
+      "deviceId": "counter-d6d8db79-7fa2-4c14-8292-0bdf833c5e8c",
+      "status": "OPEN",
+      "openedAt": "2026-11-02T18:20:04.361Z",
+      "openedBy": "QA Cashier",
+      "expectedMinor": 0,
+      "countedMinor": null
+    },
+    {
+      "id": "cmvzl6rrw01nu4oqrurynfqz6",
+      "deviceId": "counter-bbd93263-ccd1-4c8d-9f65-7011e1bf6a48",
+      "status": "OPEN",
+      "openedAt": "2026-11-02T18:22:46.556Z",
+      "openedBy": "QA Cashier",
+      "expectedMinor": 10400,
+      "countedMinor": null
+    },
+    {
+      "id": "cmvzldu4601wa4oqrhuvnf2mw",
+      "deviceId": "QA-20261102-CASHCHECK-DEVICE",
+      "status": "CLOSED",
+      "openedAt": "2026-11-02T18:28:16.182Z",
+      "openedBy": "QA Cashier",
+      "expectedMinor": 0,
+      "countedMinor": 0
+    },
+    {
+      "id": "cmvzldwzz01ws4oqrips1w1ix",
+      "deviceId": "counter-06b2e7c4-2200-4651-9e66-ba697f210d5c",
+      "status": "OPEN",
+      "openedAt": "2026-11-02T18:28:19.919Z",
+      "openedBy": "QA Pharmacist",
+      "expectedMinor": 0,
+      "countedMinor": null
+    },
+    {
+      "id": "cmvzlh4uo01ym4oqr6qev0j0t",
+      "deviceId": "qa-rbac-manager-device",
+      "status": "CLOSED",
+      "openedAt": "2026-11-02T18:30:50.064Z",
+      "openedBy": "QA Manager",
+      "expectedMinor": 0,
+      "countedMinor": 0
+    },
+    {
+      "id": "cmvzlpwlm022s4oqrhb819u5t",
+      "deviceId": "QA-20261102-FINAL-DEVICE",
+      "status": "CLOSED",
+      "openedAt": "2026-11-02T18:37:39.274Z",
+      "openedBy": "QA Cashier",
+      "expectedMinor": 0,
+      "countedMinor": 0
+    }
+  ],
+  "totals": {
+    "grossSalesMinor": 63197,
+    "refundTotalMinor": 52797,
+    "netSalesMinor": 10400,
+    "cashExpectedMinor": 10400,
+    "cashCountedMinor": 0,
+    "cashVarianceMinor": -10400,
+    "sourceHash": "b74a2db0df52c5585dcedf0d996e0907ebfbcba46b42c00ccfb6d0f123d9c8fe"
+  },
+  "tenderTotals": [
+    {
+      "type": "CASH",
+      "amountMinor": 63197,
+      "refundMinor": 52797,
+      "netMinor": 10400
+    }
+  ],
+  "close": null,
+  "timezone": "Asia/Karachi"
+}

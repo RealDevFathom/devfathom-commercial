@@ -1,0 +1,1301 @@
+{
+  "owner": {
+    "pharmacySales.counterBranches": {
+      "status": 200,
+      "ms": 257,
+      "ok": true,
+      "code": null,
+      "message": null,
+      "data": {
+        "branches": [
+          {
+            "id": "cmvx5fc4p000cy5qrcgzjrc3b",
+            "code": "MAIN",
+            "name": "SehatCart Test Branch",
+            "city": "Lahore"
+          }
+        ],
+        "currency": "PKR",
+        "timezone": "Asia/Karachi",
+        "paymentSandboxAvailable": false
+      },
+      "raw": {
+        "result": {
+          "data": {
+            "json": {
+              "branches": [
+                {
+                  "id": "cmvx5fc4p000cy5qrcgzjrc3b",
+                  "code": "MAIN",
+                  "name": "SehatCart Test Branch",
+                  "city": "Lahore"
+                }
+              ],
+              "currency": "PKR",
+              "timezone": "Asia/Karachi",
+              "paymentSandboxAvailable": false
+            }
+          }
+        }
+      },
+      "at": "2026-11-02 23:04:22 PKT"
+    },
+    "pharmacySales.counterKeymap": {
+      "status": 200,
+      "ms": 82,
+      "ok": true,
+      "code": null,
+      "message": null,
+      "data": {
+        "preset": {
+          "key": "devfathom",
+          "label": "DevFathom counter",
+          "description": "F2–F10 follow the bill in workflow order; exceptions sit on Shift+F2–F4.",
+          "confirmed": true,
+          "phaseZeroDecision": null,
+          "bindings": {
+            "focusSearch": {
+              "key": "F2"
+            },
+            "selectPackUnit": {
+              "key": "F3"
+            },
+            "selectStripUnit": {
+              "key": "F4"
+            },
+            "selectLooseUnit": {
+              "key": "F5"
+            },
+            "addToCart": {
+              "key": "F6"
+            },
+            "holdSale": {
+              "key": "F7"
+            },
+            "resumeSale": {
+              "key": "F8"
+            },
+            "openTender": {
+              "key": "F9"
+            },
+            "printReceipt": {
+              "key": "F10"
+            },
+            "focusPrescriptionPanel": {
+              "key": "F2",
+              "shift": true
+            },
+            "captureDemand": {
+              "key": "F3",
+              "shift": true
+            },
+            "voidSale": {
+              "key": "F4",
+              "shift": true
+            }
+          }
+        },
+        "bindings": {
+          "focusSearch": {
+            "key": "F2"
+          },
+          "selectPackUnit": {
+            "key": "F3"
+          },
+          "selectStripUnit": {
+            "key": "F4"
+          },
+          "selectLooseUnit": {
+            "key": "F5"
+          },
+          "addToCart": {
+            "key": "F6"
+          },
+          "holdSale": {
+            "key": "F7"
+          },
+          "resumeSale": {
+            "key": "F8"
+          },
+          "openTender": {
+            "key": "F9"
+          },
+          "printReceipt": {
+            "key": "F10"
+          },
+          "focusPrescriptionPanel": {
+            "key": "F2",
+            "shift": true
+          },
+          "captureDemand": {
+            "key": "F3",
+            "shift": true
+          },
+          "voidSale": {
+            "key": "F4",
+            "shift": true
+          }
+        },
+        "overriddenActions": [],
+        "stored": false
+      },
+      "raw": {
+        "result": {
+          "data": {
+            "json": {
+              "preset": {
+                "key": "devfathom",
+                "label": "DevFathom counter",
+                "description": "F2–F10 follow the bill in workflow order; exceptions sit on Shift+F2–F4.",
+                "confirmed": true,
+                "phaseZeroDecision": null,
+                "bindings": {
+                  "focusSearch": {
+                    "key": "F2"
+                  },
+                  "selectPackUnit": {
+                    "key": "F3"
+                  },
+                  "selectStripUnit": {
+                    "key": "F4"
+                  },
+                  "selectLooseUnit": {
+                    "key": "F5"
+                  },
+                  "addToCart": {
+                    "key": "F6"
+                  },
+                  "holdSale": {
+                    "key": "F7"
+                  },
+                  "resumeSale": {
+                    "key": "F8"
+                  },
+                  "openTender": {
+                    "key": "F9"
+                  },
+                  "printReceipt": {
+                    "key": "F10"
+                  },
+                  "focusPrescriptionPanel": {
+                    "key": "F2",
+                    "shift": true
+                  },
+                  "captureDemand": {
+                    "key": "F3",
+                    "shift": true
+                  },
+                  "voidSale": {
+                    "key": "F4",
+                    "shift": true
+                  }
+                }
+              },
+              "bindings": {
+                "focusSearch": {
+                  "key": "F2"
+                },
+                "selectPackUnit": {
+                  "key": "F3"
+                },
+                "selectStripUnit": {
+                  "key": "F4"
+                },
+                "selectLooseUnit": {
+                  "key": "F5"
+                },
+                "addToCart": {
+                  "key": "F6"
+                },
+                "holdSale": {
+                  "key": "F7"
+                },
+                "resumeSale": {
+                  "key": "F8"
+                },
+                "openTender": {
+                  "key": "F9"
+                },
+                "printReceipt": {
+                  "key": "F10"
+                },
+                "focusPrescriptionPanel": {
+                  "key": "F2",
+                  "shift": true
+                },
+                "captureDemand": {
+                  "key": "F3",
+                  "shift": true
+                },
+                "voidSale": {
+                  "key": "F4",
+                  "shift": true
+                }
+              },
+              "overriddenActions": [],
+              "stored": false
+            },
+            "meta": {
+              "referentialEqualities": {
+                "bindings.focusSearch": [
+                  "preset.bindings.focusSearch"
+                ],
+                "bindings.selectPackUnit": [
+                  "preset.bindings.selectPackUnit"
+                ],
+                "bindings.selectStripUnit": [
+                  "preset.bindings.selectStripUnit"
+                ],
+                "bindings.selectLooseUnit": [
+                  "preset.bindings.selectLooseUnit"
+                ],
+                "bindings.addToCart": [
+                  "preset.bindings.addToCart"
+                ],
+                "bindings.holdSale": [
+                  "preset.bindings.holdSale"
+                ],
+                "bindings.resumeSale": [
+                  "preset.bindings.resumeSale"
+                ],
+                "bindings.openTender": [
+                  "preset.bindings.openTender"
+                ],
+                "bindings.printReceipt": [
+                  "preset.bindings.printReceipt"
+                ],
+                "bindings.focusPrescriptionPanel": [
+                  "preset.bindings.focusPrescriptionPanel"
+                ],
+                "bindings.captureDemand": [
+                  "preset.bindings.captureDemand"
+                ],
+                "bindings.voidSale": [
+                  "preset.bindings.voidSale"
+                ]
+              },
+              "v": 1
+            }
+          }
+        }
+      },
+      "at": "2026-11-02 23:04:22 PKT"
+    },
+    "pharmacyBranchAssignments.list": {
+      "status": 200,
+      "ms": 76,
+      "ok": true,
+      "code": null,
+      "message": null,
+      "data": {
+        "branches": [
+          {
+            "id": "cmvx5fc4p000cy5qrcgzjrc3b",
+            "code": "MAIN",
+            "name": "SehatCart Test Branch"
+          }
+        ],
+        "members": [
+          {
+            "id": "cqargoiyjfibo71r34xrmnago",
+            "name": "QA Cashier",
+            "email": "qa.cashier@example.com",
+            "roleName": "Cashier"
+          },
+          {
+            "id": "cqamgrd345d9c39d10ed4f66c",
+            "name": "QA Manager",
+            "email": "qa.manager@example.com",
+            "roleName": "Procurement"
+          },
+          {
+            "id": "cqaoytv76jtk0pbjipb3ump87",
+            "name": "QA Owner",
+            "email": "qa.owner@example.com",
+            "roleName": "Owner / Operator"
+          },
+          {
+            "id": "cqaphrm7c1d2e3f4a5b6c7d8e9",
+            "name": "QA Pharmacist",
+            "email": "qa.pharmacist@example.com",
+            "roleName": "Pharmacist"
+          },
+          {
+            "id": "cmvx5fc4k000by5qrhb42d2b7",
+            "name": "SehatCart Owner",
+            "email": "saad@sehatcart.com",
+            "roleName": "Owner / Operator"
+          }
+        ],
+        "assignments": []
+      },
+      "raw": {
+        "result": {
+          "data": {
+            "json": {
+              "branches": [
+                {
+                  "id": "cmvx5fc4p000cy5qrcgzjrc3b",
+                  "code": "MAIN",
+                  "name": "SehatCart Test Branch"
+                }
+              ],
+              "members": [
+                {
+                  "id": "cqargoiyjfibo71r34xrmnago",
+                  "name": "QA Cashier",
+                  "email": "qa.cashier@example.com",
+                  "roleName": "Cashier"
+                },
+                {
+                  "id": "cqamgrd345d9c39d10ed4f66c",
+                  "name": "QA Manager",
+                  "email": "qa.manager@example.com",
+                  "roleName": "Procurement"
+                },
+                {
+                  "id": "cqaoytv76jtk0pbjipb3ump87",
+                  "name": "QA Owner",
+                  "email": "qa.owner@example.com",
+                  "roleName": "Owner / Operator"
+                },
+                {
+                  "id": "cqaphrm7c1d2e3f4a5b6c7d8e9",
+                  "name": "QA Pharmacist",
+                  "email": "qa.pharmacist@example.com",
+                  "roleName": "Pharmacist"
+                },
+                {
+                  "id": "cmvx5fc4k000by5qrhb42d2b7",
+                  "name": "SehatCart Owner",
+                  "email": "saad@sehatcart.com",
+                  "roleName": "Owner / Operator"
+                }
+              ],
+              "assignments": []
+            }
+          }
+        }
+      },
+      "at": "2026-11-02 23:04:22 PKT"
+    }
+  },
+  "cashier": {
+    "pharmacySales.counterBranches": {
+      "status": 200,
+      "ms": 61,
+      "ok": true,
+      "code": null,
+      "message": null,
+      "data": {
+        "branches": [
+          {
+            "id": "cmvx5fc4p000cy5qrcgzjrc3b",
+            "code": "MAIN",
+            "name": "SehatCart Test Branch",
+            "city": "Lahore"
+          }
+        ],
+        "currency": "PKR",
+        "timezone": "Asia/Karachi",
+        "paymentSandboxAvailable": false
+      },
+      "raw": {
+        "result": {
+          "data": {
+            "json": {
+              "branches": [
+                {
+                  "id": "cmvx5fc4p000cy5qrcgzjrc3b",
+                  "code": "MAIN",
+                  "name": "SehatCart Test Branch",
+                  "city": "Lahore"
+                }
+              ],
+              "currency": "PKR",
+              "timezone": "Asia/Karachi",
+              "paymentSandboxAvailable": false
+            }
+          }
+        }
+      },
+      "at": "2026-11-02 23:04:22 PKT"
+    },
+    "pharmacySales.counterKeymap": {
+      "status": 200,
+      "ms": 61,
+      "ok": true,
+      "code": null,
+      "message": null,
+      "data": {
+        "preset": {
+          "key": "devfathom",
+          "label": "DevFathom counter",
+          "description": "F2–F10 follow the bill in workflow order; exceptions sit on Shift+F2–F4.",
+          "confirmed": true,
+          "phaseZeroDecision": null,
+          "bindings": {
+            "focusSearch": {
+              "key": "F2"
+            },
+            "selectPackUnit": {
+              "key": "F3"
+            },
+            "selectStripUnit": {
+              "key": "F4"
+            },
+            "selectLooseUnit": {
+              "key": "F5"
+            },
+            "addToCart": {
+              "key": "F6"
+            },
+            "holdSale": {
+              "key": "F7"
+            },
+            "resumeSale": {
+              "key": "F8"
+            },
+            "openTender": {
+              "key": "F9"
+            },
+            "printReceipt": {
+              "key": "F10"
+            },
+            "focusPrescriptionPanel": {
+              "key": "F2",
+              "shift": true
+            },
+            "captureDemand": {
+              "key": "F3",
+              "shift": true
+            },
+            "voidSale": {
+              "key": "F4",
+              "shift": true
+            }
+          }
+        },
+        "bindings": {
+          "focusSearch": {
+            "key": "F2"
+          },
+          "selectPackUnit": {
+            "key": "F3"
+          },
+          "selectStripUnit": {
+            "key": "F4"
+          },
+          "selectLooseUnit": {
+            "key": "F5"
+          },
+          "addToCart": {
+            "key": "F6"
+          },
+          "holdSale": {
+            "key": "F7"
+          },
+          "resumeSale": {
+            "key": "F8"
+          },
+          "openTender": {
+            "key": "F9"
+          },
+          "printReceipt": {
+            "key": "F10"
+          },
+          "focusPrescriptionPanel": {
+            "key": "F2",
+            "shift": true
+          },
+          "captureDemand": {
+            "key": "F3",
+            "shift": true
+          },
+          "voidSale": {
+            "key": "F4",
+            "shift": true
+          }
+        },
+        "overriddenActions": [],
+        "stored": false
+      },
+      "raw": {
+        "result": {
+          "data": {
+            "json": {
+              "preset": {
+                "key": "devfathom",
+                "label": "DevFathom counter",
+                "description": "F2–F10 follow the bill in workflow order; exceptions sit on Shift+F2–F4.",
+                "confirmed": true,
+                "phaseZeroDecision": null,
+                "bindings": {
+                  "focusSearch": {
+                    "key": "F2"
+                  },
+                  "selectPackUnit": {
+                    "key": "F3"
+                  },
+                  "selectStripUnit": {
+                    "key": "F4"
+                  },
+                  "selectLooseUnit": {
+                    "key": "F5"
+                  },
+                  "addToCart": {
+                    "key": "F6"
+                  },
+                  "holdSale": {
+                    "key": "F7"
+                  },
+                  "resumeSale": {
+                    "key": "F8"
+                  },
+                  "openTender": {
+                    "key": "F9"
+                  },
+                  "printReceipt": {
+                    "key": "F10"
+                  },
+                  "focusPrescriptionPanel": {
+                    "key": "F2",
+                    "shift": true
+                  },
+                  "captureDemand": {
+                    "key": "F3",
+                    "shift": true
+                  },
+                  "voidSale": {
+                    "key": "F4",
+                    "shift": true
+                  }
+                }
+              },
+              "bindings": {
+                "focusSearch": {
+                  "key": "F2"
+                },
+                "selectPackUnit": {
+                  "key": "F3"
+                },
+                "selectStripUnit": {
+                  "key": "F4"
+                },
+                "selectLooseUnit": {
+                  "key": "F5"
+                },
+                "addToCart": {
+                  "key": "F6"
+                },
+                "holdSale": {
+                  "key": "F7"
+                },
+                "resumeSale": {
+                  "key": "F8"
+                },
+                "openTender": {
+                  "key": "F9"
+                },
+                "printReceipt": {
+                  "key": "F10"
+                },
+                "focusPrescriptionPanel": {
+                  "key": "F2",
+                  "shift": true
+                },
+                "captureDemand": {
+                  "key": "F3",
+                  "shift": true
+                },
+                "voidSale": {
+                  "key": "F4",
+                  "shift": true
+                }
+              },
+              "overriddenActions": [],
+              "stored": false
+            },
+            "meta": {
+              "referentialEqualities": {
+                "bindings.focusSearch": [
+                  "preset.bindings.focusSearch"
+                ],
+                "bindings.selectPackUnit": [
+                  "preset.bindings.selectPackUnit"
+                ],
+                "bindings.selectStripUnit": [
+                  "preset.bindings.selectStripUnit"
+                ],
+                "bindings.selectLooseUnit": [
+                  "preset.bindings.selectLooseUnit"
+                ],
+                "bindings.addToCart": [
+                  "preset.bindings.addToCart"
+                ],
+                "bindings.holdSale": [
+                  "preset.bindings.holdSale"
+                ],
+                "bindings.resumeSale": [
+                  "preset.bindings.resumeSale"
+                ],
+                "bindings.openTender": [
+                  "preset.bindings.openTender"
+                ],
+                "bindings.printReceipt": [
+                  "preset.bindings.printReceipt"
+                ],
+                "bindings.focusPrescriptionPanel": [
+                  "preset.bindings.focusPrescriptionPanel"
+                ],
+                "bindings.captureDemand": [
+                  "preset.bindings.captureDemand"
+                ],
+                "bindings.voidSale": [
+                  "preset.bindings.voidSale"
+                ]
+              },
+              "v": 1
+            }
+          }
+        }
+      },
+      "at": "2026-11-02 23:04:22 PKT"
+    },
+    "pharmacyBranchAssignments.list": {
+      "status": 403,
+      "ms": 67,
+      "ok": false,
+      "code": "FORBIDDEN",
+      "message": "You do not have permission for this action.",
+      "data": null,
+      "raw": {
+        "error": {
+          "json": {
+            "message": "You do not have permission for this action.",
+            "code": -32003,
+            "data": {
+              "code": "FORBIDDEN",
+              "httpStatus": 403,
+              "path": "pharmacyBranchAssignments.list",
+              "validation": null
+            }
+          }
+        }
+      },
+      "at": "2026-11-02 23:04:22 PKT"
+    }
+  },
+  "manager": {
+    "pharmacySales.counterBranches": {
+      "status": 200,
+      "ms": 66,
+      "ok": true,
+      "code": null,
+      "message": null,
+      "data": {
+        "branches": [
+          {
+            "id": "cmvx5fc4p000cy5qrcgzjrc3b",
+            "code": "MAIN",
+            "name": "SehatCart Test Branch",
+            "city": "Lahore"
+          }
+        ],
+        "currency": "PKR",
+        "timezone": "Asia/Karachi",
+        "paymentSandboxAvailable": false
+      },
+      "raw": {
+        "result": {
+          "data": {
+            "json": {
+              "branches": [
+                {
+                  "id": "cmvx5fc4p000cy5qrcgzjrc3b",
+                  "code": "MAIN",
+                  "name": "SehatCart Test Branch",
+                  "city": "Lahore"
+                }
+              ],
+              "currency": "PKR",
+              "timezone": "Asia/Karachi",
+              "paymentSandboxAvailable": false
+            }
+          }
+        }
+      },
+      "at": "2026-11-02 23:04:22 PKT"
+    },
+    "pharmacySales.counterKeymap": {
+      "status": 200,
+      "ms": 60,
+      "ok": true,
+      "code": null,
+      "message": null,
+      "data": {
+        "preset": {
+          "key": "devfathom",
+          "label": "DevFathom counter",
+          "description": "F2–F10 follow the bill in workflow order; exceptions sit on Shift+F2–F4.",
+          "confirmed": true,
+          "phaseZeroDecision": null,
+          "bindings": {
+            "focusSearch": {
+              "key": "F2"
+            },
+            "selectPackUnit": {
+              "key": "F3"
+            },
+            "selectStripUnit": {
+              "key": "F4"
+            },
+            "selectLooseUnit": {
+              "key": "F5"
+            },
+            "addToCart": {
+              "key": "F6"
+            },
+            "holdSale": {
+              "key": "F7"
+            },
+            "resumeSale": {
+              "key": "F8"
+            },
+            "openTender": {
+              "key": "F9"
+            },
+            "printReceipt": {
+              "key": "F10"
+            },
+            "focusPrescriptionPanel": {
+              "key": "F2",
+              "shift": true
+            },
+            "captureDemand": {
+              "key": "F3",
+              "shift": true
+            },
+            "voidSale": {
+              "key": "F4",
+              "shift": true
+            }
+          }
+        },
+        "bindings": {
+          "focusSearch": {
+            "key": "F2"
+          },
+          "selectPackUnit": {
+            "key": "F3"
+          },
+          "selectStripUnit": {
+            "key": "F4"
+          },
+          "selectLooseUnit": {
+            "key": "F5"
+          },
+          "addToCart": {
+            "key": "F6"
+          },
+          "holdSale": {
+            "key": "F7"
+          },
+          "resumeSale": {
+            "key": "F8"
+          },
+          "openTender": {
+            "key": "F9"
+          },
+          "printReceipt": {
+            "key": "F10"
+          },
+          "focusPrescriptionPanel": {
+            "key": "F2",
+            "shift": true
+          },
+          "captureDemand": {
+            "key": "F3",
+            "shift": true
+          },
+          "voidSale": {
+            "key": "F4",
+            "shift": true
+          }
+        },
+        "overriddenActions": [],
+        "stored": false
+      },
+      "raw": {
+        "result": {
+          "data": {
+            "json": {
+              "preset": {
+                "key": "devfathom",
+                "label": "DevFathom counter",
+                "description": "F2–F10 follow the bill in workflow order; exceptions sit on Shift+F2–F4.",
+                "confirmed": true,
+                "phaseZeroDecision": null,
+                "bindings": {
+                  "focusSearch": {
+                    "key": "F2"
+                  },
+                  "selectPackUnit": {
+                    "key": "F3"
+                  },
+                  "selectStripUnit": {
+                    "key": "F4"
+                  },
+                  "selectLooseUnit": {
+                    "key": "F5"
+                  },
+                  "addToCart": {
+                    "key": "F6"
+                  },
+                  "holdSale": {
+                    "key": "F7"
+                  },
+                  "resumeSale": {
+                    "key": "F8"
+                  },
+                  "openTender": {
+                    "key": "F9"
+                  },
+                  "printReceipt": {
+                    "key": "F10"
+                  },
+                  "focusPrescriptionPanel": {
+                    "key": "F2",
+                    "shift": true
+                  },
+                  "captureDemand": {
+                    "key": "F3",
+                    "shift": true
+                  },
+                  "voidSale": {
+                    "key": "F4",
+                    "shift": true
+                  }
+                }
+              },
+              "bindings": {
+                "focusSearch": {
+                  "key": "F2"
+                },
+                "selectPackUnit": {
+                  "key": "F3"
+                },
+                "selectStripUnit": {
+                  "key": "F4"
+                },
+                "selectLooseUnit": {
+                  "key": "F5"
+                },
+                "addToCart": {
+                  "key": "F6"
+                },
+                "holdSale": {
+                  "key": "F7"
+                },
+                "resumeSale": {
+                  "key": "F8"
+                },
+                "openTender": {
+                  "key": "F9"
+                },
+                "printReceipt": {
+                  "key": "F10"
+                },
+                "focusPrescriptionPanel": {
+                  "key": "F2",
+                  "shift": true
+                },
+                "captureDemand": {
+                  "key": "F3",
+                  "shift": true
+                },
+                "voidSale": {
+                  "key": "F4",
+                  "shift": true
+                }
+              },
+              "overriddenActions": [],
+              "stored": false
+            },
+            "meta": {
+              "referentialEqualities": {
+                "bindings.focusSearch": [
+                  "preset.bindings.focusSearch"
+                ],
+                "bindings.selectPackUnit": [
+                  "preset.bindings.selectPackUnit"
+                ],
+                "bindings.selectStripUnit": [
+                  "preset.bindings.selectStripUnit"
+                ],
+                "bindings.selectLooseUnit": [
+                  "preset.bindings.selectLooseUnit"
+                ],
+                "bindings.addToCart": [
+                  "preset.bindings.addToCart"
+                ],
+                "bindings.holdSale": [
+                  "preset.bindings.holdSale"
+                ],
+                "bindings.resumeSale": [
+                  "preset.bindings.resumeSale"
+                ],
+                "bindings.openTender": [
+                  "preset.bindings.openTender"
+                ],
+                "bindings.printReceipt": [
+                  "preset.bindings.printReceipt"
+                ],
+                "bindings.focusPrescriptionPanel": [
+                  "preset.bindings.focusPrescriptionPanel"
+                ],
+                "bindings.captureDemand": [
+                  "preset.bindings.captureDemand"
+                ],
+                "bindings.voidSale": [
+                  "preset.bindings.voidSale"
+                ]
+              },
+              "v": 1
+            }
+          }
+        }
+      },
+      "at": "2026-11-02 23:04:22 PKT"
+    },
+    "pharmacyBranchAssignments.list": {
+      "status": 403,
+      "ms": 66,
+      "ok": false,
+      "code": "FORBIDDEN",
+      "message": "You do not have permission for this action.",
+      "data": null,
+      "raw": {
+        "error": {
+          "json": {
+            "message": "You do not have permission for this action.",
+            "code": -32003,
+            "data": {
+              "code": "FORBIDDEN",
+              "httpStatus": 403,
+              "path": "pharmacyBranchAssignments.list",
+              "validation": null
+            }
+          }
+        }
+      },
+      "at": "2026-11-02 23:04:22 PKT"
+    }
+  },
+  "pharmacist": {
+    "pharmacySales.counterBranches": {
+      "status": 200,
+      "ms": 65,
+      "ok": true,
+      "code": null,
+      "message": null,
+      "data": {
+        "branches": [
+          {
+            "id": "cmvx5fc4p000cy5qrcgzjrc3b",
+            "code": "MAIN",
+            "name": "SehatCart Test Branch",
+            "city": "Lahore"
+          }
+        ],
+        "currency": "PKR",
+        "timezone": "Asia/Karachi",
+        "paymentSandboxAvailable": false
+      },
+      "raw": {
+        "result": {
+          "data": {
+            "json": {
+              "branches": [
+                {
+                  "id": "cmvx5fc4p000cy5qrcgzjrc3b",
+                  "code": "MAIN",
+                  "name": "SehatCart Test Branch",
+                  "city": "Lahore"
+                }
+              ],
+              "currency": "PKR",
+              "timezone": "Asia/Karachi",
+              "paymentSandboxAvailable": false
+            }
+          }
+        }
+      },
+      "at": "2026-11-02 23:04:22 PKT"
+    },
+    "pharmacySales.counterKeymap": {
+      "status": 200,
+      "ms": 63,
+      "ok": true,
+      "code": null,
+      "message": null,
+      "data": {
+        "preset": {
+          "key": "devfathom",
+          "label": "DevFathom counter",
+          "description": "F2–F10 follow the bill in workflow order; exceptions sit on Shift+F2–F4.",
+          "confirmed": true,
+          "phaseZeroDecision": null,
+          "bindings": {
+            "focusSearch": {
+              "key": "F2"
+            },
+            "selectPackUnit": {
+              "key": "F3"
+            },
+            "selectStripUnit": {
+              "key": "F4"
+            },
+            "selectLooseUnit": {
+              "key": "F5"
+            },
+            "addToCart": {
+              "key": "F6"
+            },
+            "holdSale": {
+              "key": "F7"
+            },
+            "resumeSale": {
+              "key": "F8"
+            },
+            "openTender": {
+              "key": "F9"
+            },
+            "printReceipt": {
+              "key": "F10"
+            },
+            "focusPrescriptionPanel": {
+              "key": "F2",
+              "shift": true
+            },
+            "captureDemand": {
+              "key": "F3",
+              "shift": true
+            },
+            "voidSale": {
+              "key": "F4",
+              "shift": true
+            }
+          }
+        },
+        "bindings": {
+          "focusSearch": {
+            "key": "F2"
+          },
+          "selectPackUnit": {
+            "key": "F3"
+          },
+          "selectStripUnit": {
+            "key": "F4"
+          },
+          "selectLooseUnit": {
+            "key": "F5"
+          },
+          "addToCart": {
+            "key": "F6"
+          },
+          "holdSale": {
+            "key": "F7"
+          },
+          "resumeSale": {
+            "key": "F8"
+          },
+          "openTender": {
+            "key": "F9"
+          },
+          "printReceipt": {
+            "key": "F10"
+          },
+          "focusPrescriptionPanel": {
+            "key": "F2",
+            "shift": true
+          },
+          "captureDemand": {
+            "key": "F3",
+            "shift": true
+          },
+          "voidSale": {
+            "key": "F4",
+            "shift": true
+          }
+        },
+        "overriddenActions": [],
+        "stored": false
+      },
+      "raw": {
+        "result": {
+          "data": {
+            "json": {
+              "preset": {
+                "key": "devfathom",
+                "label": "DevFathom counter",
+                "description": "F2–F10 follow the bill in workflow order; exceptions sit on Shift+F2–F4.",
+                "confirmed": true,
+                "phaseZeroDecision": null,
+                "bindings": {
+                  "focusSearch": {
+                    "key": "F2"
+                  },
+                  "selectPackUnit": {
+                    "key": "F3"
+                  },
+                  "selectStripUnit": {
+                    "key": "F4"
+                  },
+                  "selectLooseUnit": {
+                    "key": "F5"
+                  },
+                  "addToCart": {
+                    "key": "F6"
+                  },
+                  "holdSale": {
+                    "key": "F7"
+                  },
+                  "resumeSale": {
+                    "key": "F8"
+                  },
+                  "openTender": {
+                    "key": "F9"
+                  },
+                  "printReceipt": {
+                    "key": "F10"
+                  },
+                  "focusPrescriptionPanel": {
+                    "key": "F2",
+                    "shift": true
+                  },
+                  "captureDemand": {
+                    "key": "F3",
+                    "shift": true
+                  },
+                  "voidSale": {
+                    "key": "F4",
+                    "shift": true
+                  }
+                }
+              },
+              "bindings": {
+                "focusSearch": {
+                  "key": "F2"
+                },
+                "selectPackUnit": {
+                  "key": "F3"
+                },
+                "selectStripUnit": {
+                  "key": "F4"
+                },
+                "selectLooseUnit": {
+                  "key": "F5"
+                },
+                "addToCart": {
+                  "key": "F6"
+                },
+                "holdSale": {
+                  "key": "F7"
+                },
+                "resumeSale": {
+                  "key": "F8"
+                },
+                "openTender": {
+                  "key": "F9"
+                },
+                "printReceipt": {
+                  "key": "F10"
+                },
+                "focusPrescriptionPanel": {
+                  "key": "F2",
+                  "shift": true
+                },
+                "captureDemand": {
+                  "key": "F3",
+                  "shift": true
+                },
+                "voidSale": {
+                  "key": "F4",
+                  "shift": true
+                }
+              },
+              "overriddenActions": [],
+              "stored": false
+            },
+            "meta": {
+              "referentialEqualities": {
+                "bindings.focusSearch": [
+                  "preset.bindings.focusSearch"
+                ],
+                "bindings.selectPackUnit": [
+                  "preset.bindings.selectPackUnit"
+                ],
+                "bindings.selectStripUnit": [
+                  "preset.bindings.selectStripUnit"
+                ],
+                "bindings.selectLooseUnit": [
+                  "preset.bindings.selectLooseUnit"
+                ],
+                "bindings.addToCart": [
+                  "preset.bindings.addToCart"
+                ],
+                "bindings.holdSale": [
+                  "preset.bindings.holdSale"
+                ],
+                "bindings.resumeSale": [
+                  "preset.bindings.resumeSale"
+                ],
+                "bindings.openTender": [
+                  "preset.bindings.openTender"
+                ],
+                "bindings.printReceipt": [
+                  "preset.bindings.printReceipt"
+                ],
+                "bindings.focusPrescriptionPanel": [
+                  "preset.bindings.focusPrescriptionPanel"
+                ],
+                "bindings.captureDemand": [
+                  "preset.bindings.captureDemand"
+                ],
+                "bindings.voidSale": [
+                  "preset.bindings.voidSale"
+                ]
+              },
+              "v": 1
+            }
+          }
+        }
+      },
+      "at": "2026-11-02 23:04:22 PKT"
+    },
+    "pharmacyBranchAssignments.list": {
+      "status": 403,
+      "ms": 61,
+      "ok": false,
+      "code": "FORBIDDEN",
+      "message": "You do not have permission for this action.",
+      "data": null,
+      "raw": {
+        "error": {
+          "json": {
+            "message": "You do not have permission for this action.",
+            "code": -32003,
+            "data": {
+              "code": "FORBIDDEN",
+              "httpStatus": 403,
+              "path": "pharmacyBranchAssignments.list",
+              "validation": null
+            }
+          }
+        }
+      },
+      "at": "2026-11-02 23:04:22 PKT"
+    }
+  }
+}

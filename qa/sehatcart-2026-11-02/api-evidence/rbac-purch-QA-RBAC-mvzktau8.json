@@ -1,0 +1,279 @@
+{
+  "TAG": "QA-RBAC-mvzktau8",
+  "at": "2026-11-02 23:12:19 PKT",
+  "log": [
+    {
+      "label": "A cashier createSupplier",
+      "role": "cashier",
+      "proc": "pharmacyPurchasing.createSupplier",
+      "input": {
+        "name": "QA-RBAC-mvzktau8 supplier",
+        "legalName": "QA-RBAC-mvzktau8 Ltd",
+        "serviceArea": "Lahore"
+      },
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzktbce01cs4oqrsxjjoswy",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "name": "QA-RBAC-mvzktau8 supplier",
+        "legalName": "QA-RBAC-mvzktau8 Ltd",
+        "authorized": false,
+        "serviceArea": "Lahore",
+        "contactName": null,
+        "contactPhone": null,
+        "paymentTermsDays": 0,
+        "creditLimitMinor": 0,
+        "active": true,
+        "createdAt": "2026-11-02T18:12:18.734Z",
+        "updatedAt": "2026-11-02T18:12:18.734Z"
+      },
+      "at": "2026-11-02 23:12:18 PKT"
+    },
+    {
+      "label": "B cashier recordSupplierLicence",
+      "role": "cashier",
+      "proc": "pharmacyPurchasing.recordSupplierLicence",
+      "input": {
+        "supplierId": "cmvzktbce01cs4oqrsxjjoswy",
+        "licenceType": "Drug sale licence (distribution)",
+        "licenceNumber": "QA-RBAC-mvzktau8-LIC",
+        "issuingAuthority": "QA self-asserted",
+        "issuedAt": "2026-01-01T00:00:00.000Z",
+        "expiresAt": "2027-12-31T00:00:00.000Z",
+        "verified": true
+      },
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzktbe801cu4oqrm3fk73l2",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "supplierId": "cmvzktbce01cs4oqrsxjjoswy",
+        "licenceType": "Drug sale licence (distribution)",
+        "licenceNumber": "QA-RBAC-mvzktau8-LIC",
+        "issuingAuthority": "QA self-asserted",
+        "issuedAt": "2026-01-01T00:00:00.000Z",
+        "expiresAt": "2027-12-31T00:00:00.000Z",
+        "evidenceUri": null,
+        "verifiedAt": "2026-11-02T18:12:18.799Z",
+        "verifiedByUserId": "cqargoiyjfibo71r34xrmnago",
+        "supersedesId": null,
+        "createdAt": "2026-11-02T18:12:18.800Z"
+      },
+      "at": "2026-11-02 23:12:18 PKT"
+    },
+    {
+      "label": "C cashier setSupplierAuthorization",
+      "role": "cashier",
+      "proc": "pharmacyPurchasing.setSupplierAuthorization",
+      "input": {
+        "supplierId": "cmvzktbce01cs4oqrsxjjoswy",
+        "authorized": true
+      },
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzktbce01cs4oqrsxjjoswy",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "name": "QA-RBAC-mvzktau8 supplier",
+        "legalName": "QA-RBAC-mvzktau8 Ltd",
+        "authorized": true,
+        "serviceArea": "Lahore",
+        "contactName": null,
+        "contactPhone": null,
+        "paymentTermsDays": 0,
+        "creditLimitMinor": 0,
+        "active": true,
+        "createdAt": "2026-11-02T18:12:18.734Z",
+        "updatedAt": "2026-11-02T18:12:18.860Z"
+      },
+      "at": "2026-11-02 23:12:18 PKT"
+    },
+    {
+      "label": "D cashier createPurchaseOrder",
+      "role": "cashier",
+      "proc": "pharmacyPurchasing.createPurchaseOrder",
+      "input": {
+        "reference": "QA-RBAC-mvzktau8-PO",
+        "supplierId": "cmvzktbce01cs4oqrsxjjoswy",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "lines": [
+          {
+            "medicineId": "cmvxpws13002v1xqrfsg4p4hz",
+            "packLevelId": "cmvxpy8hn003t1xqr9az7aste",
+            "orderedPacks": 10,
+            "canonicalUnitsPerPack": 10,
+            "listPricePerPackMinor": 1000
+          }
+        ]
+      },
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzktbhs01cx4oqr5n1jj15c",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "reference": "QA-RBAC-mvzktau8-PO",
+        "status": "DRAFT",
+        "supplierId": "cmvzktbce01cs4oqrsxjjoswy",
+        "requisitionId": null,
+        "quoteId": null,
+        "createdByUserId": "cqargoiyjfibo71r34xrmnago",
+        "expectedDeliveryAt": null,
+        "freightMinor": 0,
+        "otherChargesMinor": 0,
+        "note": null,
+        "submittedAt": null,
+        "approvedAt": null,
+        "approvedByUserId": null,
+        "sentAt": null,
+        "createdAt": "2026-11-02T18:12:18.928Z",
+        "updatedAt": "2026-11-02T18:12:18.928Z",
+        "lines": [
+          {
+            "id": "cmvzktbhw01cy4oqrsznd0gif",
+            "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+            "purchaseOrderId": "cmvzktbhs01cx4oqr5n1jj15c",
+            "lineNumber": 1,
+            "medicineId": "cmvxpws13002v1xqrfsg4p4hz",
+            "packLevelId": "cmvxpy8hn003t1xqr9az7aste",
+            "orderedPacks": 10,
+            "bonusPacks": 0,
+            "canonicalUnitsPerPack": 10,
+            "orderedCanonicalUnits": 100,
+            "bonusCanonicalUnits": 0,
+            "listPricePerPackMinor": 1000,
+            "discountBps": 0,
+            "rebateBps": 0,
+            "taxBps": 0,
+            "taxCreditable": false,
+            "forecastSellThroughPacks": null,
+            "minimumExpiryDays": null,
+            "leadTimeDays": null,
+            "createdAt": "2026-11-02T18:12:18.928Z"
+          }
+        ]
+      },
+      "at": "2026-11-02 23:12:18 PKT"
+    },
+    {
+      "label": "E cashier submitPurchaseOrder",
+      "role": "cashier",
+      "proc": "pharmacyPurchasing.submitPurchaseOrder",
+      "input": {
+        "purchaseOrderId": "cmvzktbhs01cx4oqr5n1jj15c"
+      },
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzktbhs01cx4oqr5n1jj15c",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "reference": "QA-RBAC-mvzktau8-PO",
+        "status": "SUBMITTED",
+        "supplierId": "cmvzktbce01cs4oqrsxjjoswy",
+        "requisitionId": null,
+        "quoteId": null,
+        "createdByUserId": "cqargoiyjfibo71r34xrmnago",
+        "expectedDeliveryAt": null,
+        "freightMinor": 0,
+        "otherChargesMinor": 0,
+        "note": null,
+        "submittedAt": "2026-11-02T18:12:18.996Z",
+        "approvedAt": null,
+        "approvedByUserId": null,
+        "sentAt": null,
+        "createdAt": "2026-11-02T18:12:18.928Z",
+        "updatedAt": "2026-11-02T18:12:18.996Z"
+      },
+      "at": "2026-11-02 23:12:18 PKT"
+    },
+    {
+      "label": "F cashier approve own PO",
+      "role": "cashier",
+      "proc": "pharmacyPurchasing.approvePurchaseOrder",
+      "input": {
+        "purchaseOrderId": "cmvzktbhs01cx4oqr5n1jj15c",
+        "decision": "APPROVED"
+      },
+      "status": 403,
+      "code": "FORBIDDEN",
+      "message": "SELF_APPROVAL",
+      "data": null,
+      "at": "2026-11-02 23:12:19 PKT"
+    },
+    {
+      "label": "G pharmacist approve PO",
+      "role": "pharmacist",
+      "proc": "pharmacyPurchasing.approvePurchaseOrder",
+      "input": {
+        "purchaseOrderId": "cmvzktbhs01cx4oqr5n1jj15c",
+        "decision": "APPROVED",
+        "reason": "QA RBAC probe"
+      },
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzktbhs01cx4oqr5n1jj15c",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "reference": "QA-RBAC-mvzktau8-PO",
+        "status": "APPROVED",
+        "supplierId": "cmvzktbce01cs4oqrsxjjoswy",
+        "requisitionId": null,
+        "quoteId": null,
+        "createdByUserId": "cqargoiyjfibo71r34xrmnago",
+        "expectedDeliveryAt": null,
+        "freightMinor": 0,
+        "otherChargesMinor": 0,
+        "note": null,
+        "submittedAt": "2026-11-02T18:12:18.996Z",
+        "approvedAt": "2026-11-02T18:12:19.119Z",
+        "approvedByUserId": "cqaphrm7c1d2e3f4a5b6c7d8e9",
+        "sentAt": null,
+        "createdAt": "2026-11-02T18:12:18.928Z",
+        "updatedAt": "2026-11-02T18:12:19.119Z"
+      },
+      "at": "2026-11-02 23:12:19 PKT"
+    },
+    {
+      "label": "H cashier sendPurchaseOrder",
+      "role": "cashier",
+      "proc": "pharmacyPurchasing.sendPurchaseOrder",
+      "input": {
+        "purchaseOrderId": "cmvzktbhs01cx4oqr5n1jj15c"
+      },
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzktbhs01cx4oqr5n1jj15c",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "reference": "QA-RBAC-mvzktau8-PO",
+        "status": "SENT",
+        "supplierId": "cmvzktbce01cs4oqrsxjjoswy",
+        "requisitionId": null,
+        "quoteId": null,
+        "createdByUserId": "cqargoiyjfibo71r34xrmnago",
+        "expectedDeliveryAt": null,
+        "freightMinor": 0,
+        "otherChargesMinor": 0,
+        "note": null,
+        "submittedAt": "2026-11-02T18:12:18.996Z",
+        "approvedAt": "2026-11-02T18:12:19.119Z",
+        "approvedByUserId": "cqaphrm7c1d2e3f4a5b6c7d8e9",
+        "sentAt": "2026-11-02T18:12:19.184Z",
+        "createdAt": "2026-11-02T18:12:18.928Z",
+        "updatedAt": "2026-11-02T18:12:19.184Z"
+      },
+      "at": "2026-11-02 23:12:19 PKT"
+    }
+  ]
+}

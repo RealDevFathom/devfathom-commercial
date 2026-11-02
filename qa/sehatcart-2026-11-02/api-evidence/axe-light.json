@@ -1,0 +1,113 @@
+[
+  {
+    "role": null,
+    "route": "/login",
+    "violations": []
+  },
+  {
+    "role": "cashier",
+    "route": "/pharmacy/counter",
+    "violations": [
+      {
+        "id": "scrollable-region-focusable",
+        "impact": "serious",
+        "n": 1,
+        "help": "Scrollable region must have keyboard access",
+        "sample": [
+          ".overflow-y-auto.flex-1.text-card-foreground ::   Element should have focusable content"
+        ]
+      }
+    ]
+  },
+  {
+    "role": "cashier",
+    "route": "/dashboard",
+    "violations": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "n": 1,
+        "help": "Elements must meet minimum color contrast ratio thresholds",
+        "sample": [
+          ".eyebrow-accent ::   Element has insufficient color contrast of 2.64 (foreground color: #ff684f, background color: #f6f6f3, font size: 8.3pt (11px), font weight: normal). Expected"
+        ]
+      }
+    ]
+  },
+  {
+    "role": "owner",
+    "route": "/pharmacy/purchasing/receiving",
+    "violations": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "n": 5,
+        "help": "Elements must meet minimum color contrast ratio thresholds",
+        "sample": [
+          ".eyebrow-accent ::   Element has insufficient color contrast of 2.64 (foreground color: #ff684f, background color: #f6f6f3, font size: 8.3pt (11px), font weight: normal). Expected",
+          ".whitespace-nowrap.hover\\:text-text-strong[href$=\"purchasing\"] > .opacity-70.text-\\[0\\.625rem\\].font-mono ::   Element has insufficient color contrast of 2.77 (foreground color: #959592, background color: #f6f6f3, font size: 7.5pt (10px), font weight: normal). Expected"
+        ]
+      }
+    ]
+  },
+  {
+    "role": "owner",
+    "route": "/pharmacy/counter/close",
+    "violations": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "n": 1,
+        "help": "Elements must meet minimum color contrast ratio thresholds",
+        "sample": [
+          ".eyebrow ::   Element has insufficient color contrast of 2.64 (foreground color: #ff684f, background color: #f6f6f3, font size: 8.3pt (11px), font weight: normal). Expected"
+        ]
+      }
+    ]
+  },
+  {
+    "role": "pharmacist",
+    "route": "/pharmacy/prescriptions",
+    "violations": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "n": 1,
+        "help": "Elements must meet minimum color contrast ratio thresholds",
+        "sample": [
+          ".eyebrow ::   Element has insufficient color contrast of 2.64 (foreground color: #ff684f, background color: #f6f6f3, font size: 8.3pt (11px), font weight: normal). Expected"
+        ]
+      }
+    ]
+  },
+  {
+    "role": "owner",
+    "route": "/pharmacy/inventory",
+    "violations": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "n": 1,
+        "help": "Elements must meet minimum color contrast ratio thresholds",
+        "sample": [
+          ".eyebrow-accent ::   Element has insufficient color contrast of 2.64 (foreground color: #ff684f, background color: #f6f6f3, font size: 8.3pt (11px), font weight: normal). Expected"
+        ]
+      }
+    ]
+  },
+  {
+    "role": "owner",
+    "route": "/pharmacy/reports",
+    "violations": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "n": 1,
+        "help": "Elements must meet minimum color contrast ratio thresholds",
+        "sample": [
+          ".eyebrow-accent ::   Element has insufficient color contrast of 2.64 (foreground color: #ff684f, background color: #f6f6f3, font size: 8.3pt (11px), font weight: normal). Expected"
+        ]
+      }
+    ]
+  }
+]

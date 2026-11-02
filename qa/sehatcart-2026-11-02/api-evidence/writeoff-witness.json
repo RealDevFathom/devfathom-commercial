@@ -1,0 +1,22 @@
+[
+  {
+    "label": "witness=manager (not branch-assigned)",
+    "status": 400,
+    "ms": 322,
+    "ok": false,
+    "code": "BAD_REQUEST",
+    "message": "COAUTH_REQUIRED",
+    "data": null,
+    "at": "2026-11-02 23:45:52 PKT"
+  },
+  {
+    "label": "witness=self (owner)",
+    "status": 400,
+    "ms": 88,
+    "ok": false,
+    "code": "BAD_REQUEST",
+    "message": "COAUTH_REQUIRED",
+    "data": null,
+    "at": "2026-11-02 23:45:53 PKT"
+  }
+]

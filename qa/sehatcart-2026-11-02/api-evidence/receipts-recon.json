@@ -1,0 +1,127 @@
+{
+  "rows": [
+    {
+      "n": 1,
+      "saleId": "cmvzldtad01w14oqry6m4d259",
+      "device": "QA-20261102-CASHCHECK-DEVICE",
+      "businessDate": "2026-11-02T00:00:00.000Z",
+      "keys": "saleId,receiptNumber,branchName,businessDate,completedAt,currency,lines,tenders,totals,dispensingLabelSources,taxIdentity",
+      "totals": {
+        "grossMinor": 19998,
+        "discountMinor": 0,
+        "netMinor": 19998,
+        "tenderedMinor": 25000,
+        "changeMinor": 5002
+      },
+      "refunds": null
+    },
+    {
+      "n": 1,
+      "saleId": "cmvzl6v0m01nw4oqrimq0hg4n",
+      "device": "counter-bbd93263-ccd1-4c8d-9f65-7011e1bf6a48",
+      "businessDate": "2026-11-02T00:00:00.000Z",
+      "keys": "saleId,receiptNumber,branchName,businessDate,completedAt,currency,lines,tenders,totals,dispensingLabelSources,taxIdentity",
+      "totals": {
+        "grossMinor": 5000,
+        "discountMinor": 0,
+        "netMinor": 5000,
+        "tenderedMinor": 10000,
+        "changeMinor": 5000
+      },
+      "refunds": null
+    },
+    {
+      "n": 1,
+      "saleId": "cmvzku1az01da4oqrz84e5cap",
+      "device": "QA-20261102-FUNC-DEVICE",
+      "businessDate": "2026-11-02T00:00:00.000Z",
+      "keys": "saleId,receiptNumber,branchName,businessDate,completedAt,currency,lines,tenders,totals,dispensingLabelSources,taxIdentity",
+      "totals": {
+        "grossMinor": 20000,
+        "discountMinor": 0,
+        "netMinor": 20000,
+        "tenderedMinor": 25000,
+        "changeMinor": 5000
+      },
+      "refunds": null
+    },
+    {
+      "n": 2,
+      "saleId": "cmvzl92ax01px4oqr8pa8auko",
+      "device": "counter-bbd93263-ccd1-4c8d-9f65-7011e1bf6a48",
+      "businessDate": "2026-11-02T00:00:00.000Z",
+      "keys": "saleId,receiptNumber,branchName,businessDate,completedAt,currency,lines,tenders,totals,dispensingLabelSources,taxIdentity",
+      "totals": {
+        "grossMinor": 2800,
+        "discountMinor": 0,
+        "netMinor": 2800,
+        "tenderedMinor": 3000,
+        "changeMinor": 200
+      },
+      "refunds": null
+    },
+    {
+      "n": 3,
+      "saleId": "cmvzl9pu901qk4oqr1h6uaitm",
+      "device": "counter-bbd93263-ccd1-4c8d-9f65-7011e1bf6a48",
+      "businessDate": "2026-11-02T00:00:00.000Z",
+      "keys": "saleId,receiptNumber,branchName,businessDate,completedAt,currency,lines,tenders,totals,dispensingLabelSources,taxIdentity",
+      "totals": {
+        "grossMinor": 2800,
+        "discountMinor": 0,
+        "netMinor": 2800,
+        "tenderedMinor": 3000,
+        "changeMinor": 200
+      },
+      "refunds": null
+    }
+  ],
+  "cc": {
+    "filters": {
+      "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+      "from": "2026-11-01",
+      "to": "2026-11-02",
+      "branchIds": [
+        "cmvx5fc4p000cy5qrcgzjrc3b"
+      ]
+    },
+    "metricScopes": {
+      "safetyQueue": "organization"
+    },
+    "freshness": {
+      "status": "CURRENT",
+      "asOf": "2026-11-02T18:37:08.365Z",
+      "source": "transactional pharmacy ledgers"
+    },
+    "metrics": {
+      "salesMinor": 50598,
+      "marginMinor": 3600,
+      "cashMinor": 50598,
+      "refundsMinor": 42798,
+      "cashVarianceMinor": 0,
+      "openStockSignals": 0,
+      "lostDemandEvents": 0,
+      "recommendedOrders": 0,
+      "expiryValueMinor30": 0,
+      "expiryValueMinor60": 0,
+      "expiryValueMinor90": 0,
+      "expiryValueMinor180": 30800,
+      "openRecalls": 0,
+      "quarantineUnits": 140,
+      "openClaims": 0,
+      "openReceivingExceptions": 0,
+      "pharmacistCoverage": 1,
+      "safetyQueue": 0,
+      "agingFiscalDocuments": 0,
+      "rejectedFiscalDocuments": 0,
+      "accountsPayableMinor": null,
+      "accountsReceivableMinor": null,
+      "khataAgingMinor": 0,
+      "deviceFiscalOfflineExceptions": null
+    },
+    "permissions": {
+      "operational": true,
+      "financial": true
+    }
+  }
+}

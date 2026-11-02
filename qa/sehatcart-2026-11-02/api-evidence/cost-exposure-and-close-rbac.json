@@ -1,0 +1,62 @@
+{
+ "cashierExpiryBoardLots": {
+  "status": 200,
+  "at": "2026-11-02 23:57:58 PKT",
+  "riskBuckets": [
+   {
+    "days": 30,
+    "valueAtRiskMinor": 0
+   },
+   {
+    "days": 60,
+    "valueAtRiskMinor": 0
+   },
+   {
+    "days": 90,
+    "valueAtRiskMinor": 1050
+   }
+  ],
+  "firstRows": [
+   {
+    "medicineName": "QA Panadol",
+    "batchNumber": "QA-B4",
+    "unitCostMinor": 105,
+    "printedMrpMinor": 2600,
+    "valueAtRiskMinor": 1050
+   },
+   {
+    "medicineName": "QA Panadol",
+    "batchNumber": "QA-B2",
+    "unitCostMinor": 110,
+    "printedMrpMinor": 2800,
+    "valueAtRiskMinor": 30800
+   }
+  ]
+ },
+ "closePreviewByRole": {
+  "owner": {
+   "status": 200,
+   "code": null,
+   "message": null,
+   "at": "2026-11-02 23:57:58 PKT"
+  },
+  "pharmacist": {
+   "status": 200,
+   "code": null,
+   "message": null,
+   "at": "2026-11-02 23:57:58 PKT"
+  },
+  "cashier": {
+   "status": 403,
+   "code": "FORBIDDEN",
+   "message": "Day-close permission is required to reconcile and close a day.",
+   "at": "2026-11-02 23:57:58 PKT"
+  },
+  "manager": {
+   "status": 403,
+   "code": "FORBIDDEN",
+   "message": "Day-close permission is required to reconcile and close a day.",
+   "at": "2026-11-02 23:57:58 PKT"
+  }
+ }
+}

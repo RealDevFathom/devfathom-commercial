@@ -1,0 +1,16 @@
+[
+ {"goto":"/pharmacy/purchasing/receiving"},
+ {"eval":"(()=>{const s=[...document.querySelectorAll('main select')].find(x=>[...x.options].some(o=>/QA-UI-PO-mvzma26a/.test(o.text)));const o=[...s.options].find(o=>/QA-UI-PO-mvzma26a/.test(o.text));s.value=o.value;s.dispatchEvent(new Event('change',{bubbles:true}));return o.text})()"},
+ {"click":{"role":"button","name":"Open order"}},
+ {"wait":1500},
+ {"fill":{"label":"Receipt reference"},"value":"QA-UI-GRN-RECHECK"},
+ {"fill":{"label":"Supplier invoice number"},"value":"INV-UI-RECHECK"},
+ {"fill":{"label":"Warranty / source evidence"},"value":"Warranty on invoice"},
+ {"fill":{"label":"Batch number"},"nth":0,"value":"QA-B5"},
+ {"fill":{"label":"Printed expiry"},"nth":0,"value":"2027-12-31"},
+ {"fill":{"label":"Printed MRP (PKR)"},"nth":0,"value":"28.00"},
+ {"select":{"label":"Receive into"},"nth":0,"value":"Main Shelf (STORE)"},
+ {"click":{"role":"button","name":"File receipt (draft)"}},
+ {"wait":3500},
+ {"eval":"({url: location.pathname+location.search, scrollY: window.scrollY, top: document.querySelector('main').innerText.replace(/\\s+/g,' ').slice(0,600)})","max":1200,"shot":"mgr-grn-filed-recheck","full":true}
+]
