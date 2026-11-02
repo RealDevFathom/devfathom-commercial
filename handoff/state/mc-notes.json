@@ -52,5 +52,8 @@
  ],
  "1001": [
   "REGRESSION: 2 existing tests fail on the PR and pass on develop: supplier-credit-follow-up/packet.test.tsx ('shows people-readable times while the CSV keeps exact instants': no text /Prepared 4 Sep 2026, 12:00 UTC/) and supplier-credit-follow-up/page.test.tsx ('renders observations and independent next pages...': no text /Observed: 12 Sep 2026, 07:00 UTC/). The PR changed the reports date/time presentation those tests assert."
+ ],
+ "999": [
+  "REGRESSION: existing test src/app/(app)/pharmacy/reports/page.test.tsx 'pharmacy report catalog filters carries all supported filters and exposes the metric contract' fails on the PR (no text /1 report \u00b7/) and passes on develop; the copy sweep changed the report-count label the test asserts. Other failing related tests also fail on develop or only under the gate runtime DB role."
  ]
 }
