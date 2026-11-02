@@ -39,6 +39,15 @@ function renderShell() {
 const drawer = () => screen.queryByRole('complementary', { name: 'Platform navigation' });
 
 describe('PlatformShell compact navigation', () => {
+  it('names the platform logo link and points it to platform home', () => {
+    renderShell();
+
+    expect(screen.getByRole('link', { name: 'DevFathom platform home' })).toHaveAttribute(
+      'href',
+      '/platform'
+    );
+  });
+
   it('returns focus to the trigger when the close button is activated by keyboard', () => {
     const trigger = renderShell();
 
