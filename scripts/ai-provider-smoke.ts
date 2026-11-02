@@ -143,7 +143,7 @@ async function main() {
 
   const readiness = readAIProviderReadiness(env);
   console.log(
-    `AI_PROVIDER=${env.AI_PROVIDER ?? '(unset → auto)'} · readiness: ${JSON.stringify(readiness)}`
+    `AI_PROVIDER=${env.AI_PROVIDER ?? '(unset → off)'} · readiness: ${JSON.stringify(readiness)}`
   );
   console.log(`database settings and ledger: ${noDb ? 'skipped (--no-db)' : 'live'}\n`);
 

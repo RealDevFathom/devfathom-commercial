@@ -23,6 +23,7 @@ type Provider = TieredAIProviderName;
 
 const ENV = {
   NODE_ENV: 'production',
+  AI_PROVIDER: 'auto',
   ANTHROPIC_API_KEY_SECRET_ID: 'devfathom/staging/anthropic-api-key',
   OPENAI_API_KEY_SECRET_ID: 'devfathom/staging/openai-api-key',
   BEDROCK_REGION: 'us-east-1',

@@ -227,6 +227,7 @@ describe('AI settings authorization', () => {
 
 describe('AI settings read', () => {
   it('returns environment defaults, configured providers and spend before any save', async () => {
+    vi.stubEnv('AI_PROVIDER', 'auto');
     vi.stubEnv('ANTHROPIC_API_KEY_SECRET_ID', 'devfathom/staging/anthropic-api-key');
     vi.stubEnv('BEDROCK_REGION', 'us-east-1');
     vi.stubEnv('AI_OPENAI_MODEL_STANDARD', 'gpt-env-standard');

@@ -32,12 +32,14 @@ export type AISelector =
   | { kind: 'disabled' }
   | { kind: 'invalid' }
   | { kind: 'legacy'; provider: LegacyAIProviderName }
-  /** `preferred` comes first in the chain; `explicit` is false when AI_PROVIDER is unset. */
-  | { kind: 'routed'; preferred: TieredAIProviderName | null; explicit: boolean };
+  /** `preferred` comes first in the chain. */
+  | { kind: 'routed'; preferred: TieredAIProviderName | null };
 
 /**
  * AI_PROVIDER:
- *   unset / `auto`                 → routed chain, if any routed provider is configured
+ *   unset / blank                  → off: AI is never on by default (production stays off
+ *                                    until it is set up; develop opts in with `auto`)
+ *   `auto`                         → routed chain, if any routed provider is configured
  *   `anthropic` / `openai` / `bedrock` → routed chain with that provider first
  *   `azure` / `groq` / `google` / `vertex` → the legacy single-provider path, unchanged
  *   `disabled`                     → off
@@ -48,9 +50,9 @@ export function readAISelector(env: Env = process.env): AISelector {
   if (selector && LEGACY_PROVIDERS.has(selector)) {
     return { kind: 'legacy', provider: selector as LegacyAIProviderName };
   }
-  if (!selector || selector === 'auto')
-    return { kind: 'routed', preferred: null, explicit: !!selector };
-  if (isRoutedProvider(selector)) return { kind: 'routed', preferred: selector, explicit: true };
+  if (!selector) return { kind: 'disabled' };
+  if (selector === 'auto') return { kind: 'routed', preferred: null };
+  if (isRoutedProvider(selector)) return { kind: 'routed', preferred: selector };
   return { kind: 'invalid' };
 }
 
@@ -95,8 +97,7 @@ export function readAIAvailability(env: Env = process.env): AIAvailability {
       return { available: true, provider: selector.provider };
     case 'routed':
       if (configuredRoutedProviders(env).length) return { available: true, provider: 'auto' };
-      // Unset with nothing configured keeps develop's historic meaning: AI off.
-      return { available: false, reason: selector.explicit ? 'NOT_CONFIGURED' : 'DISABLED' };
+      return { available: false, reason: 'NOT_CONFIGURED' };
   }
 }
 
@@ -191,15 +192,6 @@ export function readAIProviderReadiness(env: Env = process.env): AIProviderReadi
   if (selector.kind === 'routed') {
     if (configuredRoutedProviders(env).length)
       return { ready: true, provider: 'auto', modelId: 'auto' };
-    if (!selector.explicit) {
-      return {
-        ready: false,
-        reason: 'DISABLED',
-        provider: null,
-        missing: ['AI_PROVIDER'],
-        invalid: [],
-      };
-    }
     const wanted = selector.preferred ? [selector.preferred] : envProviderOrder(env);
     return {
       ready: false,

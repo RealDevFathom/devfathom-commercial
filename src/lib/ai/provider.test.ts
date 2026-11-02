@@ -144,9 +144,28 @@ describe('shared provider gate with real factory boundary', () => {
         expect(spy).not.toHaveBeenCalled();
     }
   );
-  it('uses the routed chain when AI_PROVIDER is unset but a provider is configured', () => {
-    const env = { OPENAI_API_KEY_SECRET_ID: 'devfathom/staging/openai-api-key' };
-    expect(readAISelector(env)).toEqual({ kind: 'routed', preferred: null, explicit: false });
+  it.each([undefined, '', '   '])(
+    'keeps AI off when AI_PROVIDER is %j, even with providers configured',
+    (selector) => {
+      const env = {
+        AI_PROVIDER: selector,
+        ANTHROPIC_API_KEY_SECRET_ID: 'devfathom/staging/anthropic-api-key',
+        OPENAI_API_KEY_SECRET_ID: 'devfathom/staging/openai-api-key',
+        BEDROCK_REGION: 'ap-southeast-1',
+        ANTHROPIC_API_KEY: 'local-key',
+      };
+      expect(readAISelector(env)).toEqual({ kind: 'disabled' });
+      expect(readAIAvailability(env)).toEqual({ available: false, reason: 'DISABLED' });
+      expect(readAIProviderReadiness(env)).toMatchObject({ ready: false, reason: 'DISABLED' });
+      expect(() => createAIModel(env, { feature: 'ask-fathom' })).toThrow(AIUnavailableError);
+    }
+  );
+  it('uses the routed chain only when AI_PROVIDER is auto', () => {
+    const env = {
+      AI_PROVIDER: 'auto',
+      OPENAI_API_KEY_SECRET_ID: 'devfathom/staging/openai-api-key',
+    };
+    expect(readAISelector(env)).toEqual({ kind: 'routed', preferred: null });
     expect(readAIAvailability(env)).toEqual({ available: true, provider: 'auto' });
     expect(createAIModel(env, { feature: 'ask-fathom' })).toMatchObject({
       modelId: 'auto:standard',
