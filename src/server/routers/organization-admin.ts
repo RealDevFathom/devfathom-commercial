@@ -9,6 +9,7 @@ import {
   readRoutedAvailabilityFor,
   readAskFathomSettings,
 } from '@/lib/ai/ask-fathom-settings';
+import { readDeepStrategySettings } from '@/lib/ai/deep-strategy-settings';
 import { readAIProviderReadiness } from '@/lib/ai/provider';
 import { passwordSchema } from '@/lib/password-policy';
 import { organizationRolePermissionsSchema } from '@/lib/organization-role';
@@ -115,6 +116,41 @@ export const organizationAdminRouter = router({
         provider,
         await readRoutedAvailabilityFor(provider)
       );
+    }),
+
+  // The pharmacy's opt-in for deep strategy on the deep model. ADMIN only; no UI yet.
+  deepStrategySettings: adminProcedure.input(z.void()).query(async ({ ctx }) => {
+    if (ctx.session.user.role !== 'ADMIN') {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Administrator access is required.' });
+    }
+    const settings = await readDeepStrategySettings(ctx.db, organizationId(ctx));
+    if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+    return settings;
+  }),
+
+  setDeepStrategyEnabled: adminProcedure
+    .input(z.strictObject({ aiDeepStrategyEnabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      // A custom capability grant must not broaden this company control beyond ADMIN.
+      if (ctx.session.user.role !== 'ADMIN') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Administrator access is required.' });
+      }
+      const id = organizationId(ctx);
+      const settings = await readDeepStrategySettings(ctx.db, id);
+      if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+      const saved = await ctx.db.organization.update({
+        where: { id },
+        data: { aiDeepStrategyEnabled: input.aiDeepStrategyEnabled },
+        select: { id: true, aiDeepStrategyEnabled: true },
+      });
+      annotateAudit(ctx, {
+        targetType: 'Organization',
+        targetId: id,
+        operation: 'UPDATE',
+        description: `${saved.aiDeepStrategyEnabled ? 'Enabled' : 'Disabled'} AI deep strategy`,
+      });
+      // The router caches the opt-in for up to 30 seconds per server.
+      return { organizationId: saved.id, aiDeepStrategyEnabled: saved.aiDeepStrategyEnabled };
     }),
 
   departments: adminProcedure.query(async ({ ctx }) => {

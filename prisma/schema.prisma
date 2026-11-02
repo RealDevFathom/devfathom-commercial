@@ -4896,6 +4896,7 @@ model Organization {
   seatLimit                Int                        @default(1)
   isDemo                   Boolean                    @default(false)
   askFathomEnabled         Boolean                    @default(true)
+  aiDeepStrategyEnabled    Boolean                    @default(false)
   lastDemoResetAt          DateTime?
   gracePeriodDays          Int                        @default(0)
   activatedAt              DateTime?
