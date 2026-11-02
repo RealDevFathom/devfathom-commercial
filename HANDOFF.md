@@ -1,17 +1,18 @@
 # HANDOFF — SehatCart develop QA pass + BA recommendations
 
-Last updated: 2026-11-03 00:42 PKT (19:42 UTC)
+Last updated: 2026-11-03 01:08 PKT (20:08 UTC)
 Branch: `saad/great-brown-id2w5x` (base `develop` @ `47518cb`)
 PR: [#1224](https://github.com/RealDevFathom/devfathom-commercial/pull/1224) into `develop` — docs/evidence/harness only, never merge from this session. Session is subscribed to PR activity.
 Linear: no Linear issue is attached to this QA pass (see Open questions)
 
 ## Resume here
 
-- **Single next action:** (1) when workflow `wf_7026951b-8f2` finishes, apply all verification corrections + new findings N27–N30 (see `findings-log.md`) to `qa-report.md`; (2) then, per Saad (2026-11-03), **file every new finding as a GitHub issue** — labels `bug`, `qa`, `pharmacy`, `sevN-…` plus `security`/`ux`/`ui`/`a11y` as relevant, **never the `claude` label**, do **not** start fixing; they sync to Linear and Codex will fix them. Record each issue number back into `qa-report.md` and this log.
+- **Single next action:** file the new findings as GitHub issues (per Saad 2026-11-03: labels `bug`, `qa`, `pharmacy`, `sevN-…` + `security`/`ux`/`ui`/`a11y` as relevant, **never `claude`**, do **not** fix; they sync to Linear and Codex fixes them). **Before filing, de-duplicate against issues #1225+**: a parallel Codex QA run filed #1227 (= finding 1), #1232 (= 30), #1233 (= 25, names part), #1234 (≈ 26, Settings Edit only), #1236 (= 29) at ~19:39 UTC. Linear-only: DEV-504 (= finding 28, Urdu foundation), DEV-498 item F14 (= finding 21; its proposed fix would block adding controlled items). Do not create duplicates; record the existing number instead. Then write every issue number into `qa-report.md` + this log and push.
+  - `qa-report.md` is rewritten with the adversarial-verification corrections (32 findings: 6 Sev1 / 7 Sev2 / 15 Sev3 / 4 Sev4). Workflow `wf_7026951b-8f2`: 7 verify groups + duplicate hunt done; completeness critic (agent `a2d620bc0934d4493`) still running — read its result from the workflow `journal.jsonl` and apply anything real.
   - Testing is complete. Day 2026-11-02 was CLOSED by QA at 23:48 PKT (variance −4.00, deliberate).
   - Caveat: another tester (`QA-20261102-FUNC-*`, `QA-20261102-CASHCHECK-*`) is using the **same QA Cashier account** on this tenant.
-- **Item:** QA pass (no DEV id). All workstreams done.
-- **Half-written / uncommitted:** nothing uncommitted. `qa-report.md` will get one more correction commit (dark-mode finding N27 + verification results); `ba-recommendations.md` is final. Raw working notes stay in `qa/sehatcart-2026-11-02/findings-log.md` (superseded by the report; N7 was withdrawn after re-check). Nothing else uncommitted after this commit.
+- **Item:** QA pass (no DEV id). All test workstreams done; W9 (file issues) in progress.
+- **Half-written / uncommitted:** nothing after this commit. Test bills still holding stock (no UI can release them, finding 2): ~60 u QA-B1 (3 reload-lost cashier bills, ids unknown), 10 u QA-AMX-1, 10 u QA-B4 (after-close bill), 20 u QA-B2 (pre-add preview probe ~00:58 PKT).
 
 ## PR #1224 review status
 
@@ -20,7 +21,7 @@ Linear: no Linear issue is attached to this QA pass (see Open questions)
 | Machine checks (CI) | none configured | 0 check runs on the PR head; repo workflows only deploy. `mergeable_state: clean`. No Claude Approvals check in this repo. |
 | Codex code review (`dd6cf1d`) | 2 × P2 → fixed | (1) dark sweeps only set `prefers-color-scheme`; the app reads `localStorage['theme']`, so the "dark" sweep rendered light → `roleContext` now stores the app theme and sweeps record `data-theme`. (2) `print-receipt.mjs` wrote HTML to a hard-coded path → now `path.join(EVIDENCE, …)`. Threads replied to and resolved. |
 | Codex security review (`dd6cf1d`) | completed, no findings | — |
-| QA re-check after fix | done (report edit pending) | Genuine dark pass: 34/34 pages `data-theme=dark`, no errors/overflow. New dark finding N27 (tenant brand `--primary:#111110` kept in dark → `text-primary` links 1.21:1). Adversarial verification workflow `wf_7026951b-8f2` running. |
+| QA re-check after fix | done | Genuine dark pass: 34/34 pages `data-theme=dark`, no errors/overflow. New dark finding (report #26). Adversarial verification applied to `qa-report.md` (one finding withdrawn, three added from live follow-ups). |
 
 ## Workstreams (items)
 
@@ -33,7 +34,8 @@ Linear: no Linear issue is attached to this QA pass (see Open questions)
 | W5 | AI (Ask Fathom + growth) | done (blocked live) | Ask Fathom 503 (no `AI_PROVIDER` on develop, #1199/#1159) → accuracy/injection/Urdu **not testable live**; tool authz reviewed in code (`src/lib/ai/tools/pharmacy-reports.ts`); growth insights UNAVAILABLE; basket needs completed days | Write up; optional: deterministic replenishment report check (`pharmacyReports.replenishment`) |
 | W6 | UI/UX/a11y sweep (375/768/1440, dark, Urdu RTL, keyboard, axe) | done | Desktop/tablet/phone sweeps done (no doc overflow; #1032/#1069 reproduce); axe done (N25); no app Urdu (N24); dark sweep running | `ROUTES="..." node qa/sehatcart-2026-11-02/harness/sweep.mjs tablet 768 1024 light`, then `phone 375 812`, `desk-dark 1440 900 dark`; Urdu switch via Settings; axe via `@axe-core/playwright` |
 | W7 | Security + data integrity probes | done | XSS pass; CSV pass (Sev4 gap); throttle N19; logout-not-revoked N20; concurrency pass; #521/#636 fixed; offline N21 | Optional: cross-tenant host probe (needs another tenant host) |
-| W8 | Write `qa-report.md` + `ba-recommendations.md` | done | 28 new findings (5 Sev1/7 Sev2/12 Sev3/4 Sev4), 23 re-verified, go/no-go = NO-GO; 39 BA recommendations (24 P1, 14 P2, 1 P3) + top 10 | — |
+| W8 | Write `qa-report.md` + `ba-recommendations.md` | done | After verification: 32 new findings (6 Sev1/7 Sev2/15 Sev3/4 Sev4), 23 re-verified, go/no-go = NO-GO; 39 BA recommendations (24 P1, 14 P2, 1 P3) + top 10 | — |
+| W9 | File new findings as GitHub issues (no `claude` label, no fixes) | in progress | Duplicate hunt done (see Resume here) | De-dup vs #1225+, then `issue_write create` per finding |
 
 ## Environment / test data (no passwords here — creds live only in a local, uncommitted file)
 
