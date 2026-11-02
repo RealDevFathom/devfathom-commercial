@@ -236,7 +236,10 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
       <SheetContent
         side="right"
         showCloseButton={false}
-        className="gap-0 p-0 motion-reduce:transition-none motion-reduce:transform-none"
+        // DEV-598: animate position and opacity only. Colours come straight from
+        // the theme tokens, so a theme switch can never leave the surface
+        // interpolating (or stuck) on the previous theme's paper.
+        className="gap-0 p-0 transition-[opacity,translate] motion-reduce:transition-none motion-reduce:transform-none"
         style={{ width: '100%', maxWidth: 460 }}
       >
         {/* Header */}
@@ -320,7 +323,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
           >
             Your question
           </label>
-          <div className="flex items-end gap-2 rounded-2xl border border-border bg-background px-3 py-2 focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15 transition-colors">
+          <div className="flex items-end gap-2 rounded-2xl border border-border bg-background px-3 py-2 transition-shadow focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15">
             <textarea
               ref={inputRef}
               id="assistant-question"
@@ -356,7 +359,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
               <Button
                 type="submit"
                 disabled={!input.trim() || !entry.canChat || requestError === 'permission'}
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-all hover:bg-primary-hover active:scale-95 disabled:opacity-40"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-none transition-all hover:bg-primary-hover active:scale-95 disabled:opacity-40"
                 aria-label="Send"
               >
                 <ArrowUp className="h-4 w-4" />
@@ -599,7 +602,7 @@ function ApprovalCard({
         <Button
           disabled={disabled}
           onClick={() => onApprove(approvalId, true)}
-          className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary-hover"
+          className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-none transition-colors hover:bg-primary-hover"
         >
           <Check className="h-3.5 w-3.5" /> Confirm &amp; run
         </Button>

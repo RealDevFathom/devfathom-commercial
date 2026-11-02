@@ -435,6 +435,30 @@ describe('Ask Fathom lifecycle and keyboard', () => {
     expect(await screen.findByText('Synthetic answer')).toBeVisible();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+  it('follows the current theme through tokens when reopened (DEV-598)', async () => {
+    try {
+      render(panel());
+      enter();
+      await screen.findByText('Synthetic answer');
+      act(() => useAssistant.setState({ open: false }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      document.documentElement.setAttribute('data-theme', 'dark');
+      act(() => useAssistant.setState({ open: true }));
+      const dialog = await screen.findByRole('dialog', { name: 'Ask Fathom' });
+      // The surface reads the theme token; only opacity and position animate,
+      // so a theme switch can never leave it on the previous theme's colour.
+      expect(dialog).toHaveClass('bg-popover', 'transition-[opacity,translate]');
+      expect(dialog.className).not.toMatch(/(^|\s)transition(\s|$)/);
+      for (const element of [dialog, ...dialog.querySelectorAll('*')]) {
+        expect(element.getAttribute('class') ?? '').not.toMatch(
+          /rgba?\(|#[0-9a-f]{3,8}\b|\b(bg|text|border)-(white|black)\b/i
+        );
+        expect(element.getAttribute('style') ?? '').not.toMatch(/colou?r|background/i);
+      }
+    } finally {
+      document.documentElement.removeAttribute('data-theme');
+    }
+  });
   it('honors reduced motion for scrolling and uses a named dialog', async () => {
     fixtures.reducedMotion = true;
     render(panel());
