@@ -10,10 +10,12 @@
  * key stops it being written — but neither stops a DEACTIVATED branch of the
  * caller's own organization: its open drawer could take cash movements and be
  * closed, and it could be cut a daily close. `scopeFor` refuses a branch that is
- * not an active branch of the caller's organization; every one of these
- * procedures must reach that refusal before it reads or writes anything. And the
- * close family's typed refusals (a drawer still open, a second cut without a
- * reason) must reach the caller as typed errors, the way the drawer family's do.
+ * not an active branch of the caller's organization; the drawer mutations and
+ * the cash tender reach it through `branchScopeOrForbidden`, which words it as
+ * FORBIDDEN. Every one of these procedures must reach that refusal before it
+ * reads or writes anything. And the close family's typed refusals (a drawer
+ * still open, a second cut without a reason) must reach the caller as typed
+ * errors, the way the drawer family's do.
  *
  * Requires TEST_DATABASE_URL: a disposable, migrated database reached as the
  * restricted runtime role (neither SUPERUSER nor BYPASSRLS — asserted first).
@@ -205,7 +207,7 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
             businessDate,
             openingFloatMinor: 0,
           }),
-        NOT_IN_WORKSPACE,
+        OUTSIDE,
       ],
       [
         'drawerMovement',
@@ -217,12 +219,12 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
             amountMinor: 200,
             reason: 'Courier',
           }),
-        NOT_IN_WORKSPACE,
+        OUTSIDE,
       ],
       [
         'closeDrawer',
         (c) => c.closeDrawer({ branchId, drawerSessionId, countedCashMinor: 500 }),
-        NOT_IN_WORKSPACE,
+        OUTSIDE,
       ],
       ['dailyClose', (c) => c.dailyClose({ branchId, businessDate }), NOT_IN_WORKSPACE],
       ['closePreview', (c) => c.closePreview({ branchId, businessDate }), NOT_IN_WORKSPACE],

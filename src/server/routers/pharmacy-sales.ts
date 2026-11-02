@@ -272,13 +272,34 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
   });
 }
 
+// Canonical names (#163) beside the legacy dotted ones, which still cover un-migrated grants.
 const RECEIPT_READ_CAPABILITIES = [
   'pharmacy:dispense',
+  'pharmacy.dispense',
+  'pharmacy:receipt',
+  'pharmacy.receipt',
   'pharmacy:counter',
+  'pharmacy.counter',
 ] as const;
 
+function capabilityCovers(rule: string, action: string): boolean {
+  if (rule === '*' || rule === action) return true;
+  if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
+  return false;
+}
+
+function capabilityDecision(
+  rules: { capability: string; effect: string }[],
+  action: string
+): 'ALLOW' | 'DENY' | null {
+  const matched = rules.filter((rule) => capabilityCovers(rule.capability, action));
+  if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
+  if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
+  return null;
+}
+
 /**
- * Dispense or counter capability, then an active pharmacy branch
+ * Dispense, receipt, or counter capability, then an active pharmacy branch
  * assignment in the session organization. Restaurant staff profiles are not
  * consulted. An empty assignment denies a non-admin. A session `ADMIN` of this
  * organization may use every active branch, including when they also have an
@@ -299,7 +320,7 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
 async function requireCounterReceiptAccess(
   ctx: TRPCContext,
   branch: string,
-  capabilities: readonly (typeof RECEIPT_READ_CAPABILITIES)[number][] = RECEIPT_READ_CAPABILITIES
+  requireCanonicalCounter = false
 ): Promise<LedgerScope> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
@@ -307,11 +328,33 @@ async function requireCounterReceiptAccess(
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
+  // The cash drawer moves money: it needs the canonical counter capability, not
+  // a dispense or receipt grant.
+  if (
+    requireCanonicalCounter &&
+    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+
   const member = await ctx.db.user.findUnique({
     where: { id: user.id },
     select: {
       status: true,
       organizationId: true,
+      organizationRole: {
+        select: { permissions: { select: { capability: true, effect: true } } },
+      },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { capability: true, effect: true },
+      },
     },
   });
   if (
@@ -323,13 +366,14 @@ async function requireCounterReceiptAccess(
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const capable = (
-    await Promise.all(
-      capabilities.map((action) =>
-        can(subjectFromSession(user), action, undefined, { db: ctx.db, source: 'TRPC' })
-      )
-    )
-  ).some(Boolean);
+  const overrides = member.permissionOverrides;
+  const roleRules = member.organizationRole?.permissions ?? [];
+  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
+    const override = capabilityDecision(overrides, action);
+    if (override === 'DENY') return false;
+    if (override === 'ALLOW') return true;
+    return capabilityDecision(roleRules, action) === 'ALLOW';
+  });
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -608,10 +652,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, ['pharmacy:counter']);
-        return await ctx.db.$transaction(async (tx) =>
-          openPharmacyDrawer(txDb(tx), scope, input)
-        );
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return await ctx.db.$transaction(async (tx) => openPharmacyDrawer(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
@@ -630,7 +672,7 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, ['pharmacy:counter']);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
           recordPharmacyCashMovement(txDb(tx), scope, input)
         );
@@ -651,10 +693,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, ['pharmacy:counter']);
-        return await ctx.db.$transaction(async (tx) =>
-          closePharmacyDrawer(txDb(tx), scope, input)
-        );
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return await ctx.db.$transaction(async (tx) => closePharmacyDrawer(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }

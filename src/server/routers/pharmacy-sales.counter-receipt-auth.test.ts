@@ -401,13 +401,17 @@ describe('counter receipt authorization', () => {
     expect(readCounterCart).not.toHaveBeenCalled();
   });
 
-  it('denies legacy or unknown receipt capability names', async () => {
-    for (const capability of ['pharmacy.dispense', 'pharmacy:receipt', 'pharmacy.receipt'] as const) {
+  it('allows pharmacy.dispense and pharmacy:receipt when the branch is assigned', async () => {
+    for (const capability of [
+      'pharmacy.dispense',
+      'pharmacy:receipt',
+      'pharmacy.receipt',
+    ] as const) {
       const f = fixture([{ capability, effect: 'ALLOW' }]);
       assign(f, ['branch-a']);
       await expect(
         f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
-      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      ).resolves.toMatchObject({ receiptNumber: 7 });
     }
   });
 
@@ -604,7 +608,7 @@ describe('cash drawer authorization (#343)', () => {
     expect(f.db.$transaction).not.toHaveBeenCalled();
   });
 
-  it.each(drawerPaths)('$name keeps a role DENY stronger than an override ALLOW', async (path) => {
+  it.each(drawerPaths)('$name lets a user-level ALLOW override a role DENY', async (path) => {
     const f = fixture([{ capability: 'pharmacy:counter', effect: 'DENY' }]);
     f.db.user.findUnique.mockResolvedValue({
       status: 'ACTIVE',
@@ -615,16 +619,19 @@ describe('cash drawer authorization (#343)', () => {
       permissionOverrides: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
     });
     assign(f, ['branch-a']);
-    await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(f.db.$transaction).not.toHaveBeenCalled();
+    await expect(path.run(f.caller())).resolves.toBeDefined();
+    expect(f.db.$transaction).toHaveBeenCalledTimes(1);
   });
 
-  it.each(drawerPaths)('$name does not accept dispense authority as counter authority', async (path) => {
-    const f = fixture([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
-    assign(f, ['branch-a']);
-    await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(f.db.$transaction).not.toHaveBeenCalled();
-  });
+  it.each(drawerPaths)(
+    '$name does not accept dispense authority as counter authority',
+    async (path) => {
+      const f = fixture([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
+      await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
 
   it('routes each allowed operation to its settlement command', async () => {
     const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);

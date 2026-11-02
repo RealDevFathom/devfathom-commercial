@@ -48,6 +48,7 @@ function fixture(
         async ({ where }: { where: { id: { in: string[] }; organizationId: string } }) =>
           options.branch === false ? [] : where.id.in.map((id) => ({ id }))
       ),
+      findFirst: vi.fn(async () => (options.branch === false ? null : { id: 'branch-1' })),
     },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyBranchAssignment: {
@@ -85,8 +86,8 @@ describe('pharmacySales.openDrawer', () => {
   it('refuses a branch that is missing, inactive, or outside the session organization', async () => {
     const f = fixture({ branch: false });
     await expect(f.caller.openDrawer(input)).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-      message: 'That record is not in this workspace.',
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
     });
     expect(f.db.pharmacyBranch.findMany).toHaveBeenCalledWith({
       where: { id: { in: ['branch-1'] }, organizationId: 'org-1', active: true },

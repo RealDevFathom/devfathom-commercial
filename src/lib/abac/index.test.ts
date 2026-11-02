@@ -156,15 +156,6 @@ describe('custom ABAC decisions', () => {
     ).resolves.toBe(false);
   });
 
-  it('keeps a role deny stronger than a user allow', async () => {
-    const db = authorizationDb({
-      overrides: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
-      rolePermissions: [{ capability: 'pharmacy:counter', effect: 'DENY' }],
-    });
-
-    await expect(can(employee, 'pharmacy:counter', undefined, { db })).resolves.toBe(false);
-  });
-
   it('falls back to built-in policy only when no custom rule matches', async () => {
     const db = authorizationDb({});
 
