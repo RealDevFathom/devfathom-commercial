@@ -1,117 +1,106 @@
 # HANDOFF — DEV-576 (top priority)
 
-Last updated: 2026-11-02 19:20 UTC
-Branch: `feat/dev-576-ai-providers` (from `develop` @ `47518cbf`). PR: not opened yet.
-Linear: https://linear.app/devfathom/issue/DEV-576
-Other work (the claude-label batch) lives on branch `saad/nice-thompson-99m17p`, PR
-https://github.com/RealDevFathom/devfathom-commercial/pull/1223. That branch has its own
-`HANDOFF.md`. **All other Linear work is paused until DEV-576 is done.**
+Last updated: 2026-11-02 19:50 UTC
+
+- **Branch:** `feat/dev-576-ai-providers`, from `develop` @ `47518cbf`.
+- **PR:** [RealDevFathom/devfathom-commercial#1238](https://github.com/RealDevFathom/devfathom-commercial/pull/1238). Open into develop, not merged; this session watches it.
+- **Linear:** https://linear.app/devfathom/issue/DEV-576. The PR link and live results are posted there.
+- **Other work:** the claude-label batch lives on branch `saad/nice-thompson-99m17p`, PR
+  https://github.com/RealDevFathom/devfathom-commercial/pull/1223, which has its own `HANDOFF.md`.
+  That work stays paused until DEV-576 is done.
 
 ## Resume here
 
-- **Next action:** integrate the three "adapt" work streams. They are being written now in
-  local worktrees (workflow `wf_7dcd7f73-601`):
-  - **settings**, branch `dev576-settings`: SuperAdmin router `src/server/routers/ai-settings.ts`
-    and console `src/components/platform/ai-settings-console.tsx`. Covers the active provider,
-    order, fallback, caps with month spend, per-tier models, and reset.
-  - **usage**, branch `dev576-usage`: `src/lib/ai/usage.ts`, `money.ts`, `platform-ai-usage.ts`
-    and `ai-usage-panel.tsx` on `ai_provider_usage`, plus the budget alert
-    `maybeCreateAIBudgetAlert(provider, now)`. It removes `src/lib/ai/budget.ts`.
-  - **infra**, branch `dev576-infra` (queued): `infra/aws/environment.yaml`,
-    `tests/infra/aws-environment.test.ts`, and docs. Docs cover the env var list, the IAM
-    policy, removing the created secret, and Bedrock us-east-1 ARNs.
-- **How to integrate:** cherry-pick each commit with the trailers stripped:
-  `git cherry-pick --no-commit <sha>`, then commit with the message minus any
-  `Co-Authored-By:` / `Claude-Session:` lines. Then:
-  - Run `bunx prettier --write` on the touched files.
-  - Resolve formatting overlap in `budget.ts` and `mutation-authorization.ts`. Commit
-    `ef9ea5f1` reformatted both.
-- **If the agent worktrees are gone:** redo the three streams from the scope above, against
-  the contract in `src/lib/ai/router.ts`, `spend.ts` and `model-defaults.ts`.
-- **Known open tsc error:** `src/lib/ai/router.ts` default `alert` calls
-  `maybeCreateAIBudgetAlert(provider, now)`. It type-checks only once the usage stream lands.
-- **Uncommitted / half-written on this branch:** nothing.
-- **Worktree:** `/home/user/devfathom-ai` (local). Everything listed below is pushed.
+- **Next action:**
+  - When `bun run build` finishes, put its result in the PR body "Checks" table, replacing
+    "in progress".
+  - Then ask Saad for the "two changes for DEV-576": his message arrived truncated, with
+    nothing after the colon.
+- **Waiting on ops (Saad):**
+  1. Add the IAM policy from the PR body to the develop host role `inky-ec2-ssm` (and/or
+     update the ECS staging stack).
+  2. In the Bedrock console (us-east-1), submit the Anthropic use-case form and ask AWS to
+     enable the Claude 5.5 models.
+  3. Set the env vars from the PR body and deploy.
+  4. Run `bun run ai:smoke` from a checkout with credentials that carry the policy.
+- **Open review questions in the PR:**
+  - Should production default to `AiProvider=disabled`?
+  - Should the ECS Bedrock IAM stay exact to the 3 parameter models, or be widened to
+    `us.anthropic.claude-*` so SuperAdmin switches work?
+- **Uncommitted / half-written:** nothing.
+- **Worktree:** `/home/user/devfathom-ai` (local). Everything is pushed.
 
 ## Status
 
-| Step                                                                                                                                            | Status                                                                         | Commits                                        |
-| ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------- |
-| 1. Branch from develop; merge `feat/ai-provider-3-superadmin-settings`, `-4-usage`, `-5-infra`                                                  | done                                                                           | `35a97a4a`, `f44276c8`, `6add61a4`             |
-| Reconcile with develop (ledger renamed `ai_provider_usage`, migration `20261102130000`, tenant `ai_usage` + `routeAI` fail-open kept, lockfile) | done                                                                           | `e362514b`                                     |
-| 2. Providers anthropic / openai / bedrock (instance role, `BEDROCK_REGION` default us-east-1)                                                   | done                                                                           | `e362514b`                                     |
-| 3. Keys from Secrets Manager at runtime (`*_API_KEY_SECRET_ID`, `AI_SECRETS_REGION`; plain keys only outside production; never logged)          | done                                                                           | `e362514b` (`secrets.ts`, `ai-credentials.ts`) |
-| 4. Fallback anthropic → openai → bedrock, configurable (`AI_PROVIDER_ORDER` or SuperAdmin order)                                                | done                                                                           | `e362514b` (`router.ts`)                       |
-| 5. SuperAdmin switch: active provider plus model per tier                                                                                       | backend done; router/console being adapted                                     | `e362514b`; settings stream pending            |
-| 6. Per-provider monthly caps 190 / 190 / 300 USD (env `AI_<P>_MONTHLY_CAP_USD` or SuperAdmin), Asia/Karachi month, fail-closed on unknown spend | done                                                                           | `e362514b`                                     |
-| 7. Azure kept, never default, never in the chain                                                                                                | done (tested)                                                                  | `e362514b`, `372cae63`                         |
-| 8. Tests                                                                                                                                        | unit + routed + offline e2e done; DB integration in the settings/usage streams | `372cae63`                                     |
-| 8. Typecheck, lint, vitest, build                                                                                                               | pending full run after integration                                             | —                                              |
-| 9. Docs: env vars and IAM                                                                                                                       | infra stream (queued)                                                          | —                                              |
-| Fold-in DEV-583 (Ask Fathom 503 / honest availability)                                                                                          | done                                                                           | `ef9ea5f1`                                     |
-| Fold-in DEV-579 / 580 / 581 (expiry advisor query)                                                                                              | done                                                                           | `770d37bc`                                     |
-| PR into develop titled `feat(DEV-576): AI providers Anthropic, OpenAI, Bedrock`; post link on DEV-576                                           | not started                                                                    | —                                              |
+| Step                                                                                                      | Status                         | Commits                            |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------ | ---------------------------------- |
+| Merge `feat/ai-provider-3/-4/-5` into a branch from develop                                               | done                           | `35a97a4a`, `f44276c8`, `6add61a4` |
+| Reconcile with develop (ledger `ai_provider_usage`, migration `20261102130000`, tenant `ai_usage` kept)   | done                           | `e362514b`                         |
+| Providers anthropic / openai / bedrock; keys from Secrets Manager; fallback; caps; Azure out of the chain | done                           | `e362514b`, `74053aec`             |
+| SuperAdmin switch: mode, order, fallback, caps, per-tier models, reset, audit                             | done                           | `196e6237`                         |
+| Per-provider spend report and 80% / 100% cap alerts; `budget.ts` removed                                  | done                           | `6b617b0a`                         |
+| Infra template, IAM and docs (`docs/ai-providers.md`)                                                     | done                           | `bfd509ab`, `f579ee24`             |
+| DEV-583 fold-in                                                                                           | done                           | `ef9ea5f1`                         |
+| DEV-579 / 580 / 581 fold-in                                                                               | done                           | `770d37bc`                         |
+| Tests: unit, DB, offline e2e, smoke script                                                                | done                           | `372cae63`, `8a65a578`, `74053aec` |
+| Live checks via the AWS connector                                                                         | partial (see below)            | —                                  |
+| PR opened; link posted on DEV-576                                                                         | done                           | #1238                              |
+| Studio visual QA matrix for the two SuperAdmin panels                                                     | not done (needs a running app) | —                                  |
+
+## Live checks (2026-11-02, AWS connector, account 892667864163)
+
+The connector authenticates as the account **root**. I used it read-only, plus a few tiny
+Bedrock Converse calls.
+
+**Secrets:**
+
+- Both secrets exist in ap-southeast-1 and use AWS-managed KMS.
+- They hold JSON `{"value": …}` with a valid key prefix.
+- No stack owns them. Values were never printed.
+
+**Bedrock (us-east-1):**
+
+- The `us.anthropic.claude-{haiku,sonnet,opus}-5-5` profiles are ACTIVE, with destinations
+  us-east-1, us-east-2 and us-west-2.
+- Converse on them is denied: "not available for this account", agreement
+  `NOT_AVAILABLE`.
+- Haiku 4.5, Opus 4.5 and Opus 4.6 answered.
+- Sonnet 4.5 / 4.6 answered once, then said "use case details not submitted".
+
+**IAM:** `SimulatePrincipalPolicy` shows both `inky-ec2-ssm` (EC2 `devfathom-pharmacy`) and
+`devfathom-staging-WebTaskRole-…` implicitly denied for GetSecretValue and Bedrock invoke.
+
+**Anthropic / OpenAI live:** not possible from this session.
+
+- The connector sandbox has no internet access.
+- The container has internet access but no AWS credentials.
+- Moving a key between them would mean printing it.
+
+**Container reachability:** `api.anthropic.com` and `api.openai.com` answer 401 without a key.
+`ai:smoke -- --no-db` reached the real Secrets Manager and Bedrock endpoints, and they
+rejected the placeholder credentials.
 
 ## Checks (latest)
 
-| Check                  | Command                                                                                                  | Latest result                                             |
-| ---------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| Routed + key tests     | `bunx vitest run src/lib/ai/secrets.test.ts src/lib/ai/router.routing.test.ts`                           | 38/38 pass                                                |
-| Offline Ask Fathom e2e | `bunx vitest run src/app/api/assistant/route.providers.e2e.test.ts`                                      | 7/7 pass                                                  |
-| AI unit suites         | `bunx vitest run src/lib/ai src/app/api/assistant`                                                       | provider 42, router, tiers pass (rerun after integration) |
-| Typecheck              | `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit` (run in this worktree, not the main checkout) | 1 known error: the `alert` signature (see Resume here)    |
-| Lint                   | `bunx eslint <changed files>`                                                                            | clean on the new test files                               |
-| Full vitest / build    | `bunx vitest run`, `bun run build`                                                                       | not run yet                                               |
-
-**What "end to end" means here:** `route.providers.e2e.test.ts` drives `POST /api/assistant`
-through:
-
-- the real `ai` SDK and the real `@ai-sdk/anthropic`, `@ai-sdk/openai` and
-  `@ai-sdk/amazon-bedrock`;
-- the routed chain, the caps and the key loader.
-
-Only the network is faked, in each provider's wire format: Anthropic SSE, OpenAI Responses
-SSE, and the Bedrock binary event stream.
-
-What it shows:
-
-- Anthropic answers.
-- Anthropic 529 falls back to OpenAI with `store:false`.
-- Both failing falls back to Bedrock, SigV4-signed for us-east-1.
-- ForceBedrock, ForceOpenAI and Disabled behave as set.
-- All providers capped returns 503.
-
-**Live calls were not possible from this container.** Its AWS credentials are placeholders
-(`UnrecognizedClientException`) and the AWS connector needs sign-in. Live verification
-belongs on the develop server once the env and IAM are applied.
+| Check     | Command                                                                                                                                                                                     | Result                                                                                                                                                                                         |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit      | `bunx vitest run src/lib/ai src/server/routers/ai-settings.test.ts src/server/routers/organization-admin.ask-fathom.test.ts src/components/platform src/app/api/assistant src/app/platform` | 716 passed, 3 skipped                                                                                                                                                                          |
+| DB        | `TEST_DATABASE_URL=postgresql://devfathom_app:app@127.0.0.1:5432/dev576_core bunx vitest run src/server/routers/ai-settings.db.test.ts src/lib/ai/usage.db.test.ts`                         | 8/8                                                                                                                                                                                            |
+| Infra     | `bunx vitest run tests/infra/aws-environment.test.ts tests/local-setup-contract.test.ts`                                                                                                    | 20/20                                                                                                                                                                                          |
+| Lint      | `bunx eslint $(git diff --name-only origin/develop...HEAD -- '*.ts' '*.tsx')`                                                                                                               | clean (56 files)                                                                                                                                                                               |
+| Typecheck | `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit` (in this worktree)                                                                                                               | 4 errors, all pre-existing on develop in untouched files: `counter-console.test.tsx`, `duplicate-salt-acknowledgement.db.test.ts`, `pharmacy-inventory.test.ts`, `restaurant-catering.test.ts` |
+| Build     | `bun run build`                                                                                                                                                                             | running (log: scratchpad `dev576-build.txt`)                                                                                                                                                   |
 
 ## Decisions
 
-- **Merge strategy:** merge only, no rebase or force-push. Develop behaviour was restored in
-  one reconcile commit.
-- **Routing:** `createAIModel` stays synchronous. It returns a lazy `LanguageModelV3`
-  (`devfathom.routed`) that resolves settings, keys and caps per call. Failover happens
-  only before any output, and never on abort.
-- **Settings precedence:** a SuperAdmin force mode wins, then `AI_PROVIDER=anthropic|openai|bedrock`
-  (preferred first), then the SuperAdmin order, then `AI_PROVIDER_ORDER`, then the default.
-  `AI_PROVIDER` unset or `auto` means routed. Azure, groq, google and vertex remain explicit
-  legacy selectors only.
-- **Model defaults** (overridable by `AI_<P>_MODEL_<TIER>` or SuperAdmin):
-
-  | Provider                        | cheap                           | standard                         | deep                           |
-  | ------------------------------- | ------------------------------- | -------------------------------- | ------------------------------ |
-  | Anthropic                       | `claude-haiku-5-5`              | `claude-sonnet-5-5`              | `claude-opus-5-5`              |
-  | Bedrock (us-east-1 US profiles) | `us.anthropic.claude-haiku-5-5` | `us.anthropic.claude-sonnet-5-5` | `us.anthropic.claude-opus-5-5` |
-  | OpenAI                          | `gpt-5.4-nano`                  | `gpt-5.4-mini`                   | `gpt-5.4`                      |
-
-- **Bedrock IAM:**
-  - Converse and ConverseStream are authorized by `bedrock:InvokeModel` and
-    `bedrock:InvokeModelWithResponseStream`. There is no separate Converse IAM action.
-  - The US geo profile needs the inference-profile ARN in us-east-1, plus foundation-model
-    ARNs in us-east-1, us-east-2 and us-west-2, conditioned on `bedrock:InferenceProfileArn`.
-- **Secrets:**
-  - Branch 5 created `devfathom/<env>/anthropic-api-key` and injected it as env. That is
-    replaced by `*_SECRET_ID` env vars plus runtime GetSecretValue on the workload role.
-  - Keys are cached for 15 min; a failure is retried after 1 min.
-- **Ledgers:** the platform spend ledger `ai_provider_usage` drives the caps. Develop's
-  tenant `ai_usage` attribution stays separate and unchanged.
+- **Merge strategy:** merge only, no rebase or force-push. Agent commits were cherry-picked
+  with their trailers stripped.
+- **Bedrock defaults stay Claude 5.5.** The older working profiles have list prices so a
+  SuperAdmin can switch tiers to them until AWS enables 5.5.
+- **Staging secret format:** `{"value": …}`, which is read by name.
+- **`BEDROCK_REGION` must be set** for Bedrock to join the chain.
+- **Template secret ARNs** use the `-??????` suffix. No CloudFormation stack owns the AI key
+  secrets, so removing branch 5's secret resource deletes nothing.
+- **Known slip:** commit `74053aec` names Bedrock model versions in its body as product facts.
+  It is not rewritten (no force-push). Later commit messages are scanned for model names
+  too.
