@@ -4920,6 +4920,7 @@ model Organization {
   limits                                    OrganizationLimit[]
   usageCounters                             OrganizationUsageCounter[]
   aiUsages                                  AIUsage[]
+  aiAssistantActions                        AIAssistantAction[]
   brand                                     OrganizationBrand?
   emailSettings                             OrganizationEmailSettings?
   domains                                   OrganizationDomain[]
@@ -11013,6 +11014,43 @@ model AIUsage {
   @@index([organizationId, createdAt])
   @@index([organizationId, branchId, createdAt])
   @@map("ai_usage")
+}
+
+enum AIAssistantActionStatus {
+  PROPOSED
+  EXECUTING
+  SUCCEEDED
+  FAILED
+}
+
+/// DEV-576 — the confirmed-write ledger for Ask Fathom. One row per write the
+/// server proposed for approval (a `tool-approval-request` it emitted). The
+/// wrapped tool `execute` runs only against a matching row, so a forged or
+/// modified approval is refused, and a resent approval or a provider failover
+/// returns the stored result instead of running the write again.
+/// `id` is the idempotency key: SHA-256 (HMAC-SHA-256 when AUTH_SECRET is set)
+/// over organization, user, tool call id, tool name and the canonical input.
+/// The input itself is never stored; `result` is redacted, JSON-safe output.
+model AIAssistantAction {
+  id             String                  @id
+  organizationId String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  toolName       String
+  toolCallId     String
+  approvalId     String
+  payloadHash    String
+  status         AIAssistantActionStatus @default(PROPOSED)
+  result         Json?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @default(now()) @updatedAt
+  startedAt      DateTime?
+  completedAt    DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, toolCallId])
+  @@index([organizationId, createdAt])
+  @@map("ai_assistant_actions")
 }
 
 model OrganizationRole {
