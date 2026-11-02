@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { Prisma } from '@/generated/prisma/client';
+import { lockCustomerConsent } from '@/lib/pharmacy/consent-writer';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { WhatsAppProviderError, type WhatsAppSendResult } from './provider';
@@ -88,26 +88,22 @@ export async function sendClaimedMessage(
   logId: string,
   send: () => Promise<WhatsAppSendResult>
 ): Promise<'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED'> {
-  // A reminder's reservation and provider call are deliberately separated by a
-  // commit. Consent can change in that gap, so never rely solely on the customer
-  // loaded while claiming the row. Consent acknowledgements are excluded: a
-  // STOP acknowledgement must still be sent after recording the opt-out.
-  if (entry.kind === 'REFILL_REMINDER' || entry.kind === 'KHATA_REMINDER') {
+  // STOP acknowledgements must still send after the opt-out commits.
+  if (
+    entry.kind !== 'CONSENT_ACK' &&
+    (entry.customerId || entry.kind === 'REFILL_REMINDER' || entry.kind === 'KHATA_REMINDER')
+  ) {
     return withTenantDb(entry.organizationId, async (db) => {
-      // STOP updates this row under the same FOR UPDATE lock. If STOP commits
-      // first this statement sees the new flag and returns no row; if this lock
-      // wins, STOP cannot commit until provider submission has finished.
-      const eligible = entry.customerId
-        ? await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-            SELECT id FROM pharmacy_customers
-            WHERE "organizationId" = ${entry.organizationId}
-              AND id = ${entry.customerId}
-              AND active = true
-              AND "whatsappOptIn" = true
-            FOR UPDATE
-          `)
-        : [];
-      if (eligible.length === 0) {
+      let customer = null;
+      if (entry.customerId) {
+        // Match STOP's patient-then-customer lock order before reading consent.
+        await lockCustomerConsent(db, entry.organizationId, entry.customerId);
+        customer = await db.pharmacyCustomer.findFirst({
+          where: { organizationId: entry.organizationId, id: entry.customerId },
+          select: { active: true, whatsappOptIn: true },
+        });
+      }
+      if (!customer?.active || customer.whatsappOptIn !== true) {
         await db.pharmacyMessageLog.update({
           where: { id: logId },
           data: { status: 'IGNORED', error: 'OPTED_OUT_BEFORE_SEND' },

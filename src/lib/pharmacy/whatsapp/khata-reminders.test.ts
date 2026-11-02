@@ -16,8 +16,9 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: async () => ({}),
 }));
 vi.mock('../consent-writer', () => ({
-  // The real writer takes a FOR UPDATE row lock on the patient; the fake is a no-op.
+  // Consent row locking is covered by the message-log tests.
   lockPatientConsent: async () => undefined,
+  lockCustomerConsent: async () => undefined,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {

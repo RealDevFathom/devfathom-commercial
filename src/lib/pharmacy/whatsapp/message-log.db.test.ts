@@ -79,6 +79,7 @@ describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
     await admin!.query(
       `GRANT SELECT, INSERT, UPDATE ON pharmacy_customers, pharmacy_message_logs TO "${role}"`
     );
+    await admin!.query(`GRANT SELECT, UPDATE ON pharmacy_patients TO "${role}"`);
 
     await admin!.query('BEGIN');
     await admin!.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);

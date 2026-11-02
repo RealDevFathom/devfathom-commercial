@@ -19,8 +19,12 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     // The real query also excludes captures that already have a log row; the
     // fake returns every capture so the dedupe-key claim is what is exercised.
-    $queryRaw: async (query: { sql: string }) =>
-      query.sql.includes('FOR UPDATE') ? [{ id: 'patient-1' }] : store.captures,
+    $queryRaw: async (query: { sql: string; values: unknown[] }) => {
+      if (!query.sql.includes('FOR UPDATE')) return store.captures;
+      if (query.sql.includes('pharmacy_customers'))
+        return store.customers.filter((customer) => customer.id === query.values[1]);
+      return [{ id: query.values[1] }];
+    },
     organization: {
       findUnique: async () => ({
         vertical: 'PHARMACY',
@@ -30,8 +34,10 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     },
     pharmacyBranch: { findFirst: async () => ({ id: 'branch-1' }) },
     pharmacyCustomer: {
-      findFirst: async ({ where }: { where: { patientId: string } }) =>
-        store.customers.find((customer) => customer.patientId === where.patientId) ?? null,
+      findFirst: async ({ where }: { where: { id?: string; patientId?: string } }) =>
+        store.customers.find((customer) =>
+          where.id ? customer.id === where.id : customer.patientId === where.patientId
+        ) ?? null,
     },
     patientConsent: {
       findFirst: async ({ where }: { where: { patientId: string } }) =>
