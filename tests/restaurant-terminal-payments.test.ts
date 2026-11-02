@@ -81,13 +81,9 @@ describe('provider-neutral terminal payments', () => {
     const timestamp = String(Math.floor(now / 1000));
     const rawBody = JSON.stringify({ externalEventId: 'event-1', payload: baseEvent });
     const sign = (at: string, signedSource = source, body = rawBody) =>
-      createHmac('sha256', secret)
-        .update(`${at}.${signedSource}.${body}`)
-        .digest('hex');
+      createHmac('sha256', secret).update(`${at}.${signedSource}.${body}`).digest('hex');
     const signature = sign(timestamp);
-    const bodyOnly = createHmac('sha256', secret)
-      .update(`${source}.${rawBody}`)
-      .digest('hex');
+    const bodyOnly = createHmac('sha256', secret).update(`${source}.${rawBody}`).digest('hex');
     const edge = String(Number(timestamp) - 5 * 60);
     const stale = String(Number(timestamp) - 5 * 60 - 1);
     const future = String(Number(timestamp) + 5 * 60 + 1);
