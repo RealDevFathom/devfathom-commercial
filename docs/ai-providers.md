@@ -523,7 +523,18 @@ These are done once, by an administrator, not by the workload role.
 - **Live check.** `bun run ai:smoke` (`scripts/ai-provider-smoke.ts`) calls each provider
   directly, the routed chain, and a forced Anthropic to OpenAI fallback. It uses the app's own
   key loader and prints no key. Run it from a checkout with credentials that carry the policy
-  above. Until AWS approves the form, expect the Bedrock step to fail with an access error.
+  above. Until AWS approves the form, pass `--skip-bedrock`, or expect the Bedrock step to
+  fail with an access error.
+  - On a host without Node, such as the develop EC2 host, `bun run ai:smoke` stops at the
+    `server-only` guard. Run it with Bun directly instead:
+    `bun --conditions=react-server scripts/ai-provider-smoke.ts --skip-bedrock`.
+  - **Develop result, 2 Nov at 21:40 UTC:** every check passed.
+    - Anthropic and OpenAI answered directly.
+    - The routed chain answered on the default model.
+    - The cheap tier stayed on the default model.
+    - The weekly summary used the deep model on Anthropic.
+    - The forced fallback was answered by OpenAI.
+    - Bedrock was skipped until AWS approves the form.
 
 ### Rolling it out (not done by this change)
 
