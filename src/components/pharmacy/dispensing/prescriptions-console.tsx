@@ -100,6 +100,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
   });
   const [notice, setNotice] = useState('');
   const [medicineId, setMedicineId] = useState('');
+  const [medicineQuery, setMedicineQuery] = useState('');
   const [selectedPatientId, setPatientId] = useState<string | null>(null);
   const counterPatientId = useSyncExternalStore(
     subscribeToPatientFragment,
@@ -123,6 +124,11 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
     () => workspace.data?.medicines.find((item) => item.id === medicineId),
     [medicineId, workspace.data]
   );
+  const medicineSearch = medicineQuery.trim().toLowerCase();
+  const matchingMedicines =
+    workspace.data?.medicines.filter((item) =>
+      item.productName.toLowerCase().includes(medicineSearch)
+    ) ?? [];
 
   const effectiveBranchId = selectedBranchId || workspace.data?.selectedBranchId || '';
 
@@ -225,6 +231,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
       setSavedAttachment({ url: evidence.url, name: sourceFile.name });
       form.reset();
       setMedicineId('');
+      setMedicineQuery('');
       setSourceFile(null);
       uploaded.current = null;
       setNotice('Prescription captured. Pharmacist review and dispensing consent still apply.');
@@ -394,6 +401,30 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                     <p className="mb-3 font-mono text-xs tracking-wide text-text-muted uppercase">
                       Line 1
                     </p>
+                    <div className="mb-4 space-y-2">
+                      <Field label="Search medicine names">
+                        <input
+                          type="search"
+                          value={medicineQuery}
+                          onChange={(event) => setMedicineQuery(event.target.value)}
+                          className={fieldClass}
+                          aria-describedby={
+                            matchingMedicines.length === 0
+                              ? 'capture-medicine-search-empty'
+                              : undefined
+                          }
+                        />
+                      </Field>
+                      {matchingMedicines.length === 0 ? (
+                        <p
+                          id="capture-medicine-search-empty"
+                          role="status"
+                          className="text-sm text-text-muted"
+                        >
+                          No medicines match this search. Clear or change the name.
+                        </p>
+                      ) : null}
+                    </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <Field label="Medicine">
                         <select
@@ -405,7 +436,10 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                           <option value="" disabled>
                             Select medicine
                           </option>
-                          {workspace.data.medicines.map((m) => (
+                          {medicine && !matchingMedicines.includes(medicine) ? (
+                            <option value={medicine.id}>{medicine.productName}</option>
+                          ) : null}
+                          {matchingMedicines.map((m) => (
                             <option key={m.id} value={m.id}>
                               {m.productName}
                             </option>
