@@ -151,7 +151,10 @@ for key, label in (("qa", "QA"), ("security", "Security")):
         conf = [f for f in orig.get("verifiedBlocking", []) if f.get("confirmed")]
         fxn = fixes.get(n)
         if conf and fxn and fxn["sha"] == head and orig.get("verdict") == "FAIL" and "first review" not in d.lower():
-            short = "; ".join(re.split(r"(?<=[.!?])\s", f["problem"].strip(), maxsplit=1)[0][:140].rstrip(".") for f in conf[:3])
+            def clip(t, k=150):
+                t = re.split(r"(?<=[.!?])\s", t.strip(), maxsplit=1)[0].rstrip(".")
+                return t if len(t) <= k else t[:k].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+            short = "; ".join(clip(f["problem"]) for f in conf[:3])
             d = f"First review FAIL ({short}), fixed in {fxn['sha'][:10]}. Re-review: {d}"
     else:
         if not r or not r.get(key):
