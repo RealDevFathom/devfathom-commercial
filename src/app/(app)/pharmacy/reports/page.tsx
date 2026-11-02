@@ -409,12 +409,18 @@ export default async function PharmacyReportsPage({
             filters={{ ...(branch ? { branchId: branch } : {}), from, to }}
             branches={branchResult.branches}
             refreshFields={Object.fromEntries(returnQuery)}
+            timeZone={
+              ctx.organization?.id === ctx.entitlements.organizationId
+                ? ctx.organization?.timezone
+                : null
+            }
+            currency={currency}
           />
         </Suspense>
       ) : (
         <ReportNotice
           title="Daily work pack unavailable"
-          detail="Select an available branch scope and a valid, unambiguous date range. No work-pack sources were queried."
+          detail="Choose one of your branches and a valid date range to see today's to-do list."
         />
       )}
       {invalidRange ? (
