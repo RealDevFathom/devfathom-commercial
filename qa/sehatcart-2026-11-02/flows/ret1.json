@@ -1,0 +1,6 @@
+[
+ {"goto":"/pharmacy/counter"},
+ {"wait":1200},
+ {"click":{"role":"button","name":"Returns & refunds"}},
+ {"wait":1500,"map":true,"max":3500,"shot":"cash-return-panel","log":"returns panel"}
+]

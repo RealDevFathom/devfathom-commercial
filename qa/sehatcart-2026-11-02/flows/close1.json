@@ -1,0 +1,5 @@
+[
+ {"goto":"/pharmacy/counter/close"},
+ {"wait":2000,"map":true,"max":3500,"shot":"own-dayclose-initial","full":true},
+ {"text":"main","max":3500}
+]

@@ -1,0 +1,6 @@
+[
+ {"goto":"/pharmacy/counter"},
+ {"wait":1200},
+ {"click":{"role":"button","name":"Open drawer"}},
+ {"wait":1500,"map":true,"max":3500,"shot":"cash-drawer-dialog","log":"after open drawer click"}
+]

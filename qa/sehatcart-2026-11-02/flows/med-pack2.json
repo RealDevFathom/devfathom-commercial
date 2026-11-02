@@ -1,0 +1,16 @@
+[
+ {"goto":"/pharmacy/medicines"},
+ {"eval":"document.querySelectorAll('details').forEach(d=>d.open=true)"},
+ {"fill":{"label":"Medicine name"},"value":"Paracetamol"},
+ {"click":{"role":"button","name":"Find medicine"}},
+ {"wait":1500},
+ {"select":{"sel":"main select"},"nth":1,"index":1},
+ {"wait":1000,"map":true,"max":3000},
+ {"select":{"sel":"main select"},"nth":2,"index":1},
+ {"select":{"sel":"main select"},"nth":3,"value":"Strip"},
+ {"fill":{"label":"Individual units per pack"},"value":"10"},
+ {"fill":{"label":"Effective from"},"value":"2026-11-01"},
+ {"wait":300,"map":true,"max":4000},
+ {"click":{"role":"button","name":"Create pack"}},
+ {"wait":2500,"map":true,"max":6000,"shot":"own-medicine-pack-created","full":true}
+]

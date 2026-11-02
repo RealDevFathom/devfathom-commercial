@@ -1,0 +1,12 @@
+[
+ {"goto":"/pharmacy/counter"},
+ {"wait":1200},
+ {"press":"F2"},
+ {"type":{"label":"Scan or search"},"value":"amoxil","delay":30},
+ {"wait":1500},
+ {"click":{"role":"button","name":"QA Amoxicillin 500mg Capsules"}},
+ {"wait":1000,"map":true,"max":2500,"log":"selected rx"},
+ {"click":{"role":"button","name":"Add to cart (F6)"},"optional":true},
+ {"wait":2500,"map":true,"max":3500,"shot":"cash-rx-add","log":"after add rx"},
+ {"text":"main","max":2500}
+]

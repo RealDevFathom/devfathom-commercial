@@ -1,0 +1,7 @@
+[
+ {"goto":"/pharmacy/purchasing/receiving"},
+ {"click":{"role":"link","name":"QA-RBAC-GRN-1"}},
+ {"wait":2000},
+ {"eval":"(()=>{const h=[...document.querySelectorAll('h2,h3')].find(e=>/QA-RBAC-GRN-1|Post|receipt/i.test(e.innerText)&&e.closest('section,div'));return [...document.querySelectorAll('main section, main [class*=card]')].map(s=>s.innerText.replace(/\\s+/g,' ').slice(0,300)).filter(t=>/QA-RBAC-GRN-1/.test(t)).slice(0,3)})()","max":3000},
+ {"map":true,"max":2500,"shot":"mgr-grn-receipt-detail","full":true}
+]

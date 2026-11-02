@@ -1,0 +1,16 @@
+[
+ {"goto":"/pharmacy/counter"},
+ {"wait":1200},
+ {"click":{"role":"button","name":"Open drawer"},"optional":true},
+ {"wait":1200},
+ {"press":"F2"},
+ {"type":{"label":"Scan or search"},"value":"amoxil","delay":30},
+ {"wait":1500},
+ {"click":{"role":"button","name":"QA Amoxicillin 500mg Capsules"}},
+ {"wait":1000},
+ {"click":{"role":"button","name":"Add to cart (F6)"}},
+ {"wait":2500,"map":true,"max":3500,"shot":"pharm-rx-add","log":"after add rx as pharmacist"},
+ {"fill":{"label":"Cash received"},"value":"300"},
+ {"click":{"role":"button","name":"Take payment"},"optional":true},
+ {"wait":3500,"map":true,"max":3000,"shot":"pharm-rx-paid","log":"after pay"}
+]
