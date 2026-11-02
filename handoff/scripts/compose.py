@@ -122,8 +122,12 @@ else:
 fx = fixes.get(n)
 lead = f"head {head[:10]}"
 if fx and fx["sha"] == head:
-    lead = (f"the first run on {fx['initialSha'][:10]} failed on {fx['initialFailure']}; fixed in {fx['sha'][:10]} "
-            f"({fx['what']}), and the re-run on that head gives")
+    if fx["initialFailure"].startswith("nothing"):
+        lead = (f"the first run on {fx['initialSha'][:10]} passed; fix commit {fx['sha'][:10]} ({fx['what']}) addresses the review "
+                f"findings, and the re-run on that head gives")
+    else:
+        lead = (f"the first run on {fx['initialSha'][:10]} failed on {fx['initialFailure']}; fixed in {fx['sha'][:10]} "
+                f"({fx['what']}), and the re-run on that head gives")
 mverdict = "FAIL" if fail else "PASS"
 machine = f"Machine checks: {mverdict} ({lead}: " + "; ".join(parts) + ")."
 
