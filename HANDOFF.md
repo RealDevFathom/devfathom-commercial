@@ -1,27 +1,44 @@
 # HANDOFF — SehatCart develop QA pass + BA recommendations
 
-Last updated: 2026-11-03 01:15 PKT (20:15 UTC)
+Last updated: 2026-11-03 01:28 PKT (20:28 UTC)
 Branch: `saad/great-brown-id2w5x` (base `develop` @ `47518cb`)
 PR: [#1224](https://github.com/RealDevFathom/devfathom-commercial/pull/1224) into `develop` — docs/evidence/harness only, never merge from this session. Session is subscribed to PR activity.
 Linear: no Linear issue is attached to this QA pass (see Open questions)
 
 ## Resume here
 
-- **Single next action:** file the new findings as GitHub issues (per Saad 2026-11-03: labels `bug`, `qa`, `pharmacy`, `sevN-…` + `security`/`ux`/`ui`/`a11y` as relevant, **never `claude`**, do **not** fix; they sync to Linear and Codex fixes them). **Before filing, de-duplicate against issues #1225+**: a parallel Codex QA run filed #1227 (= finding 1), #1232 (= 30), #1233 (= 25, names part), #1234 (≈ 26, Settings Edit only), #1236 (= 29) at ~19:39 UTC. Linear-only: DEV-504 (= finding 28, Urdu foundation), DEV-498 item F14 (= finding 21; its proposed fix would block adding controlled items). Do not create duplicates; record the existing number instead. Then write every issue number into `qa-report.md` + this log and push.
-  - `qa-report.md` is rewritten with the adversarial-verification corrections (32 findings: 6 Sev1 / 7 Sev2 / 15 Sev3 / 4 Sev4). Workflow `wf_7026951b-8f2`: 7 verify groups + duplicate hunt done; completeness critic (agent `a2d620bc0934d4493`) still running — read its result from the workflow `journal.jsonl` and apply anything real.
+- **Single next action:** none required. All QA, BA and issue-filing work is done; PR #1224 (docs only) waits for review. If anything comes back, handle it per the PR subscription rules. Do **not** start fixing the filed issues: per Saad (2026-11-03), Codex fixes them.
   - Testing is complete. Day 2026-11-02 was CLOSED by QA at 23:48 PKT (variance −4.00, deliberate).
   - Caveat: another tester (`QA-20261102-FUNC-*`, `QA-20261102-CASHCHECK-*`) is using the **same QA Cashier account** on this tenant.
-- **Item:** QA pass (no DEV id). All test workstreams done; W9 (file issues) in progress.
-- **Half-written / uncommitted:** nothing after this commit. Test bills still holding stock (no UI can release them, finding 2): ~60 u QA-B1 (3 reload-lost cashier bills, ids unknown), 10 u QA-AMX-1, 10 u QA-B4 (after-close bill), 20 u QA-B2 (pre-add preview probe ~00:58 PKT).
+- **Item:** QA pass (no DEV id). W1–W9 done.
+- **Half-written / uncommitted:** nothing after this commit. Test bills still holding stock (no UI can release them, #1242): 60 u QA-B1 (3 reload-lost UI bills, ids unknown), 20 u QA-B2 (pre-add preview probe ~00:58 PKT), 10 u QA-B4 (after-close bill), 10 u QA-AMX-1 (Rx test bill). Three API drawers `qa-verify-mvzny1qg-*` are still open (one dated 2026-11-05).
 
-## Issues filed (W9) — report finding → GitHub issue
+## Issues filed (W9) — report finding → issue
 
-Filed so far (labels `bug`,`qa`,[`pharmacy`],`sevN-…`,[`security`/`ux`/`a11y`]; never `claude`; no fixes):
-2 → #1242 · 3 → #1245 · 4 → #1241 · 6 → #1243 · 7 → #1244 · 8 (narrowed to Expiry board) → #1246 · 9 → #1248 · 10 → #1249 · 11 → #1250 · 12 → #1251 · 13 → #1252 · 14 → #1253
+Filed 2026-11-03 01:15–01:30 PKT with labels `bug`, `qa`, severity (`sev1-critical`…`sev4-trivial`) plus `pharmacy`/`security`/`ux`/`a11y` where relevant. **No `claude` label, no assignees, no fixes.**
 
-Still to file: 15, 16, 17, 18, 19, 20, 23, 24, 27, 31, 32.
-Not filed (already tracked): 1 → #1227 · 5 → #1227 + closed #509 · 21 → Linear DEV-498 (F14) · 22 → DEV-498 (F11) / #1239 · 25 → #1233 (+ #1081/#1092 contrast) · 26 → #1234 · 28 → Linear DEV-504 · 29 → #1236 · 30 → #1232.
-Comments planned (add evidence that changes the fix): #1227 (capability half + onboarding gap), #1234 (all `text-primary` in dark, token-level fix), DEV-498 (F14 fix would block adding controlled items; F11 desktop clipping), DEV-504 (unused workspace Locale, Urdu receipt details). Then: fix the "finding 3" text in #1249 to "#1245".
+| Finding | Issue | Finding | Issue |
+|---|---|---|---|
+| 2 Sev1 reload-lost bills leak stock | #1242 | 15 Sev3 refused payment locks counter | #1254 |
+| 3 Sev1 no prescriber/patient creation | #1245 | 16 Sev3 change disappears | #1255 |
+| 4 Sev1 pharmacist can't tender | #1241 | 17 Sev3 receipt text/identity | #1256 |
+| 6 Sev1 exportPatient unmasked | #1243 | 18 Sev3 receipt numbers per device | #1257 |
+| 7 Sev2 pharmacovigilance 500 | #1244 | 19 Sev3 returns "1 BOX" | #1258 |
+| 8 Sev2 Expiry board cost exposure | #1246 | 20 Sev3 duplicate pack sizes | #1259 |
+| 9 Sev2 write-off witness | #1248 | 23 Sev3 login throttle message | #1260 |
+| 10 Sev2 Rx without prescription (API) | #1249 | 24 Sev3 no offline indicator | #1261 |
+| 11 Sev2 client business date | #1250 | 27 Sev3 opening import cost basis | #1262 |
+| 12 Sev2 day close blocks until midnight | #1251 | 31 Sev4 category growth undercount | #1263 |
+| 13 Sev2 sign-out doesn't revoke | #1252 | 32 Sev4 no H1 / day-close aria | #1264 |
+| 14 Sev3 keyboard search | #1253 | | |
+
+Not filed because already tracked (no duplicates created):
+- 1 → #1227 and 5 → #1227 + closed #509: **comment added** (capability half, onboarding gap, evidence).
+- 21 → Linear DEV-498 F14 and 22 → DEV-498 F11 / #1239: **comment added** (F14's proposed fix would block adding controlled items; desktop clipping details).
+- 25 → #1233 (names; contrast is #1081/#1092). 26 → #1234: **comment added** (all `text-primary` in dark, token-level fix).
+- 28 → Linear DEV-504: **comment added** (unused workspace Locale, Urdu receipt details). 29 → #1236. 30 → #1232.
+
+Corrections after the completeness critic (`wf_7026951b-8f2`, agent `a2d620bc0934d4493`): issue bodies #1242, #1243, #1245, #1251, #1254, #1259, #1264 were edited to cite saved evidence only; UI observations that existed only in run output are now saved verbatim in `qa/sehatcart-2026-11-02/api-evidence/ui-run-log-excerpts.md` (commit `7dbce5d`). `qa-report.md` carries the same corrections and every issue number.
 
 ## PR #1224 review status
 
@@ -44,7 +61,7 @@ Comments planned (add evidence that changes the fix): #1227 (capability half + o
 | W6 | UI/UX/a11y sweep (375/768/1440, dark, Urdu RTL, keyboard, axe) | done | Desktop/tablet/phone sweeps done (no doc overflow; #1032/#1069 reproduce); axe done (N25); no app Urdu (N24); dark sweep running | `ROUTES="..." node qa/sehatcart-2026-11-02/harness/sweep.mjs tablet 768 1024 light`, then `phone 375 812`, `desk-dark 1440 900 dark`; Urdu switch via Settings; axe via `@axe-core/playwright` |
 | W7 | Security + data integrity probes | done | XSS pass; CSV pass (Sev4 gap); throttle N19; logout-not-revoked N20; concurrency pass; #521/#636 fixed; offline N21 | Optional: cross-tenant host probe (needs another tenant host) |
 | W8 | Write `qa-report.md` + `ba-recommendations.md` | done | After verification: 32 new findings (6 Sev1/7 Sev2/15 Sev3/4 Sev4), 23 re-verified, go/no-go = NO-GO; 39 BA recommendations (24 P1, 14 P2, 1 P3) + top 10 | — |
-| W9 | File new findings as GitHub issues (no `claude` label, no fixes) | in progress | Duplicate hunt done (see Resume here) | De-dup vs #1225+, then `issue_write create` per finding |
+| W9 | File new findings as GitHub issues (no `claude` label, no fixes) | done | 23 issues #1241–#1264; 9 already tracked (see table above); 4 evidence comments | — |
 
 ## Environment / test data (no passwords here — creds live only in a local, uncommitted file)
 
