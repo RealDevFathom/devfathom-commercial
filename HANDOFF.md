@@ -1,38 +1,47 @@
 # HANDOFF — claude-labelled Linear batch
 
-Last updated: 2026-11-02 19:25 UTC · Branch: `saad/nice-thompson-99m17p` · PR:
+Last updated: 2026-11-02 21:52 UTC · Branch: `saad/nice-thompson-99m17p` · PR:
 [RealDevFathom/devfathom-commercial#1223](https://github.com/RealDevFathom/devfathom-commercial/pull/1223)
 (into `develop`, open, not merged)
 
 ## Resume here
 
-- **PAUSED for DEV-576** (top priority). Its state is in `HANDOFF.md` on branch
-  `feat/dev-576-ai-providers`. Come back here only once the DEV-576 PR is open.
-- **Next action here after that:** cherry-pick the finished agent commits onto this branch,
-  stripping trailers:
-  - reports: `9014980b`, `be910e97`, `65571821` (DEV-595, DEV-601 work-pack half, DEV-596)
-  - marketing: `0cbb059c`, `0394e82d`, `040e3fec`, `b40c67d1`, `526383a9` (DEV-606, DEV-591,
-    DEV-597, DEV-601 marketing half, test-race fix)
-  - panel: `532905f9`, `ed0c0924`, `2efd61ec`, `329d0d71`, `76374820`, `8acad851`
-    (DEV-584/605, DEV-599, DEV-598, DEV-603, DEV-600/592/593, DEV-604)
+DEV-576 is done and deployed to develop. It lives on PR #1238, branch
+`feat/dev-576-ai-providers`, with its own HANDOFF. This batch resumed at 21:47 UTC.
 
-  Then run the full typecheck and push, and post the "Finished" comments.
+- **Integrated and pushed (21:48 UTC, head `3a578a60`):** the 14 finished agent commits, with
+  trailers stripped; 184/184 touched tests pass.
 
-- **Already pushed, Finished comments still owed:** DEV-602 `bb4777cd`, DEV-594 `b5e29ad0`.
-- **DEV-583** moved to the DEV-576 PR (`ef9ea5f1`). **DEV-582** is partial (WIP `6a0ddedc`
-  in an agent worktree).
-- **Review fixes queued** (internal review, confirmed, low severity):
-  1. The custody migration `20261102090100` comment wrongly claims the purge handles custody
-     rows. Pharmacy purge is blocked by `pharmacy_reject_append_only_change`: file a
-     separate task for that.
-  2. The meetings edit/create forms block valid meetings that cross local midnight
-     (`meetings-content.tsx` ~498).
-  3. The `seed-failure.ts` P2002 hint points to `db:reset`; point it to the rebuild
-     procedure.
-  4. Reword the disputed audit-trigger comment about staff-profile deletion.
-- **Uncommitted / half-written:** nothing in this checkout. The agent commits above exist
-  only in local worktrees under `.claude/worktrees/` (unpushed). If they are lost, redo each
-  stream from its Linear issue using the scope notes below.
+  | Group     | Commits                                                                | Issues                                                           |
+  | --------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------- |
+  | reports   | `6e86f60e`, `93c08770`, `de24163b`                                     | DEV-595, DEV-601 work pack, DEV-596                              |
+  | marketing | `4e8c2cec`, `c07c8605`, `64ff270c`, `bdc8081a`, `33a76c92`             | DEV-606, DEV-591, DEV-597, DEV-601 marketing                     |
+  | panel     | `e2a76920`, `116f2830`, `6b43e67d`, `90894229`, `28c932c0`, `3a578a60` | DEV-584/605, DEV-599, DEV-598, DEV-603, DEV-600/592/593, DEV-604 |
+
+- **Linear:** a ✅ Finished comment is posted on all 17 issues: DEV-595, 601, 596, 606, 591,
+  597, 584, 605, 599, 598, 603, 600, 592, 593, 604, 602 and 594. No status was changed.
+- **In flight:** workflow `wf_a307a46f-c66`, worktree branches `pr1223-fix-*` from `3a578a60`.
+  1. **migrations:**
+     - Security findings 2 and 3: `BEGIN`/`COMMIT` around 090200 and 090100, and idempotency
+       guards on 090000-090300.
+     - Fix the custody migration comment (the pharmacy purge gap is pre-existing; it becomes a
+       follow-up).
+     - Reword the audit-trigger staff-profile comment.
+  2. **app:** meetings that cross local midnight are allowed in the forms; the seed's P2002
+     hint points to the rebuild procedure.
+  3. **dev582:** finish DEV-582 from WIP `6a0ddedc` (the workspace locale reaches every
+     pharmacy tool).
+
+  Then cherry-pick with plain-pick, run the DB tests, run the full tsc, push, update the PR
+  body, reply to the security review comment, and post Finished on DEV-582.
+
+- **Waiting on the user:** security finding 1. The append-only trigger on `audit_logs`
+  conflicts with #1165's retention DELETE. Proposal: a narrow carve-out under
+  `app.retention_purge_organization_id`.
+- **Follow-ups to propose, not in this PR:**
+  - The pharmacy purge is blocked by `pharmacy_reject_append_only_change`.
+  - Invoice numbers collide across tenants.
+- **Uncommitted / half-written:** nothing in this checkout.
 
 ## Rules in force
 
