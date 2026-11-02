@@ -6,8 +6,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  followStartDate,
   isMeetingTimeOrderValid,
   MEETING_TIME_ORDER_MESSAGE,
+  meetingFormInstants,
   meetingFormTimeOrderError,
   meetingTimeOrderError,
   meetingTimeOrderErrorForPatch,
@@ -48,25 +50,91 @@ describe('isMeetingTimeOrderValid / meetingTimeOrderError', () => {
 });
 
 describe('meetingFormTimeOrderError', () => {
+  const form = (startDate: string, startTime: string, endTime: string, endDate = startDate) =>
+    meetingFormTimeOrderError({ startDate, startTime, endDate, endTime });
+
   it('stays silent until both times are chosen', () => {
-    expect(meetingFormTimeOrderError('2026-11-02', '', '')).toBeNull();
-    expect(meetingFormTimeOrderError('2026-11-02', '10:00', '')).toBeNull();
-    expect(meetingFormTimeOrderError('2026-11-02', '', '09:00')).toBeNull();
+    expect(form('2026-11-02', '', '')).toBeNull();
+    expect(form('2026-11-02', '10:00', '')).toBeNull();
+    expect(form('2026-11-02', '', '09:00')).toBeNull();
   });
 
   it('judges the same instants the form submits', () => {
-    expect(meetingFormTimeOrderError('2026-11-02', '10:00', '11:00')).toBeNull();
-    expect(meetingFormTimeOrderError('2026-11-02', '10:00', '10:00')).toBe(
-      MEETING_TIME_ORDER_MESSAGE
-    );
-    expect(meetingFormTimeOrderError('2026-11-02', '10:00', '09:45')).toBe(
-      MEETING_TIME_ORDER_MESSAGE
-    );
+    expect(form('2026-11-02', '10:00', '11:00')).toBeNull();
+    expect(form('2026-11-02', '10:00', '10:00')).toBe(MEETING_TIME_ORDER_MESSAGE);
+    expect(form('2026-11-02', '10:00', '09:45')).toBe(MEETING_TIME_ORDER_MESSAGE);
   });
 
   it('flags a bad range before a date is picked', () => {
-    expect(meetingFormTimeOrderError('', '14:00', '13:00')).toBe(MEETING_TIME_ORDER_MESSAGE);
-    expect(meetingFormTimeOrderError('', '13:00', '14:00')).toBeNull();
+    expect(form('', '14:00', '13:00', '')).toBe(MEETING_TIME_ORDER_MESSAGE);
+    expect(form('', '13:00', '14:00', '')).toBeNull();
+  });
+
+  it('allows a meeting that runs past midnight into the next day', () => {
+    // 23:30 to 00:30 the next day is one hour, not an end 23 hours early.
+    expect(form('2026-11-09', '23:30', '00:30', '2026-11-10')).toBeNull();
+    // The review's case: a stored 04:00-05:00 UTC range read back in New York.
+    expect(form('2026-11-09', '23:00', '00:00', '2026-11-10')).toBeNull();
+  });
+
+  it('still refuses an end at or before the start', () => {
+    // The same wall-clock times on one day run backwards.
+    expect(form('2026-11-09', '23:30', '00:30')).toBe(MEETING_TIME_ORDER_MESSAGE);
+    // An end date before the start date, whatever the times say.
+    expect(form('2026-11-10', '09:00', '10:00', '2026-11-09')).toBe(MEETING_TIME_ORDER_MESSAGE);
+    expect(form('2026-11-09', '00:00', '00:00')).toBe(MEETING_TIME_ORDER_MESSAGE);
+    // The same time on the next day is a full day later, so it is in order.
+    expect(form('2026-11-09', '10:00', '10:00', '2026-11-10')).toBeNull();
+  });
+
+  it('reads an empty end date as the start date', () => {
+    expect(form('2026-11-02', '10:00', '11:00', '')).toBeNull();
+    expect(form('2026-11-02', '10:00', '09:00', '')).toBe(MEETING_TIME_ORDER_MESSAGE);
+  });
+});
+
+describe('meetingFormInstants', () => {
+  it('reads each side on its own date in the viewer’s zone', () => {
+    expect(
+      meetingFormInstants({
+        startDate: '2026-11-09',
+        startTime: '23:30',
+        endDate: '2026-11-10',
+        endTime: '00:30',
+      })
+    ).toEqual({
+      startTime: new Date(2026, 10, 9, 23, 30),
+      endTime: new Date(2026, 10, 10, 0, 30),
+    });
+  });
+
+  it('ends on the start date when no end date is set', () => {
+    const { endTime } = meetingFormInstants({
+      startDate: '2026-11-09',
+      startTime: '10:00',
+      endDate: '',
+      endTime: '11:00',
+    });
+    expect(endTime).toEqual(new Date(2026, 10, 9, 11, 0));
+  });
+});
+
+describe('followStartDate', () => {
+  it('moves the end date by as many days as the start date moved', () => {
+    expect(followStartDate('2026-11-09', '2026-11-12', '2026-11-10')).toBe('2026-11-13');
+    expect(followStartDate('2026-11-09', '2026-11-02', '2026-11-09')).toBe('2026-11-02');
+    // Across a month and a year end.
+    expect(followStartDate('2026-12-31', '2027-01-31', '2027-01-01')).toBe('2027-02-01');
+  });
+
+  it('follows the start date when the end date was never set', () => {
+    expect(followStartDate('', '2026-11-09', '')).toBe('2026-11-09');
+    expect(followStartDate('2026-11-08', '2026-11-09', '')).toBe('2026-11-09');
+  });
+
+  it('follows the start date when it is cleared or unreadable', () => {
+    expect(followStartDate('2026-11-09', '', '2026-11-10')).toBe('');
+    expect(followStartDate('not-a-date', '2026-11-09', '2026-11-10')).toBe('2026-11-09');
   });
 });
 

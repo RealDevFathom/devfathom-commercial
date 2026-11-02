@@ -38,20 +38,62 @@ export function meetingTimeOrderError(start: Date, end: Date): string | null {
 const REFERENCE_DAY = '2000-01-03';
 
 /**
- * The range a same-day meeting form describes: one `YYYY-MM-DD` date and two
- * `HH:mm` wall-clock times in the browser's zone — exactly the instants the
- * forms submit. Null until both times are chosen, so an untouched form shows
- * no error. Before a date is chosen the times are judged on a reference day,
- * which lets the message appear as soon as the second time is picked.
+ * What a meeting form holds: a start date and time and an end date and time,
+ * as `YYYY-MM-DD` and `HH:mm` wall-clock values in the browser's zone. An
+ * empty `endDate` means the meeting ends on its start date.
  */
-export function meetingFormTimeOrderError(
-  date: string,
-  startTime: string,
-  endTime: string
-): string | null {
-  if (!startTime || !endTime) return null;
-  const day = date || REFERENCE_DAY;
-  return meetingTimeOrderError(new Date(`${day}T${startTime}`), new Date(`${day}T${endTime}`));
+export type MeetingFormRange = {
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+};
+
+/**
+ * The two instants a meeting form submits. The end is read on its OWN date, so
+ * a meeting that runs past the viewer's midnight (23:30 to 00:30 the next day)
+ * is the hour it is, not an end 23 hours before the start. Before any date is
+ * chosen both sides fall on a reference day.
+ */
+export function meetingFormInstants({ startDate, startTime, endDate, endTime }: MeetingFormRange): {
+  startTime: Date;
+  endTime: Date;
+} {
+  const startDay = startDate || endDate || REFERENCE_DAY;
+  const endDay = endDate || startDay;
+  return {
+    startTime: new Date(`${startDay}T${startTime}`),
+    endTime: new Date(`${endDay}T${endTime}`),
+  };
+}
+
+/**
+ * The server's rule applied to what a meeting form holds: the full end instant
+ * (end date + end time) must be strictly after the full start instant. Null
+ * until both times are chosen, so an untouched form shows no error.
+ */
+export function meetingFormTimeOrderError(range: MeetingFormRange): string | null {
+  if (!range.startTime || !range.endTime) return null;
+  const { startTime, endTime } = meetingFormInstants(range);
+  return meetingTimeOrderError(startTime, endTime);
+}
+
+/**
+ * The end date a form should show after the person moves the start date: the
+ * end moves by the same number of days, so the meeting keeps its length. An end
+ * date that was never set follows the start date.
+ */
+export function followStartDate(
+  previousStartDate: string,
+  nextStartDate: string,
+  endDate: string
+): string {
+  if (!endDate || !previousStartDate || !nextStartDate) return nextStartDate;
+  const day = (value: string) => Date.parse(`${value}T00:00:00Z`);
+  const shift = day(nextStartDate) - day(previousStartDate);
+  const moved = day(endDate) + shift;
+  if (!Number.isFinite(moved)) return nextStartDate;
+  return new Date(moved).toISOString().slice(0, 10);
 }
 
 export type MeetingTimes = { startTime: Date; endTime: Date };

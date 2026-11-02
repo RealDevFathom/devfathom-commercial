@@ -18,7 +18,8 @@
  * screen.
  *
  * DEV-249 / #451 adds the time-order cases at the bottom: the create and edit
- * forms refuse a meeting that ends at or before it starts.
+ * forms refuse a meeting that ends at or before it starts, judged on full
+ * instants, so a meeting that runs past the viewer's midnight is allowed.
  */
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -237,7 +238,7 @@ describe('MeetingsContent time order (DEV-249)', () => {
     fireEvent.change(screen.getByPlaceholderText('e.g. Sprint Planning'), {
       target: { value: 'Sprint Planning' },
     });
-    fireEvent.change(container.querySelector('input[type="date"]')!, {
+    fireEvent.change(within(container).getByLabelText('Start date'), {
       target: { value: '2030-01-15' },
     });
     return screen.getByRole('button', { name: 'Schedule' });
@@ -311,5 +312,77 @@ describe('MeetingsContent time order (DEV-249)', () => {
         endTime: new Date(2030, 0, 15, 10, 30),
       })
     );
+  });
+
+  it('creates a meeting that runs past midnight once its end date is the next day', () => {
+    const submit = openCreateForm();
+    const endDate = screen.getByLabelText('End date');
+    // An end date that was never set follows the start date.
+    expect(endDate).toHaveValue('2030-01-15');
+
+    pick('Start time', '11:30 PM');
+    pick('End time', '12:30 AM');
+    // On one day, 00:30 is before 23:30.
+    expectRangeRefused(submit);
+    expect(endDate).toHaveAttribute('aria-invalid', 'true');
+
+    fireEvent.change(endDate, { target: { value: '2030-01-16' } });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(endDate).not.toHaveAttribute('aria-invalid');
+    expect(submit).toBeEnabled();
+
+    fireEvent.click(submit);
+    const [input] = mocks.mutate.create.mock.calls[0] as [{ startTime: Date; endTime: Date }];
+    expect(input.startTime).toEqual(new Date(2030, 0, 15, 23, 30));
+    expect(input.endTime).toEqual(new Date(2030, 0, 16, 0, 30));
+  });
+
+  it('refuses an end date before the start date', () => {
+    const submit = openCreateForm();
+    pick('Start time', '9:00 AM');
+    pick('End time', '10:00 AM');
+    expect(submit).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2030-01-14' } });
+    expectRangeRefused(submit);
+    fireEvent.click(submit);
+    expect(mocks.mutate.create).not.toHaveBeenCalled();
+  });
+
+  it('opens a meeting that crosses midnight without an error and saves it unchanged', () => {
+    // 23:30 to 00:30 the next day, in the viewer's own zone.
+    const start = new Date(2030, 0, 15, 23, 30);
+    mocks.upcoming = [meeting('Late sync', start)];
+    render(<MeetingsContent />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Start date')).toHaveValue('2030-01-15');
+    expect(screen.getByLabelText('End date')).toHaveValue('2030-01-16');
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeEnabled();
+
+    fireEvent.click(save);
+    expect(mocks.mutate.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'Late sync',
+        startTime: start,
+        endTime: new Date(2030, 0, 16, 0, 30),
+      })
+    );
+  });
+
+  it('keeps a cross-midnight meeting’s length when its start date moves', () => {
+    mocks.upcoming = [meeting('Late sync', new Date(2030, 0, 15, 23, 30))];
+    render(<MeetingsContent />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2030-01-20' } });
+    expect(screen.getByLabelText('End date')).toHaveValue('2030-01-21');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    // Pulling the end back onto the start date runs it backwards again.
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2030-01-20' } });
+    expectRangeRefused(screen.getByRole('button', { name: 'Save' }));
   });
 });
