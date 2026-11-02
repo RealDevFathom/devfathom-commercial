@@ -373,7 +373,7 @@ describe('PharmacyCounterConsole receipt scrolling', () => {
     expect(screen.getByText('Settled')).toBeInTheDocument();
     const receipt = screen
       .getByRole('heading', { name: 'Receipt' })
-      .closest('[data-slot="section-card"]');
+      .closest<HTMLElement>('[data-slot="section-card"]');
     expect(receipt).toHaveClass('shrink-0');
     expect(receipt).not.toHaveClass('max-h-24');
     expect(receipt).not.toHaveClass('shrink');
