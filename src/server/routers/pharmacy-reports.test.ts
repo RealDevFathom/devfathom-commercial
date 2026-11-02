@@ -434,16 +434,10 @@ describe('DEV-59 expiry advice reporting period', () => {
     mocks.expiryRead.mockResolvedValue([]);
   });
 
-  it('passes the authorized ADMIN owner range with an exclusive next-day cutoff', async () => {
+  it('returns advice for the authorized ADMIN owner on a valid range', async () => {
     const ctx = context('ADMIN');
-    await expect(pharmacyReportsRouter.createCaller(ctx).expiryAdvice(input)).resolves.toEqual(
-      []
-    );
-    expect(mocks.expiryRead).toHaveBeenCalledExactlyOnceWith(ctx.db, ['branch_1'], undefined, {
-      from: new Date('2026-11-01T00:00:00.000Z'),
-      to: new Date('2026-12-02T00:00:00.000Z'),
-      days: 31,
-    });
+    await expect(pharmacyReportsRouter.createCaller(ctx).expiryAdvice(input)).resolves.toEqual([]);
+    expect(mocks.expiryRead).toHaveBeenCalledExactlyOnceWith(ctx.db, ['branch_1']);
     expect(mocks.branchFindMany).toHaveBeenCalledWith({
       where: { organizationId: 'org_1', active: true },
       orderBy: { name: 'asc' },

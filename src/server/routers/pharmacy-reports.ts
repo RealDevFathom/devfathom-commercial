@@ -610,17 +610,15 @@ export const pharmacyReportsRouter = router({
   }),
   expiryAdvice: reports.input(filters).query(async ({ ctx, input }) => {
     const bounded = await ownerFilters(ctx, input);
-    let period: ReturnType<typeof validatePharmacyReportFilters>;
     try {
-      period = validatePharmacyReportFilters(bounded);
+      validatePharmacyReportFilters(bounded);
     } catch (error) {
       throw new TRPCError({
         code: 'BAD_REQUEST',
         message: error instanceof Error ? error.message : 'Invalid expiry advice report dates.',
       });
     }
-    // Narrow current advice without moving its sales-history observation window.
-    return readExpiryAdvice(ctx.db, bounded.branchIds, undefined, period);
+    return readExpiryAdvice(ctx.db, bounded.branchIds);
   }),
   proposeExpiryReturn: reports
     .input(

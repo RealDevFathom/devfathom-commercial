@@ -13,8 +13,7 @@ type AdvisorRow = Omit<ExpiryLotFact, 'onHandUnits' | 'soldUnits' | 'historyDays
 export async function readExpiryAdvice(
   db: ScopedDb,
   branchIds: readonly string[],
-  at = new Date(),
-  expiryRange?: { from: Date; to: Date }
+  at = new Date()
 ) {
   if (!branchIds.length) return [];
   const rows = await db.$queryRaw<AdvisorRow[]>(Prisma.sql`
@@ -65,11 +64,6 @@ export async function readExpiryAdvice(
     LEFT JOIN "pharmacy_supplier_relationships" relationship ON relationship."organizationId"=lot."organizationId"
       AND relationship."branchId"=lot."branchId" AND relationship."supplierId"=source."supplierId" AND relationship."active"=true
     WHERE lot."branchId" IN (${Prisma.join(branchIds)}) AND batch."expiresAt">${at}
-      ${
-        expiryRange
-          ? Prisma.sql`AND batch."expiresAt">=${expiryRange.from} AND batch."expiresAt"<${expiryRange.to}`
-          : Prisma.empty
-      }
   `);
   return adviseExpiryLots(rows, at);
 }
