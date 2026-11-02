@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { BasketPanel } from './basket-panel';
 import type { listBasketInsights } from '@/lib/pharmacy/basket-workflow';
@@ -64,7 +64,9 @@ it('shows pending feedback, disables controls and retains values after failed re
   const button = screen.getByRole('button', { name: 'Approve bundle and create draft' });
   fireEvent.submit(button.closest('form')!);
   await waitFor(() => expect(pin).toBeDisabled());
-  finish({ error: true, message: 'Enter your current owner PIN.' });
+  await act(async () => {
+    finish({ error: true, message: 'Enter your current owner PIN.' });
+  });
   expect(await screen.findByRole('alert')).toHaveTextContent('Enter your current owner PIN.');
   expect(pin).toHaveValue('1234');
   expect(button).toBeEnabled();
