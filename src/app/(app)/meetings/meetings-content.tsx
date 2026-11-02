@@ -267,7 +267,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Sprint Planning"
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
           <div>
@@ -276,7 +276,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               value={location}
               onChange={(e) => setLocation(e.target.value)}
               placeholder="Google Meet, Zoom, Office..."
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
         </div>
@@ -287,7 +287,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="What's this meeting about?"
-            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
         </div>
 
@@ -299,7 +299,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               aria-label="Start date"
               value={date}
               onChange={(e) => changeStartDate(e.target.value)}
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+              className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
             />
           </div>
           <div>
@@ -308,7 +308,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               value={startTime}
               onChange={setStartTime}
               aria-label="Start time"
-              className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
           <div>
@@ -321,7 +321,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               onChange={(e) => setEndDate(e.target.value)}
               aria-invalid={timeOrderError ? true : undefined}
               aria-describedby={timeOrderError ? timeErrorId : undefined}
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
+              className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
             />
           </div>
           <div>
@@ -332,7 +332,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               aria-label="End time"
               invalid={!!timeOrderError}
               aria-describedby={timeOrderError ? timeErrorId : undefined}
-              className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
         </div>
@@ -569,7 +569,7 @@ const MeetingCard = memo(function MeetingCard({
               <input
                 value={eTitle}
                 onChange={(e) => setETitle(e.target.value)}
-                className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                className="w-full min-h-11 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
             <div>
@@ -578,7 +578,7 @@ const MeetingCard = memo(function MeetingCard({
                 value={eLoc}
                 onChange={(e) => setELoc(e.target.value)}
                 placeholder="Google Meet..."
-                className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                className="w-full min-h-11 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
               />
             </div>
           </div>
@@ -592,7 +592,7 @@ const MeetingCard = memo(function MeetingCard({
                 aria-label="Start date"
                 value={eDate}
                 onChange={(e) => changeEditStartDate(e.target.value)}
-                className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                className="w-full min-h-11 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
             <div>
@@ -601,7 +601,7 @@ const MeetingCard = memo(function MeetingCard({
                 value={eStart}
                 onChange={setEStart}
                 aria-label="Start time"
-                className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                className="min-h-11 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
             <div>
@@ -614,7 +614,7 @@ const MeetingCard = memo(function MeetingCard({
                 onChange={(e) => setEEndDate(e.target.value)}
                 aria-invalid={editTimeOrderError ? true : undefined}
                 aria-describedby={editTimeOrderError ? editTimeErrorId : undefined}
-                className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
+                className="w-full min-h-11 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
               />
             </div>
             <div>
@@ -625,7 +625,7 @@ const MeetingCard = memo(function MeetingCard({
                 aria-label="End time"
                 invalid={!!editTimeOrderError}
                 aria-describedby={editTimeOrderError ? editTimeErrorId : undefined}
-                className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                className="min-h-11 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
           </div>
