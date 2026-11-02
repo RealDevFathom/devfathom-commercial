@@ -1,6 +1,6 @@
 # HANDOFF — SehatCart develop QA pass + BA recommendations
 
-Last updated: 2026-11-03 01:08 PKT (20:08 UTC)
+Last updated: 2026-11-03 01:15 PKT (20:15 UTC)
 Branch: `saad/great-brown-id2w5x` (base `develop` @ `47518cb`)
 PR: [#1224](https://github.com/RealDevFathom/devfathom-commercial/pull/1224) into `develop` — docs/evidence/harness only, never merge from this session. Session is subscribed to PR activity.
 Linear: no Linear issue is attached to this QA pass (see Open questions)
@@ -13,6 +13,15 @@ Linear: no Linear issue is attached to this QA pass (see Open questions)
   - Caveat: another tester (`QA-20261102-FUNC-*`, `QA-20261102-CASHCHECK-*`) is using the **same QA Cashier account** on this tenant.
 - **Item:** QA pass (no DEV id). All test workstreams done; W9 (file issues) in progress.
 - **Half-written / uncommitted:** nothing after this commit. Test bills still holding stock (no UI can release them, finding 2): ~60 u QA-B1 (3 reload-lost cashier bills, ids unknown), 10 u QA-AMX-1, 10 u QA-B4 (after-close bill), 20 u QA-B2 (pre-add preview probe ~00:58 PKT).
+
+## Issues filed (W9) — report finding → GitHub issue
+
+Filed so far (labels `bug`,`qa`,[`pharmacy`],`sevN-…`,[`security`/`ux`/`a11y`]; never `claude`; no fixes):
+2 → #1242 · 3 → #1245 · 4 → #1241 · 6 → #1243 · 7 → #1244 · 8 (narrowed to Expiry board) → #1246 · 9 → #1248 · 10 → #1249 · 11 → #1250 · 12 → #1251 · 13 → #1252 · 14 → #1253
+
+Still to file: 15, 16, 17, 18, 19, 20, 23, 24, 27, 31, 32.
+Not filed (already tracked): 1 → #1227 · 5 → #1227 + closed #509 · 21 → Linear DEV-498 (F14) · 22 → DEV-498 (F11) / #1239 · 25 → #1233 (+ #1081/#1092 contrast) · 26 → #1234 · 28 → Linear DEV-504 · 29 → #1236 · 30 → #1232.
+Comments planned (add evidence that changes the fix): #1227 (capability half + onboarding gap), #1234 (all `text-primary` in dark, token-level fix), DEV-498 (F14 fix would block adding controlled items; F11 desktop clipping), DEV-504 (unused workspace Locale, Urdu receipt details). Then: fix the "finding 3" text in #1249 to "#1245".
 
 ## PR #1224 review status
 
