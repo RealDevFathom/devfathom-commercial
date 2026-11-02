@@ -1562,7 +1562,7 @@ describeIfDatabase('idempotency (real DB)', () => {
 });
 
 describeIfDatabase('frozen service-charge settlement (real DB)', () => {
-  it('settles with the charge frozen at bill cut after a new policy becomes effective', async () => {
+  it('preserves the frozen charge across partial tenders before and after a policy transition', async () => {
     const transition = new Date('2026-08-20T00:00:00.000Z');
     const settlementAt = new Date('2026-08-20T18:00:00.000Z');
     const [openingPolicy, settlementPolicy] = await read(async (tx) => {
@@ -1610,6 +1610,15 @@ describeIfDatabase('frozen service-charge settlement (real DB)', () => {
     expect(frozen.serviceChargeBasis.toFixed(2)).toBe('12.50');
     expect(frozen.serviceChargeTotal.toFixed(2)).toBe('1.25');
 
+    const partial = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'OTHER', amount: '5.00' },
+      actor: actor(),
+      now: AT,
+    });
+    expect(partial.settled).toBe(false);
+    expect(partial.remainingDue.toFixed(2)).toBe('8.75');
+
     const activePolicy = await read((tx) =>
       tx.restaurantServiceChargePolicyVersion.findFirstOrThrow({
         where: {
@@ -1628,11 +1637,11 @@ describeIfDatabase('frozen service-charge settlement (real DB)', () => {
     );
     expect(quote?.serviceChargePayable.toFixed(2)).toBe('1.25');
     expect(quote?.grandTotal.toFixed(2)).toBe('13.75');
-    expect(quote?.remainingDue.toFixed(2)).toBe('13.75');
+    expect(quote?.remainingDue.toFixed(2)).toBe('8.75');
 
     const result = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
       billId,
-      tender: { type: 'OTHER', amount: grandTotal },
+      tender: { type: 'OTHER', amount: '8.75' },
       actor: actor(),
       now: settlementAt,
     });
@@ -1653,17 +1662,21 @@ describeIfDatabase('frozen service-charge settlement (real DB)', () => {
           grandTotal: true,
         },
       }),
-      tender: await tx.restaurantTender.findUniqueOrThrow({
-        where: { id: result.tenderId },
+      tenders: await tx.restaurantTender.findMany({
+        where: { billId },
         select: { amount: true },
       }),
     }));
     expect(settled.bill.serviceChargeTotal.toFixed(2)).toBe('1.25');
     expect(settled.bill.grandTotal.toFixed(2)).toBe('13.75');
+    expect(settled.tenders).toHaveLength(2);
 
     // Reconcile the persisted settlement as exact debit/credit evidence. Keeping the
     // residual in Decimal space catches cent-level drift that total-only assertions hide.
-    const debitTotal = settled.tender.amount;
+    const debitTotal = settled.tenders.reduce(
+      (total, tender) => total.plus(tender.amount),
+      new Prisma.Decimal(0)
+    );
     const creditTotal = settled.bill.subtotal
       .minus(settled.bill.compTotal)
       .minus(settled.bill.discountTotal)
