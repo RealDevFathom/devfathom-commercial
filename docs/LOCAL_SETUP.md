@@ -357,9 +357,10 @@ plain key in `.env.local`, for example `ANTHROPIC_API_KEY=<your key>`, and leave
 empty or `auto`. Plain keys work only outside production and must never be committed.
 
 To exercise the deployed path, set `ANTHROPIC_API_KEY_SECRET_ID` or `OPENAI_API_KEY_SECRET_ID`
-with `AI_SECRETS_REGION`. For Bedrock, set `BEDROCK_REGION=us-east-1`. Both read through an AWS
-profile that can reach them. Every variable, the fallback order, the caps and the IAM policy are
-in [AI providers](./ai-providers.md).
+with `AI_SECRETS_REGION`. For Bedrock, set `BEDROCK_REGION=ap-southeast-1`. Both read through an
+AWS profile that can reach them. `AF_HAIKU_LOOKUPS` stays `false` unless you are trying Ask Fathom
+quick lookups on the small model. Every variable, the fallback order, the caps and the IAM policy
+are in [AI providers](./ai-providers.md).
 
 ## Resetting local data
 
