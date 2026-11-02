@@ -141,6 +141,35 @@ QA and Security at head `1276a75e` (20:16 UTC, box run): **both FAIL**.
 - **Hygiene:** commit messages name model versions, so merge with a clean squash message.
 - **Next step:** after integration, reply on the PR with the fixes and ask for QA/Security again.
 
+**Develop deploy in progress (started 21:23 UTC)**
+
+- **Release:** `96d372bd` (head after the review fixes; 1128/1128 tests; the Dockerfile-style
+  build passes).
+- **Patch:** `s3://devfathom-develop-artifacts/deploy-develop/dev576/96d372bd.patch.gz`
+  (sha256 `393f0b7e…`).
+- **Script:** `/root/scdeploy576.sh` on the host (copy at `deploy-develop/dev576/scdeploy576.sh`).
+  It runs as transient unit `dev576-deploy.service` and logs to
+  `/var/log/sehatcart-deploy-96d372bd.log`, with markers DOWNLOAD_OK, PATCH_OK, INSTALL_OK,
+  BACKUP_OK, MIGRATE_OK, ENV_OK, BUILD_OK and DONE.
+- **What the script does:**
+  1. Guards that `current` is `47518cbf`.
+  2. Takes a `pg_dump` backup into `/root/backups/sehatcart_dev-pre-96d372bd-*.dump`.
+  3. Backs up the env to `sehatcart.env.bak-pre-dev576-*`, then appends the AI env.
+  4. Builds, switches `current`, restarts, and checks `/api/ready`.
+  5. If `/api/ready` is not 200, it relinks `47518cbf`, restores the env and restarts.
+- **Manual rollback:**
+  - `ln -sfn /home/sehatcart/releases/47518cbf94ac912d0d657122625af03b23bbd1c1 /home/sehatcart/current`
+  - Restore the env backup.
+  - `systemctl restart sehatcart`
+  - Migrations stay; they are additive.
+- **After DONE:**
+  - On the host, run
+    `cd /home/sehatcart/current && sudo -u sehatcart … bun run ai:smoke -- --skip-bedrock`
+    with `sehatcart.env` sourced. This uses the instance role and prints no key.
+  - Ask Saad to send one Ask Fathom message at `sehatcart.pharmacy.develop.devfathom.com`.
+  - Then reply to QA/Security on #1238, rewrite the PR body, and post on DEV-576. Mark the
+    Bedrock live test as pending AWS approval.
+
 **Internal adversarial review** (`wf_66fd213d-49e`, four lenses, every finding verified by a
 skeptic): 15 confirmed, 6 rejected.
 
