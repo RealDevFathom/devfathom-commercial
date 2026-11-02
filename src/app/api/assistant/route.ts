@@ -19,19 +19,29 @@ import { logAIProviderUnavailable, readAskFathomAvailability } from '@/lib/ai/as
 import { createAIModel } from '@/lib/ai/provider';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
+import { createAnswerGuardTransform, GroundingEvidence } from '@/lib/ai/grounding';
+import { assistantTurnTier } from '@/lib/ai/quick-lookup';
+import { limitToolCalls } from '@/lib/ai/tool-call-limit';
+import {
+  ASK_FATHOM_MAX_MODEL_CALLS,
+  ASK_FATHOM_MAX_TOOL_CALLS,
+  ASK_FATHOM_TURN_TIMEOUT_MS,
+  createTurnBudget,
+} from '@/lib/ai/turn-budget';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 
-// Allow headroom for multi-step tool runs.
-export const maxDuration = 60;
+// The turn itself stops at 90 s (ASK_FATHOM_TURN_TIMEOUT_MS); this leaves room to
+// finish the stream and log after the deadline.
+export const maxDuration = 120;
 
 // The text of the last couple of user messages — used to route which tool
 // domains to load (including the prior turn handles follow-ups like "do it").
-function recentUserText(messages: UIMessage[]): string {
+function recentUserText(messages: UIMessage[], count = 2): string {
   const texts: string[] = [];
-  for (let i = messages.length - 1; i >= 0 && texts.length < 2; i--) {
+  for (let i = messages.length - 1; i >= 0 && texts.length < count; i--) {
     const m = messages[i];
     if (m.role !== 'user') continue;
     const t = (m.parts ?? [])
@@ -177,9 +187,9 @@ async function respond(req: Request) {
   );
 
   const hint = recentUserText(messages);
-  const tools = buildAssistantTools(ctx, isApprovalContinuation ? {} : { hint });
+  const assembled = buildAssistantTools(ctx, isApprovalContinuation ? {} : { hint });
   // Client approval history cannot resurrect a disabled or wrong-vertical tool.
-  if (hasUnavailableApprovedTool(messages, new Set(Object.keys(tools)))) {
+  if (hasUnavailableApprovedTool(messages, new Set(Object.keys(assembled)))) {
     return Response.json({ error: 'This action is no longer available.' }, { status: 403 });
   }
   let modelMessages;
@@ -188,9 +198,29 @@ async function respond(req: Request) {
   } catch {
     return Response.json({ error: 'Invalid assistant messages.' }, { status: 400 });
   }
+  // One turn: at most 90 s, 4 model calls (every provider attempt, retries and
+  // failovers included) and 6 tool calls.
+  const turn = createTurnBudget();
+  const tools = limitToolCalls(assembled, ASK_FATHOM_MAX_TOOL_CALLS);
+  const toolChoice = isApprovalContinuation ? 'auto' : assistantToolChoice(hint, tools);
+  const tier = assistantTurnTier({
+    latestUserText: recentUserText(messages, 1),
+    isApprovalContinuation,
+    forcedTool: toolChoice !== 'auto',
+    toolNames: Object.keys(tools),
+  });
+  // Every figure in the answer must come from this turn's tool results, the tools'
+  // earlier results in the conversation or the user's own text.
+  const evidence = new GroundingEvidence();
+  evidence.addConversation(messages);
   let ai: ReturnType<typeof createAIModel>;
   try {
-    ai = createAIModel(process.env, { feature: 'ask-fathom', organizationId: organization.id });
+    ai = createAIModel(process.env, {
+      feature: 'ask-fathom',
+      organizationId: organization.id,
+      tier,
+      turn,
+    });
   } catch {
     console.error('ASSISTANT_PROVIDER_UNAVAILABLE', {
       reason: 'MODEL_CREATE_FAILED',
@@ -206,10 +236,17 @@ async function respond(req: Request) {
     // about (a core read set + the matched domain), not all ~96 every request.
     // The hint is the recent user text. See buildAssistantTools / tools.ts.
     tools,
-    toolChoice: isApprovalContinuation ? 'auto' : assistantToolChoice(hint, tools),
-    // Operator actions chain resolve → act → confirm; 6 steps covers that while
-    // capping the worst-case number of (token-heavy) model round-trips per turn.
-    stopWhen: stepCountIs(6),
+    toolChoice,
+    // Each step is one model call; the routed model also spends the shared turn
+    // budget on every attempt, so a retry or failover cannot exceed it either.
+    stopWhen: stepCountIs(ASK_FATHOM_MAX_MODEL_CALLS),
+    // The router owns retries (one jittered retry, then failover); the SDK's own
+    // retries would multiply attempts past the turn budget.
+    maxRetries: 0,
+    abortSignal: AbortSignal.any([req.signal, AbortSignal.timeout(ASK_FATHOM_TURN_TIMEOUT_MS)]),
+    // Number grounding and the dosing guard, applied to every text block before it
+    // leaves the server.
+    experimental_transform: createAnswerGuardTransform<typeof tools>(evidence),
     providerOptions: ai.providerOptions,
   });
 
