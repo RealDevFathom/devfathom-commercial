@@ -1,3 +1,5 @@
+import { csvSafeText } from '@/lib/csv';
+
 export const MEDICINE_REFERENCE_FIELDS = [
   'productName',
   'brandName',
@@ -164,8 +166,7 @@ export class ManualFileConnector implements MedicineReferenceConnector<ManualFil
 }
 
 export function formulaSafeCell(value: unknown): string {
-  const text = value === null || value === undefined ? '' : String(value);
-  return /^[=+\-@]/.test(text) ? `'${text}` : text;
+  return csvSafeText(value);
 }
 
 /** Rows accepted by one `runReferenceConnectorNow` request. Shared with the server schema. */

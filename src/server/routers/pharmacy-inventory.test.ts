@@ -372,6 +372,21 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     expect(db.pharmacyManufacturingBatch.create).not.toHaveBeenCalled();
   });
 
+  it.each(['QA\r=1+1', 'QA\nB-2', 'QA\t=1+1', 'QA\u2028B-2'])(
+    'rejects control characters in manufacturing batch numbers: %j',
+    async (batchNumber) => {
+      await expect(
+        caller().registerBatch({
+          medicineId: 'medicine_1',
+          batchNumber,
+          printedExpiry: new Date('2027-06-15T00:00:00.000Z'),
+          expiryPrecision: 'DAY',
+        })
+      ).rejects.toThrow();
+      expect(db.pharmacyManufacturingBatch.create).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects a cross-tenant pack level ID substitution when receiving a lot', async () => {
     grant([allow('pharmacy:inventory')]);
     await expect(

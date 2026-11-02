@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
+import { csvCell } from '@/lib/csv';
 import {
   Table,
   TableBody,
@@ -93,13 +94,6 @@ const expiryText = (row: Pick<ExpiryBoardRow, 'expired' | 'daysLeft'>) =>
   row.expired
     ? `Expired ${Math.abs(row.daysLeft)} day${Math.abs(row.daysLeft) === 1 ? '' : 's'} ago`
     : `${row.daysLeft} day${row.daysLeft === 1 ? '' : 's'} left`;
-
-/** A leading `=`, `+`, `-` or `@` would run as a formula when the file is opened. */
-function csvCell(value: string | number): string {
-  const text = String(value);
-  const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
-  return /[",\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
-}
 
 export function nearExpiryCsv(rows: readonly ExpiryBoardRow[]): string {
   const header = [

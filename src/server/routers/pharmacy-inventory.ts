@@ -768,7 +768,10 @@ export const pharmacyInventoryRouter = router({
       z
         .object({
           medicineId: z.string().min(1),
-          batchNumber: z.string().trim().min(1).max(120),
+          batchNumber: z.string().trim().min(1).max(120).regex(
+            /^[^\u0000-\u001f\u007f-\u009f\u2028\u2029]*$/u,
+            'Batch number cannot contain control characters.'
+          ),
           printedExpiry: z.date(),
           expiryPrecision,
         })
