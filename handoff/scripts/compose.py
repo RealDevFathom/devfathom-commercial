@@ -129,6 +129,11 @@ if fx and fx["sha"] == head:
         lead = (f"the first run on {fx['initialSha'][:10]} failed on {fx['initialFailure']}; fixed in {fx['sha'][:10]} "
                 f"({fx['what']}), and the re-run on that head gives")
 mverdict = "FAIL" if fail else "PASS"
+_r = reviews.get(n) or {}
+_sup = any("supersed" in (f.get("id", "") + f.get("problem", "")).lower() and not f.get("fixable", True)
+           for f in (_r.get("qa") or {}).get("verifiedBlocking", []) if f.get("confirmed"))
+if fail and _sup and not fixes.get(n):
+    parts.append("no fix commit pushed for this because QA recommends closing the PR as superseded")
 machine = f"Machine checks: {mverdict} ({lead}: " + "; ".join(parts) + ")."
 
 

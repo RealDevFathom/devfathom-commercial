@@ -118,5 +118,11 @@
   "initialSha": "b49bbf354aaf21a7d13059c0833be1e1b7d769c1",
   "what": "Prettier on restaurant-growth.test.ts",
   "initialFailure": "Prettier: src/server/routers/restaurant-growth.test.ts unformatted"
+ },
+ "1224": {
+  "sha": "d34637b9f2a649797e99b38f6f82ef081cf0a3dd",
+  "initialSha": "1f736757289a63136199b1030e490c7cb5a4a4c4",
+  "what": "Prettier on the 95 new md/json/mjs files",
+  "initialFailure": "Prettier: 95 of the PR's 98 new md/json/mjs files unformatted"
  }
 }

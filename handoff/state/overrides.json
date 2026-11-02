@@ -202,5 +202,11 @@
    "verdict": "PASS",
    "details": "Checked witness validation, org/branch scoping, the in-transaction can() re-check and every new raw SQL (all Prisma.sql-parameterized, org-filtered, run under withTenantDb RLS). Denial tests assert no-effect. The PR introduces no vulnerability, but develop already fixes the issue (1c615d3b4 #657, 7f8649221 #430): it requires an ACTIVE, same-tenant, branch-assigned witness who is not the actor. The rest of the PR is out-of-scope hardening, so it is superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
   }
+ },
+ "1224": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "First review FAIL (95 of the 98 new .md/.json/.mjs files failed the prettier --check the QA gate runs on changed files), fixed in d34637b9f2. Docs/evidence/harness only: nothing in src/ changes, no credentials or session tokens are committed, and all 74 file:line citations in qa-report.md resolve on develop. Non-blocking for the owner: the root HANDOFF.md collides with #1223's, the harness defaults point at the original session's paths, probe1.json contains the tenant owner's real email, and about 10.9 MB of evidence lands in qa/ and qa-evidence/ rather than docs/qa/"
+  }
  }
 }
