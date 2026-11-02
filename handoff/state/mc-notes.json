@@ -1,0 +1,62 @@
+{
+ "1192": [
+  "Related test src/lib/pharmacy/whatsapp/message-log.db.test.ts fails under the gate runtime role (permission denied to create role) on both the PR and develop; passes 2/2 on the PR and develop when run with a superuser DB role. Environmental, not introduced."
+ ],
+ "1189": [
+  "NEW typecheck error introduced: src/components/pharmacy/counter/counter-console.test.tsx(387,36) TS2345 Argument of type 'Element | null' is not assignable to parameter of type 'HTMLElement | SVGElement | null'. Must be fixed on the branch."
+ ],
+ "1181": [
+  "Typecheck: PR fixes all 4 develop baseline errors (0 errors). Related test src/server/routers/pharmacy-inventory.test.ts has 1 failing test ('manual quarantine resolution authorization refuses regulatory stock through inventory-only write-off before posting movements': expected BAD_REQUEST, got TRPCError COAUTH_REQUIRED) that fails identically on develop (pre-existing). This PR edits that test file (DEV-222 test fixture repair) so whether it should also repair this assertion is a scope question for QA."
+ ],
+ "1174": [
+  "Related tests: 13 failures in tests/vertical-foundation.test.ts, src/lib/platform/commands.opportunity-convert.test.ts, src/lib/platform/commands.organization-create.test.ts; the identical 13 fail on develop (pre-existing, not introduced). 291 other related tests pass."
+ ],
+ "1165": [
+  "Related tests: 4 DB test files fail (pharmacy-offline.db #710 manual totals, pharmacy-sales.drawer-close.db branch refusals x2, counter-evidence.db CAM-2 replay, duplicate-salt-acknowledgement.db prisma create). The identical tests fail on develop (pre-existing). The PR's own retention tests pass."
+ ],
+ "1166": [
+  "PR-introduced failures in its new test file src/components/layout/topbar.search-licensing.test.tsx: 4 ESLint react/display-name errors (lines 15,18,26,32) and 1 failing test ('keeps all five groups and selection available for a fully licensed agency': no button named 'Matching task Matching project'). File does not exist on develop."
+ ],
+ "1163": [
+  "Related tests: 2 DB test files fail (pharmacy-sales.drawer-close.db branch refusals x2, duplicate-salt-acknowledgement.db prisma create); identical failures on develop (pre-existing). 516 other related tests pass."
+ ],
+ "1155": [
+  "REGRESSION: src/components/layout/sidebar.test.tsx 'Restaurant desktop navigation groups marks the active group and destination, opens by keyboard and restores focus on Escape' fails on the PR (no menuitem 'Inventory Current') and passes on develop."
+ ],
+ "1161": [
+  "NEW typecheck error in the PR's new tests/postgres-backup.test.ts: TS2741 Property 'NODE_ENV' is missing in the env object passed as ProcessEnv."
+ ],
+ "1118": [
+  "NEW test failure attributable to the PR (fails on PR, passes on develop): see retry.json attributable list."
+ ],
+ "1117": [
+  "NEW typecheck error in the PR's new src/lib/pharmacy/accounts/profit-loss.coverage.test.ts: TS2737 BigInt literals are not available when targeting lower than ES2020 (tsconfig target ES2017); use BigInt(n) instead of n-suffixed literals."
+ ],
+ "1116": [
+  "REGRESSION vs its merge-base 6e4253809b (PR is 312 behind develop and conflicts with it in supplier-returns.db.test.ts): 10 tests in src/lib/pharmacy/supplier-returns.db.test.ts fail on the PR and pass at the merge-base; first error 'prisma.financeJournalEntry.create() Foreign key constraint violated: finance_journal_entries_visibility_fkey' (the PR's journal posting writes an entry whose visibility row does not exist). ESLint errors on the PR all already exist at the merge-base."
+ ],
+ "1101": [
+  "PR-introduced failure in its new test src/components/pharmacy/counter/day-close-console.currency.test.ts: 'TypeError: The URL must be of scheme file' at readFileSync(new URL(..., import.meta.url)) line 8. Under the repo's jsdom vitest environment import.meta.url is not a file: URL; read the file via a path (e.g. fileURLToPath-free path.resolve(__dirname...) or a // @vitest-environment node docblock)."
+ ],
+ "1086": [
+  "11 test failures caused by the PR vs its merge-base 16a2a3705a (PR is 438 behind develop and conflicts with it in abac/index.ts, pharmacy-sales.ts and its tests): pharmacy-sales.open-drawer.test.ts (5), pharmacy-sales.branch-scope.test.ts (4), pharmacy-sales.counter-receipt-auth.test.ts (2). The new drawer authorization rejects earlier (FORBIDDEN / 'Branch is outside your scope') than these tests expect (BAD_REQUEST / CONFLICT), and their mocks lack pharmacyBranch.findFirst. Overlaps #1163, which now gates openDrawer on pharmacy:counter. Lint errors all already exist at the merge-base."
+ ],
+ "1068": [
+  "REGRESSION: 5 tests in the existing tests/finance-insights-ai-independence.test.ts fail on the PR and pass on develop with 'TRPCError: ctx.db.$transaction is not a function'. The PR's pharmacy-reports.ts now calls ctx.db.$transaction in the command-centre path, and that suite's mocked db has no $transaction. Either extend the mock or avoid the transaction there, whichever matches the real tenant db contract."
+ ],
+ "1003": [
+  "PR-introduced failure in its new test src/components/pharmacy/dispensing/field.test.tsx: 'Field packs its rows to the top so a taller neighbour cannot stretch the control' cannot find a label with text 'Prescription image' (the rendered Field does not associate that label)."
+ ],
+ "1005": [
+  "NEW ESLint error(s): src/components/layout/topbar.command-palette.test.tsx react/display-name Component definition is missing display name;"
+ ],
+ "1001": [
+  "REGRESSION: 2 existing tests fail on the PR and pass on develop: supplier-credit-follow-up/packet.test.tsx ('shows people-readable times while the CSV keeps exact instants': no text /Prepared 4 Sep 2026, 12:00 UTC/) and supplier-credit-follow-up/page.test.tsx ('renders observations and independent next pages...': no text /Observed: 12 Sep 2026, 07:00 UTC/). The PR changed the reports date/time presentation those tests assert."
+ ],
+ "999": [
+  "REGRESSION: existing test src/app/(app)/pharmacy/reports/page.test.tsx 'pharmacy report catalog filters carries all supported filters and exposes the metric contract' fails on the PR (no text /1 report \u00b7/) and passes on develop; the copy sweep changed the report-count label the test asserts. Other failing related tests also fail on develop or only under the gate runtime DB role."
+ ],
+ "996": [
+  "PR-introduced failure in its new tests/pharmacy-pharmacist-backfill.db.test.ts: the suite's beforeAll fails with 'duplicate key value violates unique constraint organization_roles_organizationId_key_key' on a gate-equivalent migrated+seeded DB, so all 4 tests are skipped/failed (same with a superuser role). The fixture inserts a role that already exists for its organization; make the fixture use unique org/role keys or upsert."
+ ]
+}

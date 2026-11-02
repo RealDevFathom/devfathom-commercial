@@ -1,0 +1,236 @@
+{
+ "1174": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Develop already guards organization.update; this PR moves the guard into one shared assertDedicatedProvisioningConfigured() used by create and update with identical behaviour: it still runs after the row lock and current-state read, an unchanged DEDICATED mode never checks the config, and the tests are stronger, not weaker. The one QA failure (src/lib/platform/commands.ts:1972 no longer Prettier-formatted, while develop's copy was clean) is fixed in 765302d8c9"
+  }
+ },
+ "1184": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Verified the DEV-213 disposition (close as obsolete) against the archived commits via the GitHub API: c85ea42a adds the Nuxt app/, the FastAPI backend/ and a migration doc that makes src/ and Prisma historical; 43a72f44 changes 8 Nuxt shell files; f6f72ee0 has the same tree as its parent (15f6215b). The cited Next.js shell, token and tRPC files exist. Docs and test only, so nothing regresses; the doc's Prettier formatting is fixed in 3c317f346a"
+  }
+ },
+ "1181": {
+  "qa": {
+   "verdict": "FAIL",
+   "details": "The five fixture repairs are correct (duplicate mock keys removed, required grossMinor and recipeId added, the resolve wrapped in act, no assertion weakened) and they take typecheck to 0 errors. But DEV-222 asks to recover or explicitly retire the archive/fix/qa-b3-pharmacy work (10d268de), and none of it is recovered or ruled on: the PKT licence dates (regulatory.ts:93), the PKT week bucket (khata-reminders.ts:51), the quiet-hours counter and the platform-login tabIndex and skip link are still absent, yet the body says \"Fixes DEV-222\". No fix commit was pushed, because those items overlap other open PRs (#812, #105, #104, #103) and need the owner's per-commit decision. Change \"Fixes\" to \"Refs DEV-222\" or record that decision"
+  }
+ },
+ "1164": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Reports now names the missing operational reports permission or the Pharmacy Reports module and says the workspace administrator can fix it; tests cover the permission, module, sign-in and unrelated-failure cases. The reviewer flagged that Day close still blocks a non-admin pharmacy:close holder on the client and that nav items are not hidden, but 2 of 3 skeptics refuted it as blocking here because open PR #992 delivers both; merge #992 with this PR. Prettier on the reports page is fixed in 019e88945f"
+  }
+ },
+ "1150": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "The production sandbox guard works and is tested (paymentSandboxAdmitted returns false when NODE_ENV=production), and the main expiry advisor card now shows a proper load-error state instead of the owner-only permission copy, with tests for FORBIDDEN, UNAUTHORIZED and INTERNAL errors. The Daily work pack's bare 'UNAVAILABLE' row and the raw-ID supplier/ingredient/batch filters are left to open PR #1001; both skeptics refuted that as a blocker for this PR. Prettier on the reports page test is fixed in bc698680e4"
+  }
+ },
+ "1161": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "The PR adds encrypted pg_dump-to-S3 and guarded restore scripts, a nightly systemd timer runbook and fake-command tests; the encryption, checksum, archive-check, source/target guard and migration-probe paths are handled and tested (26 tests pass). The one QA failure, a new TS2741 because the test env object lacked NODE_ENV, is fixed in 7013e12df3. Non-blocking: the live restore drill on the pharmacy EC2 and the timer installation are operational steps still to be done, as the PR says"
+  }
+ },
+ "1166": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 4d41f8423 the fully licensed agency test clicks the task button inside the Tasks group. It still checks push('/projects/p1') and that the dialog closes, and both PR test files pass locally (34 tests). Tailwind 4.3.3 compiles not-forced-colors:focus-visible:outline-none! to an @media not (forced-colors: active) rule, so high-contrast mode keeps the global :focus-visible outline again. ESLint and Prettier are clean on all 6 PR files. No unrelated changes."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "At 4d41f8423, search.global runs the team query only when the hr licence and can(team:view) both allow it, the same ABAC check team.getAll/getRoster use. A denied member gets no directory rows and no email-match probe. The new tests run the real engine: a team:view override DENY and a custom-role team:* DENY both leave user.findMany uncalled and team empty, while other categories still return. Session gate, RLS db and licence gating are unchanged."
+  }
+ },
+ "1163": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 7b48d2dbb, openDrawer requires pharmacy:counter. The four server and test files match a1ed98277 exactly, and the only other change is the CASH/CARD dispense-only tender FORBIDDEN test. Locally, open-drawer, branch-scope and counter-receipt-auth passed 97/97 and counter-console 117/117; with the gate reverted, the new openDrawer test fails. eslint is clean and the prettier warnings already exist on develop. The DB suites were skipped (no DB). The PR body's Validation paragraph is stale."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "7b48d2dbb closes the openDrawer gap. The same can('pharmacy:counter') decision that tender and the UI use now runs as middleware before scopeFor, so a dispense-only pharmacist gets FORBIDDEN before any branch read or drawer write. capabilityProcedure keeps the active-session, password and demo guards. CASH/CARD tender denial now has tests. drawerMovement and closeDrawer are still ungated, but that gap already exists on develop and the fix spec assigns it to DEV-279/#1086."
+  }
+ },
+ "1160": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "QA-1 is resolved in 37efd2c. The emergency-supply lookup no longer filters on the rule set's effective window, so it uses the same in-force org/branch profile as assertStoredBranchMayOperate. A closed rule set version no longer drops the province cap or nulls the audit. The new router test checks the 1-unit cap block, branch scoping and the full emergencySupply audit metadata. It passes at 37efd2c and fails against the pre-fix router. ESLint is clean, and the Prettier drift in pharmacy-sales.ts already exists on develop. PASS."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "37efd2c only removes a relation filter. The profile lookup is still scoped by organizationId and branchId inside the tenant transaction, and it reads the bound rule set the same way the PLAT-02 gate does. The pharmacy:dispense check, the PIN witness with lockout, the advisory-lock eligibility check and the canonical-unit cap are unchanged. The audit metadata has no PII. The test-only mocks spread the original modules and do not weaken the existing denial tests. No vulnerability found."
+  }
+ },
+ "1156": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At eca3272, expiryAdvice validates the dates and then calls readExpiryAdvice(ctx.db, branchIds) with no report-period filter. The reader again lists every unexpired lot, as on develop. The fix touches only the 3 PR files. Router, work-pack and page tests pass (84), eslint, prettier and tsc are clean, and the branch merges cleanly into develop. Removing the validation made the BAD_REQUEST tests fail, so the date checks are covered. The tests mock the reader, so the new SQL was not run against a real database."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "eca3272 removes one bound Prisma.sql date filter and adds no new SQL. Access checks still run first and are unchanged: reports:financial, the module licence, the ADMIN owner role and active-branch tenant scope. Dates are still validated server-side before any read, and the FORBIDDEN and BAD_REQUEST tests still assert that the reader is never called. The supplier join filters on organizationId. No vulnerabilities found."
+  }
+ },
+ "1152": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Checked at 63c8b16. The no-match message and the search box's aria-describedby now show only when a trimmed search is non-empty and matches nothing. With an empty catalog and an empty search, neither appears. The new empty-catalog test fails on 9504a99 and passes on 63c8b16. The search and scrolling-table tests pass 8/8, and eslint and prettier --check are clean. The other diff is formatting only, and no assertions were weakened."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix 63c8b16 adds only a client-side boolean guard and a component test. Medicine search still filters the tenant-scoped workspace list already in the browser. The search text never reaches the server, and React escapes the names it shows. No server, router, schema, SQL, auth or capability code changed: capture still goes through the pharmacy:prescriptions check. No secrets and no new data exposure."
+  }
+ },
+ "1165": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Verified 7601bd98b on a disposable PostgreSQL 16. The SQL fixture passes and fails on the old migration. Held and quoted carts reopen; COMPLETED/VOID carts cannot. Counter updates skip the mutex, and a line delete waits for the sale's completion and is then refused. retention-owners.db.test passes under an RLS role and fails with the old void lock. A real worker run queued and ran one daily job. Lint, prettier, node 9/9 and tsc are clean. Note: a 100-row daily batch can trail audit volume. Non-blocking follow-ups: the AUDIT purge can stall for a tenant with 100+ rows older than its first branch profile (fail-closed, nothing wrongly deleted), and a follow-up issue for regulator-approved PRESCRIPTION/CONTROLLED_REGISTER/FISCAL purge guards still needs to be opened"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Re-checked 7601bd98b. The audit purge runs per tenant in withTenantDb (RLS-scoped) with parameterized tagged SQL only. It deletes exactly one row by organization and id, or throws. Each candidate is rechecked under the mutex and the DB guards. The cron is secret-gated and queues pharmacy tenants only. FOR SHARE takes no global lock, and the SECURITY DEFINER lock is unchanged. The Rx, controlled-register and fiscal guards are not loosened. Nothing blocking."
+  }
+ },
+ "1157": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Fix commit 87d91d58f changes the Inventory header link to 'Imported stock references' (one line in inventory/page.tsx). It also adds a test that checks the link name, its href /pharmacy/inventory/imports and that no 'awaiting verification' text renders. With the old label restored the test fails. The other changes are prettier formatting only, and all six PR files now pass the prettier check. vitest related (4 files, 21 tests) and eslint are clean. No user-facing 'Awaiting verification' text remains."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix commit 87d91d58f changes only a static link label and adds test assertions, plus formatting. The link href and every other attribute are unchanged. It adds no data access, inputs, SQL, secrets or permission changes. The PR as a whole matches the earlier security review: the GET date form still feeds the unchanged server-side branchComparison validation and access checks, values render as escaped React attributes, and errors show fixed strings only."
+  }
+ },
+ "1155": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 098316e48 the pharmacy owner's desktop nav uses the shared Sell/Stock/Buy/Reports/Settings menus with scroll={false} links. Agency, hospitality and unlicensed pharmacy keep the flat strip. The menu item name now reads 'Inventory Current'. sidebar.test.tsx passes 60/60, while the keyboard test fails at 7365a9b98. The 3 changed unit test files pass 189/189, and removing the PHARMACY entry fails 13 tests. eslint and prettier are clean. I read the e2e edits but did not run them."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "098316e48 changes only client-side presentation. Pharmacy menus are built from the same permission-filtered visibleNavigation output, and leftover entries go to Settings, so nothing is dropped or added. The new ADMIN/MEMBER test checks that the hrefs equal visibleNavigation. Role, module and vertical gates are unchanged. There are no server, API, SQL, auth, storage or secret changes, and the e2e edits only change selectors. No vulnerabilities found."
+  }
+ },
+ "1162": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "First review FAIL (Sign out was disabled whenever the 30-second cart read went stale, so ending a sale took extra clicks), fixed in 06512703f: only in-progress work blocks Sign out, a cached non-OPEN bill signs out in one click, and missing, loading, stale-open or wrong-sale reads ask first. Its re-review found the new reason text flashing and reflowing the header on every add-to-cart, fixed in 6dbe145dc: the reason now shows only for payment and recovery blocks. Suite 137/137; the new tests fail on the earlier code. The browser visual QA matrix was not run"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Neither fix commit adds data, network, storage or auth paths. Sign out stays blocked during any in-flight payment work (signOutBlocked = busy) and signOutFromCounter still rechecks its in-flight refs, so a payment-recovery block cannot be skipped. The visible reason only appears while Sign out is disabled. The payment sandbox removal from the original PR is unchanged"
+  }
+ },
+ "1114": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the one new test file and the recordReviewDecision and publishAssertions paths on develop: capabilities are enforced server-side through adminProcedure (admin:access), tenant scope comes from the scoped db and RLS, there is no raw SQL, and the test holds no secrets. No vulnerability was found. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "1087": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the emergency controlled-supply path: pharmacy:dispense and pharmacist PIN checks run server-side before the lock, the patient lookup is org-scoped, the lock key is a bound $queryRaw parameter that includes the org id, and the default READ COMMITTED tenant transaction means the post-lock count sees committed rows. I found no vulnerability. The PR fails only because develop already has the identical lock, test and .gitignore entry (d7753e033 via #177, be80f2362), so it is superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "1072": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the counterPatients/counterPatientPanel path. The module gate lets either pharmacy-counter or pharmacy-dispensing through, the server-side pharmacy:counter/pharmacy:dispense check runs before any read, and queries stay scoped by organizationId. No raw SQL, secrets or UI. I found no vulnerability. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "1056": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the seedPeople role selection, the org-scoped kitchen role lookup, the kitchen role's capabilities (least-privilege), the KDS unlock kitchen:operate check, and the refund-cap test edit. No vulnerability, auth change or raw SQL change was found. The FAIL is only because develop already contains the fix (2756d5427, #612 / #193), and this PR adds a refactor that changes nothing, so it is superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "1008": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the /api/files/[name] licence-evidence gate. The lookup runs in withTenantDb, and pharmacy_branch_regulatory_profiles has FORCE RLS. Non-ADMIN users get a non-enumerating 404 before storage is read, admin:access maps to isAdmin, and there are no raw SQL or input changes. The PR adds no vulnerability, but develop already ships this fix (94e67bb1, #830 for #641/DEV-139). The PR only adds a redundant organizationId filter, so it is superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "966": {
+  "security": {
+   "verdict": "PASS",
+   "details": "No vulnerability found. The PR's net diff is empty: f368fcc2c fully reverts 6fc3a9ce1, so the head tree matches merge-base 8b203969dc7d. No auth, org or branch scoping, validation, raw SQL or secrets change. Develop's daily-close.ts already takes refunded tax, service charge and delivery fee out of netSales. The remaining reportNetSales gap is DEV-160 (PR #1059), so this PR should close as superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "960": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the void-time fill reversal. reverseSaleFills is parameterized and scoped to org, branch and sale. The new trigger allows only a one-time reversedAt/By change, on a VOID sale, by the actor who voided it. Controlled voids still need dispense plus a witness PIN, and no gate file is reverted. The PR introduces no vulnerability, but it adds no Rx gate. Develop's #518 dispense-grant gate already closes DEV-281, so close this PR as superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "855": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked that every PO and receipt read and mutation resolves the owning branch through resolveRestaurantActor before the domain call, that org scope and RLS are kept, that the lists are filtered before pagination, and that the tests assert the denial paths. I found no vulnerability and no raw SQL. The verdict is FAIL anyway: develop already fixes the same issue (2ac18cbb2, fix #546), the PR conflicts with develop, and it adds nothing the issue still needs. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "1116": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the submit path for tenant scoping, input validation, raw SQL and server-side permission checks. postSupplierClaimEntry is scoped by organization and branch, input stays strict zod, there is no raw SQL, and the new procurement check runs server-side before the transaction. The PR introduces no vulnerability, but develop commit 4a72fda1c already carries the same journal fix, so the PR is superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "950": {
+  "security": {
+   "verdict": "PASS",
+   "details": "The gate is correct. quarantinePart moves to capabilityProcedure('pharmacy:safety'), whose can() check runs server-side before any input handling or database access. Branch and org scope through scopeFor/assertInOrganization is unchanged, there are no raw SQL changes, and the denial test asserts that no stock is touched. But develop already has the identical change and tests (b81916c8e, #281), so the PR only adds a comment. Close it as superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "934": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked tenant actor and org match, module gate, ADMIN-or-reports:financial check, and reports:operational plus session usability (enforced by calling the real Reports branches procedure). Also checked tenant-scoped active-branch reads, deny-on-invalid-branch, React-escaped output, no raw SQL or secrets, and that errors are swallowed without leaking. No vulnerability found. FAIL only because develop already shipped this feature in adec4fd2c (#680, the origin of #673): close as superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "66": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the six-file delta: no production, schema or RLS change, no raw SQL from user input, no secrets. Tests use the real ABAC can(). The only blocker is that the PR is superseded: develop already lets canonical Cashiers through the counter gate (2ee391bd3). Develop also moved Khata/CREDIT tender to pharmacy:counter (#803), so the PR's account-tender tests and docs describe the reverse of that policy. Close as superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "37": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked witness validation, org/branch scoping, the in-transaction can() re-check and every new raw SQL (all Prisma.sql-parameterized, org-filtered, run under withTenantDb RLS). Denial tests assert no-effect. The PR introduces no vulnerability, but develop already fixes the issue (1c615d3b4 #657, 7f8649221 #430): it requires an ACTIVE, same-tenant, branch-assigned witness who is not the actor. The rest of the PR is out-of-scope hardening, so it is superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "1224": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "First review FAIL (95 of the 98 new .md/.json/.mjs files failed the prettier --check the QA gate runs on changed files), fixed in d34637b9f2. Docs/evidence/harness only: nothing in src/ changes, no credentials or session tokens are committed, and all 74 file:line citations in qa-report.md resolve on develop. Non-blocking for the owner: the root HANDOFF.md collides with #1223's, the harness defaults point at the original session's paths, probe1.json contains the tenant owner's real email, and about 10.9 MB of evidence lands in qa/ and qa-evidence/ rather than docs/qa/"
+  }
+ },
+ "1055": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Security: the change is a pure in-memory refactor that pulls the refund math into a shared helper. It changes no queries, tenant/branch scoping, RLS transactions, input schemas, permission checks, raw SQL or logging, so I found no vulnerability. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "906": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Security review: the PR changes only docs/admin-platform/api.md and adds a Vitest file that reads files. No runtime code, auth, tenant scoping, SQL, secrets or permission paths changed, and I found no vulnerability.test.ts pinning both rows to the routes. Close as superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "872": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked getOrderForBranch and its route: withTerminalAuth with withTenantDb org scope, branchId from the device context, orderId checked by zod, bills limited to the order's non-VOID rows, no raw SQL, no new fields exposed. No vulnerability found. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "854": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the cutBills/openOrder closed-day guards, the cutClose/correctClose guard under the branch-day advisory lock (parameterized $executeRaw), org/branch scoping, error mapping and the close-packet permission split. The PR introduces no vulnerability. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ }
+}
