@@ -141,6 +141,39 @@ QA and Security at head `1276a75e` (20:16 UTC, box run): **both FAIL**.
 - **Hygiene:** commit messages name model versions, so merge with a clean squash message.
 - **Next step:** after integration, reply on the PR with the fixes and ask for QA/Security again.
 
+**Internal adversarial review** (`wf_66fd213d-49e`, four lenses, every finding verified by a
+skeptic): 15 confirmed, 6 rejected.
+
+- **Confirmed medium:**
+  - Bedrock in-stream errors are not failed over.
+  - Prescription images can reach Bedrock unmasked.
+  - Urdu stock counts are flagged as dosing advice.
+  - Urdu scale words fail grounding.
+  - The dosing detector misses common phrasings.
+  - The docs say unset `AI_PROVIDER` routes.
+  - The QA step quotes the wrong log line, and its 404 blocks Anthropic for 10 minutes.
+- **Confirmed low:**
+  - Masking misses some phone formats and name keys.
+  - Plain 1900-2100 numbers are exempt from grounding.
+  - "may" / "mar" are read as months.
+  - dd/mm dates are read as figures.
+  - Some operations sentences are flagged as dosing advice.
+  - Medicine-name variants are not cut at dose forms.
+  - Only 5,000 names are read.
+  - `docs/deploy/aws.md` is stale.
+  - The weekly summary docs overstate what exists.
+- **Rejected:** the OpenAI 429 billing text, a throw after a committed write, and the rollout
+  parameter values. The per-attempt timeout was rejected as a contract deviation, but it is
+  being added anyway, because a stalled provider must fail over.
+- **Fixes:**
+  - Docs: fixed in `b0438fd8`.
+  - Router and guards: workflow `wf_e4807efc-069` (branches `dev576-fix-router`,
+    `dev576-fix-guards`, from `11872205`). Cherry-pick them with plain-pick, rerun the suites,
+    then deploy.
+- **Latest checks at `11872205`:**
+  - Dockerfile-style build passes.
+  - tsc shows only the 4 baseline test-file errors (one new error fixed in `11872205`).
+
 **Other state**
 
 - **Build:** the Dockerfile-style build of `f579ee24` and later passes. Plain `bun run build`
