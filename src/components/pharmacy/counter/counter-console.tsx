@@ -299,9 +299,7 @@ function ScopedPharmacyCounterConsole({
   const [submittedSearch, setSubmittedSearch] = useState({ text: '', query: '', branchId: '' });
   const submittedQuery = submittedSearch.query;
   const scannerRevision = useRef(0);
-  const scannerInFlight = useRef<{ text: string; branchId: string; revision: number } | null>(
-    null
-  );
+  const scannerInFlight = useRef<{ text: string; branchId: string; revision: number } | null>(null);
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
@@ -539,7 +537,8 @@ function ScopedPharmacyCounterConsole({
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
-    { branchId }, { enabled: Boolean(branchId) }
+    { branchId },
+    { enabled: Boolean(branchId) }
   );
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
@@ -1232,15 +1231,18 @@ function ScopedPharmacyCounterConsole({
           ...(input.cashReceivedMinor !== undefined
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
-          idempotencyKey: input.familyAccountId || input.payerName !== undefined
-            ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
-            : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
+          idempotencyKey:
+            input.familyAccountId || input.payerName !== undefined
+              ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
+              : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId
             ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride }
             : {}),
           ...(input.providerRef !== undefined ? { providerRef: input.providerRef } : {}),
           ...(input.payerName !== undefined ? { payerName: input.payerName } : {}),
-          ...(input.referenceSkipped !== undefined ? { referenceSkipped: input.referenceSkipped } : {}),
+          ...(input.referenceSkipped !== undefined
+            ? { referenceSkipped: input.referenceSkipped }
+            : {}),
         };
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
         // Persistence and read-back must succeed before any money write starts.
@@ -1761,87 +1763,148 @@ function ScopedPharmacyCounterConsole({
 
   return (
     <div className="pos-calm flex h-full min-h-0 flex-col overflow-hidden">
-      <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-2 py-1">
-        <div className="min-w-0">
-          <h1 className="text-sm font-semibold leading-5 text-text-strong">Counter</h1>
-          <p className="text-xs text-text-muted">
-            {formatBinding(keymap.bindings.focusSearch)} search · Enter add ·{' '}
-            {formatBinding(keymap.bindings.openTender)} pay
-          </p>
-        </div>
-        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
-          <CounterReturnPanel
-            branchId={branchId}
-            organizationId={organizationId}
-            accountId={accountId}
-            deviceId={counterDeviceId}
-            businessDate={todayBusinessDate}
-          />
-          <Link
-            className={buttonVariants({
-              variant: 'outline',
-              className: 'h-8 shadow-none hover:translate-y-0 active:translate-y-0',
-            })}
-            href="/pharmacy/orders"
-          >
-            Customer orders
-          </Link>
-          {/*
+      <header className="shrink-0 border-b border-border-subtle bg-surface-card px-3 py-3 sm:px-4">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="min-w-[12rem] flex-1">
+            <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
+              Pharmacy · Sales
+            </p>
+            <div className="mt-1 flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-semibold tracking-[-0.04em] text-text-strong">
+                Counter
+              </h1>
+              <label className="sr-only" htmlFor="counter-branch">
+                Branch
+              </label>
+              <select
+                id="counter-branch"
+                value={branchId}
+                disabled={busy}
+                onChange={(event) => {
+                  scannerRevision.current += 1;
+                  setSelectedBranchId(event.target.value);
+                  setActiveRow(null);
+                  setActiveSale(null);
+                  setHeldSaleId(null);
+                }}
+                className="h-8 max-w-56 rounded-[var(--radius-xs)] border border-border-default bg-surface-sunken px-2 text-xs font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+              >
+                {branches.map((branch) => (
+                  <option key={branch.id} value={branch.id}>
+                    {branch.name} · {branch.code}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+            <CounterReturnPanel
+              branchId={branchId}
+              organizationId={organizationId}
+              accountId={accountId}
+              deviceId={counterDeviceId}
+              businessDate={todayBusinessDate}
+            />
+            <Link
+              className={buttonVariants({
+                variant: 'outline',
+                className: 'h-8 shadow-none hover:translate-y-0 active:translate-y-0',
+              })}
+              href="/pharmacy/orders"
+            >
+              Customer orders
+            </Link>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+              onClick={() =>
+                document.getElementById('counter-shortcuts')?.scrollIntoView({ behavior: 'smooth' })
+              }
+            >
+              Shortcuts
+            </Button>
+            {/*
               UX rule 1: never show the operator an identifier the application
               already knows. A sale id fragment names nothing a pharmacist can
               act on; the receipt number is the only bill identity that exists
               in the real world, and it exists only once the bill is settled.
               Before that, describe the bill by what it holds.
             */}
-          <StatusPill
-            status={saleId ? 'open' : 'idle'}
-            tone={saleId ? 'info' : 'neutral'}
-            label={
-              cart?.receiptNumber
-                ? `Receipt ${cart.receiptNumber}`
-                : saleId
-                  ? `Bill open · ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`
-                  : 'No open bill'
-            }
-          />
-          {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
-          {blocked ? <StatusPill status="blocked" tone="danger" label="Safety block" /> : null}
-          {openDrawerSession ? (
-            <StatusPill status="drawer-open" tone="success" label="Drawer open" />
-          ) : (
-            <Button
-              type="button"
-              variant="outline"
-              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-              disabled={busy || !drawerStatusKnown}
-              onClick={() => {
-                setPending('drawer');
-                openDrawer
-                  .mutateAsync({
-                    branchId,
-                    deviceId: counterDeviceId(),
-                    businessDate: todayBusinessDate(),
-                    openingFloatMinor: 0,
-                  })
-                  .then(() =>
-                    setNotice({
-                      tone: 'success',
-                      message: 'Cash drawer opened for this counter.',
+            <StatusPill
+              status={saleId ? 'open' : 'idle'}
+              tone={saleId ? 'info' : 'neutral'}
+              label={
+                cart?.receiptNumber
+                  ? `Receipt ${cart.receiptNumber}`
+                  : saleId
+                    ? `Bill open · ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`
+                    : 'No open bill'
+              }
+            />
+            {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
+            {blocked ? <StatusPill status="blocked" tone="danger" label="Safety block" /> : null}
+            {openDrawerSession ? (
+              <StatusPill status="drawer-open" tone="success" label="Drawer open" />
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                disabled={busy || !drawerStatusKnown}
+                onClick={() => {
+                  setPending('drawer');
+                  openDrawer
+                    .mutateAsync({
+                      branchId,
+                      deviceId: counterDeviceId(),
+                      businessDate: todayBusinessDate(),
+                      openingFloatMinor: 0,
                     })
-                  )
-                  .catch((error: unknown) =>
-                    setNotice({ tone: 'warning', message: messageFrom(error) })
-                  )
-                  // Either way the server now holds the truth about this device's drawer.
-                  .finally(() => {
-                    setPending(null);
-                    void utils.pharmacySales.drawerStatus.invalidate();
-                  });
-              }}
-            >
-              Open drawer
-            </Button>
-          )}
+                    .then(() =>
+                      setNotice({
+                        tone: 'success',
+                        message: 'Cash drawer opened for this counter.',
+                      })
+                    )
+                    .catch((error: unknown) =>
+                      setNotice({ tone: 'warning', message: messageFrom(error) })
+                    )
+                    // Either way the server now holds the truth about this device's drawer.
+                    .finally(() => {
+                      setPending(null);
+                      void utils.pharmacySales.drawerStatus.invalidate();
+                    });
+                }}
+              >
+                Open drawer
+              </Button>
+            )}
+          </div>
+        </div>
+        <div className="mt-3 flex gap-2 overflow-x-auto pb-0.5 text-xs" aria-label="Bill context">
+          <button
+            type="button"
+            className="min-h-8 shrink-0 rounded-full border border-border-default bg-surface-sunken px-3 font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            onClick={() => rxPanelRef.current?.focus()}
+          >
+            {patient ? patient.displayName : 'Patient + prescription'} ·{' '}
+            {formatBinding(keymap.bindings.focusPrescriptionPanel)}
+          </button>
+          <span
+            className={`flex min-h-8 shrink-0 items-center rounded-full border px-3 font-semibold ${blocked ? 'border-destructive/30 bg-destructive/10 text-destructive' : 'border-success/30 bg-success/10 text-success'}`}
+          >
+            {blocked
+              ? 'Safety block · payment locked'
+              : alerts.length
+                ? `${alerts.length} safety notes`
+                : 'No safety blocks'}
+          </span>
+          <span className="flex min-h-8 shrink-0 items-center rounded-full border border-border-default bg-surface-sunken px-3 font-semibold text-text-strong">
+            {customerQuery.data
+              ? `${customerQuery.data.pointsBalance} loyalty points · Khata`
+              : 'Loyalty + khata'}
+          </span>
         </div>
       </header>
 
@@ -1884,9 +1947,13 @@ function ScopedPharmacyCounterConsole({
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
         <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">
-          <SectionCard compact eyebrow="POS-02" title="Scan and search">
+          <SectionCard
+            compact
+            eyebrow={formatBinding(keymap.bindings.focusSearch)}
+            title="Scan or search"
+          >
             <div className="space-y-2">
-              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <div>
                 <div className="space-y-1.5">
                   <Label htmlFor="counter-search">Scan or search</Label>
                   <Input
@@ -1932,28 +1999,6 @@ function ScopedPharmacyCounterConsole({
                     selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
                     opens pay.
                   </p>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="counter-branch">Branch</Label>
-                  <select
-                    id="counter-branch"
-                    value={branchId}
-                    disabled={busy}
-                    onChange={(event) => {
-                      scannerRevision.current += 1;
-                      setSelectedBranchId(event.target.value);
-                      setActiveRow(null);
-                      setActiveSale(null);
-                      setHeldSaleId(null);
-                    }}
-                    className="h-9 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-                  >
-                    {branches.map((branch) => (
-                      <option key={branch.id} value={branch.id}>
-                        {branch.name} · {branch.code}
-                      </option>
-                    ))}
-                  </select>
                 </div>
               </div>
 
@@ -2032,7 +2077,7 @@ function ScopedPharmacyCounterConsole({
           <SectionCard
             compact
             eyebrow="POS-03"
-            title="Sale unit and quantity"
+            title="Next line"
             actions={
               <Button
                 type="button"
@@ -2112,7 +2157,7 @@ function ScopedPharmacyCounterConsole({
             )}
           </SectionCard>
 
-          <SectionCard compact eyebrow="POS-01" title="Workflow map">
+          <SectionCard compact id="counter-shortcuts" eyebrow="Keyboard" title="Shortcuts">
             <CounterKeymapLegend
               keymap={keymap}
               saving={saveKeymap.isPending}
@@ -2129,7 +2174,7 @@ function ScopedPharmacyCounterConsole({
             compact
             className="min-h-0 flex-1 overflow-y-auto"
             eyebrow="POS-03"
-            title="Cart and FEFO allocation"
+            title="Cart"
             actions={
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -2169,7 +2214,7 @@ function ScopedPharmacyCounterConsole({
             />
           </SectionCard>
 
-          <SectionCard compact className="shrink-0" eyebrow="POS-05" title="Tender">
+          <SectionCard compact className="shrink-0" eyebrow="Payment" title="Bill total">
             <div className="mb-4 space-y-1">
               <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
                 <input
@@ -2217,9 +2262,13 @@ function ScopedPharmacyCounterConsole({
               disabled={busy || !saleId}
               initialDraft={
                 restoredAttempt
-                  ? { ...restoredAttempt.draft, type: restoredAttempt.input.type,
-                    payerName: restoredAttempt.input.payerName, providerRef: restoredAttempt.input.providerRef,
-                    referenceSkipped: restoredAttempt.input.referenceSkipped }
+                  ? {
+                      ...restoredAttempt.draft,
+                      type: restoredAttempt.input.type,
+                      payerName: restoredAttempt.input.payerName,
+                      providerRef: restoredAttempt.input.providerRef,
+                      referenceSkipped: restoredAttempt.input.referenceSkipped,
+                    }
                   : undefined
               }
               recoveryOutcome={tenderOutcome}
@@ -2286,6 +2335,25 @@ function ScopedPharmacyCounterConsole({
               onSettlementPresented={receiptPresented}
             />
           </SectionCard>
+        </div>
+
+        <div className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card p-3 shadow-[0_-8px_24px_rgba(0,0,0,0.08)] md:hidden">
+          <div className="min-w-0 flex-1">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-text-muted">
+              Balance due
+            </p>
+            <p className="text-lg font-semibold tabular-nums text-text-strong">
+              {balanceMinor === null ? '—' : formatMinor(balanceMinor)}
+            </p>
+          </div>
+          <Button
+            type="button"
+            className="h-11 min-w-32"
+            disabled={!saleId || blocked || busy}
+            onClick={() => tenderRef.current?.focus()}
+          >
+            Pay · {formatBinding(keymap.bindings.openTender)}
+          </Button>
         </div>
 
         <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">
