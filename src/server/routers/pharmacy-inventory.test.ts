@@ -336,6 +336,47 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     }
   );
 
+  it('keeps the branch-assignment check off the inventory reads', async () => {
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    const findMany = () => vi.fn().mockResolvedValue([]);
+    Object.assign(db.pharmacyStockLocation, { findMany: findMany() });
+    Object.assign(db.pharmacyInterbranchTransfer, { findMany: findMany() });
+    Object.assign(db.pharmacyStockMovement, { findMany: findMany() });
+    Object.assign(db.user, { findMany: findMany() });
+
+    await expect(caller().nearExpiryBoard({ branchId: 'branch_a' })).resolves.toEqual([]);
+    await expect(caller().temperatureZoneStatuses({ branchId: 'branch_a' })).resolves.toEqual([]);
+    await expect(caller().transferBoard({ branchId: 'branch_a' })).resolves.toEqual([]);
+    expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('leaves a non-target mutation such as allocateForSale on the tenant branch check', async () => {
+    const allocate = () =>
+      caller().allocateForSale({
+        branchId: 'branch_a',
+        medicineId: 'medicine_1',
+        requiredUnits: 1,
+        idempotencyKeyPrefix: 'sale-1',
+      });
+    const assigned = await allocate().then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error })
+    );
+    db = makeDb();
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    const unassigned = await allocate().then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error })
+    );
+
+    expect(unassigned).toEqual(assigned);
+    expect(unassigned).not.toMatchObject({
+      error: { message: 'Branch is outside your scope.' },
+    });
+    expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyBranch.findMany).toHaveBeenCalled();
+  });
+
   it('lets an explicit user deny override an inventory allow from the role', async () => {
     db.user.findUnique.mockResolvedValue({
       organizationRole: {

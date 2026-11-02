@@ -152,20 +152,30 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   await assertInOrganization(ctx.db.pharmacyBranch, actor.organizationId, [branch], {
     active: true,
   });
+  return { ...actor, branchId: branch };
+}
+
+/**
+ * DEV-211: the stock-creating and stock-removing mutations (createLocation,
+ * receiveLot, createCount, writeOff) also need the actor to hold an active
+ * assignment to the requested branch. Reads and other mutations keep scopeFor.
+ */
+async function assignedScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await scopeFor(ctx, branch);
   const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
     where: {
-      organizationId: actor.organizationId,
+      organizationId: scope.organizationId,
       branchId: branch,
-      userId: actor.actorId,
+      userId: scope.actorId,
       active: true,
-      branch: { organizationId: actor.organizationId, active: true },
+      branch: { organizationId: scope.organizationId, active: true },
     },
     select: { id: true },
   });
   if (!assignment) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
-  return { ...actor, branchId: branch };
+  return scope;
 }
 
 // ── PH-A5 — expiry board actions ────────────────────────────────────────────
@@ -652,7 +662,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedScopeFor(ctx, input.branchId);
       return ctx.db.pharmacyStockLocation.create({
         data: { ...input, organizationId: scope.organizationId },
       });
@@ -836,7 +846,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedScopeFor(ctx, input.branchId);
       if (!(await ctx.db.packLevel.findFirst({ where: { id: input.packLevelId } }))) {
         throw new TRPCError({
           code: 'FORBIDDEN',
@@ -997,7 +1007,7 @@ export const pharmacyInventoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          createCount(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          createCount(txDb(tx), await assignedScopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         domainError(error);
@@ -1047,7 +1057,7 @@ export const pharmacyInventoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          writeOff(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          writeOff(txDb(tx), await assignedScopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         domainError(error);
