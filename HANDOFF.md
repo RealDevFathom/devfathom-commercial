@@ -1,6 +1,6 @@
 # HANDOFF — claude-labelled Linear batch
 
-Last updated: 2026-11-02 21:52 UTC · Branch: `saad/nice-thompson-99m17p` · PR:
+Last updated: 2026-11-02 22:06 UTC · Branch: `saad/nice-thompson-99m17p` · PR:
 [RealDevFathom/devfathom-commercial#1223](https://github.com/RealDevFathom/devfathom-commercial/pull/1223)
 (into `develop`, open, not merged)
 
@@ -20,21 +20,26 @@ DEV-576 is done and deployed to develop. It lives on PR #1238, branch
 
 - **Linear:** a ✅ Finished comment is posted on all 17 issues: DEV-595, 601, 596, 606, 591,
   597, 584, 605, 599, 598, 603, 600, 592, 593, 604, 602 and 594. No status was changed.
-- **In flight:** workflow `wf_a307a46f-c66`, worktree branches `pr1223-fix-*` from `3a578a60`.
-  1. **migrations:**
-     - Security findings 2 and 3: `BEGIN`/`COMMIT` around 090200 and 090100, and idempotency
-       guards on 090000-090300.
-     - Fix the custody migration comment (the pharmacy purge gap is pre-existing; it becomes a
-       follow-up).
-     - Reword the audit-trigger staff-profile comment.
-  2. **app:** meetings that cross local midnight are allowed in the forms; the seed's P2002
-     hint points to the rebuild procedure.
-  3. **dev582:** finish DEV-582 from WIP `6a0ddedc` (the workspace locale reaches every
-     pharmacy tool).
-
-  Then cherry-pick with plain-pick, run the DB tests, run the full tsc, push, update the PR
-  body, reply to the security review comment, and post Finished on DEV-582.
-
+- **Fixes integrated and pushed (22:05 UTC, head `bc50cd65`):**
+  - `9bf8e9a0`: the migrations.
+    - Security finding 2 (explicit `BEGIN`/`COMMIT`) and finding 3 (idempotent re-runs). Every
+      changed file re-runs cleanly; there are 171 + 125 DB tests.
+    - Honest custody and audit-trigger comments.
+  - `f80590a9` (DEV-249): the meeting forms gain an End date and judge full instants. A meeting
+    that crosses midnight is allowed. **The Studio visual QA matrix for the new End date field
+    is not done yet.**
+  - `8089090f` (DEV-347): the seed's P2002 hint lists the documented rebuild.
+  - `bc50cd65` (DEV-582): Ask Fathom pharmacy tools answer in the workspace locale. The growth
+    cards and marketing assist remain, so a progress comment was posted, not Finished.
+  - Tests: 197 + 417 related tests pass. A full tsc run is in progress (scratchpad
+    `pr1223-tsc.txt`).
+- **#1223:** a reply to the security review is posted
+  (https://github.com/RealDevFathom/devfathom-commercial/pull/1223#issuecomment-6589646259),
+  with a re-run requested.
+- **Next:**
+  1. Record the tsc result.
+  2. Update the PR #1223 body: the batch, the fixes, and the visual QA item for the meetings
+     End date field.
 - **Waiting on the user:** security finding 1. The append-only trigger on `audit_logs`
   conflicts with #1165's retention DELETE. Proposal: a narrow carve-out under
   `app.retention_purge_organization_id`.
