@@ -4,6 +4,7 @@ import { withApiAuth } from '@/lib/api-auth';
 import { canAccessProject } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
+import { completedAtForColumnChange } from '@/lib/task-completion';
 
 // GET /api/v1/tasks?columnId=&assigneeId=&priority=
 export const GET = withApiAuth('tasks:read', async (ctx, request) => {
@@ -133,6 +134,8 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
       priority: input.priority,
       dueDate: input.dueDate ? new Date(input.dueDate) : null,
       createdById: ctx.userId,
+      // DEV-250: a task created straight into a done column is completed now.
+      ...completedAtForColumnChange(null, column.name),
       assignees:
         mergedAssignees.length > 0
           ? { create: mergedAssignees.map((id) => ({ userId: id })) }

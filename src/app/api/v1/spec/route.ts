@@ -158,7 +158,7 @@ Create a new task. The column's default assignees are auto-added in addition to 
   }
   \`\`\`
 - **Response:** \`{ data: Task }\` (201 Created)
-- **Side effects:** logs \`task_created\` activity
+- **Side effects:** logs \`task_created\` activity. Creating straight into a done column (Done, Complete, Completed, Shipped or Closed) sets \`completedAt\`.
 
 ### \`GET /tasks/:id\`
 Get full task with comments, checklists, labels, assignees.
@@ -167,7 +167,7 @@ Get full task with comments, checklists, labels, assignees.
 - **Response:** \`{ data: Task }\` with deeply-included relations
 
 ### \`PATCH /tasks/:id\`
-Update a task. Setting \`columnId\` triggers a proper column move — reorders both source and target columns and adds the target column's default assignees (additive, idempotent). If the move enters the "Done" column, logs \`task_completed\`.
+Update a task. Setting \`columnId\` triggers a proper column move — reorders both source and target columns and adds the target column's default assignees (additive, idempotent). If the move enters a done column (Done, Complete, Completed, Shipped or Closed) from a non-done one, sets \`completedAt\` and logs \`task_completed\`; moving out of done clears \`completedAt\`. \`completedAt\` is read-only and other edits never change it.
 
 - **Scope:** \`tasks:write\`
 - **Body (all fields optional):**

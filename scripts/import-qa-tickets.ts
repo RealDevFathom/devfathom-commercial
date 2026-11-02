@@ -36,6 +36,7 @@ import {
   TARGET_COLUMN,
   moduleLabels,
 } from './qa-lib';
+import { completedAtForColumnChange } from '../src/lib/task-completion.js';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const adapter = new PrismaPg(pool);
@@ -126,15 +127,23 @@ async function main() {
 
       const existing = await prisma.task.findFirst({
         where: { column: { boardId: board.id }, title: { endsWith: `(${t.id})` } },
-        select: { id: true },
+        select: { id: true, column: { select: { name: true } } },
       });
 
       let taskId: string;
       let status: string;
       if (existing) {
+        // Re-filing into the target column also reopens a ticket that was Done.
         await prisma.task.update({
           where: { id: existing.id },
-          data: { title, description, priority, columnId: toDoColumnId, order: i },
+          data: {
+            title,
+            description,
+            priority,
+            columnId: toDoColumnId,
+            order: i,
+            ...completedAtForColumnChange(existing.column.name, TARGET_COLUMN),
+          },
         });
         taskId = existing.id;
         status = 'Skipped-existing';

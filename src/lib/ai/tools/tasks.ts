@@ -23,6 +23,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { matchScore, norm } from '@/lib/ai/context';
 import { appUrl, templates } from '@/lib/email';
+import { completedAtForColumnChange, entersDone } from '@/lib/task-completion';
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM". Mirrors the
 // helper in the projects router so assistant-sent emails match human-sent ones.
@@ -515,6 +516,8 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           priority: priority ?? 'MEDIUM',
           dueDate: dueAt,
           createdById: h.ctx.userId,
+          // DEV-250: a task created straight into a done column is completed now.
+          ...completedAtForColumnChange(null, column.name),
           assignees: { create: merged.map((id) => ({ userId: id })) },
         },
         select: { id: true, title: true, priority: true, dueDate: true, description: true },
@@ -687,9 +690,15 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           where: { columnId: target.id, order: { gte: newOrder } },
           data: { order: { increment: 1 } },
         });
+        // DEV-250: entering done stamps completedAt, leaving clears it, and a
+        // done-to-done move keeps the original completion time.
         await tx.task.update({
           where: { id: task.id },
-          data: { columnId: target.id, order: newOrder },
+          data: {
+            columnId: target.id,
+            order: newOrder,
+            ...completedAtForColumnChange(task.column.name, target.name),
+          },
         });
         // Auto-assign the target column's default assignees (additive).
         const defaults = await tx.columnDefaultAssignee.findMany({
@@ -704,9 +713,9 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         }
       });
 
-      // Completion: entering a Done column from a non-Done one.
-      const enteringDone =
-        h.DONE_COLUMNS.includes(target.name) && !h.DONE_COLUMNS.includes(task.column.name);
+      // Completion: entering a Done column from a non-Done one (the same
+      // transition that set completedAt above).
+      const enteringDone = entersDone(task.column.name, target.name);
       if (enteringDone) {
         h.activity({
           type: 'task_completed',

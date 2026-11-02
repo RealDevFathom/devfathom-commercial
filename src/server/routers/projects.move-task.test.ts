@@ -41,7 +41,7 @@ const tx = {
       .mockResolvedValueOnce([{ id: 'task-1' }])
       .mockResolvedValueOnce([]),
     update: taskUpdate,
-    findUnique: vi.fn(async () => ({ columnId: 'source-column' })),
+    findUnique: vi.fn(async () => ({ columnId: 'source-column', column: { name: 'To Do' } })),
   },
   $queryRaw: vi.fn(async () => []),
   column: {
@@ -149,7 +149,7 @@ describe('projects.moveTask', () => {
 
 describe('projects.moveTask concurrency', () => {
   it('locks the columns and refuses a task that moved since the access check', async () => {
-    tx.task.findUnique.mockResolvedValueOnce({ columnId: 'elsewhere' });
+    tx.task.findUnique.mockResolvedValueOnce({ columnId: 'elsewhere', column: { name: 'To Do' } });
     await expect(
       caller().moveTask({ taskId: 'task-1', targetColumnId: 'target-column', newOrder: 0 })
     ).rejects.toMatchObject({ code: 'CONFLICT' });

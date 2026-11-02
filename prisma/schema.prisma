@@ -3240,6 +3240,9 @@ model Task {
   createdById    String
   // IMP-PROJ-06: optional parent for subtasks (self-relation).
   parentId       String?
+  // DEV-250: when the task entered a done column; null while it is not done.
+  // Maintained only through src/lib/task-completion.ts — never from updatedAt.
+  completedAt    DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -3262,6 +3265,7 @@ model Task {
   @@index([createdById])
   @@index([parentId])
   @@index([organizationId])
+  @@index([organizationId, completedAt])
   @@map("tasks")
 }
 

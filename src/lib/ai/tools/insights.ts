@@ -312,8 +312,8 @@ export function buildInsightsTools(h: AssistantHelpers): ToolSet {
           h.db.task.count({
             where: {
               assignees: { some: { userId } },
-              column: { name: 'Done' },
-              updatedAt: { gte: weekAgo },
+              // DEV-250: entered done this week (completedAt), not edited this week.
+              completedAt: { gte: weekAgo },
             },
           }),
         ]);
@@ -352,8 +352,7 @@ export function buildInsightsTools(h: AssistantHelpers): ToolSet {
         }),
         h.db.task.findMany({
           where: {
-            column: { name: 'Done' },
-            updatedAt: { gte: weekAgo },
+            completedAt: { gte: weekAgo },
             assignees: { some: {} },
           },
           select: { assignees: { select: { userId: true } } },
@@ -491,8 +490,7 @@ export function buildInsightsTools(h: AssistantHelpers): ToolSet {
           h.db.task.count({
             where: {
               ...(isAdmin ? {} : { assignees: { some: { userId } } }),
-              column: { name: 'Done' },
-              updatedAt: { gte: new Date(now.getTime() - 7 * DAY_MS) },
+              completedAt: { gte: new Date(now.getTime() - 7 * DAY_MS) },
             },
           }),
           // AI-03: mirror DASH-02 — admins see the company-wide pending-leave count,

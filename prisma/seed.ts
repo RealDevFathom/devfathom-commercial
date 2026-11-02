@@ -7,6 +7,7 @@ import pg from 'pg';
 import { hash } from 'bcryptjs';
 
 import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
+import { completedAtForColumnChange } from '../src/lib/task-completion.js';
 import { AGENCY_SUITE_MODULES, syncPlatformCatalog } from './catalog-sync.js';
 import { reportPlatformAdmin, upsertPlatformAdmin } from './platform-admin.js';
 import { conflictingSeedDataMessage } from './seed-failure.js';
@@ -724,6 +725,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
             priority: task.priority as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT',
             dueDate: task.dueDate ? new Date(task.dueDate) : null,
             createdById: alex.id,
+            ...completedAtForColumnChange(null, column.name),
             assignees: {
               create: task.assigneeIds.map((id: string) => ({ userId: id })),
             },

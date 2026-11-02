@@ -2,7 +2,8 @@
  * Move QA tickets between columns on the internal "QA Findings" board.
  *
  * STATUS-UPDATE ONLY: the only mutation is task.columnId (moving a card between
- * Backlog/To Do/In Progress/In Review/Done). No rows are created or deleted. This
+ * Backlog/To Do/In Progress/In Review/Done) and the completedAt that move implies
+ * (src/lib/task-completion.ts). No rows are created or deleted. This
  * is the single sanctioned write to the shared DB during remediation.
  *
  * Usage:  bun scripts/qa-move-cards.ts "<Target Column>" BUG-ID [BUG-ID ...]
@@ -15,6 +16,7 @@ import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { PROJECT_NAME, BOARD_NAME, COLUMNS } from './qa-lib';
+import { completedAtForColumnChange } from '../src/lib/task-completion.js';
 
 const [, , targetColumn, ...bugIds] = process.argv;
 
@@ -70,9 +72,18 @@ async function main() {
         console.log(`  ✗ ${bugId}: no task found`);
         continue;
       }
-      const before = await prisma.task.findUnique({ where: { id: taskId }, select: { columnId: true } });
+      const before = await prisma.task.findUnique({
+        where: { id: taskId },
+        select: { columnId: true, column: { select: { name: true } } },
+      });
       const fromName = before ? colName.get(before.columnId) ?? '?' : '?';
-      await prisma.task.update({ where: { id: taskId }, data: { columnId: target.id } });
+      await prisma.task.update({
+        where: { id: taskId },
+        data: {
+          columnId: target.id,
+          ...completedAtForColumnChange(before?.column.name ?? null, target.name),
+        },
+      });
       moved++;
       console.log(`  → ${bugId}: ${fromName} → ${targetColumn}`);
     } catch (e: any) {
