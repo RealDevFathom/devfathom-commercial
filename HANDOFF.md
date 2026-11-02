@@ -1,17 +1,16 @@
 # HANDOFF — SehatCart develop QA pass + BA recommendations
 
-Last updated: 2026-11-02 23:40 PKT (18:40 UTC)
+Last updated: 2026-11-02 23:52 PKT (18:52 UTC)
 Branch: `saad/great-brown-id2w5x` (base `develop` @ `47518cb`)
-PR: none yet (will be opened into `develop`, docs/evidence only — never merge from this session)
+PR: [#1224](https://github.com/RealDevFathom/devfathom-commercial/pull/1224) into `develop` — docs/evidence/harness only, never merge from this session. Session is subscribed to PR activity.
 Linear: no Linear issue is attached to this QA pass (see Open questions)
 
 ## Resume here
 
-- **Single next action:** finish workstream W4 (Functional E2E) → *report accuracy*: rebuild today's sales from receipts and compare with the owner command centre.
-  - Command: `node qa/sehatcart-2026-11-02/harness/reports1.mjs` (prints `pharmacyReports.commandCentre`), then enumerate receipts with `pharmacySales.lookupReceiptByNumber` (receiptNumber 1..N, branch `cmvx5fc4p000cy5qrcgzjrc3b`) + `pharmacySales.counterReceipt` and sum totals/refunds.
-  - Baseline captured 2026-11-02 23:33 PKT, filters 2026-11-01..2026-11-02: `salesMinor 50598`, `marginMinor 3600`, `cashMinor 50598`, `refundsMinor 42798`, `expiryValueMinor180 30800` (= 280 u × 110 cost, verified), `quarantineUnits 140`.
-  - Caveat: another tester (`QA-20261102-FUNC-*`, device `QA-20261102-FUNC-DEVICE`) is using the **same QA Cashier account** on this tenant, so totals include their sales/refunds.
-- **Item:** QA pass (no DEV id). Workstream W4.
+- **Single next action:** W6 — review the tablet/phone/dark sweep output in `$QA_SCRATCH/sweep/{tablet,phone,desk-dark}/results.json` (started 23:47 PKT by `run-sweeps.sh`, routes in `$ROUTES`), then run axe scans on counter, goods-in, prescriptions, day close, login.
+  - Then W4 leftovers: day close + lock-after-close as owner (`/pharmacy/counter/close`, run LAST — it locks the day for everyone), stock count / transfer / write-off / recall / opening-stock CSV import.
+  - Caveat: another tester (`QA-20261102-FUNC-*`, `QA-20261102-CASHCHECK-*`) is using the **same QA Cashier account** on this tenant.
+- **Item:** QA pass (no DEV id). Workstreams W6 then W4.
 - **Half-written / uncommitted:** `qa-report.md` and `ba-recommendations.md` are **not started**. All findings so far are in `qa/sehatcart-2026-11-02/findings-log.md` (N1–N17 + re-verified issues). Nothing else uncommitted after this commit.
 
 ## Workstreams (items)
@@ -21,10 +20,10 @@ Linear: no Linear issue is attached to this QA pass (see Open questions)
 | W1 | Recon + GitHub issue index | done | 573 issues indexed (`gh api search/issues`), permission model + role templates mapped (`src/lib/vertical-catalog.ts:764-826`) | — |
 | W2 | Harness (per-role sessions, tRPC caller, UI step runner, page sweep) | done | `qa/sehatcart-2026-11-02/harness/*.mjs`; desktop sweep 46 routes × 4 roles | — |
 | W3 | RBAC UI + API denial matrix | done | Live: #1010/#507, #1012, #1016, #1036, #412, #517, #509(closed→reproduces) confirmed; new N4, N15, N17. Static audit: `rbac-static.tsv` (350 procs) | — |
-| W4 | Functional E2E (purchasing → goods-in → counter → returns → Rx → day close → reports) | in progress | PO/GRN/post via UI+API, cash sale + receipt print (EN/UR), return + refund, Rx gate, day-close preview, command centre | Report accuracy (above) → day close + lock-after-close test (owner; do last, it locks the business day for everyone) → stock count/transfer/write-off/recall/opening-stock CSV import |
-| W5 | AI (Ask Fathom + growth) | in progress | Ask Fathom 503 (no `AI_PROVIDER` on develop, #1199/#1159) → accuracy/injection/Urdu **not testable live**; tool authz reviewed in code (`src/lib/ai/tools/pharmacy-reports.ts`); growth insights UNAVAILABLE; basket needs completed days | Write up; optional: deterministic replenishment report check (`pharmacyReports.replenishment`) |
-| W6 | UI/UX/a11y sweep (375/768/1440, dark, Urdu RTL, keyboard, axe) | not started | Desktop light sweep done (W2) | `ROUTES="..." node qa/sehatcart-2026-11-02/harness/sweep.mjs tablet 768 1024 light`, then `phone 375 812`, `desk-dark 1440 900 dark`; Urdu switch via Settings; axe via `@axe-core/playwright` |
-| W7 | Security + data integrity probes | not started | Cookies host-only/Secure/HttpOnly/Lax, 8 h JWT (`src/lib/auth.ts:806`); login limits 30/IP + 10/account per 5 min (`src/lib/auth.ts:185-186`) | XSS payloads in supplier/patient/medicine names + render check; CSV injection in import/exports; rate-limit probe with a NON-existent email only; concurrent addLine on last units of one batch |
+| W4 | Functional E2E (purchasing → goods-in → counter → returns → Rx → day close → reports) | in progress | PO/GRN/post via UI+API, cash sale + receipt print (EN/UR), return + refund, Rx gate, day-close preview; command-centre sales reconciled to 5 receipts (PKR 505.98) | Report accuracy (above) → day close + lock-after-close test (owner; do last, it locks the business day for everyone) → stock count/transfer/write-off/recall/opening-stock CSV import |
+| W5 | AI (Ask Fathom + growth) | done (blocked live) | Ask Fathom 503 (no `AI_PROVIDER` on develop, #1199/#1159) → accuracy/injection/Urdu **not testable live**; tool authz reviewed in code (`src/lib/ai/tools/pharmacy-reports.ts`); growth insights UNAVAILABLE; basket needs completed days | Write up; optional: deterministic replenishment report check (`pharmacyReports.replenishment`) |
+| W6 | UI/UX/a11y sweep (375/768/1440, dark, Urdu RTL, keyboard, axe) | in progress | Desktop light sweep done; tablet sweep done; phone + dark running | `ROUTES="..." node qa/sehatcart-2026-11-02/harness/sweep.mjs tablet 768 1024 light`, then `phone 375 812`, `desk-dark 1440 900 dark`; Urdu switch via Settings; axe via `@axe-core/playwright` |
+| W7 | Security + data integrity probes | mostly done | XSS pass; CSV pass (Sev4 gap); throttle N19; logout-not-revoked N20; concurrency pass; #521/#636 fixed; offline N21 | Optional: cross-tenant host probe (needs another tenant host) |
 | W8 | Write `qa-report.md` + `ba-recommendations.md` | not started | — | Draft from `findings-log.md`; dedupe against `issues.tsv` (regenerate with the `gh api` command below) |
 
 ## Environment / test data (no passwords here — creds live only in a local, uncommitted file)
