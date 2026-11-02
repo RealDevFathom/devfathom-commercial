@@ -240,6 +240,9 @@ pill geometry for statuses and compact controls.
 
 #### Navigation
 
+Secondary tab rows that must stay on one line (for example a module's sub-tabs on a phone) use
+`src/components/ui/scroll-rail.tsx`, which shows an arrow on any edge that hides more items.
+
 Active state must be unambiguous through fill/position and text, not color alone. Desktop active
 items use a smooth shared pill; mobile items use the grouped drawer grammar. Preserve keyboard
 focus and `aria-current`.

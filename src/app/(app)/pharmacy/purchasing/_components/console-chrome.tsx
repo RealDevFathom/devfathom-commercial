@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type * as React from 'react';
 
 import { PageHeader } from '@/components/ui/page-header';
+import { ScrollRail } from '@/components/ui/scroll-rail';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { cn } from '@/lib/utils';
@@ -40,30 +41,33 @@ export function PurchasingHeader({
  */
 export function PurchasingTabs({ active }: { active: string }) {
   return (
-    <nav aria-label="Purchasing surfaces" className="-mx-1 overflow-x-auto">
-      <ul className="flex min-w-max items-center gap-1 px-1">
-        {PURCHASING_TABS.map((tab) => {
-          const current = tab.href === active;
-          return (
-            <li key={tab.href}>
-              <Link
-                aria-current={current ? 'page' : undefined}
-                className={cn(
-                  'flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium whitespace-nowrap transition-colors',
-                  'focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2',
-                  current
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-text-muted hover:bg-muted hover:text-text-strong'
-                )}
-                href={tab.href}
-              >
-                {tab.label}
-                <span className="font-mono text-[0.625rem] opacity-70">{tab.requirement}</span>
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
+    <nav aria-label="Purchasing surfaces" className="-mx-1">
+      {/* Five tabs do not fit a phone or tablet row: the rail scrolls and shows an arrow on the hidden side. */}
+      <ScrollRail label="purchasing tabs">
+        <ul className="flex min-w-max items-center gap-1 px-1 pb-1">
+          {PURCHASING_TABS.map((tab) => {
+            const current = tab.href === active;
+            return (
+              <li key={tab.href}>
+                <Link
+                  aria-current={current ? 'page' : undefined}
+                  className={cn(
+                    'flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium whitespace-nowrap transition-colors',
+                    'focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2',
+                    current
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-text-muted hover:bg-muted hover:text-text-strong'
+                  )}
+                  href={tab.href}
+                >
+                  {tab.label}
+                  <span className="font-mono text-[0.625rem] opacity-70">{tab.requirement}</span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </ScrollRail>
     </nav>
   );
 }

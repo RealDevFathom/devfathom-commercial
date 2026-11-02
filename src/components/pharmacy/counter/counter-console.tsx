@@ -1761,8 +1761,11 @@ function ScopedPharmacyCounterConsole({
 
   return (
     <div className="pos-calm flex h-full min-h-0 flex-col overflow-hidden">
-      <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-2 py-1">
-        <div className="min-w-0">
+      <header
+        data-testid="counter-toolbar"
+        className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border-subtle px-2 py-1"
+      >
+        <div className="min-w-0 shrink-0">
           <h1 className="text-sm font-semibold leading-5 text-text-strong">Counter</h1>
           <p className="text-xs text-text-muted">
             {formatBinding(keymap.bindings.focusSearch)} search · Enter add ·{' '}
@@ -1882,252 +1885,459 @@ function ScopedPharmacyCounterConsole({
         ) : null}
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
-        <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">
-          <SectionCard compact eyebrow="POS-02" title="Scan and search">
-            <div className="space-y-2">
-              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                <div className="space-y-1.5">
-                  <Label htmlFor="counter-search">Scan or search</Label>
-                  <Input
-                    id="counter-search"
-                    ref={searchRef}
-                    // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
-                    data-counter-scan=""
-                    autoFocus
-                    autoComplete="off"
-                    value={query}
-                    disabled={busy}
-                    placeholder="Brand, generic, ingredient, strength, form, barcode, alias"
-                    aria-describedby="counter-search-help"
-                    onChange={(event) => {
-                      scannerRevision.current += 1;
-                      setQuery(event.target.value);
-                      setActiveRow(null);
-                      setSaleUnit(null);
-                      setQuantity(1);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Enter') return;
-                      event.preventDefault();
-                      const trimmed = event.currentTarget.value.trim();
-                      const barcode =
-                        /^\d{6,}$/.test(trimmed) ||
-                        trimmed.startsWith(']d2') ||
-                        trimmed.startsWith('(01)');
-                      if (barcode) {
-                        void addBarcode(trimmed);
-                        return;
-                      }
-                      if (activeRow) {
-                        void addToCart();
-                        return;
-                      }
-                      void runSearch();
-                    }}
-                    className="h-9"
-                  />
-                  <p id="counter-search-help" className="text-xs text-text-muted">
-                    {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
-                    selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
-                    opens pay.
-                  </p>
+      {/*
+          Below md the whole workspace scrolls as one page with the cards stacked in
+          bill order (search, cart and tender, then customer and prescription), so no
+          card is clipped by a nested scroll area. From md up the left cards share one
+          scroll column and the bill column scrolls on its own; the left column is never
+          split into two rows, which used to clip the workflow map after a search.
+        */}
+      <div
+        data-testid="counter-workspace"
+        className="grid min-h-0 flex-1 grid-cols-1 content-start gap-2 overflow-y-auto p-2 md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] md:grid-rows-[minmax(0,1fr)] md:content-stretch md:overflow-hidden"
+      >
+        <div
+          data-testid="counter-main-column"
+          className="contents md:col-start-1 md:row-start-1 md:flex md:min-h-0 md:flex-col md:gap-2 md:overflow-y-auto"
+        >
+          <div className="order-1 space-y-2 md:order-none md:shrink-0">
+            <SectionCard compact eyebrow="POS-02" title="Scan and search">
+              <div className="space-y-2">
+                {/* The search field keeps at least 15rem; the branch picker wraps below it first. */}
+                <div data-testid="counter-search-row" className="flex flex-wrap gap-2">
+                  <div className="min-w-[min(15rem,100%)] flex-[999_1_15rem] space-y-1.5">
+                    <Label htmlFor="counter-search">Scan or search</Label>
+                    <Input
+                      id="counter-search"
+                      ref={searchRef}
+                      // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
+                      data-counter-scan=""
+                      autoFocus
+                      autoComplete="off"
+                      value={query}
+                      disabled={busy}
+                      placeholder="Brand, generic, ingredient, strength, form, barcode, alias"
+                      aria-describedby="counter-search-help"
+                      onChange={(event) => {
+                        scannerRevision.current += 1;
+                        setQuery(event.target.value);
+                        setActiveRow(null);
+                        setSaleUnit(null);
+                        setQuantity(1);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter') return;
+                        event.preventDefault();
+                        const trimmed = event.currentTarget.value.trim();
+                        const barcode =
+                          /^\d{6,}$/.test(trimmed) ||
+                          trimmed.startsWith(']d2') ||
+                          trimmed.startsWith('(01)');
+                        if (barcode) {
+                          void addBarcode(trimmed);
+                          return;
+                        }
+                        if (activeRow) {
+                          void addToCart();
+                          return;
+                        }
+                        void runSearch();
+                      }}
+                      className="h-9"
+                    />
+                    <p id="counter-search-help" className="text-xs text-text-muted">
+                      {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
+                      selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
+                      opens pay.
+                    </p>
+                  </div>
+                  <div className="min-w-0 flex-[1_1_14rem] space-y-1.5">
+                    <Label htmlFor="counter-branch">Branch</Label>
+                    <select
+                      id="counter-branch"
+                      value={branchId}
+                      disabled={busy}
+                      onChange={(event) => {
+                        scannerRevision.current += 1;
+                        setSelectedBranchId(event.target.value);
+                        setActiveRow(null);
+                        setActiveSale(null);
+                        setHeldSaleId(null);
+                      }}
+                      className="h-9 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                    >
+                      {branches.map((branch) => (
+                        <option key={branch.id} value={branch.id}>
+                          {branch.name} · {branch.code}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="counter-branch">Branch</Label>
-                  <select
-                    id="counter-branch"
-                    value={branchId}
-                    disabled={busy}
-                    onChange={(event) => {
-                      scannerRevision.current += 1;
-                      setSelectedBranchId(event.target.value);
-                      setActiveRow(null);
-                      setActiveSale(null);
-                      setHeldSaleId(null);
-                    }}
-                    className="h-9 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-                  >
-                    {branches.map((branch) => (
-                      <option key={branch.id} value={branch.id}>
-                        {branch.name} · {branch.code}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
 
-              <CounterSearchResults
-                rows={
-                  searchCurrent && !searchQuery.isPlaceholderData
-                    ? (searchQuery.data?.rows ?? [])
-                    : []
-                }
-                state={
-                  !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
-                    ? 'idle'
-                    : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
+                <CounterSearchResults
+                  rows={
+                    searchCurrent && !searchQuery.isPlaceholderData
+                      ? (searchQuery.data?.rows ?? [])
+                      : []
+                  }
+                  state={
+                    !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
+                      ? 'idle'
+                      : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
+                        ? 'loading'
+                        : searchQuery.isError
+                          ? 'error'
+                          : 'ready'
+                  }
+                  query={trimmedQuery}
+                  disabled={busy || !branchAuthorized}
+                  activeMedicineId={activeRow?.medicineId ?? null}
+                  error={searchQuery.error ? messageFrom(searchQuery.error) : null}
+                  onSelect={stageRow}
+                  onCaptureDemand={() => void captureShortfall()}
+                  onRetry={() => {
+                    if (searchCurrent) void searchQuery.refetch();
+                  }}
+                />
+              </div>
+            </SectionCard>
+
+            {substituteInput ? (
+              <SectionCard compact eyebrow="AI-05 · RX-04" title="Exact substitute suggestions">
+                <CounterSubstituteProposals
+                  proposals={substitutesQuery.data ?? []}
+                  state={
+                    substitutesQuery.isLoading
                       ? 'loading'
-                      : searchQuery.isError
+                      : substitutesQuery.isError
                         ? 'error'
                         : 'ready'
-                }
-                query={trimmedQuery}
-                disabled={busy || !branchAuthorized}
-                activeMedicineId={activeRow?.medicineId ?? null}
-                error={searchQuery.error ? messageFrom(searchQuery.error) : null}
-                onSelect={stageRow}
-                onCaptureDemand={() => void captureShortfall()}
-                onRetry={() => {
-                  if (searchCurrent) void searchQuery.refetch();
-                }}
-              />
-            </div>
-          </SectionCard>
+                  }
+                  prescriptionOnly={activeRow?.restriction.rx ?? false}
+                  error={substitutesQuery.error ? messageFrom(substitutesQuery.error) : null}
+                  disabled={busy}
+                  onChoose={(proposal) => {
+                    setQuery(proposal.displayName);
+                    setSubmittedSearch({
+                      text: proposal.displayName,
+                      query: proposal.displayName,
+                      branchId,
+                    });
+                    setActiveRow(null);
+                  }}
+                  onDecline={() => void declineVisibleSubstitutes()}
+                  onRetry={() => void substitutesQuery.refetch()}
+                />
+              </SectionCard>
+            ) : null}
 
-          {substituteInput ? (
-            <SectionCard compact eyebrow="AI-05 · RX-04" title="Exact substitute suggestions">
-              <CounterSubstituteProposals
-                proposals={substitutesQuery.data ?? []}
-                state={
-                  substitutesQuery.isLoading
-                    ? 'loading'
-                    : substitutesQuery.isError
-                      ? 'error'
-                      : 'ready'
-                }
-                prescriptionOnly={activeRow?.restriction.rx ?? false}
-                error={substitutesQuery.error ? messageFrom(substitutesQuery.error) : null}
+            <CounterUpsellSuggestions
+              branchId={branchId}
+              medicineIds={currentBill ? cart.lines.map((line) => line.medicineId) : []}
+              disabled={busy || !branchAuthorized}
+              onChoose={(suggestion) => {
+                setQuery(suggestion.displayName);
+                setSubmittedSearch({
+                  text: suggestion.displayName,
+                  query: suggestion.displayName,
+                  branchId,
+                });
+                setActiveRow(null);
+              }}
+            />
+
+            <SectionCard
+              compact
+              eyebrow="POS-03"
+              title="Sale unit and quantity"
+              actions={
+                <Button
+                  type="button"
+                  className="h-9 shadow-none hover:translate-y-0 active:translate-y-0"
+                  disabled={busy || !activeRow || !preview?.sufficient}
+                  onClick={() => void addToCart()}
+                >
+                  {pending === 'addToCart'
+                    ? 'Adding…'
+                    : `Add to cart (${formatBinding(keymap.bindings.addToCart)})`}
+                </Button>
+              }
+            >
+              {activeRow ? (
+                <div className="space-y-2">
+                  <CounterUnitToggle
+                    options={activeRow.saleUnits}
+                    selected={saleUnit}
+                    quantity={quantity}
+                    preview={preview}
+                    disabled={busy}
+                    onSelect={setSaleUnit}
+                    onQuantityChange={setQuantity}
+                    chordFor={chordFor}
+                  />
+                  {activeRow.saleUnits.length === 0 ? (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="counter-demand-units">Requested canonical units</Label>
+                      <Input
+                        id="counter-demand-units"
+                        type="number"
+                        min={1}
+                        step={1}
+                        className="h-11 w-32"
+                        value={quantity}
+                        disabled={busy}
+                        onChange={(event) => {
+                          const next = Number(event.target.value);
+                          setQuantity(Number.isSafeInteger(next) && next > 0 ? next : 1);
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                  {shortfallUnits > 0 ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-auto min-h-11 whitespace-normal"
+                      disabled={busy || !branchAuthorized}
+                      onClick={() => void captureShortfall()}
+                    >
+                      {pending === 'captureDemand'
+                        ? 'Capturing…'
+                        : `Capture shortfall: ${shortfallUnits} canonical units`}
+                    </Button>
+                  ) : null}
+                  <CounterLotOverride
+                    value={lotOverride}
+                    lots={lotOptionsQuery.data ?? []}
+                    state={
+                      lotOptionsQuery.isError
+                        ? 'error'
+                        : lotOptionsQuery.isSuccess
+                          ? 'ready'
+                          : 'loading'
+                    }
+                    error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
+                    disabled={busy}
+                    onChange={setLotOverride}
+                    onRetry={() => void lotOptionsQuery.refetch()}
+                  />
+                </div>
+              ) : (
+                <p className="text-sm text-text-muted">
+                  Select a search result to choose its sale unit.
+                </p>
+              )}
+            </SectionCard>
+
+            <SectionCard compact eyebrow="POS-01" title="Workflow map">
+              <CounterKeymapLegend
+                keymap={keymap}
+                saving={saveKeymap.isPending}
                 disabled={busy}
-                onChoose={(proposal) => {
-                  setQuery(proposal.displayName);
-                  setSubmittedSearch({
-                    text: proposal.displayName,
-                    query: proposal.displayName,
-                    branchId,
-                  });
-                  setActiveRow(null);
-                }}
-                onDecline={() => void declineVisibleSubstitutes()}
-                onRetry={() => void substitutesQuery.refetch()}
+                onPresetChange={(preset: CounterKeymapPresetKey) =>
+                  saveKeymap.mutate({ preset, overrides: {} })
+                }
               />
             </SectionCard>
-          ) : null}
-
-          <CounterUpsellSuggestions
-            branchId={branchId}
-            medicineIds={currentBill ? cart.lines.map((line) => line.medicineId) : []}
-            disabled={busy || !branchAuthorized}
-            onChoose={(suggestion) => {
-              setQuery(suggestion.displayName);
-              setSubmittedSearch({
-                text: suggestion.displayName,
-                query: suggestion.displayName,
-                branchId,
-              });
-              setActiveRow(null);
-            }}
-          />
-
-          <SectionCard
-            compact
-            eyebrow="POS-03"
-            title="Sale unit and quantity"
-            actions={
-              <Button
-                type="button"
-                className="h-9 shadow-none hover:translate-y-0 active:translate-y-0"
-                disabled={busy || !activeRow || !preview?.sufficient}
-                onClick={() => void addToCart()}
-              >
-                {pending === 'addToCart'
-                  ? 'Adding…'
-                  : `Add to cart (${formatBinding(keymap.bindings.addToCart)})`}
-              </Button>
-            }
-          >
-            {activeRow ? (
-              <div className="space-y-2">
-                <CounterUnitToggle
-                  options={activeRow.saleUnits}
-                  selected={saleUnit}
-                  quantity={quantity}
-                  preview={preview}
-                  disabled={busy}
-                  onSelect={setSaleUnit}
-                  onQuantityChange={setQuantity}
-                  chordFor={chordFor}
-                />
-                {activeRow.saleUnits.length === 0 ? (
-                  <div className="space-y-1.5">
-                    <Label htmlFor="counter-demand-units">Requested canonical units</Label>
+          </div>
+          <div className="order-3 space-y-2 md:order-none md:shrink-0">
+            <SectionCard
+              compact
+              eyebrow="CRM-L01"
+              title="Customer loyalty and khata"
+              actions={
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                  disabled={busy || !patient || !saleId}
+                  onClick={() => void attachCustomer()}
+                >
+                  {pending === 'customer' ? 'Linking…' : 'Link selected patient'}
+                </Button>
+              }
+            >
+              {customerQuery.data ? (
+                <div className="space-y-4 text-sm text-text-body">
+                  <div>
+                    <p className="font-semibold text-text-strong">
+                      {customerQuery.data.customer.displayName}
+                    </p>
+                    <p className="text-text-muted">
+                      {customerQuery.data.pointsBalance} points · Khata{' '}
+                      {formatMinor(customerQuery.data.creditBalanceMinor)} /{' '}
+                      {formatMinor(customerQuery.data.customer.creditLimitMinor)}
+                    </p>
+                    <p className="text-text-muted">
+                      Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Label htmlFor="counter-redeem-points" className="sr-only">
+                      Points to redeem
+                    </Label>
                     <Input
-                      id="counter-demand-units"
+                      id="counter-redeem-points"
                       type="number"
                       min={1}
                       step={1}
-                      className="h-11 w-32"
-                      value={quantity}
-                      disabled={busy}
-                      onChange={(event) => {
-                        const next = Number(event.target.value);
-                        setQuantity(Number.isSafeInteger(next) && next > 0 ? next : 1);
-                      }}
+                      value={redeemPoints || ''}
+                      disabled={busy || balanceMinor === null || balanceMinor <= 0}
+                      onChange={(event) => setRedeemPoints(Number(event.target.value))}
+                      placeholder="Points"
+                      className="h-8"
                     />
+                    <Button
+                      type="button"
+                      className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                      disabled={
+                        busy || redeemPoints <= 0 || balanceMinor === null || balanceMinor <= 0
+                      }
+                      onClick={() => void redeemCustomerPoints()}
+                    >
+                      Redeem
+                    </Button>
                   </div>
-                ) : null}
-                {shortfallUnits > 0 ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-auto min-h-11 whitespace-normal"
-                    disabled={busy || !branchAuthorized}
-                    onClick={() => void captureShortfall()}
-                  >
-                    {pending === 'captureDemand'
-                      ? 'Capturing…'
-                      : `Capture shortfall: ${shortfallUnits} canonical units`}
-                  </Button>
-                ) : null}
-                <CounterLotOverride
-                  value={lotOverride}
-                  lots={lotOptionsQuery.data ?? []}
-                  state={
-                    lotOptionsQuery.isError
-                      ? 'error'
-                      : lotOptionsQuery.isSuccess
-                        ? 'ready'
-                        : 'loading'
-                  }
-                  error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
-                  disabled={busy}
-                  onChange={setLotOverride}
-                  onRetry={() => void lotOptionsQuery.refetch()}
-                />
-              </div>
-            ) : (
-              <p className="text-sm text-text-muted">
-                Select a search result to choose its sale unit.
-              </p>
-            )}
-          </SectionCard>
-
-          <SectionCard compact eyebrow="POS-01" title="Workflow map">
-            <CounterKeymapLegend
-              keymap={keymap}
-              saving={saveKeymap.isPending}
-              disabled={busy}
-              onPresetChange={(preset: CounterKeymapPresetKey) =>
-                saveKeymap.mutate({ preset, overrides: {} })
+                  <div>
+                    <p className="font-mono text-xs uppercase tracking-wide text-text-muted">
+                      Points ledger · latest 25 entries
+                    </p>
+                    <ul className="mt-2 space-y-2" aria-label="Points ledger">
+                      {customerQuery.data.pointsHistory?.map((entry) => (
+                        <li
+                          key={entry.id}
+                          className="flex flex-wrap justify-between gap-2 border-b border-border-subtle pb-2"
+                        >
+                          <span>
+                            {entry.kind} · Receipt {entry.sale.receiptNumber ?? '—'} ·{' '}
+                            {new Date(entry.occurredAt).toISOString().slice(0, 10)}
+                          </span>
+                          <span className="font-mono tabular-nums">
+                            {entry.points > 0 ? '+' : ''}
+                            {entry.points}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-3 font-mono text-xs uppercase tracking-wide text-text-muted">
+                      Purchase history
+                    </p>
+                    {customerQuery.data.history.length ? (
+                      <ul className="mt-2 space-y-2">
+                        {customerQuery.data.history.map((sale) => (
+                          <li
+                            key={sale.saleId}
+                            className="flex justify-between border-b border-border-subtle pb-2 tabular-nums"
+                          >
+                            <span>Receipt {sale.receiptNumber ?? '—'}</span>
+                            <span>{formatMinor(sale.totalMinor)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-text-muted">No completed purchases at this branch.</p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-text-muted">
+                  Select a patient, open a bill, then link. Current loyalty consent is required.
+                </p>
+              )}
+            </SectionCard>
+            <SectionCard
+              compact
+              eyebrow="POS-09"
+              title="Prescription and patient"
+              actions={
+                <kbd className="rounded-[3px] border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-strong">
+                  {formatBinding(keymap.bindings.focusPrescriptionPanel)}
+                </kbd>
               }
-            />
-          </SectionCard>
+            >
+              <CounterRxPanel
+                ref={rxPanelRef}
+                controlled={
+                  // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A
+                  // FORBIDDEN read means this actor cannot dispense, so the controlled
+                  // authorization panel is not offered (the server refuses it anyway).
+                  // Without Pharmacy Safety the read is not made at all, with the same outcome.
+                  !safetyLicensed ||
+                  (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code ===
+                    'FORBIDDEN'
+                    ? undefined
+                    : {
+                        ...controlledAuth,
+                        pharmacists: pharmacistsQuery.data ?? [],
+                        loading: pharmacistsQuery.isLoading,
+                        error: pharmacistsQuery.isError,
+                        patientAddress,
+                        onChange: (field, value) => {
+                          if (field === 'patientAddress') {
+                            setPatientAddressDraft(typeof value === 'string' ? value : '');
+                            return;
+                          }
+                          setControlledAuth((current) => {
+                            if (field === 'emergency' || field === 'rxSerialWritten') {
+                              return { ...current, [field]: value === true };
+                            }
+                            if (typeof value !== 'string') return current;
+                            return { ...current, [field]: value };
+                          });
+                        },
+                      }
+                }
+                alerts={alerts}
+                acknowledgementScope={saleId && branchId ? { branchId, saleId } : null}
+                patient={patient}
+                candidates={patientsQuery.data?.patients ?? []}
+                query={patientQuery}
+                state={
+                  patientPanelQuery.isError &&
+                  (patientPanelQuery.error?.data?.code === 'FORBIDDEN' ||
+                    patientsQuery.error?.data?.code === 'FORBIDDEN')
+                    ? 'denied'
+                    : patientsQuery.isLoading || patientPanelQuery.isLoading
+                      ? 'loading'
+                      : patientsQuery.isError || patientPanelQuery.isError
+                        ? 'error'
+                        : submittedPatientQuery.trim().length >= 2
+                          ? 'ready'
+                          : 'idle'
+                }
+                error={
+                  patientsQuery.error
+                    ? messageFrom(patientsQuery.error)
+                    : patientPanelQuery.error
+                      ? messageFrom(patientPanelQuery.error)
+                      : null
+                }
+                disabled={busy}
+                onQueryChange={setPatientQuery}
+                onSearch={() => setSubmittedPatientQuery(patientQuery.trim())}
+                onSelectPatient={(id) => {
+                  setPatientId(id);
+                  setPatientAddressDraft(null);
+                }}
+                onClearPatient={() => {
+                  setPatientId(null);
+                  setPatientAddressDraft(null);
+                  setSubmittedPatientQuery('');
+                  setPatientQuery('');
+                }}
+              />
+            </SectionCard>
+          </div>
         </div>
 
-        <div className="flex min-h-0 flex-col gap-2 overflow-hidden md:col-start-2 md:row-span-2">
+        <div
+          data-testid="counter-bill-column"
+          className="order-2 flex flex-col gap-2 md:order-none md:col-start-2 md:row-start-1 md:min-h-0 md:overflow-hidden"
+        >
           <SectionCard
             compact
-            className="min-h-0 flex-1 overflow-y-auto"
+            className="md:min-h-0 md:flex-1 md:overflow-y-auto"
             eyebrow="POS-03"
             title="Cart and FEFO allocation"
             actions={
@@ -2245,7 +2455,7 @@ function ScopedPharmacyCounterConsole({
 
           <SectionCard
             compact
-            className="min-h-0 max-h-24 shrink overflow-y-auto"
+            className="md:min-h-0 md:max-h-24 md:shrink md:overflow-y-auto"
             eyebrow="POS-08"
             title="Receipt"
           >
@@ -2284,195 +2494,6 @@ function ScopedPharmacyCounterConsole({
               onRetry={() => void receiptQuery.refetch()}
               settlement={receiptSettlement}
               onSettlementPresented={receiptPresented}
-            />
-          </SectionCard>
-        </div>
-
-        <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">
-          <SectionCard
-            compact
-            eyebrow="CRM-L01"
-            title="Customer loyalty and khata"
-            actions={
-              <Button
-                type="button"
-                variant="outline"
-                className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                disabled={busy || !patient || !saleId}
-                onClick={() => void attachCustomer()}
-              >
-                {pending === 'customer' ? 'Linking…' : 'Link selected patient'}
-              </Button>
-            }
-          >
-            {customerQuery.data ? (
-              <div className="space-y-4 text-sm text-text-body">
-                <div>
-                  <p className="font-semibold text-text-strong">
-                    {customerQuery.data.customer.displayName}
-                  </p>
-                  <p className="text-text-muted">
-                    {customerQuery.data.pointsBalance} points · Khata{' '}
-                    {formatMinor(customerQuery.data.creditBalanceMinor)} /{' '}
-                    {formatMinor(customerQuery.data.customer.creditLimitMinor)}
-                  </p>
-                  <p className="text-text-muted">
-                    Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <Label htmlFor="counter-redeem-points" className="sr-only">
-                    Points to redeem
-                  </Label>
-                  <Input
-                    id="counter-redeem-points"
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={redeemPoints || ''}
-                    disabled={busy || balanceMinor === null || balanceMinor <= 0}
-                    onChange={(event) => setRedeemPoints(Number(event.target.value))}
-                    placeholder="Points"
-                    className="h-8"
-                  />
-                  <Button
-                    type="button"
-                    className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                    disabled={
-                      busy || redeemPoints <= 0 || balanceMinor === null || balanceMinor <= 0
-                    }
-                    onClick={() => void redeemCustomerPoints()}
-                  >
-                    Redeem
-                  </Button>
-                </div>
-                <div>
-                  <p className="font-mono text-xs uppercase tracking-wide text-text-muted">
-                    Points ledger · latest 25 entries
-                  </p>
-                  <ul className="mt-2 space-y-2" aria-label="Points ledger">
-                    {customerQuery.data.pointsHistory?.map((entry) => (
-                      <li
-                        key={entry.id}
-                        className="flex flex-wrap justify-between gap-2 border-b border-border-subtle pb-2"
-                      >
-                        <span>
-                          {entry.kind} · Receipt {entry.sale.receiptNumber ?? '—'} ·{' '}
-                          {new Date(entry.occurredAt).toISOString().slice(0, 10)}
-                        </span>
-                        <span className="font-mono tabular-nums">
-                          {entry.points > 0 ? '+' : ''}
-                          {entry.points}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="mt-3 font-mono text-xs uppercase tracking-wide text-text-muted">
-                    Purchase history
-                  </p>
-                  {customerQuery.data.history.length ? (
-                    <ul className="mt-2 space-y-2">
-                      {customerQuery.data.history.map((sale) => (
-                        <li
-                          key={sale.saleId}
-                          className="flex justify-between border-b border-border-subtle pb-2 tabular-nums"
-                        >
-                          <span>Receipt {sale.receiptNumber ?? '—'}</span>
-                          <span>{formatMinor(sale.totalMinor)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-2 text-text-muted">No completed purchases at this branch.</p>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-text-muted">
-                Select a patient, open a bill, then link. Current loyalty consent is required.
-              </p>
-            )}
-          </SectionCard>
-          <SectionCard
-            compact
-            eyebrow="POS-09"
-            title="Prescription and patient"
-            actions={
-              <kbd className="rounded-[3px] border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-strong">
-                {formatBinding(keymap.bindings.focusPrescriptionPanel)}
-              </kbd>
-            }
-          >
-            <CounterRxPanel
-              ref={rxPanelRef}
-              controlled={
-                // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A
-                // FORBIDDEN read means this actor cannot dispense, so the controlled
-                // authorization panel is not offered (the server refuses it anyway).
-                // Without Pharmacy Safety the read is not made at all, with the same outcome.
-                !safetyLicensed ||
-                (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code ===
-                  'FORBIDDEN'
-                  ? undefined
-                  : {
-                      ...controlledAuth,
-                      pharmacists: pharmacistsQuery.data ?? [],
-                      loading: pharmacistsQuery.isLoading,
-                      error: pharmacistsQuery.isError,
-                      patientAddress,
-                      onChange: (field, value) => {
-                        if (field === 'patientAddress') {
-                          setPatientAddressDraft(typeof value === 'string' ? value : '');
-                          return;
-                        }
-                        setControlledAuth((current) => {
-                          if (field === 'emergency' || field === 'rxSerialWritten') {
-                            return { ...current, [field]: value === true };
-                          }
-                          if (typeof value !== 'string') return current;
-                          return { ...current, [field]: value };
-                        });
-                      },
-                    }
-              }
-              alerts={alerts}
-              acknowledgementScope={saleId && branchId ? { branchId, saleId } : null}
-              patient={patient}
-              candidates={patientsQuery.data?.patients ?? []}
-              query={patientQuery}
-              state={
-                patientPanelQuery.isError &&
-                (patientPanelQuery.error?.data?.code === 'FORBIDDEN' ||
-                  patientsQuery.error?.data?.code === 'FORBIDDEN')
-                  ? 'denied'
-                  : patientsQuery.isLoading || patientPanelQuery.isLoading
-                    ? 'loading'
-                    : patientsQuery.isError || patientPanelQuery.isError
-                      ? 'error'
-                      : submittedPatientQuery.trim().length >= 2
-                        ? 'ready'
-                        : 'idle'
-              }
-              error={
-                patientsQuery.error
-                  ? messageFrom(patientsQuery.error)
-                  : patientPanelQuery.error
-                    ? messageFrom(patientPanelQuery.error)
-                    : null
-              }
-              disabled={busy}
-              onQueryChange={setPatientQuery}
-              onSearch={() => setSubmittedPatientQuery(patientQuery.trim())}
-              onSelectPatient={(id) => {
-                setPatientId(id);
-                setPatientAddressDraft(null);
-              }}
-              onClearPatient={() => {
-                setPatientId(null);
-                setPatientAddressDraft(null);
-                setSubmittedPatientQuery('');
-                setPatientQuery('');
-              }}
             />
           </SectionCard>
         </div>

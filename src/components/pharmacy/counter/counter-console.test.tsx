@@ -1767,3 +1767,64 @@ describe('PharmacyCounterConsole module boundaries', () => {
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
   });
 });
+
+describe('PharmacyCounterConsole responsive layout', () => {
+  const classes = (testId: string) => screen.getByTestId(testId).className.split(/\s+/);
+
+  it('scrolls the whole workspace as one page below md and stacks every card', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const workspace = classes('counter-workspace');
+    expect(workspace).toEqual(expect.arrayContaining(['grid-cols-1', 'overflow-y-auto']));
+    expect(workspace).toContain('md:overflow-hidden');
+    // The main column dissolves into the stacked grid on phones and only scrolls from md up.
+    const main = classes('counter-main-column');
+    expect(main).toContain('contents');
+    expect(main).not.toContain('overflow-y-auto');
+    expect(main).toContain('md:overflow-y-auto');
+    const bill = classes('counter-bill-column');
+    expect(bill).not.toContain('overflow-hidden');
+    expect(bill).toContain('md:overflow-hidden');
+    // No card or stack carries a nested scroll area below md.
+    for (const element of screen.getByTestId('counter-workspace').querySelectorAll('*')) {
+      const tokens = element.getAttribute('class')?.split(/\s+/) ?? [];
+      if (element === screen.getByTestId('counter-workspace')) continue;
+      expect(tokens).not.toContain('overflow-y-auto');
+      expect(tokens.filter((token) => token.startsWith('max-h-'))).toEqual([]);
+    }
+  });
+
+  it('keeps the search, cart and tender, then customer cards in bill order on phones', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    const searchStack = search.closest('.order-1');
+    const customerStack = screen.getByText('Customer loyalty and khata').closest('.order-3');
+    expect(searchStack).not.toBeNull();
+    expect(customerStack).not.toBeNull();
+    expect(classes('counter-bill-column')).toContain('order-2');
+  });
+
+  it('keeps the workflow map in the same scroll column as search so a search cannot clip it', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const main = screen.getByTestId('counter-main-column');
+    expect(main).toContainElement(screen.getByLabelText('Scan or search'));
+    expect(main).toContainElement(screen.getByText('Workflow map'));
+    expect(main).toContainElement(screen.getByText('Customer loyalty and khata'));
+    // One row on md: the left column is never split into two clipped scroll areas.
+    expect(classes('counter-workspace')).toContain('md:grid-rows-[minmax(0,1fr)]');
+    expect(classes('counter-bill-column')).not.toContain('md:row-span-2');
+  });
+
+  it('keeps the search field at least 15rem wide and wraps the branch picker first', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(classes('counter-search-row')).toEqual(expect.arrayContaining(['flex', 'flex-wrap']));
+    const field = screen.getByLabelText('Scan or search').parentElement!;
+    expect(field.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(['min-w-[min(15rem,100%)]', 'flex-[999_1_15rem]'])
+    );
+  });
+
+  it('lets the toolbar actions wrap below the title on narrow screens', () => {
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(classes('counter-toolbar')).toContain('flex-wrap');
+  });
+});

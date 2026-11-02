@@ -12,8 +12,10 @@ export function Field({
   hint?: string;
   children: ReactNode;
 }) {
+  // content-start: when a neighbour in the same form row is taller (a hint under it), the
+  // stretched label must not hand that extra height to this control.
   return (
-    <label className="grid gap-1.5 text-sm font-medium text-text-strong">
+    <label className="grid content-start gap-1.5 text-sm font-medium text-text-strong">
       <span>{label}</span>
       {children}
       {hint ? <span className="text-xs font-normal text-text-muted">{hint}</span> : null}
