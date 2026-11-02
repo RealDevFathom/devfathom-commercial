@@ -79,3 +79,24 @@ it('preserves destructive confirmation before submitting a reason', () => {
   expect(fetchMock).not.toHaveBeenCalled();
   confirm.mockRestore();
 });
+
+it('DEV-344: the organization page confirms a tenant password reset by tenant, user and consequence', async () => {
+  const { readFileSync } = await import('node:fs');
+  const page = readFileSync('src/app/platform/(console)/organizations/[id]/page.tsx', 'utf8');
+  const form = page.slice(
+    page.indexOf('action="organization.user.password"'),
+    page.indexOf('/>', page.indexOf('action="organization.user.password"'))
+  );
+  const confirm = form.match(/confirm=\{`([^`]+)`\}/)?.[1];
+  expect(confirm).toBeDefined();
+  for (const part of [
+    '${user.name}',
+    '${user.email}',
+    '${organization.displayName}',
+    'session',
+    'new password at next sign-in',
+    'emailed',
+  ]) {
+    expect(confirm).toContain(part);
+  }
+});

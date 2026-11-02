@@ -13,6 +13,11 @@ vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ hash: async () => 'hashed' }));
 vi.mock('@/lib/secret-crypto', () => ({ decryptSecret: () => 'totp-secret' }));
 vi.mock('@/lib/totp', () => ({ verifyTotp: (_secret: string, code: string) => code === '123456' }));
+const sendEmail = vi.hoisted(() => vi.fn(async () => ({ messageId: 'sent' })));
+vi.mock('@/lib/email', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/email')>()),
+  sendEmail,
+}));
 const db = {
   $queryRawUnsafe: vi.fn(async (sql: string) =>
     sql.startsWith('SELECT id FROM organizations') ? [{ id: state.organization.id }] : []
@@ -24,7 +29,15 @@ const db = {
     create: vi.fn(async ({ data }: any) => ({ id: 'new_1', ...data })),
   },
   platformSession: { updateMany: vi.fn() },
-  user: { update: vi.fn(async () => ({ id: 'user_1', organizationId: 'org_1' })) },
+  user: {
+    update: vi.fn(async () => ({
+      id: 'user_1',
+      organizationId: 'org_1',
+      name: 'Amna Tenant',
+      email: 'amna@tenant.example',
+      organization: { displayName: 'Tenant Pharmacy' },
+    })),
+  },
   organization: {
     findUnique: vi.fn(async () => state.organization),
     update: vi.fn(async ({ data }: any) => {
@@ -370,6 +383,71 @@ describe('sensitive commands', () => {
       passwordReset: true,
     });
     expect(JSON.stringify(state.audits)).not.toContain('a-secret-password');
+  });
+  it('makes the operator-chosen password temporary and revokes every session', async () => {
+    await execute('organization.user.password', {
+      id: 'user_1',
+      password: 'a-secret-password',
+      reason: 'Verified owner recovery',
+    });
+    expect(db.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'user_1' },
+        data: expect.objectContaining({
+          password: 'hashed',
+          mustChangePassword: true,
+          passwordChangedAt: null,
+          tokenVersion: { increment: 1 },
+        }),
+      })
+    );
+    expect(state.audits[0].after).toMatchObject({ mustChangePassword: true });
+  });
+  it('emails the affected user after the reset and its audit row commit, without the password', async () => {
+    await execute('organization.user.password', {
+      id: 'user_1',
+      password: 'a-secret-password',
+      reason: 'Verified owner recovery',
+    });
+    expect(sendEmail).toHaveBeenCalledOnce();
+    expect(db.platformAuditLog.create.mock.invocationCallOrder[0]).toBeLessThan(
+      sendEmail.mock.invocationCallOrder[0]
+    );
+    const [mail] = sendEmail.mock.calls[0] as unknown as [
+      { to: { email: string }; subject: string; html: string; text: string },
+    ];
+    expect(mail.to.email).toBe('amna@tenant.example');
+    expect(mail.subject).toMatch(/reset by DevFathom support/);
+    expect(mail.text).toContain('Tenant Pharmacy');
+    expect(`${mail.html}${mail.text}`).not.toContain('a-secret-password');
+  });
+  it('keeps a committed reset when the notice cannot be delivered', async () => {
+    sendEmail.mockRejectedValueOnce(new Error('provider down'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await expect(
+      execute('organization.user.password', {
+        id: 'user_1',
+        password: 'a-secret-password',
+        reason: 'Verified owner recovery',
+      })
+    ).resolves.toMatchObject({ passwordReset: true });
+    expect(state.audits).toHaveLength(1);
+    expect(state.audits[0].success).toBe(true);
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
+  });
+  it('sends no notice when the reset is refused', async () => {
+    await expect(
+      execute('organization.user.password', { id: 'user_1', password: 'a-secret-password' })
+    ).rejects.toThrow();
+    await expect(
+      execute(
+        'organization.user.password',
+        { id: 'user_1', password: 'a-secret-password', reason: 'Verified owner recovery' },
+        'OPERATIONS'
+      )
+    ).rejects.toMatchObject({ status: 403 });
+    expect(sendEmail).not.toHaveBeenCalled();
   });
   it('denies an OPERATIONS vertical correction before mutation', async () => {
     await expect(

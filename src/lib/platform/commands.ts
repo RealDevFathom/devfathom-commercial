@@ -22,6 +22,7 @@ import type { DemoSeatIdentity } from '@/lib/platform/command-types';
 import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
 import { emailSchema } from '@/lib/email-address';
+import { sendEmail, templates as emailTemplates } from '@/lib/email';
 import { organizationRolePermissionsSchema } from '@/lib/organization-role';
 import { ianaTimezone } from '@/lib/timezone';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
@@ -177,6 +178,13 @@ type CommandResult = {
   organizationId?: string | null;
   /** AUDIT: written verbatim to platform_audit_logs.before. Omitted logs nothing. */
   auditBefore?: unknown;
+  /**
+   * Best-effort side effect run only after the command's transaction and its
+   * audit row have committed (e.g. notifying the affected person), so a
+   * rolled-back command never announces a change that did not happen. A failure
+   * here is logged and never fails or reverses the committed command.
+   */
+  afterCommit?: () => Promise<void>;
 };
 
 /** Structural JSON cast. Redacts nothing: persistence must keep what it stores. */
@@ -2854,20 +2862,52 @@ async function runCommand(
     case 'organization.user.password': {
       const input = z.object({ id, password: z.string().min(12).max(256) }).parse(payload);
       const password = await hash(input.password, 12);
+      // DEV-344: the operator-chosen password is temporary. The user must
+      // replace it at next sign-in (as with a tenant admin reset in team.ts),
+      // every session is revoked, and the user is told out of band once the
+      // reset has committed. `organizations:security:write` and a reason are
+      // enforced for this action before runCommand (sensitiveCommand).
       const saved = await db.user.update({
         where: { id: input.id },
         data: {
           password,
-          passwordChangedAt: new Date(),
+          passwordChangedAt: null,
+          mustChangePassword: true,
           tokenVersion: { increment: 1 },
         },
+        select: {
+          id: true,
+          organizationId: true,
+          name: true,
+          email: true,
+          organization: { select: { displayName: true } },
+        },
       });
+      const resetAt = new Date();
       return {
         targetType: 'User',
         targetId: saved.id,
         organizationId: saved.organizationId,
-        data: { id: saved.id, passwordReset: true },
-        audit: { id: saved.id, passwordReset: true },
+        data: { id: saved.id, passwordReset: true, mustChangePassword: true },
+        audit: {
+          id: saved.id,
+          passwordReset: true,
+          mustChangePassword: true,
+          notifyUserByEmail: true,
+        },
+        afterCommit: async () => {
+          const mail = emailTemplates.operatorPasswordReset({
+            name: saved.name,
+            organizationName: saved.organization?.displayName ?? 'DevFathom',
+            resetLabel: `${resetAt.toISOString().slice(0, 16).replace('T', ' ')} UTC`,
+          });
+          await sendEmail({
+            to: { email: saved.email, name: saved.name },
+            subject: mail.subject,
+            html: mail.html,
+            text: mail.text,
+          });
+        },
       };
     }
     // PROP-04 G2 — break-glass property recovery. The tenant write policy on
@@ -4217,7 +4257,7 @@ export async function executePlatformCommand(
       assertPlatformCapability(actor, 'organizations:security:write');
     }
 
-    return await withPlatformDb(async (db) => {
+    const committed = await withPlatformDb(async (db) => {
       const reason = sensitiveCommand(action)
         ? z.object({ reason: sensitiveReason }).parse(payload).reason
         : undefined;
@@ -4261,8 +4301,16 @@ export async function executePlatformCommand(
           userAgent: request.headers.get('user-agent')?.slice(0, 500),
         },
       });
-      return result.data;
+      return { data: result.data, afterCommit: result.afterCommit };
     });
+    if (committed.afterCommit) {
+      try {
+        await committed.afterCommit();
+      } catch (error) {
+        console.error(`[platform-command] post-commit side effect failed for ${action}`, error);
+      }
+    }
+    return committed.data;
   } catch (error) {
     await persistCommandFailure(actor, action, payload, request, error);
     throw error;
