@@ -1,6 +1,7 @@
 // Complete one sale (optionally Urdu receipt) and capture the browser print popup.
 import fs from 'node:fs';
-import { roleContext, capture, closeBrowser, BASE, shot, statePath } from './lib.mjs';
+import path from 'node:path';
+import { roleContext, capture, closeBrowser, BASE, EVIDENCE, shot, statePath } from './lib.mjs';
 const lang = process.argv[2] ?? 'English';
 const fmt = process.argv[3] ?? 'Thermal · 80 mm';
 const name = process.argv[4] ?? 'cash-receipt-print';
@@ -38,7 +39,7 @@ if (popup) {
   console.log('POPUP TEXT\n' + txt.slice(0, 2500));
   console.log('POPUP DIR', await popup.evaluate(() => document.documentElement.dir + ' ' + document.documentElement.lang));
   console.log('SHOT', await shot(popup, name, { fullPage: true }));
-  fs.writeFileSync(`/home/user/devfathom-commercial/qa-evidence/${name}.html`, await popup.content());
+  fs.writeFileSync(path.join(EVIDENCE, `${name}.html`), await popup.content());
 } else console.log('no popup');
 if (log.http.length) console.log('HTTP', JSON.stringify(log.http.map((h) => [h.status, h.url.slice(-80), h.body.slice(0, 200)])));
 await ctx.storageState({ path: statePath('cashier') });

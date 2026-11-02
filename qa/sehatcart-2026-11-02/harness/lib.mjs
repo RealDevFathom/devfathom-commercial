@@ -61,17 +61,32 @@ export async function login(role, { force = false } = {}) {
   return { state: statePath(role), landed, ms };
 }
 
-/** New browser context for a role with optional viewport/theme/locale settings. */
+/**
+ * New browser context for a role with optional viewport/theme/locale settings.
+ *
+ * The app ignores `prefers-color-scheme`: its theme comes only from
+ * `localStorage['theme']` (src/components/theme-provider.tsx,
+ * src/components/preference-bootstrap.tsx). So a dark run must also store the
+ * app theme before any page script runs. `opts.theme` overrides the stored
+ * theme; otherwise it follows `opts.colorScheme`.
+ */
 export async function roleContext(role, opts = {}) {
   const b = await browser();
+  const colorScheme = opts.colorScheme ?? 'light';
   const ctx = await b.newContext({
     storageState: role ? statePath(role) : undefined,
     viewport: opts.viewport ?? { width: 1440, height: 900 },
-    colorScheme: opts.colorScheme ?? 'light',
+    colorScheme,
     reducedMotion: opts.reducedMotion ?? 'no-preference',
     deviceScaleFactor: 1,
     ...(opts.extra ?? {}),
   });
+  const theme = opts.theme ?? (colorScheme === 'dark' ? 'dark' : 'light');
+  await ctx.addInitScript((value) => {
+    try {
+      window.localStorage.setItem('theme', value);
+    } catch {}
+  }, theme);
   return ctx;
 }
 

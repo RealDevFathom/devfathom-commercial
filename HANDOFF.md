@@ -1,6 +1,6 @@
 # HANDOFF — SehatCart develop QA pass + BA recommendations
 
-Last updated: 2026-11-03 00:01 PKT (19:01 UTC)
+Last updated: 2026-11-03 00:04 PKT (19:04 UTC)
 Branch: `saad/great-brown-id2w5x` (base `develop` @ `47518cb`)
 PR: [#1224](https://github.com/RealDevFathom/devfathom-commercial/pull/1224) into `develop` — docs/evidence/harness only, never merge from this session. Session is subscribed to PR activity.
 Linear: no Linear issue is attached to this QA pass (see Open questions)
@@ -12,6 +12,15 @@ Linear: no Linear issue is attached to this QA pass (see Open questions)
   - Caveat: another tester (`QA-20261102-FUNC-*`, `QA-20261102-CASHCHECK-*`) is using the **same QA Cashier account** on this tenant.
 - **Item:** QA pass (no DEV id). All workstreams done.
 - **Half-written / uncommitted:** nothing. `qa-report.md` and `ba-recommendations.md` are final. Raw working notes stay in `qa/sehatcart-2026-11-02/findings-log.md` (superseded by the report; N7 was withdrawn after re-check). Nothing else uncommitted after this commit.
+
+## PR #1224 review status
+
+| Check | Verdict | Notes |
+|---|---|---|
+| Machine checks (CI) | none configured | 0 check runs on the PR head; repo workflows only deploy. `mergeable_state: clean`. No Claude Approvals check in this repo. |
+| Codex code review (`dd6cf1d`) | 2 × P2 → fixed | (1) dark sweeps only set `prefers-color-scheme`; the app reads `localStorage['theme']`, so the "dark" sweep rendered light → `roleContext` now stores the app theme and sweeps record `data-theme`. (2) `print-receipt.mjs` wrote HTML to a hard-coded path → now `path.join(EVIDENCE, …)`. Threads replied to and resolved. |
+| Codex security review (`dd6cf1d`) | completed, no findings | — |
+| QA re-check after fix | in progress | Re-running the genuine dark-mode sweep + axe in dark; `qa-report.md` dark-mode statements will be corrected if results differ. |
 
 ## Workstreams (items)
 

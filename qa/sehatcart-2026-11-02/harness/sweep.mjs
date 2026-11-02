@@ -35,7 +35,7 @@ async function runRole(role) {
         const docW = document.documentElement.scrollWidth;
         const vw = window.innerWidth;
         const skeletons = document.querySelectorAll('[class*="skeleton"],[class*="animate-pulse"]').length;
-        return { h1, navLinks, text: text.slice(0, 3000), docW, vw, skeletons, title: document.title, dir: document.documentElement.dir, lang: document.documentElement.lang };
+        return { h1, navLinks, text: text.slice(0, 3000), docW, vw, skeletons, title: document.title, dir: document.documentElement.dir, lang: document.documentElement.lang, theme: document.documentElement.dataset.theme ?? null };
       });
     } catch (e) {
       info = { evalErr: String(e).slice(0, 200) };
@@ -54,6 +54,8 @@ async function runRole(role) {
 
 const all = (await Promise.all(roles.map(runRole))).flat();
 fs.writeFileSync(path.join(outDir, 'results.json'), JSON.stringify(all, null, 1));
+const wrongTheme = all.filter((r) => r.theme && r.theme !== scheme);
+if (wrongTheme.length) console.log(`WARNING: ${wrongTheme.length} page(s) rendered data-theme other than "${scheme}"`);
 console.log('done', all.length, 'pages ->', outDir);
 await Promise.race([closeBrowser(), new Promise((r) => setTimeout(r, 5000))]);
 process.exit(0);
