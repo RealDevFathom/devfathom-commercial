@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { TRPCError } from '@trpc/server';
 import { redirect } from 'next/navigation';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -129,6 +129,34 @@ describe('cash-flow page', () => {
       'href',
       `?${new URLSearchParams({ ...filters, page: '1' })}`
     );
+  });
+
+  it('lists cash and non-cash counterpart journal lines in each evidence drilldown', async () => {
+    const amountMinor = BigInt('900719925474099312');
+    mocks.projection.mockResolvedValue({
+      totals: [],
+      evidence: [
+        {
+          ...evidenceRow(0),
+          lines: [
+            { accountCode: 'CASH', side: 'DEBIT', amountMinor },
+            { accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor },
+          ],
+          netMinor: amountMinor,
+        },
+      ],
+      metadata: { retrievedAt: new Date('2026-10-31T12:00:00Z'), completenessReason: 'Test' },
+    });
+    await show();
+    const lines = screen.getByRole('list', { name: 'Classification journal lines' });
+    expect(
+      within(lines)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent)
+    ).toEqual([
+      'CASH · DEBIT · PKR 9007199254740993.12',
+      'SALES_CLEARING · CREDIT · PKR 9007199254740993.12',
+    ]);
   });
 
   it('shows date guidance for malformed dates without reading financial data', async () => {
