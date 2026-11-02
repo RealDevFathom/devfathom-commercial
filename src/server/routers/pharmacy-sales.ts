@@ -1171,10 +1171,6 @@ export const pharmacySalesRouter = router({
                 branchId: scope.branchId,
                 effectiveFrom: { lte: now },
                 OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
-                jurisdictionRuleSet: {
-                  effectiveFrom: { lte: now },
-                  OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
-                },
               },
               select: {
                 provinceCode: true,

@@ -17,8 +17,14 @@ vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/sales')>()),
   addSaleLine: vi.fn(),
 }));
+vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/restaurant/operator-credentials')>()),
+  verifyOperatorCredential: vi.fn(),
+}));
 
 import { addSaleLine } from '@/lib/pharmacy/sales';
+import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
+import { annotateAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
@@ -99,7 +105,7 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
-  return { credential, register, lock, caller: app.createCaller(context).pharmacySales };
+  return { db, credential, register, lock, caller: app.createCaller(context).pharmacySales };
 }
 
 beforeEach(() => {
@@ -205,5 +211,64 @@ describe('pharmacySales.addLine controlled actor', () => {
     });
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
+  });
+
+  it('enforces the branch rule-set emergency cap and audits the policy it used', async () => {
+    const { caller, credential, register, db } = callerFor([
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+    ]);
+    vi.mocked(annotateAudit).mockClear();
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
+    credential.mockResolvedValue({
+      id: 'credential-1',
+      credentialHash: 'hash',
+      failedAttempts: 0,
+      lockedUntil: null,
+      staffProfile: {
+        status: 'ACTIVE',
+        user: { id: 'pharmacist-1', organizationId: 'org-1', status: 'ACTIVE', role: 'EMPLOYEE' },
+      },
+    });
+    const profile = vi.fn().mockResolvedValue({
+      provinceCode: 'PB',
+      jurisdictionRuleSet: {
+        id: 'pk_pb_v2',
+        controlledRegisterFlags: {
+          values: { emergencySupply: { maxUnits: 1, repeatWindowHours: 24 } },
+        },
+      },
+    });
+    Object.assign(db.restaurantOperatorCredential, { update: vi.fn() });
+    Object.assign(db.branchRegulatoryProfile, { findFirst: profile });
+    Object.assign(db.pharmacyControlledRegisterEntry, { count: vi.fn(async () => 0) });
+    Object.assign(db, {
+      pharmacyPatient: {
+        findFirst: async () => ({ id: 'patient-1', cnic: '35202-1234567-1' }),
+      },
+      pharmacyEmergencyRxFollowUp: { findFirst: async () => null },
+    });
+
+    await expect(caller.addLine(line)).resolves.toEqual({
+      blocked: expect.stringMatching(/limited to 1 units/),
+    });
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+    expect(profile).toHaveBeenCalledOnce();
+    const { where } = profile.mock.calls[0][0];
+    expect(where).toMatchObject({ organizationId: 'org-1', branchId: 'branch-1' });
+    expect(where).not.toHaveProperty('jurisdictionRuleSet');
+    expect(annotateAudit).toHaveBeenCalledWith(expect.anything(), {
+      metadata: {
+        emergencySupply: {
+          ruleSetId: 'pk_pb_v2',
+          provinceCode: 'PB',
+          source: 'JURISDICTION_RULE_SET',
+          maxUnits: 1,
+          repeatWindowHours: 24,
+          medicineId: 'medicine-1',
+          requestedCanonicalUnits: 2,
+        },
+      },
+    });
   });
 });
