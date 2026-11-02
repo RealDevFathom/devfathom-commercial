@@ -83,7 +83,7 @@ Token authentication resolves the bound organization in platform scope, then ret
 | invoices | `/api/v1/invoices`, `/api/v1/invoices/{id}` |
 | transactions | `/api/v1/transactions`, `/api/v1/transactions/{id}` |
 | finance summary | `GET /api/v1/finance/summary` |
-| meetings | `GET                                                               | POST /api/v1/meetings` |
+| meetings | `GET /api/v1/meetings`, `POST /api/v1/meetings` |
 | team | `GET /api/v1/team` |
 
 Scopes are documented by the live Markdown response at `/api/v1/spec`. Write scope implies read scope for the same resource; `*` grants all token scopes but never bypasses module, tenant, lifecycle, or finance-role checks.
