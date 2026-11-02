@@ -52,14 +52,14 @@ breaker), `model-defaults.ts` (defaults, prices and env names), `tiers.ts` (feat
 
 ### `AI_PROVIDER`
 
-| Value                               | Behaviour                                                                                                                                       |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| unset or empty                      | Routed chain, if at least one routed provider is configured. With none configured, AI is off (reason `DISABLED`), as on develop before DEV-576. |
-| `auto`                              | Routed chain. With none configured, AI is unavailable (reason `NOT_CONFIGURED`).                                                                |
-| `anthropic`, `openai`, `bedrock`    | Routed chain with that provider first. The others still follow as fallbacks, unless a SuperAdmin turns fallback off.                            |
-| `disabled`                          | Hard off. The SuperAdmin settings cannot turn AI back on.                                                                                       |
-| `azure`, `groq`, `google`, `vertex` | Legacy single-provider path. It bypasses routing, caps, the SuperAdmin settings and the spend ledger.                                           |
-| anything else                       | AI unavailable (reason `INVALID_PROVIDER`).                                                                                                     |
+| Value                               | Behaviour                                                                                                                                            |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| unset or empty                      | **Off** (reason `DISABLED`), even when keys or a Bedrock region are present. AI is never on by default; set `auto` or a provider name to turn it on. |
+| `auto`                              | Routed chain. With none configured, AI is unavailable (reason `NOT_CONFIGURED`).                                                                     |
+| `anthropic`, `openai`, `bedrock`    | Routed chain with that provider first. The others still follow as fallbacks, unless a SuperAdmin turns fallback off.                                 |
+| `disabled`                          | Hard off. The SuperAdmin settings cannot turn AI back on.                                                                                            |
+| `azure`, `groq`, `google`, `vertex` | Legacy single-provider path. It bypasses routing, caps, the SuperAdmin settings and the spend ledger.                                                |
+| anything else                       | AI unavailable (reason `INVALID_PROVIDER`).                                                                                                          |
 
 On AWS, the template parameter `AiProvider` defaults to empty, which means the environment
 default: `auto` in staging and `disabled` in production. Production AI stays off until its
@@ -138,9 +138,14 @@ Each feature has a tier (`src/lib/ai/tiers.ts`):
 - **Opus.** `claude-opus-5-5` always writes the weekly owner summary. It runs deep strategy
   only for a pharmacy that has opted in (`organizations."aiDeepStrategyEnabled"`, default
   `false`). Any other `deep` request resolves to the `standard` model.
-- **Weekly owner summary.** It runs on Anthropic only and never fails over. If a run fails, it
-  is retried at +15 minutes, +1 hour and +6 hours (`WEEKLY_SUMMARY_RETRY_DELAYS_MS` in
-  `src/lib/ai/workload.ts`).
+- **Weekly owner summary.**
+  - The routing policy is in code. Feature id `weekly-owner-summary` runs on Anthropic only
+    and never fails over (it still honours the SuperAdmin `Disabled` switch).
+  - The retry schedule is in code: +15 minutes, +1 hour and +6 hours
+    (`WEEKLY_SUMMARY_RETRY_DELAYS_MS` and `nextWeeklySummaryAttemptAt` in
+    `src/lib/ai/workload.ts`).
+  - **The weekly summary itself is not built yet.** No job generates or schedules it today.
+    Whoever builds it must use this feature id and this retry schedule.
 - **OpenAI.** Calls use the Responses API with `store: false`, so OpenAI keeps no stored
   response for later retrieval.
 
@@ -228,8 +233,8 @@ turn.` without running.
 - **Skipped providers.** A provider is skipped when it is not configured (no secret id or
   key, no Bedrock region, or an unreadable key), when it has reached its cap, or when its
   breaker is open. A failed attempt logs
-  `[ai-router] provider attempt failed; trying the next provider`, with the provider, the
-  error name and the status.
+  `[ai-router] provider attempt failed` with `{ provider, kind, status, next }`, where
+  `kind` is the classified error and `next` is `retry`, `next` or `stop`.
 - **When nothing is left.**
   - If every provider was attempted and failed, the reason is `PROVIDERS_FAILED`.
   - If every remaining candidate is capped, the reason is `CAPPED`.
@@ -549,7 +554,7 @@ with no deploy. For a hard off, update the stack with `AiProvider=disabled`.
 ## Local development
 
 For a quick local run, set a plain key in `.env.local`, for example
-`ANTHROPIC_API_KEY=<your key>`, and leave `AI_PROVIDER` unset or set it to `auto`.
+`ANTHROPIC_API_KEY=<your key>`, and set `AI_PROVIDER=auto`. Unset means off.
 
 - **Secrets Manager.** To test the deployed path locally, set the `*_SECRET_ID` variables and
   use an AWS profile (`AWS_PROFILE`) that can read them.
@@ -578,13 +583,17 @@ Run this on the develop (staging) environment after rollout. You need:
    AWS approves the Anthropic use-case form.
 3. **Model per tier.** Change one provider's `standard` model in the SuperAdmin settings. The
    next row shows the new model. Restore it.
-4. **Forced first-provider failure falls back.** Set mode `Auto` with fallback on. Set the
-   Anthropic `standard` model to a model id that does not exist.
-   - The next call succeeds.
-   - The log shows `provider attempt failed; trying the next provider` with
-     `provider: 'anthropic'`.
-   - The ledger row shows `openai` with `gpt-6.1-sol`.
-   - Restore the models. No real key or secret needs to change.
+4. **Forced first-provider failure falls back.** Run `bun run ai:smoke` on the host (see
+   "Live check"). Its fallback check gives Anthropic a model id that does not exist **in the
+   script's own process**:
+   - The routed answer comes from `openai` with `gpt-6.1-sol`.
+   - The script's log shows `[ai-router] provider attempt failed` with
+     `provider: 'anthropic'` and `next: 'next'`.
+
+   Do not set a non-existent model in the SuperAdmin settings on a live server. A 404 is a
+   configuration fault, so it opens Anthropic's circuit breaker for 10 minutes in that server
+   process, and later QA steps would then pass for the wrong reason.
+
 5. **No failover on a refusal or a bad request.** A request that the provider rejects as
    invalid (400), or refuses, surfaces as is. No other provider is tried.
 6. **Turn limits.** A turn that needs more than 6 tool calls gets the limit message for the

@@ -353,8 +353,8 @@ their values empty in `.env.local` unless you are testing that integration.
 ### AI providers
 
 AI is off locally until a provider is configured. To try Ask Fathom or growth insights, set one
-plain key in `.env.local`, for example `ANTHROPIC_API_KEY=<your key>`, and leave `AI_PROVIDER`
-empty or `auto`. Plain keys work only outside production and must never be committed.
+plain key in `.env.local`, for example `ANTHROPIC_API_KEY=<your key>`, and set
+`AI_PROVIDER=auto`; unset means off. Plain keys work only outside production and must never be committed.
 
 To exercise the deployed path, set `ANTHROPIC_API_KEY_SECRET_ID` or `OPENAI_API_KEY_SECRET_ID`
 with `AI_SECRETS_REGION`. For Bedrock, set `BEDROCK_REGION=ap-southeast-1`. Both read through an

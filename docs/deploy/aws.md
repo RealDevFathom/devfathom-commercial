@@ -6,12 +6,12 @@ CloudFormation in `infra/aws/`, and the application image is the repository's ow
 
 ## Where it runs
 
-|            |                                                                                                                       |
-| ---------- | --------------------------------------------------------------------------------------------------------------------- |
-| Account    | `<account-id>`                                                                                                        |
-| Region     | `ap-southeast-1` (Singapore)                                                                                          |
+|            |                                                                                                  |
+| ---------- | ------------------------------------------------------------------------------------------------ |
+| Account    | `<account-id>`                                                                                   |
+| Region     | `ap-southeast-1` (Singapore)                                                                     |
 | Staging    | `<staging-host>`, tenants at `<slug>.<staging-host>`, platform console at `admin.<staging-host>` |
-| Production | not created yet: `environment.yaml` with `EnvironmentName=production`                                                 |
+| Production | not created yet: `environment.yaml` with `EnvironmentName=production`                            |
 
 **Why Singapore.** The first choice was `me-central-1` (UAE), next to the old Azure UAE North
 setup. That region has been impaired since physical damage to its data centres in March 2026,
@@ -25,9 +25,9 @@ this region"), and ECS throttled cluster creation. Singapore is where the app ra
 | Stack                    | Template           | Region         | What it holds                                                                                                        |
 | ------------------------ | ------------------ | -------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `devfathom-shared`       | `shared.yaml`      | ap-southeast-1 | ECR repository `devfathom-commercial`, build-source bucket, CodeBuild project `devfathom-image`                      |
-| `devfathom-staging-dns`  | `dns.yaml`         | me-central-1*  | Route 53 zone for `<staging-host>`                                                                            |
+| `devfathom-staging-dns`  | `dns.yaml`         | me-central-1*  | Route 53 zone for `<staging-host>`                                                                                   |
 | `devfathom-staging`      | `environment.yaml` | ap-southeast-1 | VPC, RDS PostgreSQL 16, secrets, uploads bucket, ECS cluster and services, load balancer, DNS records, jobs schedule |
-| `devfathom-staging-cert` | `certificate.yaml` | ap-southeast-1 | ACM certificate for `<staging-host>` and `*.<staging-host>`                                            |
+| `devfathom-staging-cert` | `certificate.yaml` | ap-southeast-1 | ACM certificate for `<staging-host>` and `*.<staging-host>`                                                          |
 
 \* Route 53 is global, so the zone serves every region. The stack happens to live in the
 region that was tried first.
@@ -170,10 +170,14 @@ Builds cost cents.
 ## Not yet on AWS
 
 - **Email** stays in `capture` mode, as on Azure: nothing is sent.
-- **AI** is not rolled out yet. The template defaults `AiProvider` to `auto`, the routed chain (Anthropic, OpenAI, then
-  Bedrock in us-east-1). The keys are read at runtime from existing Secrets Manager secrets through
-  the web task role. Variables, IAM and the rollout steps are in [AI providers](../ai-providers.md).
-  Azure OpenAI was Azure-only and is never configured here.
+- **AI** is not rolled out yet.
+  - The template's `AiProvider` defaults to empty, which means the environment default: `auto`
+    (the routed chain: Anthropic, OpenAI, then Bedrock) in staging, and `disabled` in production.
+  - Bedrock runs from `AiBedrockRegion` (default `ap-southeast-1`) on the global inference
+    profiles.
+  - The keys are read at runtime from existing Secrets Manager secrets through the web task role.
+  - Variables, IAM and the rollout steps are in [AI providers](../ai-providers.md).
+    Azure OpenAI was Azure-only and is never configured here.
 - **Meetings:** the LiveKit server (`infra/meetings.bicep`) is not ported. Calls need `NEXT_PUBLIC_LIVEKIT_URL`.
 - **Public URLs:** the metadata base URL and the plain-text email footer still name `dev-fathom-hub.vercel.app` until the production domain is final.
 
