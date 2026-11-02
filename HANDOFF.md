@@ -8,8 +8,11 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 - **Single next action:** none pending. PR #1226 is waiting on QA's runtime retest and on human review.
   When either reports back, handle the comments or failures on the PR and record the verdict in the table
   below. Never merge the PR.
-- A safety-net check-in on the PR is scheduled for about 19:54 UTC (scheduled task
-  `trig_0183UsoUBhcd194C9pVHhEmq`).
+- Safety-net check-ins on the PR:
+  - #1 at 19:54 UTC found nothing new: no check runs, no review threads or reviews, and `develop` still
+    at `47518cb`, so no conflict.
+  - #2 is scheduled for about 23:56 UTC (scheduled task `trig_01NcrHjiUmWySt3ZTwjcHJyq`).
+  - Stop after 3 empty check-ins in a row.
 - **Uncommitted / half-written:** nothing.
 
 ## Items
