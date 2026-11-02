@@ -12,19 +12,23 @@ describe('AI tiers', () => {
     expect(getTierForFeature('new-unclassified-feature')).toBe('cheap');
   });
 
-  it('defines Claude defaults for both adapters and permits per-tier overrides', () => {
+  it('defines current defaults for every routed provider and permits per-tier overrides', () => {
     expect(DEFAULT_MODELS).toEqual({
       anthropic: {
-        cheap: 'claude-haiku-4-5-20251001',
-        standard: 'claude-sonnet-4-6',
-        deep: 'claude-opus-4-6',
+        cheap: 'claude-haiku-5-5',
+        standard: 'claude-sonnet-5-5',
+        deep: 'claude-opus-5-5',
       },
+      openai: { cheap: 'gpt-5.4-nano', standard: 'gpt-5.4-mini', deep: 'gpt-5.4' },
       bedrock: {
-        cheap: 'anthropic.claude-haiku-4-5-20251001-v1:0',
-        standard: 'anthropic.claude-sonnet-4-6',
-        deep: 'apac.anthropic.claude-opus-4-6-v1',
+        cheap: 'us.anthropic.claude-haiku-5-5',
+        standard: 'us.anthropic.claude-sonnet-5-5',
+        deep: 'us.anthropic.claude-opus-5-5',
       },
     });
+    expect(
+      getDefaultModelId('openai', 'deep', undefined, { AI_OPENAI_MODEL_DEEP: 'env-model' })
+    ).toBe('env-model');
     expect(getDefaultModelId('anthropic', 'standard', { standard: 'database-model' })).toBe(
       'database-model'
     );

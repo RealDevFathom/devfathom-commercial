@@ -52,7 +52,10 @@ export type RoutingSettings = {
   source: 'superadmin' | 'environment';
 };
 
-export function resolveRoutingSettings(stored: StoredAISettings | null, env: Env = process.env): RoutingSettings {
+export function resolveRoutingSettings(
+  stored: StoredAISettings | null,
+  env: Env = process.env
+): RoutingSettings {
   const savedOrder = [...new Set(stored?.providerOrder ?? [])];
   const models = {} as Record<Provider, Record<AITier, string>>;
   const capsUsd = {} as Record<Provider, number>;
@@ -113,7 +116,12 @@ export type RouterDependencies = {
   storedSettings: () => Promise<StoredAISettings | null>;
   spend: (provider: Provider, from: Date, to: Date) => Promise<number>;
   apiKey: (provider: 'anthropic' | 'openai', env: Env) => Promise<string | null>;
-  model: (input: { provider: Provider; modelId: string; apiKey: string | null; env: Env }) => LanguageModelV3;
+  model: (input: {
+    provider: Provider;
+    modelId: string;
+    apiKey: string | null;
+    env: Env;
+  }) => LanguageModelV3;
   record: (usage: ProviderUsageWrite) => Promise<unknown>;
   /** Best-effort cap alert after a recorded attempt. */
   alert?: (provider: Provider, now: Date) => Promise<unknown>;
@@ -201,7 +209,10 @@ async function prepareAttempt(
 }
 
 /** OpenAI must not retain prompts or responses. */
-function callOptionsFor(provider: Provider, options: LanguageModelV3CallOptions): LanguageModelV3CallOptions {
+function callOptionsFor(
+  provider: Provider,
+  options: LanguageModelV3CallOptions
+): LanguageModelV3CallOptions {
   if (provider !== 'openai') return options;
   return {
     ...options,
@@ -308,7 +319,10 @@ export async function routedGenerate(
       continue;
     }
     await recordAttempt(attempt, context, result.usage, now);
-    return { ...result, providerMetadata: { ...result.providerMetadata, ...routingMetadata(attempt) } };
+    return {
+      ...result,
+      providerMetadata: { ...result.providerMetadata, ...routingMetadata(attempt) },
+    };
   }
   throw exhausted(skipped, failures);
 }
@@ -376,7 +390,9 @@ export async function readRoutedAvailability(
   for (const provider of candidateChain(settings, env)) {
     if (!isRoutedProviderConfigured(provider, env)) continue;
     try {
-      if ((await dependencies.spend(provider, bounds.from, bounds.to)) < settings.capsUsd[provider]) {
+      if (
+        (await dependencies.spend(provider, bounds.from, bounds.to)) < settings.capsUsd[provider]
+      ) {
         return { available: true };
       }
     } catch {

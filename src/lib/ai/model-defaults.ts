@@ -83,7 +83,8 @@ export const FALLBACK_PRICE_USD_PER_MTOK: Readonly<
 
 export function listPriceFor(provider: TieredAIProviderName, model: string) {
   return (
-    DEFAULT_MODEL_PRICES_USD_PER_MTOK[`${provider}:${model}`] ?? FALLBACK_PRICE_USD_PER_MTOK[provider]
+    DEFAULT_MODEL_PRICES_USD_PER_MTOK[`${provider}:${model}`] ??
+    FALLBACK_PRICE_USD_PER_MTOK[provider]
   );
 }
 

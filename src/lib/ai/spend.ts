@@ -70,7 +70,8 @@ type SettingsRow = {
   updatedBy: string | null;
 };
 
-const optionalNumber = (value: Prisma.Decimal | null) => (value === null ? undefined : Number(value));
+const optionalNumber = (value: Prisma.Decimal | null) =>
+  value === null ? undefined : Number(value);
 const optionalText = (value: string | null) => value?.trim() || undefined;
 
 export function storedSettingsFromRow(row: SettingsRow): StoredAISettings {

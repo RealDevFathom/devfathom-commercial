@@ -15,8 +15,9 @@ import {
 } from '@/lib/ai/assistant-request';
 import { assistantVertical } from '@/lib/ai/context';
 import { rateLimit } from '@/lib/rate-limit';
-import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
-import { createAIModel, readAIAvailability } from '@/lib/ai/provider';
+import { logAIProviderUnavailable, readAskFathomAvailability } from '@/lib/ai/ask-fathom-settings';
+import { createAIModel } from '@/lib/ai/provider';
+import { readRoutedAvailability } from '@/lib/ai/router';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
@@ -93,11 +94,12 @@ async function respond(req: Request) {
   const tenantDb = createTenantDb(organization.id);
   // Every POST (including approval continuations) rechecks current company chat policy.
   // Requests already past this gate are not cancelled when an administrator disables chat.
-  const settings = await readAskFathomSettings(tenantDb, organization.id);
-  if (!settings) {
+  // The launcher's askFathomSettings query uses this same check, so the two cannot disagree.
+  const check = await readAskFathomAvailability(tenantDb, organization.id);
+  if (!check) {
     return Response.json({ error: UNAVAILABLE }, { status: 503 });
   }
-  if (!settings.askFathomEnabled) {
+  if (!check.availability.askFathomEnabled) {
     return Response.json(
       { error: 'Ask Fathom chat is disabled for your company.' },
       { status: 403 }
@@ -127,9 +129,20 @@ async function respond(req: Request) {
   if (organization.isDemo) {
     return Response.json({ error: 'Not available in demo.' }, { status: 403 });
   }
-  // Rechecked for every request, including approved tool continuations.
-  if (!readAIAvailability().available) {
+  // Rechecked for every request, including approved tool continuations. An unset,
+  // disabled or incomplete provider (AI_PROVIDER, AI_MODEL, provider credentials) ends here.
+  if (!check.provider.ready) {
+    logAIProviderUnavailable('ASSISTANT_PROVIDER_UNAVAILABLE', check.provider);
     return Response.json({ error: UNAVAILABLE }, { status: 503 });
+  }
+  // The routed chain can also be off (SuperAdmin switch) or have every candidate
+  // at its monthly spend cap: answer with the same unavailable state before streaming.
+  if (check.provider.provider === 'auto') {
+    const routed = await readRoutedAvailability();
+    if (!routed.available) {
+      console.error('ASSISTANT_PROVIDER_UNAVAILABLE', { reason: routed.reason, provider: 'auto' });
+      return Response.json({ error: UNAVAILABLE }, { status: 503 });
+    }
   }
   const entitlements = await resolveOrganizationEntitlements(organization.id, tenantDb);
 
@@ -178,13 +191,13 @@ async function respond(req: Request) {
   }
   let ai: ReturnType<typeof createAIModel>;
   try {
-    ai = createAIModel();
+    ai = createAIModel(process.env, { feature: 'ask-fathom', organizationId: organization.id });
   } catch {
-    console.error('ASSISTANT_PROVIDER_UNAVAILABLE');
-    return Response.json(
-      { error: 'Ask Fathom is currently unavailable. No cached answer was used.' },
-      { status: 503 }
-    );
+    console.error('ASSISTANT_PROVIDER_UNAVAILABLE', {
+      reason: 'MODEL_CREATE_FAILED',
+      provider: check.provider.provider,
+    });
+    return Response.json({ error: UNAVAILABLE }, { status: 503 });
   }
   const result = streamText({
     model: ai.model,

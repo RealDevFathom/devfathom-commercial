@@ -9,6 +9,7 @@ const sdk = vi.hoisted(() => {
     vertex: vi.fn(() => select),
     groq: vi.fn(() => select),
     anthropic: vi.fn(() => select),
+    openai: vi.fn(() => select),
     bedrock: vi.fn(() => select),
     awsCredentialChain: vi.fn(() => credentialProvider),
     credentialProvider,
@@ -21,6 +22,7 @@ const sdk = vi.hoisted(() => {
 });
 vi.mock('@ai-sdk/amazon-bedrock', () => ({ createAmazonBedrock: sdk.bedrock }));
 vi.mock('@ai-sdk/anthropic', () => ({ createAnthropic: sdk.anthropic }));
+vi.mock('@ai-sdk/openai', () => ({ createOpenAI: sdk.openai }));
 vi.mock('@ai-sdk/azure', () => ({ createAzure: sdk.azure }));
 vi.mock('@ai-sdk/google', () => ({ createGoogleGenerativeAI: sdk.google }));
 vi.mock('@ai-sdk/google-vertex', () => ({ createVertex: sdk.vertex }));
@@ -38,9 +40,12 @@ vi.mock('ai', async (importOriginal) => ({
 import {
   AIUnavailableError,
   createAIModel,
-  getModelForTier,
+  configuredRoutedProviders,
+  createTieredModel,
   readAIAvailability,
   readAIConfig,
+  readAIProviderReadiness,
+  readAISelector,
 } from './provider';
 import { generateGrowthRecommendations, type GrowthInput } from './growth-recommendations';
 const inert = {
@@ -49,7 +54,6 @@ const inert = {
   GROQ_API_KEY: 'inert-test-key',
   GOOGLE_GENERATIVE_AI_API_KEY: 'inert-test-key',
   GOOGLE_VERTEX_API_KEY: 'inert-test-key',
-  ANTHROPIC_API_KEY: 'inert-test-key',
 };
 const input: GrowthInput = {
   vertical: 'RESTAURANT',
@@ -123,54 +127,98 @@ describe('shared provider gate with real factory boundary', () => {
       expect(sdk.fetch).not.toHaveBeenCalled();
     }
   );
-  it.each(['anthropic', 'bedrock'] as const)('selects the %s adapter', (provider) => {
-    expect(createAIModel({ ...inert, AI_PROVIDER: provider })).toMatchObject({
-      provider,
-      modelId: 'inert-model',
+  it.each(['anthropic', 'openai', 'bedrock'] as const)(
+    'routes AI_PROVIDER=%s through the chain without building an SDK at selection time',
+    (provider) => {
+      const env = {
+        AI_PROVIDER: provider,
+        NODE_ENV: 'development',
+        ANTHROPIC_API_KEY: 'inert-test-key',
+        OPENAI_API_KEY: 'inert-test-key',
+        BEDROCK_REGION: 'us-east-1',
+      };
+      expect(createAIModel(env)).toMatchObject({ provider: 'auto', modelId: 'auto:standard' });
+      expect(readAIConfig(env)).toMatchObject({ provider: 'auto', preferred: provider });
+      expect(configuredRoutedProviders(env)[0]).toBe(provider);
+      for (const spy of [sdk.anthropic, sdk.openai, sdk.bedrock])
+        expect(spy).not.toHaveBeenCalled();
+    }
+  );
+  it('uses the routed chain when AI_PROVIDER is unset but a provider is configured', () => {
+    const env = { OPENAI_API_KEY_SECRET_ID: 'devfathom/staging/openai-api-key' };
+    expect(readAISelector(env)).toEqual({ kind: 'routed', preferred: null, explicit: false });
+    expect(readAIAvailability(env)).toEqual({ available: true, provider: 'auto' });
+    expect(createAIModel(env, { feature: 'ask-fathom' })).toMatchObject({
+      modelId: 'auto:standard',
     });
-    expect(sdk[provider]).toHaveBeenCalledOnce();
-    expect(sdk.select).toHaveBeenCalledWith('inert-model');
   });
-  it('reports Anthropic without an API key as not configured', () => {
-    const env = { AI_PROVIDER: 'anthropic', AI_MODEL: 'inert-model' };
-    expect(readAIAvailability(env)).toEqual({ available: false, reason: 'NOT_CONFIGURED' });
-    expect(() => readAIConfig(env)).toThrow(AIUnavailableError);
-    expect(sdk.anthropic).not.toHaveBeenCalled();
+  it('ignores plain API keys in production and requires the Secrets Manager id', () => {
+    const production = {
+      AI_PROVIDER: 'anthropic',
+      NODE_ENV: 'production',
+      ANTHROPIC_API_KEY: 'must-not-be-used',
+      OPENAI_API_KEY: 'must-not-be-used',
+    };
+    expect(readAIAvailability(production)).toEqual({ available: false, reason: 'NOT_CONFIGURED' });
+    expect(() => readAIConfig(production)).toThrow(AIUnavailableError);
+    expect(
+      readAIAvailability({
+        ...production,
+        ANTHROPIC_API_KEY_SECRET_ID: 'devfathom/staging/anthropic-api-key',
+      })
+    ).toEqual({ available: true, provider: 'auto' });
   });
-  it('uses the AWS credential chain and never forwards static keys', () => {
-    createAIModel({
-      AI_PROVIDER: 'bedrock',
-      AI_MODEL: 'inert-model',
-      AWS_REGION: 'us-west-2',
-      AWS_ACCESS_KEY_ID: 'must-not-forward',
-      AWS_SECRET_ACCESS_KEY: 'must-not-forward',
+  it('orders the chain by AI_PROVIDER_ORDER and never includes Azure', () => {
+    const env = {
+      ...inert,
+      AI_PROVIDER_ORDER: 'bedrock, azure, openai, anthropic, openai',
+      ANTHROPIC_API_KEY_SECRET_ID: 'a',
+      OPENAI_API_KEY_SECRET_ID: 'o',
+      BEDROCK_REGION: 'us-east-1',
+    };
+    expect(configuredRoutedProviders(env)).toEqual(['bedrock', 'openai', 'anthropic']);
+    expect(configuredRoutedProviders({ ...env, AI_PROVIDER: 'anthropic' })).toEqual([
+      'anthropic',
+      'bedrock',
+      'openai',
+    ]);
+    expect(createAIModel({ ...inert, AI_PROVIDER: 'azure' })).toMatchObject({ provider: 'azure' });
+  });
+  it('builds Anthropic and OpenAI models only with a resolved key', () => {
+    createTieredModel({
+      provider: 'anthropic',
+      modelId: 'claude-haiku-5-5',
+      apiKey: 'resolved-key',
+    });
+    expect(sdk.anthropic).toHaveBeenCalledWith({ apiKey: 'resolved-key' });
+    expect(sdk.select).toHaveBeenLastCalledWith('claude-haiku-5-5');
+    createTieredModel({ provider: 'openai', modelId: 'gpt-5.4-mini', apiKey: 'resolved-key' });
+    expect(sdk.openai).toHaveBeenCalledWith({ apiKey: 'resolved-key' });
+    expect(sdk.select).toHaveBeenLastCalledWith('gpt-5.4-mini');
+    expect(() => createTieredModel({ provider: 'openai', modelId: 'm', apiKey: null })).toThrow(
+      AIUnavailableError
+    );
+  });
+  it('builds Bedrock with the AWS credential chain in us-east-1 and never forwards static keys', () => {
+    createTieredModel({
+      provider: 'bedrock',
+      modelId: 'us.anthropic.claude-sonnet-5-5',
+      env: { AWS_ACCESS_KEY_ID: 'must-not-forward', AWS_SECRET_ACCESS_KEY: 'must-not-forward' },
     });
     expect(sdk.awsCredentialChain).toHaveBeenCalledOnce();
     expect(sdk.bedrock).toHaveBeenCalledWith({
-      region: 'us-west-2',
+      region: 'us-east-1',
       credentialProvider: sdk.credentialProvider,
     });
     expect(sdk.bedrock.mock.calls[0]?.[0]).not.toHaveProperty('accessKeyId');
     expect(sdk.bedrock.mock.calls[0]?.[0]).not.toHaveProperty('secretAccessKey');
-  });
-  it('constructs tier models with defaults, overrides, and the Bedrock region precedence', () => {
-    getModelForTier('anthropic', 'cheap', undefined, {
-      ANTHROPIC_API_KEY: 'inert-test-key',
+    createTieredModel({
+      provider: 'bedrock',
+      modelId: 'm',
+      env: { AI_BEDROCK_REGION: 'us-west-2', BEDROCK_REGION: 'us-east-2' },
     });
-    expect(sdk.select).toHaveBeenLastCalledWith('claude-haiku-4-5-20251001');
-
-    getModelForTier(
-      'bedrock',
-      'deep',
-      { deep: 'tenant-deep-model' },
-      {
-        AWS_REGION: 'ignored-region',
-        AI_BEDROCK_REGION: 'ap-southeast-2',
-      }
-    );
-    expect(sdk.select).toHaveBeenLastCalledWith('tenant-deep-model');
     expect(sdk.bedrock).toHaveBeenLastCalledWith({
-      region: 'ap-southeast-2',
+      region: 'us-east-2',
       credentialProvider: sdk.credentialProvider,
     });
   });
@@ -188,5 +236,111 @@ describe('shared provider gate with real factory boundary', () => {
     expect(() => readAIConfig({ AI_PROVIDER: 'groq', AI_MODEL: 'model' })).toThrow(
       '[ai:groq] GROQ_API_KEY is required.'
     );
+  });
+});
+
+describe('provider readiness (DEV-583)', () => {
+  it.each([
+    [{}, 'DISABLED', null, ['AI_PROVIDER'], []],
+    [{ AI_PROVIDER: ' disabled ' }, 'DISABLED', null, ['AI_PROVIDER'], []],
+    [{ AI_PROVIDER: 'not-a-provider' }, 'INVALID_PROVIDER', null, [], ['AI_PROVIDER']],
+    [{ AI_PROVIDER: 'groq' }, 'MISSING_CONFIG', 'groq', ['AI_MODEL', 'GROQ_API_KEY'], []],
+    [{ AI_PROVIDER: 'groq', AI_MODEL: 'm' }, 'MISSING_CONFIG', 'groq', ['GROQ_API_KEY'], []],
+    [{ AI_PROVIDER: 'groq', GROQ_API_KEY: 'k' }, 'MISSING_CONFIG', 'groq', ['AI_MODEL'], []],
+    [
+      { AI_PROVIDER: 'google', AI_MODEL: 'm', GOOGLE_GENERATIVE_AI_API_KEY: '  ' },
+      'MISSING_CONFIG',
+      'google',
+      ['GOOGLE_GENERATIVE_AI_API_KEY'],
+      [],
+    ],
+    [
+      { AI_PROVIDER: 'azure', AI_MODEL: 'm' },
+      'MISSING_CONFIG',
+      'azure',
+      ['AZURE_OPENAI_RESOURCE_NAME'],
+      [],
+    ],
+    [
+      { AI_PROVIDER: 'vertex', AI_MODEL: 'm' },
+      'MISSING_CONFIG',
+      'vertex',
+      ['GOOGLE_VERTEX_PROJECT', 'GOOGLE_VERTEX_LOCATION'],
+      [],
+    ],
+    [
+      { AI_PROVIDER: 'vertex', AI_MODEL: 'm', GOOGLE_VERTEX_PROJECT: 'p' },
+      'MISSING_CONFIG',
+      'vertex',
+      ['GOOGLE_VERTEX_LOCATION'],
+      [],
+    ],
+    ...['${AI_MODEL}', '<model>', 'two words', '-model', 'x'.repeat(300)].map(
+      (AI_MODEL) =>
+        [
+          { AI_PROVIDER: 'groq', AI_MODEL, GROQ_API_KEY: 'k' },
+          'INVALID_MODEL',
+          'groq',
+          [],
+          ['AI_MODEL'],
+        ] as const
+    ),
+  ] as const)('reports %j as %s', (env, reason, provider, missing, invalid) => {
+    expect(readAIProviderReadiness(env)).toEqual({
+      ready: false,
+      reason,
+      provider,
+      missing,
+      invalid,
+    });
+    expect(() => createAIModel(env)).toThrow();
+    for (const spy of Object.values(sdk)) expect(spy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ AI_PROVIDER: 'azure', AI_MODEL: 'gpt-4o', AZURE_OPENAI_RESOURCE_NAME: 'r' }, 'azure'],
+    [{ AI_PROVIDER: 'GROQ', AI_MODEL: 'openai/gpt-oss-120b', GROQ_API_KEY: 'k' }, 'groq'],
+    [
+      { AI_PROVIDER: 'google', AI_MODEL: 'gemini-2.5-flash', GOOGLE_GENERATIVE_AI_API_KEY: 'k' },
+      'google',
+    ],
+    [
+      { AI_PROVIDER: 'vertex', AI_MODEL: 'claude-x@20250929', GOOGLE_VERTEX_API_KEY: 'k' },
+      'vertex',
+    ],
+    [
+      {
+        AI_PROVIDER: 'vertex',
+        AI_MODEL: 'gemini-2.5-pro',
+        GOOGLE_VERTEX_PROJECT: 'p',
+        GOOGLE_VERTEX_LOCATION: 'l',
+      },
+      'vertex',
+    ],
+  ] as const)('reports %j ready for %s, matching the model factory', (env, provider) => {
+    expect(readAIProviderReadiness(env)).toEqual({
+      ready: true,
+      provider,
+      modelId: env.AI_MODEL,
+    });
+    expect(createAIModel(env)).toMatchObject({ provider, modelId: env.AI_MODEL });
+  });
+
+  it('names settings without returning any configured value', () => {
+    const readiness = readAIProviderReadiness({
+      AI_PROVIDER: 'vertex',
+      AI_MODEL: 'secret-model-name with space',
+      GOOGLE_VERTEX_PROJECT: 'secret-project',
+    });
+    expect(JSON.stringify(readiness)).not.toMatch(/secret/);
+  });
+
+  it('keeps the factory error naming the first missing or invalid setting', () => {
+    expect(() => readAIConfig({ AI_PROVIDER: 'groq', GROQ_API_KEY: 'k' })).toThrow(
+      '[ai:groq] AI_MODEL is required.'
+    );
+    expect(() =>
+      readAIConfig({ AI_PROVIDER: 'groq', AI_MODEL: '${AI_MODEL}', GROQ_API_KEY: 'k' })
+    ).toThrow('[ai:groq] AI_MODEL is invalid.');
   });
 });

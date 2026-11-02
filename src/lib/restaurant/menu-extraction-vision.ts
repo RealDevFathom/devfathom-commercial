@@ -140,7 +140,9 @@ function contentPart(request: MenuExtractionRequest) {
 export function createVisionMenuExtractionAdapter(
   options: VisionAdapterOptions = {}
 ): MenuExtractionAdapter {
-  const selectModel = options.selectModel ?? (() => createAIModel());
+  const selectModel =
+    options.selectModel ??
+    (() => createAIModel(process.env, { feature: 'restaurant-menu-vision' }));
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   return {

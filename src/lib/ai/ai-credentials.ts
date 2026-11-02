@@ -15,15 +15,17 @@ export const LOCAL_API_KEY_ENV: Readonly<Record<KeyedAIProvider, string>> = {
 };
 
 export type APIKeySource =
-  | { kind: 'secret'; secretId: string; region: string }
-  | { kind: 'local-env'; envName: string };
+  { kind: 'secret'; secretId: string; region: string } | { kind: 'local-env'; envName: string };
 
 /**
  * Where a provider's API key comes from, without reading it. Deployed
  * environments name an AWS Secrets Manager secret (read at runtime through the
  * instance role); a plain key variable counts only outside production.
  */
-export function apiKeySource(provider: KeyedAIProvider, env: Env = process.env): APIKeySource | null {
+export function apiKeySource(
+  provider: KeyedAIProvider,
+  env: Env = process.env
+): APIKeySource | null {
   const secretId = env[API_KEY_SECRET_ID_ENV[provider]]?.trim();
   if (secretId) {
     return {

@@ -7,10 +7,7 @@ export type AIMutationPrincipal = Readonly<{
 }>;
 
 /** Central, default-deny decision for platform-global AI background mutations. */
-export function can(
-  principal: AIMutationPrincipal,
-  capability: AIMutationCapability
-): boolean {
+export function can(principal: AIMutationPrincipal, capability: AIMutationCapability): boolean {
   if (principal.deny.includes(capability)) return false;
   return principal.allow.includes(capability);
 }

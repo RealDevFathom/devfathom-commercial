@@ -172,7 +172,8 @@ export type VisionRxOcrOptions = {
 };
 
 export function createVisionRxOcrAdapter(options: VisionRxOcrOptions = {}): RxOcrAdapter {
-  const selectModel = options.selectModel ?? (() => createAIModel());
+  const selectModel =
+    options.selectModel ?? (() => createAIModel(process.env, { feature: 'pharmacy-rx-ocr' }));
   const timeoutMs = options.timeoutMs ?? 45_000;
 
   return {

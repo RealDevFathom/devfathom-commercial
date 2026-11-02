@@ -1,52 +1,63 @@
 import { create } from 'zustand';
-
-type AskFathomSettings = {
-  organizationId: string;
-  askFathomEnabled: boolean;
-};
+import type {
+  AskFathomAvailability,
+  AskFathomUnavailableReason,
+} from '@/lib/ai/ask-fathom-settings';
 
 type AssistantState = {
   organizationId: string | null;
   askFathomEnabled: boolean | null;
+  /** Server-reported reason the confirmed settings cannot answer, e.g. no AI provider configured. */
+  unavailableReason: AskFathomUnavailableReason | null;
   settingsUpdatedAt: number;
   settingsFailed: boolean;
   open: boolean;
   hasOpened: boolean;
   panelEpoch: number;
   setOrganization: (organizationId: string | null) => void;
-  confirmSettings: (settings: AskFathomSettings, updatedAt: number) => void;
+  confirmSettings: (settings: AskFathomAvailability, updatedAt: number) => void;
   markUnavailable: (organizationId: string, updatedAt: number) => void;
   setOpen: (open: boolean) => void;
   toggle: () => void;
 };
 
 export function isAssistantAvailable(
-  state: Pick<AssistantState, 'organizationId' | 'askFathomEnabled'>,
+  state: Pick<AssistantState, 'organizationId' | 'askFathomEnabled' | 'unavailableReason'>,
   organizationId: string | null | undefined
 ) {
   return Boolean(
-    organizationId && state.organizationId === organizationId && state.askFathomEnabled === true
+    organizationId &&
+    state.organizationId === organizationId &&
+    state.askFathomEnabled === true &&
+    state.unavailableReason === null
   );
 }
 
 export function assistantAvailabilityMessage(
-  state: Pick<AssistantState, 'organizationId' | 'askFathomEnabled' | 'settingsFailed'>,
+  state: Pick<
+    AssistantState,
+    'organizationId' | 'askFathomEnabled' | 'unavailableReason' | 'settingsFailed'
+  >,
   organizationId: string | null | undefined
 ) {
   if (state.organizationId === organizationId && state.settingsFailed) {
     return 'Ask Fathom chat availability could not be confirmed. Reload to try again.';
   }
-  return organizationId &&
-    state.organizationId === organizationId &&
-    state.askFathomEnabled === false
-    ? 'Ask Fathom chat is off for this organization.'
-    : 'Ask Fathom chat availability is being checked. Try again shortly.';
+  const confirmed = Boolean(organizationId && state.organizationId === organizationId);
+  if (confirmed && state.askFathomEnabled === false) {
+    return 'Ask Fathom chat is off for this organization.';
+  }
+  if (confirmed && state.unavailableReason === 'AI_NOT_CONFIGURED') {
+    return 'Ask Fathom is unavailable because no AI provider is configured for this environment.';
+  }
+  return 'Ask Fathom chat availability is being checked. Try again shortly.';
 }
 
 // Ephemeral presentation state only. The server authorizes every chat turn.
 export const useAssistant = create<AssistantState>((set) => ({
   organizationId: null,
   askFathomEnabled: null,
+  unavailableReason: null,
   settingsUpdatedAt: 0,
   settingsFailed: false,
   open: false,
@@ -59,6 +70,7 @@ export const useAssistant = create<AssistantState>((set) => ({
         : {
             organizationId,
             askFathomEnabled: null,
+            unavailableReason: null,
             settingsUpdatedAt: 0,
             settingsFailed: false,
             open: false,
@@ -74,14 +86,19 @@ export const useAssistant = create<AssistantState>((set) => ({
       ) {
         return state;
       }
+      const unavailableReason = settings.available
+        ? null
+        : (settings.unavailableReason ?? 'AI_NOT_CONFIGURED');
       return {
         askFathomEnabled: settings.askFathomEnabled,
+        unavailableReason,
         settingsFailed: false,
         settingsUpdatedAt: updatedAt,
-        ...(!settings.askFathomEnabled && {
+        ...(unavailableReason !== null && {
           open: false,
           hasOpened: false,
-          panelEpoch: state.panelEpoch + (state.askFathomEnabled === true ? 1 : 0),
+          panelEpoch:
+            state.panelEpoch + (isAssistantAvailable(state, state.organizationId) ? 1 : 0),
         }),
       };
     }),
@@ -91,11 +108,13 @@ export const useAssistant = create<AssistantState>((set) => ({
         ? state
         : {
             askFathomEnabled: null,
+            unavailableReason: null,
             settingsFailed: true,
             settingsUpdatedAt: updatedAt,
             open: false,
             hasOpened: false,
-            panelEpoch: state.panelEpoch + (state.askFathomEnabled === true ? 1 : 0),
+            panelEpoch:
+              state.panelEpoch + (isAssistantAvailable(state, state.organizationId) ? 1 : 0),
           }
     ),
   setOpen: (open) =>

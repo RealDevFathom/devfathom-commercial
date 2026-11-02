@@ -3,7 +3,12 @@ import { TRPCError } from '@trpc/server';
 import { hash } from 'bcryptjs';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
-import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
+import {
+  askFathomAvailability,
+  readAskFathomAvailability,
+  readAskFathomSettings,
+} from '@/lib/ai/ask-fathom-settings';
+import { readAIProviderReadiness } from '@/lib/ai/provider';
 import { passwordSchema } from '@/lib/password-policy';
 import { organizationRolePermissionsSchema } from '@/lib/organization-role';
 import { encryptSecret } from '@/lib/secret-crypto';
@@ -74,10 +79,12 @@ function organizationId(ctx: { session: { user: { organizationId?: string } } })
 }
 
 export const organizationAdminRouter = router({
+  // Shares POST /api/assistant's availability check: the launcher is enabled only when
+  // the company switch is on and the AI provider is configured.
   askFathomSettings: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
-    const settings = await readAskFathomSettings(ctx.db, organizationId(ctx));
-    if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
-    return settings;
+    const check = await readAskFathomAvailability(ctx.db, organizationId(ctx));
+    if (!check) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+    return check.availability;
   }),
 
   setAskFathomEnabled: adminProcedure
@@ -101,7 +108,10 @@ export const organizationAdminRouter = router({
         operation: 'UPDATE',
         description: `${saved.askFathomEnabled ? 'Enabled' : 'Disabled'} company Ask Fathom chat`,
       });
-      return { organizationId: saved.id, askFathomEnabled: saved.askFathomEnabled };
+      return askFathomAvailability(
+        { organizationId: saved.id, askFathomEnabled: saved.askFathomEnabled },
+        readAIProviderReadiness()
+      );
     }),
 
   departments: adminProcedure.query(async ({ ctx }) => {

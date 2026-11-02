@@ -48,7 +48,8 @@ export function readAISelector(env: Env = process.env): AISelector {
   if (selector && LEGACY_PROVIDERS.has(selector)) {
     return { kind: 'legacy', provider: selector as LegacyAIProviderName };
   }
-  if (!selector || selector === 'auto') return { kind: 'routed', preferred: null, explicit: !!selector };
+  if (!selector || selector === 'auto')
+    return { kind: 'routed', preferred: null, explicit: !!selector };
   if (isRoutedProvider(selector)) return { kind: 'routed', preferred: selector, explicit: true };
   return { kind: 'invalid' };
 }
@@ -130,7 +131,12 @@ export type AIConfig =
       project?: string;
       location?: string;
     }
-  | { provider: 'auto'; model: 'auto'; preferred: TieredAIProviderName | null; chain: TieredAIProviderName[] };
+  | {
+      provider: 'auto';
+      model: 'auto';
+      preferred: TieredAIProviderName | null;
+      chain: TieredAIProviderName[];
+    };
 
 export type AIModelSelection = {
   model: LanguageModel;
@@ -165,7 +171,9 @@ const LEGACY_PROVIDER_SETTINGS: Record<LegacyAIProviderName, (env: Env) => strin
   google: () => ['GOOGLE_GENERATIVE_AI_API_KEY'],
   // An API key replaces the project/location pair.
   vertex: (env) =>
-    present(env, 'GOOGLE_VERTEX_API_KEY') ? [] : ['GOOGLE_VERTEX_PROJECT', 'GOOGLE_VERTEX_LOCATION'],
+    present(env, 'GOOGLE_VERTEX_API_KEY')
+      ? []
+      : ['GOOGLE_VERTEX_PROJECT', 'GOOGLE_VERTEX_LOCATION'],
 };
 
 /** What a routed provider needs, named for the readiness report. */
@@ -181,9 +189,16 @@ function routedProviderSettingNames(provider: TieredAIProviderName): string[] {
 export function readAIProviderReadiness(env: Env = process.env): AIProviderReadiness {
   const selector = readAISelector(env);
   if (selector.kind === 'routed') {
-    if (configuredRoutedProviders(env).length) return { ready: true, provider: 'auto', modelId: 'auto' };
+    if (configuredRoutedProviders(env).length)
+      return { ready: true, provider: 'auto', modelId: 'auto' };
     if (!selector.explicit) {
-      return { ready: false, reason: 'DISABLED', provider: null, missing: ['AI_PROVIDER'], invalid: [] };
+      return {
+        ready: false,
+        reason: 'DISABLED',
+        provider: null,
+        missing: ['AI_PROVIDER'],
+        invalid: [],
+      };
     }
     const wanted = selector.preferred ? [selector.preferred] : envProviderOrder(env);
     return {
@@ -195,10 +210,22 @@ export function readAIProviderReadiness(env: Env = process.env): AIProviderReadi
     };
   }
   if (selector.kind === 'disabled') {
-    return { ready: false, reason: 'DISABLED', provider: null, missing: ['AI_PROVIDER'], invalid: [] };
+    return {
+      ready: false,
+      reason: 'DISABLED',
+      provider: null,
+      missing: ['AI_PROVIDER'],
+      invalid: [],
+    };
   }
   if (selector.kind === 'invalid') {
-    return { ready: false, reason: 'INVALID_PROVIDER', provider: null, missing: [], invalid: ['AI_PROVIDER'] };
+    return {
+      ready: false,
+      reason: 'INVALID_PROVIDER',
+      provider: null,
+      missing: [],
+      invalid: ['AI_PROVIDER'],
+    };
   }
   const provider = selector.provider;
   const model = env.AI_MODEL?.trim() ?? '';
@@ -206,7 +233,8 @@ export function readAIProviderReadiness(env: Env = process.env): AIProviderReadi
     ...(model ? [] : ['AI_MODEL']),
     ...LEGACY_PROVIDER_SETTINGS[provider](env).filter((name) => !present(env, name)),
   ];
-  if (missing.length) return { ready: false, reason: 'MISSING_CONFIG', provider, missing, invalid: [] };
+  if (missing.length)
+    return { ready: false, reason: 'MISSING_CONFIG', provider, missing, invalid: [] };
   if (!MODEL_ID.test(model)) {
     return { ready: false, reason: 'INVALID_MODEL', provider, missing: [], invalid: ['AI_MODEL'] };
   }
@@ -269,12 +297,16 @@ export type CreateAIModelOptions = {
   organizationId?: string | null;
 };
 
-export function createAIModel(env: Env = process.env, options: CreateAIModelOptions = {}): AIModelSelection {
+export function createAIModel(
+  env: Env = process.env,
+  options: CreateAIModelOptions = {}
+): AIModelSelection {
   const config = readAIConfig(env);
 
   switch (config.provider) {
     case 'auto': {
-      const tier = options.tier ?? (options.feature ? getTierForFeature(options.feature) : 'standard');
+      const tier =
+        options.tier ?? (options.feature ? getTierForFeature(options.feature) : 'standard');
       return {
         model: createRoutedLanguageModel({
           tier,
@@ -313,7 +345,9 @@ export function createAIModel(env: Env = process.env, options: CreateAIModelOpti
       };
     case 'vertex': {
       const vertex = createVertex(
-        config.apiKey ? { apiKey: config.apiKey } : { project: config.project, location: config.location }
+        config.apiKey
+          ? { apiKey: config.apiKey }
+          : { project: config.project, location: config.location }
       );
       return { model: vertex(config.model), provider: config.provider, modelId: config.model };
     }

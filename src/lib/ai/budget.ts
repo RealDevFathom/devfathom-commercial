@@ -28,7 +28,5 @@ export async function getAiBudgetMinor(): Promise<number> {
     // settings storage is not present yet. Never log configuration values.
     return envBudgetMinor();
   }
-  return rows[0]
-    ? safeMinorFromBigInt(rows[0].budgetMinor, 'AI monthly budget')
-    : envBudgetMinor();
+  return rows[0] ? safeMinorFromBigInt(rows[0].budgetMinor, 'AI monthly budget') : envBudgetMinor();
 }

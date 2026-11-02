@@ -56,7 +56,8 @@ export async function loadProviderAPIKey(
     try {
       const secret = await reader(source.secretId, source.region);
       const raw =
-        secret.SecretString ?? (secret.SecretBinary ? Buffer.from(secret.SecretBinary).toString('utf8') : '');
+        secret.SecretString ??
+        (secret.SecretBinary ? Buffer.from(secret.SecretBinary).toString('utf8') : '');
       const key = extractAPIKey(raw, provider);
       if (!key) {
         console.error('[ai-secrets] secret holds no usable API key', {
