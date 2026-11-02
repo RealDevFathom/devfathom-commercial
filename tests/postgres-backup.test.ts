@@ -75,12 +75,21 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'postgres-backup-'));
   const bin = join(root, 'bin');
   mkdirSync(bin);
-  for (const command of ['aws', 'pg_dump', 'pg_restore', 'psql', 'createdb', 'dropdb', 'sha256sum']) {
+  for (const command of [
+    'aws',
+    'pg_dump',
+    'pg_restore',
+    'psql',
+    'createdb',
+    'dropdb',
+    'sha256sum',
+  ]) {
     writeFileSync(join(bin, command), `#!${process.execPath}\n${fakeCommand}`, { mode: 0o700 });
   }
   writeFileSync(join(root, 'calls'), '');
   writeFileSync(join(root, 'pgpass'), '*:*:*:backup:fixture-secret', { mode: 0o600 });
   env = {
+    NODE_ENV: 'test',
     PATH: `${bin}:/usr/bin:/bin`,
     FIXTURE_ROOT: root,
     TMPDIR: root,
@@ -118,30 +127,38 @@ function expectNoCreation() {
 }
 
 describe('PostgreSQL backup', () => {
-  it.each(['AES256', 'aws:kms'])('validates, hashes and explicitly encrypts both uploads: %s', (sse) => {
-    if (sse === 'aws:kms') env.BACKUP_KMS_KEY_ID = kmsArn;
-    const result = run('backup');
-    expect(result.status, result.stderr).toBe(0);
-    const log = calls();
-    expect(log[0].args).toEqual([
-      '--no-password',
-      '--format=custom',
-      '--compress=6',
-      '--file',
-      expect.stringMatching(/\.dump$/),
-    ]);
-    expect(log[1].args[0]).toBe('--list');
-    const uploads = log.filter((call) => call.command === 'aws');
-    expect(uploads).toHaveLength(2);
-    for (const upload of uploads) {
-      expect(upload.args.slice(4, 6)).toEqual(['--sse', sse]);
-      if (sse === 'aws:kms') expect(upload.args.slice(6, 8)).toEqual(['--sse-kms-key-id', kmsArn]);
+  it.each(['AES256', 'aws:kms'])(
+    'validates, hashes and explicitly encrypts both uploads: %s',
+    (sse) => {
+      if (sse === 'aws:kms') env.BACKUP_KMS_KEY_ID = kmsArn;
+      const result = run('backup');
+      expect(result.status, result.stderr).toBe(0);
+      const log = calls();
+      expect(log[0].args).toEqual([
+        '--no-password',
+        '--format=custom',
+        '--compress=6',
+        '--file',
+        expect.stringMatching(/\.dump$/),
+      ]);
+      expect(log[1].args[0]).toBe('--list');
+      const uploads = log.filter((call) => call.command === 'aws');
+      expect(uploads).toHaveLength(2);
+      for (const upload of uploads) {
+        expect(upload.args.slice(4, 6)).toEqual(['--sse', sse]);
+        if (sse === 'aws:kms')
+          expect(upload.args.slice(6, 8)).toEqual(['--sse-kms-key-id', kmsArn]);
+      }
+      const filename = uploads[0].args[3].split('/').at(-1)!;
+      const digest = createHash('sha256')
+        .update(readFileSync(join(root, filename)))
+        .digest('hex');
+      expect(readFileSync(join(root, `${filename}.sha256`), 'utf8')).toBe(
+        `${digest}  ${filename}\n`
+      );
+      expect(JSON.stringify(log)).not.toContain('fixture-secret');
     }
-    const filename = uploads[0].args[3].split('/').at(-1)!;
-    const digest = createHash('sha256').update(readFileSync(join(root, filename))).digest('hex');
-    expect(readFileSync(join(root, `${filename}.sha256`), 'utf8')).toBe(`${digest}  ${filename}\n`);
-    expect(JSON.stringify(log)).not.toContain('fixture-secret');
-  });
+  );
 
   it('does not upload an unreadable archive', () => {
     env.BAD_ARCHIVE = '1';
