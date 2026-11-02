@@ -1,6 +1,6 @@
 # HANDOFF — DEV-576 (top priority)
 
-Last updated: 2026-11-02 20:25 UTC
+Last updated: 2026-11-02 21:47 UTC
 
 - **Branch:** `feat/dev-576-ai-providers`, from `develop` @ `47518cbf`.
 - **PR:** [RealDevFathom/devfathom-commercial#1238](https://github.com/RealDevFathom/devfathom-commercial/pull/1238). Open into develop, not merged; this session watches it.
@@ -178,10 +178,18 @@ QA and Security at head `1276a75e` (20:16 UTC, box run): **both FAIL**.
     `[ai-usage] could not read SuperAdmin AI settings`. There are no `ai_settings` rows; this is
     probably a disconnect race in the script. Watch the app log for it.
   - Re-run the Bedrock live check once AWS approves the use-case form.
-- **Rest of the plan:**
-  1. Rewrite the PR body (scratchpad `dev576-pr-body-v2.md`).
-  2. Reply to QA/Security on #1238 and ask them to re-review.
-  3. Post on DEV-576.
+- **Done at 21:46 UTC:**
+  - The PR #1238 body is rewritten with the decided routing, the live results, the env vars and
+    the IAM.
+  - QA/Security got a reply covering all 3 blockers, with a re-run requested
+    (https://github.com/RealDevFathom/devfathom-commercial/pull/1238#issuecomment-6589266534).
+  - DEV-576 has a comment with the deploy and live results, with Bedrock marked pending.
+- **Waiting on:**
+  - the QA/Security re-run;
+  - Saad's browser Ask Fathom check;
+  - AWS approval for Bedrock.
+- **After that:** go back to the other claude-labelled tasks on #1223 (see that branch's
+  HANDOFF).
 
 **Internal adversarial review** (`wf_66fd213d-49e`, four lenses, every finding verified by a
 skeptic): 15 confirmed, 6 rejected.
