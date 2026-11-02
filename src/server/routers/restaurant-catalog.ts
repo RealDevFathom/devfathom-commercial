@@ -1,12 +1,18 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { Prisma } from '@/generated/prisma/client';
 
 import { router, capabilityProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { catalogOrganizationId } from '@/lib/restaurant/catalog-scope';
 import { CatalogError } from '@/lib/restaurant/catalog';
+import {
+  parseRecipeMeasurement,
+  RECIPE_MEASUREMENT_MAX_LENGTH,
+  RECIPE_MEASUREMENT_PATTERN,
+  RECIPE_MEASUREMENT_SPECS,
+  type RecipeMeasurementSpec,
+} from '@/lib/restaurant/recipe-measurements';
 import { resolveEntitlementLimit, RESTAURANT_BRANDS_LIMIT } from '@/lib/entitlement-limits';
 import {
   ensureDefaultBrand,
@@ -100,35 +106,28 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const readProcedure = capabilityProcedure('menu:read');
 
-function decimalString(domain: 'positive' | 'nonnegative', precision: number, scale: number) {
+function decimalString(spec: RecipeMeasurementSpec) {
   return z
     .string()
-    // Leading zeroes do not consume NUMERIC precision, so the transport-level
-    // safety limit must not be derived from the database precision.
-    .max(256)
-    .regex(/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/, 'Must be a decimal without exponent notation.')
+    .max(RECIPE_MEASUREMENT_MAX_LENGTH)
+    .regex(RECIPE_MEASUREMENT_PATTERN, 'Must be a decimal without exponent notation.')
     .refine(
       (value) => {
         try {
-          const decimal = new Prisma.Decimal(value);
-          return (
-            decimal.isFinite() &&
-            decimal.decimalPlaces() <= scale &&
-            decimal.abs().lessThan(new Prisma.Decimal(10).pow(precision - scale)) &&
-            (domain === 'positive' ? decimal.greaterThan(0) : decimal.greaterThanOrEqualTo(0))
-          );
+          parseRecipeMeasurement(value, spec);
+          return true;
         } catch {
           return false;
         }
       },
-      { message: `Must be a ${domain} decimal.` }
+      { message: `Must be a ${spec.domain} decimal.` }
     );
 }
 
-const POSITIVE_CONVERSION_FACTOR = decimalString('positive', 18, 6);
-const POSITIVE_RECIPE_YIELD = decimalString('positive', 12, 3);
-const POSITIVE_RECIPE_QUANTITY = decimalString('positive', 12, 4);
-const NONNEGATIVE_REFERENCE_COST = decimalString('nonnegative', 12, 4);
+const POSITIVE_CONVERSION_FACTOR = decimalString(RECIPE_MEASUREMENT_SPECS.conversionFactor);
+const POSITIVE_RECIPE_YIELD = decimalString(RECIPE_MEASUREMENT_SPECS.yieldQuantity);
+const POSITIVE_RECIPE_QUANTITY = decimalString(RECIPE_MEASUREMENT_SPECS.lineQuantity);
+const NONNEGATIVE_REFERENCE_COST = decimalString(RECIPE_MEASUREMENT_SPECS.referenceCost);
 
 const writeProcedure = capabilityProcedure('menu:write').use(async ({ ctx, getRawInput, next }) => {
   const organizationId = workspaceId(ctx);

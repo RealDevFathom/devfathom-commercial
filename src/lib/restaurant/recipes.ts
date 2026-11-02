@@ -12,6 +12,11 @@ import {
   type VersionRecord,
 } from './effective-dating';
 import type { LocalizedField } from './catalog';
+import {
+  parseRecipeMeasurement,
+  RECIPE_MEASUREMENT_SPECS,
+  type RecipeMeasurementSpec,
+} from './recipe-measurements';
 
 /**
  * M3-L2 / §6 — unit + conversion CRUD, allergen catalog CRUD, ingredient CRUD
@@ -50,36 +55,13 @@ function requireName(value: string, label = 'name'): string {
   return trimmed;
 }
 
-function decimalInDomain(
-  value: string,
-  label: string,
-  domain: 'positive' | 'nonnegative',
-  precision: number,
-  scale: number
-): Prisma.Decimal {
-  // Keep a defensive input bound without rejecting representable values that
-  // happen to include leading zeroes (which do not consume database precision).
-  if (value.length > 256 || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) {
-    throw new RecipeError(`${label} must be a valid decimal.`, 'INVALID');
-  }
-  let parsed: Prisma.Decimal;
+function decimalInDomain(value: string, spec: RecipeMeasurementSpec): Prisma.Decimal {
   try {
-    parsed = new Prisma.Decimal(value);
-  } catch {
-    throw new RecipeError(`${label} must be a valid decimal.`, 'INVALID');
+    return parseRecipeMeasurement(value, spec);
+  } catch (error) {
+    if (error instanceof Error) throw new RecipeError(error.message, 'INVALID');
+    throw error;
   }
-  const valid =
-    parsed.isFinite() &&
-    parsed.decimalPlaces() <= scale &&
-    parsed.abs().lessThan(new Prisma.Decimal(10).pow(precision - scale)) &&
-    (domain === 'positive' ? parsed.greaterThan(0) : parsed.greaterThanOrEqualTo(0));
-  if (!valid) {
-    throw new RecipeError(
-      `${label} must be ${domain === 'positive' ? 'positive' : 'nonnegative'}.`,
-      'INVALID'
-    );
-  }
-  return parsed;
 }
 
 function localizedWrite(
@@ -152,7 +134,7 @@ export async function upsertConversion(
   factor: string
 ) {
   const organizationId = await catalogOrganizationId(db);
-  const parsedFactor = decimalInDomain(factor, 'Unit conversion factor', 'positive', 18, 6);
+  const parsedFactor = decimalInDomain(factor, RECIPE_MEASUREMENT_SPECS.conversionFactor);
   await requireUnit(db, fromUnitId);
   await requireUnit(db, toUnitId);
   if (fromUnitId === toUnitId) {
@@ -269,7 +251,7 @@ export async function createIngredient(db: ScopedDb, input: CreateIngredientInpu
       baseUnitId: input.baseUnitId,
       referenceCost:
         input.referenceCost != null
-          ? decimalInDomain(input.referenceCost, 'Reference cost', 'nonnegative', 12, 4)
+          ? decimalInDomain(input.referenceCost, RECIPE_MEASUREMENT_SPECS.referenceCost)
           : null,
     },
   });
@@ -295,7 +277,7 @@ export async function updateIngredient(db: ScopedDb, id: string, patch: UpdateIn
   if (patch.referenceCost !== undefined) {
     data.referenceCost =
       patch.referenceCost != null
-        ? decimalInDomain(patch.referenceCost, 'Reference cost', 'nonnegative', 12, 4)
+        ? decimalInDomain(patch.referenceCost, RECIPE_MEASUREMENT_SPECS.referenceCost)
         : null;
   }
   return db.restaurantIngredient.update({ where: { organizationId, id }, data });
@@ -395,7 +377,7 @@ export async function createRecipeVersion(db: ScopedDb, input: CreateRecipeVersi
   const organizationId = await catalogOrganizationId(db);
   const yieldQuantity =
     input.yieldQuantity != null
-      ? decimalInDomain(input.yieldQuantity, 'Recipe yield quantity', 'positive', 12, 3)
+      ? decimalInDomain(input.yieldQuantity, RECIPE_MEASUREMENT_SPECS.yieldQuantity)
       : null;
   await requireRecipe(db, input.recipeId);
   if (input.yieldUnitId) await requireUnit(db, input.yieldUnitId);
@@ -444,7 +426,7 @@ export async function updateRecipeVersion(
     if (patch.yieldQuantity !== undefined) {
       data.yieldQuantity =
         patch.yieldQuantity != null
-          ? decimalInDomain(patch.yieldQuantity, 'Recipe yield quantity', 'positive', 12, 3)
+          ? decimalInDomain(patch.yieldQuantity, RECIPE_MEASUREMENT_SPECS.yieldQuantity)
           : null;
     }
     if (patch.yieldUnitId !== undefined) data.yieldUnitId = patch.yieldUnitId;
@@ -538,7 +520,7 @@ export type CreateRecipeLineInput =
  */
 export async function createRecipeLine(db: ScopedDb, input: CreateRecipeLineInput) {
   const organizationId = await catalogOrganizationId(db);
-  const quantity = decimalInDomain(input.quantity, 'Recipe line quantity', 'positive', 12, 4);
+  const quantity = decimalInDomain(input.quantity, RECIPE_MEASUREMENT_SPECS.lineQuantity);
   if ((!input.ingredientId && !input.subRecipeId) || (input.ingredientId && input.subRecipeId)) {
     throw new RecipeError('Exactly one of ingredientId or subRecipeId must be set.', 'INVALID');
   }
@@ -596,7 +578,7 @@ export async function updateRecipeLine(db: ScopedDb, id: string, patch: UpdateRe
     if (patch.unitId) await requireUnit(scopedTx, patch.unitId);
     const data: Prisma.RestaurantRecipeLineUncheckedUpdateInput = {};
     if (patch.quantity !== undefined) {
-      data.quantity = decimalInDomain(patch.quantity, 'Recipe line quantity', 'positive', 12, 4);
+      data.quantity = decimalInDomain(patch.quantity, RECIPE_MEASUREMENT_SPECS.lineQuantity);
     }
     if (patch.unitId !== undefined) data.unitId = patch.unitId;
     if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
