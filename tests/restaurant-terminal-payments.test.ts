@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
@@ -74,17 +74,18 @@ describe('provider-neutral terminal payments', () => {
   });
 
   it('authenticates a timestamp plus the source and raw body, and rejects skew and short digests', () => {
-    process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET = 'test-terminal-secret';
+    const secret = randomBytes(32).toString('hex');
+    process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET = secret;
     const source = 'provider-neutral';
     const now = 1_700_000_000_000;
     const timestamp = String(Math.floor(now / 1000));
     const rawBody = JSON.stringify({ externalEventId: 'event-1', payload: baseEvent });
     const sign = (at: string, signedSource = source, body = rawBody) =>
-      createHmac('sha256', 'test-terminal-secret')
+      createHmac('sha256', secret)
         .update(`${at}.${signedSource}.${body}`)
         .digest('hex');
     const signature = sign(timestamp);
-    const bodyOnly = createHmac('sha256', 'test-terminal-secret')
+    const bodyOnly = createHmac('sha256', secret)
       .update(`${source}.${rawBody}`)
       .digest('hex');
     const edge = String(Number(timestamp) - 5 * 60);
