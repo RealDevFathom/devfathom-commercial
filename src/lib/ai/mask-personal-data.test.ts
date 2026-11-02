@@ -6,6 +6,7 @@ import {
   maskPersonalDataInPrompt,
   maskPersonalJson,
   maskPersonalText,
+  promptHasUnmaskableContent,
 } from './mask-personal-data';
 
 describe('maskPersonalText', () => {
@@ -26,6 +27,12 @@ describe('maskPersonalText', () => {
     ['Amex 3782 822463 10005', 'Amex [card]'],
     ['IBAN PK36SCBL0000001123456702', 'IBAN [iban]'],
     ['IBAN PK36 SCBL 0000 0011 2345 6702.', 'IBAN [iban].'],
+    ['Call 0300 123 4567 today', 'Call [phone] today'],
+    ['Call 0300-123-4567.', 'Call [phone].'],
+    ['Call 923001234567 now', 'Call [phone] now'],
+    ['Call 92 300 1234567, thanks', 'Call [phone], thanks'],
+    ['Call 92-300-123-4567', 'Call [phone]'],
+    ['(0321 765 4321)', '([phone])'],
   ])('masks %j', (input, expected) => {
     expect(maskPersonalText(input)).toBe(expected);
   });
@@ -40,6 +47,11 @@ describe('maskPersonalText', () => {
     'Growth was +12,500 rupees; margin 0.3412.',
     'Amount 1234 5678 9012 3456 is not a card here.',
     'Year 2026, quarter 3, ratio 1.25, count 1000000.',
+    'Sold 923 units for PKR 300,123,456 on 2026-11-02.',
+    'totalMinor 9230012345678 and 92300123456 paisa; 923001234567.50 rupees.',
+    'Batch 0300-123-45678 and lot 0300-1234-567.',
+    'Ref 1923001234567 and order 92300123456789.',
+    'Sales 9,230,012,345 over 92 days (300 invoices, 1234567 minor units).',
   ])('leaves ordinary figures alone: %j', (input) => {
     expect(maskPersonalText(input)).toBe(input);
   });
@@ -60,16 +72,40 @@ describe('personal-data keys', () => {
     'addressLine1',
     'contactEmail',
     'whatsappNumber',
+    'name',
+    'fullName',
+    'displayName',
+    'firstName',
+    'lastName',
+    'familyName',
+    'recipientName',
+    'recipient_name',
+    'recipientNameSnapshot',
+    'customerNameSnapshot',
+    'walkInCustomerName',
+    'primaryPatientName',
   ])('%s is personal data', (key) => {
     expect(isPersonalDataKey(key)).toBe(true);
   });
 
-  it.each(['productName', 'name', 'brandName', 'branchName', 'total', 'emailEnabled', 'addressId'])(
-    '%s is not',
-    (key) => {
-      expect(isPersonalDataKey(key)).toBe(false);
-    }
-  );
+  it.each([
+    'productName',
+    'brandName',
+    'branchName',
+    'organizationName',
+    'medicineName',
+    'reportName',
+    'productNameSnapshot',
+    'zoneNameSnapshot',
+    'label',
+    'metricKey',
+    'toolName',
+    'total',
+    'emailEnabled',
+    'addressId',
+  ])('%s is not', (key) => {
+    expect(isPersonalDataKey(key)).toBe(false);
+  });
 
   it('redacts values under personal-data keys and keeps figures elsewhere', () => {
     expect(
@@ -105,6 +141,146 @@ describe('personal-data keys', () => {
       productName: 'Panadol 500mg',
       revenue: '1,234,567.00',
     });
+  });
+});
+
+describe('name-bearing keys in tool results', () => {
+  it('redacts person names and keeps product, branch, organization and report names', () => {
+    expect(
+      maskPersonalJson({
+        organizationName: 'Shifa Pharmacy',
+        branchName: 'DHA Phase 5',
+        report: { label: 'Top sellers', metricKey: 'revenue' },
+        rows: [
+          {
+            name: 'Ayesha Malik',
+            displayName: 'Ayesha M.',
+            firstName: 'Ayesha',
+            lastName: 'Malik',
+            productName: 'Panadol 500mg',
+            brandName: 'Panadol',
+            quantity: 12,
+            totalMinor: 125000,
+          },
+        ],
+        delivery: {
+          recipientNameSnapshot: 'Bilal Khan',
+          zoneNameSnapshot: 'Gulberg',
+          walkInCustomerName: 'Sara',
+        },
+      })
+    ).toEqual({
+      organizationName: 'Shifa Pharmacy',
+      branchName: 'DHA Phase 5',
+      report: { label: 'Top sellers', metricKey: 'revenue' },
+      rows: [
+        {
+          name: '[redacted]',
+          displayName: '[redacted]',
+          firstName: '[redacted]',
+          lastName: '[redacted]',
+          productName: 'Panadol 500mg',
+          brandName: 'Panadol',
+          quantity: 12,
+          totalMinor: 125000,
+        },
+      ],
+      delivery: {
+        recipientNameSnapshot: '[redacted]',
+        zoneNameSnapshot: 'Gulberg',
+        walkInCustomerName: '[redacted]',
+      },
+    });
+  });
+
+  it('redacts names inside a tool result carried as JSON text', () => {
+    const [message] = maskPersonalDataInPrompt([
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'c1',
+            toolName: 'topCustomers',
+            output: {
+              type: 'text',
+              value: '[{"fullName":"Ayesha Malik","familyName":"Malik","visits":4}]',
+            },
+          },
+        ],
+      },
+    ]);
+    expect(message.content).toEqual([
+      expect.objectContaining({
+        output: {
+          type: 'text',
+          value: '[{"fullName":"[redacted]","familyName":"[redacted]","visits":4}]',
+        },
+      }),
+    ]);
+  });
+});
+
+describe('promptHasUnmaskableContent', () => {
+  const text = { type: 'text' as const, text: 'Sales today?' };
+
+  it('is false for text-only prompts, tool calls and text tool results', () => {
+    expect(
+      promptHasUnmaskableContent([
+        { role: 'system', content: 'You are Fathom.' },
+        { role: 'user', content: [text] },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'sales', input: {} }],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'c1',
+              toolName: 'sales',
+              output: { type: 'content', value: [{ type: 'text', text: '{"total":1}' }] },
+            },
+          ],
+        },
+      ])
+    ).toBe(false);
+  });
+
+  it('is true for a user image, an assistant file or an image in a tool result', () => {
+    const image = new Uint8Array([1, 2, 3]);
+    expect(
+      promptHasUnmaskableContent([
+        { role: 'user', content: [text, { type: 'file', data: image, mediaType: 'image/png' }] },
+      ])
+    ).toBe(true);
+    expect(
+      promptHasUnmaskableContent([
+        {
+          role: 'assistant',
+          content: [{ type: 'file', data: image, mediaType: 'application/pdf' }],
+        },
+      ])
+    ).toBe(true);
+    expect(
+      promptHasUnmaskableContent([
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'c1',
+              toolName: 'scan',
+              output: {
+                type: 'content',
+                value: [{ type: 'image-data', data: 'AAAA', mediaType: 'image/png' }],
+              },
+            },
+          ],
+        },
+      ])
+    ).toBe(true);
   });
 });
 

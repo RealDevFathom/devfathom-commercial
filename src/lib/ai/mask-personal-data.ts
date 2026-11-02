@@ -24,8 +24,13 @@ const CARD =
   /(?<![\w.,-])(?:\d{15,16}|\d{4}([ -])\d{4}\1\d{4}\1\d{4}(?:\1\d{3})?|\d{4}([ -])\d{6}\2\d{5})(?![\w-]|[.,]\d)/g;
 // International numbers written with a leading + or 00 (8 to 15 digits).
 const INTERNATIONAL_PHONE = /(?<![\w+/#-])(?:\+|\b00)\d(?:[ ().-]{0,2}\d){7,14}(?![\w]|[.,]\d)/g;
-// Pakistani mobiles 03XX-XXXXXXX (with or without the dash or a space).
-const PK_MOBILE = /(?<![\w.,-])03\d{2}[ -]?\d{7}(?![\w-]|[.,]\d)/g;
+// Pakistani mobiles 03XX-XXXXXXX (with or without the dash or a space), or grouped
+// 03XX XXX XXXX / 03XX-XXX-XXXX with the same separator twice.
+const PK_MOBILE = /(?<![\w.,-])03\d{2}(?:[ -]?\d{7}|([ -])\d{3}\1\d{4})(?![\w-]|[.,]\d)/g;
+// The same mobiles with the country code but no + or 00: 923001234567, 92 300 1234567,
+// 92-300-123-4567. Exactly 92 + 3XX + seven digits, so longer figures never match.
+const PK_MOBILE_COUNTRY_CODE =
+  /(?<![\w.,+-])92([ -]?)3\d{2}(?:\1\d{7}|\1\d{3}\1\d{4})(?![\w-]|[.,]\d)/g;
 // Pakistani landlines with an area code and a separator, e.g. 021-34567890, 042 35761234.
 const PK_LANDLINE = /(?<![\w.,-])0[2-9]\d{1,2}[ -]\d{6,8}(?![\w-]|[.,]\d)/g;
 
@@ -61,6 +66,7 @@ export function maskPersonalText(text: string): string {
       return digits >= 8 && digits <= 15 ? '[phone]' : match;
     })
     .replace(PK_MOBILE, '[phone]')
+    .replace(PK_MOBILE_COUNTRY_CODE, '[phone]')
     .replace(PK_LANDLINE, '[phone]');
 }
 
@@ -84,6 +90,18 @@ const PERSONAL_KEYS = new Set([
   'patientname',
   'contactname',
   'guardianname',
+  // A person's name. A generic `name` is treated as personal: product, branch and
+  // organization names arrive under their own keys (productName, branchName, ...).
+  'name',
+  'fullname',
+  'displayname',
+  'firstname',
+  'middlename',
+  'lastname',
+  'familyname',
+  'givenname',
+  'surname',
+  'recipientname',
 ]);
 const PERSONAL_SUFFIXES = [
   'phone',
@@ -95,11 +113,59 @@ const PERSONAL_SUFFIXES = [
   'whatsapp',
 ];
 
+/** Person-name suffixes: `walkInCustomerName`, `primaryPatientName`. */
+const PERSON_NAME_SUFFIXES = ['customername', 'patientname'];
+
+/**
+ * Snapshot names of things rather than people stay readable: `zoneNameSnapshot`,
+ * `productNameSnapshot`. Any other `*NameSnapshot` (recipient, customer) is personal.
+ */
+const NON_PERSON_SNAPSHOT_PREFIXES = new Set([
+  '',
+  'product',
+  'brand',
+  'medicine',
+  'generic',
+  'ingredient',
+  'item',
+  'variant',
+  'category',
+  'branch',
+  'organization',
+  'organisation',
+  'org',
+  'tenant',
+  'business',
+  'company',
+  'store',
+  'warehouse',
+  'location',
+  'zone',
+  'area',
+  'city',
+  'region',
+  'supplier',
+  'vendor',
+  'manufacturer',
+  'report',
+  'metric',
+  'plan',
+  'service',
+  'tax',
+  'unit',
+  'batch',
+  'label',
+]);
+
 /** Whether a JSON key names personal data, e.g. `phone`, `customerPhone`, `billing_address`. */
 export function isPersonalDataKey(key: string): boolean {
   const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
   if (PERSONAL_KEYS.has(normalized)) return true;
   if (/^address(line)?\d*$/.test(normalized)) return true;
+  if (PERSON_NAME_SUFFIXES.some((suffix) => normalized.endsWith(suffix))) return true;
+  if (normalized.endsWith('namesnapshot')) {
+    return !NON_PERSON_SNAPSHOT_PREFIXES.has(normalized.slice(0, -'namesnapshot'.length));
+  }
   return PERSONAL_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
 }
 
