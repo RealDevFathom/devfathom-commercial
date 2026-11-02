@@ -723,7 +723,7 @@ export const pharmacySalesRouter = router({
   // The drawer family raises typed `PharmacySettlementError`s (OPEN_DRAWER,
   // DRAWER_NOT_OPEN, DAY_CLOSED, INVALID_AMOUNT); `fail` turns them into typed
   // tRPC errors the counter can word, instead of a 500 with the raw reason.
-  openDrawer: protectedProcedure
+  openDrawer: capabilityProcedure('pharmacy:counter')
     .input(
       z
         .object({
@@ -1708,7 +1708,7 @@ export const pharmacySalesRouter = router({
   counterBranches: protectedProcedure.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    const [branches, organization] = await Promise.all([
+    const [branches, organization, canSettlePayments] = await Promise.all([
       ctx.db.pharmacyBranch.findMany({
         where: { organizationId, active: true },
         select: { id: true, code: true, name: true, city: true },
@@ -1718,9 +1718,15 @@ export const pharmacySalesRouter = router({
         where: { id: organizationId },
         select: { currency: true, timezone: true },
       }),
+      can(subjectFromSession(ctx.session.user), 'pharmacy:counter', undefined, {
+        db: ctx.db,
+        source: 'TRPC',
+        ip: ctx.requestMeta.ip,
+      }),
     ]);
     return {
       branches,
+      canSettlePayments,
       currency: organization?.currency ?? 'PKR',
       // The workspace's zone: the day close picks "today" in it before any
       // close has been read. A stored value Intl refuses is handed over as UTC.

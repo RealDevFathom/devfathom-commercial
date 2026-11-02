@@ -28,15 +28,31 @@ const input = {
   openingFloatMinor: 0,
 };
 
+type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
+const dispense: Permission = { capability: 'pharmacy:dispense', effect: 'ALLOW' };
+const counter: Permission = { capability: 'pharmacy:counter', effect: 'ALLOW' };
+
 function fixture(
-  options: { openDrawer?: { id: string } | null; createError?: unknown; branch?: boolean } = {}
+  options: {
+    openDrawer?: { id: string } | null;
+    createError?: unknown;
+    branch?: boolean;
+    permissions?: Permission[];
+  } = {}
 ) {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        organizationRole: { permissions: options.permissions ?? [counter] },
+        permissionOverrides: [],
+      }),
+    },
+    organization: { findUnique: vi.fn().mockResolvedValue({ currency: 'PKR', timezone: 'UTC' }) },
     pharmacyBranch: {
       findMany: vi.fn(
-        async ({ where }: { where: { id: { in: string[] }; organizationId: string } }) =>
-          options.branch === false ? [] : where.id.in.map((id) => ({ id }))
+        async ({ where }: { where: { id?: { in: string[] }; organizationId: string } }) =>
+          options.branch === false ? [] : (where.id?.in ?? ['branch-1']).map((id) => ({ id }))
       ),
     },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -69,6 +85,20 @@ function fixture(
 }
 
 describe('pharmacySales.openDrawer', () => {
+  it('refuses a pharmacist without pharmacy:counter before touching the drawer', async () => {
+    const f = fixture({ permissions: [dispense] });
+    await expect(f.caller.openDrawer(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(f.db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+    expect(f.db.pharmacyDrawerSession.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a pharmacist explicitly granted pharmacy:counter', async () => {
+    const f = fixture({ permissions: [dispense, counter] });
+    await expect(f.caller.openDrawer(input)).resolves.toMatchObject({ id: 'drawer-new' });
+    expect(f.db.pharmacyDrawerSession.create).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses a branch that is missing, inactive, or outside the session organization', async () => {
     const f = fixture({ branch: false });
     await expect(f.caller.openDrawer(input)).rejects.toMatchObject({
@@ -116,6 +146,20 @@ describe('pharmacySales.openDrawer', () => {
     await expect(f.caller.openDrawer(input)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
       message: 'DAY_CLOSED',
+    });
+  });
+});
+
+describe('pharmacySales.counterBranches settlement authorization', () => {
+  it.each([
+    ['dispensing-only pharmacist', [dispense], false],
+    ['counter staff', [counter], true],
+    ['pharmacist with counter grant', [dispense, counter], true],
+    ['explicit counter denial', [counter, { ...counter, effect: 'DENY' as const }], false],
+  ] as const)('reports the canonical decision for %s', async (_name, permissions, allowed) => {
+    const f = fixture({ permissions: [...permissions] });
+    await expect(f.caller.counterBranches()).resolves.toMatchObject({
+      canSettlePayments: allowed,
     });
   });
 });

@@ -319,6 +319,7 @@ beforeEach(() => {
     mocks.queries[name] = query();
   mocks.queries.drawerStatus = query({ openDrawer: null });
   mocks.queries.counterBranches = query({
+    canSettlePayments: true,
     branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
   });
   mocks.queries.counterCart = { ...query(cart()), refetch: mocks.refetch };
@@ -991,6 +992,7 @@ describe('PharmacyCounterConsole durable tender recovery', () => {
     attempt.input.branchId = 'branch-b';
     persistTenderAttempt(attempt);
     mocks.queries.counterBranches!.data = {
+      canSettlePayments: true,
       branches: [
         { id: 'branch-a', name: 'First branch' },
         { id: 'branch-b', name: 'Original branch' },
@@ -1130,6 +1132,62 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     openingFloatMinor: 0,
   };
 
+  it.each([false, undefined])('hides settlement without a confirmed counter grant (%s)', (grant) => {
+    mocks.queries.counterBranches = query({
+      branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
+      canSettlePayments: grant,
+    });
+    mocks.queries.drawerStatus = query({ openDrawer });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByRole('button', { name: 'Open drawer' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Drawer open')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Tender' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Tender')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Take payment' })).not.toBeInTheDocument();
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'drawerStatus',
+      expect.objectContaining({ enabled: false })
+    );
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'manualPaymentSettings',
+      expect.objectContaining({ enabled: false })
+    );
+    fireEvent.keyDown(window, { key: 'F9' });
+    expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('keeps settlement controls available with the server-provided counter grant', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByRole('button', { name: 'Open drawer' })).toBeEnabled();
+    expect(screen.getByRole('heading', { name: 'Tender' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Tender')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeInTheDocument();
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'drawerStatus',
+      expect.objectContaining({ enabled: true })
+    );
+  });
+
+  it('removes settlement controls when the server revokes the grant', () => {
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeInTheDocument();
+    mocks.queries.counterBranches = query({
+      branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
+      canSettlePayments: false,
+    });
+    mocks.queryOptions.mockClear();
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByRole('button', { name: 'Take payment' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open drawer' })).not.toBeInTheDocument();
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'drawerStatus',
+      expect.objectContaining({ enabled: false })
+    );
+  });
+
   it('never offers "Open drawer" while this device already has one open', () => {
     mocks.queries.drawerStatus = query({ openDrawer });
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
@@ -1175,6 +1233,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       expect(device).not.toBe(day.slice(8));
       vi.useFakeTimers({ toFake: ['Date'], now: new Date(now) });
       mocks.queries.counterBranches = query({
+        canSettlePayments: true,
         branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
         timezone,
       });
@@ -1511,6 +1570,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
         })
     );
     mocks.queries.counterBranches = query({
+      canSettlePayments: true,
       branches: [
         { id: 'branch-a', name: 'A' },
         { id: 'branch-b', name: 'B' },
@@ -1591,6 +1651,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
     });
     mocks.mutations.create!.mockResolvedValue({ id: 'sale-b' });
     mocks.queries.counterBranches = query({
+      canSettlePayments: true,
       branches: [
         { id: 'branch-a', name: 'A' },
         { id: 'branch-b', name: 'B' },

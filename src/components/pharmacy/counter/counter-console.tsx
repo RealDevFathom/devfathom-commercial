@@ -373,6 +373,7 @@ function ScopedPharmacyCounterConsole({
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
     branches.some((branch) => branch.id === branchId);
+  const canSettlePayments = branchAuthorized && branchesQuery.data?.canSettlePayments === true;
 
   useEffect(
     () => () => {
@@ -490,9 +491,9 @@ function ScopedPharmacyCounterConsole({
   const deviceId = useCounterDeviceId();
   const drawerQuery = trpc.pharmacySales.drawerStatus.useQuery(
     { branchId, deviceId: deviceId ?? '' },
-    { enabled: Boolean(branchAuthorized && branchId && deviceId), staleTime: 30_000 }
+    { enabled: Boolean(canSettlePayments && branchId && deviceId), staleTime: 30_000 }
   );
-  const openDrawerSession = drawerQuery.data?.openDrawer ?? null;
+  const openDrawerSession = canSettlePayments ? (drawerQuery.data?.openDrawer ?? null) : null;
   const drawerStatusKnown = drawerQuery.isSuccess || drawerQuery.isError;
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
@@ -539,7 +540,7 @@ function ScopedPharmacyCounterConsole({
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
-    { branchId }, { enabled: Boolean(branchId) }
+    { branchId }, { enabled: canSettlePayments }
   );
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
@@ -1196,6 +1197,7 @@ function ScopedPharmacyCounterConsole({
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
       if (
+        !canSettlePayments ||
         !saleId ||
         busy ||
         blocked ||
@@ -1299,6 +1301,7 @@ function ScopedPharmacyCounterConsole({
       blocked,
       branchId,
       busy,
+      canSettlePayments,
       discardReceiptIntent,
       recoveryScope,
       refreshTenderBill,
@@ -1582,7 +1585,7 @@ function ScopedPharmacyCounterConsole({
           void runTransition('resume');
           return;
         case 'openTender':
-          tenderRef.current?.focus();
+          if (canSettlePayments) tenderRef.current?.focus();
           return;
         case 'printReceipt':
           printReceipt();
@@ -1598,7 +1601,7 @@ function ScopedPharmacyCounterConsole({
           return;
       }
     },
-    [activeRow, addToCart, captureShortfall, focusSearch, printReceipt, runTransition]
+    [activeRow, addToCart, canSettlePayments, captureShortfall, focusSearch, printReceipt, runTransition]
   );
 
   useEffect(() => {
@@ -1765,8 +1768,8 @@ function ScopedPharmacyCounterConsole({
         <div className="min-w-0">
           <h1 className="text-sm font-semibold leading-5 text-text-strong">Counter</h1>
           <p className="text-xs text-text-muted">
-            {formatBinding(keymap.bindings.focusSearch)} search · Enter add ·{' '}
-            {formatBinding(keymap.bindings.openTender)} pay
+            {formatBinding(keymap.bindings.focusSearch)} search · Enter add
+            {canSettlePayments ? ` · ${formatBinding(keymap.bindings.openTender)} pay` : null}
           </p>
         </div>
         <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
@@ -1806,42 +1809,44 @@ function ScopedPharmacyCounterConsole({
           />
           {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
           {blocked ? <StatusPill status="blocked" tone="danger" label="Safety block" /> : null}
-          {openDrawerSession ? (
-            <StatusPill status="drawer-open" tone="success" label="Drawer open" />
-          ) : (
-            <Button
-              type="button"
-              variant="outline"
-              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-              disabled={busy || !drawerStatusKnown}
-              onClick={() => {
-                setPending('drawer');
-                openDrawer
-                  .mutateAsync({
-                    branchId,
-                    deviceId: counterDeviceId(),
-                    businessDate: todayBusinessDate(),
-                    openingFloatMinor: 0,
-                  })
-                  .then(() =>
-                    setNotice({
-                      tone: 'success',
-                      message: 'Cash drawer opened for this counter.',
+          {canSettlePayments ? (
+            openDrawerSession ? (
+              <StatusPill status="drawer-open" tone="success" label="Drawer open" />
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                disabled={busy || !drawerStatusKnown}
+                onClick={() => {
+                  setPending('drawer');
+                  openDrawer
+                    .mutateAsync({
+                      branchId,
+                      deviceId: counterDeviceId(),
+                      businessDate: todayBusinessDate(),
+                      openingFloatMinor: 0,
                     })
-                  )
-                  .catch((error: unknown) =>
-                    setNotice({ tone: 'warning', message: messageFrom(error) })
-                  )
-                  // Either way the server now holds the truth about this device's drawer.
-                  .finally(() => {
-                    setPending(null);
-                    void utils.pharmacySales.drawerStatus.invalidate();
-                  });
-              }}
-            >
-              Open drawer
-            </Button>
-          )}
+                    .then(() =>
+                      setNotice({
+                        tone: 'success',
+                        message: 'Cash drawer opened for this counter.',
+                      })
+                    )
+                    .catch((error: unknown) =>
+                      setNotice({ tone: 'warning', message: messageFrom(error) })
+                    )
+                    // Either way the server now holds the truth about this device's drawer.
+                    .finally(() => {
+                      setPending(null);
+                      void utils.pharmacySales.drawerStatus.invalidate();
+                    });
+                }}
+              >
+                Open drawer
+              </Button>
+            )
+          ) : null}
         </div>
       </header>
 
@@ -2169,79 +2174,81 @@ function ScopedPharmacyCounterConsole({
             />
           </SectionCard>
 
-          <SectionCard compact className="shrink-0" eyebrow="POS-05" title="Tender">
-            <div className="mb-4 space-y-1">
-              <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
-                <input
-                  ref={autoPrintRef}
-                  id="counter-auto-print"
-                  type="checkbox"
-                  checked={autoPrint}
-                  disabled={busy}
-                  onChange={(event) => setAutoPrint(event.target.checked)}
-                  aria-describedby="counter-auto-print-help"
-                  className="size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+          {canSettlePayments ? (
+            <SectionCard compact className="shrink-0" eyebrow="POS-05" title="Tender">
+              <div className="mb-4 space-y-1">
+                <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
+                  <input
+                    ref={autoPrintRef}
+                    id="counter-auto-print"
+                    type="checkbox"
+                    checked={autoPrint}
+                    disabled={busy}
+                    onChange={(event) => setAutoPrint(event.target.checked)}
+                    aria-describedby="counter-auto-print-help"
+                    className="size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                  />
+                  Automatically open print dialog after payment
+                </Label>
+                <p id="counter-auto-print-help" className="text-xs text-text-muted">
+                  This counter session only. Requires a newly settled bill and issued receipt.
+                  Physical printing is not confirmed.
+                </p>
+              </div>
+              {branchesQuery.data?.paymentSandboxAvailable && saleId ? (
+                <PaymentSandboxPanel
+                  key={`${branchId}:${saleId}`}
+                  branchId={branchId}
+                  saleId={saleId}
+                  deviceId={counterDeviceId()}
+                  businessDate={todayBusinessDate()}
+                  disabled={busy || blocked}
+                  onRecorded={refreshCart}
                 />
-                Automatically open print dialog after payment
-              </Label>
-              <p id="counter-auto-print-help" className="text-xs text-text-muted">
-                This counter session only. Requires a newly settled bill and issued receipt.
-                Physical printing is not confirmed.
-              </p>
-            </div>
-            {branchesQuery.data?.paymentSandboxAvailable && saleId ? (
-              <PaymentSandboxPanel
-                key={`${branchId}:${saleId}`}
-                branchId={branchId}
-                saleId={saleId}
-                deviceId={counterDeviceId()}
-                businessDate={todayBusinessDate()}
-                disabled={busy || blocked}
-                onRecorded={refreshCart}
+              ) : null}
+              <CounterTenderPanel
+                key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
+                ref={tenderRef}
+                manualSettings={manualSettings.data?.settings}
+                manualSettingsLoading={manualSettings.isLoading}
+                manualSettingsError={manualSettings.isError}
+                onReloadManualSettings={() => void manualSettings.refetch()}
+                loadKhataAccounts={loadKhataAccounts}
+                reauthenticateOwner={reauthenticateOwner}
+                printKhataStatement={printKhataStatement}
+                balanceMinor={balanceMinor}
+                state={billState}
+                blocked={blocked}
+                pending={pending === 'tender'}
+                disabled={busy || !saleId}
+                initialDraft={
+                  restoredAttempt
+                    ? { ...restoredAttempt.draft, type: restoredAttempt.input.type,
+                      payerName: restoredAttempt.input.payerName, providerRef: restoredAttempt.input.providerRef,
+                      referenceSkipped: restoredAttempt.input.referenceSkipped }
+                    : undefined
+                }
+                recoveryOutcome={tenderOutcome}
+                checkingOutcome={checkingOutcome}
+                onCheckOutcome={
+                  attempt && tenderOutcome?.status === 'unknown' ? checkPaymentOutcome : undefined
+                }
+                error={
+                  storageError
+                    ? TENDER_STORAGE_MESSAGE
+                    : cartQuery.isError
+                      ? 'This bill could not be read. Check your access and refresh this bill before taking payment.'
+                      : tenderReadRequired && pending !== 'tender'
+                        ? tenderOutcome?.status === 'accepted'
+                          ? 'Payment recorded, but the bill refresh is incomplete. Refresh this bill before taking another payment.'
+                          : 'Refresh this bill to verify its current state.'
+                        : null
+                }
+                onRetry={() => void refreshTenderBill()}
+                onTender={takePayment}
               />
-            ) : null}
-            <CounterTenderPanel
-              key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
-              ref={tenderRef}
-              manualSettings={manualSettings.data?.settings}
-              manualSettingsLoading={manualSettings.isLoading}
-              manualSettingsError={manualSettings.isError}
-              onReloadManualSettings={() => void manualSettings.refetch()}
-              loadKhataAccounts={loadKhataAccounts}
-              reauthenticateOwner={reauthenticateOwner}
-              printKhataStatement={printKhataStatement}
-              balanceMinor={balanceMinor}
-              state={billState}
-              blocked={blocked}
-              pending={pending === 'tender'}
-              disabled={busy || !saleId}
-              initialDraft={
-                restoredAttempt
-                  ? { ...restoredAttempt.draft, type: restoredAttempt.input.type,
-                    payerName: restoredAttempt.input.payerName, providerRef: restoredAttempt.input.providerRef,
-                    referenceSkipped: restoredAttempt.input.referenceSkipped }
-                  : undefined
-              }
-              recoveryOutcome={tenderOutcome}
-              checkingOutcome={checkingOutcome}
-              onCheckOutcome={
-                attempt && tenderOutcome?.status === 'unknown' ? checkPaymentOutcome : undefined
-              }
-              error={
-                storageError
-                  ? TENDER_STORAGE_MESSAGE
-                  : cartQuery.isError
-                    ? 'This bill could not be read. Check your access and refresh this bill before taking payment.'
-                    : tenderReadRequired && pending !== 'tender'
-                      ? tenderOutcome?.status === 'accepted'
-                        ? 'Payment recorded, but the bill refresh is incomplete. Refresh this bill before taking another payment.'
-                        : 'Refresh this bill to verify its current state.'
-                      : null
-              }
-              onRetry={() => void refreshTenderBill()}
-              onTender={takePayment}
-            />
-          </SectionCard>
+            </SectionCard>
+          ) : null}
 
           <SectionCard
             compact
