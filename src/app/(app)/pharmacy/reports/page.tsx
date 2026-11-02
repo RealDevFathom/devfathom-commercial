@@ -87,7 +87,7 @@ export default async function PharmacyReportsPage({
           'pharmacy-reports';
         if (error.message === 'You do not have permission for this action.') {
           detail =
-            'You need the reports:operational permission to view pharmacy reports. Ask your workspace administrator to grant it.';
+            'You need the operational reports permission to view pharmacy reports. Ask your workspace administrator to grant it.';
         } else if (
           !isModuleGranted('pharmacy-reports', ctx.entitlements.enabledModules) &&
           (error.message === 'Pharmacy reports are not licensed.' ||
@@ -95,7 +95,7 @@ export default async function PharmacyReportsPage({
               `The ${moduleName} module is not enabled for this organization.`)
         ) {
           detail =
-            'The Pharmacy Reports module (pharmacy-reports) is not enabled for this workspace. Ask your workspace administrator to enable it.';
+            'The Pharmacy Reports module is not enabled for this workspace. Ask your workspace administrator to enable it.';
         }
       }
     }

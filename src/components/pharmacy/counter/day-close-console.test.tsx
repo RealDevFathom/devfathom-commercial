@@ -204,7 +204,7 @@ describe('day-close console', () => {
     mocks.role = 'MEMBER';
     render(<PharmacyDayCloseConsole />);
     expect(screen.getByRole('status')).toHaveTextContent(
-      'This day-close screen requires administrator access. Ask your workspace administrator to review your day-close access and pharmacy:close permission.'
+      'This day-close screen requires administrator access. Ask your workspace administrator to review your day-close permission.'
     );
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
     expect(mocks.previewInput).not.toHaveBeenCalled();
@@ -214,7 +214,7 @@ describe('day-close console', () => {
     mocks.enabledModules = [];
     render(<PharmacyDayCloseConsole />);
     expect(screen.getByRole('status')).toHaveTextContent(
-      'The Pharmacy Counter module (pharmacy-counter) is not enabled for this workspace. Ask your workspace administrator to enable it for day close.'
+      'The Pharmacy Counter module is not enabled for this workspace. Ask your workspace administrator to enable it for day close.'
     );
     expect(mocks.previewInput).not.toHaveBeenCalled();
     expect(mocks.mutate).not.toHaveBeenCalled();

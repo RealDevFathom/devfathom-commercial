@@ -161,7 +161,7 @@ describe('pharmacy report catalog filters', () => {
 
     render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
 
-    expect(screen.getByText(/You need the reports:operational permission/)).toHaveTextContent(
+    expect(screen.getByText(/You need the operational reports permission/)).toHaveTextContent(
       'Ask your workspace administrator to grant it.'
     );
     expect(commandCentre).not.toHaveBeenCalled();
@@ -176,10 +176,10 @@ describe('pharmacy report catalog filters', () => {
 
     render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
 
-    expect(screen.getByText(/Pharmacy Reports module \(pharmacy-reports\)/)).toHaveTextContent(
+    expect(screen.getByText(/Pharmacy Reports module is not enabled/)).toHaveTextContent(
       'Ask your workspace administrator to enable it.'
     );
-    expect(screen.queryByText(/You need the reports:operational permission/)).toBeNull();
+    expect(screen.queryByText(/You need the operational reports permission/)).toBeNull();
     expect(commandCentre).not.toHaveBeenCalled();
   });
 
@@ -193,7 +193,7 @@ describe('pharmacy report catalog filters', () => {
     render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
 
     expect(screen.getByText(/Reports could not be loaded. Try again/)).toBeVisible();
-    expect(screen.queryByText(/reports:operational|pharmacy-reports/)).toBeNull();
+    expect(screen.queryByText(/operational reports permission|Pharmacy Reports module/)).toBeNull();
     expect(screen.queryByText('Database unavailable')).toBeNull();
     expect(commandCentre).not.toHaveBeenCalled();
   });
