@@ -89,7 +89,8 @@ it('shows pending feedback, disables controls and retains values after failed re
   finish({ error: true, message: 'Enter your current owner PIN.' });
   expect(await screen.findByRole('alert')).toHaveTextContent('Enter your current owner PIN.');
   expect(pin).toHaveValue('1234');
-  expect(button).toBeEnabled();
+  // The message renders as soon as the action returns; the transition ends a tick later.
+  await waitFor(() => expect(button).toBeEnabled());
 });
 
 it('provides resolved campaign navigation and empty/error states', () => {
