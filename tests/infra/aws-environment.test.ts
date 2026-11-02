@@ -9,7 +9,6 @@ import { API_KEY_SECRET_ID_ENV, LOCAL_API_KEY_ENV } from '@/lib/ai/ai-credential
 import {
   AI_TIERS,
   DEFAULT_AI_SECRETS_REGION,
-  DEFAULT_BEDROCK_REGION,
   DEFAULT_MODELS,
   DEFAULT_MONTHLY_CAPS_USD,
   DEFAULT_PROVIDER_ORDER,
@@ -205,7 +204,14 @@ const resourcesOf = (statement: Statement) =>
   (Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource]) as string[];
 
 const BEDROCK_ACTIONS = ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'];
-const US_PROFILE_DESTINATIONS = ['us-east-1', 'us-east-2', 'us-west-2'];
+// The decided Bedrock fallback: global cross-Region profiles called from Singapore.
+// The deep tier uses the standard model on Bedrock.
+const BEDROCK_SOURCE_REGION = 'ap-southeast-1';
+const BEDROCK_GLOBAL_PROFILES = {
+  cheap: 'global.anthropic.claude-haiku-5-5',
+  standard: 'global.anthropic.claude-sonnet-5-5',
+  deep: 'global.anthropic.claude-sonnet-5-5',
+} as const;
 const BEDROCK_PARAMETERS = {
   cheap: 'AiBedrockCheapModelId',
   standard: 'AiBedrockStandardModelId',
@@ -217,8 +223,6 @@ const CAP_PARAMETERS = {
   bedrock: 'AiBedrockMonthlyCapUsd',
 } as const;
 
-const profileArn = (profile: string) =>
-  `arn:aws:bedrock:us-east-1:${ACCOUNT}:inference-profile/${profile}`;
 const secretArn = (name: string, region = 'ap-southeast-1') =>
   `arn:aws:secretsmanager:${region}:${ACCOUNT}:secret:${name}-??????`;
 
@@ -289,20 +293,52 @@ describe('AWS environment: web container AI contract', () => {
     expect(env.OPENAI_API_KEY_SECRET_ID).toBe('team/openai');
   });
 
-  it('routes through the chain by default with the code-default order, models and caps', () => {
+  it('defaults AI off in production and to the routed chain in staging', () => {
+    expect(environmentOf('WebTaskDefinition', { EnvironmentName: 'production' }).AI_PROVIDER).toBe(
+      'disabled'
+    );
+    expect(environmentOf('WebTaskDefinition', { EnvironmentName: 'staging' }).AI_PROVIDER).toBe(
+      'auto'
+    );
+  });
+
+  it('passes an explicit AiProvider through in either environment', () => {
+    for (const environment of ['staging', 'production']) {
+      for (const provider of ['auto', 'anthropic', 'openai', 'bedrock', 'disabled']) {
+        const env = environmentOf('WebTaskDefinition', {
+          EnvironmentName: environment,
+          AiProvider: provider,
+        });
+        expect(env.AI_PROVIDER).toBe(provider);
+      }
+    }
+  });
+
+  it('uses the code-default order and caps, Bedrock from Singapore and the small model off', () => {
     const env = environmentOf('WebTaskDefinition');
 
-    expect(env.AI_PROVIDER).toBe('auto');
     expect(env.AI_PROVIDER_ORDER).toBe(DEFAULT_PROVIDER_ORDER.join(','));
-    expect(env.BEDROCK_REGION).toBe(DEFAULT_BEDROCK_REGION);
-    expect(DEFAULT_BEDROCK_REGION).toBe('us-east-1');
+    expect(env.BEDROCK_REGION).toBe(BEDROCK_SOURCE_REGION);
     for (const tier of AI_TIERS) {
-      expect(env[modelEnvName('bedrock', tier)]).toBe(DEFAULT_MODELS.bedrock[tier]);
+      expect(env[modelEnvName('bedrock', tier)]).toBe(BEDROCK_GLOBAL_PROFILES[tier]);
     }
+    expect(env.AF_HAIKU_LOOKUPS).toBe('false');
     for (const provider of ROUTED_AI_PROVIDERS) {
       expect(Number(env[capEnvName(provider)])).toBe(DEFAULT_MONTHLY_CAPS_USD[provider]);
     }
     expect(DEFAULT_MONTHLY_CAPS_USD).toEqual({ anthropic: 190, openai: 190, bedrock: 300 });
+  });
+
+  it('follows the Bedrock region, model and small-model parameters into the container', () => {
+    const env = environmentOf('WebTaskDefinition', {
+      AiBedrockRegion: 'eu-central-1',
+      AiBedrockDeepModelId: 'eu.anthropic.claude-opus-9-9-v1:0',
+      AiHaikuLookups: 'true',
+    });
+
+    expect(env.BEDROCK_REGION).toBe('eu-central-1');
+    expect(env.AI_BEDROCK_MODEL_DEEP).toBe('eu.anthropic.claude-opus-9-9-v1:0');
+    expect(env.AF_HAIKU_LOOKUPS).toBe('true');
   });
 
   it('drops the superseded Bedrock pin and never configures Azure', () => {
@@ -312,18 +348,23 @@ describe('AWS environment: web container AI contract', () => {
     expect(names.filter((name) => /_(HAIKU|SONNET|OPUS)_MODEL_ID$/.test(name))).toEqual([]);
     expect(names.filter((name) => name.startsWith('AZURE_'))).toEqual([]);
     expect(names).not.toContain('AI_MODEL');
-    expect(templateSource).not.toMatch(/apac\.|ap-southeast-1::foundation-model/);
+    expect(templateSource).not.toMatch(/us-east-1|us\.anthropic\.|claude-[a-z]+-4-/);
   });
 });
 
 describe('AWS environment: AI parameters', () => {
-  it('defaults AI_PROVIDER to the routed chain and offers no legacy provider', () => {
+  it('defaults AI_PROVIDER to the environment default and offers no legacy provider', () => {
     const parameter = template.Parameters.AiProvider;
 
-    expect(parameter.Default).toBe('auto');
-    expect(parameter.AllowedValues).toEqual(
-      expect.arrayContaining(['auto', 'anthropic', 'openai', 'bedrock', 'disabled'])
-    );
+    expect(parameter.Default).toBe('');
+    expect(parameter.AllowedValues).toEqual([
+      '',
+      'auto',
+      'anthropic',
+      'openai',
+      'bedrock',
+      'disabled',
+    ]);
     for (const legacy of ['azure', 'groq', 'google', 'vertex']) {
       expect(parameter.AllowedValues).not.toContain(legacy);
     }
@@ -340,14 +381,27 @@ describe('AWS environment: AI parameters', () => {
     }
   });
 
-  it('keeps Bedrock model parameters on US profiles and caps non-negative', () => {
+  it('defaults Bedrock to the global profiles from Singapore, the small model off, caps non-negative', () => {
+    expect(template.Parameters.AiBedrockRegion.Default).toBe(BEDROCK_SOURCE_REGION);
+    expect(BEDROCK_SOURCE_REGION).toMatch(
+      new RegExp(template.Parameters.AiBedrockRegion.AllowedPattern!)
+    );
+    expect(template.Parameters.AiHaikuLookups).toMatchObject({
+      Default: 'false',
+      AllowedValues: ['true', 'false'],
+    });
     for (const tier of AI_TIERS) {
       const parameter = template.Parameters[BEDROCK_PARAMETERS[tier]];
       const pattern = new RegExp(parameter.AllowedPattern!);
-      expect(parameter.Default).toBe(DEFAULT_MODELS.bedrock[tier]);
-      expect(DEFAULT_MODELS.bedrock[tier]).toMatch(pattern);
-      expect(`apac.${DEFAULT_MODELS.anthropic[tier]}`).not.toMatch(pattern);
+      expect(parameter.Default).toBe(BEDROCK_GLOBAL_PROFILES[tier]);
+      for (const geo of ['global', 'us', 'eu', 'apac', 'au', 'jp']) {
+        expect(`${geo}.${DEFAULT_MODELS.anthropic[tier]}`).not.toMatch(pattern);
+        expect(`${geo}.anthropic.claude-sonnet-5-5`).toMatch(pattern);
+      }
       expect(DEFAULT_MODELS.anthropic[tier]).not.toMatch(pattern);
+      expect('anthropic.claude-sonnet-5-5').not.toMatch(pattern);
+      expect('global.openai.gpt-6-sol').not.toMatch(pattern);
+      expect('ca.anthropic.claude-haiku-5-5').not.toMatch(pattern);
     }
     for (const provider of ROUTED_AI_PROVIDERS) {
       const parameter = template.Parameters[CAP_PARAMETERS[provider]];
@@ -405,56 +459,75 @@ describe('AWS environment: web task role least privilege', () => {
     expect(env.AI_SECRETS_REGION).toBe('eu-west-1');
   });
 
-  it('invokes Bedrock only through the three US profiles from us-east-1', () => {
+  it('invokes every Anthropic Claude model and profile, including global profiles', () => {
     const statements = statementsOf('WebTaskRole').filter((statement) =>
       actionsOf(statement).some((action) => action.startsWith('bedrock:'))
     );
-    const profiles = AI_TIERS.map((tier) => profileArn(DEFAULT_MODELS.bedrock[tier]));
-    const foundationModels = AI_TIERS.flatMap((tier) =>
-      US_PROFILE_DESTINATIONS.map(
-        (region) =>
-          `arn:aws:bedrock:${region}::foundation-model/${DEFAULT_MODELS.bedrock[tier].replace(/^us\./, '')}`
-      )
-    );
 
-    expect(statements).toHaveLength(2);
-    for (const statement of statements) expect(actionsOf(statement)).toEqual(BEDROCK_ACTIONS);
+    expect(statements).toHaveLength(3);
+    for (const statement of statements) {
+      expect(statement.Effect).toBe('Allow');
+      expect(actionsOf(statement)).toEqual(BEDROCK_ACTIONS);
+    }
 
-    const [profileStatement, modelStatement] = statements;
-    expect(resourcesOf(profileStatement)).toEqual(profiles);
-    expect(profileStatement.Condition).toBeUndefined();
-    expect(resourcesOf(modelStatement)).toEqual(foundationModels);
-    expect(modelStatement.Condition).toEqual({
-      StringEquals: { 'bedrock:InferenceProfileArn': profiles },
+    const [profiles, regionalModels, globalModels] = statements;
+    expect(resourcesOf(profiles)).toEqual([
+      `arn:aws:bedrock:*:${ACCOUNT}:inference-profile/*anthropic.claude-*`,
+    ]);
+    expect(profiles.Condition).toBeUndefined();
+    expect(resourcesOf(regionalModels)).toEqual([
+      'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+    ]);
+    expect(regionalModels.Condition).toBeUndefined();
+    // AWS evaluates the Region-less global foundation-model ARN of a global
+    // cross-Region profile with aws:RequestedRegion = "unspecified".
+    expect(resourcesOf(globalModels)).toEqual([
+      'arn:aws:bedrock:::foundation-model/anthropic.claude-*',
+    ]);
+    expect(globalModels.Condition).toEqual({
+      StringEquals: { 'aws:RequestedRegion': 'unspecified' },
     });
-    expect(foundationModels).toContain(
-      'arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-opus-5-5'
-    );
   });
 
-  it('follows the Bedrock model parameters into the policy and the container', () => {
-    const overrides = { AiBedrockDeepModelId: 'us.anthropic.claude-opus-9-9-v1:0' };
-    const env = environmentOf('WebTaskDefinition', overrides);
-    const statements = statementsOf('WebTaskRole', overrides).filter((statement) =>
-      actionsOf(statement).some((action) => action.startsWith('bedrock:'))
-    );
-
-    expect(env.AI_BEDROCK_MODEL_DEEP).toBe('us.anthropic.claude-opus-9-9-v1:0');
-    expect(resourcesOf(statements[0])).toContain(profileArn('us.anthropic.claude-opus-9-9-v1:0'));
-    expect(resourcesOf(statements[1])).toEqual(
-      expect.arrayContaining(
-        US_PROFILE_DESTINATIONS.map(
-          (region) => `arn:aws:bedrock:${region}::foundation-model/anthropic.claude-opus-9-9-v1:0`
+  it('covers the default profiles and the Singapore source Region, and nothing but Claude', () => {
+    const resources = statementsOf('WebTaskRole')
+      .filter((statement) => actionsOf(statement).some((action) => action.startsWith('bedrock:')))
+      .flatMap(resourcesOf);
+    const matches = (arn: string) =>
+      resources.some((resource) =>
+        new RegExp(`^${resource.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`).test(
+          arn
         )
+      );
+
+    for (const tier of AI_TIERS) {
+      const profile = BEDROCK_GLOBAL_PROFILES[tier];
+      const model = profile.replace(/^global\./, '');
+      expect(
+        matches(`arn:aws:bedrock:${BEDROCK_SOURCE_REGION}:${ACCOUNT}:inference-profile/${profile}`)
+      ).toBe(true);
+      expect(matches(`arn:aws:bedrock:${BEDROCK_SOURCE_REGION}::foundation-model/${model}`)).toBe(
+        true
+      );
+      expect(matches(`arn:aws:bedrock:::foundation-model/${model}`)).toBe(true);
+    }
+    expect(
+      matches(`arn:aws:bedrock:us-east-1:${ACCOUNT}:inference-profile/global.openai.gpt-6-sol`)
+    ).toBe(false);
+    expect(matches('arn:aws:bedrock:us-east-1::foundation-model/openai.gpt-6-sol')).toBe(false);
+    expect(matches('arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0')).toBe(false);
+    expect(
+      matches(
+        `arn:aws:bedrock:us-east-1:999999999999:inference-profile/global.anthropic.claude-sonnet-5-5`
       )
-    );
+    ).toBe(false);
   });
 
-  it('grants nothing broader: no wildcard actions, no wildcard resources, no Converse action', () => {
+  it('grants nothing broader: exact actions, no Converse action, secrets without wildcards', () => {
     const aiStatements = statementsOf('WebTaskRole').filter((statement) =>
       actionsOf(statement).some((action) => /^(bedrock|secretsmanager):/.test(action))
     );
-    expect(aiStatements).toHaveLength(3);
+    expect(aiStatements).toHaveLength(4);
     for (const statement of aiStatements) {
       expect(statement.Effect).toBe('Allow');
       for (const action of actionsOf(statement)) {
@@ -462,8 +535,13 @@ describe('AWS environment: web task role least privilege', () => {
         expect(action).not.toMatch(/Converse/);
       }
       for (const resource of resourcesOf(statement)) {
-        expect(resource.replace(/-\?{6}$/, '')).not.toMatch(/[*?]/);
+        if (resource.startsWith('arn:aws:secretsmanager:')) {
+          expect(resource.replace(/-\?{6}$/, '')).not.toMatch(/[*?]/);
+        } else {
+          expect(resource).toMatch(/anthropic\.claude-\*$/);
+        }
       }
     }
+    expect(JSON.stringify(template.Resources.WebTaskRole)).not.toMatch(/aws-marketplace|kms:/);
   });
 });
