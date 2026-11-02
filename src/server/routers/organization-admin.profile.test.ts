@@ -106,3 +106,46 @@ describe('organizationAdmin.updateProfile time zone', () => {
     });
   });
 });
+
+describe('organizationAdmin.updateProfile invoice seller details (#458)', () => {
+  it('stores the invoice address with its line breaks and the tax ID, trimmed', async () => {
+    const { error } = await save({
+      ...profile,
+      invoiceAddress: '  42 Market Street\nSeattle, WA 98101 ',
+      invoiceTaxId: ' US-12-3456789 ',
+    });
+
+    expect(error).toBeUndefined();
+    expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'org_a' },
+      data: expect.objectContaining({
+        invoiceAddress: '42 Market Street\nSeattle, WA 98101',
+        invoiceTaxId: 'US-12-3456789',
+      }),
+    });
+  });
+
+  it('clears a blank address or tax ID to null', async () => {
+    await save({ ...profile, invoiceAddress: '   ', invoiceTaxId: null });
+
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: 'org_a' },
+      data: expect.objectContaining({ invoiceAddress: null, invoiceTaxId: null }),
+    });
+  });
+
+  it('leaves both untouched when a caller omits them', async () => {
+    await save(profile);
+
+    const { data } = mocks.update.mock.calls[0][0];
+    expect(data).not.toHaveProperty('invoiceAddress');
+    expect(data).not.toHaveProperty('invoiceTaxId');
+  });
+
+  it('refuses an over-long tax ID, writing nothing', async () => {
+    const { error } = await save({ ...profile, invoiceTaxId: 'x'.repeat(101) });
+
+    expect(error?.json.data.code).toBe('BAD_REQUEST');
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+});

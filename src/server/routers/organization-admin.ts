@@ -19,6 +19,15 @@ const optionalEmail = z
   .union([z.email().max(254), z.literal('')])
   .transform((value) => value.trim().toLowerCase() || null);
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+/** Trimmed free text; blank (or null) is stored as null. Omitted leaves the column as is. */
+const optionalText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullable()
+    .optional()
+    .transform((value) => (value === undefined ? undefined : value || null));
 const hostname = z
   .string()
   .trim()
@@ -198,6 +207,8 @@ export const organizationAdminRouter = router({
         currency: true,
         primaryContactName: true,
         primaryContactEmail: true,
+        invoiceAddress: true,
+        invoiceTaxId: true,
         activatedAt: true,
         packageId: true,
         brand: true,
@@ -311,6 +322,11 @@ export const organizationAdminRouter = router({
         locale: z.string().trim().min(2).max(20),
         primaryContactName: z.string().trim().max(150).nullable(),
         primaryContactEmail: optionalEmail,
+        // #458: seller details printed on this workspace's client invoices.
+        // Optional so an older client that omits them leaves them untouched;
+        // a blank value clears the line from the invoice.
+        invoiceAddress: optionalText(500),
+        invoiceTaxId: optionalText(100),
       })
     )
     .mutation(async ({ ctx, input }) => {

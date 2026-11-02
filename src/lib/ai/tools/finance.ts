@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
+import { readInvoiceIssuer } from '@/lib/finance/invoice-issuer';
 import {
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
@@ -286,7 +287,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
   tools.getInvoice = tool({
     description:
-      'Full detail for ONE invoice: client + primary contact, project, line items, subtotal/tax/total, status and key dates. Identify it by its invoice number (e.g. "INV-2026-001") or by client name. Use for "show invoice <number>", "what is on <client>\'s invoice", "the line items on that invoice". ADMIN ONLY.',
+      'Full detail for ONE invoice: the issuer (this workspace\'s legal name, invoice address and tax ID), client + primary contact, project, line items, subtotal/tax/total, status and key dates. Identify it by its invoice number (e.g. "INV-2026-001") or by client name. Use for "show invoice <number>", "what is on <client>\'s invoice", "the line items on that invoice". ADMIN ONLY.',
     inputSchema: z.object({
       invoiceNumber: z.string().nullish().describe('Invoice number, e.g. "INV-2026-001"'),
       clientName: z
@@ -333,13 +334,17 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         invoiceId = clientInvoices[0].id;
       }
 
-      const invoice = await db.invoice.findUnique({
-        where: { id: invoiceId },
-        include: {
-          client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
-          project: { select: { name: true } },
-        },
-      });
+      const [invoice, issuer] = await Promise.all([
+        db.invoice.findUnique({
+          where: { id: invoiceId, organizationId: h.ctx.organizationId },
+          include: {
+            client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+            project: { select: { name: true } },
+          },
+        }),
+        // #458: the seller on the invoice is this workspace, never DevFathom.
+        readInvoiceIssuer(db, h.ctx.organizationId),
+      ]);
       if (!invoice) return { error: 'That invoice was not found.' };
 
       const rawItems = Array.isArray(invoice.items)
@@ -357,6 +362,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         status: invoice.status,
         client: invoice.client.name,
         clientContact: primary ? { name: primary.name, email: primary.email ?? null } : null,
+        issuer,
         project: invoice.project?.name ?? null,
         currency: invoice.currency,
         subtotal: Number(invoice.subtotal),

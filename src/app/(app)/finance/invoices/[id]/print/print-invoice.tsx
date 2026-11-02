@@ -57,6 +57,7 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
   const amountPaid = Number(invoice.amountPaid);
   const balance = Number(invoice.balance);
   const primaryContact = invoice.client.contacts?.[0];
+  const issuer = invoice.issuer;
 
   return (
     <>
@@ -101,15 +102,27 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
           id="invoice-print"
           className="rounded-2xl border border-border/60 bg-white p-8 text-slate-900 shadow-sm sm:p-10"
         >
-          {/* Header */}
-          <div className="flex items-start justify-between gap-6 border-b border-slate-200 pb-6">
-            <div>
-              <p className="font-display text-2xl font-bold tracking-tight text-[#0C2E2C]">
-                DevFathom
-              </p>
-              <p className="mt-1 text-xs text-slate-500">hub.devfathom.com</p>
+          {/* Header — #458: the agency (this workspace) is the seller, never DevFathom.
+              Optional seller details are omitted rather than printed blank. */}
+          <div className="flex flex-col gap-6 border-b border-slate-200 pb-6 sm:flex-row sm:items-start sm:justify-between print:flex-row print:items-start print:justify-between">
+            <div className="min-w-0 flex-1 break-words">
+              {issuer && (
+                <>
+                  <p className="font-display text-2xl font-bold tracking-tight text-slate-900">
+                    {issuer.name}
+                  </p>
+                  {issuer.address && (
+                    <p className="mt-1 max-w-xs whitespace-pre-line text-xs leading-relaxed text-slate-600">
+                      {issuer.address}
+                    </p>
+                  )}
+                  {issuer.taxId && (
+                    <p className="mt-1 text-xs text-slate-600">Tax ID: {issuer.taxId}</p>
+                  )}
+                </>
+              )}
             </div>
-            <div className="text-right">
+            <div className="shrink-0 sm:text-right print:text-right">
               <p className="font-display text-xl font-bold tracking-tight text-slate-900">
                 INVOICE
               </p>

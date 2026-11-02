@@ -16,6 +16,7 @@ import {
   type CurrencyAmount,
 } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
+import { readInvoiceIssuer } from '@/lib/finance/invoice-issuer';
 import {
   isPersistableMoney,
   MAX_MONEY,
@@ -275,21 +276,34 @@ export const financeRouter = router({
       });
     }),
 
+  // Backs the print / Save-as-PDF view, which is also where the emailed invoice
+  // link lands. #458: the seller printed on it is the authenticated workspace.
+  // Both reads carry the workspace id explicitly on top of row-level security,
+  // so the invoice and its issuer always belong to the same tenant.
   getInvoiceById: adminProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      const invoice = await ctx.db.invoice.findUnique({
-        where: { id: input.id },
-        include: {
-          client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
-          project: { select: { id: true, name: true } },
-          // IMP-FIN-04: payments + computed paid/balance for the invoice detail view.
-          payments: { orderBy: { paidAt: 'desc' } },
-        },
-      });
+      const organizationId = workspaceId(ctx);
+      const [invoice, issuer] = await Promise.all([
+        ctx.db.invoice.findUnique({
+          where: { id: input.id, organizationId },
+          include: {
+            client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+            project: { select: { id: true, name: true } },
+            // IMP-FIN-04: payments + computed paid/balance for the invoice detail view.
+            payments: { orderBy: { paidAt: 'desc' } },
+          },
+        }),
+        readInvoiceIssuer(ctx.db, organizationId),
+      ]);
       if (!invoice) return null;
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
-      return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
+      return {
+        ...invoice,
+        issuer,
+        amountPaid,
+        balance: round2(Number(invoice.total) - amountPaid),
+      };
     }),
 
   createInvoice: adminProcedure.input(createInvoiceInputSchema).mutation(async ({ ctx, input }) => {
@@ -433,7 +447,7 @@ export const financeRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const invoice = await ctx.db.invoice.findUnique({
-        where: { id: input.id },
+        where: { id: input.id, organizationId: workspaceId(ctx) },
         include: {
           client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
         },
@@ -461,6 +475,9 @@ export const financeRouter = router({
         clientName: invoice.client.name,
         amountLabel: moneyLabel(Number(invoice.total), invoice.currency),
         dueDate: format(new Date(invoice.dueDate), 'MMM d, yyyy'),
+        // The link carries only the invoice id. The print view it opens signs the
+        // reader into their workspace and reads the invoice and its seller
+        // (getInvoiceById) under that workspace — never from the URL.
         url: `${appUrl()}/finance/invoices/${invoice.id}/print`,
       });
 

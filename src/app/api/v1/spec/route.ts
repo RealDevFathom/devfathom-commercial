@@ -397,6 +397,8 @@ Create an invoice. \`finance:write\`. Logs \`invoice_created\`.
 
 ### \`GET /invoices/:id\` / \`PATCH /invoices/:id\`
 Get or update invoice status. \`finance:read\` / \`finance:write\`.
+GET also returns \`issuer: { "name", "address", "taxId" }\` — the token's own workspace as the
+seller (its legal name, invoice address and tax ID; an unset address or tax ID is \`null\`).
 PATCH body: \`{ "status": "DRAFT | SENT | OVERDUE | CANCELLED" }\`.
 The PATCH endpoint enforces valid status transitions and logs \`invoice_sent\` activity. To mark an
 invoice PAID, record its payment through the mark-paid workflow instead.

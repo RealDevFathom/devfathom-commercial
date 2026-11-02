@@ -4905,6 +4905,10 @@ model Organization {
   dataResidency            String?
   primaryContactName       String?
   primaryContactEmail      String?
+  /// #458: the seller identity printed on this workspace's client invoices.
+  /// Optional; the print view omits a line when it is blank.
+  invoiceAddress           String?
+  invoiceTaxId             String?
   notes                    String?
   createdAt                DateTime                   @default(now())
   updatedAt                DateTime                   @updatedAt

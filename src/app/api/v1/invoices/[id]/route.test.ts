@@ -10,7 +10,7 @@ vi.mock('@/lib/api-auth', () => ({
 }));
 vi.mock('@/server/activity', () => ({ logActivity: mocks.logActivity }));
 
-import { PATCH } from './route';
+import { GET, PATCH } from './route';
 
 const invoice = {
   id: 'invoice-1',
@@ -114,5 +114,59 @@ describe('PATCH /api/v1/invoices/:id invoice status', () => {
     expect(response.status).toBe(409);
     expect(authCtx.db.invoice.findUniqueOrThrow).not.toHaveBeenCalled();
     expect(mocks.logActivity).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/v1/invoices/:id seller identity (#458)', () => {
+  async function get(found: unknown) {
+    const authCtx = {
+      organizationId: 'agency-1',
+      userId: 'user-1',
+      db: {
+        invoice: { findUnique: vi.fn().mockResolvedValue(found) },
+        organization: {
+          findUnique: vi.fn().mockResolvedValue({
+            legalName: 'Northwind Agency LLC',
+            displayName: 'Northwind',
+            invoiceAddress: '42 Market Street',
+            invoiceTaxId: null,
+          }),
+        },
+      },
+    };
+    const getHandler = GET as unknown as (
+      authCtx: unknown,
+      request: Request,
+      context: { params: Promise<{ id: string }> }
+    ) => Promise<Response>;
+    const response = await getHandler(
+      authCtx,
+      new Request('https://example.test/api/v1/invoices/invoice-1'),
+      { params: Promise.resolve({ id: 'invoice-1' }) }
+    );
+    return { authCtx, response, body: await response.json() };
+  }
+
+  it("returns the token workspace as the issuer, read under that workspace's id", async () => {
+    const { authCtx, response, body } = await get({ id: 'invoice-1', total: 100 });
+
+    expect(response.status).toBe(200);
+    expect(authCtx.db.invoice.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'invoice-1', organizationId: 'agency-1' } })
+    );
+    expect(authCtx.db.organization.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'agency-1' } })
+    );
+    expect(body.data.issuer).toEqual({
+      name: 'Northwind Agency LLC',
+      address: '42 Market Street',
+      taxId: null,
+    });
+  });
+
+  it('404s an invoice outside the workspace', async () => {
+    const { response } = await get(null);
+
+    expect(response.status).toBe(404);
   });
 });

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
+import { readInvoiceIssuer } from '@/lib/finance/invoice-issuer';
 import {
   INVOICE_STATUS_VALUES,
   invoiceStatusTransitionError,
@@ -14,15 +15,20 @@ export const GET = withApiAuth(
   'finance:read',
   async (authCtx, _request, ctx: { params: Promise<{ id: string }> }) => {
     const { id } = await ctx.params;
-    const invoice = await authCtx.db.invoice.findUnique({
-      where: { id },
-      include: {
-        client: { include: { contacts: true } },
-        project: { select: { id: true, name: true } },
-      },
-    });
+    // #458: the seller is the token's own workspace, read under the same
+    // tenant-scoped client and explicit organization predicate as the invoice.
+    const [invoice, issuer] = await Promise.all([
+      authCtx.db.invoice.findUnique({
+        where: { id, organizationId: authCtx.organizationId },
+        include: {
+          client: { include: { contacts: true } },
+          project: { select: { id: true, name: true } },
+        },
+      }),
+      readInvoiceIssuer(authCtx.db, authCtx.organizationId),
+    ]);
     if (!invoice) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
-    return NextResponse.json({ data: invoice });
+    return NextResponse.json({ data: { ...invoice, issuer } });
   }
 );
 
