@@ -883,6 +883,44 @@ describe('PharmacyCounterConsole sign out (DEV-41)', () => {
     expect(mocks.mutations.tender).not.toHaveBeenCalled();
   });
 
+  it.each(['open drawer', 'add to cart'])(
+    'disables sign out without a header reason while %s is pending',
+    async (action) => {
+      mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+      mocks.mutations.openDrawer!.mockImplementationOnce(() => new Promise(() => {}));
+      mocks.mutations.addLine!.mockImplementationOnce(() => new Promise(() => {}));
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      if (action === 'open drawer') {
+        fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+        await waitFor(() => expect(mocks.mutations.openDrawer).toHaveBeenCalled());
+      } else {
+        const search = screen.getByLabelText('Scan or search');
+        fireEvent.change(search, { target: { value: '123456' } });
+        fireEvent.keyDown(search, { key: 'Enter' });
+        await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalled());
+      }
+      const button = screen.getByRole('button', { name: 'Sign out' });
+      expect(button).toBeDisabled();
+      expect(button).not.toHaveAccessibleDescription();
+      expect(
+        screen.queryByText('Finish the current step or payment check to sign out.')
+      ).not.toBeInTheDocument();
+    }
+  );
+
+  it('shows the sign-out reason while a restored payment attempt needs recovery', () => {
+    persistTenderAttempt(savedAttempt());
+    render(<PharmacyCounterConsole />);
+    const button = screen.getByRole('button', { name: 'Sign out' });
+    expect(button).toBeDisabled();
+    expect(
+      screen.getByText('Finish the current step or payment check to sign out.')
+    ).toBeInTheDocument();
+    expect(button).toHaveAccessibleDescription(
+      'Finish the current step or payment check to sign out.'
+    );
+  });
+
   it.each(['missing', 'loading', 'fetching', 'stale', 'placeholder', 'wrong-sale'])(
     'asks before signing out while the active sale read is %s',
     async (state) => {

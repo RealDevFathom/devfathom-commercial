@@ -711,8 +711,16 @@ function ScopedPharmacyCounterConsole({
   const lineCount = cart?.lines.length ?? 0;
   // Only in-progress work blocks sign out; bill freshness decides whether to confirm.
   const signOutBlocked = busy;
+  // Explain only long-lived payment and recovery blocks; short actions just disable the button.
   const signOutReason =
-    signOutBlocked && pending !== 'signOut'
+    pending === 'tender' ||
+    pending === 'ownerAuthentication' ||
+    attempt !== null ||
+    unknownTender ||
+    tenderReadRequired ||
+    checkingOutcome ||
+    refreshingTenderBill ||
+    storageError
       ? 'Finish the current step or payment check to sign out.'
       : null;
 
