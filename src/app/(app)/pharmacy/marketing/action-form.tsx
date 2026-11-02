@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState, useTransition, type ReactNode } fro
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { marketingAction } from './actions';
+import { actionButton } from './controls';
 
 type Control = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
 
@@ -99,7 +100,7 @@ export function MarketingActionForm({
         <Button
           type="submit"
           variant={operation === 'preview' || operation === 'sandbox' ? 'outline' : 'default'}
-          className="min-h-11"
+          className={actionButton}
           disabled={pending || disabled}
         >
           {pending ? 'Working…' : label}

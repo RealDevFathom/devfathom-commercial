@@ -490,7 +490,7 @@ export default async function PharmacyMarketingPage({
             </label>
           </MarketingActionForm>
           <details className="mt-6 border-t border-border-subtle pt-4">
-            <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
+            <summary className="min-h-11 cursor-pointer content-center text-sm font-medium text-text-strong focus-visible:outline-2 focus-visible:outline-ring">
               Get a generic AI draft
             </summary>
             <div className="mt-4 space-y-4">
@@ -509,7 +509,7 @@ export default async function PharmacyMarketingPage({
                     <option value="RETAIL_OFFER">Retail offer</option>
                   </select>
                 </label>
-                <p className="text-sm text-text-muted">
+                <p className="text-sm text-text-body">
                   Only this generic choice goes to the AI provider. Copy and review a suggestion
                   before approving it.
                 </p>
@@ -525,7 +525,7 @@ export default async function PharmacyMarketingPage({
             disabled={!history.templates.length}
           >
             {!history.templates.length && (
-              <p className="text-sm text-text-muted">
+              <p className="text-sm text-text-body">
                 Approve a template first to enable this form.
               </p>
             )}
