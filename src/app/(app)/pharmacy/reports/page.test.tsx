@@ -223,7 +223,9 @@ describe('pharmacy report catalog filters', () => {
       render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
       expect(screen.getByText(/Financial report and owner permissions/)).toBeVisible();
       expect(screen.queryByText(/Expiry advice could not load/)).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Create draft proposal' })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'Create draft proposal' })
+      ).not.toBeInTheDocument();
     }
   );
 
