@@ -1,8 +1,9 @@
 -- btree_gist objects are owned by PostgreSQL's extension bootstrap role when a
 -- non-superuser installs this trusted extension. The executable deployment path
 -- must therefore run prisma/prepare-extensions.ts with the privileged extension
--- administrator before Prisma migrations. This migration verifies that required
--- postcondition and fails closed instead of accepting ineffective REVOKE warnings.
+-- administrator before Prisma migrations. This migration also corrects functions
+-- owned by its own role in shadow databases, then verifies that postcondition and
+-- fails closed instead of accepting ineffective REVOKE warnings.
 --
 -- A managed PostgreSQL service installs trusted extensions under an internal
 -- superuser (Azure Database for PostgreSQL uses "azuresu") that no customer role
@@ -17,6 +18,7 @@ DECLARE
   configured_role name := current_user;
   configured_role_oid oid;
   configured_role_is_superuser boolean;
+  member record;
   member_count integer := 0;
   remediable_public_execute_count integer;
   managed_public_execute_count integer;
@@ -34,6 +36,22 @@ BEGIN
   IF extension_oid IS NULL THEN
     RAISE EXCEPTION 'btree_gist extension attribution is unavailable';
   END IF;
+
+  -- Shadow databases can create extension functions owned by the migration role.
+  FOR member IN
+    SELECT procedure.oid::regprocedure AS identity
+      FROM pg_catalog.pg_proc AS procedure
+      JOIN pg_catalog.pg_depend AS dependency
+        ON dependency.classid = 'pg_catalog.pg_proc'::regclass
+       AND dependency.objid = procedure.oid
+       AND dependency.refclassid = 'pg_catalog.pg_extension'::regclass
+       AND dependency.refobjid = extension_oid
+       AND dependency.deptype = 'e'
+     WHERE procedure.proowner = configured_role_oid
+     ORDER BY procedure.oid
+  LOOP
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC', member.identity);
+  END LOOP;
 
   SELECT count(*),
          count(*) FILTER (
