@@ -126,8 +126,27 @@ describe('conflictingSeedDataMessage', () => {
 
     expect(message).toContain('this database already contains conflicting seed data');
     expect(message).toContain('unique constraint on Invoice (invoiceNumber)');
-    expect(message).toContain('bun run db:reset');
     expect(message).not.toContain('at ');
+  });
+
+  it('points to the documented rebuild, in order, and away from db:reset', () => {
+    const message = conflictingSeedDataMessage({ code: 'P2002' })!;
+    const steps = [
+      'dropdb devfathom && createdb devfathom',
+      'bun prisma/prepare-extensions.ts',
+      'bunx prisma migrate deploy',
+      'devfathom_app grants',
+      'bun run db:seed',
+    ];
+    const positions = steps.map((step) => message.indexOf(step));
+    expect(positions.every((at) => at >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    expect(message).toContain('docs/LOCAL_SETUP.md, "Resetting local data"');
+    // db:reset is named only to warn against it: it drops btree_gist and
+    // pg_trgm and then stops on a failed migration.
+    expect(message).toMatch(/Do not use `bun run db:reset`/);
+    expect(message).not.toMatch(/run `bun run db:reset`/);
+    expect(message).not.toContain('then seed again');
   });
 
   it('reads the classic meta.target too, and works without any meta', () => {
