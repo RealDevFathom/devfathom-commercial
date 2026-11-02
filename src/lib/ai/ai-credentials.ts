@@ -55,7 +55,9 @@ export function extractAPIKey(secretString: string, provider: KeyedAIProvider): 
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const record = parsed as Record<string, unknown>;
-  for (const field of ['apiKey', 'api_key', 'key', LOCAL_API_KEY_ENV[provider]]) {
+  // The staging secrets are stored as {"value": "..."}; name that shape explicitly so
+  // adding a second field to the secret later cannot make the key unreadable.
+  for (const field of ['apiKey', 'api_key', 'key', 'value', LOCAL_API_KEY_ENV[provider]]) {
     const value = record[field];
     if (typeof value === 'string' && value.trim()) return value.trim();
   }

@@ -35,6 +35,7 @@
     "db:reset": "bunx prisma migrate reset",
     "assistant:eval": "tsx scripts/assistant-eval.ts",
     "assistant:diag": "tsx scripts/assistant-diag.ts",
+    "ai:smoke": "tsx --tsconfig scripts/tsconfig.json scripts/ai-provider-smoke.ts",
     "email:smoke": "tsx scripts/email-smoke.ts",
     "platform:jobs": "tsx --tsconfig scripts/tsconfig.json scripts/process-platform-jobs.ts",
     "restaurant:jobs": "tsx --tsconfig scripts/tsconfig.json scripts/run-restaurant-jobs.ts",

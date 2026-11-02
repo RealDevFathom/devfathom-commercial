@@ -67,6 +67,13 @@ export const DEFAULT_MODEL_PRICES_USD_PER_MTOK: Readonly<
   'bedrock:us.anthropic.claude-haiku-5-5': { input: 0.11, output: 0.55 },
   'bedrock:us.anthropic.claude-sonnet-5-5': { input: 2.2, output: 11 },
   'bedrock:us.anthropic.claude-opus-5-5': { input: 4.4, output: 22 },
+  // Older US profiles that answer on the staging account today, for SuperAdmin or
+  // AI_BEDROCK_MODEL_* overrides while the Claude 5.5 Bedrock agreement is pending.
+  'bedrock:us.anthropic.claude-haiku-4-5-20251001-v1:0': { input: 1.1, output: 5.5 },
+  'bedrock:us.anthropic.claude-sonnet-4-6': { input: 3.3, output: 16.5 },
+  'bedrock:us.anthropic.claude-sonnet-4-5-20250929-v1:0': { input: 3.3, output: 16.5 },
+  'bedrock:us.anthropic.claude-opus-4-6-v1': { input: 5.5, output: 27.5 },
+  'bedrock:us.anthropic.claude-opus-4-5-20251101-v1:0': { input: 5.5, output: 27.5 },
 };
 
 /**

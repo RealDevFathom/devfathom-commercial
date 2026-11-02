@@ -41,6 +41,7 @@ describe('API key source', () => {
     ['{"apiKey":"json-key"}', 'json-key'],
     ['{"ANTHROPIC_API_KEY":"named-key","other":1}', 'named-key'],
     ['{"only":"single-string"}', 'single-string'],
+    ['{"value":"staging-shape","rotatedBy":"ops"}', 'staging-shape'],
     ['{"a":"one","b":"two"}', null],
     ['{not json', null],
     ['', null],
