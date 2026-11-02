@@ -203,7 +203,9 @@ it('includes unidentified quarantine holdings in the mandatory refund cap', asyn
     'REFUND_EXCEEDS_TENDER'
   );
   expect(f.db.pharmacyRefund.create).not.toHaveBeenCalled();
-  await expect(f.caller.refundTender({ ...input, amountMinor: 200 })).resolves.toMatchObject({
+  await expect(
+    f.caller.refundTender({ ...input, amountMinor: 200, idempotencyKey: 'refund-exact-cap' })
+  ).resolves.toMatchObject({
     refundId: 'refund-1',
   });
 });
