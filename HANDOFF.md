@@ -141,34 +141,47 @@ QA and Security at head `1276a75e` (20:16 UTC, box run): **both FAIL**.
 - **Hygiene:** commit messages name model versions, so merge with a clean squash message.
 - **Next step:** after integration, reply on the PR with the fixes and ask for QA/Security again.
 
-**Develop deploy in progress (started 21:23 UTC)**
+**Develop deploy: done (21:37 UTC)**
 
-- **Release:** `96d372bd` (head after the review fixes; 1128/1128 tests; the Dockerfile-style
-  build passes).
-- **Patch:** `s3://devfathom-develop-artifacts/deploy-develop/dev576/96d372bd.patch.gz`
-  (sha256 `393f0b7e…`).
-- **Script:** `/root/scdeploy576.sh` on the host (copy at `deploy-develop/dev576/scdeploy576.sh`).
-  It runs as transient unit `dev576-deploy.service` and logs to
-  `/var/log/sehatcart-deploy-96d372bd.log`, with markers DOWNLOAD_OK, PATCH_OK, INSTALL_OK,
-  BACKUP_OK, MIGRATE_OK, ENV_OK, BUILD_OK and DONE.
-- **What the script does:**
-  1. Guards that `current` is `47518cbf`.
-  2. Takes a `pg_dump` backup into `/root/backups/sehatcart_dev-pre-96d372bd-*.dump`.
-  3. Backs up the env to `sehatcart.env.bak-pre-dev576-*`, then appends the AI env.
-  4. Builds, switches `current`, restarts, and checks `/api/ready`.
-  5. If `/api/ready` is not 200, it relinks `47518cbf`, restores the env and restarts.
-- **Manual rollback:**
+- **State:** release `96d372bd` is live on `sehatcart.service`. `/api/ready` returns 200, and
+  the app has logged no errors since the restart.
+- **Rollback point:** `releases/47518cbf…` is kept. To roll back:
   - `ln -sfn /home/sehatcart/releases/47518cbf94ac912d0d657122625af03b23bbd1c1 /home/sehatcart/current`
-  - Restore the env backup.
+  - `cp -a /home/sehatcart/sehatcart.env.bak-pre-dev576-20261102T212540Z /home/sehatcart/sehatcart.env`
   - `systemctl restart sehatcart`
-  - Migrations stay; they are additive.
-- **After DONE:**
-  - On the host, run
-    `cd /home/sehatcart/current && sudo -u sehatcart … bun run ai:smoke -- --skip-bedrock`
-    with `sehatcart.env` sourced. This uses the instance role and prints no key.
-  - Ask Saad to send one Ask Fathom message at `sehatcart.pharmacy.develop.devfathom.com`.
-  - Then reply to QA/Security on #1238, rewrite the PR body, and post on DEV-576. Mark the
-    Bedrock live test as pending AWS approval.
+- **DB backup:** `/root/backups/sehatcart_dev-pre-96d372bd-20261102T212535Z.dump`.
+- **Migrations:** all three DEV-576 migrations are applied on develop. They are frozen; add new
+  migrations rather than editing these.
+- **Env added:**
+  - `AI_PROVIDER=auto`
+  - `AI_PROVIDER_ORDER=anthropic,openai,bedrock`
+  - both `*_SECRET_ID`
+  - `AI_SECRETS_REGION=ap-southeast-1`
+  - `BEDROCK_REGION=ap-southeast-1`
+  - `AF_HAIKU_LOOKUPS=false`
+- **IAM:** inline policy `devfathom-ai-providers` on `inky-ec2-ssm`.
+- **Live smoke on the host:** ✅ all checks passed.
+  - Command: `bun --conditions=react-server scripts/ai-provider-smoke.ts --skip-bedrock`, run as
+    sehatcart with `sehatcart.env` and the instance role. `bun run ai:smoke` fails there because
+    the host has no Node.
+  - Anthropic direct: Sonnet 5.5, 1.5 s.
+  - OpenAI direct: gpt-6.1-sol, 2.7 s.
+  - Routed chain: Anthropic Sonnet.
+  - Cheap tier: Sonnet, because the flag is off.
+  - Weekly-summary policy: Anthropic Opus 5.5.
+  - Forced fallback (missing model, 404): answered by OpenAI gpt-6.1-sol.
+  - `ai_provider_usage`: 4 rows, priced correctly.
+  - Bedrock: SKIP, pending AWS approval of the use-case form.
+- **Open follow-ups:**
+  - Saad to send one Ask Fathom message in the browser (a tenant login is needed).
+  - The smoke run printed one warning after it finished:
+    `[ai-usage] could not read SuperAdmin AI settings`. There are no `ai_settings` rows; this is
+    probably a disconnect race in the script. Watch the app log for it.
+  - Re-run the Bedrock live check once AWS approves the use-case form.
+- **Rest of the plan:**
+  1. Rewrite the PR body (scratchpad `dev576-pr-body-v2.md`).
+  2. Reply to QA/Security on #1238 and ask them to re-review.
+  3. Post on DEV-576.
 
 **Internal adversarial review** (`wf_66fd213d-49e`, four lenses, every finding verified by a
 skeptic): 15 confirmed, 6 rejected.
