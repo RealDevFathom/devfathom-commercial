@@ -9,10 +9,98 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * are aliases but not names, so they are left out.
  */
 
-/** Rows read per source; a tenant catalogue larger than this is checked on its first rows. */
+/** Rows read per page, paged by id. */
 export const MEDICINE_NAME_QUERY_LIMIT = 5_000;
+/** Rows read per source in total; a larger catalogue is checked on its first rows and logged. */
+export const MEDICINE_NAME_MAX_ROWS = 100_000;
 /** Shorter names ("Q", "AB") would match ordinary words. */
 export const MIN_MEDICINE_NAME_LENGTH = 3;
+
+/** Dose-form and unit words: a name's leading words before one of these are also a name. */
+const DOSE_FORM_WORDS = new Set([
+  'tablet',
+  'tablets',
+  'tab',
+  'tabs',
+  'capsule',
+  'capsules',
+  'cap',
+  'caps',
+  'syrup',
+  'syp',
+  'suspension',
+  'susp',
+  'drops',
+  'drop',
+  'injection',
+  'inj',
+  'cream',
+  'ointment',
+  'oint',
+  'gel',
+  'sachet',
+  'sachets',
+  'lotion',
+  'spray',
+  'inhaler',
+  'infusion',
+  'solution',
+  'powder',
+  'elixir',
+  'ml',
+  'mg',
+  'mcg',
+  'goli',
+  'golian',
+  'goliyan',
+  'sharbat',
+  'qatray',
+  'qatre',
+  'گولی',
+  'گولیاں',
+  'شربت',
+  'کیپسول',
+  'قطرے',
+  'انجکشن',
+  'کریم',
+]);
+
+/**
+ * Ordinary words that are not names on their own, though a product may start with them
+ * ("Eye Drops", "Baby Syrup"). The full product name is still kept.
+ */
+const SHORT_NAME_STOPWORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'new',
+  'eye',
+  'ear',
+  'nose',
+  'nasal',
+  'oral',
+  'baby',
+  'kids',
+  'child',
+  'children',
+  'adult',
+  'cough',
+  'cold',
+  'flu',
+  'pain',
+  'fever',
+  'skin',
+  'hair',
+  'multi',
+  'vitamin',
+  'vitamins',
+  'extra',
+  'plus',
+  'forte',
+  'sugar',
+  'free',
+  'relief',
+]);
 
 /** Lower-case, accents removed, every run of non-letters/digits collapsed to one space. */
 export function normalizeNameText(value: string): string {
@@ -26,15 +114,18 @@ export function normalizeNameText(value: string): string {
 
 /**
  * The full normalized name plus its leading words before a strength or dose form, so
- * "Panadol Extra 500mg Tablet" also yields "panadol extra".
+ * "Panadol Extra 500mg Tablet" also yields "panadol extra" and "Calpol Syrup 120ml"
+ * yields "calpol". A leading part that is only an ordinary word ("eye") is dropped.
  */
 export function medicineNameVariants(value: string): string[] {
   const full = normalizeNameText(value);
   if (!full) return [];
   const words = full.split(' ');
-  const cut = words.findIndex((word) => /\d/.test(word));
+  const cut = words.findIndex((word) => /\d/.test(word) || DOSE_FORM_WORDS.has(word));
   const base = (cut === -1 ? words : words.slice(0, cut)).join(' ');
-  return [...new Set([full, base])].filter((name) => [...name].length >= MIN_MEDICINE_NAME_LENGTH);
+  const names = [full];
+  if (base !== full && !SHORT_NAME_STOPWORDS.has(base)) names.push(base);
+  return names.filter((name) => [...name].length >= MIN_MEDICINE_NAME_LENGTH);
 }
 
 /** Build a name set from raw catalogue strings. */
@@ -46,25 +137,57 @@ export function medicineNameSet(values: Iterable<string | null | undefined>): Se
   return names;
 }
 
+/**
+ * Read every row of one source, a page at a time by id, up to MEDICINE_NAME_MAX_ROWS.
+ * Hitting the bound is logged (source and row count only).
+ */
+async function readAllPages<T extends { id: string }>(
+  source: string,
+  readPage: (afterId: string | undefined) => Promise<T[]>
+): Promise<T[]> {
+  const rows: T[] = [];
+  let afterId: string | undefined;
+  for (;;) {
+    const page = await readPage(afterId);
+    rows.push(...page);
+    if (page.length < MEDICINE_NAME_QUERY_LIMIT) return rows;
+    if (rows.length >= MEDICINE_NAME_MAX_ROWS) {
+      console.warn('PHARMACY_MEDICINE_NAMES_TRUNCATED', { source, rows: rows.length });
+      return rows;
+    }
+    afterId = page.at(-1)!.id;
+  }
+}
+
+const afterIdWhere = (afterId: string | undefined) => (afterId ? { id: { gt: afterId } } : {});
+
 /** Read the tenant's medicine names. `db` must be tenant-scoped (RLS). */
 export async function readTenantMedicineNames(db: ScopedDb): Promise<Set<string>> {
   const [medicines, aliases, ingredients] = await Promise.all([
-    db.medicine.findMany({
-      select: { productName: true, brandName: true },
-      orderBy: { id: 'asc' },
-      take: MEDICINE_NAME_QUERY_LIMIT,
-    }),
-    db.medicineAlias.findMany({
-      where: { type: { not: 'LEGACY_CODE' } },
-      select: { value: true },
-      orderBy: { id: 'asc' },
-      take: MEDICINE_NAME_QUERY_LIMIT,
-    }),
-    db.ingredient.findMany({
-      select: { name: true },
-      orderBy: { id: 'asc' },
-      take: MEDICINE_NAME_QUERY_LIMIT,
-    }),
+    readAllPages('medicine', (afterId) =>
+      db.medicine.findMany({
+        where: afterIdWhere(afterId),
+        select: { id: true, productName: true, brandName: true },
+        orderBy: { id: 'asc' },
+        take: MEDICINE_NAME_QUERY_LIMIT,
+      })
+    ),
+    readAllPages('medicineAlias', (afterId) =>
+      db.medicineAlias.findMany({
+        where: { type: { not: 'LEGACY_CODE' }, ...afterIdWhere(afterId) },
+        select: { id: true, value: true },
+        orderBy: { id: 'asc' },
+        take: MEDICINE_NAME_QUERY_LIMIT,
+      })
+    ),
+    readAllPages('ingredient', (afterId) =>
+      db.ingredient.findMany({
+        where: afterIdWhere(afterId),
+        select: { id: true, name: true },
+        orderBy: { id: 'asc' },
+        take: MEDICINE_NAME_QUERY_LIMIT,
+      })
+    ),
   ]);
   return medicineNameSet([
     ...medicines.flatMap((row) => [row.productName, row.brandName]),

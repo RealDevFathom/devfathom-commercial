@@ -77,6 +77,15 @@ beforeAll(async () => {
   });
   await seed(orgA, 'Panadol Extra 500mg Tablet', 'Panadol', 'Paracetamol');
   await seed(orgB, 'Brufen 400mg Tablet', 'Brufen', 'Ibuprofen');
+  await inOrg(orgA, (dbx) =>
+    dbx.medicine.create({
+      data: {
+        organizationId: orgA,
+        productName: 'Calpol Syrup 120ml',
+        productFamily: 'PHARMACEUTICAL',
+      },
+    })
+  );
 });
 afterAll(() => client?.$disconnect());
 
@@ -84,8 +93,17 @@ describeIfDatabase('tenant medicine names (DEV-576)', () => {
   it("reads only the tenant's own product, brand, alias and ingredient names", async () => {
     const names = await inOrg(orgA, (dbx) => readTenantMedicineNames(dbx));
     expect(names).toEqual(
-      new Set(['panadol extra 500mg tablet', 'panadol extra', 'panadol', 'panadola', 'paracetamol'])
+      new Set([
+        'panadol extra 500mg tablet',
+        'panadol extra',
+        'panadol',
+        'panadola',
+        'paracetamol',
+        'calpol syrup 120ml',
+        'calpol',
+      ])
     );
+    expect(containsMedicineName('Calpol is back! Reply STOP to opt out.', names)).toBe(true);
     expect(containsMedicineName('Panadol is back! Reply STOP to opt out.', names)).toBe(true);
     expect(containsMedicineName('Brufen is back! Reply STOP to opt out.', names)).toBe(false);
     const other = await inOrg(orgB, (dbx) => readTenantMedicineNames(dbx));
