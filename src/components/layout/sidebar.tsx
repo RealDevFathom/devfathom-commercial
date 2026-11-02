@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
@@ -860,67 +860,53 @@ export function TopNavigation() {
 
   return (
     <div className="studio-navigation hidden border-b border-border-subtle bg-card lg:block">
-      {/*
-          The rail wraps instead of scrolling sideways: a large workspace (a pharmacy owner
-          sees 21 entries) used to hide Prescriptions and the Pharmacist queue past the
-          right edge at 1280px. Entries stay in their numbered order and each navigation
-          group starts after a hairline divider, so the wrapped rows still read as groups.
-        */}
       <nav
         aria-label="Primary navigation"
-        className="mx-auto flex min-h-14 w-full max-w-[1540px] flex-wrap items-center gap-x-1 gap-y-1 px-8 py-2.5"
+        className="mx-auto flex h-14 w-full max-w-[1540px] items-center gap-1 overflow-x-auto px-8"
       >
         {filteredNav.map((item, index) => {
           const isActive = item.href === bestMatch;
-          const beginsGroup = index > 0 && filteredNav[index - 1]?.group !== item.group;
+          const beginsFirmGroup = item.group === 'Firm' && filteredNav[index - 1]?.group !== 'Firm';
           const Icon = item.icon;
           const num = indexByHref.get(item.href) ?? 0;
 
           return (
-            <Fragment key={item.href}>
-              {beginsGroup ? (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-current={isActive ? 'page' : undefined}
+              className={cn(
+                'group relative isolate flex h-9 shrink-0 items-center gap-2 rounded-full px-3.5 text-xs font-medium text-text-muted transition-colors hover:bg-muted hover:text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                isActive && 'text-primary-foreground hover:text-primary-foreground',
+                beginsFirmGroup && 'ml-3'
+              )}
+            >
+              {numbered ? (
                 <span
-                  aria-hidden="true"
-                  data-slot="nav-group-divider"
-                  className="mx-2 h-5 w-px shrink-0 bg-border-subtle"
+                  className={cn(
+                    'font-mono text-[10px] tabular-nums text-text-body',
+                    isActive && 'text-accent-brand'
+                  )}
+                >
+                  {String(num).padStart(2, '0')}
+                </span>
+              ) : (
+                <Icon
+                  className={cn(
+                    'h-3.5 w-3.5 text-text-faint group-hover:text-text-muted',
+                    isActive && 'text-accent-brand'
+                  )}
                 />
-              ) : null}
-              <Link
-                href={item.href}
-                data-nav-group={item.group}
-                aria-current={isActive ? 'page' : undefined}
-                className={cn(
-                  'group relative isolate flex h-9 shrink-0 items-center gap-2 rounded-full px-3.5 text-xs font-medium text-text-muted transition-colors hover:bg-muted hover:text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  isActive && 'text-primary-foreground hover:text-primary-foreground'
-                )}
-              >
-                {numbered ? (
-                  <span
-                    className={cn(
-                      'font-mono text-[10px] tabular-nums text-text-body',
-                      isActive && 'text-accent-brand'
-                    )}
-                  >
-                    {String(num).padStart(2, '0')}
-                  </span>
-                ) : (
-                  <Icon
-                    className={cn(
-                      'h-3.5 w-3.5 text-text-faint group-hover:text-text-muted',
-                      isActive && 'text-accent-brand'
-                    )}
-                  />
-                )}
-                <span>{item.label}</span>
-                {isActive && (
-                  <m.span
-                    layoutId="topnav-active"
-                    className="absolute inset-0 -z-10 rounded-full bg-primary"
-                    transition={{ type: 'spring', stiffness: 420, damping: 34 }}
-                  />
-                )}
-              </Link>
-            </Fragment>
+              )}
+              <span>{item.label}</span>
+              {isActive && (
+                <m.span
+                  layoutId="topnav-active"
+                  className="absolute inset-0 -z-10 rounded-full bg-primary"
+                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                />
+              )}
+            </Link>
           );
         })}
       </nav>

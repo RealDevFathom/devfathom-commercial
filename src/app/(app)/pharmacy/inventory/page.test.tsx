@@ -289,38 +289,3 @@ describe('Inventory pack-action integration', () => {
     expect(lots).not.toHaveBeenCalled();
   });
 });
-
-describe('Physical count card', () => {
-  it('is left out when there is nothing to count and no past count', async () => {
-    lots.mockResolvedValue([]);
-    await show();
-    expect(screen.queryByText('Physical count')).not.toBeInTheDocument();
-    expect(screen.queryByText(/before starting a count/)).not.toBeInTheDocument();
-    // Locations takes the full row instead of sitting beside an empty panel.
-    expect(screen.getByTestId('inventory-locations-row')).not.toHaveClass('xl:grid-cols-2');
-    expect(screen.getByText('Locations')).toBeVisible();
-  });
-
-  it('is left out when stock exists but no location is set up', async () => {
-    ctx.db.pharmacyStockLocation.findMany.mockResolvedValue([]);
-    await show();
-    expect(screen.queryByText('Physical count')).not.toBeInTheDocument();
-  });
-
-  it('shows the count form beside Locations when stock can be counted', async () => {
-    await show();
-    expect(screen.getByText('Physical count')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Freeze count scope' })).toBeVisible();
-    expect(screen.getByTestId('inventory-locations-row')).toHaveClass('xl:grid-cols-2');
-  });
-
-  it('keeps past counts reachable for approval even when nothing is countable now', async () => {
-    lots.mockResolvedValue([]);
-    ctx.db.pharmacyInventoryCount.findMany.mockResolvedValue([
-      { id: 'count-a', status: 'OPEN', createdAt: new Date('2026-10-01'), lines: [] },
-    ]);
-    await show();
-    expect(screen.getByText('Physical count')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Approve count' })).toBeVisible();
-  });
-});

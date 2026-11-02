@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EntitlementsProvider } from '@/components/entitlements-provider';
@@ -469,65 +469,4 @@ describe.each(['mobile', 'desktop'] as const)('%s Hospitality navigation', (surf
       expect(renderRail({ capabilities: everyRailCapability, vertical })).toEqual([]);
     }
   );
-});
-
-describe('TopNavigation wrapping groups', () => {
-  beforeEach(() => {
-    useSessionMock.mockReturnValue({ data: { user: { role: 'ADMIN', name: 'Test operator' } } });
-    usePathnameMock.mockReturnValue('/pharmacy/prescriptions');
-  });
-
-  function pharmacyOwnerRail() {
-    render(
-      <EntitlementsProvider
-        value={{
-          organizationId: 'org-1',
-          vertical: 'PHARMACY',
-          seatLimit: 10,
-          activeSeats: 1,
-          enabledModules: [
-            ...enabledModules,
-            'pharmacy-core',
-            'pharmacy-counter',
-            'pharmacy-crm',
-            'pharmacy-dispensing',
-            'pharmacy-procurement',
-            'pharmacy-safety',
-          ],
-          modules: [],
-          limits: {},
-        }}
-      >
-        <TopNavigation />
-      </EntitlementsProvider>
-    );
-    return screen.getByRole('navigation', { name: 'Primary navigation' });
-  }
-
-  it('wraps onto further rows instead of hiding entries past a sideways scroll', () => {
-    const nav = pharmacyOwnerRail();
-    expect(nav).toHaveClass('flex-wrap');
-    expect(nav).toHaveClass('min-h-14');
-    expect(nav).not.toHaveClass('overflow-x-auto');
-    expect(nav).not.toHaveClass('h-14');
-    expect(screen.getByRole('link', { name: /Prescriptions$/ })).toHaveAttribute(
-      'aria-current',
-      'page'
-    );
-    expect(screen.getByRole('link', { name: /Pharmacist queue$/ })).toBeInTheDocument();
-  });
-
-  it('starts every navigation group after one hairline divider and keeps numbering contiguous', () => {
-    const nav = pharmacyOwnerRail();
-    const links = within(nav).getAllByRole('link');
-    const groups = links.map((link) => link.getAttribute('data-nav-group'));
-    const groupStarts = groups.filter((group, index) => index > 0 && groups[index - 1] !== group);
-    expect(groupStarts.length).toBeGreaterThan(0);
-    const dividers = nav.querySelectorAll('[data-slot="nav-group-divider"]');
-    expect(dividers).toHaveLength(groupStarts.length);
-    for (const divider of dividers) expect(divider).toHaveAttribute('aria-hidden', 'true');
-    expect(links.map((link) => link.textContent?.slice(0, 2))).toEqual(
-      links.map((_, index) => String(index + 1).padStart(2, '0'))
-    );
-  });
 });

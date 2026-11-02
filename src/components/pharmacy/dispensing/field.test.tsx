@@ -22,6 +22,6 @@ describe('Field', () => {
     expect(label.className.split(/\s+/)).toEqual(expect.arrayContaining(['grid', 'content-start']));
     // Height comes from the shared control recipe only, the same as its neighbours.
     expect(select.className).toBe(fieldClass);
-    expect(screen.getByLabelText('Prescription image').className).toBe(fieldClass);
+    expect(screen.getByLabelText(/^Prescription image/).className).toBe(fieldClass);
   });
 });

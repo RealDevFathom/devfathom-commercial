@@ -247,9 +247,6 @@ export default async function PharmacyInventoryPage({
   );
   const releasableQuarantined = quarantined.filter(({ lot }) => lot.batch.state === 'ACTIVE');
   const writeOffPositions = [...available, ...quarantined];
-  // A count needs countable stock at a location; with neither that nor a past count the card
-  // would be an empty panel stretched beside Locations, so it is left out until it can be used.
-  const showPhysicalCount = (available.length > 0 && locations.length > 0) || counts.length > 0;
   const totalUnits = available.reduce((sum, row) => sum + row.balance.onHandUnits, 0);
   const draftLotByMedicine = new Map(
     available.map(({ lot }) => [lot.batch.medicineId, lot] as const)
@@ -574,10 +571,7 @@ export default async function PharmacyInventoryPage({
         )}
       </SectionCard>
 
-      <div
-        data-testid="inventory-locations-row"
-        className={`grid gap-6 ${showPhysicalCount ? 'xl:grid-cols-2' : ''}`}
-      >
+      <div className="grid gap-6 xl:grid-cols-2">
         <SectionCard title="Locations" eyebrow="INV-05">
           {outOfRangeLogs.length > 0 ? (
             <div
@@ -715,86 +709,81 @@ export default async function PharmacyInventoryPage({
             </div>
           </div>
         </SectionCard>
-        {showPhysicalCount ? (
-          <SectionCard title="Physical count" eyebrow="INV-06 · frozen snapshot">
-            {available.length && locations.length ? (
-              <form action={perform} className="grid gap-3 sm:grid-cols-2">
-                <input name="action" type="hidden" value="create-count" />
-                <input name="branchId" type="hidden" value={branch.id} />
-                <label className="text-sm sm:col-span-2">
-                  Lot and location
-                  <select className={inputClass} name="position">
-                    {available.map(({ lot, balance }) => (
-                      <option
-                        key={`${lot.id}:${balance.stockLocationId}`}
-                        value={`${lot.id}:${balance.stockLocationId}`}
-                      >
-                        {lot.batch.medicine.productName} · batch {lot.batch.batchNumber} ·{' '}
-                        {balance.location.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-sm">
-                  Variance threshold
-                  <Input
-                    className="mt-1"
-                    defaultValue="0"
-                    min="0"
-                    name="threshold"
-                    required
-                    type="number"
-                  />
-                </label>
-                <label className="text-sm">
-                  Counted sealed packs
-                  <Input className="mt-1" min="0" name="sealed" required type="number" />
-                </label>
-                <label className="text-sm">
-                  Counted loose units
-                  <Input className="mt-1" min="0" name="loose" required type="number" />
-                </label>
-                <Button className="sm:col-span-2" type="submit">
-                  Freeze count scope
-                </Button>
-              </form>
-            ) : (
-              <Empty>Receive stock and create a location before starting a count.</Empty>
-            )}
-            <div className="mt-5 space-y-2">
-              {counts.map((count) => (
-                <div
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-border-subtle p-3"
-                  key={count.id}
-                >
-                  <div>
-                    <StatusPill status={label(count.status)} tone={tone(count.status)} />
-                    <p className="mt-1 text-xs text-text-muted">
-                      {count.lines.length} frozen line · {when(count.createdAt)} · variance{' '}
-                      {count.lines.reduce(
-                        (sum, line) => sum + Math.abs(line.varianceUnits ?? 0),
-                        0
-                      )}{' '}
-                      units
-                    </p>
-                  </div>
-                  {count.status !== 'APPROVED' ? (
-                    <form action={perform}>
-                      <input name="action" type="hidden" value="approve-count" />
-                      <input name="branchId" type="hidden" value={branch.id} />
-                      <input name="countId" type="hidden" value={count.id} />
-                      <Submit>
-                        {count.status === 'AWAITING_COAUTH'
-                          ? 'Co-authorize variance'
-                          : 'Approve count'}
-                      </Submit>
-                    </form>
-                  ) : null}
+        <SectionCard title="Physical count" eyebrow="INV-06 · frozen snapshot">
+          {available.length && locations.length ? (
+            <form action={perform} className="grid gap-3 sm:grid-cols-2">
+              <input name="action" type="hidden" value="create-count" />
+              <input name="branchId" type="hidden" value={branch.id} />
+              <label className="text-sm sm:col-span-2">
+                Lot and location
+                <select className={inputClass} name="position">
+                  {available.map(({ lot, balance }) => (
+                    <option
+                      key={`${lot.id}:${balance.stockLocationId}`}
+                      value={`${lot.id}:${balance.stockLocationId}`}
+                    >
+                      {lot.batch.medicine.productName} · batch {lot.batch.batchNumber} ·{' '}
+                      {balance.location.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">
+                Variance threshold
+                <Input
+                  className="mt-1"
+                  defaultValue="0"
+                  min="0"
+                  name="threshold"
+                  required
+                  type="number"
+                />
+              </label>
+              <label className="text-sm">
+                Counted sealed packs
+                <Input className="mt-1" min="0" name="sealed" required type="number" />
+              </label>
+              <label className="text-sm">
+                Counted loose units
+                <Input className="mt-1" min="0" name="loose" required type="number" />
+              </label>
+              <Button className="sm:col-span-2" type="submit">
+                Freeze count scope
+              </Button>
+            </form>
+          ) : (
+            <Empty>Receive stock and create a location before starting a count.</Empty>
+          )}
+          <div className="mt-5 space-y-2">
+            {counts.map((count) => (
+              <div
+                className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-border-subtle p-3"
+                key={count.id}
+              >
+                <div>
+                  <StatusPill status={label(count.status)} tone={tone(count.status)} />
+                  <p className="mt-1 text-xs text-text-muted">
+                    {count.lines.length} frozen line · {when(count.createdAt)} · variance{' '}
+                    {count.lines.reduce((sum, line) => sum + Math.abs(line.varianceUnits ?? 0), 0)}{' '}
+                    units
+                  </p>
                 </div>
-              ))}
-            </div>
-          </SectionCard>
-        ) : null}
+                {count.status !== 'APPROVED' ? (
+                  <form action={perform}>
+                    <input name="action" type="hidden" value="approve-count" />
+                    <input name="branchId" type="hidden" value={branch.id} />
+                    <input name="countId" type="hidden" value={count.id} />
+                    <Submit>
+                      {count.status === 'AWAITING_COAUTH'
+                        ? 'Co-authorize variance'
+                        : 'Approve count'}
+                    </Submit>
+                  </form>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </SectionCard>
       </div>
 
       <SectionCard title="Adjustments and write-off custody" eyebrow="INV-06">
