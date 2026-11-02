@@ -11,7 +11,7 @@ Linear: no Linear issue is attached to this QA pass (see Open questions)
   - Testing is complete. Day 2026-11-02 was CLOSED by QA at 23:48 PKT (variance −4.00, deliberate).
   - Caveat: another tester (`QA-20261102-FUNC-*`, `QA-20261102-CASHCHECK-*`) is using the **same QA Cashier account** on this tenant.
 - **Item:** QA pass (no DEV id). All workstreams done.
-- **Half-written / uncommitted:** nothing. `qa-report.md` and `ba-recommendations.md` are final. All findings so far are in `qa/sehatcart-2026-11-02/findings-log.md` (N1–N17 + re-verified issues). Nothing else uncommitted after this commit.
+- **Half-written / uncommitted:** nothing. `qa-report.md` and `ba-recommendations.md` are final. Raw working notes stay in `qa/sehatcart-2026-11-02/findings-log.md` (superseded by the report; N7 was withdrawn after re-check). Nothing else uncommitted after this commit.
 
 ## Workstreams (items)
 
@@ -24,7 +24,7 @@ Linear: no Linear issue is attached to this QA pass (see Open questions)
 | W5 | AI (Ask Fathom + growth) | done (blocked live) | Ask Fathom 503 (no `AI_PROVIDER` on develop, #1199/#1159) → accuracy/injection/Urdu **not testable live**; tool authz reviewed in code (`src/lib/ai/tools/pharmacy-reports.ts`); growth insights UNAVAILABLE; basket needs completed days | Write up; optional: deterministic replenishment report check (`pharmacyReports.replenishment`) |
 | W6 | UI/UX/a11y sweep (375/768/1440, dark, Urdu RTL, keyboard, axe) | done | Desktop/tablet/phone sweeps done (no doc overflow; #1032/#1069 reproduce); axe done (N25); no app Urdu (N24); dark sweep running | `ROUTES="..." node qa/sehatcart-2026-11-02/harness/sweep.mjs tablet 768 1024 light`, then `phone 375 812`, `desk-dark 1440 900 dark`; Urdu switch via Settings; axe via `@axe-core/playwright` |
 | W7 | Security + data integrity probes | done | XSS pass; CSV pass (Sev4 gap); throttle N19; logout-not-revoked N20; concurrency pass; #521/#636 fixed; offline N21 | Optional: cross-tenant host probe (needs another tenant host) |
-| W8 | Write `qa-report.md` + `ba-recommendations.md` | done | 28 new findings (5 Sev1/7 Sev2/12 Sev3/4 Sev4), 23 re-verified, go/no-go = NO-GO; 40 BA recommendations + top 10 | Draft from `findings-log.md`; dedupe against `issues.tsv` (regenerate with the `gh api` command below) |
+| W8 | Write `qa-report.md` + `ba-recommendations.md` | done | 28 new findings (5 Sev1/7 Sev2/12 Sev3/4 Sev4), 23 re-verified, go/no-go = NO-GO; 39 BA recommendations (24 P1, 14 P2, 1 P3) + top 10 | — |
 
 ## Environment / test data (no passwords here — creds live only in a local, uncommitted file)
 
