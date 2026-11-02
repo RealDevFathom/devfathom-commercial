@@ -40,5 +40,23 @@
   "initialSha": "875bcc24b1bfc23a7a905adfcfa5038538a89a33",
   "what": "Prettier on the new archive-recovery doc",
   "initialFailure": "Prettier: docs/archive-recovery/issue-506-white-ui-dirty.md unformatted"
+ },
+ "1161": {
+  "sha": "7013e12df3e562d0ec0f075aec87cd3d03e8a3a0",
+  "initialSha": "c42d7aca78fcbc705806f5a4f30dd722ba0b6aff",
+  "what": "types the test env with NODE_ENV and applies Prettier to the new test",
+  "initialFailure": "1 new typecheck error (TS2741 in tests/postgres-backup.test.ts) and Prettier on that new file"
+ },
+ "1164": {
+  "sha": "019e88945f0e922b4d553246b27b5d8312be63ac",
+  "initialSha": "a4f02fc8a4217589aa42d82017eecd43bef9bd22",
+  "what": "Prettier on the reports page and its test",
+  "initialFailure": "Prettier: src/app/(app)/pharmacy/reports/page.tsx and page.test.tsx unformatted"
+ },
+ "1150": {
+  "sha": "bc698680e4ae951923cd69d9669960fa47541ff8",
+  "initialSha": "d9ecb6f1aa109be3ed12a975be8138c347de2547",
+  "what": "Prettier on the reports page test",
+  "initialFailure": "Prettier: src/app/(app)/pharmacy/reports/page.test.tsx unformatted"
  }
 }

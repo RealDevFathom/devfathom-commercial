@@ -16,5 +16,17 @@
    "verdict": "FAIL",
    "details": "The five fixture repairs are correct (duplicate mock keys removed, required grossMinor and recipeId added, the resolve wrapped in act, no assertion weakened) and they take typecheck to 0 errors. But DEV-222 asks to recover or explicitly retire the archive/fix/qa-b3-pharmacy work (10d268de), and none of it is recovered or ruled on: the PKT licence dates (regulatory.ts:93), the PKT week bucket (khata-reminders.ts:51), the quiet-hours counter and the platform-login tabIndex and skip link are still absent, yet the body says \"Fixes DEV-222\". No fix commit was pushed, because those items overlap other open PRs (#812, #105, #104, #103) and need the owner's per-commit decision. Change \"Fixes\" to \"Refs DEV-222\" or record that decision"
   }
+ },
+ "1164": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Reports now names the missing operational reports permission or the Pharmacy Reports module and says the workspace administrator can fix it; tests cover the permission, module, sign-in and unrelated-failure cases. The reviewer flagged that Day close still blocks a non-admin pharmacy:close holder on the client and that nav items are not hidden, but 2 of 3 skeptics refuted it as blocking here because open PR #992 delivers both; merge #992 with this PR. Prettier on the reports page is fixed in 019e88945f"
+  }
+ },
+ "1150": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "The production sandbox guard works and is tested (paymentSandboxAdmitted returns false when NODE_ENV=production), and the main expiry advisor card now shows a proper load-error state instead of the owner-only permission copy, with tests for FORBIDDEN, UNAUTHORIZED and INTERNAL errors. The Daily work pack's bare 'UNAVAILABLE' row and the raw-ID supplier/ingredient/batch filters are left to open PR #1001; both skeptics refuted that as a blocker for this PR. Prettier on the reports page test is fixed in bc698680e4"
+  }
  }
 }

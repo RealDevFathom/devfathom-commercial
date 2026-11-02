@@ -1,19 +1,20 @@
 # PR review handoff log
 
-_Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
+_Generated 2026-11-02 19:04 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
 
 ## Resume here
 
-- **Next action:** collect the group 2 review workflow result (run wf_f4d5deac-1fc), then push one fix commit each for the group 2 PRs whose machine checks or reviews failed. Known so far: #1166 (4 ESLint react/display-name errors and 1 failing test in its new `src/components/layout/topbar.search-licensing.test.tsx`), #1161 (new TS2741 in `tests/postgres-backup.test.ts`: the env object needs `NODE_ENV`), and Prettier on files newly unformatted by #1166, #1165, #1164, #1161, #1157, #1156, #1152 and #1150 (`python3 handoff/scripts/format-check.py pr/<n>`), plus any confirmed QA/Security findings.
-- **Item:** group 2 (#1148-#1166). Group 1's original 22 are done (all verdicts posted). #1223 and #1224 were opened during the run and have been added to group 1: their machine checks are at the front of the queue and their reviews are running (run wf_77d9fe9a-f1a).
-- **Half-written / uncommitted:** nothing on any PR branch. The fix worktree `fixD` is clean. Running in the background: machine-check lanes A and B (`queue.txt`); review runs wf_f4d5deac-1fc (group 2), wf_4756b925-16c and wf_76951271-6f3 (group 3 pharmacy), and wf_77d9fe9a-f1a (#1223, #1224); and the 15-minute handoff sync loop.
+- **Next action:** wait for fix workflows wf_93114307-681 (#1166, #1163, #1160, #1156, #1152) and wf_cde0aab2-904 (#1165, #1162, #1157, #1155). Each one pushes one `[skip ci]` fix commit, posts a status comment, and gets an independent re-review. Record each result in `fixes.json` and `overrides.json` (from the re-review's qaDetails/securityDetails), queue `<n>` at the front of `queue.txt`, then run `compose.py <n>` and post once the re-check lands.
+- **Item:** group 2. Already fixed by hand and re-check queued: #1161 (7013e12df3), #1164 (019e88945f), #1150 (bc698680e4). Their QA overrides for #1164 and #1150 are recorded. Still to compose and post once their machine checks finish (reviews PASS/PASS): #1154, #1153, #1151, #1149, #1148, #1158.
+- **Blocked:** #1223 and #1224 are being pushed to by other sessions; their heads moved after review. Re-review and re-check at their final heads. Do not push to those branches while they move.
+- **Half-written / uncommitted:** nothing. `fixD` is detached at the #1150 fix commit with no local changes.
 
 ## Progress
 
 - Scope: every open PR into develop without a QA+Security verdict comment: group 1 #1172-#1194 (22, plus #1223 and #1224 opened during the run; #1225 is this tracking PR and is not reviewed), group 2 #1148-#1166 (18), group 3 the other 127 (pharmacy first). 118 older PRs already had verdict comments and are out of scope.
-- Status: done 22 · in progress 41 · blocked 0 · not started 106 (of 169)
-- Machine-check queue (130 left, two lanes, runs serially per lane): 1149 1148 1158 1120 1119 1118 1117 1116 1114 1101 1087 1086 1072 1068 1061 1060 1056 1050 1008 1006 1005 1004 1003 1002 1001 1000 999 998 997 996 995 994 993 986 985 984 983 982 966 965 …
-- Last finished checks: #1155@7365a9b9, #1154@07cc0aaf, #1224@dd6cf1de, #1153@617c185c, #1152@9504a99f, #1151@de8a0921
+- Status: done 22 · in progress 46 · blocked 0 · not started 101 (of 169)
+- Machine-check queue (129 left, two lanes, runs serially per lane): 1164 1150 1120 1119 1118 1117 1116 1114 1101 1087 1086 1072 1068 1061 1060 1056 1050 1008 1006 1005 1004 1003 1002 1001 1000 999 998 997 996 995 994 993 986 985 984 983 982 966 965 960 …
+- Last finished checks: #1152@9504a99f, #1151@de8a0921, #1223@e3bb296c, #1150@d9ecb6f1, #1149@2e235ef9, #1148@07b03320
 
 ### Posted verdicts
 
@@ -63,22 +64,23 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 ## Group 1 (#1172-#1194)
 
 ### #1223 · DEV-155, DEV-249, DEV-344, DEV-124, DEV-252, DEV-250, DEV-347, DEV-348, DEV-243, DEV-579, DEV-580, DEV-581, DEV-325, DEV-329, DEV-140, DEV-312, DEV-577 · in progress
-- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1223 · branch `saad/nice-thompson-99m17p` · head `e3bb296c64` · group 1
+- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1223 · branch `saad/nice-thompson-99m17p` · head `b5e29ad0f3` · group 1
 - Title: None
-- Verdicts: machine ran, see below · QA PASS (partial) · Security PASS (partial)
-- Done so far: checks on e3bb296c64: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 3749 passed / 50 failed in 23 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1223`, then post comments/1223.md via the poster workflow
-- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1223` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1223`; tests `bunx vitest related --run prisma.config.ts prisma/bootstrap.ts prisma/create-admin.ts prisma/load-env.ts prisma/platform-admin.ts prisma/reset-admin-password.ts prisma/seed-demo.ts prisma/seed-failure.ts …` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
-- Known failures: test failures not yet compared with develop: tests/restaurant-m5-acceptance.test.ts, tests/restaurant-m5-reconciliation.test.ts, tests/restaurant-m6-acceptance.test.ts, tests/restaurant-menu-import-acceptance.db.test.ts, tests/vertical-foundation.test.ts, src/lib/platform/commands.opportunity-convert.test.ts, src/lib/platform/commands.organization-create.test.ts, src/lib/pharmacy/counter-evidence.db.test.ts, src/lib/pharmacy/duplicate-salt-acknowledgement.db.test.ts, src/lib/pharmacy/supplier-returns.db.test.ts, src/lib/pharmacy/upsell-suggestions.db.test.ts, src/lib/restaurant/catering-endpoints.db.test.ts, src/lib/restaurant/catering-money.db.test.ts, src/lib/restaurant/catering-runtime.db.test.ts, src/lib/restaurant/daily-close-clock.test.ts, src/lib/restaurant/refunds.test.ts, src/lib/restaurant/tenders-posting.test.ts, src/lib/restaurant/terminal-checkout.db.test.ts, src/server/routers/pharmacy-offline.db.test.ts, src/server/routers/pharmacy-sales.drawer-close.db.test.ts, src/server/routers/restaurant-tax.db.test.ts, src/server/routers/restaurant-tax.test.ts, src/lib/pharmacy/accounts/cash-flow.db.test.ts | typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
+- Verdicts: machine pending · QA PASS · Security PASS
+- Done so far: QA+Security reviews complete
+- Next step: wait for machine checks not queued
+- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1223` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1223`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
+- Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
 ### #1224 · none (no DEV-<n> or #<n> in title; Linear search for 'SehatCart QA' finds only product-finding issues such as DEV-31 and DEV-32, no tracking issue for this pass) · in progress
-- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1224 · branch `saad/great-brown-id2w5x` · head `dd6cf1de49` · group 1
+- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1224 · branch `saad/great-brown-id2w5x` · head `7b3a46bfd5` · group 1
 - Title: None
-- Verdicts: machine ran, see below · QA FAIL (partial) · Security PASS (partial)
-- Done so far: checks on dd6cf1de49: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 0 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1224`, then post comments/1224.md via the poster workflow
-- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1224` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1224`; tests `bunx vitest related --run qa/sehatcart-2026-11-02/harness/ask.mjs qa/sehatcart-2026-11-02/harness/close-rbac.mjs qa/sehatcart-2026-11-02/harness/data1.mjs qa/sehatcart-2026-11-02/harness/data2.mjs qa/sehatcart-2026-11-02/harness/data3.mjs qa/sehatcart-2026-11-02/harness/hydration-diff.mjs qa/sehatcart-2026-11-02/harness/lib.mjs qa/sehatcart-2026-11-02/harness/login-all.mjs …` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
-- Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
+- Verdicts: machine pending · QA FAIL · Security PASS
+- Done so far: QA+Security reviews complete
+- Next step: wait for machine checks not queued
+- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1224` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1224`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
+- Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
+- Decisions: F1 (qa) confirmed by skeptics: The receipt HTML evidence is written to a hardcoded absolute path. This ignores QA_REPO and QA_EVIDENCE, the env overrides the README and lib.mjs offer so that another agent or machine can take over. | F2 (qa) confirmed by skeptics: The W6 next step in HANDOFF.md is `sweep.mjs desk-dark 1440 900 dark`. That run would produce light-mode screenshots labelled as dark, which gives a false dark-theme pass for the QA report. | F3 (qa) confirmed by skeptics: The handoff log misses two fields the user request requires per item: the PR number and URL, and the work done with commit SHAs. | F4 (qa) confirmed by skeptics: The PR is incomplete by its own scope. The two final deliverables the PR description promises, and makes a merge precondition, are missing, and most workstreams are still open.
 
 ### #1193 · DEV-200 · done
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1193 · branch `codex/dev-200-local-recovery-20261102` · head `d5543e9bc7` · group 1
@@ -286,97 +288,107 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 ### #1166 · DEV-52 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1166 · branch `codex/dev-52-recover-20261102` · head `93eac69168` · group 2
 - Title: DEV-52: Scope command search to licensed categories
-- Verdicts: machine ran, see below · QA FAIL (partial) · Security FAIL (partial)
+- Verdicts: machine ran, see below · QA FAIL · Security FAIL
 - Done so far: checks on 93eac69168: typecheck exit 2 (0 new vs baseline); eslint 4 errors; tests 153 passed / 1 failed in 1 files; build exit 0; QA+Security reviews complete
-- Next step: push one fix commit on codex/dev-52-recover-20261102 for: machine-check failure listed below
+- Next step: push one fix commit on codex/dev-52-recover-20261102 for: B1 src/components/layout/topbar.search-licensing.test.tsx:180 Match the real name, e.g. `screen.getByRole('button', { name: /^Matching task/ })` (or `name: 'Matching taskMatching project'`), and keep the push('/projects/p1; B2 src/components/ui/command.tsx:72 Replace `focus-visible:outline-none! forced-colors:focus-visible:outline-auto!` with `not-forced-colors:focus-visible:outline-none!`. I verified this compiles t; SEC-1166-1 src/server/routers/search.ts:116 In search.global, before Promise.all, compute: const directory = access.team && (await can(subjectFromSession(ctx.session.user), 'team:view', undefined, { sourc; machine-check failure listed below
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1166` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1166`; tests `bunx vitest related --run src/components/layout/topbar.search-licensing.test.tsx src/components/layout/topbar.tsx src/components/ui/command.tsx src/lib/search-access.ts src/server/routers/search.test.ts src/server/routers/search.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: NEW eslint: src/components/layout/topbar.search-licensing.test.tsx:15 react/display-name Component definition is missing display name | NEW eslint: src/components/layout/topbar.search-licensing.test.tsx:18 react/display-name Component definition is missing display name | NEW eslint: src/components/layout/topbar.search-licensing.test.tsx:26 react/display-name Component definition is missing display name | NEW eslint: src/components/layout/topbar.search-licensing.test.tsx:32 react/display-name Component definition is missing display name | NEW test failure: src/components/layout/topbar.search-licensing.test.tsx > command palette category search licensing keeps all five groups and selection available for a fully licensed agency | typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts) | note: PR-introduced failures in its new test file src/components/layout/topbar.search-licensing.test.tsx: 4 ESLint react/display-name errors (lines 15,18,26,32) and 1 failing test ('keeps all five groups and selection available for a fully licensed agency': no button named 'Matching task Matching project'). File does not exist on develop.
+- Decisions: B1 (qa) confirmed by skeptics: The new acceptance test 'keeps all five groups and selection available for a fully licensed agency' always fails. It queries a button by an accessible name that the rendered markup never produces. | B2 (qa) confirmed by skeptics: The forced-colors outline fallback the PR describes does not exist. `forced-colors:focus-visible:outline-auto!` is not a Tailwind 4 utility, so it generates no CSS. Meanwhile `focus-visible:outline-none!` removes the glo | SEC-1166-1 (security) confirmed by skeptics: The palette's team search is gated only on the 'hr' licence and ignores the ABAC 'team:view' permission. Custom roles and user_permission_overrides can DENY that capability, and every other directory read honours the den
 
 ### #1165 · DEV-96 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1165 · branch `codex/dev-96-recover-20261102` · head `6855b75dca` · group 2
 - Title: DEV-96: enforce pharmacy record retention periods
-- Verdicts: machine ran, see below · QA FAIL (partial) · Security PASS (partial)
+- Verdicts: machine ran, see below · QA FAIL · Security PASS
 - Done so far: checks on 6855b75dca: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 717 passed / 4 failed in 4 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1165`, then post comments/1165.md via the poster workflow
+- Next step: push one fix commit on codex/dev-96-recover-20261102 for: F1 prisma/migrations/20261102010000_pharmacy_retention_enforcement/migration.sql:189 Limit the check to terminal statuses, e.g. `IF OLD."status"::text IN ('COMPLETED','VOID') AND NEW."status"::text IN ('OPEN','HELD','QUOTATION') THEN RAISE ...`.; F2 prisma/migrations/20261102010000_pharmacy_retention_enforcement/migration.sql:281 Register the aa_retention_serialize statement triggers on the record tables, the fiscal child tables and audit_logs as `BEFORE DELETE` only, keeping the BEFORE ; F3 src/lib/pharmacy/retention.ts:144 Add the purge job within DEV-96: a scheduled entry point (e.g. a new platform job type, or a cron route iterating pharmacy tenants under withTenantDb) that call; F4 src/lib/pharmacy/retention.ts:166 Use `await tx.$executeRaw`SELECT pharmacy_lock_retention()`` or `await tx.$queryRaw`SELECT 1 AS locked FROM pharmacy_lock_retention()``.
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1165` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1165`; tests `bunx vitest related --run src/lib/pharmacy/retention.test.ts src/lib/pharmacy/retention.ts tests/pharmacy-retention.test.mjs` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: also fail on develop/merge-base (pre-existing): src/lib/pharmacy/counter-evidence.db.test.ts, src/lib/pharmacy/duplicate-salt-acknowledgement.db.test.ts, src/server/routers/pharmacy-offline.db.test.ts, src/server/routers/pharmacy-sales.drawer-close.db.test.ts | env-only (gate runtime role lacks CREATE ROLE; pass as superuser): src/lib/pharmacy/counter-evidence.db.test.ts, src/server/routers/pharmacy-sales.drawer-close.db.test.ts | typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts) | note: Related tests: 4 DB test files fail (pharmacy-offline.db #710 manual totals, pharmacy-sales.drawer-close.db branch refusals x2, counter-evidence.db CAM-2 replay, duplicate-salt-acknowledgement.db prisma create). The identical tests fail on develop (pre-existing). The PR's own retention tests pass.
+- Decisions: F1 (qa) confirmed by skeptics: The new pharmacy_sales UPDATE row guard rejects every transition from a non-OPEN status to OPEN, not only transitions from completed fiscal records. That breaks the existing hold/resume and quotation-conversion features  | F2 (qa) confirmed by skeptics: A single platform-wide mutex row is locked by BEFORE UPDATE statement triggers on pharmacy_sales, every fiscal child table and audit_logs, and the lock is held until commit. Every pharmacy counter write (add line, hold,  | F3 (qa) confirmed by skeptics: The issue's requirement "purge job outside it" is not met. develop plus this PR has no scheduled or invocable purge. runPharmacyRetentionPurge has no callers and no record-owner adapters exist, so records past their wind | F4 (qa) confirmed by skeptics: The purge coordinator takes its lock with $queryRaw on a void-returning function. The Prisma 7 pg adapter cannot deserialize a void column, so every runPharmacyRetentionPurge call throws at the lock step and rolls back. 
 
 ### #1164 · DEV-108 · in progress
-- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1164 · branch `codex/dev-108-recover-20261102` · head `a4f02fc8a4` · group 2
+- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1164 · branch `codex/dev-108-recover-20261102` · head `019e88945f` · group 2
 - Title: DEV-108: Clarify pharmacy access-denial guidance
-- Verdicts: machine ran, see below · QA FAIL (partial) · Security PASS (partial)
-- Done so far: checks on a4f02fc8a4: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 27 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1164`, then post comments/1164.md via the poster workflow
-- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1164` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1164`; tests `bunx vitest related --run src/app/(app)/pharmacy/reports/page.test.tsx src/app/(app)/pharmacy/reports/page.tsx src/components/pharmacy/counter/day-close-console.test.tsx src/components/pharmacy/counter/day-close-console.tsx` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
-- Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
+- Verdicts: machine pending · QA PASS · Security PASS
+- Done so far: fix commit 019e88945f (Prettier on the reports page and its test; first run on a4f02fc8a4 failed on Prettier: src/app/(app)/pharmacy/reports/page.tsx and page.test.tsx unformatted); QA+Security reviews complete
+- Next step: re-check queued for fix 019e88945f; then `python3 handoff/scripts/compose.py 1164` and post comments/1164.md
+- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1164` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1164`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
+- Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
+- Decisions: qa verdict set to PASS by hand: Reports now names the missing operational reports permission or the Pharmacy Reports module and says the workspace administrator can fix it; tests cover the permission, module, sign-in and unrelated-failure cases. The reviewer flagged that Day close still blocks a non-admin pharmacy:close holder on  | F1 (qa) refuted by skeptics: Day close is still wrong for the persona in the issue. The client gate still requires the tenant ADMIN role, and the new text sends a pharmacist to have a 'day-close permission' reviewed. But the server already lets that
 
 ### #1163 · DEV-97 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1163 · branch `codex/dev-97-recover-20261102` · head `82827d16fd` · group 2
 - Title: DEV-97: Gate counter settlement controls by capability
-- Verdicts: machine ran, see below · QA FAIL (partial) · Security FAIL (partial)
+- Verdicts: machine ran, see below · QA FAIL · Security FAIL
 - Done so far: checks on 82827d16fd: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 518 passed / 2 failed in 2 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1163`, then post comments/1163.md via the poster workflow
+- Next step: push one fix commit on codex/dev-97-recover-20261102 for: F1 src/server/routers/pharmacy-sales.ts:726 Re-apply the server half of commit a1ed9827. In pharmacy-sales.ts, change `openDrawer: protectedProcedure` to `openDrawer: capabilityProcedure('pharmacy:counter; SEC-1163-1 src/server/routers/pharmacy-sales.ts:726 In openDrawer, drawerMovement and closeDrawer (and drawerStatus), resolve the scope before the transaction with `const scope = await requireCounterReceiptAccess
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1163` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1163`; tests `bunx vitest related --run src/components/pharmacy/counter/counter-console.test.tsx src/components/pharmacy/counter/counter-console.tsx src/server/routers/pharmacy-sales.open-drawer.test.ts src/server/routers/pharmacy-sales.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: also fail on develop/merge-base (pre-existing): src/lib/pharmacy/duplicate-salt-acknowledgement.db.test.ts, src/server/routers/pharmacy-sales.drawer-close.db.test.ts | env-only (gate runtime role lacks CREATE ROLE; pass as superuser): src/server/routers/pharmacy-sales.drawer-close.db.test.ts | typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts) | note: Related tests: 2 DB test files fail (pharmacy-sales.drawer-close.db branch refusals x2, duplicate-salt-acknowledgement.db prisma create); identical failures on develop (pre-existing). 516 other related tests pass.
+- Decisions: F1 (qa) confirmed by skeptics: Unmet issue requirement: DEV-97 asks to 'enforce server-side (drawer/tender capability), with FORBIDDEN tests for the pharmacist role'. In develop plus this PR, openDrawer is still a plain protectedProcedure whose only c | SEC-1163-1 (security) confirmed by skeptics: The issue asks for the drawer and tender capability to be enforced on the server, with FORBIDDEN tests for the pharmacist role. This PR only hides the controls in the UI. The drawer mutations are still plain protectedPro
 
 ### #1162 · DEV-41 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1162 · branch `codex/dev-41-recover-20261102` · head `87130c9b05` · group 2
 - Title: DEV-41: Restore direct Counter sign-out and remove payment sandbox
-- Verdicts: machine ran, see below · QA FAIL (partial) · Security PASS (partial)
+- Verdicts: machine ran, see below · QA FAIL · Security PASS
 - Done so far: checks on 87130c9b05: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 132 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1162`, then post comments/1162.md via the poster workflow
+- Next step: push one fix commit on codex/dev-41-recover-20261102 for: F1 src/components/pharmacy/counter/counter-console.tsx:712 Gate signOutBlocked on the payment and in-flight guards only (busy, signOutInFlight, tenderInFlight, outcomeInFlight, attemptRef), not on cart-read freshness. I
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1162` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1162`; tests `bunx vitest related --run src/components/pharmacy/counter/counter-console.test.tsx src/components/pharmacy/counter/counter-console.tsx` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
+- Decisions: F1 (qa) confirmed by skeptics: Sign out depends on whether the cart read is fresh, not only on payment state. counterCart uses staleTime 30_000 (line 495) and nothing refetches it on a timer (refetchOnWindowFocus is false in trpc-provider). So 30 s af
 
 ### #1161 · DEV-94 · in progress
-- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1161 · branch `codex/dev-94-recover-20261102` · head `c42d7aca78` · group 2
+- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1161 · branch `codex/dev-94-recover-20261102` · head `7013e12df3` · group 2
 - Title: DEV-94: Add pharmacy PostgreSQL backup and restore drill tooling
-- Verdicts: machine ran, see below · QA FAIL (partial) · Security PASS (partial)
-- Done so far: checks on c42d7aca78: typecheck exit 2 (1 new vs baseline); eslint 0 errors; tests 26 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
-- Next step: push one fix commit on codex/dev-94-recover-20261102 for: machine-check failure listed below
-- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1161` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1161`; tests `bunx vitest related --run tests/postgres-backup.test.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
-- Known failures: NEW typecheck: tests/postgres-backup.test.ts: error TS2741: Property 'NODE_ENV' is missing in type '{ PATH: string; FIXTURE_ROOT: string; TMPDIR: string; PGHOST: string; PGPORT: string; PGUSER: string; PGDATABASE: s | note: NEW typecheck error in the PR's new tests/postgres-backup.test.ts: TS2741 Property 'NODE_ENV' is missing in the env object passed as ProcessEnv.
+- Verdicts: machine pending · QA FAIL · Security PASS
+- Done so far: fix commit 7013e12df3 (types the test env with NODE_ENV and applies Prettier to the new test; first run on c42d7aca78 failed on 1 new typecheck error (TS2741 in tests/postgres-backup.test.ts) and Prettier on that new file); QA+Security reviews complete
+- Next step: re-check queued for fix 7013e12df3; then `python3 handoff/scripts/compose.py 1161` and post comments/1161.md
+- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1161` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1161`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
+- Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
+- Decisions: F1 (qa) confirmed by skeptics: The new test file adds a typecheck error. `env` is typed as NodeJS.ProcessEnv, but it is assigned an object literal that has no NODE_ENV. Next.js adds NODE_ENV to ProcessEnv as a required property, so `tsc --noEmit` (the
 
 ### #1160 · DEV-98 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1160 · branch `codex/dev-98-recover-20261102` · head `d832236d94` · group 2
 - Title: DEV-98: Configure emergency-supply caps by jurisdiction
-- Verdicts: machine ran, see below · QA FAIL (partial) · Security PASS (partial)
+- Verdicts: machine ran, see below · QA FAIL · Security PASS
 - Done so far: checks on d832236d94: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 1372 passed / 22 failed in 8 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1160`, then post comments/1160.md via the poster workflow
+- Next step: push one fix commit on codex/dev-98-recover-20261102 for: QA-1 src/server/routers/pharmacy-sales.ts:1174 Remove the nested `jurisdictionRuleSet` effective filter so the lookup matches `assertStoredBranchMayOperate`, and always audit the in-force profile's `province
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1160` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1160`; tests `bunx vitest related --run src/lib/pharmacy/controlled-register.test.ts src/lib/pharmacy/controlled-register.ts src/lib/platform/commands.ts src/server/routers/pharmacy-sales.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: also fail on develop/merge-base (pre-existing): src/lib/pharmacy/counter-evidence.db.test.ts, src/lib/pharmacy/duplicate-salt-acknowledgement.db.test.ts, src/lib/pharmacy/stock-ledger.db.test.ts, src/lib/platform/commands.opportunity-convert.test.ts, src/lib/platform/commands.organization-create.test.ts, src/server/routers/pharmacy-offline.db.test.ts, src/server/routers/pharmacy-sales.drawer-close.db.test.ts, tests/vertical-foundation.test.ts | env-only (gate runtime role lacks CREATE ROLE; pass as superuser): src/lib/pharmacy/counter-evidence.db.test.ts, src/server/routers/pharmacy-sales.drawer-close.db.test.ts | typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
+- Decisions: QA-1 (qa) confirmed by skeptics: The emergency-supply policy lookup adds a nested `jurisdictionRuleSet` effective-window filter to the in-force branch profile query. When a branch's in-force profile still points to a rule set version that has since been
 
 ### #1157 · DEV-62 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1157 · branch `codex/dev-62-recover-20261102` · head `4c7b6768b8` · group 2
 - Title: DEV-62: Add report date controls and accurate import reference labels
-- Verdicts: machine ran, see below · QA FAIL (partial) · Security PASS (partial)
+- Verdicts: machine ran, see below · QA FAIL · Security PASS
 - Done so far: checks on 4c7b6768b8: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 7 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1157`, then post comments/1157.md via the poster workflow
+- Next step: push one fix commit on codex/dev-62-recover-20261102 for: QA-1 src/app/(app)/pharmacy/inventory/page.tsx:429 Change the link text at inventory/page.tsx:429 to match the new wording, e.g. 'Imported stock references'. Add an assertion to src/app/(app)/pharmacy/inventory/
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1157` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1157`; tests `bunx vitest related --run src/app/(app)/pharmacy/inventory/imports/page.test.tsx src/app/(app)/pharmacy/inventory/imports/page.tsx src/app/(app)/pharmacy/reports/branch-comparison/date-controls.test.tsx src/app/(app)/pharmacy/reports/branch-comparison/page.tsx` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
+- Decisions: QA-1 (qa) confirmed by skeptics: The 'Awaiting verification' item is only partly fixed. The Inventory page header button that leads to /pharmacy/inventory/imports still reads 'Imported stock / Awaiting verification'. With develop plus this PR, users sti
 
 ### #1156 · DEV-59 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1156 · branch `codex/dev-59-recover-20261102` · head `4b437e5aa8` · group 2
 - Title: DEV-59: Restore bounded owner expiry advice
-- Verdicts: machine ran, see below · QA FAIL (partial) · Security PASS (partial)
+- Verdicts: machine ran, see below · QA FAIL · Security PASS
 - Done so far: checks on 4b437e5aa8: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 219 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1156`, then post comments/1156.md via the poster workflow
+- Next step: push one fix commit on codex/dev-59-recover-20261102 for: QA-1156-1 src/server/routers/pharmacy-reports.ts:623 Keep the new validation, so invalid calendar dates and over-limit ranges still return BAD_REQUEST, but stop narrowing the advice. Call `readExpiryAdvice(ctx.db,
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1156` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1156`; tests `bunx vitest related --run src/lib/pharmacy/expiry-advisor-operations.ts src/server/routers/pharmacy-reports.test.ts src/server/routers/pharmacy-reports.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
+- Decisions: QA-1156-1 (qa) confirmed by skeptics: The PR makes the forward-looking expiry advisor return only lots that expire inside the backward-looking report period. On the Reports page's default request, this removes almost every lot, including the RETURNABLE and A
 
 ### #1155 · DEV-44 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1155 · branch `codex/dev-44-recover-20261102` · head `7365a9b98d` · group 2
 - Title: DEV-44: Restore grouped owner navigation and dismissible onboarding
-- Verdicts: machine ran, see below · QA FAIL (partial) · Security PASS (partial)
+- Verdicts: machine ran, see below · QA FAIL · Security PASS
 - Done so far: checks on 7365a9b98d: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 282 passed / 1 failed in 1 files; build exit 0; QA+Security reviews complete
-- Next step: push one fix commit on codex/dev-44-recover-20261102 for: machine-check failure listed below
+- Next step: push one fix commit on codex/dev-44-recover-20261102 for: F1 src/components/layout/sidebar.tsx:898 Make the route map depend on the vertical. Keep RESTAURANT_MENU_ROUTES and add a PHARMACY map, for example Sell: /dashboard, /pharmacy/counter, /pharmacy/counte; F2 src/components/layout/sidebar.tsx:943 Separate the two words in the component, e.g. `{item.label}{' '}<span className="ml-auto ...">Current</span>` or put the space inside the span. That keeps the t; F3 tests/e2e/restaurant-actor-accessibility.spec.ts:199 In the restaurant spec, click the 'Sell' trigger (getByRole('button', { name: /^Sell/ })) and check Point of sale and Kitchen display as menuitems. Keep the toH; machine-check failure listed below
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1155` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1155`; tests `bunx vitest related --run src/app/(app)/settings/settings-content.tsx src/components/layout/sidebar.test.tsx src/components/layout/sidebar.tsx src/components/pharmacy/counter/counter-console.test.tsx src/components/pharmacy/counter/counter-console.tsx src/components/restaurant/administrator-staff-profile-callout.test.tsx src/components/restaurant/administrator-staff-profile-callout.tsx` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: NEW test failure: src/components/layout/sidebar.test.tsx > Restaurant desktop navigation groups marks the active group and destination, opens by keyboard and restores focus on Escape | typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts) | note: REGRESSION: src/components/layout/sidebar.test.tsx 'Restaurant desktop navigation groups marks the active group and destination, opens by keyboard and restores focus on Escape' fails on the PR (no menuitem 'Inventory Current') and passes on develop.
+- Decisions: F1 (qa) confirmed by skeptics: The grouped Sell/Stock/Buy/Reports/Settings navigation, and the scroll-preserving links that come with it, only run for the RESTAURANT vertical. The issue was reported on the SehatCart pharmacy tenant by qa.owner, and th | F2 (qa) confirmed by skeptics: The new test 'marks the active group and destination, opens by keyboard and restores focus on Escape' cannot pass. The current menu item's accessible name is 'InventoryCurrent', with no space, because the label and the i | F3 (qa) confirmed by skeptics: The restaurant e2e accessibility matrix still expects flat restaurant links to be visible inside 'Primary navigation' at 1440px and 1024px. After this PR those links only exist inside closed dropdown menus that render in
 
 ### #1154 · DEV-315 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1154 · branch `codex/dev-315-recover-20261102` · head `07cc0aaf13` · group 2
 - Title: DEV-315: Guard WhatsApp STOP acknowledgement replay
-- Verdicts: machine ran, see below · QA PASS (partial) · Security PASS (partial)
+- Verdicts: machine ran, see below · QA PASS · Security PASS
 - Done so far: checks on 07cc0aaf13: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 31 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
 - Next step: `python3 handoff/scripts/compose.py 1154`, then post comments/1154.md via the poster workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1154` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1154`; tests `bunx vitest related --run src/lib/pharmacy/whatsapp/inbound.test.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
@@ -385,7 +397,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 ### #1153 · DEV-61 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1153 · branch `codex/dev-61-recover-20261102` · head `617c185c1a` · group 2
 - Title: DEV-61: Add pharmacy report print and PDF action
-- Verdicts: machine ran, see below · QA PASS (partial) · Security PASS (partial)
+- Verdicts: machine ran, see below · QA PASS · Security PASS
 - Done so far: checks on 617c185c1a: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 6 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
 - Next step: `python3 handoff/scripts/compose.py 1153`, then post comments/1153.md via the poster workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1153` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1153`; tests `bunx vitest related --run src/app/(app)/pharmacy/reports/page.test.tsx src/app/(app)/pharmacy/reports/page.tsx src/app/(app)/pharmacy/reports/report-print-button.tsx` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
@@ -394,54 +406,56 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 ### #1152 · DEV-56 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1152 · branch `codex/dev-56-recover-20261102` · head `9504a99faa` · group 2
 - Title: DEV-56: Add medicine-name search to prescription capture
-- Verdicts: machine ran, see below · QA FAIL (partial) · Security PASS (partial)
+- Verdicts: machine ran, see below · QA FAIL · Security PASS
 - Done so far: checks on 9504a99faa: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 2 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1152`, then post comments/1152.md via the poster workflow
+- Next step: push one fix commit on codex/dev-56-recover-20261102 for: empty-catalog-false-no-match src/components/pharmacy/dispensing/prescriptions-console.tsx:418 Add `const noMedicineMatches = medicineSearch !== '' && matchingMedicines.length === 0;` and use it for both the aria-describedby (line 412) and the message (li
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1152` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1152`; tests `bunx vitest related --run src/components/pharmacy/dispensing/prescriptions-console-search.test.tsx src/components/pharmacy/dispensing/prescriptions-console.tsx` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
+- Decisions: empty-catalog-false-no-match (qa) confirmed by skeptics: The no-match message depends only on matchingMedicines.length === 0. When the workspace has no saleable medicines and the search box is empty, the form shows 'No medicines match this search. Clear or change the name.' an
 
 ### #1151 · DEV-38 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1151 · branch `codex/dev-38-recover-20261102` · head `de8a0921f5` · group 2
 - Title: DEV-38: Restore purchasing returns access for procurement roles
-- Verdicts: machine ran, see below · QA PASS (partial) · Security PASS (partial)
+- Verdicts: machine ran, see below · QA PASS · Security PASS
 - Done so far: checks on de8a0921f5: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 226 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
 - Next step: `python3 handoff/scripts/compose.py 1151`, then post comments/1151.md via the poster workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1151` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1151`; tests `bunx vitest related --run src/app/(app)/pharmacy/purchasing/returns/page.test.tsx src/app/(app)/pharmacy/purchasing/returns/page.tsx src/server/routers/pharmacy-purchasing.test.ts src/server/routers/pharmacy-purchasing.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
 
 ### #1150 · DEV-45 · in progress
-- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1150 · branch `codex/dev-45-recover-20261102` · head `d9ecb6f1aa` · group 2
+- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1150 · branch `codex/dev-45-recover-20261102` · head `bc698680e4` · group 2
 - Title: DEV-45: Clarify expiry advice failures and exclude production sandbox
-- Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
-- Done so far: QA+Security reviews complete
-- Next step: wait for machine checks running
+- Verdicts: machine pending · QA PASS · Security PASS
+- Done so far: fix commit bc698680e4 (Prettier on the reports page test; first run on d9ecb6f1aa failed on Prettier: src/app/(app)/pharmacy/reports/page.test.tsx unformatted); QA+Security reviews complete
+- Next step: re-check queued for fix bc698680e4; then `python3 handoff/scripts/compose.py 1150` and post comments/1150.md
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1150` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1150`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
+- Decisions: qa verdict set to PASS by hand: The production sandbox guard works and is tested (paymentSandboxAdmitted returns false when NODE_ENV=production), and the main expiry advisor card now shows a proper load-error state instead of the owner-only permission copy, with tests for FORBIDDEN, UNAUTHORIZED and INTERNAL errors. The Daily work | F1 (qa) refuted by skeptics: The issue's actual symptom ('Expiry advice card shows UNAVAILABLE') is not fixed. The PR changes a different surface: the main advisor card, which on develop never rendered 'UNAVAILABLE'. Its failure branch showed the 'A
 
 ### #1149 · DEV-54 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1149 · branch `codex/dev-54-recover-20261102` · head `2e235ef933` · group 2
 - Title: DEV-54: Match effective flat packs in opening-stock imports
-- Verdicts: machine pending · QA PASS (partial) · Security PASS (partial)
-- Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 1
-- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1149` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1149`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
-- Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
+- Verdicts: machine ran, see below · QA PASS · Security PASS
+- Done so far: checks on 2e235ef933: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 62 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
+- Next step: `python3 handoff/scripts/compose.py 1149`, then post comments/1149.md via the poster workflow
+- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1149` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1149`; tests `bunx vitest related --run src/lib/pharmacy/migration/owner-import.test.ts src/lib/pharmacy/migration/owner-import.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
+- Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
 
 ### #1148 · DEV-5 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1148 · branch `codex/dev-5-recover-20261102` · head `07b03320a8` · group 2
 - Title: DEV-5: Check goods-receipt branch before locking the purchase order
-- Verdicts: machine pending · QA PASS (partial) · Security PASS (partial)
-- Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 2
-- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1148` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1148`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
-- Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
+- Verdicts: machine ran, see below · QA PASS · Security PASS
+- Done so far: checks on 07b03320a8: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 260 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
+- Next step: `python3 handoff/scripts/compose.py 1148`, then post comments/1148.md via the poster workflow
+- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1148` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1148`; tests `bunx vitest related --run src/lib/pharmacy/goods-receipt.ts src/server/routers/pharmacy-purchasing.test.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
+- Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
 
 ### #1158 · DEV-34 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1158 · branch `codex/dev-34-recover-20261102` · head `c642d2bda9` · group 2
 - Title: DEV-34: Reserve space for two-line login errors
-- Verdicts: machine pending · QA PASS (partial) · Security PASS (partial)
+- Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 3
+- Next step: wait for machine checks running
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1158` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1158`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -452,7 +466,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-211: Require inventory capability and active branch assignment
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 4
+- Next step: wait for machine checks queued at position 3
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1120` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1120`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -461,7 +475,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-116: Show classification journal evidence in cash flow
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 5
+- Next step: wait for machine checks queued at position 4
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1119` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1119`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -470,7 +484,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-117: Qualify balance sheet reconciliation coverage
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 6
+- Next step: wait for machine checks queued at position 5
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1118` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1118`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -479,7 +493,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-118: Expose profit and loss classification coverage
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 7
+- Next step: wait for machine checks queued at position 6
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1117` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1117`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -488,7 +502,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-135: Preserve supplier-return claim journal posting
 - Verdicts: machine pending · QA FAIL (partial) · Security FAIL (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 8
+- Next step: wait for machine checks queued at position 7
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1116` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1116`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -497,7 +511,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-145: Cover the review assertion limit
 - Verdicts: machine pending · QA FAIL (partial) · Security FAIL (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 9
+- Next step: wait for machine checks queued at position 8
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1114` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1114`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -506,7 +520,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-198: Use tenant currency in day-close tender totals
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 10
+- Next step: wait for machine checks queued at position 9
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1101` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1101`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -515,7 +529,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-199: Serialize emergency supply eligibility
 - Verdicts: machine pending · QA FAIL (partial) · Security FAIL (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 11
+- Next step: wait for machine checks queued at position 10
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1087` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1087`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -524,7 +538,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-279: Authorize cash drawer mutations and branch scope
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 12
+- Next step: wait for machine checks queued at position 11
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1086` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1086`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -533,7 +547,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-321: Lock counter patient entitlement regression
 - Verdicts: machine pending · QA FAIL (partial) · Security FAIL (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 13
+- Next step: wait for machine checks queued at position 12
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1072` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1072`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -542,7 +556,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-322: Preserve command-centre Khata branch context
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 14
+- Next step: wait for machine checks queued at position 13
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1068` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1068`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -551,7 +565,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: Fix type errors in merged test fixtures
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 15
+- Next step: wait for machine checks queued at position 14
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1061` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1061`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -560,7 +574,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: test: prevent cancelling shifts with active attendance
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 16
+- Next step: wait for machine checks queued at position 15
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1060` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1060`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -569,7 +583,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(restaurant): assign demo head chef to kitchen role
 - Verdicts: machine pending · QA FAIL (partial) · Security FAIL (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 17
+- Next step: wait for machine checks queued at position 16
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1056` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1056`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -578,7 +592,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(pharmacy): derive medicine reference saleability copy
 - Verdicts: machine pending · QA PASS (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 18
+- Next step: wait for machine checks queued at position 17
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1050` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1050`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -587,7 +601,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(files): restrict pharmacy licence evidence to admins
 - Verdicts: machine pending · QA FAIL (partial) · Security FAIL (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 19
+- Next step: wait for machine checks queued at position 18
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1008` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1008`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -596,7 +610,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(authz): capability checks for patient/consent, hotel setStatus, restaurant growth (Sev3)
 - Verdicts: machine pending · QA PASS (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 20
+- Next step: wait for machine checks queued at position 19
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1006` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1006`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -605,16 +619,16 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(pharmacy): vertical gating in Settings and branded 404 for unknown tenant (QA batch 5)
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 21
+- Next step: wait for machine checks queued at position 20
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1005` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1005`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
 ### #1004 · DEV-51 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1004 · branch `fix/dark-mode-tokens` · head `087149317e` · group 3
 - Title: fix(ui): dark-mode theme tokens for borders, primary button edge, toggles, links and active tab
-- Verdicts: machine pending · QA pending · Security PASS (partial)
-- Done so far: 
-- Next step: wait for machine checks queued at position 22 and QA/Security review running
+- Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
+- Done so far: QA+Security reviews complete
+- Next step: wait for machine checks queued at position 21
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1004` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1004`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -623,61 +637,61 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(pharmacy): counter, prescriptions and inventory responsive layout (QA batch 5)
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 23
+- Next step: wait for machine checks queued at position 22
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1003` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1003`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
-### #1002 · ? · not started
+### #1002 · DEV-61 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1002 · branch `feat/reports-csv-export` · head `6aea99a22d` · group 3
 - Title: feat(reports): CSV export for reports, gated by reports:financial
-- Verdicts: machine pending · QA pending · Security pending
-- Done so far: 
-- Next step: wait for machine checks queued at position 24 and QA/Security review queued in a review workflow
+- Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
+- Done so far: QA+Security reviews complete
+- Next step: wait for machine checks queued at position 23
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1002` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1002`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
 ### #1001 · DEV-46 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1001 · branch `fix/reports-ops-screens` · head `63d657e346` · group 3
 - Title: fix(reports,ops): Reports filters, opening stock, Day close, Settings
-- Verdicts: machine pending · QA pending · Security PASS (partial)
-- Done so far: 
-- Next step: wait for machine checks queued at position 25 and QA/Security review running
+- Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
+- Done so far: QA+Security reviews complete
+- Next step: wait for machine checks queued at position 24
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1001` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1001`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
-### #1000 · ? · not started
+### #1000 · DEV-43 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1000 · branch `fix/team-members-zero` · head `017d00745f` · group 3
 - Title: fix(team): Team shows 0 members when users exist
-- Verdicts: machine pending · QA pending · Security pending
-- Done so far: 
-- Next step: wait for machine checks queued at position 26 and QA/Security review queued in a review workflow
+- Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
+- Done so far: QA+Security reviews complete
+- Next step: wait for machine checks queued at position 25
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1000` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1000`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
-### #999 · ? · not started
+### #999 · DEV-39 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/999 · branch `fix/owner-copy-sweep` · head `942e5068e8` · group 3
 - Title: fix(ui): owner copy sweep, remove internal codes and jargon
-- Verdicts: machine pending · QA pending · Security pending
-- Done so far: 
-- Next step: wait for machine checks queued at position 27 and QA/Security review queued in a review workflow
+- Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
+- Done so far: QA+Security reviews complete
+- Next step: wait for machine checks queued at position 26
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 999` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/999`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
-### #998 · ? · not started
+### #998 · DEV-41 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/998 · branch `fix/counter-cashier-copy` · head `97f0b070f6` · group 3
 - Title: fix(counter): plain-language copy for cashiers and hide internal tools
-- Verdicts: machine pending · QA pending · Security pending
+- Verdicts: machine pending · QA pending · Security PASS (partial)
 - Done so far: 
-- Next step: wait for machine checks queued at position 28 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 27 and QA/Security review running
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 998` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/998`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
-### #997 · ? · not started
+### #997 · DEV-37 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/997 · branch `fix/returns-lookup-scope` · head `c9e45219ad` · group 3
 - Title: fix(returns): scope receipt lookup to the cashier's branches
-- Verdicts: machine pending · QA pending · Security pending
-- Done so far: 
-- Next step: wait for machine checks queued at position 29 and QA/Security review queued in a review workflow
+- Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
+- Done so far: QA+Security reviews complete
+- Next step: wait for machine checks queued at position 28
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 997` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/997`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -686,7 +700,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(pharmacy): campaign approval/generation and day close/drawer need manager or owner (Sev2)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 30 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 29 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 996` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/996`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -695,7 +709,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(pharmacy): catalogue edits go through review (Sev2)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 31 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 30 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 995` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/995`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -704,7 +718,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(pharmacy): server-side capability checks on every purchasing procedure (Sev1)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 32 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 31 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 994` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/994`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -713,7 +727,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(pharmacy): publishing a medicine creates its pack size and barcode so stock can be imported (Sev1)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 33 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 32 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 993` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/993`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -722,7 +736,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#980): Pharmacy leakage: agency/HR features in pharmacy tenant
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 34 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 33 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 986` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/986`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -731,7 +745,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#978): Pharmacy catalogue review: accept/reject/defer disabled for owner despite pharmacy:catalogue-review
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 35 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 34 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 985` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/985`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -740,7 +754,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#979): Pharmacy: cashier over-exposure (suppliers, purchasing, nav)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 36 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 35 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 984` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/984`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -749,7 +763,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#977): Pharmacy regulatory: only Punjab (provisional) offered; Sindh branch can't get an in-force profile
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 37 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 36 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 983` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/983`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -758,7 +772,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#976): Pharmacy inventory: Create location fails with generic "could not be completed"
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 38 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 37 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 982` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/982`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -767,7 +781,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix: Restaurant day close net sales with refunds (salvage; likely superseded)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 39 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 38 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 966` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/966`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -776,7 +790,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: docs(qa): archive restaurant/pharmacy QA runs and sev1 retest records (salvage)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 40 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 39 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 965` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/965`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -785,7 +799,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix: Pharmacy counter Rx gate for prescription-only medicines (salvage)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 41 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 40 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 960` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/960`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -794,7 +808,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix: Khata over-limit override approvable by owner/manager, re-checked in txn (salvage)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 42 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 41 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 959` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/959`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -803,7 +817,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#727): [Pharmacy] Date-based pharmacy promotions
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 43 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 42 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 956` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/956`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -812,7 +826,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#729): [Pharmacy] Churn scoring
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 44 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 43 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 955` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/955`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -821,7 +835,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#722): [Pharmacy][P1] Split tender on one sale (cash + khata + wallet)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 45 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 44 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 954` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/954`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -830,7 +844,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#728): [Pharmacy] AI cash-close anomaly check
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 46 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 45 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 953` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/953`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -839,7 +853,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#439): [QA][sev3] Pharmacy Urdu receipts use ASCII digits and ignore the locale for numbers
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 47 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 46 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 951` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/951`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -848,7 +862,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#661): [sev3] quarantinePart gated by pharmacy:inventory instead of pharmacy:safety
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 48 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 47 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 950` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/950`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -857,7 +871,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#716): [Pharmacy][P0] Owner full data export ("no lock-in" button)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 49 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 48 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 949` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/949`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -866,7 +880,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#720): [Pharmacy][P1] Licence and registration renewal reminders
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 50 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 49 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 947` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/947`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -875,7 +889,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#723): [Pharmacy][P2] SMS fallback for utility messages
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 51 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 50 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 946` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/946`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -884,7 +898,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#708): [Pharmacy][P0] Sindh cash-memo receipt mode (Drug rules r.18)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 52 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 51 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 945` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/945`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -893,7 +907,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#732): [Pharmacy] Live cold-chain sensor push
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 53 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 52 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 942` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/942`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -902,7 +916,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#719): [Pharmacy][P1] Shelf and price sticker printing for unbarcoded or loose stock
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 54 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 53 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 941` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/941`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -911,7 +925,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#718): [Pharmacy][P1] Non-drug retail items with promo eligibility
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 55 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 54 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 940` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/940`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -920,7 +934,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(#673): [Pharmacy Accounts][S3] Add read-only canonical account-code normal-side reference
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 56 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 55 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 934` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/934`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -929,7 +943,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#660): [QA][sev2] Pharmacy activation gate: regulatory profile isn't bound to an active branch or to the branch's province/premises
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 57 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 56 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 929` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/929`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -938,7 +952,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#526): [QA][sev2] Prescription calendar validity shifts by device timezone and expires at UTC midnight
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 58 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 57 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 915` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/915`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -947,7 +961,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#577): [QA][sev2] Purchasing: Branch-limited staff can read and change other branches' purchase orders
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 59 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 58 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 855` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/855`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -956,7 +970,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#385): Khata reminders: language can't be set, no Urdu template, Meta provider unconfigured
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 60 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 59 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 814` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/814`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -965,7 +979,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#381): Licence invalid 00:00–04:59 PKT on its start day; profile effective today shows as scheduled until 05:00
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 61 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 60 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 812` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/812`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -974,7 +988,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#380): Khata cash collections never reach the cash drawer (+250 variance at close)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 62 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 61 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 811` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/811`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -983,7 +997,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#395): [sev2] Goods-in reversal doesn't correct the controlled register, leaving it overstated
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 63 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 62 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 805` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/805`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -992,7 +1006,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#759): [Pharmacy][Growth] WhatsApp campaign cost preview from current rate card
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 64 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 63 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 776` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/776`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1001,7 +1015,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#740): [Pharmacy][Growth] Khata collection reminders with Raast payment link
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 65 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 64 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 769` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/769`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1010,7 +1024,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#488): Prescription calendar validity shifts by device timezone and expires at UTC midnight
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 66 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 65 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 241` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/241`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1019,7 +1033,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#692): [planned] Narrow nontrade accrual journal voucher and account catalog (CEO-JVCORE-20261025
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 67 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 66 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 132` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/132`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1028,7 +1042,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix: pharmacy follow-up for #299 (revalidation required)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 68 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 67 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 66` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/66`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1037,7 +1051,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: port: consolidation-20261019 (from Mac archive)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 69 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 68 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 63` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/63`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1046,7 +1060,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: Inventory write-off witnessId isn't validated as a real active tenant user (#362)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 70 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 69 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 37` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/37`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1055,7 +1069,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: chore(deps): bump the production-patch group across 1 directory with 11 updates
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 71 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 70 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1171` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1171`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1064,7 +1078,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: chore(deps): bump the production-minor group across 1 directory with 21 updates
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 72 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 71 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1170` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1170`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1073,7 +1087,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: chore(deps-dev): bump shadcn from 4.22.0 to 4.22.1 in the development group
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 73 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 72 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1169` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1169`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1082,7 +1096,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-342: Sanitize Prisma errors on stale tenant writes
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 74 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 73 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1067` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1067`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1091,7 +1105,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: DEV-343: Sanitize platform command validation errors
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 75 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 74 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1066` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1066`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1100,7 +1114,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(catering): report durable decimal scale validation errors
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 76 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 75 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1065` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1065`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1109,7 +1123,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(devices): enforce dedicated revoke capability
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 77 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 76 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1064` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1064`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1118,7 +1132,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(menu-import): reject foreign-currency relabelling at commit
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 78 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 77 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1063` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1063`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1127,7 +1141,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(workforce): prevent shift swaps from transferring attendance
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 79 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 78 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1062` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1062`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1136,7 +1150,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(restaurant): preserve componentized refund net sales
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 80 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 79 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1059` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1059`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1145,7 +1159,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(pos): gate offline replay on modifier price changes
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 81 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 80 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1058` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1058`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1154,7 +1168,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(restaurant): prevent SOP evidence attribution spoofing
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 82 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 81 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1057` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1057`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1163,7 +1177,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(restaurant): keep close and rollup refund math aligned
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 83 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 82 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1055` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1055`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1172,7 +1186,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(restaurant): enforce low-stock branch authorization
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 84 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 83 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1054` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1054`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1181,7 +1195,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(restaurant): resolve all-channel menus at POS
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 85 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 84 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1053` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1053`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1190,7 +1204,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(printing): prevent read-only users from fabricating print jobs
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 86 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 85 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1052` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1052`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1199,7 +1213,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(menu-import): require review of extracted variant prices
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 87 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 86 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1051` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1051`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1208,7 +1222,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(ask-fathom): remove forced requestLeave tool_choice
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 88 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 87 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1007` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1007`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1217,7 +1231,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: feat(hotel): reservations, front desk, folio ledger, housekeeping, rate plans (salvage)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 89 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 88 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 964` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/964`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1226,7 +1240,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: chore: Growth G1 models follow-up (salvage; likely superseded)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 90 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 89 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 963` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/963`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1235,7 +1249,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix: Agency REST projects verify clientId/memberIds belong to org (salvage)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 91 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 90 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 962` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/962`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1244,7 +1258,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix: Restaurant comp gated on orders:complimentary, add orders:comp (salvage)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 92 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 91 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 961` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/961`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1253,7 +1267,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#640): [QA][sev3] API docs advertise PATCH /api/v1/projects/{id} and /clients/{id}, but routes export only GET/DELETE
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 93 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 92 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 906` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/906`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1262,7 +1276,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#572): [QA][sev3] Tax profiles: Preset effective dates start at UTC midnight instead of branch midnight
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 94 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 93 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 903` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/903`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1271,7 +1285,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#551): [QA][sev3] Persisted role grants bypass mandatory resignation-review resource constraints
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 95 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 94 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 902` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/902`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1280,7 +1294,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#448): [QA][sev3] Agency invoices: create form has no tax input (always sends tax 0) and discounts aren't supported anywhere
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 96 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 95 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 888` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/888`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1289,7 +1303,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#438): [QA][sev3] Agency invoice status dropdown offers transitions the server rejects
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 97 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 96 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 887` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/887`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1298,7 +1312,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#429): [QA][sev3] Resending an invite while an old-token accept is mid-hash lets the old request claim the new row
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 98 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 97 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 886` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/886`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1307,7 +1321,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#383): #282 pg_trgm grant migration grants nothing when the migrator doesn't own the extension
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 99 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 98 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 882` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/882`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1316,7 +1330,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#371): No way to reverse a mistaken comp; recut locked after any tender
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 100 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 99 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 875` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/875`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1325,7 +1339,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#367): Order ticket shows live gross service, not the bill's service
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 101 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 100 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 872` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/872`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1334,7 +1348,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#314): [QA][P2][Admin] Audit ledger shows raw actor IDs, cannot be searched by actor, and silently truncates at 500 rows
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 102 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 101 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 864` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/864`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1343,7 +1357,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#310): [QA][P3][Auth] Show/hide password toggle is keyboard-unreachable (tabindex="-1") and below minimum target size on both login forms
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 103 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 102 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 863` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/863`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1352,7 +1366,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#308): [QA][P3][UI] Studio token migration is incomplete — duplicate :root scales, live legacy abyss/brass utilities, and controls that bypass the radius scale
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 104 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 103 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 862` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/862`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1361,7 +1375,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#570): [QA][sev2] Daily close: Unbilled active orders can create unpayable bills after close
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 105 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 104 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 854` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/854`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1370,7 +1384,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#568): [QA][sev2] Daily close: Future dates can be closed before trading begins
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 106 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 105 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 853` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/853`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1379,7 +1393,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#458): [QA][sev2] Agency invoice print/PDF shows DevFathom as the seller instead of the agency
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 107 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 106 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 850` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/850`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1388,7 +1402,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#440): [QA][sev2] Agency invoices: Mark paid sets PAID without recording a payment, so the balance is wrong and payment entry is hidden
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 108 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 107 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 841` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/841`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1397,7 +1411,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#435): [QA][sev2] Agency team: team:setRole is never checked, so an ADMIN denied it can still grant or revoke roles
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 109 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 108 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 838` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/838`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1406,7 +1420,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: chore(deps-dev): bump eslint from 9.39.5 to 10.11.0
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 110 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 109 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 305` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/305`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1415,7 +1429,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: chore(deps-dev): bump typescript from 5.9.3 to 7.0.2
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 111 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 110 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 304` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/304`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1424,7 +1438,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: recover: dead-letter exhausted stale jobs; idempotent dead-job requeue
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 112 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 111 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 286` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/286`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1433,7 +1447,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#508): Future-dated approved resignations never execute scheduled offboarding
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 113 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 112 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 275` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/275`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1442,7 +1456,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#556): Menu import: Approving a line imports variant prices the reviewer cannot see
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 114 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 113 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 262` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/262`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1451,7 +1465,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#554): SOP escalation: Configured escalation policies never receive production jobs
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 115 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 114 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 261` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/261`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1460,7 +1474,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#539): Tax quotation: Multi-quantity previews round tax differently from settlement
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 116 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 115 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 259` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/259`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1469,7 +1483,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#222): Dark-theme info status pill nearly invisible on branch settings
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 117 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 116 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 253` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/253`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1478,7 +1492,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#567): SOP verification: A verifier can invent the second identity for an SOP waiver
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 118 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 117 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 212` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/212`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1487,7 +1501,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#169): [Platform][sev4] JWT session cookie is reissued on every session read
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 119 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 118 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 149` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/149`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1496,7 +1510,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#7): [P2][Admin] Documented local setup cannot work — seed and prisma.config read .env only, 
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 120 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 119 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 146` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/146`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1505,7 +1519,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#6): [P3][Auth] Show/hide password toggle is keyboard-unreachable (tabindex="-1") and below min
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 121 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 120 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 145` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/145`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1514,7 +1528,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#4): [P3][UI] Studio token migration is incomplete — duplicate :root scales, live legacy abys
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 122 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 121 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 144` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/144`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1523,7 +1537,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#639): [sev2] AI routing: no seeded model prices and a provider-wide $3/$15 fallback make the Ant
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 123 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 122 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 140` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/140`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1532,7 +1546,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#409): [sev3] Agency invoice list always shows $ even for PKR invoices
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 124 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 123 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 136` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/136`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1541,7 +1555,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#11): [P2][Admin] Audit ledger shows raw actor IDs, cannot be searched by actor, and silently tr
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 125 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 124 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 133` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/133`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1550,7 +1564,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#258): Reminder quiet-hour skips counted as skippedNoConsent; weekly dedupe key uses UTC epoch we
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 126 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 125 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 105` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/105`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1559,7 +1573,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: fix(#257): Show password toggle has tabindex -1
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 127 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 126 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 104` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/104`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1568,7 +1582,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: docs: AWS staging, runbook, environment variables and security overview
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 128 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 127 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 59` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/59`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1577,7 +1591,7 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: docs: restaurant guide and glossary (PR 3)
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 129 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 128 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 57` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/57`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1586,6 +1600,6 @@ _Generated 2026-11-02 18:51 UTC from the live run state by `handoff/scripts/gen-
 - Title: docs: developer onboarding, architecture, auth and roles, testing, contributing
 - Verdicts: machine pending · QA pending · Security pending
 - Done so far: 
-- Next step: wait for machine checks queued at position 130 and QA/Security review queued in a review workflow
+- Next step: wait for machine checks queued at position 129 and QA/Security review queued in a review workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 56` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/56`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
