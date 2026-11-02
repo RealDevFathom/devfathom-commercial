@@ -25,5 +25,11 @@
  ],
  "1161": [
   "NEW typecheck error in the PR's new tests/postgres-backup.test.ts: TS2741 Property 'NODE_ENV' is missing in the env object passed as ProcessEnv."
+ ],
+ "1118": [
+  "NEW test failure attributable to the PR (fails on PR, passes on develop): see retry.json attributable list."
+ ],
+ "1117": [
+  "NEW typecheck error in the PR's new src/lib/pharmacy/accounts/profit-loss.coverage.test.ts: TS2737 BigInt literals are not available when targeting lower than ES2020 (tsconfig target ES2017); use BigInt(n) instead of n-suffixed literals."
  ]
 }
