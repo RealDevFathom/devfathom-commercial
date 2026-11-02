@@ -243,7 +243,9 @@ describe('POST browser enrollment', () => {
   it('expires every Auth.js session cookie chunk supplied by the enrolling browser', async () => {
     const response = await POST(
       request(
-        'authjs.session-token.0=local-first; authjs.session-token.1=local-second; ' +
+        'authjs.session-token=local-base==; __Secure-authjs.session-token=secure-base; ' +
+          'authjs.session-token.0=local-first==; authjs.session-token.1=local-second; ' +
+          'authjs.session-token.123=local-last; ' +
           '__Secure-authjs.session-token.0=secure-first; ' +
           '__Secure-authjs.session-token.12=secure-last; authjs.session-token.1=duplicate; ' +
           'authjs.session-token.invalid=preserved; authjs.session-token.2; ' +
@@ -253,15 +255,21 @@ describe('POST browser enrollment', () => {
     const cookies = response.headers.getSetCookie();
 
     for (const name of [
+      'authjs.session-token',
+      '__Secure-authjs.session-token',
       'authjs.session-token.0',
       'authjs.session-token.1',
+      'authjs.session-token.123',
       '__Secure-authjs.session-token.0',
       '__Secure-authjs.session-token.12',
     ]) {
       const deletion = cookies.find((cookie) => cookie.startsWith(`${name}=`));
+      expect(deletion).toContain('Path=/');
+      expect(deletion).toContain('HttpOnly');
+      expect(deletion).toContain('SameSite=lax');
       expect(deletion).toContain('Max-Age=0');
       expect(deletion).toContain('Expires=Thu, 01 Jan 1970 00:00:00 GMT');
-      expect(deletion?.includes('Secure')).toBe(name.startsWith('__Secure-'));
+      expect(deletion?.split('; ').includes('Secure')).toBe(name.startsWith('__Secure-'));
     }
     expect(
       cookies.filter((cookie) => cookie.startsWith('authjs.session-token.1='))

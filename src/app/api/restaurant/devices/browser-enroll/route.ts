@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { can, subjectFromSession } from '@/lib/abac';
+import { authSessionCookieNames } from '@/lib/auth/session-cookies';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { publicRequestOrigin } from '@/lib/http-origin';
@@ -146,17 +147,7 @@ export async function POST(request: Request) {
     path: '/',
     maxAge: 60 * 60 * 24 * 180,
   });
-  const sessionCookieNames = new Set(['authjs.session-token', '__Secure-authjs.session-token']);
-  for (const cookie of request.headers.get('cookie')?.split(';') ?? []) {
-    const separatorIndex = cookie.indexOf('=');
-    if (separatorIndex === -1) continue;
-
-    const name = cookie.slice(0, separatorIndex).trim();
-    if (/^(?:__Secure-)?authjs\.session-token\.\d+$/.test(name)) {
-      sessionCookieNames.add(name);
-    }
-  }
-  for (const name of sessionCookieNames) {
+  for (const name of authSessionCookieNames(request.headers.get('cookie'))) {
     response.cookies.set(name, '', {
       httpOnly: true,
       sameSite: 'lax',
