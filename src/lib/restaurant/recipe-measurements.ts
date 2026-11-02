@@ -1,7 +1,12 @@
 import { Prisma } from '@/generated/prisma/client';
 
 export const RECIPE_MEASUREMENT_SPECS = {
-  conversionFactor: { label: 'Unit conversion factor', domain: 'positive', precision: 18, scale: 6 },
+  conversionFactor: {
+    label: 'Unit conversion factor',
+    domain: 'positive',
+    precision: 18,
+    scale: 6,
+  },
   yieldQuantity: { label: 'Recipe yield quantity', domain: 'positive', precision: 12, scale: 3 },
   lineQuantity: { label: 'Recipe line quantity', domain: 'positive', precision: 12, scale: 4 },
   referenceCost: { label: 'Reference cost', domain: 'nonnegative', precision: 12, scale: 4 },
