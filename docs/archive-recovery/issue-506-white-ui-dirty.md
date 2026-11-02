@@ -9,11 +9,11 @@ The preserved tag `archive/wip/white-ui-dirty-20260828` points at `f6f72ee0`. Th
 three commits outside its historical `main` comparison. Their preserved objects were inspected
 against the maintained `develop` snapshot `47518cbf94ac912d0d657122625af03b23bbd1c1`:
 
-| Commit     | Archived change                                   | Disposition                                                   |
-| ---------- | ------------------------------------------------- | ------------------------------------------------------------- |
-| `c85ea42a` | Checkpoint Nuxt and FastAPI migration              | Superseded runtime; do not replay                              |
-| `43a72f44` | Port white Studio shell to Nuxt                    | Superseded by the maintained Next.js Studio shell              |
-| `f6f72ee0` | Snapshot described as uncommitted white UI state   | Historical checkpoint; no additional tree changes to recover   |
+| Commit     | Archived change                                  | Disposition                                                  |
+| ---------- | ------------------------------------------------ | ------------------------------------------------------------ |
+| `c85ea42a` | Checkpoint Nuxt and FastAPI migration            | Superseded runtime; do not replay                            |
+| `43a72f44` | Port white Studio shell to Nuxt                  | Superseded by the maintained Next.js Studio shell            |
+| `f6f72ee0` | Snapshot described as uncommitted white UI state | Historical checkpoint; no additional tree changes to recover |
 
 `c85ea42a` adds the Vue application under `app/`, the Python application under `backend/`,
 `nuxt.config.ts`, and a replacement dependency manifest. Its
