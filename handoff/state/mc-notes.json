@@ -43,5 +43,11 @@
  ],
  "1068": [
   "REGRESSION: 5 tests in the existing tests/finance-insights-ai-independence.test.ts fail on the PR and pass on develop with 'TRPCError: ctx.db.$transaction is not a function'. The PR's pharmacy-reports.ts now calls ctx.db.$transaction in the command-centre path, and that suite's mocked db has no $transaction. Either extend the mock or avoid the transaction there, whichever matches the real tenant db contract."
+ ],
+ "1003": [
+  "PR-introduced failure in its new test src/components/pharmacy/dispensing/field.test.tsx: 'Field packs its rows to the top so a taller neighbour cannot stretch the control' cannot find a label with text 'Prescription image' (the rendered Field does not associate that label)."
+ ],
+ "1005": [
+  "NEW ESLint error(s): src/components/layout/topbar.command-palette.test.tsx react/display-name Component definition is missing display name;"
  ]
 }

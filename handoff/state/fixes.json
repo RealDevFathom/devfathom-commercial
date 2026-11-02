@@ -112,5 +112,11 @@
   "initialSha": "87130c9b0503ecf362f86922ae5edb36a8683213",
   "what": "06512703f lets a stale bill read sign out in one click; 6dbe145dc shows the sign-out reason only for payment and recovery blocks",
   "initialFailure": "nothing (machine checks passed; the fixes are for the QA finding)"
+ },
+ "1006": {
+  "sha": "63af85e15b31110ec1f668ca3c49d78c69f30bc0",
+  "initialSha": "b49bbf354aaf21a7d13059c0833be1e1b7d769c1",
+  "what": "Prettier on restaurant-growth.test.ts",
+  "initialFailure": "Prettier: src/server/routers/restaurant-growth.test.ts unformatted"
  }
 }
