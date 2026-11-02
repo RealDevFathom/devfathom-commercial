@@ -72,11 +72,15 @@ function makeDb() {
 
 let db = makeDb();
 
-function caller(userId = 'user_a', enabledModules = ['pharmacy-procurement']) {
+function caller(
+  userId = 'user_a',
+  enabledModules = ['pharmacy-procurement'],
+  organizationId = 'org_a'
+) {
   return pharmacyPurchasingRouter.createCaller({
     db,
     entitlements: {
-      organizationId: 'org_a',
+      organizationId,
       enabledModules,
       activeSeats: 1,
       seatLimit: 10,
@@ -193,18 +197,82 @@ describe.each(['purchaseReturns', 'supplierCredits'] as const)(
       expect(source().findMany.mock.lastCall![0]).not.toHaveProperty('take');
     });
 
-    it.each(['permission', 'branch', 'module', 'actor'])(
+    it('allows procurement managers without financial-report access in both modes', async () => {
+      mocks.can.mockResolvedValue(false);
+      db.user.findUnique.mockResolvedValue({
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      });
+      for (const page of [undefined, { limit: 5 }]) {
+        await expect(caller()[endpoint]({ branchId: 'branch_a', page })).resolves.toBeDefined();
+      }
+      expect(source().findMany).toHaveBeenCalledTimes(2);
+      expect(source().findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ organizationId: 'org_a', branchId: 'branch_a' }),
+        })
+      );
+      expect(db.user.findUnique.mock.invocationCallOrder[0]).toBeLessThan(
+        db.pharmacyBranch.findFirst.mock.invocationCallOrder[0]!
+      );
+      expect(db.pharmacyBranch.findFirst).toHaveBeenCalledWith({
+        where: { organizationId: 'org_a', id: 'branch_a', active: true },
+        select: { id: true },
+      });
+    });
+
+    it.each([
+      { denied: ['reports:financial'], allowed: true },
+      { denied: ['pharmacy:procurement'], allowed: true },
+      { denied: ['reports:financial', 'pharmacy:procurement'], allowed: false },
+      { denied: ['*'], allowed: false },
+    ])('respects DENY within each alternative capability: $denied', async ({ denied, allowed }) => {
+      const { can } = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+      mocks.can.mockImplementation(can);
+      db.user.findUnique.mockResolvedValue({
+        role: 'ADMIN',
+        organizationRole: {
+          permissions: [
+            { capability: 'reports:financial', effect: 'ALLOW' },
+            { capability: 'pharmacy:procurement', effect: 'ALLOW' },
+          ],
+        },
+        permissionOverrides: denied.map((capability) => ({ capability, effect: 'DENY' })),
+      });
+      const result = caller()[endpoint]({ branchId: 'branch_a' });
+      if (allowed) {
+        await expect(result).resolves.toEqual([]);
+        expect(source().findMany).toHaveBeenCalledOnce();
+      } else {
+        await expect(result).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
+        expect(source().findMany).not.toHaveBeenCalled();
+      }
+    });
+
+    it.each(['permission', 'branch', 'module', 'actor', 'tenant'])(
       'denies %s before source reads for both modes',
       async (reason) => {
-        if (reason === 'permission') mocks.can.mockResolvedValue(false);
+        mocks.can.mockResolvedValue(false);
+        if (reason !== 'permission') {
+          db.user.findUnique.mockResolvedValue({
+            organizationRole: {
+              permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+            },
+            permissionOverrides: [],
+          });
+        }
         if (reason === 'branch') db.pharmacyBranch.findFirst.mockResolvedValue(null);
         const reader = caller(
           reason === 'actor' ? '' : 'user_a',
-          reason === 'module' ? [] : ['pharmacy-procurement']
+          reason === 'module' ? [] : ['pharmacy-procurement'],
+          reason === 'tenant' ? '' : 'org_a'
         );
         for (const page of [undefined, { limit: 5 }]) {
           await expect(reader[endpoint]({ branchId: 'branch_a', page })).rejects.toMatchObject({
-            code: reason === 'actor' ? 'UNAUTHORIZED' : 'FORBIDDEN',
+            code: reason === 'actor' || reason === 'tenant' ? 'UNAUTHORIZED' : 'FORBIDDEN',
           });
         }
         expect(source().findMany).not.toHaveBeenCalled();

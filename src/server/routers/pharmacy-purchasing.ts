@@ -342,7 +342,7 @@ const WITH_LICENCES = { licences: true } as const;
 
 const supplierFollowUpInput = purchasingReadBoundsSchema.safeExtend({ branchId });
 
-/** Both bounded and legacy financial readers enforce access before reading their source rows. */
+/** Both bounded and legacy follow-up readers enforce access before reading their source rows. */
 async function supplierFollowUpScope(ctx: TRPCContext, branch: string) {
   const scope = receivingScope(ctx, branch);
   // Direct subrouter callers have no pharmacyPurchasing path prefix for the shared module lookup.
@@ -354,9 +354,13 @@ async function supplierFollowUpScope(ctx: TRPCContext, branch: string) {
       db: ctx.db,
       source: 'TRPC',
       ip: ctx.requestMeta.ip,
-    }))
+    })) &&
+    !(await actorCanProcure(ctx.db, scope.actorId))
   )
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Financial report access required.' });
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Financial report or pharmacy procurement access required.',
+    });
   const available = await ctx.db.pharmacyBranch.findFirst({
     where: { organizationId: scope.organizationId, id: scope.branchId, active: true },
     select: { id: true },

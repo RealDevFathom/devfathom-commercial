@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   context: vi.fn(),
   caller: vi.fn(),
   module: vi.fn(),
+  user: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
@@ -31,6 +32,13 @@ beforeEach(() => {
   mocks.context.mockResolvedValue({
     session: { user: { id: 'user' } },
     entitlements: { organizationId: 'org' },
+    db: { user: { findUnique: mocks.user } },
+  });
+  mocks.user.mockResolvedValue({
+    organizationRole: {
+      permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+    },
+    permissionOverrides: [],
   });
   mocks.module.mockReturnValue(true);
   mocks.caller.mockReturnValue(reads);
@@ -51,7 +59,22 @@ it('does not read or render priorities without module access', async () => {
   expect(
     screen.getByRole('heading', { name: 'Pharmacy Procurement is not licensed' })
   ).toBeVisible();
+  expect(mocks.user).not.toHaveBeenCalled();
+  expect(mocks.caller).not.toHaveBeenCalled();
   expect(reads.purchaseReturns).not.toHaveBeenCalled();
+  expect(screen.queryByRole('heading', { name: 'Supplier-credit follow-up' })).toBeNull();
+});
+it('denies cashiers before creating a caller or reading any purchasing records', async () => {
+  mocks.user.mockResolvedValue({
+    organizationRole: {
+      permissions: [{ capability: 'pharmacy.counter', effect: 'ALLOW' }],
+    },
+    permissionOverrides: [],
+  });
+  render(await ReturnsPage({ searchParams: params() }));
+  expect(screen.getByRole('heading', { name: 'You do not have purchasing access' })).toBeVisible();
+  expect(mocks.caller).not.toHaveBeenCalled();
+  for (const read of Object.values(reads)) expect(read).not.toHaveBeenCalled();
   expect(screen.queryByRole('heading', { name: 'Supplier-credit follow-up' })).toBeNull();
 });
 it('does not render priorities after branch read denial', async () => {
@@ -64,8 +87,12 @@ it('does not render priorities after branch read denial', async () => {
   ).toBeVisible();
   expect(screen.queryByRole('heading', { name: 'Supplier-credit follow-up' })).toBeNull();
 });
-it('loads the queue from the existing authorized branch reads', async () => {
+it('loads the queue for a procurement manager after checking capability', async () => {
   render(await ReturnsPage({ searchParams: params() }));
+  expect(mocks.user).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'user' } }));
+  expect(mocks.user.mock.invocationCallOrder[0]).toBeLessThan(
+    reads.workspace.mock.invocationCallOrder[0]!
+  );
   expect(reads.purchaseReturns).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' });
   expect(reads.supplierCredits).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' });
   expect(screen.getByRole('heading', { name: 'Supplier-credit follow-up' })).toBeVisible();
