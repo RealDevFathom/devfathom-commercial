@@ -38,10 +38,10 @@ run('finance outstanding summary database isolation', () => {
       INSERT INTO clients (id, "organizationId", name, "updatedAt")
       VALUES ('${orgA}_client', '${orgA}', 'A', now()), ('${orgB}_client', '${orgB}', 'B', now());
       INSERT INTO invoices (id, "organizationId", "invoiceNumber", "clientId", items, subtotal, total, currency, status, "dueDate", "updatedAt")
-      VALUES ('${orgA}_invoice', '${orgA}', '${orgA}', '${orgA}_client', '[]', 100, 100, 'USD', 'SENT', now(), now()),
+      VALUES ('${orgA}_invoice', '${orgA}', '${orgA}', '${orgA}_client', '[]', 1000, 1000, 'USD', 'SENT', now(), now()),
              ('${orgB}_invoice', '${orgB}', '${orgB}', '${orgB}_client', '[]', 900, 900, 'USD', 'SENT', now(), now());
       INSERT INTO payments (id, "organizationId", "invoiceId", amount, currency)
-      VALUES ('${orgA}_payment', '${orgA}', '${orgA}_invoice', 25, 'USD'),
+      VALUES ('${orgA}_payment', '${orgA}', '${orgA}_invoice', 600, 'USD'),
              ('${orgB}_payment', '${orgB}', '${orgB}_invoice', 100, 'USD');
     `);
   });
@@ -58,10 +58,10 @@ run('finance outstanding summary database isolation', () => {
     }
   });
 
-  it('subtracts payments without including another tenant', async () => {
+  it('reports 400 outstanding for a 1000 invoice paid by 600 without including another tenant', async () => {
     const groups = await withTenantDb(orgA, (db) => getOutstandingInvoiceGroups(db));
     expect(groups.map((group) => ({ ...group, amount: Number(group.amount) }))).toEqual([
-      { currency: 'USD', amount: 75, count: BigInt(1) },
+      { currency: 'USD', amount: 400, count: BigInt(1) },
     ]);
   });
 });
