@@ -6,7 +6,10 @@
  *   - a value in this turn's tool results (numbers, numeric strings, numbers inside
  *     returned text, `*Minor` integer minor units ÷ 100, ratio ↔ percent, array lengths),
  *   - a figure the user typed,
- *   - or an exempt figure: a plain integer ≤ 10, or a date, time or year.
+ *   - or an exempt figure: a plain integer ≤ 10, or a date, time or year (a year only
+ *     where it reads as one: "in 2026", "since 2024", "November 2026", "FY 2026").
+ * Scale words are read in English, Roman Urdu and Urdu ("50 hazar", "1.2 لاکھ", "3 karor"),
+ * and Urdu digits as ASCII digits.
  * A figure matches within its displayed precision ("1.2 lakh" accepts 115,000–125,000;
  * "Rs 1,235" accepts 1,234.5). Signs are compared by magnitude, because answers often
  * carry the sign in words ("a shortfall of Rs 1,200").
@@ -36,6 +39,8 @@ export type Figure = {
   /** Half a unit of the displayed precision, in base units. */
   tolerance: number;
   percent: boolean;
+  /** Offset of the figure in the text it was extracted from. */
+  index: number;
 };
 
 const SCALE_WORDS: Record<string, number> = {
@@ -55,11 +60,25 @@ const SCALE_WORDS: Record<string, number> = {
   bn: 1e9,
   billion: 1e9,
   billions: 1e9,
+  hazar: 1e3,
+  hazaar: 1e3,
+  hazaron: 1e3,
+  ہزار: 1e3,
+  لاکھ: 1e5,
+  karor: 1e7,
+  karod: 1e7,
+  karore: 1e7,
+  کروڑ: 1e7,
+  arab: 1e9,
+  ارب: 1e9,
 };
 
-const EASTERN_DIGITS = /[٠-٩۰-۹]/g;
+const EASTERN_DIGITS = /[٠-٩۰-۹٫٬]/g;
+/** Arabic-Indic and Urdu digits (and their separators) as ASCII, one for one. */
 function asciiDigits(text: string): string {
   return text.replace(EASTERN_DIGITS, (digit) => {
+    if (digit === '٫') return '.';
+    if (digit === '٬') return ',';
     const code = digit.charCodeAt(0);
     return String(code >= 0x06f0 ? code - 0x06f0 : code - 0x0660);
   });
@@ -67,6 +86,26 @@ function asciiDigits(text: string): string {
 
 const MONTH =
   '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+const DAY = '(?:0?[1-9]|[12]\\d|3[01])';
+/** "may" and "mar" are also ordinary words; lower-case, they need a year or an ordinal. */
+const AMBIGUOUS_MONTH = /^(?:may|mar)$/i;
+const CAPITALISED = /^\p{Lu}\p{Ll}*$/u;
+
+function isAmbiguousMonth(month: string, ordinal: string | undefined, year: string | undefined) {
+  return AMBIGUOUS_MONTH.test(month) && !CAPITALISED.test(month) && !ordinal && !year;
+}
+
+/** "15/11" and "11/15" read as dates. A first part ≤ the second ("3/5") is a date only after a date word. */
+const SHORT_DATE = /(?<![\p{L}\p{N}.,/])(\d{1,2})\/(\d{1,2})(?![\p{N}/]|[.,]\d)/gu;
+const DATE_WORD_BEFORE =
+  /(?:\b(?:on|from|to|till|until|since|by|dated?|due|before|after|between|and|through|tak|se|ko)|تک|سے|کو)\s*$/iu;
+
+function isShortDate(text: string, index: number, first: number, second: number) {
+  if (first < 1 || second < 1) return false;
+  const valid = (first <= 31 && second <= 12) || (first <= 12 && second <= 31);
+  if (!valid) return false;
+  return first > second || DATE_WORD_BEFORE.test(text.slice(Math.max(0, index - 12), index));
+}
 
 /**
  * Spans that are never figures: links (their ids and query strings), dates, times,
@@ -79,11 +118,19 @@ const EXEMPT_SPANS: RegExp[] = [
   /\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b/g,
   /\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:am|pm|a\.m\.|p\.m\.))?/gi,
   /\b\d{1,2}\s*(?:am|pm|a\.m\.|p\.m\.)(?![\p{L}])/giu,
-  new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH}\\b\\.?(?:,?\\s+\\d{4})?`, 'gi'),
-  new RegExp(`\\b${MONTH}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?\\b(?:,?\\s+\\d{4})?`, 'gi'),
   /\b\d+(?:st|nd|rd|th)\b/gi,
   /^[ \t]*\d+[.)][ \t]/gm,
 ];
+
+/** Day-month and month-day dates; lower-case "may"/"mar" need an ordinal or a year. */
+const DAY_MONTH = new RegExp(
+  `\\b${DAY}(st|nd|rd|th)?\\s+(?:of\\s+)?(${MONTH})\\b\\.?(?:,?\\s+(\\d{4}))?`,
+  'gi'
+);
+const MONTH_DAY = new RegExp(
+  `\\b(${MONTH})\\.?\\s+${DAY}(st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?`,
+  'gi'
+);
 
 /**
  * One figure: optional currency, optional sign, the digits (Western or South Asian
@@ -91,19 +138,52 @@ const EXEMPT_SPANS: RegExp[] = [
  * The look-behinds skip digits inside identifiers ("INV-0042", "Q3", "v2", "#12", "3/5"'s 5).
  */
 const FIGURE =
-  /(?<![\p{L}\p{N}_.,/#:=?&])(?<![\p{L}\p{N}][-–])((?:rs\.?|pkr|usd|\$)\s?)?([-−–]\s?)?((?:rs\.?|pkr|usd|\$)\s?)?(\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s?(thousand|lakhs?|lacs?|crores?|cr|millions?|mn|billions?|bn)(?![\p{L}])|([kKmM])(?![\p{L}\p{N}]))?(\s?%|\s+percent\b)?/giu;
+  /(?<![\p{L}\p{N}_.,/#:=?&])(?<![\p{L}\p{N}][-–])((?:rs\.?|pkr|usd|\$)\s?)?([-−–]\s?)?((?:rs\.?|pkr|usd|\$)\s?)?(\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s?(thousand|hazaa?r|hazaron|ہزار|lakhs?|lacs?|لاکھ|crores?|cr|karor|karod|karore|کروڑ|millions?|mn|billions?|bn|arab|ارب)(?![\p{L}])|([kKmM])(?![\p{L}\p{N}]))?(\s?%|\s+percent\b)?/giu;
 
-function blankExemptSpans(text: string): string {
-  let out = asciiDigits(text);
-  for (const pattern of EXEMPT_SPANS)
-    out = out.replace(pattern, (match) => ' '.repeat(match.length));
+const blank = (match: string) => ' '.repeat(match.length);
+
+function blankExemptSpans(ascii: string): string {
+  let out = ascii;
+  // Day-month dates go first, before ordinals lose their suffix.
+  out = out.replace(DAY_MONTH, (match, ordinal?: string, month?: string, year?: string) =>
+    isAmbiguousMonth(month!, ordinal, year) ? match : blank(match)
+  );
+  out = out.replace(MONTH_DAY, (match, month?: string, ordinal?: string, year?: string) =>
+    isAmbiguousMonth(month!, ordinal, year) ? match : blank(match)
+  );
+  for (const pattern of EXEMPT_SPANS) out = out.replace(pattern, blank);
+  out = out.replace(SHORT_DATE, (match, first: string, second: string, offset: number) =>
+    isShortDate(out, offset, Number(first), Number(second)) ? blank(match) : match
+  );
   return out;
+}
+
+/** Words before a figure that make a 1900–2100 integer a year. */
+const YEAR_BEFORE = new RegExp(
+  `(?:\\b(?:in|since|during|until|till|through|between|year|years|fy|cy|fiscal|financial|calendar|as\\s+of|san|sal|saal|q[1-4]|h[12]|${MONTH}\\.?,?)|سال|سن)\\s*'?$`,
+  'iu'
+);
+/** "2025-26", "2024–2026": a financial year or a year range. */
+const YEAR_AFTER = /^\s*[-–/]\s*(?:(?:19|20)\d{2}|\d{2})(?![\p{N}])/u;
+
+function readsAsYear(text: string, index: number, length: number): boolean {
+  const before = text.slice(Math.max(0, index - 16), index);
+  if (YEAR_BEFORE.test(before)) return true;
+  const after = YEAR_AFTER.exec(text.slice(index + length, index + length + 8));
+  if (!after) return false;
+  const year = Number(text.slice(index, index + length));
+  const next = after[0].replace(/[^\d]/g, '');
+  return next.length === 4 ? Number(next) > year : Number(next) === (year + 1) % 100;
 }
 
 /** Every figure in `text`, including exempt-sized ones; dates, times and links excluded. */
 export function extractFigures(text: string): Figure[] {
+  return extract(asciiDigits(text));
+}
+
+function extract(ascii: string): Figure[] {
   const figures: Figure[] = [];
-  for (const match of blankExemptSpans(text).matchAll(FIGURE)) {
+  for (const match of blankExemptSpans(ascii).matchAll(FIGURE)) {
     // Groups: 1 currency, 2 sign, 3 currency, 4 digits, 5 scale word, 6 scale letter, 7 percent.
     const digits = match[4]!.replace(/,/g, '');
     const mantissa = Number(digits);
@@ -116,22 +196,28 @@ export function extractFigures(text: string): Figure[] {
       value: mantissa * scale,
       tolerance: 0.5 * 10 ** -decimals * scale,
       percent: Boolean(match[7]),
+      index: match.index,
     });
   }
   return figures;
 }
 
-function isExemptFigure(figure: Figure, raw: string): boolean {
-  const plain = /^\d+$/.test(raw.replace(/^[-−–]\s?/, ''));
-  if (!plain || figure.percent) return false;
+function isExemptFigure(figure: Figure, ascii: string): boolean {
+  const digits = figure.raw.replace(/^[-−–]\s?/, '');
+  if (!/^\d+$/.test(digits) || figure.percent) return false;
   if (figure.value <= SMALL_INTEGER_EXEMPTION) return true;
-  // A plain four-digit year.
-  return figure.value >= 1900 && figure.value <= 2100;
+  // A four-digit year, where the words around it say so ("in 2026", not "sold 2000").
+  return (
+    figure.value >= 1900 &&
+    figure.value <= 2100 &&
+    readsAsYear(ascii, figure.index + figure.raw.length - digits.length, digits.length)
+  );
 }
 
 /** The figures in `text` that must be grounded: everything except the exemptions. */
 export function checkableFigures(text: string): Figure[] {
-  return extractFigures(text).filter((figure) => !isExemptFigure(figure, figure.raw));
+  const ascii = asciiDigits(text);
+  return extract(ascii).filter((figure) => !isExemptFigure(figure, ascii));
 }
 
 /** Numeric values the current turn may restate. */

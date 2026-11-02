@@ -155,6 +155,66 @@ describe('extractFigures', () => {
   });
 });
 
+describe('Urdu and Roman Urdu scales', () => {
+  it('reads hazar, lakh, crore, karor and arab in Roman Urdu and Urdu script', () => {
+    const values = extractFigures(
+      '50 hazar, 2 hazaar, 1.2 لاکھ, 3 crore, 4 karor, 2 کروڑ, 7 ہزار, 1 arab, ۱٫۵ ارب'
+    ).map((figure) => figure.value);
+    expect(values).toEqual([
+      50_000, 2_000, 120_000, 30_000_000, 40_000_000, 20_000_000, 7_000, 1e9, 1.5e9,
+    ]);
+  });
+
+  it('grounds salesMinor stated in Roman Urdu or Urdu scale words', () => {
+    const evidence = evidenceFrom({ claims: [{ metricKey: 'salesMinor', value: 5_000_000 }] });
+    expect(grounded('Aaj ki sales 50 hazar rupay hain.', evidence)).toBe(true);
+    expect(grounded('آج کی سیل 50 ہزار روپے ہے', evidence)).toBe(true);
+    expect(grounded('آج کی سیل ۵۰ ہزار روپے ہے', evidence)).toBe(true);
+    expect(grounded('Aaj ki sales 60 hazar rupay hain.', evidence)).toBe(false);
+    const lakh = evidenceFrom({ claims: [{ metricKey: 'salesMinor', value: 12_000_000 }] });
+    expect(grounded('آج کی سیل 1.2 لاکھ روپے', lakh)).toBe(true);
+    expect(grounded('Aaj ki sales 1.2 lakh hain.', lakh)).toBe(true);
+    expect(grounded('آج کی سیل 1.5 لاکھ روپے', lakh)).toBe(false);
+  });
+});
+
+describe('date and year exemptions', () => {
+  const raws = (text: string) => checkableFigures(text).map((figure) => figure.raw);
+
+  it('exempts a year only where it reads as one', () => {
+    expect(raws('Sales in 2026 beat 2025-26 and FY2026.')).toEqual([]);
+    expect(raws('Since 2024 we have grown; FY 2025 closed in November 2025.')).toEqual([]);
+    expect(raws('Compare 2024–2026 and Q3 2026, as of 2026.')).toEqual([]);
+    expect(raws('Due 15 May 2026 and 2026-11-02.')).toEqual([]);
+    expect(raws('We sold 2000 tablets.')).toEqual(['2000']);
+    expect(raws('Shortfall of 1999 units.')).toEqual(['1999']);
+    expect(raws('Stock fell from 2050 to 1980 boxes.')).toEqual(['2050', '1980']);
+  });
+
+  it('does not treat the verb may or the word mar as months', () => {
+    expect(raws('About 45 may expire this week.')).toEqual(['45']);
+    expect(raws('About 15 may expire this week.')).toEqual(['15']);
+    expect(raws('Expiry on 15 May.')).toEqual([]);
+    expect(raws('Expiry on 15 May 2026.')).toEqual([]);
+    expect(raws('Expiry on the 15th may.')).toEqual([]);
+    expect(raws('Expiry on 15 may 2026.')).toEqual([]);
+    expect(raws('Expiry on May 15.')).toEqual([]);
+    expect(raws('Sales may 15 rise; 12 mar 30 were lost.')).toEqual(['15', '12', '30']);
+    expect(raws('Opened on 12 Mar and 3 March.')).toEqual([]);
+    expect(raws('Expiry on 45 May.')).toEqual(['45']);
+  });
+
+  it('treats dd/mm and mm/dd short dates as dates', () => {
+    const evidence = evidenceFrom({ value: 2000 });
+    expect(raws('Sales on 15/11 were Rs 2,000.')).toEqual(['Rs 2,000']);
+    expect(grounded('Sales on 15/11 were Rs 2,000.', evidence)).toBe(true);
+    expect(grounded('Sales on 11/15 were Rs 2,000.', evidence)).toBe(true);
+    expect(raws('Between 12/11 and 20/11 sales held.')).toEqual([]);
+    expect(raws('Progress is 12/20 tasks; 45/50 later.')).toEqual(['12', '45']);
+    expect(raws('Ratio 15.5/11 and 15/11.5.')).not.toEqual([]);
+  });
+});
+
 describe('checkGrounding with realistic tool results', () => {
   it('accepts pharmacy minor-unit claims shown in major units, with and without suffixes', () => {
     const evidence = evidenceFrom(pharmacyClaims);
