@@ -94,8 +94,7 @@ function receiptDb(line: {
     },
     pharmacyPurchaseOrder: {
       findFirst: vi.fn().mockResolvedValue(
-        line.purchaseOrderStatus &&
-          (line.purchaseOrderSupplierId ?? 'supplier_a') === 'supplier_a'
+        line.purchaseOrderStatus && (line.purchaseOrderSupplierId ?? 'supplier_a') === 'supplier_a'
           ? {
               id: 'po',
               branchId:
