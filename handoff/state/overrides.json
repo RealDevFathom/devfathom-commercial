@@ -28,5 +28,11 @@
    "verdict": "PASS",
    "details": "The production sandbox guard works and is tested (paymentSandboxAdmitted returns false when NODE_ENV=production), and the main expiry advisor card now shows a proper load-error state instead of the owner-only permission copy, with tests for FORBIDDEN, UNAUTHORIZED and INTERNAL errors. The Daily work pack's bare 'UNAVAILABLE' row and the raw-ID supplier/ingredient/batch filters are left to open PR #1001; both skeptics refuted that as a blocker for this PR. Prettier on the reports page test is fixed in bc698680e4"
   }
+ },
+ "1161": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "The PR adds encrypted pg_dump-to-S3 and guarded restore scripts, a nightly systemd timer runbook and fake-command tests; the encryption, checksum, archive-check, source/target guard and migration-probe paths are handled and tested (26 tests pass). The one QA failure, a new TS2741 because the test env object lacked NODE_ENV, is fixed in 7013e12df3. Non-blocking: the live restore drill on the pharmacy EC2 and the timer installation are operational steps still to be done, as the PR says"
+  }
  }
 }
