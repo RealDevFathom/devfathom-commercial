@@ -9,6 +9,49 @@ import type { PharmacyDashboardAccess, PharmacyDashboardLink } from './dashboard
 type Viewer = Parameters<typeof subjectFromSession>[0];
 type Gate = { module: string; owner: boolean; actions: readonly Action[] };
 
+export type PharmacyAdviceKey = 'reorder' | 'expiry' | 'growth';
+
+/**
+ * DEV-594 — the advice pages that already exist, named the way an owner asks for
+ * them. Each gate repeats the checks its page's own reads make, so a link is
+ * never offered to someone the page would refuse.
+ */
+const ADVICE: Record<PharmacyAdviceKey, PharmacyDashboardLink & { gate: Gate }> = {
+  reorder: {
+    key: 'reorder',
+    href: '/pharmacy/reports/replenishment',
+    label: 'Reorder advice',
+    detail: 'How much of each medicine to reorder, from what sold and what is on the shelf.',
+    // `pharmacyReports.branches` + `catalog`: Pharmacy Reports and reports:operational.
+    gate: { module: 'pharmacy-reports', owner: false, actions: ['reports:operational'] },
+  },
+  expiry: {
+    key: 'expiry',
+    href: '/pharmacy/reports',
+    label: 'Expiry advice',
+    detail:
+      'Stock likely to expire before it sells, ranked by value, with supplier returns to try.',
+    // `pharmacyReports.expiryAdvice` is an owner report (`ownerFilters`).
+    gate: {
+      module: 'pharmacy-reports',
+      owner: true,
+      actions: ['reports:operational', 'reports:financial'],
+    },
+  },
+  growth: {
+    key: 'growth',
+    href: '/pharmacy/marketing',
+    label: 'Growth insights',
+    detail: 'Suggestions for growing sales, which you review before anything reaches a customer.',
+    // `pharmacyMarketing.growthHistory`: owner, Pharmacy CRM and both report grants.
+    gate: {
+      module: 'pharmacy-crm',
+      owner: true,
+      actions: ['reports:operational', 'reports:financial'],
+    },
+  },
+};
+
 /** The working pages a viewer without reports starts from, each on its page's own grant. */
 const ROLE_TOOLS: ReadonlyArray<PharmacyDashboardLink & { gate: Gate }> = [
   {
@@ -94,6 +137,21 @@ async function permitted(
   return open;
 }
 
+/** The advice links among `keys` that this viewer can open, in the order asked. */
+export function resolvePharmacyAdvice(
+  db: AuthzDb,
+  viewer: Viewer,
+  entitlements: EntitlementView,
+  keys: readonly PharmacyAdviceKey[]
+): Promise<PharmacyDashboardLink[]> {
+  return permitted(
+    keys.map((key) => ADVICE[key]),
+    viewer,
+    entitlements,
+    grants(db, viewer)
+  );
+}
+
 /**
  * DEV-602 — the dashboard follows the viewer's grants, not the workspace's owner.
  * A viewer without `reports:operational` (a cashier, a pharmacist) is refused by
@@ -109,5 +167,14 @@ export async function resolvePharmacyDashboardAccess(
   const reports = await holds('reports:operational');
   if (!reports)
     return { reports, tools: await permitted(ROLE_TOOLS, viewer, entitlements, holds), advice: [] };
-  return { reports, tools: [], advice: [] };
+  return {
+    reports,
+    tools: [],
+    advice: await permitted(
+      (['reorder', 'expiry', 'growth'] as const).map((key) => ADVICE[key]),
+      viewer,
+      entitlements,
+      holds
+    ),
+  };
 }

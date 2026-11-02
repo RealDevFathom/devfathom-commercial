@@ -129,7 +129,9 @@ describe('PharmacyDashboardContent states', () => {
   it('fails financial widgets closed while keeping operational widgets usable', () => {
     render(<PharmacyDashboardContent role="ADMIN" access={REPORTS} />);
     expect(screen.getAllByText('Restricted').length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/reports:financial is required/i).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/Only people with financial report access see these figures/).length
+    ).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Stock actions' })).toBeVisible();
     expect(screen.queryByText('PKR 0')).not.toBeInTheDocument();
   });
@@ -141,7 +143,7 @@ describe('PharmacyDashboardContent states', () => {
     state.command = query(undefined, { isLoading: false });
     render(<PharmacyDashboardContent role="ADMIN" access={REPORTS} />);
     expect(screen.queryByText('Restricted')).not.toBeInTheDocument();
-    expect(screen.queryByText(/reports:financial is required/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/financial report access/i)).not.toBeInTheDocument();
     expect(screen.getAllByRole('status', { name: /^Loading /i }).length).toBeGreaterThan(0);
   });
 
@@ -289,5 +291,87 @@ describe('PharmacyDashboardContent follows the viewer, not the owner (DEV-602)',
     render(<PharmacyDashboardContent role="ADMIN" access={REPORTS} />);
     expect(screen.getByText('Branches could not be loaded.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible();
+  });
+});
+
+describe('PharmacyDashboardContent speaks plainly to the owner (DEV-594)', () => {
+  const ADVICE = [
+    {
+      key: 'reorder',
+      href: '/pharmacy/reports/replenishment',
+      label: 'Reorder advice',
+      detail: 'How much of each medicine to reorder.',
+    },
+    {
+      key: 'expiry',
+      href: '/pharmacy/reports',
+      label: 'Expiry advice',
+      detail: 'Stock likely to expire before it sells.',
+    },
+    {
+      key: 'growth',
+      href: '/pharmacy/marketing',
+      label: 'Growth insights',
+      detail: 'Suggestions for growing sales.',
+    },
+  ];
+
+  it('shows plain source and access labels, never table names or permission keys', () => {
+    // The real contract values for these two metrics, as the catalog delivers them.
+    state.catalog = query({
+      metrics: [
+        { ...CATALOG_METRICS[0], source: 'pharmacy_stock_signals' },
+        {
+          ...CATALOG_METRICS[1],
+          source: 'pharmacy_stock_signals + pharmacy_stock_signal_actions',
+        },
+      ],
+      reports: [],
+      permissions: { operational: true, financial: false },
+    });
+    state.command = query({
+      freshness: { asOf: '2026-09-04T10:00:00Z', source: 'transactional pharmacy ledgers' },
+      permissions: { operational: true, financial: false },
+      metrics: { openStockSignals: 3, recommendedOrders: 1 },
+    });
+    const { container } = render(<PharmacyDashboardContent role="ADMIN" access={REPORTS} />);
+
+    expect(screen.getByText('Based on stock alerts')).toBeVisible();
+    expect(screen.getByText('Based on stock alerts and reorder drafts')).toBeVisible();
+    expect(screen.getAllByText('Operations report').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Financial report').length).toBeGreaterThan(0);
+    expect(container.textContent).not.toMatch(/pharmacy_[a-z_]+/);
+    expect(container.textContent).not.toMatch(/reports:(operational|financial)/);
+  });
+
+  it('offers the owner the advice pages where the day starts', () => {
+    render(<PharmacyDashboardContent role="ADMIN" access={{ ...REPORTS, advice: ADVICE }} />);
+    expect(screen.getByRole('heading', { level: 2, name: 'Advice for your shop' })).toBeVisible();
+    expect(screen.getByRole('link', { name: /^Reorder advice/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/reports/replenishment'
+    );
+    expect(screen.getByRole('link', { name: /^Expiry advice/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/reports'
+    );
+    expect(screen.getByRole('link', { name: /^Growth insights/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/marketing'
+    );
+  });
+
+  it('offers only the advice the server resolved for this viewer', () => {
+    render(
+      <PharmacyDashboardContent role="EMPLOYEE" access={{ ...REPORTS, advice: [ADVICE[0]!] }} />
+    );
+    expect(screen.getByRole('link', { name: /^Reorder advice/ })).toBeVisible();
+    expect(screen.queryByRole('link', { name: /^Expiry advice/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^Growth insights/ })).not.toBeInTheDocument();
+  });
+
+  it('shows no advice card when nothing is permitted', () => {
+    render(<PharmacyDashboardContent role="ADMIN" access={REPORTS} />);
+    expect(screen.queryByText('Advice for your shop')).not.toBeInTheDocument();
   });
 });

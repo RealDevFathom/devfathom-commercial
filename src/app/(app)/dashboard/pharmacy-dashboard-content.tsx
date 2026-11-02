@@ -19,6 +19,11 @@ import {
   type PharmacyDashboardLink,
   type PharmacyDashboardPreference,
 } from '@/lib/pharmacy/dashboard';
+import {
+  pharmacyReportPermissionLabel,
+  pharmacyReportRestriction,
+  pharmacyReportSourceLabel,
+} from '@/lib/pharmacy/report-labels';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
@@ -91,7 +96,7 @@ function WidgetState({
         <StatusPill status={denied ? 'Restricted' : 'Unavailable'} tone="warning" />
         <p className="text-sm text-text-body">
           {denied
-            ? `${item.permission} is required. No protected values are shown.`
+            ? pharmacyReportRestriction(item.permission)
             : 'This widget could not load. Other dashboard tools remain available.'}
         </p>
         {!denied ? (
@@ -106,9 +111,7 @@ function WidgetState({
     return (
       <div role="status" className="space-y-3">
         <StatusPill status="Restricted" tone="warning" />
-        <p className="text-sm text-text-body">
-          reports:financial is required. No protected values are shown.
-        </p>
+        <p className="text-sm text-text-body">{pharmacyReportRestriction('reports:financial')}</p>
       </div>
     );
   }
@@ -120,13 +123,18 @@ function WidgetState({
         sub="Choose a branch above to compare one location with the all-branch view."
       />
     );
-  const rows = item.metrics.map((key) => ({
-    contract: contracts.find((metric) => metric.key === key),
-    value: query.data?.metrics[key] ?? null,
-  }));
+  const rows = item.metrics.map((key) => {
+    const contract = contracts.find((metric) => metric.key === key);
+    // DEV-594: the contract's table names stay internal; the owner reads plain words.
+    return {
+      contract,
+      source: pharmacyReportSourceLabel(contract?.source),
+      value: query.data?.metrics[key] ?? null,
+    };
+  });
   return (
     <div className="grid gap-5 sm:grid-cols-2">
-      {rows.map(({ contract, value }, index) => (
+      {rows.map(({ contract, source, value }, index) => (
         <Stat
           key={item.metrics[index]}
           label={contract?.label ?? humanizeMetricKey(item.metrics[index]!)}
@@ -134,7 +142,9 @@ function WidgetState({
           sub={
             value == null
               ? 'Not available in this release'
-              : `Source: ${contract?.source ?? 'Not asserted'}`
+              : source
+                ? `Based on ${source}`
+                : 'Source not confirmed'
           }
         />
       ))}
@@ -157,9 +167,45 @@ export function PharmacyDashboardContent({
   // lacks it, so their dashboard asks Pharmacy Reports nothing and starts from their own tools.
   if (!access.reports) return <RoleWorkspace tools={access.tools} />;
   return isModuleGranted('pharmacy-reports', enabledModules) ? (
-    <CommandCentre role={role} />
+    <CommandCentre role={role} advice={access.advice} />
   ) : (
-    <ReportsNotInPackage role={role} />
+    <ReportsNotInPackage role={role} advice={access.advice} />
+  );
+}
+
+/** Pages offered as cards, each already checked against the viewer's grants on the server. */
+function LinkCards({ links }: { links: readonly PharmacyDashboardLink[] }) {
+  return (
+    <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {links.map((link) => (
+        <li key={link.key}>
+          <Link
+            href={link.href}
+            className="block h-full rounded-[var(--radius-sm)] border border-border-subtle p-4 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span className="block font-medium text-text-strong">{link.label}</span>
+            <span className="mt-1 block text-sm text-text-muted">{link.detail}</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * DEV-594 — the advice pages (reorder, expiry, growth) the owner could not find,
+ * offered where they start the day. Rendered only with links the viewer can open.
+ */
+function AdviceCard({ advice }: { advice: readonly PharmacyDashboardLink[] }) {
+  if (!advice.length) return null;
+  return (
+    <SectionCard eyebrow="Advice" title="Advice for your shop" titleLevel={2}>
+      <p className="mb-4 max-w-2xl text-sm text-text-muted">
+        Each one reads your own shop records and suggests what to do next. Nothing changes until you
+        act on it.
+      </p>
+      <LinkCards links={advice} />
+    </SectionCard>
   );
 }
 
@@ -178,19 +224,7 @@ function RoleWorkspace({ tools }: { tools: readonly PharmacyDashboardLink[] }) {
         titleLevel={2}
       >
         {tools.length ? (
-          <ul className="grid gap-3 md:grid-cols-2">
-            {tools.map((tool) => (
-              <li key={tool.key}>
-                <Link
-                  href={tool.href}
-                  className="block rounded-[var(--radius-sm)] border border-border-subtle p-4 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <span className="block font-medium text-text-strong">{tool.label}</span>
-                  <span className="mt-1 block text-sm text-text-muted">{tool.detail}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <LinkCards links={tools} />
         ) : (
           <p role="status" className="max-w-2xl text-sm leading-6 text-text-body">
             Your role does not include a pharmacy tool yet. Ask your workspace administrator to
@@ -203,7 +237,13 @@ function RoleWorkspace({ tools }: { tools: readonly PharmacyDashboardLink[] }) {
 }
 
 /** The same page frame, saying plainly why it holds no signals and what is still available. */
-function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
+function ReportsNotInPackage({
+  role,
+  advice,
+}: {
+  role: string | null | undefined;
+  advice: readonly PharmacyDashboardLink[];
+}) {
   return (
     <div className="space-y-5">
       <PageHeader
@@ -235,11 +275,18 @@ function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
           </p>
         )}
       </SectionCard>
+      <AdviceCard advice={advice} />
     </div>
   );
 }
 
-function CommandCentre({ role }: { role: string | null | undefined }) {
+function CommandCentre({
+  role,
+  advice,
+}: {
+  role: string | null | undefined;
+  advice: readonly PharmacyDashboardLink[];
+}) {
   const utils = trpc.useUtils();
   const branches = trpc.pharmacyReports.branches.useQuery(undefined, { retry: false });
   const catalog = trpc.pharmacyReports.catalog.useQuery(undefined, { retry: false });
@@ -337,6 +384,7 @@ function CommandCentre({ role }: { role: string | null | undefined }) {
                   : 'Loading today’s figures…'}
         </p>
       </SectionCard>
+      {branchesDenied ? null : <AdviceCard advice={advice} />}
       {editing && !branchesDenied ? (
         <SectionCard
           eyebrow="Edit mode"
@@ -462,7 +510,7 @@ function CommandCentre({ role }: { role: string | null | undefined }) {
                   className={cn('min-w-0', preference.span === 'wide' && 'lg:col-span-2')}
                 >
                   <SectionCard
-                    eyebrow={item.permission}
+                    eyebrow={pharmacyReportPermissionLabel(item.permission)}
                     title={item.label}
                     titleLevel={2}
                     actions={

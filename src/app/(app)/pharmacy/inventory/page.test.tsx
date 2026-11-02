@@ -289,3 +289,39 @@ describe('Inventory pack-action integration', () => {
     expect(lots).not.toHaveBeenCalled();
   });
 });
+
+describe('expiry advice entry point (DEV-594)', () => {
+  /** The viewer's role grants, as the ABAC lookup reads them. */
+  function grants(role: 'ADMIN' | 'EMPLOYEE', capabilities: string[]) {
+    Object.assign(ctx.session.user, { role });
+    Object.assign(ctx.db.user, {
+      findUnique: vi.fn().mockResolvedValue({
+        organizationRole: {
+          permissions: capabilities.map((capability) => ({ capability, effect: 'ALLOW' })),
+        },
+        permissionOverrides: [],
+      }),
+    });
+  }
+
+  it('links the owner to expiry advice for the working branch', async () => {
+    grants('ADMIN', ['pharmacy:inventory', 'reports:operational', 'reports:financial']);
+    await show();
+    expect(screen.getByRole('link', { name: 'Open expiry advice' })).toHaveAttribute(
+      'href',
+      '/pharmacy/reports?branch=branch-main'
+    );
+  });
+
+  it('offers no link to a non-owner, even with both report grants', async () => {
+    grants('EMPLOYEE', ['pharmacy:inventory', 'reports:operational', 'reports:financial']);
+    await show();
+    expect(screen.queryByRole('link', { name: 'Open expiry advice' })).not.toBeInTheDocument();
+  });
+
+  it('offers no link to an owner without financial reports', async () => {
+    grants('ADMIN', ['pharmacy:inventory', 'reports:operational']);
+    await show();
+    expect(screen.queryByRole('link', { name: 'Open expiry advice' })).not.toBeInTheDocument();
+  });
+});

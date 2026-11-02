@@ -6,7 +6,7 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
-import { resolvePharmacyDashboardAccess } from './dashboard-access';
+import { resolvePharmacyAdvice, resolvePharmacyDashboardAccess } from './dashboard-access';
 
 const EVERY_MODULE = [
   'pharmacy-core',
@@ -85,5 +85,71 @@ describe('resolvePharmacyDashboardAccess (DEV-602)', () => {
     const access = await resolvePharmacyDashboardAccess(db, viewer('ADMIN'), entitlements());
     error.mockRestore();
     expect(access).toEqual({ reports: false, tools: [], advice: [] });
+  });
+});
+
+describe('advice entry points open only for whoever the target page admits (DEV-594)', () => {
+  const keys = (links: ReadonlyArray<{ key: string }>) => links.map((link) => link.key);
+
+  it('offers the owner reorder, expiry and growth advice on the dashboard', async () => {
+    const { db, findUnique } = member('owner');
+    const access = await resolvePharmacyDashboardAccess(db, viewer('ADMIN'), entitlements());
+    expect(access.advice.map((link) => link.href)).toEqual([
+      '/pharmacy/reports/replenishment',
+      '/pharmacy/reports',
+      '/pharmacy/marketing',
+    ]);
+    // One grant lookup per action, however many links name it.
+    expect(findUnique).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops growth insights when Pharmacy CRM is not licensed', async () => {
+    const { db } = member('owner');
+    const access = await resolvePharmacyDashboardAccess(
+      db,
+      viewer('ADMIN'),
+      entitlements(EVERY_MODULE.filter((module) => module !== 'pharmacy-crm'))
+    );
+    expect(keys(access.advice)).toEqual(['reorder', 'expiry']);
+  });
+
+  it('offers an auditor reorder advice only: expiry and growth are owner reports', async () => {
+    const { db } = member('auditor');
+    const access = await resolvePharmacyDashboardAccess(db, viewer('EMPLOYEE'), entitlements());
+    expect(keys(access.advice)).toEqual(['reorder']);
+  });
+
+  it('withholds owner advice from a non-owner holding the owner template’s grants', async () => {
+    const { db } = member('owner');
+    expect(
+      keys(
+        await resolvePharmacyAdvice(db, viewer('EMPLOYEE'), entitlements(), ['expiry', 'growth'])
+      )
+    ).toEqual([]);
+  });
+
+  it('withholds owner advice from an owner without financial reports', async () => {
+    const { db } = member('auditor');
+    expect(
+      keys(await resolvePharmacyAdvice(db, viewer('ADMIN'), entitlements(), ['reorder', 'expiry']))
+    ).toEqual(['reorder']);
+  });
+
+  it('offers a cashier no advice and asks nothing once a gate fails', async () => {
+    const { db, findUnique } = member('cashier');
+    expect(
+      await resolvePharmacyAdvice(db, viewer('EMPLOYEE'), entitlements(), ['reorder'])
+    ).toEqual([]);
+    const access = await resolvePharmacyDashboardAccess(db, viewer('EMPLOYEE'), entitlements());
+    expect(access.advice).toEqual([]);
+    findUnique.mockClear();
+    expect(
+      await resolvePharmacyAdvice(db, viewer('EMPLOYEE'), entitlements(['pharmacy-core']), [
+        'reorder',
+        'expiry',
+        'growth',
+      ])
+    ).toEqual([]);
+    expect(findUnique).not.toHaveBeenCalled();
   });
 });

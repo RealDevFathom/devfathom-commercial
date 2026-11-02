@@ -22,6 +22,7 @@ import { hasModule } from '@/lib/entitlements';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
+import { resolvePharmacyAdvice } from '@/lib/pharmacy/dashboard-access';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
@@ -166,6 +167,7 @@ export default async function PharmacyInventoryPage({
     users,
     nearExpiry,
     temperatureLogs,
+    [expiryAdvice],
   ] = await Promise.all([
     ctx.db.pharmacyStockLocation.findMany({
       where: { organizationId, active: true },
@@ -222,6 +224,8 @@ export default async function PharmacyInventoryPage({
       take: 20,
       include: { location: { select: { name: true } } },
     }),
+    // DEV-594: the expiry advisor is an owner report; offer it here only to whoever it admits.
+    resolvePharmacyAdvice(ctx.db, ctx.session.user, ctx.entitlements, ['expiry']),
   ]);
   const branchNames = new Map(branches.map((item) => [item.id, item.name]));
   const locations = organizationLocations.filter((item) => item.branchId === branch.id);
@@ -1086,6 +1090,19 @@ export default async function PharmacyInventoryPage({
               </div>
             ))}
           </div>
+          {expiryAdvice ? (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-border-subtle p-4">
+              <p className="min-w-0 flex-1 basis-56 text-sm text-text-muted">
+                {expiryAdvice.detail}
+              </p>
+              <Link
+                className={buttonVariants({ size: 'sm', variant: 'outline' })}
+                href={`${expiryAdvice.href}?${new URLSearchParams({ branch: branch.id })}`}
+              >
+                Open {expiryAdvice.label.toLowerCase()}
+              </Link>
+            </div>
+          ) : null}
         </SectionCard>
       </div>
 
