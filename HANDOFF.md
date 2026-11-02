@@ -1,6 +1,6 @@
 # HANDOFF — DEV-576 (top priority)
 
-Last updated: 2026-11-02 19:50 UTC
+Last updated: 2026-11-02 20:25 UTC
 
 - **Branch:** `feat/dev-576-ai-providers`, from `develop` @ `47518cbf`.
 - **PR:** [RealDevFathom/devfathom-commercial#1238](https://github.com/RealDevFathom/devfathom-commercial/pull/1238). Open into develop, not merged; this session watches it.
@@ -11,23 +11,106 @@ Last updated: 2026-11-02 19:50 UTC
 
 ## Resume here
 
-- **Next action:**
-  - When `bun run build` finishes, put its result in the PR body "Checks" table, replacing
-    "in progress".
-  - Then ask Saad for the "two changes for DEV-576": his message arrived truncated, with
-    nothing after the colon.
-- **Waiting on ops (Saad):**
-  1. Add the IAM policy from the PR body to the develop host role `inky-ec2-ssm` (and/or
-     update the ECS staging stack).
-  2. In the Bedrock console (us-east-1), submit the Anthropic use-case form and ask AWS to
-     enable the Claude 5.5 models.
-  3. Set the env vars from the PR body and deploy.
-  4. Run `bun run ai:smoke` from a checkout with credentials that carry the policy.
-- **Open review questions in the PR:**
-  - Should production default to `AiProvider=disabled`?
-  - Should the ECS Bedrock IAM stay exact to the 3 parameter models, or be widened to
-    `us.anthropic.claude-*` so SuperAdmin switches work?
-- **Uncommitted / half-written:** nothing.
+**Saad's decisions (2026-11-02 evening)**
+
+They are recorded in full in scratchpad `dev576-routing-contract.md`, which is copied into the
+PR body when it is updated.
+
+- **Routing:**
+  - Sonnet 5.5 by default.
+  - Haiku 5.5 only behind `AF_HAIKU_LOOKUPS=false`. An empty or cut-off answer is resent to
+    Sonnet.
+  - Opus 5.5 for the weekly owner summary (no failover; retries at +15m / +1h / +6h) and for
+    deep strategy when the pharmacy opts in.
+- **Fallback order:**
+  1. Anthropic.
+  2. OpenAI `gpt-6.1-sol`, with `gpt-6-luna` as the small model (Responses API, `store:false`).
+  3. Bedrock `global.anthropic.claude-{sonnet,haiku}-5-5` from **ap-southeast-1**, with
+     personal data masked first.
+- **When to fail over:** only on availability errors. Never on refusals, 400s, or consent or
+  permission denials.
+- **Limits:**
+  - 90 s per turn, 4 model calls and 6 tool calls.
+  - SDK retries off, one jittered retry.
+  - A circuit breaker per provider, and an alert on 401.
+- **Answer rules:**
+  - Figures must come from tool results (post-check).
+  - Writes are drafts with an idempotency key, and are never replayed.
+  - No dosing advice, and no drug names in customer text.
+- **Infra:**
+  - Production AI is off by default.
+  - Bedrock IAM is widened to all Claude models and profiles, including global ones.
+- **Bedrock live test:** pending AWS approval of the Anthropic use-case form. It is
+  submitted. Bedrock stays wired.
+- **#1223:** has no DEV-576 commits, so nothing to move. #1238 is the separate PR.
+
+**In flight**
+
+- **Workflow `wf_6b764edf-fc8`:** four worktree agents on branches `dev576-router`,
+  `dev576-guards`, `dev576-ledger` and `dev576-infra`, all from `9d360630`.
+  1. When it reports, cherry-pick the commits with the plain-pick script (trailers stripped,
+     model-name scan).
+  2. Resolve `route.ts` overlaps between guards and ledger. The ledger agent reports its
+     route lines.
+  3. Run the AI suites, the DB tests, and a Dockerfile-style build:
+     `AUTH_SECRET=container-build-only NEXT_BUILD_SKIP_TYPECHECK=1 next build`.
+  4. Push, then reply on any new Codex threads.
+- **If the agent worktrees are lost:** redo the streams from the contract.
+
+**Then deploy to develop and run the live test** (Saad approved: IAM change plus a branch
+deploy).
+
+- **Develop host:**
+  - EC2 `i-09a24704014a3ffe3` `devfathom-pharmacy`, us-east-1, arm64, 2 vCPU, 3.8 GB, role
+    `inky-ec2-ssm`, SSM online.
+  - The live develop app is **`sehatcart.service`**: port 3101, served at
+    `sehatcart.pharmacy.develop.devfathom.com` and `admin.develop.devfathom.com`, from
+    `/home/sehatcart/current` → `releases/47518cbf…` (develop HEAD), env
+    `/home/sehatcart/sehatcart.env`, migrations via `/home/sehatcart/migrate.env`.
+  - `devfathom.service` on :3000 (`develop.devfathom.com`, release `initial`, Oct 28) is a
+    separate, older app. Do not touch it.
+- **The previous operator's deploy recipe** (`/root/scdeploy47.sh`):
+  1. `cp -a` the current release, then `git apply` a patch.
+  2. `bun install --frozen-lockfile` as sehatcart.
+  3. `pg_dump` backup.
+  4. `prisma migrate deploy` with `MIGRATION_DATABASE_URL`.
+  5. `bun run build` with `NEXT_BUILD_SKIP_TYPECHECK=1` and a 2 GB heap.
+  6. `ln -sfn` `current`, `systemctl restart sehatcart`, then check `curl /api/ready` on
+     :3101.
+- **Plan:**
+  1. Patch = `git diff --binary 47518cbf..<head>`. Upload it to
+     `s3://devfathom-develop-artifacts/deploy-develop/dev576/` with a presigned PUT. The host
+     has no AWS CLI, so it fetches with a presigned GET (curl).
+  2. Attach the inline policy `devfathom-ai-providers` to `inky-ec2-ssm`: GetSecretValue on
+     the 2 secrets, plus the widened Bedrock policy.
+  3. Back up `sehatcart.env`, then append the AI env:
+     - `AI_PROVIDER=auto`
+     - the two `*_SECRET_ID`
+     - `AI_SECRETS_REGION=ap-southeast-1`
+     - `BEDROCK_REGION=ap-southeast-1`
+     - `AF_HAIKU_LOOKUPS=false`
+  4. Run the recipe as a new release `releases/<head-sha>`.
+  5. Live check:
+     - `bun scripts/ai-provider-smoke.ts` in the release, with `sehatcart.env` and the
+       instance role.
+     - Then ask Saad to send one Ask Fathom message in the browser.
+  6. **Rollback:** `ln -sfn` back to `releases/47518cbf…` and restart. Migrations are additive
+     and stay.
+- **Migrations this applies to the develop DB** (additive; once applied, never edit them, only
+  add new ones):
+  - `20261102130000_ai_provider_routing`
+  - `20261102140000_organization_ai_deep_strategy`
+  - `20261102140100_ai_assistant_actions`
+
+**Other state**
+
+- **Build:** the Dockerfile-style build of `f579ee24` and later passes. Plain `bun run build`
+  stops at tsc on 4 test-file errors that develop has too (confirmed on a clean develop
+  worktree: same 4 errors).
+- **Codex review on #1238:** 3 P2 findings, fixed in `a66092ca`: the price lock key, the
+  launcher routed availability, and the per-provider key cache. The threads are answered and
+  resolved.
+- **Uncommitted / half-written:** nothing on this branch.
 - **Worktree:** `/home/user/devfathom-ai` (local). Everything is pushed.
 
 ## Status
