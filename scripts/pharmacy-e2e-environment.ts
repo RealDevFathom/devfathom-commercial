@@ -64,7 +64,9 @@ export function resolvePharmacyE2eDatabaseUrl(
   if (env.STAGING_DEMO_SEED === '1') {
     const target = env.STAGING_DEMO_DATABASE_URL;
     if (!target) throw new Error('STAGING_DEMO_DATABASE_URL is required for STAGING_DEMO_SEED=1.');
-    for (const name of REQUIRED) if (!env[name]) throw new Error(`${name} is required.`);
+    const required =
+      env.PHARMACY_E2E_GRANTS_ONLY === '1' ? ['PHARMACY_E2E_ADMIN_PASSWORD'] : REQUIRED;
+    for (const name of required) if (!env[name]) throw new Error(`${name} is required.`);
     return assertStagingDemoTarget(target, env);
   }
   if (env.PHARMACY_E2E !== '1') throw new Error('PHARMACY_E2E=1 explicit opt-in is required.');
