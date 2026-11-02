@@ -117,15 +117,40 @@ Then:
 
 ## Reviews
 
-PR #1223 at head `47d1a33d`:
+PR #1223 at head `6b20958a` (mergeable, clean):
 
-| Check                                          | Verdict                          | Notes                                                                       |
-| ---------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------- |
-| Machine checks (GitHub check runs)             | none reported                    | No check runs are attached to this PR. `qa.yml` did not run on it.          |
-| Codex code review                              | ✅ no findings                   | At `8fabfc81`. Re-runs on each push.                                        |
-| Codex security review                          | ✅ completed, no findings posted | At `8fabfc81`.                                                              |
-| QA (human)                                     | not started                      | —                                                                           |
-| Internal adversarial review (first 10 commits) | queued / running                 | Six areas, each finding checked by two verifiers. Fix whatever it confirms. |
+| Check                                              | Verdict                          | Notes                                                                 |
+| -------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------- |
+| Machine checks (GitHub check runs)                 | none reported                    | No check runs are attached to this PR. `qa.yml` did not run on it.    |
+| Codex code review                                  | ✅ no findings                   | At `8fabfc81`. Re-runs on each push.                                  |
+| Codex security review                              | ✅ completed, no findings posted | At `8fabfc81`.                                                        |
+| Security review comment (19:16 UTC, at `b5e29ad0`) | ⚠️ 3 findings + 1 note           | See the list below the table. Not a merge verdict.                    |
+| QA (human)                                         | not started                      | —                                                                     |
+| Internal adversarial review (first 10 commits)     | done                             | 3 confirmed low findings plus 1 disputed. Queued under "Resume here". |
+
+Security review findings, verified against the files on 2026-11-02:
+
+1. **Retention vs append-only, blocking a merge of either PR.**
+   - Draft #1165 (DEV-96) expects a plain `DELETE` of expired audit rows of a live tenant to
+     succeed. Its fixture also expects it for non-pharmacy audit rows.
+   - Our `audit_logs_append_only` trigger (`090000`) refuses that.
+   - **Proposed carve-out, waiting on the user's decision:** allow `DELETE` (never `UPDATE`)
+     only when `app.is_platform_admin` is set and `app.retention_purge_organization_id`
+     equals `OLD."organizationId"`. #1165's coordinator sets that flag inside its
+     transaction, and its own guard still enforces the deadline and legal holds, so both
+     triggers must pass.
+2. **Transactions.** Wrap `090200` (and `090100`) in `BEGIN;`/`COMMIT;` like `090300`, since
+   they use `set_config(..., true)` before writing to FORCE-RLS tables. Develop is mixed
+   (6 of 19 such migrations are wrapped), but the fix is cheap. Queued after DEV-576.
+3. **Idempotency.**
+   - `090000`: `CREATE OR REPLACE FUNCTION`, `DROP TRIGGER IF EXISTS`.
+   - `090100` / `090200`: `pg_constraint` guards, `CREATE INDEX IF NOT EXISTS`.
+   - `090300`: `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`.
+
+   Queued after DEV-576.
+
+4. **Note:** `scripts/verify-pharmacy-demo.ts` disables the trigger for a demo cleanup. It
+   is not a runtime path. No change.
 
 ## Checks: how to rerun, latest result
 
