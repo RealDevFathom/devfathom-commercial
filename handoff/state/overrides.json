@@ -208,5 +208,29 @@
    "verdict": "PASS",
    "details": "First review FAIL (95 of the 98 new .md/.json/.mjs files failed the prettier --check the QA gate runs on changed files), fixed in d34637b9f2. Docs/evidence/harness only: nothing in src/ changes, no credentials or session tokens are committed, and all 74 file:line citations in qa-report.md resolve on develop. Non-blocking for the owner: the root HANDOFF.md collides with #1223's, the harness defaults point at the original session's paths, probe1.json contains the tenant owner's real email, and about 10.9 MB of evidence lands in qa/ and qa-evidence/ rather than docs/qa/"
   }
+ },
+ "1055": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Security: the change is a pure in-memory refactor that pulls the refund math into a shared helper. It changes no queries, tenant/branch scoping, RLS transactions, input schemas, permission checks, raw SQL or logging, so I found no vulnerability. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "906": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Security review: the PR changes only docs/admin-platform/api.md and adds a Vitest file that reads files. No runtime code, auth, tenant scoping, SQL, secrets or permission paths changed, and I found no vulnerability.test.ts pinning both rows to the routes. Close as superseded. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "872": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked getOrderForBranch and its route: withTerminalAuth with withTenantDb org scope, branchId from the device context, orderId checked by zod, bills limited to the order's non-VOID rows, no raw SQL, no new fields exposed. No vulnerability found. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
+ },
+ "854": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the cutBills/openOrder closed-day guards, the cutClose/correctClose guard under the branch-day advisory lock (parameterized $executeRaw), org/branch scoping, error mapping and the close-packet permission split. The PR introduces no vulnerability. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
+  }
  }
 }

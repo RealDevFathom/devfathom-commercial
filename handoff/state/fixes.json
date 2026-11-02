@@ -124,5 +124,11 @@
   "initialSha": "1f736757289a63136199b1030e490c7cb5a4a4c4",
   "what": "Prettier on the 95 new md/json/mjs files",
   "initialFailure": "Prettier: 95 of the PR's 98 new md/json/mjs files unformatted"
+ },
+ "986": {
+  "sha": "88ebf1fd190ab8a5fadcb07f0a52613182f64e16",
+  "initialSha": "233f2fb2b449f58d0f813e63fe48e850a800c567",
+  "what": "Prettier on api-docs-content.tsx and organization-admin-content.people.test.tsx",
+  "initialFailure": "Prettier: 2 changed files unformatted"
  }
 }
