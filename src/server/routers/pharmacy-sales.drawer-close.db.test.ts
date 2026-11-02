@@ -153,6 +153,27 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
         data: { currency: 'USD', timezone: 'America/Chicago' },
       })
     );
+    const { seedDepartments } = await import('@/lib/test-support/departments');
+    await withTenantDb(ORG, async (db) => {
+      await seedDepartments(db, [ORG], ['LEADERSHIP']);
+      await db.user.create({
+        data: {
+          id: ACTOR,
+          name: ACTOR,
+          email: `${ACTOR}@example.test`,
+          role: 'ADMIN',
+          department: 'LEADERSHIP',
+          title: 'Counter',
+          permissionOverrides: {
+            create: {
+              capability: 'pharmacy:counter',
+              effect: 'ALLOW',
+              reason: 'Drawer regression fixture',
+            },
+          },
+        },
+      });
+    });
     await createBranch(ORG, ACTIVE);
     await createBranch(ORG, RETIRED);
     await createBranch(OTHER_ORG, FOREIGN);

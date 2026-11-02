@@ -666,6 +666,27 @@ describe('counter receipt authorization', () => {
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
+  it.each(['CASH', 'CARD'] as const)(
+    'denies %s tender to an assigned dispense-only pharmacist (DEV-97)',
+    async (type) => {
+      const f = fixture(dispense);
+      assign(f, ['branch-a']);
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type,
+          amountMinor: 100,
+          idempotencyKey: `pharmacist-${type}`,
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
   it('denies finance-only Khata account reads without a branch assignment', async () => {
     const f = fixture([{ capability: 'reports:financial', effect: 'ALLOW' }]);
     await expect(
