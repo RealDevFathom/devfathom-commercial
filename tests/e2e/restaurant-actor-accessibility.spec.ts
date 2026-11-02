@@ -196,11 +196,17 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
       const actorOrigin = await signInAs(page, 'restaurantAdmin');
 
       const navigation = page.getByRole('navigation', { name: 'Primary navigation' });
-      await expect(navigation.getByRole('link', { name: 'Point of sale' })).toBeVisible();
-      await expect(navigation.getByRole('link', { name: 'Kitchen display' })).toBeVisible();
-      await expect(navigation.getByRole('link', { name: 'Onboarding' })).toHaveCount(0);
-      await expect(navigation.getByRole('link', { name: 'Counter' })).toHaveCount(0);
-      await expect(navigation.getByRole('link', { name: 'Regulatory profile' })).toHaveCount(0);
+      await navigation.getByRole('button', { name: /^Sell/ }).click();
+      // Menu popups render in a body portal, so query from page, not navigation.
+      await expect(page.getByRole('menuitem', { name: 'Point of sale' })).toBeVisible();
+      await expect(page.getByRole('menuitem', { name: 'Kitchen display' })).toBeVisible();
+      await page.keyboard.press('Escape');
+      // Ungrouped destinations land in Settings, so a leaked Pharmacy entry would appear here.
+      await navigation.getByRole('button', { name: /^Settings/ }).click();
+      for (const name of ['Onboarding', 'Counter', 'Regulatory profile']) {
+        await expect(page.getByRole('menuitem', { name })).toHaveCount(0);
+      }
+      await page.keyboard.press('Escape');
 
       for (const surface of tenantAdminSurfaces) {
         await page.goto(new URL(surface.path, actorOrigin).href);

@@ -889,17 +889,41 @@ const RESTAURANT_MENU_ROUTES = {
   ],
 };
 
+const PHARMACY_MENU_ROUTES = {
+  Sell: [
+    '/dashboard',
+    '/pharmacy/counter',
+    '/pharmacy/counter/close',
+    '/pharmacy/prescriptions',
+    '/pharmacy/pharmacist-queue',
+    '/pharmacy/substitution',
+    '/pharmacy/loyalty',
+    '/pharmacy/marketing',
+  ],
+  Stock: ['/pharmacy/inventory', '/pharmacy/medicines', '/pharmacy/controlled-register'],
+  Buy: ['/pharmacy/purchasing'],
+  Reports: ['/pharmacy/reports', '/pharmacy/finance'],
+};
+
+const MENU_ROUTES_BY_VERTICAL = {
+  RESTAURANT: { group: 'Restaurant', routes: RESTAURANT_MENU_ROUTES },
+  PHARMACY: { group: 'Pharmacy', routes: PHARMACY_MENU_ROUTES },
+} as const;
+
 export function TopNavigation() {
   const { icons } = usePreferences();
   const { vertical } = useEntitlements();
   const { bestMatch, filteredNav, indexByHref } = useVisibleNavigation();
   const numbered = icons !== 'architectural';
 
-  if (vertical === 'RESTAURANT' && filteredNav.some((item) => item.group === 'Restaurant')) {
+  const menus = vertical
+    ? MENU_ROUTES_BY_VERTICAL[vertical as keyof typeof MENU_ROUTES_BY_VERTICAL]
+    : undefined;
+  if (menus && filteredNav.some((item) => item.group === menus.group)) {
     // Group only admitted destinations; shared workspace links remain reachable in Settings.
-    const groupedHrefs = new Set(Object.values(RESTAURANT_MENU_ROUTES).flat());
+    const groupedHrefs = new Set(Object.values(menus.routes).flat());
     const groups = [
-      ...Object.entries(RESTAURANT_MENU_ROUTES).map(([label, hrefs]) => ({
+      ...Object.entries(menus.routes).map(([label, hrefs]) => ({
         label,
         items: filteredNav.filter((item) => hrefs.includes(item.href)),
       })),
@@ -940,7 +964,10 @@ export function TopNavigation() {
                     >
                       {item.label}
                       {item.href === bestMatch && (
-                        <span className="ml-auto text-xs text-text-muted">Current</span>
+                        <>
+                          {' '}
+                          <span className="ml-auto text-xs text-text-muted">Current</span>
+                        </>
                       )}
                     </DropdownMenuItem>
                   ))}
