@@ -133,15 +133,18 @@ export function LoginForm({
 
   return (
     <>
-      {error && (
-        <div
-          id={errorId}
-          role="alert"
-          className="mb-5 rounded-[var(--radius-sm)] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-        >
-          {error}
-        </div>
-      )}
+      {/* Reserve two text-sm lines, py-3 padding, and both borders. */}
+      <div className="mb-5 min-h-[calc(4rem+2px)]">
+        {error && (
+          <div
+            id={errorId}
+            role="alert"
+            className="rounded-[var(--radius-sm)] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          >
+            {error}
+          </div>
+        )}
+      </div>
 
       {connections.length ? (
         <div className="mb-6 space-y-2">

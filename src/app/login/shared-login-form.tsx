@@ -245,7 +245,8 @@ export function SharedLoginForm({
     return (
       <>
         {header}
-        {alert}
+        {/* Reserve two text-sm lines, py-3 padding, and both borders. */}
+        <div className="mb-5 min-h-[calc(4rem+2px)] [&>[role=alert]]:mb-0">{alert}</div>
         {/* WHA-1623: `action` is the no-JavaScript path. Once hydrated,
             onSubmitCredentials prevents it and the two-step flow runs unchanged. */}
         <form

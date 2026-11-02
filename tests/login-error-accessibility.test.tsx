@@ -14,6 +14,7 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/components/app-providers', () => ({ AppProviders: () => null }));
 
 import { LoginForm } from '@/app/login/login-form';
+import { SharedLoginForm } from '@/app/login/shared-login-form';
 import { PlatformLoginForm } from '@/app/platform/(auth)/login/platform-login-form';
 
 function expectCredentialError(
@@ -39,6 +40,45 @@ describe('login credential error accessibility', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
+
+  it.each(['tenant', 'shared-host'] as const)(
+    'keeps the two-line banner reservation before and after a %s sign-in error',
+    async (flow) => {
+      if (flow === 'tenant') {
+        mocks.signIn.mockRejectedValueOnce(new Error('network unavailable'));
+      } else {
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('network unavailable')));
+      }
+      render(
+        flow === 'tenant' ? (
+          <LoginForm connections={[]} ssoEnforced={false} callbackUrl="/dashboard" />
+        ) : (
+          <SharedLoginForm callbackUrl="/dashboard" />
+        )
+      );
+
+      const form = screen.getByRole('button', { name: 'Sign in' }).closest('form')!;
+      const slot = form.previousElementSibling;
+      // JSDOM does not lay out text: assert the two-line height budget and persistent slot.
+      expect(slot).toHaveClass('mb-5', 'min-h-[calc(4rem+2px)]');
+      expect(slot).toBeEmptyDOMElement();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText('Email'), {
+        target: { value: 'owner@example.invalid' },
+      });
+      fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'password' } });
+      fireEvent.submit(form);
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(
+        'Unable to sign in right now. Please check your connection and try again.'
+      );
+      expect(alert.parentElement).toBe(slot);
+      expect(form.previousElementSibling).toBe(slot);
+      expect(slot).toHaveClass('mb-5', 'min-h-[calc(4rem+2px)]');
+    }
+  );
 
   it.each(['default', 'restaurant', 'pharmacy', 'hotel', 'agency'] as const)(
     'associates a server-rendered %s tenant sign-in failure with both credential fields',
