@@ -446,26 +446,26 @@
   "dev": "DEV-315",
   "branch": "codex/dev-315-recover-20261102",
   "head": "07cc0aaf1328d2dbe944755dd6c728e8727d82a0",
-  "status": "in progress",
+  "status": "done",
   "qa": "PASS",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1154#issuecomment-6585868111",
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1154`, then post comments/1154.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1154#issuecomment-6585868111)"
  },
  {
   "pr": 1153,
   "dev": "DEV-61",
   "branch": "codex/dev-61-recover-20261102",
   "head": "617c185c1a4419dcbea784989a18f4ed89b96051",
-  "status": "in progress",
+  "status": "done",
   "qa": "PASS",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1153#issuecomment-6585868983",
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1153`, then post comments/1153.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1153#issuecomment-6585868983)"
  },
  {
   "pr": 1152,
@@ -485,13 +485,13 @@
   "dev": "DEV-38",
   "branch": "codex/dev-38-recover-20261102",
   "head": "de8a0921f516d04e36b76dba756949a5370b608e",
-  "status": "in progress",
+  "status": "done",
   "qa": "PASS",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1151#issuecomment-6585877060",
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1151`, then post comments/1151.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1151#issuecomment-6585877060)"
  },
  {
   "pr": 1150,
@@ -511,26 +511,26 @@
   "dev": "DEV-54",
   "branch": "codex/dev-54-recover-20261102",
   "head": "2e235ef933e42dc92a3406714233bf912f736ec2",
-  "status": "in progress",
+  "status": "done",
   "qa": "PASS",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1149#issuecomment-6585878790",
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1149`, then post comments/1149.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1149#issuecomment-6585878790)"
  },
  {
   "pr": 1148,
   "dev": "DEV-5",
   "branch": "codex/dev-5-recover-20261102",
   "head": "07b03320a8d4d1f11c9f5f50cdb47d329eb8c132",
-  "status": "in progress",
+  "status": "done",
   "qa": "PASS",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1148#issuecomment-6585886688",
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1148`, then post comments/1148.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1148#issuecomment-6585886688)"
  },
  {
   "pr": 1158,

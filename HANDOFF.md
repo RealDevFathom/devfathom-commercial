@@ -1,6 +1,6 @@
 # PR review handoff log
 
-_Generated 2026-11-02 19:04 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
+_Generated 2026-11-02 19:05 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
 
 ## Resume here
 
@@ -12,7 +12,7 @@ _Generated 2026-11-02 19:04 UTC from the live run state by `handoff/scripts/gen-
 ## Progress
 
 - Scope: every open PR into develop without a QA+Security verdict comment: group 1 #1172-#1194 (22, plus #1223 and #1224 opened during the run; #1225 is this tracking PR and is not reviewed), group 2 #1148-#1166 (18), group 3 the other 127 (pharmacy first). 118 older PRs already had verdict comments and are out of scope.
-- Status: done 22 · in progress 46 · blocked 0 · not started 101 (of 169)
+- Status: done 27 · in progress 41 · blocked 0 · not started 101 (of 169)
 - Machine-check queue (129 left, two lanes, runs serially per lane): 1164 1150 1120 1119 1118 1117 1116 1114 1101 1087 1086 1072 1068 1061 1060 1056 1050 1008 1006 1005 1004 1003 1002 1001 1000 999 998 997 996 995 994 993 986 985 984 983 982 966 965 960 …
 - Last finished checks: #1152@9504a99f, #1151@de8a0921, #1223@e3bb296c, #1150@d9ecb6f1, #1149@2e235ef9, #1148@07b03320
 
@@ -42,6 +42,11 @@ _Generated 2026-11-02 19:04 UTC from the live run state by `handoff/scripts/gen-
 | #1175 | DEV-327 | PASS | PASS | PASS |  | https://github.com/RealDevFathom/devfathom-commercial/pull/1175#issuecomment-6584721594 |
 | #1174 | DEV-284 | PASS | PASS | PASS | 765302d8c9 | https://github.com/RealDevFathom/devfathom-commercial/pull/1174#issuecomment-6584810383 |
 | #1173 | DEV-186 | PASS | PASS | PASS |  | https://github.com/RealDevFathom/devfathom-commercial/pull/1173#issuecomment-6584725142 |
+| #1154 | DEV-315 | PASS | PASS | PASS |  | https://github.com/RealDevFathom/devfathom-commercial/pull/1154#issuecomment-6585868111 |
+| #1153 | DEV-61 | PASS | PASS | PASS |  | https://github.com/RealDevFathom/devfathom-commercial/pull/1153#issuecomment-6585868983 |
+| #1151 | DEV-38 | PASS | PASS | PASS |  | https://github.com/RealDevFathom/devfathom-commercial/pull/1151#issuecomment-6585877060 |
+| #1149 | DEV-54 | PASS | PASS | PASS |  | https://github.com/RealDevFathom/devfathom-commercial/pull/1149#issuecomment-6585878790 |
+| #1148 | DEV-5 | PASS | PASS | PASS |  | https://github.com/RealDevFathom/devfathom-commercial/pull/1148#issuecomment-6585886688 |
 
 ## Rules in force
 
@@ -385,21 +390,21 @@ _Generated 2026-11-02 19:04 UTC from the live run state by `handoff/scripts/gen-
 - Known failures: NEW test failure: src/components/layout/sidebar.test.tsx > Restaurant desktop navigation groups marks the active group and destination, opens by keyboard and restores focus on Escape | typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts) | note: REGRESSION: src/components/layout/sidebar.test.tsx 'Restaurant desktop navigation groups marks the active group and destination, opens by keyboard and restores focus on Escape' fails on the PR (no menuitem 'Inventory Current') and passes on develop.
 - Decisions: F1 (qa) confirmed by skeptics: The grouped Sell/Stock/Buy/Reports/Settings navigation, and the scroll-preserving links that come with it, only run for the RESTAURANT vertical. The issue was reported on the SehatCart pharmacy tenant by qa.owner, and th | F2 (qa) confirmed by skeptics: The new test 'marks the active group and destination, opens by keyboard and restores focus on Escape' cannot pass. The current menu item's accessible name is 'InventoryCurrent', with no space, because the label and the i | F3 (qa) confirmed by skeptics: The restaurant e2e accessibility matrix still expects flat restaurant links to be visible inside 'Primary navigation' at 1440px and 1024px. After this PR those links only exist inside closed dropdown menus that render in
 
-### #1154 · DEV-315 · in progress
+### #1154 · DEV-315 · done
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1154 · branch `codex/dev-315-recover-20261102` · head `07cc0aaf13` · group 2
 - Title: DEV-315: Guard WhatsApp STOP acknowledgement replay
-- Verdicts: machine ran, see below · QA PASS · Security PASS
-- Done so far: checks on 07cc0aaf13: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 31 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1154`, then post comments/1154.md via the poster workflow
+- Verdicts: machine PASS · QA PASS · Security PASS
+- Done so far: checks on 07cc0aaf13: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 31 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete; verdict comment https://github.com/RealDevFathom/devfathom-commercial/pull/1154#issuecomment-6585868111
+- Next step: none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1154#issuecomment-6585868111)
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1154` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1154`; tests `bunx vitest related --run src/lib/pharmacy/whatsapp/inbound.test.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
 
-### #1153 · DEV-61 · in progress
+### #1153 · DEV-61 · done
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1153 · branch `codex/dev-61-recover-20261102` · head `617c185c1a` · group 2
 - Title: DEV-61: Add pharmacy report print and PDF action
-- Verdicts: machine ran, see below · QA PASS · Security PASS
-- Done so far: checks on 617c185c1a: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 6 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1153`, then post comments/1153.md via the poster workflow
+- Verdicts: machine PASS · QA PASS · Security PASS
+- Done so far: checks on 617c185c1a: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 6 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete; verdict comment https://github.com/RealDevFathom/devfathom-commercial/pull/1153#issuecomment-6585868983
+- Next step: none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1153#issuecomment-6585868983)
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1153` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1153`; tests `bunx vitest related --run src/app/(app)/pharmacy/reports/page.test.tsx src/app/(app)/pharmacy/reports/page.tsx src/app/(app)/pharmacy/reports/report-print-button.tsx` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
 
@@ -413,12 +418,12 @@ _Generated 2026-11-02 19:04 UTC from the live run state by `handoff/scripts/gen-
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
 - Decisions: empty-catalog-false-no-match (qa) confirmed by skeptics: The no-match message depends only on matchingMedicines.length === 0. When the workspace has no saleable medicines and the search box is empty, the form shows 'No medicines match this search. Clear or change the name.' an
 
-### #1151 · DEV-38 · in progress
+### #1151 · DEV-38 · done
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1151 · branch `codex/dev-38-recover-20261102` · head `de8a0921f5` · group 2
 - Title: DEV-38: Restore purchasing returns access for procurement roles
-- Verdicts: machine ran, see below · QA PASS · Security PASS
-- Done so far: checks on de8a0921f5: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 226 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1151`, then post comments/1151.md via the poster workflow
+- Verdicts: machine PASS · QA PASS · Security PASS
+- Done so far: checks on de8a0921f5: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 226 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete; verdict comment https://github.com/RealDevFathom/devfathom-commercial/pull/1151#issuecomment-6585877060
+- Next step: none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1151#issuecomment-6585877060)
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1151` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1151`; tests `bunx vitest related --run src/app/(app)/pharmacy/purchasing/returns/page.test.tsx src/app/(app)/pharmacy/purchasing/returns/page.tsx src/server/routers/pharmacy-purchasing.test.ts src/server/routers/pharmacy-purchasing.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
 
@@ -432,21 +437,21 @@ _Generated 2026-11-02 19:04 UTC from the live run state by `handoff/scripts/gen-
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: qa verdict set to PASS by hand: The production sandbox guard works and is tested (paymentSandboxAdmitted returns false when NODE_ENV=production), and the main expiry advisor card now shows a proper load-error state instead of the owner-only permission copy, with tests for FORBIDDEN, UNAUTHORIZED and INTERNAL errors. The Daily work | F1 (qa) refuted by skeptics: The issue's actual symptom ('Expiry advice card shows UNAVAILABLE') is not fixed. The PR changes a different surface: the main advisor card, which on develop never rendered 'UNAVAILABLE'. Its failure branch showed the 'A
 
-### #1149 · DEV-54 · in progress
+### #1149 · DEV-54 · done
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1149 · branch `codex/dev-54-recover-20261102` · head `2e235ef933` · group 2
 - Title: DEV-54: Match effective flat packs in opening-stock imports
-- Verdicts: machine ran, see below · QA PASS · Security PASS
-- Done so far: checks on 2e235ef933: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 62 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1149`, then post comments/1149.md via the poster workflow
+- Verdicts: machine PASS · QA PASS · Security PASS
+- Done so far: checks on 2e235ef933: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 62 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete; verdict comment https://github.com/RealDevFathom/devfathom-commercial/pull/1149#issuecomment-6585878790
+- Next step: none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1149#issuecomment-6585878790)
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1149` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1149`; tests `bunx vitest related --run src/lib/pharmacy/migration/owner-import.test.ts src/lib/pharmacy/migration/owner-import.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
 
-### #1148 · DEV-5 · in progress
+### #1148 · DEV-5 · done
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1148 · branch `codex/dev-5-recover-20261102` · head `07b03320a8` · group 2
 - Title: DEV-5: Check goods-receipt branch before locking the purchase order
-- Verdicts: machine ran, see below · QA PASS · Security PASS
-- Done so far: checks on 07b03320a8: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 260 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete
-- Next step: `python3 handoff/scripts/compose.py 1148`, then post comments/1148.md via the poster workflow
+- Verdicts: machine PASS · QA PASS · Security PASS
+- Done so far: checks on 07b03320a8: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 260 passed / 0 failed in 0 files; build exit 0; QA+Security reviews complete; verdict comment https://github.com/RealDevFathom/devfathom-commercial/pull/1148#issuecomment-6585886688
+- Next step: none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1148#issuecomment-6585886688)
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1148` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1148`; tests `bunx vitest related --run src/lib/pharmacy/goods-receipt.ts src/server/routers/pharmacy-purchasing.test.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
 
