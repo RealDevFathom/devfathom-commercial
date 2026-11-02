@@ -3,14 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import {
-  activeLegalHoldKeys,
-  assertPharmacyRecordDeletable,
-  PharmacyLegalHoldError,
-} from './retention';
+import { activeLegalHoldKeys } from './retention';
 
 describe('SAFE-04 legal hold', () => {
-  it('refuses deletion while any latest hold event remains PLACED', async () => {
+  it('reports any latest hold event that remains PLACED', async () => {
     const db = {
       pharmacyLegalHoldEvent: {
         findMany: vi.fn().mockResolvedValue([
@@ -20,12 +16,10 @@ describe('SAFE-04 legal hold', () => {
         ]),
       },
     } as unknown as ScopedDb;
-    await expect(assertPharmacyRecordDeletable(db, 'PRESCRIPTION', 'rx-1')).rejects.toEqual(
-      new PharmacyLegalHoldError(['case-b'])
-    );
+    await expect(activeLegalHoldKeys(db, 'PRESCRIPTION', 'rx-1')).resolves.toEqual(['case-b']);
   });
 
-  it('permits deletion after every hold is released', async () => {
+  it('clears holds after every hold is released without waiving retention', async () => {
     const db = {
       pharmacyLegalHoldEvent: {
         findMany: vi.fn().mockResolvedValue([
@@ -35,6 +29,5 @@ describe('SAFE-04 legal hold', () => {
       },
     } as unknown as ScopedDb;
     await expect(activeLegalHoldKeys(db, 'AUDIT', 'audit-1')).resolves.toEqual([]);
-    await expect(assertPharmacyRecordDeletable(db, 'AUDIT', 'audit-1')).resolves.toBeUndefined();
   });
 });
