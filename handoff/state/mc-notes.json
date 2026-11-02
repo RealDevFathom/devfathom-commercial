@@ -34,5 +34,8 @@
  ],
  "1116": [
   "REGRESSION vs its merge-base 6e4253809b (PR is 312 behind develop and conflicts with it in supplier-returns.db.test.ts): 10 tests in src/lib/pharmacy/supplier-returns.db.test.ts fail on the PR and pass at the merge-base; first error 'prisma.financeJournalEntry.create() Foreign key constraint violated: finance_journal_entries_visibility_fkey' (the PR's journal posting writes an entry whose visibility row does not exist). ESLint errors on the PR all already exist at the merge-base."
+ ],
+ "1101": [
+  "PR-introduced failure in its new test src/components/pharmacy/counter/day-close-console.currency.test.ts: 'TypeError: The URL must be of scheme file' at readFileSync(new URL(..., import.meta.url)) line 8. Under the repo's jsdom vitest environment import.meta.url is not a file: URL; read the file via a path (e.g. fileURLToPath-free path.resolve(__dirname...) or a // @vitest-environment node docblock)."
  ]
 }
