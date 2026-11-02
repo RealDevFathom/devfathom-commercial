@@ -1969,10 +1969,7 @@ async function runCommand(
       }
       const before = await db.organization.findUnique({ where: { id: organizationId } });
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
-      if (
-        data.deploymentMode === 'DEDICATED' &&
-        data.deploymentMode !== before.deploymentMode
-      ) {
+      if (data.deploymentMode === 'DEDICATED' && data.deploymentMode !== before.deploymentMode) {
         assertDedicatedProvisioningConfigured();
       }
       const changesVertical = data.vertical !== undefined && data.vertical !== before.vertical;
