@@ -4,9 +4,7 @@ import { Key, Shield, Terminal, FileCode } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
 
-export async function ApiDocsContent({
-  vertical,
-}: { vertical?: string | null } = {}) {
+export async function ApiDocsContent({ vertical }: { vertical?: string | null } = {}) {
   // Task scopes belong to the agency workspace; a pharmacy never licenses them.
   const showTaskScopeExample = vertical !== 'PHARMACY';
   let baseUrl = process.env.NEXT_PUBLIC_APP_URL;
@@ -104,8 +102,7 @@ export async function ApiDocsContent({
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground leading-relaxed">
-            Give your integration or assistant these instructions, for example in its project
-            notes:
+            Give your integration or assistant these instructions, for example in its project notes:
           </p>
           <pre className="rounded-xl border border-border bg-secondary/50 p-3 text-xs font-mono text-foreground overflow-x-auto">
             {`# DevFathom API

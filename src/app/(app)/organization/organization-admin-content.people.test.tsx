@@ -57,8 +57,7 @@ vi.mock('../team/team-content', () => ({
 import { OrganizationAdminContent } from './organization-admin-content';
 
 function useVertical(vertical: string) {
-  (overviewData.current as { organization: { vertical: string } }).organization.vertical =
-    vertical;
+  (overviewData.current as { organization: { vertical: string } }).organization.vertical = vertical;
 }
 
 const PHARMACY_DEPARTMENTS = [
