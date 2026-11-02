@@ -449,5 +449,99 @@
   "posted": true,
   "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/1050#issuecomment-6589314697",
   "reason": "PR open, base develop, head matches; no prior verdict comment. Posted prepared verdict."
+ },
+ "1116": {
+  "pr": 1116,
+  "head": "7cf6f2fb1c1c7ca3eaecdd4ad344987eadc21642",
+  "machine": "FAIL",
+  "qa": "FAIL",
+  "security": "PASS",
+  "machineFail": [
+   "tests"
+  ],
+  "posted": true,
+  "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/1116#issuecomment-6590465140",
+  "reason": "Posted the prepared verdict comment. The PR is open with base develop, and no earlier verdict comment existed."
+ },
+ "1114": {
+  "pr": 1114,
+  "head": "8247167eb6dce7b61ea17b029721697264863fb4",
+  "machine": "PASS",
+  "qa": "FAIL",
+  "security": "PASS",
+  "machineFail": [],
+  "posted": true,
+  "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/1114#issuecomment-6590462689",
+  "reason": "PR open, base develop, head matches; no prior verdict comment; posted prepared comment."
+ },
+ "1087": {
+  "pr": 1087,
+  "head": "c6acae6d8df1783a3b14baa456f3b25201e9408d",
+  "machine": "PASS",
+  "qa": "FAIL",
+  "security": "PASS",
+  "machineFail": [],
+  "posted": true,
+  "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/1087#issuecomment-6590471058",
+  "reason": "Posted the prepared verdict comment. The PR is open with base develop and head c6acae6d8d, and it had no earlier verdict comment."
+ },
+ "1072": {
+  "pr": 1072,
+  "head": "d9a63c46ac089280ec50f7ee93d67bf53a45252e",
+  "machine": "FAIL",
+  "qa": "FAIL",
+  "security": "PASS",
+  "machineFail": [
+   "format"
+  ],
+  "posted": true,
+  "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/1072#issuecomment-6590472636",
+  "reason": "PR open, base develop, head matches; no prior verdict comment; posted file contents."
+ },
+ "1061": {
+  "pr": 1061,
+  "head": "c1fbb802eb65bc8699512ffea43f934e482c544c",
+  "machine": "PASS",
+  "qa": "FAIL",
+  "security": "PASS",
+  "machineFail": [],
+  "posted": true,
+  "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/1061#issuecomment-6590478994",
+  "reason": "PR open, base develop, head matches; no existing combined QA+Security verdict (only a standalone Security review comment). Posted prepared comment."
+ },
+ "1056": {
+  "pr": 1056,
+  "head": "45a00ae883694138a388f3f645473eb5d7baae23",
+  "machine": "FAIL",
+  "qa": "FAIL",
+  "security": "PASS",
+  "machineFail": [
+   "format"
+  ],
+  "posted": true,
+  "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/1056#issuecomment-6590481307",
+  "reason": "PR open, base develop, head matched; no prior verdict comment; posted prepared comment."
+ },
+ "1008": {
+  "pr": 1008,
+  "head": "cb4468aab76a34031fca349a3f1b197d17c8ea3a",
+  "machine": "PASS",
+  "qa": "FAIL",
+  "security": "PASS",
+  "machineFail": [],
+  "posted": true,
+  "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/1008#issuecomment-6590486359",
+  "reason": "PR open, base develop, head matches; no prior verdict comment; posted prepared comment."
+ },
+ "1006": {
+  "pr": 1006,
+  "head": "63af85e15b31110ec1f668ca3c49d78c69f30bc0",
+  "machine": "PASS",
+  "qa": "PASS",
+  "security": "PASS",
+  "machineFail": [],
+  "posted": true,
+  "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/1006#issuecomment-6590488301",
+  "reason": "PR open, base develop, head matches; no prior verdict comment; posted file contents."
  }
 }

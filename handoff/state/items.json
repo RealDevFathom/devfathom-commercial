@@ -602,26 +602,26 @@
   "dev": "DEV-135",
   "branch": "codex/DEV-135-supplier-claim-journal",
   "head": "7cf6f2fb1c1c7ca3eaecdd4ad344987eadc21642",
-  "status": "in progress",
+  "status": "done",
   "qa": "FAIL",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "FAIL",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1116#issuecomment-6590465140",
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1116`, then post comments/1116.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1116#issuecomment-6590465140)"
  },
  {
   "pr": 1114,
   "dev": "DEV-145",
   "branch": "codex/DEV-145-review-assertion-limit",
   "head": "8247167eb6dce7b61ea17b029721697264863fb4",
-  "status": "in progress",
+  "status": "done",
   "qa": "FAIL",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1114#issuecomment-6590462689",
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1114`, then post comments/1114.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1114#issuecomment-6590462689)"
  },
  {
   "pr": 1101,
@@ -641,13 +641,13 @@
   "dev": "DEV-199",
   "branch": "codex/DEV-199-emergency-supply-lock",
   "head": "c6acae6d8df1783a3b14baa456f3b25201e9408d",
-  "status": "in progress",
+  "status": "done",
   "qa": "FAIL",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1087#issuecomment-6590471058",
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1087`, then post comments/1087.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1087#issuecomment-6590471058)"
  },
  {
   "pr": 1086,
@@ -667,13 +667,13 @@
   "dev": "DEV-321",
   "branch": "codex/DEV-321-counter-patient-entitlements",
   "head": "d9a63c46ac089280ec50f7ee93d67bf53a45252e",
-  "status": "in progress",
+  "status": "done",
   "qa": "FAIL",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "FAIL",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1072#issuecomment-6590472636",
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1072`, then post comments/1072.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1072#issuecomment-6590472636)"
  },
  {
   "pr": 1068,
@@ -693,13 +693,13 @@
   "dev": "DEV-138",
   "branch": "codex/linear-mention-dev-138-qa]-sev2]-restaurant-reports-wast",
   "head": "c1fbb802eb65bc8699512ffea43f934e482c544c",
-  "status": "in progress",
+  "status": "done",
   "qa": "FAIL",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1061#issuecomment-6590478994",
   "fix": null,
-  "next": "push one fix commit on codex/linear-mention-dev-138-qa]-sev2]-restaurant-reports-wast for: QA-1061-01 src/lib/restaurant/reports.ts:1374 No code change on this branch. The owner should relink this PR to a dedicated issue for develop's broken typecheck in these 4 test files; the changes are correc"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1061#issuecomment-6590478994)"
  },
  {
   "pr": 1060,
@@ -719,13 +719,13 @@
   "dev": "DEV-141",
   "branch": "codex/linear-mention-dev-141-qa]-sev3]-restaurant-demo-seed-he",
   "head": "45a00ae883694138a388f3f645473eb5d7baae23",
-  "status": "in progress",
+  "status": "done",
   "qa": "FAIL",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "FAIL",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1056#issuecomment-6590481307",
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1056`, then post comments/1056.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1056#issuecomment-6590481307)"
  },
  {
   "pr": 1050,
@@ -745,26 +745,26 @@
   "dev": "DEV-139",
   "branch": "codex/linear-mention-dev-139-qa]-sev3]-pharmacy-licence-scans-a",
   "head": "cb4468aab76a34031fca349a3f1b197d17c8ea3a",
-  "status": "in progress",
+  "status": "done",
   "qa": "FAIL",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1008#issuecomment-6590486359",
   "fix": null,
-  "next": "`python3 handoff/scripts/compose.py 1008`, then post comments/1008.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1008#issuecomment-6590486359)"
  },
  {
   "pr": 1006,
   "dev": "DEV-53",
   "branch": "fix/sev3-authz-group",
   "head": "63af85e15b31110ec1f668ca3c49d78c69f30bc0",
-  "status": "in progress",
+  "status": "done",
   "qa": "PASS",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1006#issuecomment-6590488301",
   "fix": "63af85e15b31110ec1f668ca3c49d78c69f30bc0",
-  "next": "`python3 handoff/scripts/compose.py 1006`, then post comments/1006.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1006#issuecomment-6590488301)"
  },
  {
   "pr": 1005,
