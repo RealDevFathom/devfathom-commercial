@@ -196,14 +196,19 @@ for (const boundary of ['service', 'API'] as const) {
 }
 
 it('includes unidentified quarantine holdings in the mandatory refund cap', async () => {
-  const f = fixture(0);
-  const sale = await f.db.pharmacySale.findFirst();
-  sale.lines[0].unidentifiedReturnHolds.push({ canonicalUnits: 2 });
-  await expect(f.caller.refundTender({ ...input, amountMinor: 201 })).rejects.toThrow(
+  const rejected = fixture(0);
+  const rejectedSale = await rejected.db.pharmacySale.findFirst();
+  rejectedSale.lines[0].unidentifiedReturnHolds.push({ canonicalUnits: 2 });
+  await expect(rejected.caller.refundTender({ ...input, amountMinor: 201 })).rejects.toThrow(
     'REFUND_EXCEEDS_TENDER'
   );
-  expect(f.db.pharmacyRefund.create).not.toHaveBeenCalled();
-  await expect(f.caller.refundTender({ ...input, amountMinor: 200 })).resolves.toMatchObject({
+  expect(rejected.db.pharmacyRefund.create).not.toHaveBeenCalled();
+
+  // A rejected transaction rolls back its idempotency row; the mock does not.
+  const accepted = fixture(0);
+  const acceptedSale = await accepted.db.pharmacySale.findFirst();
+  acceptedSale.lines[0].unidentifiedReturnHolds.push({ canonicalUnits: 2 });
+  await expect(accepted.caller.refundTender({ ...input, amountMinor: 200 })).resolves.toMatchObject({
     refundId: 'refund-1',
   });
 });
