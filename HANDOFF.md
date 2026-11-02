@@ -72,8 +72,9 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 | Gate | Verdict | Notes |
 | --- | --- | --- |
 | Machine checks | pending | Per your instruction no GitHub Actions were triggered from here; any checks that run on their own will be recorded here |
+| Codex code review | **pass, no findings** on `1afbacf` (completed 2026-11-02 19:04 UTC) | Ran when the PR opened. Later pushes have been docs only (`HANDOFF.md`) |
+| Codex security review | running on `1afbacf` (started 19:03 UTC) | Blocking threshold is P0. Merge gate is off |
 | QA | queued | DEV-258 asks QA to retest at runtime |
-| Security | queued | Nothing reviewed yet |
 
 #### Checks (rerun commands and latest results)
 
