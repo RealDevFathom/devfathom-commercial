@@ -22,7 +22,7 @@ type Organization = {
 type Stage = 'credentials' | 'select' | 'sso-only';
 
 const inputClass =
-  'flex h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-destructive/20';
+  'flex h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-muted transition-colors focus:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-destructive/20';
 
 const GENERIC_ERROR = 'Invalid email or password. Please try again.';
 
@@ -362,7 +362,7 @@ export function SharedLoginForm({
                   <span className="block truncate text-sm font-semibold text-foreground">
                     {organization.displayName}
                   </span>
-                  <span className="mt-1 block truncate font-mono text-[10px] uppercase tracking-[0.14em] text-text-faint">
+                  <span className="mt-1 block truncate font-mono text-[10px] uppercase tracking-[0.14em] text-text-muted">
                     {organization.slug}
                   </span>
                 </span>
@@ -449,7 +449,7 @@ function SsoEntry({ organization }: { organization: Organization }) {
         <span id={labelId} className="block truncate text-sm font-semibold text-text-muted">
           {organization.displayName}
         </span>
-        <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-text-faint">
+        <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-text-muted">
           <ShieldCheck className="h-3 w-3" aria-hidden="true" />
           Single sign-on required
         </span>
@@ -464,7 +464,7 @@ function SsoEntry({ organization }: { organization: Organization }) {
           <span className="sr-only"> to {organization.displayName}</span>
         </a>
       ) : (
-        <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.14em] text-text-faint">
+        <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.14em] text-text-muted">
           Contact your administrator
         </span>
       )}
