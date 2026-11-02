@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '@/components/theme-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
-import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
+import { isModuleGranted, moduleForProcedure, verticalForModuleKey } from '@/lib/module-catalog';
 import { cn } from '@/lib/utils';
 import {
   assistantAvailabilityMessage,
@@ -83,6 +83,7 @@ export function Topbar({
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const router = useRouter();
   const { data: session } = useSession();
+  const { vertical, enabledModules } = useEntitlements();
   const { theme, setTheme } = useTheme();
   const openAssistant = useAssistant((s) => s.setOpen);
   const assistantAvailable = useAssistant((state) =>
@@ -124,9 +125,17 @@ export function Topbar({
     }
   }, []);
 
+  // shortcut: global search queries every group; allow partial licences when the API supports scoped categories.
+  const canSearchRecords = ['projects', 'clients', 'notes', 'hr'].every((moduleKey) => {
+    const moduleVertical = verticalForModuleKey(moduleKey);
+    return (
+      isModuleGranted(moduleKey, enabledModules) &&
+      (!moduleVertical || moduleVertical === vertical)
+    );
+  });
   const searchQuery = trpc.search.global.useQuery(
     { query: debouncedSearch },
-    { enabled: debouncedSearch.length > 0, staleTime: 30_000 }
+    { enabled: commandOpen && debouncedSearch.length > 0 && canSearchRecords, staleTime: 30_000 }
   );
 
   const goTo = (href: string) => {
@@ -335,13 +344,13 @@ export function Topbar({
                   </CommandItem>
                 ))}
               </CommandGroup>
-            ) : searchQuery.isLoading ? (
+            ) : canSearchRecords && searchQuery.isLoading ? (
               <div className="flex items-center justify-center py-10 text-xs text-muted-foreground">
                 <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> Searching…
               </div>
             ) : (
               (() => {
-                const r = searchQuery.data;
+                const r = canSearchRecords ? searchQuery.data : undefined;
                 const empty =
                   !r ||
                   (r.projects.length === 0 &&
