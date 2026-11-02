@@ -28,7 +28,8 @@ import {
 } from 'lucide-react';
 import { useTheme } from '@/components/theme-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
-import { isModuleGranted, moduleForProcedure, verticalForModuleKey } from '@/lib/module-catalog';
+import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
+import { getSearchCategoryAccess } from '@/lib/search-access';
 import { cn } from '@/lib/utils';
 import {
   assistantAvailabilityMessage,
@@ -125,14 +126,8 @@ export function Topbar({
     }
   }, []);
 
-  // shortcut: global search queries every group; allow partial licences when the API supports scoped categories.
-  const canSearchRecords = ['projects', 'clients', 'notes', 'hr'].every((moduleKey) => {
-    const moduleVertical = verticalForModuleKey(moduleKey);
-    return (
-      isModuleGranted(moduleKey, enabledModules) &&
-      (!moduleVertical || moduleVertical === vertical)
-    );
-  });
+  const searchAccess = getSearchCategoryAccess({ vertical, enabledModules });
+  const canSearchRecords = Object.values(searchAccess).some(Boolean);
   const searchQuery = trpc.search.global.useQuery(
     { query: debouncedSearch },
     { enabled: commandOpen && debouncedSearch.length > 0 && canSearchRecords, staleTime: 30_000 }
@@ -350,7 +345,21 @@ export function Topbar({
               </div>
             ) : (
               (() => {
-                const r = canSearchRecords ? searchQuery.data : undefined;
+                // Cached data can outlive a licence or vertical change.
+                const r = searchQuery.data
+                  ? {
+                      projects: searchAccess.projects
+                        ? searchQuery.data.projects.map((project) => ({
+                            ...project,
+                            client: searchAccess.clients ? project.client : null,
+                          }))
+                        : [],
+                      tasks: searchAccess.tasks ? searchQuery.data.tasks : [],
+                      clients: searchAccess.clients ? searchQuery.data.clients : [],
+                      notes: searchAccess.notes ? searchQuery.data.notes : [],
+                      team: searchAccess.team ? searchQuery.data.team : [],
+                    }
+                  : undefined;
                 const empty =
                   !r ||
                   (r.projects.length === 0 &&

@@ -104,34 +104,67 @@ function search() {
   act(() => vi.advanceTimersByTime(100));
 }
 
-function expectBlockedSearch() {
+function expectSearchGroups(groups: string[]) {
   expect(mocks.searchQuery).toHaveBeenLastCalledWith(
     { query: 'Matching' },
-    { enabled: false, staleTime: 30_000 }
+    { enabled: groups.length > 0, staleTime: 30_000 }
   );
-  for (const group of GROUPS) expect(screen.queryByRole('group', { name: group })).toBeNull();
-  expect(screen.getByText(/No results for/)).toBeInTheDocument();
+  for (const group of GROUPS) {
+    if (groups.includes(group)) {
+      expect(screen.getByRole('group', { name: group })).toBeInTheDocument();
+    } else {
+      expect(screen.queryByRole('group', { name: group })).toBeNull();
+    }
+  }
+  if (groups.length === 0) expect(screen.getByText(/No results for/)).toBeInTheDocument();
 }
 
-describe('command palette aggregate search licensing', () => {
+describe('command palette category search licensing', () => {
+  it.each([
+    { module: 'projects', groups: ['Projects', 'Tasks'] },
+    { module: 'clients', groups: ['Clients'] },
+    { module: 'notes', groups: ['Notes'] },
+    { module: 'hr', groups: ['Team'] },
+  ])('keeps $module search available to a partially licensed agency', ({ module, groups }) => {
+    mocks.enabledModules = [module];
+    render(<Topbar />);
+    search();
+    expectSearchGroups(groups);
+  });
+
+  it('keeps pharmacy team search while hiding mis-provisioned agency categories', () => {
+    mocks.vertical = 'PHARMACY';
+    mocks.enabledModules = ['hr', 'projects', 'clients'];
+    render(<Topbar />);
+    search();
+    expectSearchGroups(['Team']);
+    fireEvent.click(screen.getByRole('button', { name: 'Matching colleague' }));
+    expect(mocks.push).toHaveBeenCalledWith('/team/u1');
+  });
+
   it.each(['PHARMACY', 'RESTAURANT', 'HOSPITALITY', undefined])(
-    'blocks unrelated records for %s even when agency modules are accidentally enabled',
+    'allows licensed shared groups but hides agency records for %s',
     (vertical) => {
       mocks.vertical = vertical;
       render(<Topbar />);
       search();
-      expectBlockedSearch();
-      expect(mocks.searchQuery.mock.calls.every(([, options]) => !options.enabled)).toBe(true);
+      expectSearchGroups(['Notes', 'Team']);
     }
   );
 
-  it.each(SEARCH_MODULES)(
-    'does not request an unlicensed %s group through aggregate search',
-    (missing) => {
-      mocks.enabledModules = SEARCH_MODULES.filter((moduleKey) => moduleKey !== missing);
+  it.each([
+    { vertical: 'AGENCY', modules: [] },
+    { vertical: 'AGENCY', modules: ['dashboard'] },
+    { vertical: 'PHARMACY', modules: ['projects', 'clients'] },
+    { vertical: undefined, modules: ['projects', 'clients'] },
+  ])(
+    'does not request records when $vertical has no licensed compatible groups: $modules',
+    ({ vertical, modules }) => {
+      mocks.vertical = vertical;
+      mocks.enabledModules = modules;
       render(<Topbar />);
       search();
-      expectBlockedSearch();
+      expectSearchGroups([]);
       expect(mocks.searchQuery.mock.calls.every(([, options]) => !options.enabled)).toBe(true);
     }
   );
@@ -143,33 +176,63 @@ describe('command palette aggregate search licensing', () => {
       { enabled: false, staleTime: 30_000 }
     );
     search();
-    expect(mocks.searchQuery).toHaveBeenLastCalledWith(
-      { query: 'Matching' },
-      { enabled: true, staleTime: 30_000 }
-    );
-    for (const group of GROUPS) {
-      expect(screen.getByRole('group', { name: group })).toBeInTheDocument();
-    }
+    expectSearchGroups(GROUPS);
     fireEvent.click(screen.getByRole('button', { name: 'Matching task Matching project' }));
     expect(mocks.push).toHaveBeenCalledWith('/projects/p1');
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('hides cached groups immediately after licensing changes', () => {
+  it('hides revoked cached groups immediately while retaining permitted search', () => {
+    mocks.searchQuery.mockReturnValue({
+      data: {
+        ...cachedResults,
+        projects: [
+          { ...cachedResults.projects[0], client: { id: 'c1', name: 'Cached client label' } },
+        ],
+      },
+      isLoading: false,
+    });
     const view = render(<Topbar />);
     search();
-    expect(screen.getByRole('group', { name: 'Projects' })).toBeInTheDocument();
-    mocks.enabledModules = ['hr'];
+    expectSearchGroups(GROUPS);
+    expect(screen.getByText('Cached client label')).toBeInTheDocument();
+    mocks.enabledModules = ['projects'];
     view.rerender(<Topbar />);
-    expectBlockedSearch();
+    expectSearchGroups(['Projects', 'Tasks']);
+    expect(screen.queryByText('Cached client label')).toBeNull();
+    mocks.enabledModules = [];
+    view.rerender(<Topbar />);
+    expectSearchGroups([]);
   });
 
-  it('does not show a loading state for an aggregate query it cannot request', () => {
+  it('hides cached agency groups immediately after a vertical change', () => {
+    const view = render(<Topbar />);
+    search();
+    expectSearchGroups(GROUPS);
     mocks.vertical = 'PHARMACY';
+    view.rerender(<Topbar />);
+    expectSearchGroups(['Notes', 'Team']);
+  });
+
+  it('does not show a loading state when no category can be requested', () => {
+    mocks.vertical = 'PHARMACY';
+    mocks.enabledModules = ['projects', 'clients'];
     mocks.searchQuery.mockReturnValue({ data: cachedResults, isLoading: true });
     render(<Topbar />);
     search();
-    expectBlockedSearch();
+    expectSearchGroups([]);
     expect(screen.queryByText('Searching…')).toBeNull();
+  });
+
+  it('shows the loading state for a permitted partial search', () => {
+    mocks.enabledModules = ['projects'];
+    mocks.searchQuery.mockReturnValue({ data: undefined, isLoading: true });
+    render(<Topbar />);
+    search();
+    expect(mocks.searchQuery).toHaveBeenLastCalledWith(
+      { query: 'Matching' },
+      { enabled: true, staleTime: 30_000 }
+    );
+    expect(screen.getByText('Searching…')).toBeInTheDocument();
   });
 });
