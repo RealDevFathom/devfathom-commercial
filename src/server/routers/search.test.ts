@@ -28,10 +28,18 @@ const records = {
   team: [{ id: 'user-2', name: 'Match colleague' }],
 };
 
+/** The viewer's custom role and overrides, as the ABAC engine reads them. */
+type PermissionRules = {
+  organizationRole: { permissions: Array<{ capability: string; effect: string }> } | null;
+  permissionOverrides: Array<{ capability: string; effect: string }>;
+};
+const NO_CUSTOM_RULES: PermissionRules = { organizationRole: null, permissionOverrides: [] };
+
 function fixture(
   enabledModules: readonly string[],
   vertical: EntitlementView['vertical'] = 'AGENCY',
-  role: 'ADMIN' | 'EMPLOYEE' = 'EMPLOYEE'
+  role: 'ADMIN' | 'EMPLOYEE' = 'EMPLOYEE',
+  rules: PermissionRules = NO_CUSTOM_RULES
 ) {
   const queries = {
     projects: vi.fn(async () => records.projects),
@@ -46,7 +54,7 @@ function fixture(
       task: { findMany: queries.tasks },
       client: { findMany: queries.clients },
       note: { findMany: queries.notes },
-      user: { findMany: queries.team },
+      user: { findMany: queries.team, findUnique: vi.fn(async () => rules) },
     },
     entitlements: {
       organizationId: 'org-1',
@@ -75,20 +83,23 @@ describe('search.global category authorization', () => {
     { module: 'clients', permitted: ['clients'] },
     { module: 'notes', permitted: ['notes'] },
     { module: 'hr', permitted: ['team'] },
-  ])('keeps $module search available with only that agency license', async ({ module, permitted }) => {
-    const { caller, queries } = fixture([module]);
-    const result = await caller.global({ query: 'match' });
+  ])(
+    'keeps $module search available with only that agency license',
+    async ({ module, permitted }) => {
+      const { caller, queries } = fixture([module]);
+      const result = await caller.global({ query: 'match' });
 
-    for (const category of Object.keys(queries) as Array<keyof typeof queries>) {
-      if (permitted.includes(category)) {
-        expect(queries[category]).toHaveBeenCalledOnce();
-        expect(result[category]).toEqual(records[category]);
-      } else {
-        expect(queries[category]).not.toHaveBeenCalled();
-        expect(result[category]).toEqual([]);
+      for (const category of Object.keys(queries) as Array<keyof typeof queries>) {
+        if (permitted.includes(category)) {
+          expect(queries[category]).toHaveBeenCalledOnce();
+          expect(result[category]).toEqual(records[category]);
+        } else {
+          expect(queries[category]).not.toHaveBeenCalled();
+          expect(result[category]).toEqual([]);
+        }
       }
     }
-  });
+  );
 
   it('does not load client records through projects without a clients license', async () => {
     const { caller, queries } = fixture(['projects']);
@@ -114,7 +125,11 @@ describe('search.global category authorization', () => {
       expect(queries.clients).not.toHaveBeenCalled();
       expect(queries.team).toHaveBeenCalledOnce();
       expect(queries.notes).toHaveBeenCalledTimes(notes ? 1 : 0);
-      expect(result).toEqual({ ...emptyResults, team: records.team, notes: notes ? records.notes : [] });
+      expect(result).toEqual({
+        ...emptyResults,
+        team: records.team,
+        notes: notes ? records.notes : [],
+      });
     }
   );
 
@@ -140,7 +155,10 @@ describe('search.global category authorization', () => {
       vertical: 'AGENCY',
     };
 
-    await expect(caller.global(forgedInput)).resolves.toEqual({ ...emptyResults, team: records.team });
+    await expect(caller.global(forgedInput)).resolves.toEqual({
+      ...emptyResults,
+      team: records.team,
+    });
     expect(queries.projects).not.toHaveBeenCalled();
     expect(queries.tasks).not.toHaveBeenCalled();
     expect(queries.clients).not.toHaveBeenCalled();
@@ -208,6 +226,34 @@ describe('search.global category authorization', () => {
       take: 6,
       orderBy: { name: 'asc' },
     });
+  });
+
+  it.each([
+    {
+      label: 'an override',
+      rules: {
+        organizationRole: null,
+        permissionOverrides: [{ capability: 'team:view', effect: 'DENY' }],
+      },
+    },
+    {
+      label: 'the custom role',
+      rules: {
+        organizationRole: { permissions: [{ capability: 'team:*', effect: 'DENY' }] },
+        permissionOverrides: [],
+      },
+    },
+  ])('does not search the directory when $label denies team:view', async ({ rules }) => {
+    const { caller, queries } = fixture(
+      ['projects', 'clients', 'notes', 'hr'],
+      'AGENCY',
+      'EMPLOYEE',
+      rules
+    );
+    const result = await caller.global({ query: 'match' });
+
+    expect(queries.team).not.toHaveBeenCalled();
+    expect(result).toEqual({ ...records, team: [] });
   });
 
   it('keeps admin project access but does not grant unlicensed groups', async () => {

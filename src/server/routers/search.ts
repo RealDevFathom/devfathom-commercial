@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
 import { getSearchCategoryAccess } from '@/lib/search-access';
 import { router, protectedProcedure } from '../trpc';
 
@@ -27,6 +28,14 @@ export const searchRouter = router({
       const isAdmin = ctx.session.user.role === 'ADMIN';
       const insensitive = { contains: q, mode: 'insensitive' as const };
       const access = getSearchCategoryAccess(ctx.entitlements);
+      // A custom role or override that denies `team:view` takes the directory
+      // away in team.getAll/getRoster/getById; search must not be a side door.
+      const directory =
+        access.team &&
+        (await can(subjectFromSession(ctx.session.user), 'team:view', undefined, {
+          source: 'TRPC',
+          db: ctx.db,
+        }));
 
       const [projects, tasks, clients, notes, team] = await Promise.all([
         // PROJECTS — admin sees all, employees only their projects
@@ -86,7 +95,7 @@ export const searchRouter = router({
 
         // NOTES — only those visible to the user
         access.notes
-          ? ctx.db.note.findMany({
+          ? (ctx.db.note.findMany({
               where: {
                 AND: [
                   {
@@ -109,11 +118,11 @@ export const searchRouter = router({
               },
               take: 6,
               orderBy: { updatedAt: 'desc' },
-            }) satisfies Prisma.PrismaPromise<unknown>
+            }) satisfies Prisma.PrismaPromise<unknown>)
           : [],
 
-        // TEAM — everyone can see the directory
-        access.team
+        // TEAM — the licensed directory, unless `team:view` is denied
+        directory
           ? ctx.db.user.findMany({
               where: {
                 OR: [{ name: insensitive }, { email: insensitive }, { title: insensitive }],

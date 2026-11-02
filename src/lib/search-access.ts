@@ -1,8 +1,4 @@
-import {
-  isModuleGranted,
-  verticalForModuleKey,
-  type EntitlementView,
-} from '@/lib/module-catalog';
+import { isModuleGranted, verticalForModuleKey, type EntitlementView } from '@/lib/module-catalog';
 
 export function getSearchCategoryAccess({
   vertical,
@@ -11,8 +7,7 @@ export function getSearchCategoryAccess({
   const allowed = (moduleKey: string) => {
     const moduleVertical = verticalForModuleKey(moduleKey);
     return (
-      isModuleGranted(moduleKey, enabledModules) &&
-      (!moduleVertical || moduleVertical === vertical)
+      isModuleGranted(moduleKey, enabledModules) && (!moduleVertical || moduleVertical === vertical)
     );
   };
   const projects = allowed('projects');

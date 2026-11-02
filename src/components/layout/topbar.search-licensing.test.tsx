@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -12,28 +12,59 @@ vi.mock('next/dynamic', () => ({
   default: (loader: { toString(): string }) => {
     const source = loader.toString();
     if (source.includes('CommandDialog'))
-      return ({ open, children }: { open: boolean; children: React.ReactNode }) =>
-        open ? <div role="dialog">{children}</div> : null;
+      return function CommandDialog({
+        open,
+        children,
+      }: {
+        open: boolean;
+        children: React.ReactNode;
+      }) {
+        return open ? <div role="dialog">{children}</div> : null;
+      };
     if (source.includes('CommandInput'))
-      return ({ value, onValueChange }: { value: string; onValueChange: (value: string) => void }) => (
-        <input
-          aria-label="Search records"
-          value={value}
-          onChange={(event) => onValueChange(event.target.value)}
-        />
-      );
+      return function CommandInput({
+        value,
+        onValueChange,
+      }: {
+        value: string;
+        onValueChange: (value: string) => void;
+      }) {
+        return (
+          <input
+            aria-label="Search records"
+            value={value}
+            onChange={(event) => onValueChange(event.target.value)}
+          />
+        );
+      };
     if (source.includes('CommandGroup'))
-      return ({ heading, children }: { heading: string; children: React.ReactNode }) => (
-        <div role="group" aria-label={heading}>
-          {children}
-        </div>
-      );
+      return function CommandGroup({
+        heading,
+        children,
+      }: {
+        heading: string;
+        children: React.ReactNode;
+      }) {
+        return (
+          <div role="group" aria-label={heading}>
+            {children}
+          </div>
+        );
+      };
     if (source.includes('CommandItem'))
-      return ({ children, onSelect }: { children: React.ReactNode; onSelect: () => void }) => (
-        <button type="button" onClick={onSelect}>
-          {children}
-        </button>
-      );
+      return function CommandItem({
+        children,
+        onSelect,
+      }: {
+        children: React.ReactNode;
+        onSelect: () => void;
+      }) {
+        return (
+          <button type="button" onClick={onSelect}>
+            {children}
+          </button>
+        );
+      };
     return ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   },
 }));
@@ -177,7 +208,11 @@ describe('command palette category search licensing', () => {
     );
     search();
     expectSearchGroups(GROUPS);
-    fireEvent.click(screen.getByRole('button', { name: 'Matching task Matching project' }));
+    fireEvent.click(
+      within(screen.getByRole('group', { name: 'Tasks' })).getByRole('button', {
+        name: /Matching task/,
+      })
+    );
     expect(mocks.push).toHaveBeenCalledWith('/projects/p1');
     expect(screen.queryByRole('dialog')).toBeNull();
   });
