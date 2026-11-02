@@ -925,6 +925,15 @@ async function claimOpportunityForConversion(
   return { id: opportunity.id, accountId: opportunity.accountId, fromStage };
 }
 
+function assertDedicatedProvisioningConfigured() {
+  if (!isDedicatedProvisioningConfigured()) {
+    throw new PlatformSecurityError(
+      'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
+      400
+    );
+  }
+}
+
 async function bootstrapOrganization(
   db: PrismaClient,
   actor: PlatformIdentity | null,
@@ -949,12 +958,7 @@ async function bootstrapOrganization(
       throw new PlatformSecurityError('Opportunity has already been converted.', 409);
     }
   }
-  if (input.deploymentMode === 'DEDICATED' && !isDedicatedProvisioningConfigured()) {
-    throw new PlatformSecurityError(
-      'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
-      400
-    );
-  }
+  if (input.deploymentMode === 'DEDICATED') assertDedicatedProvisioningConfigured();
   const packageRecord = await db.platformPackage.findUnique({
     where: { id: input.packageId },
     include: { moduleLinks: { where: { enabled: true } } },
@@ -1967,13 +1971,9 @@ async function runCommand(
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
       if (
         data.deploymentMode === 'DEDICATED' &&
-        data.deploymentMode !== before.deploymentMode &&
-        !isDedicatedProvisioningConfigured()
+        data.deploymentMode !== before.deploymentMode
       ) {
-        throw new PlatformSecurityError(
-          'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
-          400
-        );
+        assertDedicatedProvisioningConfigured();
       }
       const changesVertical = data.vertical !== undefined && data.vertical !== before.vertical;
       // A vertical correction is deliberately narrower than ordinary onboarding

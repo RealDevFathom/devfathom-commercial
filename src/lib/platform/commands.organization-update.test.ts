@@ -87,7 +87,8 @@ describe('organization.update deployment mode', () => {
     ).catch((caught: unknown) => caught);
 
     expect(error).toMatchObject({
-      message: expect.stringContaining('Dedicated provisioning is unavailable'),
+      message:
+        'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
       status: 400,
     });
     expect(platformDb.$queryRaw).toHaveBeenCalledOnce();
@@ -97,6 +98,9 @@ describe('organization.update deployment mode', () => {
     );
     expect(platformDb.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
       platformDb.organization.findUnique.mock.invocationCallOrder[0]!
+    );
+    expect(platformDb.organization.findUnique.mock.invocationCallOrder[0]).toBeLessThan(
+      provisioningConfigured.mock.invocationCallOrder[0]!
     );
     expect(platformDb.organization.update).not.toHaveBeenCalled();
     expect(platformDb.organizationDeployment.upsert).not.toHaveBeenCalled();
