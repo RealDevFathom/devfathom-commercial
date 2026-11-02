@@ -45,6 +45,10 @@ const usage = (input: number, output: number): LanguageModelV3Usage => ({
 type Step =
   | 'ok'
   | { error: unknown }
+  /** Never answers, and ignores the abort signal (only the router's race can end it). */
+  | { stall: true }
+  /** doStream emits exactly these parts; `hang` keeps the stream open afterwards. */
+  | { parts: LanguageModelV3StreamPart[]; hang?: boolean }
   | { text?: string; finish?: LanguageModelV3FinishReason['unified']; toolCall?: boolean };
 type Behaviour = Step | Step[];
 
@@ -70,6 +74,7 @@ function fakeModel(
     if (step !== 'ok' && 'error' in step) throw step.error;
     return step === 'ok' ? {} : step;
   };
+  const never = () => new Promise<never>(() => undefined);
   const model: LanguageModelV3 = {
     specificationVersion: 'v3',
     provider,
@@ -77,6 +82,8 @@ function fakeModel(
     supportedUrls: {},
     async doGenerate(options: LanguageModelV3CallOptions) {
       const step = shape(options);
+      if ('stall' in step) return never();
+      if ('parts' in step) throw new Error('parts are for doStream');
       const text = step.text ?? `answer from ${provider}`;
       return {
         content: [
@@ -92,6 +99,17 @@ function fakeModel(
     },
     async doStream(options: LanguageModelV3CallOptions) {
       const step = shape(options);
+      if ('stall' in step) return never();
+      if ('parts' in step) {
+        return {
+          stream: new ReadableStream<LanguageModelV3StreamPart>({
+            start(controller) {
+              for (const part of step.parts) controller.enqueue(part);
+              if (!step.hang) controller.close();
+            },
+          }),
+        };
+      }
       const text = step.text ?? `streamed from ${provider}`;
       const parts: LanguageModelV3StreamPart[] = [
         { type: 'stream-start', warnings: [] },
@@ -132,8 +150,11 @@ function setup(
     /** Use the router's real (timer-based) sleep, for fake-timer tests. */
     realSleep?: boolean;
     random?: number;
+    /** Capture the per-attempt first-output timers instead of running real ones. */
+    manualTimers?: boolean;
   } = {}
 ) {
+  const timers: Array<{ ms: number; fire: () => void; cancelled: boolean; fired?: boolean }> = [];
   const calls: string[] = [];
   const log: Call[] = [];
   const recorded: Array<Record<string, unknown>> = [];
@@ -176,13 +197,46 @@ function setup(
           },
         }),
     random: () => options.random ?? 0.5,
+    ...(options.manualTimers
+      ? {
+          attemptTimer: (ms: number, onTimeout: () => void) => {
+            const timer = { ms, fire: onTimeout, cancelled: false };
+            timers.push(timer);
+            return () => {
+              timer.cancelled = true;
+            };
+          },
+        }
+      : {}),
   };
   __setRouterDependenciesForTests(deps);
   const advance = (ms: number) => {
     clock.now = new Date(clock.now.getTime() + ms);
   };
   const behaviours = (options.behaviours ??= {});
-  return { calls, log, recorded, alerts, authAlerts, sleeps, optInReads, advance, behaviours };
+  /** Fire the next live first-output timer once the router has started it. */
+  const fireTimer = async () => {
+    const live = () => timers.find((timer) => !timer.cancelled && !timer.fired);
+    await vi.waitFor(() => {
+      if (!live()) throw new Error('no live timer yet');
+    });
+    const timer = live()!;
+    timer.fired = true;
+    timer.fire();
+  };
+  return {
+    calls,
+    log,
+    recorded,
+    alerts,
+    authAlerts,
+    sleeps,
+    optInReads,
+    advance,
+    behaviours,
+    timers,
+    fireTimer,
+  };
 }
 
 const stored = (overrides: Partial<StoredAISettings>): StoredAISettings => ({
@@ -903,5 +957,282 @@ describe('unavailable errors', () => {
     expect(new AIUnavailableError('CAPPED').reason).toBe('CAPPED');
     expect(new AIUnavailableError('TURN_LIMIT').reason).toBe('TURN_LIMIT');
     expect(new AIUnavailableError('CIRCUIT_OPEN').reason).toBe('CIRCUIT_OPEN');
+  });
+});
+
+describe('streaming failover before the first output', () => {
+  const finishPart = {
+    type: 'finish',
+    usage: usage(200, 100),
+    finishReason: { unified: 'stop', raw: 'stop' },
+  } as LanguageModelV3StreamPart;
+  const head: LanguageModelV3StreamPart[] = [
+    { type: 'stream-start', warnings: [] },
+    { type: 'response-metadata', id: 'req-1', modelId: 'm' },
+  ];
+  /** Bedrock answers 200, then sends an exception frame (raw) and its error part. */
+  const bedrockException = (exception: string): LanguageModelV3StreamPart[] => [
+    ...head,
+    { type: 'raw', rawValue: { [exception]: { message: 'Too many requests' } } },
+    { type: 'error', error: { message: 'Too many requests' } },
+  ];
+  const routedStreamText = () =>
+    streamText({
+      model: createAIModel(ENV, { feature: 'ask-fathom', organizationId: 'org-1' }).model,
+      prompt: 'hello',
+      maxRetries: 0,
+    });
+
+  it('fails over when Bedrock answers 200 and then throttles before any output', async () => {
+    quiet();
+    const { calls, log, sleeps, recorded } = setup({
+      stored: stored({ mode: 'ForceBedrock' }),
+      behaviours: { bedrock: { parts: bedrockException('throttlingException') } },
+    });
+    await expect(routedStreamText().text).resolves.toBe('streamed from anthropic');
+    // Throttling is transient: one jittered retry on Bedrock, then the next provider.
+    expect(providers(calls)).toEqual(['bedrock', 'bedrock', 'anthropic']);
+    expect(sleeps).toHaveLength(1);
+    expect(log[0].options.includeRawChunks).toBe(true);
+    expect(recorded.map((row) => row.provider)).toEqual(['anthropic']);
+  });
+
+  it.each(['serviceUnavailableException', 'internalServerException', 'modelStreamErrorException'])(
+    'fails over on a Bedrock %s before any output',
+    async (exception) => {
+      quiet();
+      const { calls } = setup({
+        stored: stored({ mode: 'ForceBedrock' }),
+        behaviours: { bedrock: { parts: bedrockException(exception) } },
+      });
+      await expect(routedStreamText().text).resolves.toBe('streamed from anthropic');
+      expect(providers(calls)).toEqual(['bedrock', 'bedrock', 'anthropic']);
+    }
+  );
+
+  it('surfaces a Bedrock validation error in the stream without failover', async () => {
+    quiet();
+    const { calls } = setup({
+      stored: stored({ mode: 'ForceBedrock' }),
+      behaviours: { bedrock: { parts: bedrockException('validationException') } },
+    });
+    const types: string[] = [];
+    for await (const part of routedStreamText().fullStream) types.push(part.type);
+    expect(types).toContain('error');
+    expect(providers(calls)).toEqual(['bedrock']);
+  });
+
+  it('fails over on an Anthropic overloaded error part before any output', async () => {
+    quiet();
+    const { calls } = setup({
+      behaviours: {
+        anthropic: {
+          parts: [
+            ...head,
+            { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } },
+          ],
+        },
+      },
+    });
+    await expect(routedStreamText().text).resolves.toBe('streamed from openai');
+    expect(providers(calls)).toEqual(['anthropic', 'anthropic', 'openai']);
+  });
+
+  it('does not fail over once output has started', async () => {
+    quiet();
+    const { calls, recorded } = setup({
+      behaviours: {
+        anthropic: {
+          parts: [
+            ...head,
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: 'Sales were' },
+            { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } },
+          ],
+        },
+      },
+    });
+    const seen: string[] = [];
+    for await (const part of routedStreamText().fullStream) {
+      seen.push(part.type === 'text-delta' ? `text:${part.text}` : part.type);
+    }
+    expect(seen).toContain('text:Sales were');
+    expect(seen).toContain('error');
+    expect(providers(calls)).toEqual(['anthropic']);
+    expect(recorded).toEqual([]);
+  });
+
+  it('replays the buffered parts in order and passes the rest through', async () => {
+    const parts: LanguageModelV3StreamPart[] = [
+      ...head,
+      { type: 'raw', rawValue: { chunk: 1 } },
+      { type: 'text-start', id: 't' },
+      { type: 'text-delta', id: 't', delta: 'one ' },
+      { type: 'raw', rawValue: { chunk: 2 } },
+      { type: 'text-delta', id: 't', delta: 'two' },
+      { type: 'text-end', id: 't' },
+      finishPart,
+    ];
+    const read = async (includeRawChunks: boolean) => {
+      setup({ behaviours: { anthropic: { parts } } });
+      const model = createAIModel(ENV, { feature: 'ask-fathom', organizationId: 'org-1' })
+        .model as LanguageModelV3;
+      const { stream } = await model.doStream({
+        prompt: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+        includeRawChunks,
+      });
+      const out: LanguageModelV3StreamPart[] = [];
+      const reader = stream.getReader();
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) break;
+        out.push(next.value);
+      }
+      return out;
+    };
+
+    const withRaw = await read(true);
+    expect(withRaw.slice(0, -1)).toEqual(parts.slice(0, -1));
+    expect(withRaw.at(-1)).toMatchObject({
+      type: 'finish',
+      providerMetadata: {
+        devfathomRouting: { provider: 'anthropic', modelId: 'claude-sonnet-5-5' },
+      },
+    });
+
+    // Raw chunks are the caller's to ask for; without the request they are not passed on.
+    const withoutRaw = await read(false);
+    expect(withoutRaw.map((part) => part.type)).toEqual(
+      parts.filter((part) => part.type !== 'raw').map((part) => part.type)
+    );
+    expect(withoutRaw.slice(0, -1)).toEqual(
+      parts.filter((part) => part.type !== 'raw').slice(0, -1)
+    );
+  });
+});
+
+describe('per-attempt first-output timeout', () => {
+  it('times out a stalled provider and lets the next one answer within the turn', async () => {
+    quiet();
+    const turn = createTurnBudget();
+    const harness = setup({ manualTimers: true, behaviours: { anthropic: { stall: true } } });
+    const pending = generate(ENV, 'ask-fathom', { turn });
+    await harness.fireTimer();
+    // A timeout is transient: one retry, which stalls too, then failover.
+    await harness.fireTimer();
+    await expect(pending).resolves.toMatchObject({ text: 'answer from openai' });
+    expect(providers(harness.calls)).toEqual(['anthropic', 'anthropic', 'openai']);
+    expect(harness.timers[0].ms).toBe(20_000);
+    expect(harness.timers.every((timer) => timer.cancelled)).toBe(true);
+    expect(turn.modelCalls).toBe(3);
+  });
+
+  it('times out a stream that opens but never produces output', async () => {
+    quiet();
+    const harness = setup({
+      manualTimers: true,
+      behaviours: { anthropic: { parts: [{ type: 'stream-start', warnings: [] }], hang: true } },
+    });
+    const result = streamText({
+      model: createAIModel(ENV, { feature: 'ask-fathom', organizationId: 'org-1' }).model,
+      prompt: 'hello',
+      maxRetries: 0,
+    });
+    const text = result.text;
+    await harness.fireTimer();
+    await harness.fireTimer();
+    await expect(text).resolves.toBe('streamed from openai');
+    expect(providers(harness.calls)).toEqual(['anthropic', 'anthropic', 'openai']);
+  });
+
+  it('counts timeouts toward the circuit breaker', async () => {
+    quiet();
+    const harness = setup({ manualTimers: true, behaviours: { anthropic: { stall: true } } });
+    // Two attempts (first try and retry) per call: three calls make six counted failures.
+    for (let index = 0; index < 3; index++) {
+      const pending = generate();
+      await harness.fireTimer();
+      if (index < 2) await harness.fireTimer();
+      await expect(pending).resolves.toMatchObject({ text: 'answer from openai' });
+    }
+    harness.calls.length = 0;
+    await expect(generate()).resolves.toMatchObject({ text: 'answer from openai' });
+    expect(providers(harness.calls)).toEqual(['openai']);
+  });
+
+  it('caps the timer by the turn and treats the turn deadline as the end, not a failover', async () => {
+    quiet();
+    const turn = createTurnBudget({ timeoutMs: 5_000 });
+    const harness = setup({ manualTimers: true, behaviours: { anthropic: { stall: true } } });
+    const pending = generate(ENV, 'ask-fathom', { turn });
+    await harness.fireTimer();
+    await expect(pending).rejects.toMatchObject({ reason: 'TURN_LIMIT' });
+    expect(harness.timers[0].ms).toBeLessThanOrEqual(5_000);
+    expect(providers(harness.calls)).toEqual(['anthropic']);
+  });
+
+  it('never fails over when the caller aborts a stalled attempt', async () => {
+    quiet();
+    const controller = new AbortController();
+    const harness = setup({ manualTimers: true, behaviours: { anthropic: { stall: true } } });
+    const pending = generateText({
+      model: createAIModel(ENV, { feature: 'ask-fathom', organizationId: 'org-1' }).model,
+      prompt: 'hello',
+      maxRetries: 0,
+      abortSignal: controller.signal,
+    });
+    await vi.waitFor(() => expect(harness.calls).toHaveLength(1));
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    expect(providers(harness.calls)).toEqual(['anthropic']);
+    expect(harness.sleeps).toEqual([]);
+  });
+});
+
+describe('prompts with images and Bedrock', () => {
+  const imagePrompt = () =>
+    generateText({
+      model: createAIModel(ENV, { feature: 'pharmacy-rx-ocr', organizationId: 'org-1' }).model,
+      maxRetries: 0,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Read this prescription.' },
+            { type: 'image', image: new Uint8Array([137, 80, 78, 71]), mediaType: 'image/png' },
+          ],
+        },
+      ],
+    });
+
+  it('never sends an image prompt to Bedrock, even when the others fail', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const down = { error: apiError(503) };
+    const { calls } = setup({ behaviours: { anthropic: down, openai: down } });
+    await expect(imagePrompt()).rejects.toMatchObject({
+      name: 'AIUnavailableError',
+      reason: 'PROVIDERS_FAILED',
+    });
+    expect(providers(calls)).not.toContain('bedrock');
+    expect(warn).toHaveBeenCalledWith('[ai-router] skipping provider', {
+      provider: 'bedrock',
+      reason: 'MASKING_UNSUPPORTED',
+    });
+  });
+
+  it('skips a forced Bedrock for an image prompt and uses the next provider', async () => {
+    quiet();
+    const { calls } = setup({ stored: stored({ mode: 'ForceBedrock' }) });
+    await expect(imagePrompt()).resolves.toMatchObject({ text: 'answer from anthropic' });
+    expect(providers(calls)).toEqual(['anthropic']);
+  });
+
+  it('still sends text prompts to Bedrock', async () => {
+    quiet();
+    const down = { error: apiError(503) };
+    const { calls } = setup({ behaviours: { anthropic: down, openai: down } });
+    await expect(generate()).resolves.toMatchObject({ text: 'answer from bedrock' });
+    expect(providers(calls).at(-1)).toBe('bedrock');
   });
 });

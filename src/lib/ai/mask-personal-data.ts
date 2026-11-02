@@ -172,6 +172,24 @@ function maskToolOutput(output: LanguageModelV3ToolResultOutput): LanguageModelV
 }
 
 /**
+ * Whether the prompt carries a file or image anywhere (a user or assistant file part,
+ * or a tool result with non-text content). Images and documents cannot be masked, so
+ * such a prompt must never be sent to a provider that may only receive masked data.
+ */
+export function promptHasUnmaskableContent(prompt: LanguageModelV3Prompt): boolean {
+  return prompt.some((message) => {
+    if (message.role === 'system') return false;
+    return (
+      message.content as Array<{ type: string; output?: LanguageModelV3ToolResultOutput }>
+    ).some((part) => {
+      if (part.type === 'file') return true;
+      if (part.type !== 'tool-result' || part.output?.type !== 'content') return false;
+      return part.output.value.some((item) => item.type !== 'text');
+    });
+  });
+}
+
+/**
  * The prompt with personal data masked in every place text reaches the model: the
  * system prompt, text and reasoning parts, tool-call inputs, tool results and
  * approval reasons. Files and images are passed through unchanged.

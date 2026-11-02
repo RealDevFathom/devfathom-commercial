@@ -11,7 +11,7 @@ import type {
 } from '@ai-sdk/provider';
 import { generateText, type CallSettings, type Prompt } from 'ai';
 
-import { maskPersonalDataInPrompt } from './mask-personal-data';
+import { maskPersonalDataInPrompt, promptHasUnmaskableContent } from './mask-personal-data';
 import {
   AI_TIERS,
   ROUTED_AI_PROVIDERS,
@@ -158,7 +158,20 @@ export type RouterDependencies = {
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Jitter source in [0, 1). */
   random: () => number;
+  /**
+   * Starts one attempt's first-output timer; returns its cancel function. Injected in
+   * tests so a stalled provider can be timed out without waiting.
+   */
+  attemptTimer: (ms: number, onTimeout: () => void) => () => void;
 };
+
+/**
+ * How long one provider attempt may take to produce its first output (a stream's
+ * first text, reasoning or tool part; a generate call's whole answer). Capped by the
+ * turn's remaining time. A provider that stalls past it is treated as a transient
+ * timeout: retried once or failed over, and counted toward its circuit.
+ */
+export const ATTEMPT_FIRST_OUTPUT_TIMEOUT_MS = 20_000;
 
 function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -187,6 +200,10 @@ const defaultDependencies: RouterDependencies = {
     (await import('./deep-strategy-settings')).readDeepStrategyEnabled(organizationId),
   sleep: abortableSleep,
   random: Math.random,
+  attemptTimer: (ms, onTimeout) => {
+    const timer = setTimeout(onTimeout, ms);
+    return () => clearTimeout(timer);
+  },
 };
 
 let dependencies = defaultDependencies;
@@ -342,7 +359,13 @@ function alertAuthFailure(provider: Provider, now: Date) {
 // One routed call.
 // ---------------------------------------------------------------------------
 
-type SkipReason = 'NOT_CONFIGURED' | 'CAPPED' | 'SPEND_UNKNOWN' | 'CIRCUIT_OPEN';
+type SkipReason =
+  | 'NOT_CONFIGURED'
+  | 'CAPPED'
+  | 'SPEND_UNKNOWN'
+  | 'CIRCUIT_OPEN'
+  /** Bedrock only receives masked prompts, and files or images cannot be masked. */
+  | 'MASKING_UNSUPPORTED';
 type Attempt = { provider: Provider; modelId: string; model: LanguageModelV3 };
 
 type Planned = {
@@ -355,10 +378,16 @@ type Planned = {
 
 async function prepareAttempt(
   provider: Provider,
-  planned: Planned
+  planned: Planned,
+  options: LanguageModelV3CallOptions
 ): Promise<Attempt | { skip: SkipReason }> {
   const { env, now, settings, workload } = planned;
   if (!isRoutedProviderConfigured(provider, env)) return { skip: 'NOT_CONFIGURED' };
+  if (provider === 'bedrock' && promptHasUnmaskableContent(options.prompt)) {
+    // Provider and reason only: never prompt content.
+    console.warn('[ai-router] skipping provider', { provider, reason: 'MASKING_UNSUPPORTED' });
+    return { skip: 'MASKING_UNSUPPORTED' };
+  }
   if (!circuitWouldAdmit(provider, dependencies.now().getTime())) return { skip: 'CIRCUIT_OPEN' };
   const bounds = karachiMonthBounds(now);
   let spent: number;
@@ -491,6 +520,71 @@ function turnLimit(cause?: unknown) {
 }
 
 /**
+ * One attempt's abort signal and first-output timer. The signal joins the caller's
+ * signal with the router's own timer, so the provider's request is cancelled either
+ * way; `race` also settles a call that ignores its signal.
+ *
+ * `state()` says why the attempt was cut short: `'timeout'` is the router's own timer
+ * (a transient failure: retry or fail over), `'deadline'` is the timer capped by the
+ * turn's remaining time (the turn is over: no failover).
+ */
+type AttemptGuard = {
+  signal: AbortSignal;
+  state: () => 'running' | 'timeout' | 'deadline';
+  race: <T>(work: PromiseLike<T>) => Promise<T>;
+  /** Stop the timer once the first output has arrived (or the attempt has ended). */
+  clear: () => void;
+};
+
+function attemptTimeoutError() {
+  return Object.assign(new Error('The provider did not answer in time.'), {
+    name: 'TimeoutError',
+  });
+}
+
+function guardAttempt(
+  context: RoutedCallContext,
+  options: LanguageModelV3CallOptions
+): AttemptGuard {
+  const controller = new AbortController();
+  const remaining = context.turn ? remainingMs(context.turn) : Number.POSITIVE_INFINITY;
+  const cappedByTurn = remaining <= ATTEMPT_FIRST_OUTPUT_TIMEOUT_MS;
+  let state: 'running' | 'timeout' | 'deadline' = 'running';
+  const cancel = dependencies.attemptTimer(
+    Math.min(ATTEMPT_FIRST_OUTPUT_TIMEOUT_MS, remaining),
+    () => {
+      if (state !== 'running') return;
+      state = cappedByTurn ? 'deadline' : 'timeout';
+      controller.abort(attemptTimeoutError());
+    }
+  );
+  const signal = options.abortSignal
+    ? AbortSignal.any([options.abortSignal, controller.signal])
+    : controller.signal;
+  return {
+    signal,
+    state: () => state,
+    race: <T>(work: PromiseLike<T>) =>
+      new Promise<T>((resolve, reject) => {
+        const onAbort = () => reject(signal.reason);
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+        Promise.resolve(work).then(
+          (value) => {
+            signal.removeEventListener('abort', onAbort);
+            resolve(value);
+          },
+          (error: unknown) => {
+            signal.removeEventListener('abort', onAbort);
+            reject(error);
+          }
+        );
+      }),
+    clear: cancel,
+  };
+}
+
+/**
  * Run one call through the chain. For each provider: one attempt, and one jittered
  * retry for a transient failure; an availability failure then hands over to the next
  * provider. Anything else (a bad request, a refusal, an unusable response, the
@@ -501,12 +595,12 @@ async function runChain<T>(
   planned: Planned,
   context: RoutedCallContext,
   options: LanguageModelV3CallOptions,
-  run: (attempt: Attempt, options: LanguageModelV3CallOptions) => PromiseLike<T>
+  run: (attempt: Attempt, options: LanguageModelV3CallOptions, guard: AttemptGuard) => Promise<T>
 ): Promise<{ attempt: Attempt; value: T }> {
   const skipped: SkipReason[] = [];
   const failures: Failure[] = [];
   for (const provider of planned.chain) {
-    const attempt = await prepareAttempt(provider, planned);
+    const attempt = await prepareAttempt(provider, planned, options);
     if ('skip' in attempt) {
       skipped.push(attempt.skip);
       continue;
@@ -518,19 +612,27 @@ async function runChain<T>(
         recordCircuit(provider, 'release', dependencies.now().getTime());
         throw turnLimit(failures.at(-1)?.error);
       }
+      const guard = guardAttempt(context, options);
       try {
-        const value = await run(attempt, callOptions);
+        const value = await run(attempt, { ...callOptions, abortSignal: guard.signal }, guard);
         recordCircuit(provider, 'success', dependencies.now().getTime());
         return { attempt, value };
       } catch (error) {
         const now = dependencies.now();
-        const failure = classifyProviderError(error, {
-          callerAborted: callerAborted(context, options),
-          now: now.getTime(),
-        });
+        const timer = guard.state();
+        const aborted = callerAborted(context, options);
+        // The router's own timer is a transient timeout; the caller's signal and the
+        // turn deadline are not the provider's fault and never fail over.
+        const failure: ProviderFailure =
+          timer === 'timeout' && !aborted
+            ? { kind: 'retryable' }
+            : timer === 'deadline'
+              ? { kind: 'abort' }
+              : classifyProviderError(error, { callerAborted: aborted, now: now.getTime() });
         const policy = FAILURE_POLICY[failure.kind];
         if (failure.kind === 'abort') {
           recordCircuit(provider, 'release', now.getTime());
+          if (timer === 'deadline' && !aborted) throw turnLimit(error);
           throw error;
         }
         // The provider answered: it is up, the request or the answer is the problem.
@@ -556,6 +658,8 @@ async function runChain<T>(
         logFailure(provider, failure, planned.chain.at(-1) === provider ? 'stop' : 'next');
         failures.push({ provider, error });
         break;
+      } finally {
+        guard.clear();
       }
     }
   }
@@ -608,8 +712,12 @@ export async function routedGenerate(
   options: LanguageModelV3CallOptions
 ): Promise<LanguageModelV3GenerateResult> {
   const planned = await plan(context);
-  const { attempt, value: result } = await runChain(planned, context, options, (chosen, call) =>
-    chosen.model.doGenerate(call)
+  // The first-output timer covers the whole generate call.
+  const { attempt, value: result } = await runChain(
+    planned,
+    context,
+    options,
+    (chosen, call, guard) => guard.race(chosen.model.doGenerate(call))
   );
   await recordAttempt(attempt, context, planned.workload.tier, result.usage, planned.now);
   const answer: LanguageModelV3GenerateResult = {
@@ -682,10 +790,152 @@ function replay(parts: LanguageModelV3StreamPart[]): ReadableStream<LanguageMode
   });
 }
 
+/** Parts that are the answer itself; until one arrives, the provider can still be swapped. */
+const OUTPUT_PARTS = new Set<LanguageModelV3StreamPart['type']>([
+  'text-start',
+  'text-delta',
+  'reasoning-start',
+  'reasoning-delta',
+  'tool-input-start',
+  'tool-input-delta',
+  'tool-call',
+  'tool-result',
+  'tool-approval-request',
+  'file',
+  'source',
+]);
+
+/** HTTP status for Bedrock's in-stream exceptions (the event-stream frame's exception type). */
+const BEDROCK_STREAM_EXCEPTION_STATUS: Record<string, number> = {
+  internalServerException: 500,
+  modelStreamErrorException: 424,
+  serviceUnavailableException: 503,
+  throttlingException: 429,
+  validationException: 400,
+};
+
+/** HTTP status for Anthropic's in-stream error types. */
+const ANTHROPIC_STREAM_ERROR_STATUS: Record<string, number> = {
+  invalid_request_error: 400,
+  authentication_error: 401,
+  billing_error: 402,
+  permission_error: 403,
+  not_found_error: 404,
+  request_too_large: 413,
+  rate_limit_error: 429,
+  api_error: 500,
+  timeout_error: 504,
+  overloaded_error: 529,
+};
+
+function streamFailure(error: unknown, statusCode: number, data: Record<string, unknown>) {
+  return Object.assign(new Error('The provider stream failed before any output.'), {
+    name: 'ProviderStreamError',
+    statusCode,
+    data,
+    cause: error,
+  });
+}
+
 /**
- * Streaming through the chain. Failover is only possible before the stream is
- * returned (connection, auth, rate limit and 5xx all fail there); once bytes
- * flow, an error belongs to that provider's stream.
+ * An error part as something provider-errors can classify. Providers that already
+ * attach a status (OpenAI) pass through. Anthropic's error body carries its type;
+ * Bedrock's exception name is only in the raw frame that precedes the error part.
+ */
+function streamPartError(error: unknown, lastRaw: unknown): unknown {
+  if (!error || typeof error !== 'object') return error;
+  const candidate = error as { statusCode?: unknown; status?: unknown; type?: unknown };
+  if (typeof candidate.statusCode === 'number' || typeof candidate.status === 'number') {
+    return error;
+  }
+  if (typeof candidate.type === 'string' && candidate.type in ANTHROPIC_STREAM_ERROR_STATUS) {
+    return streamFailure(error, ANTHROPIC_STREAM_ERROR_STATUS[candidate.type], { ...error });
+  }
+  if (lastRaw && typeof lastRaw === 'object') {
+    const key = Object.keys(lastRaw).find((name) => name in BEDROCK_STREAM_EXCEPTION_STATUS);
+    if (key) {
+      return streamFailure(error, BEDROCK_STREAM_EXCEPTION_STATUS[key], {
+        ...error,
+        type: key[0].toUpperCase() + key.slice(1),
+      });
+    }
+  }
+  return error;
+}
+
+/**
+ * Read a provider stream up to its first output part. An error part (or a read
+ * error) before that is thrown, so the chain treats it like a failed request: a
+ * provider can answer 200 and then report throttling or an outage in the stream.
+ * Otherwise the buffered parts are replayed in order and the rest passes through
+ * unchanged. Raw chunks the router asked for (to name Bedrock's exception) are
+ * dropped unless the caller asked for them too.
+ */
+async function untilFirstOutput(
+  stream: ReadableStream<LanguageModelV3StreamPart>,
+  guard: AttemptGuard,
+  keepRaw: boolean
+): Promise<ReadableStream<LanguageModelV3StreamPart>> {
+  const reader = stream.getReader();
+  const buffered: LanguageModelV3StreamPart[] = [];
+  let lastRaw: unknown;
+  let done = false;
+  try {
+    for (;;) {
+      const next = await guard.race(reader.read());
+      if (next.done) {
+        done = true;
+        break;
+      }
+      const part = next.value;
+      if (part.type === 'raw') {
+        lastRaw = part.rawValue;
+        if (keepRaw) buffered.push(part);
+        continue;
+      }
+      if (part.type === 'error') throw streamPartError(part.error, lastRaw);
+      buffered.push(part);
+      if (OUTPUT_PARTS.has(part.type) || part.type === 'finish') break;
+    }
+  } catch (error) {
+    void reader.cancel().catch(() => undefined);
+    throw error;
+  }
+  return new ReadableStream<LanguageModelV3StreamPart>({
+    start(controller) {
+      for (const part of buffered) controller.enqueue(part);
+      if (done) controller.close();
+    },
+    async pull(controller) {
+      if (done) return;
+      try {
+        for (;;) {
+          const next = await reader.read();
+          if (next.done) {
+            done = true;
+            controller.close();
+            return;
+          }
+          if (next.value.type === 'raw' && !keepRaw) continue;
+          controller.enqueue(next.value);
+          return;
+        }
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
+/**
+ * Streaming through the chain. Failover is possible until the provider's first
+ * output part: a failed request, an error part before any output (Bedrock answers
+ * 200 and then reports throttling in the stream), or no output within the attempt's
+ * first-output timeout. Once output flows, an error belongs to that provider's
+ * stream.
  *
  * A cheap-tier stream from the small model is read to the end inside the router
  * first, so an empty or cut-off answer can be resent on the standard model before
@@ -696,8 +946,20 @@ export async function routedStream(
   options: LanguageModelV3CallOptions
 ): Promise<LanguageModelV3StreamResult> {
   const planned = await plan(context);
-  const { attempt, value: result } = await runChain(planned, context, options, (chosen, call) =>
-    chosen.model.doStream(call)
+  const keepRaw = options.includeRawChunks === true;
+  const { attempt, value: result } = await runChain(
+    planned,
+    context,
+    options,
+    async (chosen, call, guard) => {
+      // Bedrock's raw frames name its in-stream exceptions (throttling vs. validation).
+      const opened = await guard.race(
+        chosen.model.doStream(
+          chosen.provider === 'bedrock' ? { ...call, includeRawChunks: true } : call
+        )
+      );
+      return { ...opened, stream: await untilFirstOutput(opened.stream, guard, keepRaw) };
+    }
   );
   const mayEscalate =
     planned.workload.escalateToStandard &&
