@@ -96,11 +96,19 @@ export async function BalanceSheetReport({
         <SectionCard key={sheet.currency} title={`${sheet.currency} classified balance sheet`}>
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <StatusPill
-              status={BigInt(sheet.reconciliationGapMinor) === BigInt(0) ? 'Posted equation balanced' : 'Posted equation gap'}
+              status={
+                BigInt(sheet.reconciliationGapMinor) === BigInt(0)
+                  ? 'Posted equation balanced'
+                  : 'Posted equation gap'
+              }
               tone={BigInt(sheet.reconciliationGapMinor) === BigInt(0) ? 'success' : 'warning'}
             />
             <StatusPill
-              status={sheet.unmappedAccountCodes.length === 0 ? 'Classification complete' : 'Classification incomplete'}
+              status={
+                sheet.unmappedAccountCodes.length === 0
+                  ? 'Classification complete'
+                  : 'Classification incomplete'
+              }
               tone={sheet.unmappedAccountCodes.length === 0 ? 'success' : 'warning'}
             />
             <StatusPill status="Posted-only coverage" tone="neutral" />
