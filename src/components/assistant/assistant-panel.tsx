@@ -131,12 +131,19 @@ function createConversationTransport(canChat: boolean) {
   };
 }
 
+// Touch-first screens open on the panel itself, as Base UI does for a touch
+// trigger, so the on-screen keyboard does not cover the examples.
+const prefersTouch = () =>
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+
 function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEntry> }) {
   const { open, setOpen } = useAssistant();
   const [input, setInput] = useState('');
   const [requestError, setRequestError] = useState<'permission' | 'provider' | null>(null);
   const [notice, setNotice] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   const sending = useRef(false);
   const submittedInput = useRef('');
   const reducedMotion = useReducedMotion();
@@ -231,11 +238,23 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
     });
   };
 
+  // DEV-603: open on the question box so typing never lands on Close. Focus
+  // stays trapped in the dialog and returns to the launcher when it closes.
+  const initialFocus = (openType: string) => {
+    const box = inputRef.current;
+    if (!box || box.disabled || openType === 'touch' || prefersTouch()) {
+      return popupRef.current ?? true;
+    }
+    return box;
+  };
+
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetContent
+        ref={popupRef}
         side="right"
         showCloseButton={false}
+        initialFocus={initialFocus}
         // DEV-598: animate position and opacity only. Colours come straight from
         // the theme tokens, so a theme switch can never leave the surface
         // interpolating (or stuck) on the previous theme's paper.

@@ -91,6 +91,10 @@ function enter(text = 'Find my notes') {
 function asRole(role: string) {
   fixtures.session.mockReturnValue({ data: { user: { ...user, role } }, status: 'authenticated' });
 }
+/** Rendered user bubbles; the composer's textarea is not a paragraph. */
+function userBubbles(text: string) {
+  return screen.queryAllByText(text, { selector: 'p' });
+}
 function tool(part: Record<string, unknown>, text?: string) {
   fixtures.messages = [
     {
@@ -434,6 +438,29 @@ describe('Ask Fathom lifecycle and keyboard', () => {
     act(() => useAssistant.setState({ open: true }));
     expect(await screen.findByText('Synthetic answer')).toBeVisible();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('opens on the question box, keeps typing inside, and restores focus on close (DEV-603)', async () => {
+    useAssistant.setState({ open: false });
+    render(
+      <>
+        <button type="button">Launcher</button>
+        {panel()}
+      </>
+    );
+    const launcher = screen.getByRole('button', { name: 'Launcher' });
+    launcher.focus();
+    act(() => useAssistant.setState({ open: true }));
+    const box = await screen.findByLabelText('Your question');
+    await waitFor(() => expect(box).toHaveFocus());
+    expect(screen.getByRole('button', { name: 'Close assistant' })).not.toHaveFocus();
+    fireEvent.change(box, { target: { value: 'Typed straight away' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    expect(useAssistant.getState().open).toBe(true);
+    expect(userBubbles('Typed straight away')).toHaveLength(1);
+    fireEvent.keyDown(box, { key: 'Escape' });
+    await waitFor(() => expect(useAssistant.getState().open).toBe(false));
+    await waitFor(() => expect(launcher).toHaveFocus());
   });
   it('follows the current theme through tokens when reopened (DEV-598)', async () => {
     try {
