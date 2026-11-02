@@ -1,9 +1,9 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EntitlementsProvider } from '@/components/entitlements-provider';
 import type { EntitlementView } from '@/lib/module-catalog';
-import { Sidebar, TopNavigation } from './sidebar';
+import { Sidebar, TopNavigation, visibleNavigation } from './sidebar';
 
 const useSessionMock = vi.hoisted(() =>
   vi.fn(() => ({ data: { user: { role: 'ADMIN', name: 'Test operator' } } }))
@@ -21,9 +21,16 @@ const railQuery = vi.hoisted(() => ({
 }));
 
 vi.mock('next/link', () => ({
-  default: ({ href, children, onClick, ...props }: React.ComponentProps<'a'>) => (
+  default: ({
+    href,
+    children,
+    onClick,
+    scroll,
+    ...props
+  }: React.ComponentProps<'a'> & { scroll?: boolean }) => (
     <a
       href={String(href)}
+      data-preserve-scroll={scroll === false || undefined}
       {...props}
       onClick={(event) => {
         event.preventDefault();
@@ -86,7 +93,7 @@ const enabledModules = [
   'audit',
 ];
 
-function restaurantLinks(role = 'ADMIN') {
+function renderRestaurantNavigation(role = 'ADMIN', granted = ['restaurant-core']) {
   vi.mocked(useSessionMock).mockReturnValue({ data: { user: { role, name: 'Test operator' } } });
   render(
     <EntitlementsProvider
@@ -95,7 +102,7 @@ function restaurantLinks(role = 'ADMIN') {
         vertical: 'RESTAURANT',
         seatLimit: 10,
         activeSeats: 1,
-        enabledModules: ['restaurant-core'],
+        enabledModules: granted,
         modules: [],
         limits: {},
       }}
@@ -103,7 +110,12 @@ function restaurantLinks(role = 'ADMIN') {
       <TopNavigation />
     </EntitlementsProvider>
   );
-  return screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+}
+
+async function restaurantLinks(role = 'ADMIN') {
+  renderRestaurantNavigation(role);
+  fireEvent.click(screen.getByRole('button', { name: /^Sell/ }));
+  return (await screen.findAllByRole('menuitem')).map((link) => link.getAttribute('href'));
 }
 
 function links(vertical?: EntitlementView['vertical'], granted: string[] = enabledModules) {
@@ -131,10 +143,10 @@ describe('TopNavigation vertical visibility', () => {
     usePathnameMock.mockReturnValue('/dashboard');
   });
 
-  it('shows Delivery only to Restaurant administrators', () => {
-    expect(restaurantLinks()).toContain('/restaurant/delivery');
+  it('shows Delivery only to Restaurant administrators', async () => {
+    expect(await restaurantLinks()).toContain('/restaurant/delivery');
     cleanup();
-    expect(restaurantLinks('MEMBER')).not.toContain('/restaurant/delivery');
+    expect(await restaurantLinks('MEMBER')).not.toContain('/restaurant/delivery');
   });
 
   it('uses accessible body text for inactive navigation numbers', () => {
@@ -170,6 +182,81 @@ describe('TopNavigation vertical visibility', () => {
     expect(links('RESTAURANT', ['notes'])).toContain('/notes');
     cleanup();
     expect(links('RESTAURANT', [])).not.toContain('/notes');
+  });
+});
+
+describe('Restaurant desktop navigation groups', () => {
+  const modules = [
+    'restaurant-core',
+    'restaurant-pos',
+    'restaurant-menu',
+    'restaurant-inventory',
+    'restaurant-purchasing',
+    'restaurant-sop',
+    'restaurant-loyalty',
+    'restaurant-insights',
+    'restaurant-integrations',
+  ];
+
+  beforeEach(() => usePathnameMock.mockReturnValue('/restaurant/inventory/items'));
+
+  it.each(['ADMIN', 'MEMBER'])(
+    'groups every admitted destination once for %s without changing permissions',
+    async (role) => {
+      renderRestaurantNavigation(role, modules);
+      const triggers = screen.getAllByRole('button');
+      expect(triggers.map((button) => button.textContent)).toEqual([
+        'Sell',
+        'Stock',
+        'Buy',
+        'Reports',
+        'Settings',
+      ]);
+      const hrefs: (string | null)[] = [];
+      for (const trigger of triggers) {
+        fireEvent.click(trigger);
+        const items = await screen.findAllByRole('menuitem');
+        hrefs.push(...items.map((item) => item.getAttribute('href')));
+        for (const item of items) expect(item).toHaveAttribute('data-preserve-scroll', 'true');
+        fireEvent.keyDown(items[0]!, { key: 'Escape' });
+        await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+      }
+      const expected = visibleNavigation(
+        { vertical: 'RESTAURANT', enabledModules: modules },
+        role
+      ).map((item) => item.href);
+      expect(hrefs).toHaveLength(expected.length);
+      expect(new Set(hrefs)).toEqual(new Set(expected));
+    }
+  );
+
+  it('marks the active group and destination, opens by keyboard and restores focus on Escape', async () => {
+    renderRestaurantNavigation('ADMIN', modules);
+    const trigger = screen.getByRole('button', { name: 'Stock: Inventory' });
+    expect(trigger).toHaveAttribute('aria-current', 'true');
+    expect(trigger).toHaveClass('bg-primary');
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const inventory = await screen.findByRole('menuitem', { name: 'Inventory Current' });
+    expect(inventory).toHaveAttribute('aria-current', 'page');
+    expect(inventory).toHaveAttribute('href', '/restaurant/inventory');
+    await waitFor(() => expect(inventory).toHaveFocus());
+
+    fireEvent.keyDown(inventory, { key: 'Escape' });
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('omits empty groups and module-disabled destinations', async () => {
+    renderRestaurantNavigation('ADMIN', ['restaurant-core']);
+    expect(screen.queryByRole('button', { name: /^Stock/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Buy' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reports' }));
+    expect(await screen.findByRole('menuitem', { name: 'Reports' })).toHaveAttribute(
+      'href',
+      '/restaurant/reports'
+    );
+    expect(screen.queryByRole('menuitem', { name: 'Advanced Insights' })).not.toBeInTheDocument();
   });
 });
 

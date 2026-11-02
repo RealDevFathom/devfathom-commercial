@@ -478,6 +478,11 @@ function ScopedPharmacyCounterConsole({
     { branchId, query: submittedQuery },
     { enabled: searchCurrent && submittedQuery.length >= 2, staleTime: 10_000 }
   );
+  const searchFailed =
+    searchCurrent &&
+    !searchQuery.isFetching &&
+    !searchQuery.isPlaceholderData &&
+    searchQuery.isError;
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -1900,6 +1905,7 @@ function ScopedPharmacyCounterConsole({
                     disabled={busy}
                     placeholder="Brand, generic, ingredient, strength, form, barcode, alias"
                     aria-describedby="counter-search-help"
+                    aria-invalid={searchFailed || undefined}
                     onChange={(event) => {
                       scannerRevision.current += 1;
                       setQuery(event.target.value);
@@ -1925,7 +1931,11 @@ function ScopedPharmacyCounterConsole({
                       }
                       void runSearch();
                     }}
-                    className="h-9"
+                    className={
+                      searchFailed
+                        ? 'h-9'
+                        : 'h-9 focus-visible:border-border-strong focus-visible:ring-text-muted'
+                    }
                   />
                   <p id="counter-search-help" className="text-xs text-text-muted">
                     {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the

@@ -362,6 +362,27 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('PharmacyCounterConsole authoritative bill state', () => {
+  it('keeps scan focus neutral until the current search fails, then clears it on new input', async () => {
+    mocks.queries.counterSearch = {
+      ...query(),
+      isError: true,
+      error: new Error('Search unavailable'),
+    };
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    expect(search).not.toHaveAttribute('aria-invalid', 'true');
+    expect(search).toHaveClass('focus-visible:border-border-strong');
+
+    fireEvent.change(search, { target: { value: 'medicine' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(search).toHaveAttribute('aria-invalid', 'true'));
+    expect(search).not.toHaveClass('focus-visible:border-border-strong');
+
+    fireEvent.change(search, { target: { value: 'different medicine' } });
+    expect(search).not.toHaveAttribute('aria-invalid', 'true');
+    expect(search).toHaveClass('focus-visible:border-border-strong');
+  });
+
   it.each([
     'missing',
     'loading',
