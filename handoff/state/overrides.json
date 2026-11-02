@@ -34,5 +34,55 @@
    "verdict": "PASS",
    "details": "The PR adds encrypted pg_dump-to-S3 and guarded restore scripts, a nightly systemd timer runbook and fake-command tests; the encryption, checksum, archive-check, source/target guard and migration-probe paths are handled and tested (26 tests pass). The one QA failure, a new TS2741 because the test env object lacked NODE_ENV, is fixed in 7013e12df3. Non-blocking: the live restore drill on the pharmacy EC2 and the timer installation are operational steps still to be done, as the PR says"
   }
+ },
+ "1166": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 4d41f8423 the fully licensed agency test clicks the task button inside the Tasks group. It still checks push('/projects/p1') and that the dialog closes, and both PR test files pass locally (34 tests). Tailwind 4.3.3 compiles not-forced-colors:focus-visible:outline-none! to an @media not (forced-colors: active) rule, so high-contrast mode keeps the global :focus-visible outline again. ESLint and Prettier are clean on all 6 PR files. No unrelated changes."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "At 4d41f8423, search.global runs the team query only when the hr licence and can(team:view) both allow it, the same ABAC check team.getAll/getRoster use. A denied member gets no directory rows and no email-match probe. The new tests run the real engine: a team:view override DENY and a custom-role team:* DENY both leave user.findMany uncalled and team empty, while other categories still return. Session gate, RLS db and licence gating are unchanged."
+  }
+ },
+ "1163": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 7b48d2dbb, openDrawer requires pharmacy:counter. The four server and test files match a1ed98277 exactly, and the only other change is the CASH/CARD dispense-only tender FORBIDDEN test. Locally, open-drawer, branch-scope and counter-receipt-auth passed 97/97 and counter-console 117/117; with the gate reverted, the new openDrawer test fails. eslint is clean and the prettier warnings already exist on develop. The DB suites were skipped (no DB). The PR body's Validation paragraph is stale."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "7b48d2dbb closes the openDrawer gap. The same can('pharmacy:counter') decision that tender and the UI use now runs as middleware before scopeFor, so a dispense-only pharmacist gets FORBIDDEN before any branch read or drawer write. capabilityProcedure keeps the active-session, password and demo guards. CASH/CARD tender denial now has tests. drawerMovement and closeDrawer are still ungated, but that gap already exists on develop and the fix spec assigns it to DEV-279/#1086."
+  }
+ },
+ "1160": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "QA-1 is resolved in 37efd2c. The emergency-supply lookup no longer filters on the rule set's effective window, so it uses the same in-force org/branch profile as assertStoredBranchMayOperate. A closed rule set version no longer drops the province cap or nulls the audit. The new router test checks the 1-unit cap block, branch scoping and the full emergencySupply audit metadata. It passes at 37efd2c and fails against the pre-fix router. ESLint is clean, and the Prettier drift in pharmacy-sales.ts already exists on develop. PASS."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "37efd2c only removes a relation filter. The profile lookup is still scoped by organizationId and branchId inside the tenant transaction, and it reads the bound rule set the same way the PLAT-02 gate does. The pharmacy:dispense check, the PIN witness with lockout, the advisory-lock eligibility check and the canonical-unit cap are unchanged. The audit metadata has no PII. The test-only mocks spread the original modules and do not weaken the existing denial tests. No vulnerability found."
+  }
+ },
+ "1156": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At eca3272, expiryAdvice validates the dates and then calls readExpiryAdvice(ctx.db, branchIds) with no report-period filter. The reader again lists every unexpired lot, as on develop. The fix touches only the 3 PR files. Router, work-pack and page tests pass (84), eslint, prettier and tsc are clean, and the branch merges cleanly into develop. Removing the validation made the BAD_REQUEST tests fail, so the date checks are covered. The tests mock the reader, so the new SQL was not run against a real database."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "eca3272 removes one bound Prisma.sql date filter and adds no new SQL. Access checks still run first and are unchanged: reports:financial, the module licence, the ADMIN owner role and active-branch tenant scope. Dates are still validated server-side before any read, and the FORBIDDEN and BAD_REQUEST tests still assert that the reader is never called. The supplier join filters on organizationId. No vulnerabilities found."
+  }
+ },
+ "1152": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Checked at 63c8b16. The no-match message and the search box's aria-describedby now show only when a trimmed search is non-empty and matches nothing. With an empty catalog and an empty search, neither appears. The new empty-catalog test fails on 9504a99 and passes on 63c8b16. The search and scrolling-table tests pass 8/8, and eslint and prettier --check are clean. The other diff is formatting only, and no assertions were weakened."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix 63c8b16 adds only a client-side boolean guard and a component test. Medicine search still filters the tenant-scoped workspace list already in the browser. The search text never reaches the server, and React escapes the names it shows. No server, router, schema, SQL, auth or capability code changed: capture still goes through the pharmacy:prescriptions check. No secrets and no new data exposure."
+  }
  }
 }

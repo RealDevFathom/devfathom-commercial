@@ -58,5 +58,35 @@
   "initialSha": "d9ecb6f1aa109be3ed12a975be8138c347de2547",
   "what": "Prettier on the reports page test",
   "initialFailure": "Prettier: src/app/(app)/pharmacy/reports/page.test.tsx unformatted"
+ },
+ "1166": {
+  "sha": "4d41f84234bf93901a604026a2260b8cf829dc03",
+  "initialSha": "93eac691680e67e69276099174c265e43029a313",
+  "what": "gates palette team search on team:view, restores the forced-colors focus outline, fixes the new test and its lint errors, applies Prettier",
+  "initialFailure": "1 new failing test and 4 ESLint react/display-name errors in the new topbar.search-licensing.test.tsx, plus Prettier on 4 changed files"
+ },
+ "1163": {
+  "sha": "7b48d2dbb72c0830e5d620b5a2f554e1c4d6501a",
+  "initialSha": "82827d16fd674c71966808d721955275fb195283",
+  "what": "requires pharmacy:counter for openDrawer on the server and adds the pharmacist FORBIDDEN tests",
+  "initialFailure": "nothing (machine checks passed; the fix is for QA/Security findings)"
+ },
+ "1160": {
+  "sha": "37efd2c1372d3e42a32a2106267185f39a192450",
+  "initialSha": "d832236d94518e3136bd7157a75c64e2843fd9d8",
+  "what": "keeps the in-force branch profile when its rule set has closed and adds the cap test",
+  "initialFailure": "nothing (machine checks passed; the fix is for QA/Security findings)"
+ },
+ "1156": {
+  "sha": "eca3272cdc0cfef27846034ba995321fefb14129",
+  "initialSha": "4b437e5aa86b99ded686d7b2db2151a702a614d3",
+  "what": "stops narrowing expiry advice to the report period and applies Prettier",
+  "initialFailure": "Prettier: src/server/routers/pharmacy-reports.test.ts unformatted"
+ },
+ "1152": {
+  "sha": "63c8b16f8d99039dae95396eac79bebb25e33978",
+  "initialSha": "9504a99faad15d2073dd708bb7bc481a5facaf4f",
+  "what": "only shows the no-match message for a typed search and applies Prettier",
+  "initialFailure": "Prettier: the new prescriptions-console-search.test.tsx unformatted"
  }
 }
