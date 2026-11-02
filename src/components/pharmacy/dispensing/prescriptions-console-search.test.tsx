@@ -51,9 +51,7 @@ describe('capture medicine-name search', () => {
     const medicine = form.getByRole('combobox', { name: 'Medicine' });
 
     fireEvent.change(search, { target: { value: ' AMOX ' } });
-    expect(
-      within(medicine).getByRole('option', { name: 'Amoxicillin 500mg' })
-    ).toBeInTheDocument();
+    expect(within(medicine).getByRole('option', { name: 'Amoxicillin 500mg' })).toBeInTheDocument();
     expect(within(medicine).queryByRole('option', { name: 'Cetirizine 10mg' })).toBeNull();
     expect(within(medicine).queryByRole('option', { name: 'Paracetamol 500mg' })).toBeNull();
     expect(medicine).toHaveValue('');
@@ -86,12 +84,8 @@ describe('capture medicine-name search', () => {
 
     fireEvent.change(search, { target: { value: 'cetir' } });
     expect(medicine).toHaveValue('amoxicillin');
-    expect(
-      within(medicine).getByRole('option', { name: 'Amoxicillin 500mg' })
-    ).toBeInTheDocument();
-    expect(
-      within(medicine).getByRole('option', { name: 'Cetirizine 10mg' })
-    ).toBeInTheDocument();
+    expect(within(medicine).getByRole('option', { name: 'Amoxicillin 500mg' })).toBeInTheDocument();
+    expect(within(medicine).getByRole('option', { name: 'Cetirizine 10mg' })).toBeInTheDocument();
     expect(within(medicine).queryByRole('option', { name: 'Paracetamol 500mg' })).toBeNull();
     expect(presentation).toHaveValue('capsule');
     expect(quantity).toHaveValue(12);
@@ -108,5 +102,20 @@ describe('capture medicine-name search', () => {
     expect(within(medicine).getAllByRole('option', { name: 'Amoxicillin 500mg' })).toHaveLength(1);
     expect(medicine).toHaveValue('amoxicillin');
     expect(mocks.mutation.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('shows no no-match message for an empty catalog until a search is typed', () => {
+    (mocks.workspace.data as { medicines: unknown[] }).medicines = [];
+    render(<PrescriptionsConsole />);
+    const form = within(screen.getByRole('form', { name: 'Capture prescription' }));
+    const search = form.getByRole('searchbox', { name: 'Search medicine names' });
+
+    expect(search).toHaveValue('');
+    expect(form.queryByText(/No medicines match/)).toBeNull();
+    expect(search).not.toHaveAttribute('aria-describedby');
+
+    fireEvent.change(search, { target: { value: 'amox' } });
+    expect(form.getByRole('status')).toHaveTextContent('No medicines match this search');
+    expect(search).toHaveAttribute('aria-describedby', 'capture-medicine-search-empty');
   });
 });

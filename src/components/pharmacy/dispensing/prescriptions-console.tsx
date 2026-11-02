@@ -129,6 +129,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
     workspace.data?.medicines.filter((item) =>
       item.productName.toLowerCase().includes(medicineSearch)
     ) ?? [];
+  const noMedicineMatches = medicineSearch !== '' && matchingMedicines.length === 0;
 
   const effectiveBranchId = selectedBranchId || workspace.data?.selectedBranchId || '';
 
@@ -409,13 +410,11 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                           onChange={(event) => setMedicineQuery(event.target.value)}
                           className={fieldClass}
                           aria-describedby={
-                            matchingMedicines.length === 0
-                              ? 'capture-medicine-search-empty'
-                              : undefined
+                            noMedicineMatches ? 'capture-medicine-search-empty' : undefined
                           }
                         />
                       </Field>
-                      {matchingMedicines.length === 0 ? (
+                      {noMedicineMatches ? (
                         <p
                           id="capture-medicine-search-empty"
                           role="status"
