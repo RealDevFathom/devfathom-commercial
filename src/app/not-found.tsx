@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { LogoIcon } from '@/components/brand/logo';
 import { AuthShell } from '@/components/auth/auth-shell';
+import { sharedSignInUrl } from '@/lib/tenancy/host-routing';
 import { currentUnknownTenantHost } from '@/lib/tenancy/unknown-tenant-host';
 import { TenantNotFound } from './tenant-not-found';
 
@@ -11,7 +12,12 @@ export default async function NotFound() {
   if (tenantHost?.unknown) {
     return (
       <AuthShell vertical={tenantHost.vertical}>
-        <TenantNotFound vertical={tenantHost.vertical} />
+        {/* The way back is the shared sign-in, never /dashboard of a workspace
+            that does not exist. */}
+        <TenantNotFound
+          vertical={tenantHost.vertical}
+          signInHref={sharedSignInUrl(tenantHost.vertical)}
+        />
       </AuthShell>
     );
   }

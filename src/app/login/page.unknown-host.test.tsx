@@ -39,9 +39,7 @@ beforeEach(() => {
 it('answers a mistyped tenant subdomain with the 404 page instead of a sign-in form', async () => {
   mocks.resolve.mockResolvedValue(null);
   mocks.unknown.mockResolvedValue(true);
-  await expect(LoginPage({ searchParams: Promise.resolve({}) })).rejects.toThrow(
-    'NEXT_NOT_FOUND'
-  );
+  await expect(LoginPage({ searchParams: Promise.resolve({}) })).rejects.toThrow('NEXT_NOT_FOUND');
   expect(mocks.notFound).toHaveBeenCalledTimes(1);
   expect(mocks.unknown.mock.calls[0]?.[0]).toBe('ehatcart.pharmacy.example.com');
 });

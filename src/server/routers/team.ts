@@ -39,10 +39,6 @@ const notificationPrefsSchema = z
     client: channelPrefsSchema.optional(),
     resignation: channelPrefsSchema.optional(),
     note: channelPrefsSchema.optional(),
-    stock: channelPrefsSchema.optional(),
-    expiry: channelPrefsSchema.optional(),
-    approval: channelPrefsSchema.optional(),
-    refund: channelPrefsSchema.optional(),
   })
   .strict();
 

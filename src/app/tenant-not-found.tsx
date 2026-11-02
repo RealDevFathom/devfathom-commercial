@@ -9,9 +9,16 @@ const NOUN: Record<UnknownTenantVertical, string> = {
 
 /**
  * Body of the 404 for a workspace address that resolves to no organization.
- * It never echoes the address or suggests other workspaces.
+ * It never echoes the address or suggests other workspaces. `signInHref` is the
+ * shared sign-in (the way back); it is omitted when no base domain is configured.
  */
-export function TenantNotFound({ vertical }: { vertical: UnknownTenantVertical }) {
+export function TenantNotFound({
+  vertical,
+  signInHref,
+}: {
+  vertical: UnknownTenantVertical;
+  signInHref?: string | null;
+}) {
   const noun = NOUN[vertical];
   return (
     <div>
@@ -25,6 +32,14 @@ export function TenantNotFound({ vertical }: { vertical: UnknownTenantVertical }
         We couldn&apos;t find a {noun} at this address. Check the spelling of the link, or use the
         sign-in address your {noun} administrator sent you.
       </p>
+      {signInHref ? (
+        <a
+          href={signInHref}
+          className="mt-8 flex h-12 w-full items-center justify-center rounded-[var(--radius-sm)] bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:scale-[0.98] motion-reduce:transition-none"
+        >
+          Go to sign-in
+        </a>
+      ) : null}
     </div>
   );
 }

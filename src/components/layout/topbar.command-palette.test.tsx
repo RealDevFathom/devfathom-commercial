@@ -15,17 +15,33 @@ vi.mock('next/dynamic', () => ({
   default: (loader: { toString(): string }) => {
     const source = loader.toString();
     if (source.includes('CommandGroup'))
-      return ({ heading, children }: { heading?: string; children?: React.ReactNode }) => (
-        <div role="group" aria-label={heading}>
-          {children}
-        </div>
-      );
+      return function CommandGroup({
+        heading,
+        children,
+      }: {
+        heading?: string;
+        children?: React.ReactNode;
+      }) {
+        return (
+          <div role="group" aria-label={heading}>
+            {children}
+          </div>
+        );
+      };
     if (source.includes('CommandItem'))
-      return ({ children, onSelect }: { children?: React.ReactNode; onSelect?: () => void }) => (
-        <button type="button" onClick={onSelect}>
-          {children}
-        </button>
-      );
+      return function CommandItem({
+        children,
+        onSelect,
+      }: {
+        children?: React.ReactNode;
+        onSelect?: () => void;
+      }) {
+        return (
+          <button type="button" onClick={onSelect}>
+            {children}
+          </button>
+        );
+      };
     return () => null;
   },
 }));

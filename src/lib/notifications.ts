@@ -21,11 +21,6 @@ export const NOTIFICATION_CATEGORIES = [
   'client',
   'resignation',
   'note',
-  // Pharmacy operations.
-  'stock',
-  'expiry',
-  'approval',
-  'refund',
 ] as const;
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number];
 
@@ -57,10 +52,6 @@ export function categoryForType(type: string): NotificationCategory | null {
   if (type.startsWith('client_') || type.startsWith('contract_')) return 'client';
   if (type.startsWith('resignation_')) return 'resignation';
   if (type.startsWith('note_')) return 'note';
-  if (type.startsWith('stock_')) return 'stock';
-  if (type.startsWith('expiry_')) return 'expiry';
-  if (type.startsWith('approval_')) return 'approval';
-  if (type.startsWith('refund_')) return 'refund';
   return null;
 }
 

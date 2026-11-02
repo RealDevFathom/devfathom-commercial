@@ -1,12 +1,12 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EntitlementView } from '@/lib/module-catalog';
 import type { OrganizationVertical } from '@/lib/vertical-catalog';
 
 // QA batch 4/5: a pharmacy's Settings showed HR/agency content — raw ADMIN / COUNTER
-// account facts, a "Leave the company" card, agency notification categories, a
-// "Side rail" layout switch while a top bar is shown, and "Unknown IP" on sign-ins.
+// account facts, a "Leave the company" card, a "Side rail" layout switch while a
+// top bar is shown, and "Unknown IP" on sign-ins.
 
 const mocks = vi.hoisted(() => ({
   session: {
@@ -19,8 +19,6 @@ const mocks = vi.hoisted(() => ({
     },
   } as { user: Record<string, string> },
   profile: { data: undefined as unknown, isLoading: false },
-  prefs: { data: null as unknown, isLoading: false },
-  updatePrefs: vi.fn(),
   resignationsQuery: vi.fn(() => ({ data: [] })),
   signIns: { data: [] as unknown[], isLoading: false },
 }));
@@ -40,22 +38,18 @@ vi.mock('@/components/ui/switch', () => ({
   }: {
     checked: boolean;
     onCheckedChange?: (value: boolean) => void;
-  }) => (
-    <button role="switch" aria-checked={checked} onClick={() => onCheckedChange?.(!checked)} />
-  ),
+  }) => <button role="switch" aria-checked={checked} onClick={() => onCheckedChange?.(!checked)} />,
 }));
 vi.mock('@/lib/trpc', () => {
   const query = { cancel: vi.fn(), getData: vi.fn(), setData: vi.fn(), invalidate: vi.fn() };
   return {
     trpc: {
       useUtils: () => ({
-        team: { getNotificationPrefs: query, getById: query },
+        team: { getById: query },
         resignations: { mine: query },
       }),
       team: {
         getById: { useQuery: () => mocks.profile },
-        getNotificationPrefs: { useQuery: () => mocks.prefs },
-        updateNotificationPrefs: { useMutation: () => ({ mutate: mocks.updatePrefs }) },
         mySignIns: { useQuery: () => mocks.signIns },
       },
       dashboard: { updateAppearance: { useMutation: () => ({ mutate: vi.fn() }) } },
@@ -74,7 +68,6 @@ import {
   AccountSection,
   AppearanceSection,
   GatedResignationSection,
-  NotificationsSection,
   RecentSignInsSection,
 } from './settings-content';
 
@@ -114,7 +107,6 @@ beforeEach(() => {
     },
   };
   mocks.profile = { data: undefined, isLoading: false };
-  mocks.prefs = { data: null, isLoading: false };
   mocks.signIns = { data: [], isLoading: false };
 });
 afterEach(cleanup);
@@ -174,38 +166,6 @@ describe('Settings resignation card', () => {
       screen.getByText('To end your employment, submit a formal resignation for HR review.')
     ).toBeInTheDocument();
     expect(screen.queryByText(/Considering moving on/)).not.toBeInTheDocument();
-  });
-});
-
-describe('Settings notification categories', () => {
-  it('lists stock, expiry, approvals and refunds for a pharmacy', () => {
-    renderFor(<NotificationsSection />);
-    for (const label of ['Stock', 'Expiry', 'Approvals', 'Refunds']) {
-      expect(screen.getByText(label)).toBeInTheDocument();
-    }
-    for (const label of ['Projects', 'Clients', 'Resignations', 'Time off', 'Meetings']) {
-      expect(screen.queryByText(label)).not.toBeInTheDocument();
-    }
-  });
-
-  it('persists a pharmacy toggle without dropping other stored categories', () => {
-    mocks.prefs = { data: { task: { inApp: false } }, isLoading: false };
-    renderFor(<NotificationsSection />);
-    // First switch is Stock in-app.
-    fireEvent.click(screen.getAllByRole('switch')[0]!);
-    expect(mocks.updatePrefs).toHaveBeenCalledWith({
-      task: { inApp: false },
-      stock: { inApp: false, email: true },
-      expiry: { inApp: true, email: true },
-      approval: { inApp: true, email: true },
-      refund: { inApp: true, email: true },
-    });
-  });
-
-  it('keeps the workspace categories for an agency', () => {
-    renderFor(<NotificationsSection />, 'AGENCY', ['hr']);
-    expect(screen.getByText('Projects')).toBeInTheDocument();
-    expect(screen.queryByText('Stock')).not.toBeInTheDocument();
   });
 });
 

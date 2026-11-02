@@ -914,13 +914,11 @@ export function RecentSignInsSection() {
    Notification preferences (IMP-AUTH-04)
    Per-category × per-channel opt-outs. Honored by notify().
    ============================================================ */
-type NotificationSetting = {
+const NOTIFICATION_SETTINGS: ReadonlyArray<{
   key: NotificationCategory;
   label: string;
   desc: string;
-};
-
-const NOTIFICATION_SETTINGS: ReadonlyArray<NotificationSetting> = [
+}> = [
   { key: 'task', label: 'Tasks', desc: 'Task assignments and updates' },
   { key: 'mention', label: 'Mentions', desc: 'When someone @mentions you in chat' },
   { key: 'meeting', label: 'Meetings', desc: 'Meeting invites' },
@@ -932,24 +930,8 @@ const NOTIFICATION_SETTINGS: ReadonlyArray<NotificationSetting> = [
   { key: 'note', label: 'Notes', desc: 'When a note is shared with you' },
 ];
 
-/** A pharmacy is notified about its own operations, not agency or HR events. */
-const PHARMACY_NOTIFICATION_SETTINGS: ReadonlyArray<NotificationSetting> = [
-  { key: 'stock', label: 'Stock', desc: 'Low stock and reorder alerts' },
-  { key: 'expiry', label: 'Expiry', desc: 'Batches nearing or past expiry' },
-  { key: 'approval', label: 'Approvals', desc: 'Purchase orders and actions awaiting approval' },
-  { key: 'refund', label: 'Refunds', desc: 'Customer returns and refunds' },
-];
-
-export function notificationSettingsForVertical(
-  vertical: EntitlementView['vertical']
-): ReadonlyArray<NotificationSetting> {
-  return vertical === 'PHARMACY' ? PHARMACY_NOTIFICATION_SETTINGS : NOTIFICATION_SETTINGS;
-}
-
-export function NotificationsSection() {
+function NotificationsSection() {
   const utils = trpc.useUtils();
-  const { vertical } = useEntitlements();
-  const settings = notificationSettingsForVertical(vertical);
   const { data: prefs, isLoading } = trpc.team.getNotificationPrefs.useQuery();
 
   const update = trpc.team.updateNotificationPrefs.useMutation({
@@ -974,13 +956,9 @@ export function NotificationsSection() {
 
   const toggle = (cat: NotificationCategory, ch: NotificationChannel, value: boolean) => {
     // Build a full explicit matrix from current state, then flip one cell, so
-    // the persisted blob is self-contained and unambiguous. Categories this
-    // vertical does not list keep whatever was stored for them.
-    const next = { ...(prefs ?? {}) } as Record<
-      NotificationCategory,
-      { inApp: boolean; email: boolean }
-    >;
-    for (const s of settings) {
+    // the persisted blob is self-contained and unambiguous.
+    const next = {} as Record<NotificationCategory, { inApp: boolean; email: boolean }>;
+    for (const s of NOTIFICATION_SETTINGS) {
       next[s.key] = { inApp: isOn(s.key, 'inApp'), email: isOn(s.key, 'email') };
     }
     next[cat][ch] = value;
@@ -1017,7 +995,7 @@ export function NotificationsSection() {
                 Email
               </span>
             </div>
-            {settings.map((s) => (
+            {NOTIFICATION_SETTINGS.map((s) => (
               <div key={s.key} className="flex items-center gap-4 py-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-foreground">{s.label}</p>
