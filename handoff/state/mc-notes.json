@@ -31,5 +31,8 @@
  ],
  "1117": [
   "NEW typecheck error in the PR's new src/lib/pharmacy/accounts/profit-loss.coverage.test.ts: TS2737 BigInt literals are not available when targeting lower than ES2020 (tsconfig target ES2017); use BigInt(n) instead of n-suffixed literals."
+ ],
+ "1116": [
+  "REGRESSION vs its merge-base 6e4253809b (PR is 312 behind develop and conflicts with it in supplier-returns.db.test.ts): 10 tests in src/lib/pharmacy/supplier-returns.db.test.ts fail on the PR and pass at the merge-base; first error 'prisma.financeJournalEntry.create() Foreign key constraint violated: finance_journal_entries_visibility_fkey' (the PR's journal posting writes an entry whose visibility row does not exist). ESLint errors on the PR all already exist at the merge-base."
  ]
 }
