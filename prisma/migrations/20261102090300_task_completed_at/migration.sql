@@ -30,6 +30,10 @@
 --      is, but never understates it.
 --   The result is capped at "updatedAt": entering done is itself a write.
 -- Tasks outside done columns keep NULL.
+--
+-- Idempotent: the column and index are added only when absent, and the backfill
+-- writes only tasks whose "completedAt" is still NULL, so a second run never
+-- overwrites a value the first run or the application already set.
 
 BEGIN;
 
@@ -38,9 +42,9 @@ BEGIN;
 -- bypass is transaction-local and is cleared by COMMIT.
 SELECT set_config('app.is_platform_admin', 'true', true);
 
-ALTER TABLE "tasks" ADD COLUMN "completedAt" TIMESTAMP(3);
+ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "completedAt" TIMESTAMP(3);
 
-CREATE INDEX "tasks_organizationId_completedAt_idx" ON "tasks"("organizationId", "completedAt");
+CREATE INDEX IF NOT EXISTS "tasks_organizationId_completedAt_idx" ON "tasks"("organizationId", "completedAt");
 
 WITH done_tasks AS (
   SELECT t."id", t."organizationId", t."columnId", t."title", t."createdById",
@@ -48,6 +52,7 @@ WITH done_tasks AS (
   FROM "tasks" t
   JOIN "columns" c ON c."id" = t."columnId"
   WHERE lower(c."name") IN ('done', 'complete', 'completed', 'shipped', 'closed')
+    AND t."completedAt" IS NULL
 ),
 moves AS (
   -- In-app drag / move of one task.
@@ -135,6 +140,7 @@ evidence AS (
 UPDATE "tasks" t
 SET "completedAt" = LEAST(e.entered_done_at, e."updatedAt")
 FROM evidence e
-WHERE e."id" = t."id";
+WHERE e."id" = t."id"
+  AND t."completedAt" IS NULL;
 
 COMMIT;

@@ -10,9 +10,19 @@
 -- UPDATE is refused unless the only change is the declared ON DELETE SET NULL of
 -- an actor reference ("actorId" -> users, "actorStaffProfileId" ->
 -- restaurant_staff_profiles) whose referenced row no longer exists. That keeps
--- user and staff-profile deletion working while a direct "SET actorId = NULL"
--- against a live actor is still refused. An actor id rename (the FKs' ON UPDATE
--- CASCADE) is refused too; user and staff-profile ids are never renamed.
+-- user deletion working while a direct "SET actorId = NULL" against a live actor
+-- is still refused. An actor id rename (the FKs' ON UPDATE CASCADE) is refused
+-- too; user and staff-profile ids are never renamed.
+--
+-- The "actorStaffProfileId" branch mirrors the declared FK action, but it does
+-- NOT make staff-profile deletion work today. audit_logs_operator_actor_ck
+-- requires a non-NULL "actorStaffProfileId" on every RESTAURANT_OPERATOR row and
+-- a NULL one on every other row, so deleting a staff profile that an operator
+-- audit row references still fails on that CHECK after this trigger allows the
+-- SET NULL. That failure predates this migration (it happens with the trigger
+-- disabled too) and is a known follow-up: either the CHECK accepts a NULL once
+-- the profile is gone, or the deletion paths (e.g. the demo reset) keep any
+-- profile an operator audit row references.
 --
 -- DELETE is refused unless either
 --   * it is the sanctioned retention purge of this row's own tenant: the purge
@@ -27,8 +37,13 @@
 -- The pharmacy legal-hold trigger (aa_pharmacy_audit_legal_hold) still fires
 -- first on DELETE, so a held row is refused even inside a purge.
 -- SQLSTATE 55000 (object_not_in_prerequisite_state) matches the platform ledger.
+--
+-- Idempotent: the function is replaced and the trigger re-created, in one
+-- transaction so the table is never left without the trigger.
 
-CREATE FUNCTION tenant_audit_log_append_only() RETURNS trigger
+BEGIN;
+
+CREATE OR REPLACE FUNCTION tenant_audit_log_append_only() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
   IF NULLIF(current_setting('app.purging_organization_id', true), '') = OLD."organizationId"
@@ -61,6 +76,10 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS audit_logs_append_only ON "audit_logs";
+
 CREATE TRIGGER audit_logs_append_only
 BEFORE UPDATE OR DELETE ON "audit_logs"
 FOR EACH ROW EXECUTE FUNCTION tenant_audit_log_append_only();
+
+COMMIT;

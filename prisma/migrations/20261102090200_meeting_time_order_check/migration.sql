@@ -34,6 +34,16 @@
 --     created with is kept.
 -- Only aggregate counts are reported (no meeting ids, titles or tenants), the
 -- same way the MEET-01 migration reports.
+--
+-- One explicit transaction: the platform scope below is transaction-local, so
+-- the repair and the constraint must run inside the same transaction as the
+-- set_config that grants it.
+--
+-- Idempotent: a second run repairs nothing (no meeting can still end at or
+-- before its start, and occurrences are rebuilt only for meetings repaired in
+-- the same run), and the constraint is added only when absent.
+
+BEGIN;
 
 -- ---------------------------------------------------------------------------
 -- 0. Refuse to run blind.
@@ -98,5 +108,16 @@ END $$;
 -- Validated as it is added. That scan reads the heap directly, not through row
 -- level security, so a row the repair could not see fails the migration here
 -- instead of slipping through.
-ALTER TABLE "meetings"
-    ADD CONSTRAINT "meetings_time_order_check" CHECK ("endTime" > "startTime");
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = '"meetings"'::regclass AND conname = 'meetings_time_order_check'
+  ) THEN
+    ALTER TABLE "meetings"
+      ADD CONSTRAINT "meetings_time_order_check" CHECK ("endTime" > "startTime");
+  END IF;
+END
+$$;
+
+COMMIT;

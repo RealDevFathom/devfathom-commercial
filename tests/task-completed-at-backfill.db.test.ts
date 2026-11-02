@@ -349,4 +349,26 @@ const move = (key: string, targetColumnId: string, createdAt: Date, outcome?: 'F
     );
     expect(rows[0]!.mismatched).toBe(0);
   });
+
+  it('re-runs without changing any completedAt, including one the application set', async () => {
+    await client.query('SAVEPOINT rerun');
+    try {
+      const appSet = at('10-31T08:00:00');
+      await client.query(`UPDATE tasks SET "completedAt" = $2 WHERE id = $1`, [
+        id('edited'),
+        appSet,
+      ]);
+      await client.query(migration);
+      const { rows } = await client.query<{ id: string; completedAt: Date | null }>(
+        `SELECT id, "completedAt" FROM tasks WHERE "organizationId" = $1`,
+        [org]
+      );
+      const byId = new Map(rows.map((row) => [row.id, row.completedAt]));
+      for (const f of fixtures) {
+        expect(byId.get(id(f.key))).toEqual(f.key === 'edited' ? appSet : f.expected);
+      }
+    } finally {
+      await client.query('ROLLBACK TO SAVEPOINT rerun');
+    }
+  });
 });
