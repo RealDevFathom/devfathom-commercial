@@ -31,9 +31,9 @@ export default async function ImportedStockPage({
   return (
     <main className="min-w-0 space-y-6">
       <PageHeader
-        eyebrow="Pharmacy inventory · Awaiting verification"
+        eyebrow="Pharmacy inventory · Import references"
         heading="Imported stock"
-        description="Original medicine stock references retained from completed imports."
+        description="Original medicine stock references retained from imports for reconciliation."
         actions={
           <Link href="/pharmacy/inventory" className={buttonVariants({ variant: 'secondary' })}>
             Back to Inventory
@@ -49,17 +49,18 @@ export default async function ImportedStockPage({
         </SectionCard>
       ) : (
         <>
-          <SectionCard title="Awaiting verification" titleLevel={2}>
+          <SectionCard title="Import references and reconciliation" titleLevel={2}>
             <p className="text-sm text-text-body">
-              These quantities are imported references pending batch, expiry, and physical count
-              verification. They are not available-to-sell balances. Pack meanings and conversions
-              also need verification; no quantities here are multiplied or rounded into units.
+              These are original source quantities retained for reconciliation, not available-to-sell
+              balances. This view does not report whether a source row has been reconciled with
+              posted stock. Reconcile batch, expiry, physical count, and pack meanings against
+              Inventory; no quantities here are multiplied or rounded into units.
             </p>
             <section aria-label="Imported row totals" className="mt-5 grid gap-5 sm:grid-cols-2">
               <Stat
                 label="Imported medicine rows"
                 value={data.importedRows.toLocaleString('en-US')}
-                sub="All completed imports in this workspace"
+                sub="All retained import reference rows in this workspace"
               />
               <Stat
                 label="Rows with reported stock"
@@ -107,13 +108,13 @@ export default async function ImportedStockPage({
                 className="rounded-[var(--radius-sm)] bg-surface-sunken p-5 text-sm text-text-muted"
               >
                 {data.importedRows === 0
-                  ? 'No completed medicine imports are visible in this workspace.'
+                  ? 'No imported medicine references are visible in this workspace.'
                   : 'No imported medicine names match this search. Clear the search or try another name.'}
               </p>
             ) : (
               <Table>
                 <caption className="sr-only">
-                  Imported stock references awaiting verification, with original source counts and
+                  Imported stock references for reconciliation, with original source counts and
                   row identity.
                 </caption>
                 <TableHeader>
@@ -129,7 +130,7 @@ export default async function ImportedStockPage({
                       Original PackUnits
                     </TableHead>
                     <TableHead scope="col">Source row identity</TableHead>
-                    <TableHead scope="col">Verification status</TableHead>
+                    <TableHead scope="col">Record type</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -154,7 +155,7 @@ export default async function ImportedStockPage({
                         <p>Row ID: {row.id}</p>
                       </TableCell>
                       <TableCell>
-                        <StatusPill status="awaiting" label="Awaiting verification" />
+                        <StatusPill status="reference" tone="neutral" label="Import reference" />
                       </TableCell>
                     </TableRow>
                   ))}
