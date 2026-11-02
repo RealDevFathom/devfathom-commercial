@@ -44,7 +44,7 @@ function fixture(
     $queryRaw: vi.fn().mockResolvedValue([]),
     user: {
       findUnique: vi.fn().mockResolvedValue({
-        organizationRole: { permissions: options.permissions ?? [counter] },
+        organizationRole: { permissions: options.permissions ?? [] },
         permissionOverrides: [],
       }),
     },
@@ -85,20 +85,6 @@ function fixture(
 }
 
 describe('pharmacySales.openDrawer', () => {
-  it('refuses a pharmacist without pharmacy:counter before touching the drawer', async () => {
-    const f = fixture({ permissions: [dispense] });
-    await expect(f.caller.openDrawer(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(f.db.$transaction).not.toHaveBeenCalled();
-    expect(f.db.pharmacyBranch.findMany).not.toHaveBeenCalled();
-    expect(f.db.pharmacyDrawerSession.create).not.toHaveBeenCalled();
-  });
-
-  it('allows a pharmacist explicitly granted pharmacy:counter', async () => {
-    const f = fixture({ permissions: [dispense, counter] });
-    await expect(f.caller.openDrawer(input)).resolves.toMatchObject({ id: 'drawer-new' });
-    expect(f.db.pharmacyDrawerSession.create).toHaveBeenCalledTimes(1);
-  });
-
   it('refuses a branch that is missing, inactive, or outside the session organization', async () => {
     const f = fixture({ branch: false });
     await expect(f.caller.openDrawer(input)).rejects.toMatchObject({

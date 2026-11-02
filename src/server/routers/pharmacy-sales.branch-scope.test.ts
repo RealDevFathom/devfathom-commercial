@@ -7,8 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // `branchScopeOrForbidden`, which words that refusal as a scope denial. Every one
 // of these nine procedures must refuse such a branch before the settlement
 // library takes a lock, reads a drawer or writes anything. The close procedures
-// keep their day-close capability gate in front of that check; opening a drawer
-// requires the canonical counter capability.
+// keep their day-close capability gate in front of that check; no capability is
+// added for the counter.
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -176,14 +176,7 @@ beforeEach(() => {
     },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue(null) },
-    user: {
-      findUnique: vi.fn().mockResolvedValue({
-        organizationRole: {
-          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
-        },
-        permissionOverrides: [],
-      }),
-    },
+    user: { findUnique: vi.fn().mockResolvedValue(null) },
   };
 });
 

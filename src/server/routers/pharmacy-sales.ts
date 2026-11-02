@@ -723,7 +723,7 @@ export const pharmacySalesRouter = router({
   // The drawer family raises typed `PharmacySettlementError`s (OPEN_DRAWER,
   // DRAWER_NOT_OPEN, DAY_CLOSED, INVALID_AMOUNT); `fail` turns them into typed
   // tRPC errors the counter can word, instead of a 500 with the raw reason.
-  openDrawer: capabilityProcedure('pharmacy:counter')
+  openDrawer: protectedProcedure
     .input(
       z
         .object({
