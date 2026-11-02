@@ -8,6 +8,10 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import {
+  MARKETING_ACCESS_DENIAL,
+  MARKETING_ACCESS_FALLBACK,
+} from '@/lib/pharmacy/marketing-access';
 import { pharmacyMarketingRouter } from '@/server/routers/pharmacy-marketing';
 import { createTRPCContext } from '@/server/trpc';
 import { MarketingActionForm } from './action-form';
@@ -71,31 +75,36 @@ export default async function PharmacyMarketingPage({
   );
   let workspace: Awaited<ReturnType<typeof loadWorkspace>> = null;
   let failed = false;
-  let denied = false;
+  let denial: string | null = null;
   try {
     workspace = await loadWorkspace(params);
   } catch (error) {
     failed = true;
-    denied = error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code);
+    // The router names the one missing requirement (DEV-606); a bare code has no message.
+    if (error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code))
+      denial =
+        error.message && error.message !== error.code ? error.message : MARKETING_ACCESS_FALLBACK;
   }
   if (failed) {
+    const link =
+      denial === null || denial === MARKETING_ACCESS_DENIAL.BRANCH
+        ? { href: '/pharmacy/marketing', label: 'Reload marketing' }
+        : { href: '/dashboard', label: 'Go to dashboard' };
     return (
       <main className="min-w-0 space-y-6">
         {heading}
         <SectionCard
-          title={denied ? 'Marketing access required' : 'Marketing unavailable'}
+          title={denial ? 'Marketing access required' : 'Marketing unavailable'}
           titleLevel={2}
         >
           <p role="alert" className="text-sm text-text-body">
-            {denied
-              ? 'An owner account, Pharmacy CRM license and an active pharmacy branch are required. Contact your workspace administrator.'
-              : 'The workspace could not be loaded. Reload to try again.'}
+            {denial ?? 'The workspace could not be loaded. Reload to try again.'}
           </p>
           <Link
-            href="/pharmacy/marketing"
+            href={link.href}
             className="mt-4 inline-flex min-h-11 items-center underline focus-visible:outline-2 focus-visible:outline-ring"
           >
-            Reload marketing
+            {link.label}
           </Link>
         </SectionCard>
       </main>
@@ -106,7 +115,9 @@ export default async function PharmacyMarketingPage({
       <main className="min-w-0 space-y-6">
         {heading}
         <SectionCard title="No active branches" titleLevel={2}>
-          Activate a pharmacy branch before preparing campaigns.
+          <p role="alert" className="text-sm text-text-body">
+            {MARKETING_ACCESS_DENIAL.NO_BRANCH}
+          </p>
         </SectionCard>
       </main>
     );

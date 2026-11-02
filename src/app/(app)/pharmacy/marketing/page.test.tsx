@@ -2,7 +2,11 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { render, screen } from '@testing-library/react';
 import { TRPCError } from '@trpc/server';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  MARKETING_ACCESS_DENIAL,
+  MARKETING_ACCESS_FALLBACK,
+} from '@/lib/pharmacy/marketing-access';
 const mocks = vi.hoisted(() => ({
   branches: vi.fn(),
   growthHistory: vi.fn(),
@@ -83,8 +87,45 @@ it('shows an explicit permission-denied state', async () => {
   const page = await Page({ searchParams: Promise.resolve({}) });
   snapshot('denied', page);
   render(page);
-  expect(screen.getByRole('alert')).toHaveTextContent('owner account');
+  expect(screen.getByRole('alert')).toHaveTextContent(MARKETING_ACCESS_FALLBACK);
   expect(mocks.history).not.toHaveBeenCalled();
+});
+describe('names the missing requirement and the next step (DEV-606)', () => {
+  it.each([
+    ['cashier', MARKETING_ACCESS_DENIAL.OWNER, /pharmacy owner/],
+    ['owner without the license', MARKETING_ACCESS_DENIAL.LICENSE, /Pharmacy CRM/],
+  ])('%s', async (_, message, named) => {
+    mocks.branches.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN', message }));
+    render(await Page({ searchParams: Promise.resolve({}) }));
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent(message);
+    expect(alert).toHaveTextContent(named);
+    // The old message listed every requirement at once.
+    expect(alert).not.toHaveTextContent(/owner account, Pharmacy CRM license and/);
+    expect(screen.getByRole('link', { name: 'Go to dashboard' })).toHaveAttribute(
+      'href',
+      '/dashboard'
+    );
+  });
+  it('names an inactive branch and offers the active ones', async () => {
+    mocks.history.mockRejectedValue(
+      new TRPCError({ code: 'FORBIDDEN', message: MARKETING_ACCESS_DENIAL.BRANCH })
+    );
+    render(await Page({ searchParams: Promise.resolve({ branch: 'closed-branch' }) }));
+    expect(screen.getByRole('alert')).toHaveTextContent('This branch is not active');
+    expect(screen.getByRole('link', { name: 'Reload marketing' })).toHaveAttribute(
+      'href',
+      '/pharmacy/marketing'
+    );
+  });
+  it('explains a workspace with no active branch and who activates one', async () => {
+    mocks.branches.mockResolvedValue([]);
+    render(await Page({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByRole('heading', { name: 'No active branches' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'no active pharmacy branch yet. Contact DevFathom support'
+    );
+  });
 });
 it('shows retry guidance on data errors', async () => {
   mocks.history.mockRejectedValue(new Error('database unavailable'));

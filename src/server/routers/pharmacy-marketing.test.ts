@@ -60,6 +60,7 @@ vi.mock('@/lib/ai/growth-recommendations', async () => ({
   generateGrowthRecommendations: mocks.growthGenerate,
 }));
 import { pharmacyMarketingRouter } from './pharmacy-marketing';
+import { MARKETING_ACCESS_DENIAL } from '@/lib/pharmacy/marketing-access';
 function caller(role = 'ADMIN') {
   const transactionDb = {
     user: { findFirst: mocks.actor, findUnique: mocks.permissions },
@@ -142,6 +143,38 @@ describe('marketing workflow authorization', () => {
       expect(mocks.history).not.toHaveBeenCalled();
     }
   );
+  describe('names the one missing requirement (DEV-606)', () => {
+    it('tells a cashier Marketing is for the owner, without evaluating license or workspace', async () => {
+      mocks.licensed.mockReturnValue(false);
+      await expect(caller('EMPLOYEE').branches()).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: MARKETING_ACCESS_DENIAL.OWNER,
+      });
+      expect(mocks.licensed).not.toHaveBeenCalled();
+      expect(mocks.organization).not.toHaveBeenCalled();
+    });
+    it('tells an owner without the license to add Pharmacy CRM', async () => {
+      mocks.licensed.mockReturnValue(false);
+      await expect(caller().branches()).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: MARKETING_ACCESS_DENIAL.LICENSE,
+      });
+    });
+    it.each([
+      [{ status: 'SUSPENDED', vertical: 'PHARMACY' }, MARKETING_ACCESS_DENIAL.WORKSPACE],
+      [{ status: 'ACTIVE', vertical: 'AGENCY' }, MARKETING_ACCESS_DENIAL.PHARMACY],
+    ])('names the workspace problem for %j', async (organization, message) => {
+      mocks.organization.mockResolvedValue({ id: 'org-a', ...organization });
+      await expect(caller().branches()).rejects.toMatchObject({ message });
+    });
+    it('names an inactive branch for an otherwise entitled owner', async () => {
+      mocks.branch.mockResolvedValue(null);
+      await expect(caller().history(input)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: MARKETING_ACCESS_DENIAL.BRANCH,
+      });
+    });
+  });
   it('denies the wrong package before reading data', async () => {
     mocks.licensed.mockReturnValue(false);
     await expect(caller().history(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -268,37 +301,41 @@ describe('growth current authorization', () => {
     );
     expect(mocks.growthHistory).toHaveBeenCalledTimes(1);
   });
-  it.each(['branch', 'actor', 'licence', 'lifecycle', 'reports:financial', 'reports:operational'] as const)(
-    'rejects %s revocation during model latency',
-    async (kind) => {
-      mocks.settings.mockResolvedValue({ askFathomEnabled: true });
-      mocks.growthBuild.mockResolvedValue({ facts: [] });
-      mocks.growthGenerate.mockImplementation(async () => {
-        if (kind === 'branch') mocks.branchMatch.mockResolvedValue([{ allowed: false }]);
-        if (kind === 'actor') mocks.actor.mockResolvedValue(null);
-        if (kind === 'licence') mocks.licensed.mockReturnValue(false);
-        if (kind === 'reports:financial' || kind === 'reports:operational')
-          mocks.permissions.mockResolvedValue({
-            organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
-            permissionOverrides: [{ capability: kind, effect: 'DENY' }],
-          });
-        if (kind === 'lifecycle')
-          mocks.organization.mockResolvedValue({
-            id: 'org-a',
-            vertical: 'PHARMACY',
-            status: 'SUSPENDED',
-          });
-        return { status: 'UNAVAILABLE' };
-      });
-      await expect(
-        caller().generateGrowth({
-          ...input,
-          from: new Date('2026-09-01'),
-          cutoff: new Date('2026-10-01'),
-        })
-      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-      expect(mocks.growthGenerate).toHaveBeenCalledTimes(1);
-      expect(mocks.growthSave).not.toHaveBeenCalled();
-    }
-  );
+  it.each([
+    'branch',
+    'actor',
+    'licence',
+    'lifecycle',
+    'reports:financial',
+    'reports:operational',
+  ] as const)('rejects %s revocation during model latency', async (kind) => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: true });
+    mocks.growthBuild.mockResolvedValue({ facts: [] });
+    mocks.growthGenerate.mockImplementation(async () => {
+      if (kind === 'branch') mocks.branchMatch.mockResolvedValue([{ allowed: false }]);
+      if (kind === 'actor') mocks.actor.mockResolvedValue(null);
+      if (kind === 'licence') mocks.licensed.mockReturnValue(false);
+      if (kind === 'reports:financial' || kind === 'reports:operational')
+        mocks.permissions.mockResolvedValue({
+          organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
+          permissionOverrides: [{ capability: kind, effect: 'DENY' }],
+        });
+      if (kind === 'lifecycle')
+        mocks.organization.mockResolvedValue({
+          id: 'org-a',
+          vertical: 'PHARMACY',
+          status: 'SUSPENDED',
+        });
+      return { status: 'UNAVAILABLE' };
+    });
+    await expect(
+      caller().generateGrowth({
+        ...input,
+        from: new Date('2026-09-01'),
+        cutoff: new Date('2026-10-01'),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.growthGenerate).toHaveBeenCalledTimes(1);
+    expect(mocks.growthSave).not.toHaveBeenCalled();
+  });
 });
