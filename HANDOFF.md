@@ -5,17 +5,13 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 ## Resume here
 
 - **Item:** DEV-258 (per-organization invoice numbers).
-- **Single next action:** write `src/lib/finance/invoice-number.db.test.ts`, the Postgres test run as a
-  NOSUPERUSER NOBYPASSRLS role. Copy the role setup from `src/server/routers/notes.concurrency.db.test.ts`
-  (`beforeAll`). Cases: (1) two orgs each get `INV-<year>-001` from `financeRouter.createInvoice` run
-  inside `withTenantDb`; (2) two concurrent creates in one org get distinct numbers (hold the org's lock
-  with `allocateInvoiceNumber` in a blocker `withTenantDb`, wait for 2 sessions with
-  `wait_event = 'advisory'` in `pg_stat_activity`, release, assert `-001`/`-002`); (3) a burst mixing
-  `finance.createInvoice` and `clients.generateInvoiceFromContract` stays one gapless sequence.
-- **Then:** fix the unit-test mocks that still stub `invoice.count` (they now need `$transaction` and
-  `$queryRaw`): `src/server/routers/finance.invoice-money.test.ts`, `src/app/api/v1/invoices/route.test.ts`.
-  Add `src/lib/finance/invoice-number.test.ts` (lock key, MAX query, formatting, error outside tenant).
-- **Uncommitted / half-written:** nothing. Everything so far is in the commit listed below.
+- **Single next action:** fix the unit-test mocks that still stub `invoice.count`. They now need
+  `$transaction` and `$queryRaw`. Files: `src/server/routers/finance.invoice-money.test.ts` (`caller()`
+  and the `createInvoice` describe) and `src/app/api/v1/invoices/route.test.ts` (`authCtx.db`).
+  Then run `bunx vitest run src/server/routers/finance src/app/api/v1/invoices src/lib/ai/tools/finance src/lib/finance`.
+- **Then:** add `src/lib/finance/invoice-number.test.ts` (lock key, MAX query, formatting, error outside
+  a tenant). Then run the full `bunx vitest run`, `bun run build`, and open the PR into `develop`.
+- **Uncommitted / half-written:** nothing.
 
 ## Items
 
@@ -49,7 +45,17 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 - `prisma/seed.ts`: the sentinel `findUnique` uses `organizationId_invoiceNumber` with `org_devfathom`
   (this is what the DEV-258 QA comment asked for). `prisma/seed-demo.ts`: the sentinel count is scoped
   to `org_devfathom`.
-- Commits: see `git log origin/develop..HEAD` (the first checkpoint commit adds this file with the code).
+- `src/lib/finance/invoice-number.db.test.ts` (new) has three cases, all through the real routers inside
+  `withTenantDb` as a NOSUPERUSER NOBYPASSRLS role: (1) two orgs each get `INV-<year>-001`, and a duplicate
+  within one org still fails with P2002; (2) while a holder transaction keeps one org's lock, two creates
+  queue on the advisory lock, a create in a second org is not blocked, and on release the two get
+  `-001`/`-002`; (3) six concurrent creates mixing `finance.createInvoice` and
+  `clients.generateInvoiceFromContract` produce `-001`..`-006`.
+  - It fails on the old code: develop's callers plus the global unique index give 3/3 failures (P2002
+    across tenants, no lock queueing, P2002 in the burst).
+- Commits:
+  - `b11234e`: helper, all four callers, schema, migration, seed scoping, and this log.
+  - Next commit: the DB test and this update.
 
 #### Checks (rerun commands and latest results)
 
@@ -64,10 +70,11 @@ not real secrets.
 | Migrations | `EXTENSION_ADMIN_DATABASE_URL=$U DATABASE_URL=$U MIGRATION_DATABASE_URL=$U bun prisma/prepare-extensions.ts && DATABASE_URL=$U MIGRATION_DATABASE_URL=$U bunx prisma migrate deploy` | pass, new migration applied |
 | Schema vs migrations | `DATABASE_URL=$U bunx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script`, compared before and after | identical. All remaining drift existed before (migration-only constraints) |
 | Seed | `SEED_PASSWORD=... DATABASE_URL=$U MIGRATION_DATABASE_URL=$U bunx prisma db seed`, run twice | pass. The second run takes the "already present" sentinel path |
-| Typecheck | `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit` (it runs out of memory with the default heap) | running. The errors seen so far are only in files this branch does not touch (see Known failures) |
-| Lint | `bunx eslint <changed files>` | not run yet |
+| Typecheck | `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit` (it runs out of memory with the default heap) | 8 errors, all in files this branch does not touch (see Known failures). A comparison run on clean `develop` is in progress |
+| Lint/format | `bunx eslint <changed files>` and `bunx prettier --check <changed files>` | pass |
 | Unit tests | `bunx vitest run src/server/routers/finance src/app/api/v1/invoices src/lib/ai/tools/finance src/lib/finance` | not run yet. Expected to fail until the `invoice.count` mocks are updated |
-| DB test | `TEST_DATABASE_URL=$U bunx vitest run src/lib/finance/invoice-number.db.test.ts` | not written yet |
+| DB test | `TEST_DATABASE_URL=$U bunx vitest run src/lib/finance/invoice-number.db.test.ts` (admin URL: the suite creates its own restricted role) | 3/3 pass |
+| DB test, CI-style | `TEST_DATABASE_URL=postgresql://gate_runtime:gate_runtime@localhost:5432/devfathom_test bunx vitest run src/lib/finance/invoice-number.db.test.ts` | 3/3 pass, fixtures cleaned up |
 | Build | `bun run build` | not run yet |
 
 #### Known failures
