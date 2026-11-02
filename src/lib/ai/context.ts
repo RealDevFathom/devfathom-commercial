@@ -34,6 +34,7 @@ import {
 import { logActivity, type LogActivityArgs } from '@/server/activity';
 import { recordAudit, type AuditOperationT } from '@/server/audit';
 import { notify, type NotifyArgs } from '@/lib/notifications';
+import { aiOutputLocale, type AIOutputLocale } from '@/lib/ai/locale';
 
 export type AssistantContext = {
   organizationId: string;
@@ -46,6 +47,11 @@ export type AssistantContext = {
   email?: string | null;
   department?: string | null;
   status?: string | null;
+  /**
+   * Server-derived answer language (workspace locale, or Urdu for an Urdu-script message).
+   * Tools read the normalized `h.locale`; omitted means English.
+   */
+  locale?: AIOutputLocale | null;
 };
 
 /** Validate even typed callers: runtime input may not match the TypeScript union. */
@@ -173,6 +179,8 @@ export function createAssistantHelpers(
   const isAdmin = authz.isAdmin(ctx.role);
   const isHr = ctx.role === 'HR';
   const isAdminOrHr = isAdmin || isHr;
+  // Revalidated: runtime callers may pass a raw workspace locale such as `ur-PK`.
+  const locale = aiOutputLocale(ctx.locale);
   const now = () => new Date();
 
   /** The ABAC decision point, bound to this subject + the assistant source. */
@@ -307,6 +315,7 @@ export function createAssistantHelpers(
     isAdmin,
     isHr,
     isAdminOrHr,
+    locale,
     now,
     can,
     myProjectIds,

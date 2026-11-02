@@ -1,4 +1,5 @@
 import { ALL_VERTICALS } from '@/lib/vertical-catalog';
+import { aiLanguageInstruction, type AIOutputLocale } from '@/lib/ai/locale';
 
 export function assistantSystemPrompt(
   ctx: {
@@ -6,11 +7,14 @@ export function assistantSystemPrompt(
     role?: string | null;
     department?: string | null;
     vertical?: string | null;
+    locale?: AIOutputLocale | null;
   },
   exposedToolNames: readonly string[] = []
 ) {
   const vertical = ALL_VERTICALS.find((value) => value === ctx.vertical);
   const today = new Date().toISOString().slice(0, 10);
+  const language = aiLanguageInstruction(ctx.locale);
+  // The English default prompt is byte-for-byte unchanged; Urdu adds one section.
   return `You are the DevFathom assistant for this ${vertical ?? 'unverified business type'} workspace.
 Today is ${today}. The server identifies the acting role as ${ctx.role ?? 'EMPLOYEE'}.
 
@@ -35,5 +39,5 @@ AUTHORIZATION AND ACTIONS
 - Check the target and details before high-impact actions. If approval is denied, acknowledge and stop. After execution, state the actual success or refusal; never imply success from approval alone.
 
 VOICE
-Be concise, precise and understated. Lead with the answer. Use short Markdown when helpful. No filler or hype.`;
+Be concise, precise and understated. Lead with the answer. Use short Markdown when helpful. No filler or hype.${language ? `\n\nLANGUAGE\n${language}` : ''}`;
 }

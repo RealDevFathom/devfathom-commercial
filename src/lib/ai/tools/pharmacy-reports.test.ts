@@ -469,3 +469,303 @@ describe('pharmacy business insight execution', () => {
     }
   });
 });
+
+vi.mock('@/lib/pharmacy/daily-work-pack', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/daily-work-pack')>()),
+  readPharmacyDailyWorkPack: vi.fn(),
+}));
+
+import { readPharmacyDailyWorkPack } from '@/lib/pharmacy/daily-work-pack';
+import {
+  PHARMACY_METRIC_LABELS_UR,
+  PHARMACY_WORK_PACK_TITLES_UR,
+  pharmacyReportText,
+} from './pharmacy-report-text';
+import { URDU_OUTPUT_INSTRUCTION, type AIOutputLocale } from '@/lib/ai/locale';
+
+type Execute = (input: unknown) => Promise<Record<string, unknown>>;
+
+// One tool set per answer locale, built exactly as Ask Fathom does: from the assistant context.
+function localeTools(locale: AIOutputLocale | 'ur-PK') {
+  const tools = buildPharmacyReportTools(
+    createAssistantHelpers(
+      {
+        organizationId: 'org_1',
+        userId: 'user_1',
+        role: 'ADMIN',
+        enabledModules: ['pharmacy-reports', 'pharmacy-procurement'],
+        locale: locale as AIOutputLocale,
+      },
+      {
+        pharmacyBranch: { findMany: branchFindMany },
+        $queryRaw: queryRaw,
+        pharmacyRecallNotice: { count },
+        pharmacySupplierClaim: { count },
+        pharmacyReceivingException: { count },
+        branchRegulatoryProfile: { count },
+      } as never
+    )
+  );
+  return Object.fromEntries(
+    Object.entries(tools).map(([name, entry]) => [name, entry.execute as unknown as Execute])
+  );
+}
+
+const URDU_LETTERS = /\p{Script=Arabic}/u;
+const workPackInput = {
+  report: 'daily_work_pack',
+  branch: 'Main Pharmacy',
+  from: '2026-09-05',
+  to: '2026-09-05',
+  asOf: '2026-09-05T12:00:00.000Z',
+};
+const workPack = {
+  version: 1,
+  mode: 'read-only-preparation',
+  scope: { organizationId: 'org_1', branchIds: ['branch_1'] },
+  period: { from: workPackInput.from, to: workPackInput.to },
+  asOf: workPackInput.asOf,
+  readAt: workPackInput.asOf,
+  permissions: { operational: true, financial: true },
+  completeness: {
+    status: 'unknown',
+    allClear: false,
+    uniqueProblemCount: null,
+    additiveSavings: false,
+    definition: 'Review groups are not distinct problems.',
+  },
+  sources: [],
+  groups: [
+    {
+      key: 'inventory-review',
+      section: 'inventory-expiry',
+      tasks: [
+        {
+          id: 'branch_1:inventory-review',
+          branchId: 'branch_1',
+          title: 'Review related inventory signals',
+          evidence: [{ sourceId: 'stock-signals' }],
+          missingInputs: [],
+          nextActions: [
+            {
+              kind: 'review',
+              label: 'Review related inventory signals',
+              href: '/pharmacy/reports?branch=branch_1',
+              createsAction: false,
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  missingInputs: [],
+};
+const leakageInput = {
+  report: 'leakage',
+  branch: 'Main Pharmacy',
+  from: '2026-09-01',
+  to: '2026-09-05',
+};
+const leakageRow = {
+  branchId: 'branch_1',
+  medicineId: 'medicine_1',
+  discountMinor: 100,
+  writeOffMinor: 50,
+  shrinkageMinor: 0,
+  totalMinor: 150,
+};
+
+describe('Ask Fathom pharmacy tools answer in the assistant-context locale (DEV-582)', () => {
+  beforeEach(() => {
+    vi.mocked(readPharmacyDailyWorkPack).mockResolvedValue(workPack as never);
+    vi.mocked(readRepeatPurchasing).mockResolvedValue(repeatResult);
+  });
+
+  it('has Urdu wording for every metric contract label and work-pack group', () => {
+    for (const { key } of PHARMACY_METRIC_CONTRACT)
+      expect(PHARMACY_METRIC_LABELS_UR[key], key).toMatch(URDU_LETTERS);
+    for (const title of Object.values(PHARMACY_WORK_PACK_TITLES_UR))
+      expect(title).toMatch(URDU_LETTERS);
+    const en = pharmacyReportText('en');
+    const ur = pharmacyReportText('ur');
+    expect(Object.keys(ur).sort()).toEqual(Object.keys(en).sort());
+    for (const [key, value] of Object.entries(ur)) {
+      expect(value, key).toMatch(URDU_LETTERS);
+      expect(en[key as keyof typeof en], key).not.toMatch(URDU_LETTERS);
+    }
+  });
+
+  describe('Urdu workspace', () => {
+    const ur = pharmacyReportText('ur');
+    const outputLanguage = { locale: 'ur', instruction: URDU_OUTPUT_INSTRUCTION };
+
+    it('labels report claims in Urdu and keeps the canonical metric contract', async () => {
+      const result = await localeTools('ur').askPharmacyReports({
+        metricKeys: ['salesMinor', 'khataAgingMinor'],
+        branch: 'Main Pharmacy',
+        from: '2026-09-05',
+        to: '2026-09-05',
+      });
+      expect(result).toMatchObject({ kind: 'answer', outputLanguage });
+      expect(result.claims).toEqual([
+        expect.objectContaining({
+          metricKey: 'salesMinor',
+          label: 'آج کی فروخت',
+          definition: PHARMACY_METRIC_CONTRACT.find(({ key }) => key === 'salesMinor')!.definition,
+          drillThrough: expect.stringMatching(/^\/pharmacy\//),
+        }),
+        expect.objectContaining({ metricKey: 'khataAgingMinor', label: 'کھاتے کی میعاد گزری رقم' }),
+      ]);
+    });
+
+    it('answers an owner question in Urdu because the context says so', async () => {
+      // The tool input carries no language; only the assistant context decides it.
+      const result = await localeTools('ur').askPharmacyOwnerQuestion({
+        topic: 'stock',
+        branch: 'Main Pharmacy',
+        from: '2026-09-05',
+        to: '2026-09-05',
+      });
+      expect(result).toMatchObject({ kind: 'answer', outputLanguage });
+      expect(result.claims).toEqual([
+        expect.objectContaining({ metricKey: 'openStockSignals', label: 'اسٹاک کے کھلے اشارے' }),
+      ]);
+      await expect(
+        localeTools('ur').askPharmacyOwnerQuestion({
+          topic: 'stock',
+          branch: 'branch_outside_scope',
+          from: '2026-09-05',
+          to: '2026-09-05',
+        })
+      ).resolves.toEqual({ kind: 'refusal', message: ur.refusal, outputLanguage });
+    });
+
+    it('writes cannot-answer and unavailable messages in Urdu', async () => {
+      const tools = localeTools('ur');
+      await expect(tools.askPharmacyReports({ metricKeys: ['patientDiagnosis'] })).resolves.toEqual(
+        { kind: 'cannot_answer', message: ur.unsupported, outputLanguage }
+      );
+      branchFindMany.mockRejectedValueOnce(new Error('database offline'));
+      await expect(tools.askPharmacyReports({ metricKeys: ['openStockSignals'] })).resolves.toEqual(
+        { kind: 'unavailable', message: ur.unavailable, outputLanguage }
+      );
+    });
+
+    it('writes finance insight suggestions and input errors in Urdu', async () => {
+      queryRaw.mockResolvedValue([leakageRow]);
+      const tools = localeTools('ur');
+      expect(await tools.askPharmacyFinanceInsights(leakageInput)).toMatchObject({
+        kind: 'answer',
+        outputLanguage,
+        facts: [{ discountMinor: 100, writeOffMinor: 50, shrinkageMinor: 0, totalMinor: 150 }],
+        suggestions: [{ evidence: ur.leakageEvidence, text: ur.leakageSuggestion }],
+      });
+      await expect(
+        tools.askPharmacyFinanceInsights({ ...leakageInput, to: '2026-01-01' })
+      ).resolves.toEqual({ kind: 'invalid_input', message: ur.financePeriod, outputLanguage });
+    });
+
+    it('writes business insight suggestions and scope gaps in Urdu', async () => {
+      queryRaw.mockResolvedValue([
+        { ...marginRow, period: 'previous' },
+        { ...marginRow, period: 'current', revenueMinor: 900, grossMarginMinor: 300 },
+      ]);
+      const tools = localeTools('ur');
+      expect(await tools.askPharmacyBusinessInsights(marginInput)).toMatchObject({
+        kind: 'answer',
+        outputLanguage,
+        comparison: { differenceMinor: -100 },
+        suggestions: [{ evidence: ur.marginEvidence, text: ur.marginSuggestion }],
+      });
+      expect(await tools.askPharmacyBusinessInsights(repeatInput)).toMatchObject({
+        kind: 'answer',
+        outputLanguage,
+      });
+      expect(
+        await tools.askPharmacyBusinessInsights({ ...marginInput, branch: 'foreign' })
+      ).toEqual({
+        kind: 'refusal',
+        message: ur.refusal,
+        scopeGap: ur.branchScopeGap,
+        outputLanguage,
+      });
+    });
+
+    it('titles work-pack review groups in Urdu without changing the evidence', async () => {
+      const tools = localeTools('ur');
+      const result = await tools.askPharmacyWorkPacks(workPackInput);
+      expect(result).toMatchObject({ kind: 'answer', outputLanguage });
+      expect((result.workPack as typeof workPack).groups[0].tasks[0]).toMatchObject({
+        title: PHARMACY_WORK_PACK_TITLES_UR['inventory-review'],
+        evidence: [{ sourceId: 'stock-signals' }],
+        nextActions: [
+          {
+            label: PHARMACY_WORK_PACK_TITLES_UR['inventory-review'],
+            href: '/pharmacy/reports?branch=branch_1',
+            createsAction: false,
+          },
+        ],
+      });
+      await expect(
+        tools.askPharmacyWorkPacks({ ...workPackInput, asOf: '2099-01-01T00:00:00.000Z' })
+      ).resolves.toEqual({ kind: 'invalid_input', message: ur.workPackPeriod, outputLanguage });
+    });
+
+    it('normalizes a raw ur-PK workspace locale to Urdu', async () => {
+      const result = await localeTools('ur-PK').askPharmacyReports({
+        metricKeys: ['cashMinor'],
+        branch: 'Main Pharmacy',
+      });
+      expect(result).toMatchObject({ outputLanguage, claims: [{ label: 'آج کی نقدی' }] });
+    });
+  });
+
+  describe('English workspace', () => {
+    const en = pharmacyReportText('en');
+
+    it('keeps every pharmacy tool result in English with no language directive', async () => {
+      queryRaw.mockResolvedValue([leakageRow]);
+      const tools = localeTools('en');
+      const results = [
+        await tools.askPharmacyReports({ metricKeys: ['salesMinor'], branch: 'Main Pharmacy' }),
+        await tools.askPharmacyOwnerQuestion({
+          topic: 'khata',
+          branch: 'Main Pharmacy',
+          from: '2026-09-05',
+          to: '2026-09-05',
+        }),
+        await tools.askPharmacyFinanceInsights(leakageInput),
+        await tools.askPharmacyBusinessInsights(repeatInput),
+        await tools.askPharmacyWorkPacks(workPackInput),
+      ];
+      for (const result of results) {
+        expect(result.kind).toBe('answer');
+        expect(result).not.toHaveProperty('outputLanguage');
+        expect(JSON.stringify(result)).not.toMatch(URDU_LETTERS);
+      }
+      expect(results[0].claims).toEqual([expect.objectContaining({ label: "Today's sales" })]);
+      expect(results[1].claims).toEqual([expect.objectContaining({ label: 'Khata aging' })]);
+      expect(results[2].suggestions).toEqual([
+        expect.objectContaining({ text: en.leakageSuggestion }),
+      ]);
+      expect((results[4].workPack as typeof workPack).groups[0].tasks[0].title).toBe(
+        'Review related inventory signals'
+      );
+    });
+
+    it('keeps English messages unchanged when the context has no locale', async () => {
+      await expect(
+        localeTools('en').askPharmacyReports({ metricKeys: ['patientDiagnosis'] })
+      ).resolves.toEqual({ kind: 'cannot_answer', message: en.unsupported });
+      // ownerQuestionExecute builds its context without a locale.
+      await expect(
+        ownerQuestionExecute('EMPLOYEE')({
+          topic: 'sales',
+          branch: 'Main Pharmacy',
+          from: '2026-09-05',
+          to: '2026-09-05',
+        })
+      ).resolves.toEqual({ kind: 'refusal', message: en.refusal });
+    });
+  });
+});

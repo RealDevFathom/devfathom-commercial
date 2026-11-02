@@ -424,3 +424,51 @@ describe('assistant request limits', () => {
     expect((await POST(request({ messages: [longMessage] }))).status).toBe(413);
   });
 });
+
+describe('assistant answer locale (DEV-582)', () => {
+  function pharmacyActor(locale: string) {
+    return {
+      organization: { id: 'server-org', displayName: 'PHARMACY', locale },
+      session: { user: { id: 'server-user', role: 'ADMIN' } },
+    };
+  }
+  const question = (text: string) => ({ id: 'q', role: 'user', parts: [{ type: 'text', text }] });
+
+  beforeEach(() => {
+    mocks.entitlements.mockResolvedValue({
+      vertical: 'PHARMACY',
+      enabledModules: ['pharmacy-reports'],
+    });
+  });
+
+  it.each([
+    ['ur', 'how much did we sell today?', 'ur'],
+    ['ur-PK', 'how much did we sell today?', 'ur'],
+    ['en', 'آج کتنی فروخت ہوئی؟', 'ur'],
+    ['en', 'how much did we sell today?', 'en'],
+  ])(
+    'a %s workspace asked %j gives the pharmacy tools the %s locale',
+    async (workspaceLocale, text, expected) => {
+      mocks.actor.mockResolvedValue(pharmacyActor(workspaceLocale));
+      const response = await POST(request({ messages: [question(text)], locale: 'en' }));
+      expect(response.status).toBe(200);
+      expect(mocks.tools).toHaveBeenCalledWith(
+        expect.objectContaining({ locale: expected }),
+        expect.anything()
+      );
+      const args = mocks.stream.mock.calls[0][0];
+      expect(args.tools).toHaveProperty('askPharmacyReports');
+      if (expected === 'ur') expect(args.system).toContain('LANGUAGE\nWrite in Urdu');
+      else expect(args.system).not.toContain('LANGUAGE');
+    }
+  );
+
+  it('ignores a client-supplied locale', async () => {
+    mocks.actor.mockResolvedValue(pharmacyActor('en'));
+    await POST(request({ messages: [question('sales today')], locale: 'ur' }));
+    expect(mocks.tools).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: 'en' }),
+      expect.anything()
+    );
+  });
+});

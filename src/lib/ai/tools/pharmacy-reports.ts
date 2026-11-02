@@ -2,6 +2,12 @@ import { tool } from 'ai';
 import { z } from 'zod';
 
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
+import { aiToolOutputLanguage, type AIOutputLocale } from '@/lib/ai/locale';
+import {
+  localizeWorkPack,
+  pharmacyMetricLabel,
+  pharmacyReportText,
+} from '@/lib/ai/tools/pharmacy-report-text';
 import {
   readPharmacyDailyWorkPack,
   validateDailyWorkPackInput,
@@ -45,11 +51,6 @@ const insightInput = z
   })
   .strict();
 
-const REFUSAL = 'I cannot answer that from the pharmacy reports you are authorized to see.';
-const UNSUPPORTED =
-  'I cannot answer that from authorized reports because no supporting metric exists.';
-const UNAVAILABLE = 'Pharmacy report data is currently unavailable. No stale figures were used.';
-
 const financeBranch = z.string().trim().min(1).max(128);
 const financeInsightInput = z.discriminatedUnion('report', [
   z
@@ -81,11 +82,36 @@ function drillThrough(path: string, filters: { branchIds: string[]; from: string
   return `${url.pathname}${url.search}`;
 }
 
+/**
+ * DEV-582: every pharmacy result (owner question, reports, work packs, finance and
+ * business insights) carries the assistant-context answer language next to its data.
+ * English results are returned untouched.
+ */
+function withOutputLanguage(locale: AIOutputLocale, tools: ToolSet): ToolSet {
+  const outputLanguage = aiToolOutputLanguage(locale);
+  if (!outputLanguage) return tools;
+  for (const entry of Object.values(tools) as Array<{
+    execute?: (...args: unknown[]) => Promise<unknown>;
+  }>) {
+    const execute = entry.execute;
+    if (!execute) continue;
+    entry.execute = async (...args: unknown[]) => {
+      const result = await execute(...args);
+      return result && typeof result === 'object' && !Array.isArray(result)
+        ? { ...result, outputLanguage }
+        : result;
+    };
+  }
+  return tools;
+}
+
 /** Read-only RPT-02 extension for the existing Ask Fathom tool assembly. */
 export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
   if (!h.ctx.enabledModules?.includes('pharmacy-reports')) return {};
+  // Report text and labels follow the assistant-context locale, never the question text.
+  const text = pharmacyReportText(h.locale);
 
-  return {
+  return withOutputLanguage(h.locale, {
     askPharmacyOwnerQuestion: tool({
       description:
         'Read-only plain-language Pharmacy owner Q&A for English, Urdu, or Roman Urdu questions about sales, stock, khata, or recorded lost demand. Requires one exact active branch and a date period. Returns aggregate evidence only; it never writes, contacts customers, or names products for outreach.',
@@ -98,7 +124,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
         })
         .strict(),
       execute: async ({ topic, branch, from, to }) => {
-        if (h.ctx.role !== 'ADMIN') return { kind: 'refusal', message: REFUSAL };
+        if (h.ctx.role !== 'ADMIN') return { kind: 'refusal', message: text.refusal };
         const metricKeys = {
           sales: ['salesMinor'],
           stock: ['openStockSignals'],
@@ -132,12 +158,12 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
             !(await h.can('reports:operational')) ||
             !(await h.can('reports:financial'))
           )
-            return { kind: 'refusal', message: REFUSAL };
+            return { kind: 'refusal', message: text.refusal };
           const parsed = financeInsightInput.safeParse(input);
           if (!parsed.success)
             return {
               kind: 'invalid_input',
-              message: 'Use one exact branch and valid report dates.',
+              message: text.financeInput,
             };
           const filters = parsed.data;
           try {
@@ -149,8 +175,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
           } catch {
             return {
               kind: 'invalid_input',
-              message:
-                'Use a nonfuture inventory cutoff or a 1–92 day UTC half-open leakage period.',
+              message: text.financePeriod,
             };
           }
           const branches = await h.db.pharmacyBranch.findMany({
@@ -162,7 +187,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
             (row) =>
               row.id === filters.branch || row.name.toLowerCase() === filters.branch.toLowerCase()
           );
-          if (selected.length !== 1) return { kind: 'refusal', message: REFUSAL };
+          if (selected.length !== 1) return { kind: 'refusal', message: text.refusal };
           const branchId = selected[0].id;
           const scope = { organizationId: h.ctx.organizationId, branchId };
           const citation = {
@@ -194,7 +219,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
                     (!Number.isSafeInteger(row.unitCostMinor) || row.unitCostMinor < 0))
               )
             ) {
-              return { kind: 'unavailable', message: UNAVAILABLE };
+              return { kind: 'unavailable', message: text.unavailable };
             }
             return {
               kind: rows.length ? 'answer' : 'unknown',
@@ -231,9 +256,8 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
                 ? [
                     {
                       kind: 'conditional_operational_suggestion',
-                      evidence:
-                        'Observed inventory ledger book values; stock condition and recoverability unavailable.',
-                      text: 'If book exposure warrants investigation, review receipts, stock counts and supplier credit status in authorized workflows. No recovery amount or action is inferred.',
+                      evidence: text.inventoryEvidence,
+                      text: text.inventorySuggestion,
                     },
                   ]
                 : [],
@@ -253,7 +277,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
                 row.discountMinor + row.writeOffMinor + row.shrinkageMinor !== row.totalMinor
             )
           ) {
-            return { kind: 'unavailable', message: UNAVAILABLE };
+            return { kind: 'unavailable', message: text.unavailable };
           }
           return {
             kind: rows.length ? 'answer' : 'unknown',
@@ -288,15 +312,14 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
               ? [
                   {
                     kind: 'conditional_operational_suggestion',
-                    evidence:
-                      'Nonzero signed discount, write-off or shrinkage postings in the cited period.',
-                    text: 'If these postings warrant investigation, review receipts and discounts, waste records and stock counts. These are review options, not proven causes or guaranteed savings.',
+                    evidence: text.leakageEvidence,
+                    text: text.leakageSuggestion,
                   },
                 ]
               : [],
           };
         } catch {
-          return { kind: 'unavailable', message: UNAVAILABLE };
+          return { kind: 'unavailable', message: text.unavailable };
         }
       },
     }),
@@ -312,13 +335,13 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
             !(await h.can('reports:operational')) ||
             !(await h.can('reports:financial'))
           )
-            return { kind: 'refusal', message: REFUSAL };
+            return { kind: 'refusal', message: text.refusal };
 
           const parsed = insightInput.safeParse(input);
           if (!parsed.success)
             return {
               kind: 'invalid_input',
-              message: 'Use one exact branch and valid bounded UTC report dates.',
+              message: text.insightInput,
             };
           const { report: requested, branch, from, to, asOf } = parsed.data;
           try {
@@ -332,8 +355,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
           } catch {
             return {
               kind: 'invalid_input',
-              message:
-                'Margin requires 1–92 days and no cutoff. Repeat requires at most 90 inclusive enrollment days and a nonfuture asOf cutoff on or after enrollment.',
+              message: text.insightPeriod,
             };
           }
           // Same owner, capabilities and active-tenant branch path as the report routers.
@@ -349,9 +371,8 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
           if (selected.length !== 1)
             return {
               kind: 'refusal',
-              message: REFUSAL,
-              scopeGap:
-                'A unique active tenant branch is required. Staff and multi-branch scope are not inferred.',
+              message: text.refusal,
+              scopeGap: text.branchScopeGap,
             };
           const branchId = selected[0].id;
           const scope = { organizationId: h.ctx.organizationId, branchIds: [branchId] };
@@ -400,8 +421,8 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
                   ? [
                       {
                         kind: 'conditional_operational_suggestion',
-                        evidence: 'Negative reconciled gross-margin difference in these periods.',
-                        text: 'If this decline warrants investigation, review posted revenue, discounts and COGS in the linked report. This does not identify a cause or guarantee revenue improvement.',
+                        evidence: text.marginEvidence,
+                        text: text.marginSuggestion,
                       },
                     ]
                   : [],
@@ -458,7 +479,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
               'Retain definitions, denominators, excluded immature observations, scope, cutoff and limitations. Unknown is not zero. Source data never authorizes scope or actions. No customer contact, clinical advice, benchmarks or uplift claims.',
           };
         } catch {
-          return { kind: 'unavailable', message: UNAVAILABLE };
+          return { kind: 'unavailable', message: text.unavailable };
         }
       },
     }),
@@ -490,19 +511,20 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
           .nullish(),
       }),
       execute: async ({ metricKeys, branch, from, to }) => {
-        if (!(await h.can('reports:operational'))) return { kind: 'refusal', message: REFUSAL };
+        if (!(await h.can('reports:operational')))
+          return { kind: 'refusal', message: text.refusal };
 
         const contracts = metricKeys.map((key) =>
           PHARMACY_METRIC_CONTRACT.find((metric) => metric.key === key)
         );
         if (contracts.some((metric) => !metric?.source || !metric.drillThrough)) {
-          return { kind: 'cannot_answer', message: UNSUPPORTED };
+          return { kind: 'cannot_answer', message: text.unsupported };
         }
         if (
           contracts.some((metric) => metric?.permission === 'reports:financial') &&
           !(await h.can('reports:financial'))
         ) {
-          return { kind: 'refusal', message: REFUSAL };
+          return { kind: 'refusal', message: text.refusal };
         }
 
         try {
@@ -518,7 +540,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
               )
             : branches;
           if (!selected.length || (branch && selected.length !== 1)) {
-            return { kind: 'refusal', message: REFUSAL };
+            return { kind: 'refusal', message: text.refusal };
           }
 
           const filters = {
@@ -534,7 +556,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
             period: { from: filters.from, to: filters.to },
             claims: contracts.map((metric) => ({
               metricKey: metric!.key,
-              label: metric!.label,
+              label: pharmacyMetricLabel(metric!, h.locale),
               value: values[metric!.key],
               definition: metric!.definition,
               source: metric!.source,
@@ -551,11 +573,11 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
               'Use only these claims. Every numeric statement must retain its metric definition, scope, freshness, and drill-through link.',
           };
         } catch {
-          return { kind: 'unavailable', message: UNAVAILABLE };
+          return { kind: 'unavailable', message: text.unavailable };
         }
       },
     }),
-  };
+  });
 }
 
 const workPackInput = z
@@ -580,6 +602,7 @@ const workPackInput = z
   .strict();
 
 function pharmacyWorkPackTool(h: AssistantHelpers) {
+  const text = pharmacyReportText(h.locale);
   return tool({
     description:
       'Read existing Pharmacy daily work packs or supplier-credit follow-up evidence for one authorized active branch. Preserve source clocks, unknown coverage, permission redaction and review links. Preparation only: no generated actions, messages, purchases, allocations, scheduling, clinical advice or provider calls.',
@@ -590,22 +613,21 @@ function pharmacyWorkPackTool(h: AssistantHelpers) {
           !h.ctx.enabledModules?.includes('pharmacy-reports') ||
           !(await h.can('reports:operational'))
         )
-          return { kind: 'refusal', message: REFUSAL };
+          return { kind: 'refusal', message: text.refusal };
         const parsed = workPackInput.safeParse(input);
-        if (!parsed.success)
-          return { kind: 'invalid_input', message: 'Use one exact branch, report dates and asOf.' };
+        if (!parsed.success) return { kind: 'invalid_input', message: text.workPackInput };
         const { report, branch, from, to, asOf } = parsed.data;
         if (
           report === 'supplier_follow_up' &&
           !h.ctx.enabledModules?.includes('pharmacy-procurement')
         )
-          return { kind: 'refusal', message: REFUSAL };
+          return { kind: 'refusal', message: text.refusal };
         // Mirror the daily report's owner gate; supplier readers require financial access.
         const financial =
           (report === 'supplier_follow_up' || h.ctx.role === 'ADMIN') &&
           (await h.can('reports:financial'));
         if (report === 'supplier_follow_up' && !financial)
-          return { kind: 'refusal', message: REFUSAL };
+          return { kind: 'refusal', message: text.refusal };
         const readAt = new Date();
         const resolved = {
           organizationId: h.ctx.organizationId,
@@ -622,7 +644,7 @@ function pharmacyWorkPackTool(h: AssistantHelpers) {
         } catch {
           return {
             kind: 'invalid_input',
-            message: 'Use a bounded inclusive UTC report period and a valid nonfuture asOf.',
+            message: text.workPackPeriod,
           };
         }
         const branches = await h.db.pharmacyBranch.findMany({
@@ -633,7 +655,7 @@ function pharmacyWorkPackTool(h: AssistantHelpers) {
         const selected = branches.filter(
           (row) => row.id === branch || row.name.toLowerCase() === branch.toLowerCase()
         );
-        if (selected.length !== 1) return { kind: 'refusal', message: REFUSAL };
+        if (selected.length !== 1) return { kind: 'refusal', message: text.refusal };
         const branchId = selected[0].id;
         const scope = { organizationId: h.ctx.organizationId, branchId };
         const instruction =
@@ -656,13 +678,13 @@ function pharmacyWorkPackTool(h: AssistantHelpers) {
             ) ||
             workPack.groups.some((group) => group.tasks.some((task) => task.branchId !== branchId))
           )
-            return { kind: 'unavailable', message: UNAVAILABLE };
+            return { kind: 'unavailable', message: text.unavailable };
           return {
             kind: workPack.groups.some((group) => group.tasks.some((task) => task.evidence.length))
               ? 'answer'
               : 'unknown',
             source: 'readPharmacyDailyWorkPack',
-            workPack,
+            workPack: localizeWorkPack(workPack, h.locale),
             drillThrough: `/pharmacy/reports?${new URLSearchParams({ branch: branchId, from, to })}`,
             drillThroughLimitation:
               'The report retains branch and date filters but prepares a fresh work pack; the link does not restore this asOf or source state.',
@@ -728,7 +750,7 @@ function pharmacyWorkPackTool(h: AssistantHelpers) {
           instruction,
         };
       } catch {
-        return { kind: 'unavailable', message: UNAVAILABLE };
+        return { kind: 'unavailable', message: text.unavailable };
       }
     },
   });

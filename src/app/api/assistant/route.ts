@@ -19,6 +19,7 @@ import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { createAIModel, readAIAvailability } from '@/lib/ai/provider';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
+import { resolveAssistantLocale } from '@/lib/ai/locale';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTenantDb } from '@/lib/tenancy/scoped-db';
@@ -44,6 +45,14 @@ function recentUserText(messages: UIMessage[]): string {
     if (t.trim()) texts.push(t);
   }
   return texts.reverse().join(' \n ');
+}
+
+// DEV-582: the latest user message alone decides whether an English workspace answers in Urdu.
+function latestUserText(messages: UIMessage[]): string {
+  const latest = messages.findLast((m) => m.role === 'user');
+  return (latest?.parts ?? [])
+    .map((p) => (p.type === 'text' && typeof p.text === 'string' ? p.text : ''))
+    .join(' ');
 }
 
 const UNAVAILABLE = 'Ask Fathom is currently unavailable. No cached answer was used.';
@@ -143,6 +152,9 @@ async function respond(req: Request) {
     department: session.user.department,
     status: session.user.status,
     enabledModules: entitlements.enabledModules,
+    // DEV-582: the answer language every tool reads from the assistant context: the
+    // workspace locale, or Urdu when the user's latest message is written in Urdu script.
+    locale: resolveAssistantLocale(organization.locale, latestUserText(messages)),
   };
 
   // SECURITY INVARIANT (AI-04): the approval gate is a UX confirmation, NOT the
