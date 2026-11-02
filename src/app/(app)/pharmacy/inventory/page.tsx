@@ -426,7 +426,7 @@ export default async function PharmacyInventoryPage({
               href="/pharmacy/inventory/imports"
               className={buttonVariants({ variant: 'secondary' })}
             >
-              Imported stock / Awaiting verification
+              Imported stock references
             </Link>
           </>
         }

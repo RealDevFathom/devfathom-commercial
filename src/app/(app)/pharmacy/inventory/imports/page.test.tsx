@@ -46,7 +46,9 @@ describe('import reference reconciliation copy', () => {
     expect(screen.getByText(/These are original source quantities/)).toHaveTextContent(
       'This view does not report whether a source row has been reconciled with posted stock.'
     );
-    const table = screen.getByRole('table', { name: /Imported stock references for reconciliation/ });
+    const table = screen.getByRole('table', {
+      name: /Imported stock references for reconciliation/,
+    });
     expect(within(table).getByRole('columnheader', { name: 'Record type' })).toBeVisible();
     expect(within(table).getByText('Import reference')).toHaveAttribute('data-tone', 'neutral');
     expect(within(table).getByRole('cell', { name: '12.5000' })).toBeVisible();
@@ -55,7 +57,9 @@ describe('import reference reconciliation copy', () => {
     expect(within(table).getByText('Source row: 7')).toBeVisible();
     expect(within(table).getByText('Row ID: row-1')).toBeVisible();
     expect(screen.queryByText(/awaiting verification/i)).not.toBeInTheDocument();
-    expect(screen.queryByRole('columnheader', { name: 'Verification status' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('columnheader', { name: 'Verification status' })
+    ).not.toBeInTheDocument();
   });
 
   it('describes an empty reference list without implying a completed stock posting', async () => {

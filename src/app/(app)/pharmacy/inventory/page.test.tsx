@@ -238,6 +238,11 @@ describe('Inventory pack-action integration', () => {
     );
     expect(screen.getByText('34 units · 3 sealed + 4 loose')).toBeVisible();
     expect(nearExpiry).toHaveBeenCalledExactlyOnceWith({ branchId: branch.id });
+    expect(screen.getByRole('link', { name: 'Imported stock references' })).toHaveAttribute(
+      'href',
+      '/pharmacy/inventory/imports'
+    );
+    expect(screen.queryByText(/awaiting verification/i)).not.toBeInTheDocument();
   });
 
   it.each(['RECALLED', 'QUARANTINED'])('disables batch state %s', async (state) => {

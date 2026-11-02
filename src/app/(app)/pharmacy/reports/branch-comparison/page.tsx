@@ -67,10 +67,7 @@ export default async function BranchComparisonPage({
               className="mt-1 min-h-11"
             />
           </label>
-          <label
-            className="min-w-0 flex-1 basis-48 text-sm text-text-body"
-            htmlFor="comparison-to"
-          >
+          <label className="min-w-0 flex-1 basis-48 text-sm text-text-body" htmlFor="comparison-to">
             To
             <Input
               id="comparison-to"

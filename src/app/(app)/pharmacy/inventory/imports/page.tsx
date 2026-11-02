@@ -51,10 +51,10 @@ export default async function ImportedStockPage({
         <>
           <SectionCard title="Import references and reconciliation" titleLevel={2}>
             <p className="text-sm text-text-body">
-              These are original source quantities retained for reconciliation, not available-to-sell
-              balances. This view does not report whether a source row has been reconciled with
-              posted stock. Reconcile batch, expiry, physical count, and pack meanings against
-              Inventory; no quantities here are multiplied or rounded into units.
+              These are original source quantities retained for reconciliation, not
+              available-to-sell balances. This view does not report whether a source row has been
+              reconciled with posted stock. Reconcile batch, expiry, physical count, and pack
+              meanings against Inventory; no quantities here are multiplied or rounded into units.
             </p>
             <section aria-label="Imported row totals" className="mt-5 grid gap-5 sm:grid-cols-2">
               <Stat
@@ -114,8 +114,8 @@ export default async function ImportedStockPage({
             ) : (
               <Table>
                 <caption className="sr-only">
-                  Imported stock references for reconciliation, with original source counts and
-                  row identity.
+                  Imported stock references for reconciliation, with original source counts and row
+                  identity.
                 </caption>
                 <TableHeader>
                   <TableRow>
