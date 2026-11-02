@@ -295,7 +295,7 @@ describe('organizationAdmin AskFathom contract (mock database, real authorizatio
     }
   );
 
-  it.each([
+  it.each<[Record<string, string | undefined>, string]>([
     [{ AI_PROVIDER: undefined }, 'AI_PROVIDER unset'],
     [{ AI_PROVIDER: 'disabled' }, 'AI_PROVIDER disabled'],
     [{ AI_PROVIDER: 'not-a-provider' }, 'unknown AI_PROVIDER'],

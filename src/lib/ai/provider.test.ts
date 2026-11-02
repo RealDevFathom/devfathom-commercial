@@ -210,8 +210,9 @@ describe('shared provider gate with real factory boundary', () => {
       region: 'us-east-1',
       credentialProvider: sdk.credentialProvider,
     });
-    expect(sdk.bedrock.mock.calls[0]?.[0]).not.toHaveProperty('accessKeyId');
-    expect(sdk.bedrock.mock.calls[0]?.[0]).not.toHaveProperty('secretAccessKey');
+    const [bedrockOptions] = sdk.bedrock.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect(bedrockOptions).not.toHaveProperty('accessKeyId');
+    expect(bedrockOptions).not.toHaveProperty('secretAccessKey');
     createTieredModel({
       provider: 'bedrock',
       modelId: 'm',
