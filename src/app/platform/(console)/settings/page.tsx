@@ -10,7 +10,16 @@ import { readMonthlyAIUsage } from '@/lib/ai/usage';
 
 export default async function PlatformSettingsPage() {
   const actor = await requirePlatformRead('/platform/settings');
-  const aiUsage = actor.role === 'SUPER_ADMIN' ? await readMonthlyAIUsage(new Date(), actor) : null;
+  // undefined: not a SuperAdmin (no panel); null: the report failed (panel error state).
+  const aiUsage =
+    actor.role === 'SUPER_ADMIN'
+      ? await readMonthlyAIUsage(new Date(), actor).catch((error: unknown) => {
+          console.error('[platform-settings] AI usage report unavailable', {
+            error: error instanceof Error ? error.name : 'Error',
+          });
+          return null;
+        })
+      : undefined;
   const settings = await withPlatformDb((db) =>
     db.platformSetting.findMany({ orderBy: [{ category: 'asc' }, { key: 'asc' }] })
   );
@@ -35,7 +44,7 @@ export default async function PlatformSettingsPage() {
       {actor.role === 'SUPER_ADMIN' ? <AiSettingsConsole /> : null}
       <div className="mt-7 grid gap-7 xl:grid-cols-[1fr_400px]">
         <div className="space-y-7">
-          {aiUsage ? <AIUsagePanel usage={aiUsage} /> : null}
+          {aiUsage !== undefined ? <AIUsagePanel usage={aiUsage} /> : null}
           <PlatformMfaCard />
           <section className="border border-border-default bg-surface-card">
             <div className="border-b border-border-subtle px-5 py-4">

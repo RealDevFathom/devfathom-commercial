@@ -1,7 +1,15 @@
-const DECIMAL_MINOR_PATTERN = /^(\d+)(?:\.(\d{1,2}))?$/;
+/**
+ * Integer US-dollar minor units (cents) for the AI spend report.
+ *
+ * BigInt values are built with BigInt(...) rather than literals: the TypeScript
+ * target is below ES2020, which rejects `0n`-style literals.
+ */
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+const ZERO = BigInt(0);
 
+/** A non-negative database bigint as a safe JavaScript integer, or a RangeError. */
 export function safeMinorFromBigInt(value: bigint, label: string): number {
-  if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+  if (value < ZERO || value > MAX_SAFE) {
     throw new RangeError(`${label} is outside the safe minor-unit range.`);
   }
   return Number(value);
@@ -18,10 +26,18 @@ export function addSafeMinor(left: number, right: number, label: string): number
   return total;
 }
 
-/** Parse non-negative decimal major units without a binary floating-point conversion. */
-export function parseMajorUnitsToMinor(value: string | undefined): number | null {
-  const match = value?.trim().match(DECIMAL_MINOR_PATTERN);
-  if (!match) return null;
-  const minor = BigInt(match[1]) * 100n + BigInt((match[2] ?? '').padEnd(2, '0'));
-  return minor <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(minor) : null;
+/**
+ * Whole cents for a USD amount such as a configured cap (DECIMAL(12,4) or an
+ * environment value), rounded half up. Display only: cap enforcement compares
+ * the unrounded amounts.
+ */
+export function minorFromUsd(value: number, label: string): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new RangeError(`${label} must be a finite, non-negative amount.`);
+  }
+  const minor = Math.round(value * 100);
+  if (!Number.isSafeInteger(minor)) {
+    throw new RangeError(`${label} exceeds the safe minor-unit range.`);
+  }
+  return minor;
 }

@@ -1,27 +1,54 @@
-# AI provider piece 4: usage and budget alerts
+# AI provider spend report and cap alerts (DEV-576)
 
-This branch is built in parallel with piece 3 and must be rebased onto that sibling when it lands.
-Piece 3 owns the SuperAdmin routing/settings controls; its persisted budget will remain exposed
-through `getAiBudgetMinor()`, the only budget seam consumed here.
+Originally piece 4 (`feat/ai-provider-4-usage`). It replaced a single Anthropic budget with
+per-provider monthly caps for Anthropic, OpenAI and Bedrock. Code: `src/lib/ai/usage.ts`,
+`src/components/platform/ai-usage-panel.tsx`, `src/server/routers/platform-ai-usage.ts`.
 
-## Design
+## Report
 
-- Spend is grouped by provider and tier for the current **Asia/Karachi calendar month**. Boundaries
-  are converted to UTC before querying and the end is exclusive.
-- Monetary API values are integer US-dollar minor units. Stored high-precision USD is rounded only
-  after each provider/tier aggregate, avoiding floating-point values at the UI boundary.
-- The usage procedure authenticates with the platform session directly and permits only
-  `SUPER_ADMIN`; it never trusts tenant tRPC context.
-- At 80% of the Anthropic budget, a unique month claim and notification fan-out to every active
-  SuperAdmin happen in one transaction. The primary key makes concurrent attempts idempotent.
-- Usage recording launches the alert check as best-effort, non-blocking work. Recording and AI
-  responses are never failed by alert delivery.
+- Every figure comes from the platform ledger `ai_provider_usage`, which the router writes for
+  each billed attempt. The tenant `ai_usage` table records attribution only. It is never read
+  for spend.
+- Spend is grouped by provider and tier for the current **Asia/Karachi calendar month**.
+  `karachiMonthBounds` in `router.ts` sets the bounds, the same ones routing uses. The bounds
+  are UTC instants and the end is exclusive.
+- Money is in integer US-dollar minor units. Each aggregate is rounded once in SQL: the
+  provider total is rounded from its unrounded sum, not built up from rounded tiers.
+- Each provider shows its effective cap, `resolveRoutingSettings(...).capsUsd`. The cap is the
+  SuperAdmin value if one is saved, otherwise `AI_<PROVIDER>_MONTHLY_CAP_USD`, otherwise the
+  default (USD 190 Anthropic, 190 OpenAI, 300 Bedrock).
+- Each provider also shows the percent used and a status:
+  - `ok`;
+  - `near_cap` at 80% or more;
+  - `capped` once spend is at or above the cap. This is the router's exact skip rule, so a zero
+    cap is always capped.
+- The panel lists every tier with the model it routes to now.
+- Only `SUPER_ADMIN` can read the report. It authenticates the platform session itself and never
+  trusts the tenant tRPC context.
 
-## Follow-ups after rebase
+## Cap alerts
 
-1. Resolve the piece-3 settings-page composition mechanically, retaining `AIUsagePanel` below its
-   controls.
-2. Keep piece 3's setting lookup inside `getAiBudgetMinor()` and preserve the environment/default
-   fallback for rollout safety.
-3. Surface `platform_notifications` in the platform shell notification affordance when that shared
-   control-plane inbox is implemented; this migration intentionally stores durable unread rows now.
+After the router records an attempt, it calls `maybeCreateAIBudgetAlert(provider, now)` as
+best-effort work. This call never throws and never fails an AI call or its metering. It logs
+only the provider and the error class.
+
+- **80% of the provider's effective cap.**
+  - It claims `(provider, YYYY-MM)` in `ai_budget_alert_months`.
+  - It writes one `ai_cap_near` row in `platform_notifications` for every active SUPER_ADMIN.
+  - The claim and the notifications are written in the same transaction. The primary key makes a
+    concurrent second call a no-op. A failed fan-out rolls the claim back, so a later call tries
+    again.
+- **100% of the cap.**
+  - It writes one `ai_cap_reached` notification per active SUPER_ADMIN: "routing skips this
+    provider".
+  - Each row's id is `ai_cap_reached:<provider>:<month>:<platformUserId>`, so concurrent calls
+    write each row once. The migration was not changed for this.
+  - A provider that jumps straight past its cap gets only this notice. The claim is still taken.
+- **Limitation.** If a SuperAdmin lowers a cap below the current spend, routing skips that
+  provider at once. No further attempt is recorded for it, so no alert fires. The panel still
+  shows it as `capped`.
+
+## Follow-up
+
+Show `platform_notifications` in the platform shell's notification control once the shared
+control-plane inbox exists. Until then the rows are stored as durable unread notifications.
