@@ -58,4 +58,3 @@ describe('branch comparison accessibility', () => {
     );
   });
 });
-

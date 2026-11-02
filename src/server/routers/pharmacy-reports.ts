@@ -592,10 +592,7 @@ export const pharmacyReportsRouter = router({
     await requireFinancialReports(ctx);
     if (!isoDate(input.from) || !isoDate(input.to) || input.from > input.to)
       throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid report period.' });
-    if (
-      (Date.parse(input.to) - Date.parse(input.from)) / 86_400_000 + 1 >
-      MAX_PHARMACY_REPORT_DAYS
-    )
+    if ((Date.parse(input.to) - Date.parse(input.from)) / 86_400_000 + 1 > MAX_PHARMACY_REPORT_DAYS)
       throw new TRPCError({
         code: 'BAD_REQUEST',
         message: `Interactive pharmacy reports are limited to ${MAX_PHARMACY_REPORT_DAYS} days.`,
@@ -615,9 +612,7 @@ export const pharmacyReportsRouter = router({
     let branchIds: string[];
     let rowCount: number | null;
     if (input.report === 'period-summary') {
-      branchIds = input.branchId
-        ? [input.branchId]
-        : available.branches.map((branch) => branch.id);
+      branchIds = input.branchId ? [input.branchId] : available.branches.map((branch) => branch.id);
       if (
         !branchIds.length ||
         branchIds.some((id) => !available.branches.some((branch) => branch.id === id))
@@ -626,20 +621,21 @@ export const pharmacyReportsRouter = router({
           code: 'FORBIDDEN',
           message: 'One or more branches are outside your report scope.',
         });
-      let result: Awaited<ReturnType<typeof readPharmacyOwnerCommandCentre>>;
       try {
-        result = await readPharmacyOwnerCommandCentre(ctx.db, {
-          ...(input.branchId ? { branchId: input.branchId } : {}),
-          from: input.from,
-          to: input.to,
-          branchIds,
-        });
+        validatePharmacyReportFilters({ from: input.from, to: input.to, branchIds });
       } catch (error) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: error instanceof Error ? error.message : 'Invalid report filters.',
         });
       }
+      // Reader or SQL failures stay INTERNAL_SERVER_ERROR so the route answers a generic 500.
+      const result = await readPharmacyOwnerCommandCentre(ctx.db, {
+        ...(input.branchId ? { branchId: input.branchId } : {}),
+        from: input.from,
+        to: input.to,
+        branchIds,
+      });
       content = periodSummaryCsv(result.metrics, {
         ...base,
         branchScope,

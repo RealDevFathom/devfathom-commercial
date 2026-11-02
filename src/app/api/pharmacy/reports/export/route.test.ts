@@ -86,12 +86,50 @@ describe('GET pharmacy report export', () => {
     expect(mocks.exportCsv).not.toHaveBeenCalled();
   });
 
-  it('hides unexpected failure details', async () => {
-    mocks.exportCsv.mockRejectedValue(new Error('private database host'));
+  it('hides unexpected procedure failure details behind a generic 500', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // createCaller wraps any non-tRPC error thrown in the procedure like this.
+    mocks.exportCsv.mockRejectedValue(
+      new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'private database host',
+        cause: new Error('private database host'),
+      })
+    );
+    const response = await GET(
+      new Request(url('report=period-summary&from=2026-10-01&to=2026-10-07'))
+    );
+    expect(response.status).toBe(500);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(await response.text()).not.toContain('private');
+    expect(log).toHaveBeenCalledWith('Pharmacy report export failed', expect.any(TRPCError));
+    log.mockRestore();
+  });
+
+  it('hides unexpected context failure details', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.createTRPCContext.mockRejectedValue(new Error('private database host'));
     const response = await GET(
       new Request(url('report=period-summary&from=2026-10-01&to=2026-10-07'))
     );
     expect(response.status).toBe(500);
     expect(await response.text()).not.toContain('private');
+    expect(mocks.exportCsv).not.toHaveBeenCalled();
+    log.mockRestore();
   });
+
+  it.each([
+    ['NOT_FOUND', 'Workspace not found.', 404],
+    ['BAD_REQUEST', 'Invalid report period.', 400],
+  ] as const)(
+    'maps %s to its HTTP status with the user-facing message',
+    async (code, message, status) => {
+      mocks.exportCsv.mockRejectedValue(new TRPCError({ code, message }));
+      const response = await GET(
+        new Request(url('report=period-summary&from=2026-10-01&to=2026-10-07'))
+      );
+      expect(response.status).toBe(status);
+      expect(await response.text()).toBe(message);
+    }
+  );
 });

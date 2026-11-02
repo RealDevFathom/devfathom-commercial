@@ -14,6 +14,13 @@ const query = z
   })
   .strict();
 
+const STATUS: Record<string, number> = {
+  BAD_REQUEST: 400,
+  UNAUTHORIZED: 401,
+  FORBIDDEN: 403,
+  NOT_FOUND: 404,
+};
+
 /** Downloads a pharmacy Reports table as CSV. Authorization lives in the procedure. */
 export async function GET(request: Request) {
   const parsed = query.safeParse(Object.fromEntries(new URL(request.url).searchParams));
@@ -37,10 +44,13 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
-    if (error instanceof TRPCError) {
-      const status = error.code === 'UNAUTHORIZED' ? 401 : error.code === 'FORBIDDEN' ? 403 : 400;
-      return new Response(error.message, { status });
-    }
-    return new Response('Pharmacy report export failed.', { status: 500 });
+    if (error instanceof TRPCError && STATUS[error.code])
+      return new Response(error.message, { status: STATUS[error.code] });
+    // createCaller wraps unexpected failures as INTERNAL_SERVER_ERROR; never echo their message.
+    console.error('Pharmacy report export failed', error);
+    return new Response('Pharmacy report export failed.', {
+      status: 500,
+      headers: { 'Cache-Control': 'private, no-store' },
+    });
   }
 }

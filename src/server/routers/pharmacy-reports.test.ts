@@ -948,6 +948,36 @@ describe('Reports CSV export (reports:financial, organization scoped, audited)',
     }
   );
 
+  it('surfaces a period-summary reader failure as INTERNAL_SERVER_ERROR, not BAD_REQUEST', async () => {
+    const ctx = exportContext();
+    const count = { count: vi.fn().mockResolvedValue(0) };
+    Object.assign(ctx.db, {
+      $queryRaw: vi.fn().mockRejectedValue(new Error('private database host')),
+      pharmacyRecallNotice: count,
+      pharmacySupplierClaim: count,
+      pharmacyReceivingException: count,
+      branchRegulatoryProfile: count,
+    });
+    await expect(
+      pharmacyReportsRouter.createCaller(ctx).exportCsv({ report: 'period-summary', ...range })
+    ).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+  });
+
+  it('keeps the period-summary branch limit a BAD_REQUEST before SQL', async () => {
+    mocks.branchFindMany.mockResolvedValue(
+      Array.from({ length: 101 }, (_, i) => ({ id: `b${i}`, name: `Branch ${i}` }))
+    );
+    await expect(
+      pharmacyReportsRouter
+        .createCaller(exportContext())
+        .exportCsv({ report: 'period-summary', ...range })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Too many pharmacy branches for one report.',
+    });
+    expect(mocks.raw).not.toHaveBeenCalled();
+  });
+
   it('reads the branch comparison only for the caller organization branches', async () => {
     const ctx = exportContext('org_2');
     await pharmacyReportsRouter
