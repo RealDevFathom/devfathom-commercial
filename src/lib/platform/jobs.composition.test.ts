@@ -16,6 +16,7 @@ const m = vi.hoisted(() => ({
   scope: vi.fn(),
   snapshot: vi.fn(),
   retention: vi.fn(),
+  recordRetention: vi.fn(),
   consent: vi.fn(),
   archiveCreate: vi.fn(),
   archiveDelete: vi.fn(),
@@ -25,6 +26,10 @@ vi.mock('@/lib/pharmacy/counter-evidence', () => ({
   PHARMACY_CAMERA_SNAPSHOT_JOB: 'pharmacy.camera.snapshot.v1',
   runCounterEvidenceSnapshotJob: m.snapshot,
   runCameraEvidenceRetentionJob: m.retention,
+}));
+vi.mock('@/lib/pharmacy/retention-owners', () => ({
+  PHARMACY_RECORD_RETENTION_JOB: 'pharmacy.retention.v1',
+  runPharmacyRecordRetentionJob: m.recordRetention,
 }));
 import { processPlatformJobs } from './jobs';
 
@@ -191,6 +196,66 @@ describe('composed platform worker boundaries', () => {
     await processPlatformJobs(1);
     expect(m.retention).toHaveBeenCalledExactlyOnceWith(db, item);
     expect(m.scope).toHaveBeenCalledWith(expect.any(Function), { timeout: 120_000 });
+  });
+  it('queues one record retention batch per confirmed pharmacy tenant per UTC day', async () => {
+    m.query.mockImplementation(async (sql: { text: string; values: unknown[] }) => {
+      if (sql.text.includes(`o."vertical" = 'PHARMACY'`)) {
+        expect(sql.text).toContain(`r."recordRetentionByClass"->'provisional' = 'false'::jsonb`);
+        expect(sql.text).toContain('NOT EXISTS');
+        expect(sql.values).toEqual([
+          'pharmacy.retention.v1:',
+          `:${new Date().toISOString().slice(0, 10)}`,
+          10,
+        ]);
+        return [{ organizationId: 'tenant-a' }, { organizationId: 'tenant-b' }];
+      }
+      return [];
+    });
+    const retentionCalls = () =>
+      m.createMany.mock.calls
+        .map(([input]) => input)
+        .filter((input) => input.data[0]?.type === 'PHARMACY_RECORD_RETENTION_V1');
+    await processPlatformJobs();
+    await processPlatformJobs();
+    vi.setSystemTime(new Date('2026-10-13T00:05:00.000Z'));
+    await processPlatformJobs();
+    const [first, repeat, nextDay] = retentionCalls();
+    expect(repeat).toEqual(first);
+    expect(first).toEqual({
+      data: [
+        {
+          organizationId: 'tenant-a',
+          type: 'PHARMACY_RECORD_RETENTION_V1',
+          idempotencyKey: 'pharmacy.retention.v1:tenant-a:2026-10-12',
+        },
+        {
+          organizationId: 'tenant-b',
+          type: 'PHARMACY_RECORD_RETENTION_V1',
+          idempotencyKey: 'pharmacy.retention.v1:tenant-b:2026-10-12',
+        },
+      ],
+      skipDuplicates: true,
+    });
+    expect(nextDay.data.map((row: { idempotencyKey: string }) => row.idempotencyKey)).toEqual([
+      'pharmacy.retention.v1:tenant-a:2026-10-13',
+      'pharmacy.retention.v1:tenant-b:2026-10-13',
+    ]);
+  });
+  it('dispatches record retention to its tenant purge and records the batch result', async () => {
+    const item = job('PHARMACY_RECORD_RETENTION_V1');
+    queue(item);
+    m.recordRetention.mockResolvedValue({ examined: 3, deleted: 1, blocked: 2 });
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1, failed: 0 });
+    expect(m.recordRetention).toHaveBeenCalledExactlyOnceWith(item);
+    expect(m.scope).toHaveBeenCalledWith(expect.any(Function), { timeout: 30_000 });
+    expect(m.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'SUCCEEDED',
+          result: { examined: 3, deleted: 1, blocked: 2 },
+        }),
+      })
+    );
   });
   it.each([1, 3])('retains retry/exhaustion accounting at attempt %s', async (attempts) => {
     queue(job('PHARMACY_CAMERA_SNAPSHOT_V1', { attempts }));

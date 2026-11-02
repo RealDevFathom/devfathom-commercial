@@ -38,7 +38,9 @@ const RECORD_CLASSES: readonly PharmacyRecordClass[] = [
 
 function validateScope(scope: PharmacyRetentionScope) {
   if (!scope.organizationId?.trim() || (scope.branchId !== undefined && !scope.branchId.trim())) {
-    throw new Error('Retention requires an explicit organization and a nonempty branch if supplied.');
+    throw new Error(
+      'Retention requires an explicit organization and a nonempty branch if supplied.'
+    );
   }
 }
 
@@ -66,15 +68,23 @@ export async function pharmacyRetentionStatus(
     !Number.isFinite(status.checkedAt.getTime()) ||
     (status.blockedReason !== null && typeof status.blockedReason !== 'string') ||
     (status.retentionUntil !== null &&
-      (!(status.retentionUntil instanceof Date) || !Number.isFinite(status.retentionUntil.getTime()))) ||
+      (!(status.retentionUntil instanceof Date) ||
+        !Number.isFinite(status.retentionUntil.getTime()))) ||
     (status.retentionUntil === null && !status.blockedReason)
   ) {
-    throw new PharmacyRetentionError(recordClass, recordId, null, 'retention policy could not be verified.');
+    throw new PharmacyRetentionError(
+      recordClass,
+      recordId,
+      null,
+      'retention policy could not be verified.'
+    );
   }
   return {
     ...status,
-    eligible: status.blockedReason === null &&
-      status.retentionUntil !== null && status.retentionUntil <= status.checkedAt,
+    eligible:
+      status.blockedReason === null &&
+      status.retentionUntil !== null &&
+      status.retentionUntil <= status.checkedAt,
   };
 }
 
@@ -115,7 +125,8 @@ export async function assertPharmacyRecordDeletable(
       recordClass,
       recordId,
       status.retentionUntil,
-      status.blockedReason ?? `record must be retained until ${status.retentionUntil!.toISOString()}.`
+      status.blockedReason ??
+        `record must be retained until ${status.retentionUntil!.toISOString()}.`
     );
   }
 }
@@ -129,11 +140,7 @@ export type PharmacyRetentionOwner = {
     limit: number
   ) => Promise<readonly string[]>;
   /** Delete the entire aggregate using this transaction; throw on failure, never perform external I/O. */
-  deleteAggregate: (
-    tx: ScopedDb,
-    scope: PharmacyRetentionScope,
-    recordId: string
-  ) => Promise<void>;
+  deleteAggregate: (tx: ScopedDb, scope: PharmacyRetentionScope, recordId: string) => Promise<void>;
 };
 
 /**
@@ -163,14 +170,16 @@ export async function runPharmacyRetentionPurge(
     const savepoint = `pharmacy_retention_${crypto.randomUUID().replaceAll('-', '')}`;
     await tx.$executeRawUnsafe(`SAVEPOINT ${savepoint}`);
     try {
-      await tx.$queryRaw`SELECT pharmacy_lock_retention()`;
+      // A void result column cannot be decoded by the pg adapter; select a constant instead.
+      await tx.$queryRaw`SELECT 1 AS locked FROM pharmacy_lock_retention()`;
       const result = { examined: 0, deleted: 0, blocked: 0 };
       for (const owner of owners) {
         const remaining = limit - result.examined;
         if (!remaining) break;
         const candidates = await owner.candidates(tx, scope, remaining);
         if (
-          !Array.isArray(candidates) || candidates.length > remaining ||
+          !Array.isArray(candidates) ||
+          candidates.length > remaining ||
           candidates.some((id) => typeof id !== 'string' || !id.trim()) ||
           new Set(candidates).size !== candidates.length
         ) {

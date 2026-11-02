@@ -46,11 +46,17 @@ propagate. Deletion is eligible at the exact deadline, never before it. SQL dele
 triggers revalidate independently of application checks, including legal holds.
 Covered tables reject `TRUNCATE`. Existing immutable guards are not removed.
 
-A private singleton row serializes policy, hold and relevant scope changes with
-checks/deletes. Updating it also rejects stale repeatable-read/serializable
-snapshots. This conservative implementation serializes retention work across
-tenants; keep purge transactions short. It does not authorize deletion through
-session flags. Existing tenant row-level security continues to apply.
+A private singleton row serializes only deletes and policy, hold and scope
+changes with retention checks. Ordinary record updates, such as counter line
+edits, hold, resume and completion, never take it. A fiscal child delete instead
+share-locks its one sale, so it waits for a concurrent status change on that
+sale. Updating the singleton also rejects stale repeatable-read/serializable
+snapshots. It is shared across tenants, so keep purge transactions short. It
+does not authorize deletion through session flags. Existing tenant row-level
+security continues to apply.
+
+A completed or voided sale cannot return to an open, held or quotation cart.
+Held and quotation carts can still be reopened.
 
 ## Purge coordinator
 
@@ -68,10 +74,26 @@ fails, and perform no external I/O. An owner with pagination should persist its
 cursor only within that transaction. The caller must authorize tenant-wide or
 branch-wide access before invoking the coordinator.
 
-This recovery adds the coordinator contract, not a scheduled destructive task or
-generic cascade deletion. Record owners must supply their safe aggregate cleanup
-before scheduling it. Existing append-only records can still refuse deletion
-after expiry. No migration or purge was run against a shared database.
+## Scheduled purge
+
+The platform worker (`/api/platform/jobs/process`) queues one
+`pharmacy.retention.v1` job per live pharmacy tenant per UTC day, keyed
+`pharmacy.retention.v1:<organizationId>:<day>`, so repeated runs on the same day
+queue nothing new. Only a tenant whose branch jurisdiction has a confirmed AUDIT
+policy is queued, and at most ten tenants are queued per worker run. Each job runs
+one batch of 100 candidates in its own tenant transaction.
+
+Only the AUDIT owner (`src/lib/pharmacy/retention-owners.ts`) is registered. Its
+page skips rows under an active legal hold and rows younger than the shortest
+confirmed AUDIT policy, so they cannot block the head of the page. It deletes
+exactly one audit row per candidate and throws otherwise.
+
+PRESCRIPTION, CONTROLLED_REGISTER and FISCAL records are not purged. Their
+existing append-only and no-delete guards refuse every delete even after
+expiry, so registering them would make every batch roll back. They stay blocked
+pending a regulator-approved change to those guards, which needs its own
+follow-up issue; this change does not loosen them. No migration or purge was run
+against a shared database.
 
 ## Focused verification
 
@@ -83,6 +105,8 @@ node --test tests/pharmacy-retention.test.mjs
 
 The test uses Node's built-in TypeScript transform on the actual source and omits
 only the Next.js `server-only` marker, as the existing Vitest configuration does.
-Database verification uses the separate disposable PostgreSQL retention fixture;
-it must never target an application or shared database. The recovery report records
-exact commands/results and distinguishes current evidence from historical checks.
+Database verification uses the separate disposable PostgreSQL retention fixture
+and `src/lib/pharmacy/retention-owners.db.test.ts` (scheduled AUDIT purge, with
+`TEST_DATABASE_URL`); neither may target an application or shared database. The
+recovery report records exact commands/results and distinguishes current
+evidence from historical checks.

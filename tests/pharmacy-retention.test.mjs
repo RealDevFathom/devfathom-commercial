@@ -6,7 +6,9 @@ import { test } from 'node:test';
 // Like vitest.server-only.ts, omit Next's marker outside the server runtime.
 // Node's built-in transform runs the actual module without installing dependencies.
 const source = await readFile(new URL('../src/lib/pharmacy/retention.ts', import.meta.url), 'utf8');
-const javascript = stripTypeScriptTypes(source.replace("import 'server-only';", ''), { mode: 'transform' });
+const javascript = stripTypeScriptTypes(source.replace("import 'server-only';", ''), {
+  mode: 'transform',
+});
 const {
   activeLegalHoldKeys,
   assertPharmacyRecordDeletable,
@@ -26,7 +28,8 @@ function database(statuses = {}) {
     async $executeRawUnsafe(sql) {
       const name = sql.split(' ').at(-1);
       if (sql.startsWith('SAVEPOINT ')) savepoints.set(name, [...deleted]);
-      else if (sql.startsWith('ROLLBACK TO ')) deleted.splice(0, deleted.length, ...savepoints.get(name));
+      else if (sql.startsWith('ROLLBACK TO '))
+        deleted.splice(0, deleted.length, ...savepoints.get(name));
       else if (sql.startsWith('RELEASE ')) savepoints.delete(name);
       else throw new Error(`Unexpected transaction control: ${sql}`);
     },
@@ -97,18 +100,33 @@ test('malformed or absent database policy responses fail closed', async () => {
   ]) {
     await assert.rejects(pharmacyRetentionStatus(database({ bad: status }), scope, 'AUDIT', 'bad'));
   }
-  await assert.rejects(pharmacyRetentionStatus({ async $queryRaw() { return []; } }, scope, 'AUDIT', 'bad'));
+  await assert.rejects(
+    pharmacyRetentionStatus(
+      {
+        async $queryRaw() {
+          return [];
+        },
+      },
+      scope,
+      'AUDIT',
+      'bad'
+    )
+  );
 });
 
 test('latest hold state preserves independent cases and released holds', async () => {
-  const db = { pharmacyLegalHoldEvent: { async findMany(query) {
-    assert.deepEqual(query.where, { recordClass: 'AUDIT', recordId: 'record-1' });
-    return [
-      { holdKey: 'case-a', kind: 'PLACED' },
-      { holdKey: 'case-b', kind: 'PLACED' },
-      { holdKey: 'case-a', kind: 'RELEASED' },
-    ];
-  } } };
+  const db = {
+    pharmacyLegalHoldEvent: {
+      async findMany(query) {
+        assert.deepEqual(query.where, { recordClass: 'AUDIT', recordId: 'record-1' });
+        return [
+          { holdKey: 'case-a', kind: 'PLACED' },
+          { holdKey: 'case-b', kind: 'PLACED' },
+          { holdKey: 'case-a', kind: 'RELEASED' },
+        ];
+      },
+    },
+  };
   assert.deepEqual(await activeLegalHoldKeys(db, 'AUDIT', 'record-1'), ['case-b']);
 });
 
@@ -124,27 +142,48 @@ test('purge locks before scan, revalidates each candidate, skips held and unexpi
 
 test('total candidate budget spans owners, including ineligible records', async () => {
   const db = database({ held: { ...eligible, blockedReason: 'legal hold' } });
-  const result = await runPharmacyRetentionPurge(db, scope, [
-    owner(db, ['held', 'sale-1']), owner(db, ['audit-1', 'audit-2'], 'AUDIT'),
-  ], 3);
+  const result = await runPharmacyRetentionPurge(
+    db,
+    scope,
+    [owner(db, ['held', 'sale-1']), owner(db, ['audit-1', 'audit-2'], 'AUDIT')],
+    3
+  );
   assert.deepEqual(result, { examined: 3, deleted: 2, blocked: 1 });
   assert.deepEqual(db.deleted, ['sale-1', 'audit-1']);
 });
 
 test('invalid limits, scope and duplicate owners are rejected before starting a transaction', async () => {
-  const db = { $transaction() { throw new Error('transaction must not start'); } };
+  const db = {
+    $transaction() {
+      throw new Error('transaction must not start');
+    },
+  };
   for (const limit of [0, -1, 501, 1.5, NaN, Infinity]) {
     await assert.rejects(runPharmacyRetentionPurge(db, scope, [], limit), /limit must be/);
   }
-  await assert.rejects(runPharmacyRetentionPurge(db, { organizationId: '' }, []), /explicit organization/);
-  await assert.rejects(runPharmacyRetentionPurge(db, scope, [{ recordClass: 'AUDIT' }, { recordClass: 'AUDIT' }]), /one owner/);
+  await assert.rejects(
+    runPharmacyRetentionPurge(db, { organizationId: '' }, []),
+    /explicit organization/
+  );
+  await assert.rejects(
+    runPharmacyRetentionPurge(db, scope, [{ recordClass: 'AUDIT' }, { recordClass: 'AUDIT' }]),
+    /one owner/
+  );
 });
 
 test('oversized, duplicate and malformed owner pages are rejected without deleting', async () => {
   for (const ids of [['a', 'b'], ['a', 'a'], [''], [null]]) {
     const db = database();
-    const adapter = { ...owner(db, []), async candidates() { return ids; } };
-    await assert.rejects(runPharmacyRetentionPurge(db, scope, [adapter], ids.length === 2 && ids[1] === 'b' ? 1 : 2), /invalid or unbounded/);
+    const adapter = {
+      ...owner(db, []),
+      async candidates() {
+        return ids;
+      },
+    };
+    await assert.rejects(
+      runPharmacyRetentionPurge(db, scope, [adapter], ids.length === 2 && ids[1] === 'b' ? 1 : 2),
+      /invalid or unbounded/
+    );
     assert.deepEqual(db.deleted, []);
   }
 });
@@ -159,6 +198,11 @@ test('savepoint restores preceding deletes even when an outer caller catches own
   };
   await assert.rejects(runPharmacyRetentionPurge(db, scope, [adapter]), /child refused/);
   assert.deepEqual(db.deleted, []);
-  db.tx.$queryRaw = async () => { throw new Error('database unavailable'); };
-  await assert.rejects(runPharmacyRetentionPurge(db, scope, [owner(db, ['first'])]), /database unavailable/);
+  db.tx.$queryRaw = async () => {
+    throw new Error('database unavailable');
+  };
+  await assert.rejects(
+    runPharmacyRetentionPurge(db, scope, [owner(db, ['first'])]),
+    /database unavailable/
+  );
 });

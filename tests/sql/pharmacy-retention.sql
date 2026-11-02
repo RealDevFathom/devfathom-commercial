@@ -1,5 +1,6 @@
 -- DEV-96 focused migration fixture. Run only in an empty disposable cluster/database:
 -- psql -X -v ON_ERROR_STOP=1 -f tests/sql/pharmacy-retention.sql "$DISPOSABLE_DATABASE_URL"
+-- One case opens a second psql session; supply its password via PGPASSWORD or a passfile.
 \set ON_ERROR_STOP on
 CREATE TABLE organizations (id text PRIMARY KEY, vertical text NOT NULL);
 CREATE TABLE pharmacy_branches (id text PRIMARY KEY, "organizationId" text, "createdAt" timestamp, active boolean DEFAULT true);
@@ -43,7 +44,9 @@ INSERT INTO pharmacy_jurisdiction_rule_sets VALUES
 INSERT INTO pharmacy_branch_regulatory_profiles VALUES ('profile','tenant','branch',1,'2010-01-01',NULL,false,'rule-old');
 INSERT INTO pharmacy_prescriptions VALUES ('rx','tenant','2024-01-01');
 INSERT INTO pharmacy_controlled_register_entries VALUES ('controlled','tenant','branch','2024-01-01');
-INSERT INTO pharmacy_sales VALUES ('sale','tenant','branch','2024-01-01','COMPLETED'), ('future-sale','tenant','branch',(clock_timestamp() AT TIME ZONE 'UTC'),'COMPLETED'), ('open-sale','tenant','branch',(clock_timestamp() AT TIME ZONE 'UTC'),'OPEN');
+INSERT INTO pharmacy_sales VALUES ('sale','tenant','branch','2024-01-01','COMPLETED'), ('future-sale','tenant','branch',(clock_timestamp() AT TIME ZONE 'UTC'),'COMPLETED'), ('open-sale','tenant','branch',(clock_timestamp() AT TIME ZONE 'UTC'),'OPEN'),
+ ('held-sale','tenant','branch',(clock_timestamp() AT TIME ZONE 'UTC'),'HELD'), ('quote-sale','tenant','branch',(clock_timestamp() AT TIME ZONE 'UTC'),'QUOTATION'),
+ ('void-sale','tenant','branch',(clock_timestamp() AT TIME ZONE 'UTC'),'VOID');
 INSERT INTO audit_logs VALUES ('audit','tenant','2024-01-01',NULL), ('new-audit','tenant','2025-01-01',NULL), ('agency-audit','agency','2024-01-01',NULL), ('missing-scope','empty','2024-01-01',NULL);
 UPDATE organizations SET vertical='RESTAURANT' WHERE id='agency';
 UPDATE audit_logs SET "createdAt"='2024-02-01' WHERE id='agency-audit';
@@ -75,7 +78,13 @@ SELECT fixture_refuses($q$DELETE FROM audit_logs WHERE id='audit'$q$, 'protected
 INSERT INTO pharmacy_legal_hold_events VALUES ('h4','tenant','AUDIT','audit','second-hold','RELEASED','2025-01-04');
 SELECT fixture_refuses($q$DELETE FROM pharmacy_sales WHERE id='future-sale'$q$, 'retained until');
 SELECT fixture_refuses($q$UPDATE pharmacy_sales SET "createdAt"='1900-01-01' WHERE id='future-sale'$q$, 'creation time are immutable');
-SELECT fixture_refuses($q$UPDATE pharmacy_sales SET status='OPEN' WHERE id='future-sale'$q$, 'cannot return to an open cart');
+SELECT fixture_refuses($q$UPDATE pharmacy_sales SET status='OPEN' WHERE id='future-sale'$q$, 'cannot return to an editable cart');
+SELECT fixture_refuses($q$UPDATE pharmacy_sales SET status='HELD' WHERE id='future-sale'$q$, 'cannot return to an editable cart');
+SELECT fixture_refuses($q$UPDATE pharmacy_sales SET status='OPEN' WHERE id='void-sale'$q$, 'cannot return to an editable cart');
+-- Counter resume and quotation conversion still reopen carts that never completed.
+UPDATE pharmacy_sales SET status='OPEN' WHERE id='held-sale';
+UPDATE pharmacy_sales SET status='OPEN' WHERE id='quote-sale';
+SELECT fixture_assert((SELECT count(*) = 2 FROM pharmacy_sales WHERE id IN ('held-sale','quote-sale') AND status='OPEN'), 'held and quoted carts reopen');
 SELECT fixture_refuses($q$UPDATE audit_logs SET "organizationId"='agency' WHERE id='audit'$q$, 'scope and creation time');
 UPDATE audit_logs SET "actorId"=NULL WHERE id='audit';
 UPDATE pharmacy_branches SET active=false WHERE id='branch';
@@ -91,6 +100,18 @@ SELECT fixture_refuses($q$DELETE FROM pharmacy_sale_lines WHERE id='open-line'$q
 INSERT INTO pharmacy_legal_hold_events VALUES ('open-released','tenant','FISCAL','open-sale','open-hold','RELEASED','2025-01-02');
 DELETE FROM pharmacy_sale_lines WHERE id='open-line';
 SELECT fixture_assert(NOT EXISTS (SELECT 1 FROM pharmacy_sale_lines WHERE id='open-line'), 'open cart remains editable');
+-- Counter updates must not take the cross-tenant mutex: a second session locks
+-- it NOWAIT while this session's sale and line UPDATE transaction is still open.
+\setenv PGHOST :HOST
+\setenv PGPORT :PORT
+\setenv PGUSER :USER
+\setenv PGDATABASE :DBNAME
+BEGIN;
+UPDATE pharmacy_sales SET status='HELD' WHERE id='open-sale';
+UPDATE pharmacy_sale_lines SET "createdAt"="createdAt" WHERE id='line';
+\! psql -X -q -v ON_ERROR_STOP=1 -c 'SELECT 1 FROM pharmacy_retention_mutex FOR UPDATE NOWAIT' >/dev/null
+SELECT fixture_assert(:SHELL_EXIT_CODE = 0, 'record updates leave the retention mutex unlocked');
+ROLLBACK;
 -- Missing and malformed rules must not be masked by tenant policy.
 INSERT INTO pharmacy_branches VALUES ('missing-profile','tenant','2010-01-01',true);
 SELECT fixture_refuses($q$SELECT pharmacy_record_retention_deadline('tenant','AUDIT','audit')$q$, 'confirmed effective branch profile');

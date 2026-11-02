@@ -186,8 +186,8 @@ BEGIN
       RAISE EXCEPTION 'retention identity, scope and creation time are immutable' USING ERRCODE='55000';
     END IF;
     IF TG_TABLE_NAME = 'pharmacy_sales' THEN
-      IF OLD."status"::text <> 'OPEN' AND NEW."status"::text = 'OPEN' THEN
-        RAISE EXCEPTION 'completed fiscal records cannot return to an open cart' USING ERRCODE='55000';
+      IF OLD."status"::text IN ('COMPLETED','VOID') AND NEW."status"::text IN ('OPEN','HELD','QUOTATION') THEN
+        RAISE EXCEPTION 'completed or voided fiscal records cannot return to an editable cart' USING ERRCODE='55000';
       END IF;
     END IF;
     RETURN NEW;
@@ -245,8 +245,10 @@ BEGIN
     SELECT "saleId" INTO sale_id FROM public."pharmacy_sale_lines"
       WHERE "organizationId" = OLD."organizationId" AND "id" = old_data->>'saleLineId';
   END IF;
+  -- Share-lock the sale so a child delete waits for a concurrent status change
+  -- on that one sale instead of serializing every tenant on the global mutex.
   SELECT "status"::text INTO sale_status FROM public."pharmacy_sales"
-    WHERE "organizationId" = OLD."organizationId" AND "branchId" = OLD."branchId" AND "id" = sale_id;
+    WHERE "organizationId" = OLD."organizationId" AND "branchId" = OLD."branchId" AND "id" = sale_id FOR SHARE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'fiscal retention aggregate is missing or outside scope' USING ERRCODE='55000';
   END IF;
@@ -278,7 +280,8 @@ DO $$ DECLARE t text; class_name text; BEGIN
   FOR t, class_name IN SELECT * FROM (VALUES
     ('pharmacy_prescriptions','PRESCRIPTION'), ('pharmacy_controlled_register_entries','CONTROLLED_REGISTER'),
     ('pharmacy_sales','FISCAL'), ('audit_logs','AUDIT')) x(table_name, record_class) LOOP
-    EXECUTE format('CREATE TRIGGER aa_retention_serialize BEFORE UPDATE OR DELETE ON public.%I FOR EACH STATEMENT EXECUTE FUNCTION public.pharmacy_retention_lock_statement()', t);
+    -- Deletes only: ordinary record updates (counter edits) never take the cross-tenant mutex.
+    EXECUTE format('CREATE TRIGGER aa_retention_serialize BEFORE DELETE ON public.%I FOR EACH STATEMENT EXECUTE FUNCTION public.pharmacy_retention_lock_statement()', t);
     EXECUTE format('CREATE TRIGGER ab_retention_record BEFORE UPDATE OR DELETE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.pharmacy_retention_record_guard(%L)', t, class_name);
   END LOOP;
   CREATE TRIGGER aa_retention_serialize BEFORE UPDATE OF "id", "vertical" OR DELETE ON public."organizations"
@@ -291,7 +294,7 @@ DO $$ DECLARE t text; class_name text; BEGIN
     FOR EACH ROW EXECUTE FUNCTION public.pharmacy_retention_record_guard('FISCAL');
   FOREACH t IN ARRAY ARRAY['pharmacy_sale_lines','pharmacy_sale_line_allocations','pharmacy_sale_events',
     'pharmacy_sale_returns','pharmacy_sale_return_lines','pharmacy_tenders','pharmacy_refunds'] LOOP
-    EXECUTE format('CREATE TRIGGER aa_retention_serialize BEFORE UPDATE OR DELETE ON public.%I FOR EACH STATEMENT EXECUTE FUNCTION public.pharmacy_retention_lock_statement()', t);
+    EXECUTE format('CREATE TRIGGER aa_retention_serialize BEFORE DELETE ON public.%I FOR EACH STATEMENT EXECUTE FUNCTION public.pharmacy_retention_lock_statement()', t);
     EXECUTE format('CREATE TRIGGER ab_retention_aggregate BEFORE UPDATE OR DELETE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.pharmacy_retention_fiscal_child_guard()', t);
   END LOOP;
   FOREACH t IN ARRAY ARRAY['pharmacy_prescriptions','pharmacy_prescription_lines','pharmacy_prescription_fills',

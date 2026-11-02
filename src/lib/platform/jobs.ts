@@ -20,6 +20,10 @@ import {
   archiveWhatsAppConsentBeforeTenantPurge,
   deleteExpiredWhatsAppConsentArchives,
 } from '@/lib/pharmacy/whatsapp/consent-archive';
+import {
+  PHARMACY_RECORD_RETENTION_JOB,
+  runPharmacyRecordRetentionJob,
+} from '@/lib/pharmacy/retention-owners';
 
 type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
@@ -765,6 +769,8 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         PHARMACY_CAMERA_SNAPSHOT_V1: runCounterEvidenceSnapshotJob,
         CAMERA_EVIDENCE_RETENTION_V1: (database, item) =>
           runCameraEvidenceRetentionJob(database, item),
+        // Runs in its own tenant transaction so the purge keeps tenant RLS.
+        PHARMACY_RECORD_RETENTION_V1: (_database, item) => runPharmacyRecordRetentionJob(item),
       };
       return handlers[job.type](db, job, payload);
     },
@@ -877,6 +883,53 @@ async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
   });
 }
 
+const PHARMACY_RECORD_RETENTION_TENANTS_PER_RUN = 10;
+
+/**
+ * DEV-96: give each live pharmacy tenant one bounded record retention batch per
+ * UTC day. Only a tenant with a confirmed AUDIT policy for one of its branch
+ * jurisdictions can have an eligible record, so no other tenant is queued. The
+ * per-run cap keeps a day's burst from delaying time-bound camera snapshots,
+ * and the key makes repeated worker runs on the same day a no-op.
+ */
+async function enqueuePharmacyRecordRetentionJobs(now: Date): Promise<void> {
+  await withPlatformDb(async (db) => {
+    const day = now.toISOString().slice(0, 10);
+    const tenants = await db.$queryRaw<Array<{ organizationId: string }>>(Prisma.sql`
+      SELECT o."id" AS "organizationId"
+      FROM "organizations" o
+      WHERE o."vertical" = 'PHARMACY'
+        AND o."status" NOT IN ('PURGING', 'PURGED')
+        AND EXISTS (
+          SELECT 1
+          FROM "pharmacy_branch_regulatory_profiles" p
+          JOIN "pharmacy_jurisdiction_rule_sets" assigned ON assigned."id" = p."jurisdictionRuleSetId"
+          JOIN "pharmacy_jurisdiction_rule_sets" r ON r."code" = assigned."code"
+          WHERE p."organizationId" = o."id"
+            AND NOT p."isPlaceholder"
+            AND NOT r."isPlaceholder"
+            AND r."recordRetentionByClass"->'provisional' = 'false'::jsonb
+            AND jsonb_typeof(r."recordRetentionByClass"->'values'->'AUDIT') = 'number'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM "platform_jobs" j
+          WHERE j."idempotencyKey" = ${`${PHARMACY_RECORD_RETENTION_JOB}:`} || o."id" || ${`:${day}`}
+        )
+      ORDER BY o."id" ASC
+      LIMIT ${PHARMACY_RECORD_RETENTION_TENANTS_PER_RUN}
+    `);
+    if (!tenants.length) return;
+    await db.platformJob.createMany({
+      data: tenants.map(({ organizationId }) => ({
+        organizationId,
+        type: 'PHARMACY_RECORD_RETENTION_V1' as const,
+        idempotencyKey: `${PHARMACY_RECORD_RETENTION_JOB}:${organizationId}:${day}`,
+      })),
+      skipDuplicates: true,
+    });
+  });
+}
+
 export type ProcessJobsResult = {
   recovered: number;
   claimed: number;
@@ -889,6 +942,7 @@ export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResu
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
   await enqueueCameraEvidenceJobs(new Date());
+  await enqueuePharmacyRecordRetentionJobs(new Date());
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),
     claimed: 0,
