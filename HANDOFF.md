@@ -5,12 +5,12 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 ## Resume here
 
 - **Item:** DEV-258 (per-organization invoice numbers).
-- **Single next action:** fix the unit-test mocks that still stub `invoice.count`. They now need
-  `$transaction` and `$queryRaw`. Files: `src/server/routers/finance.invoice-money.test.ts` (`caller()`
-  and the `createInvoice` describe) and `src/app/api/v1/invoices/route.test.ts` (`authCtx.db`).
-  Then run `bunx vitest run src/server/routers/finance src/app/api/v1/invoices src/lib/ai/tools/finance src/lib/finance`.
-- **Then:** add `src/lib/finance/invoice-number.test.ts` (lock key, MAX query, formatting, error outside
-  a tenant). Then run the full `bunx vitest run`, `bun run build`, and open the PR into `develop`.
+- **Single next action:** run the full unit suite, `bunx vitest run` with no `TEST_DATABASE_URL`, and
+  compare any failures against clean `develop` (worktree at
+  `/tmp/claude-0/-home-user-devfathom-commercial/a6ad6b21-ce9d-5725-948b-7911b27f069f/scratchpad/develop-wt`,
+  which has `node_modules` symlinked and its own generated Prisma client).
+- **Then:** run the final typecheck and `bun run build`, then open the PR into `develop` (never merge) and
+  comment on DEV-258.
 - **Uncommitted / half-written:** nothing.
 
 ## Items
@@ -55,7 +55,13 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
     across tenants, no lock queueing, P2002 in the burst).
 - Commits:
   - `b11234e`: helper, all four callers, schema, migration, seed scoping, and this log.
-  - Next commit: the DB test and this update.
+  - `deb0c5c`: the DB test.
+  - Next commit: unit tests. `finance.invoice-money.test.ts` and `api/v1/invoices/route.test.ts` mocks
+    now answer the allocation queries and assert the allocated number. New
+    `src/lib/finance/invoice-number.test.ts` covers formatting, the lock key, MAX query values, the
+    first number of a year, per-org keys and the error outside a tenant. New
+    `src/lib/ai/tools/finance.create-invoice.test.ts` checks the assistant allocates and inserts in one
+    transaction and never touches the per-operation client.
 
 #### Checks (rerun commands and latest results)
 
@@ -70,9 +76,10 @@ not real secrets.
 | Migrations | `EXTENSION_ADMIN_DATABASE_URL=$U DATABASE_URL=$U MIGRATION_DATABASE_URL=$U bun prisma/prepare-extensions.ts && DATABASE_URL=$U MIGRATION_DATABASE_URL=$U bunx prisma migrate deploy` | pass, new migration applied |
 | Schema vs migrations | `DATABASE_URL=$U bunx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script`, compared before and after | identical. All remaining drift existed before (migration-only constraints) |
 | Seed | `SEED_PASSWORD=... DATABASE_URL=$U MIGRATION_DATABASE_URL=$U bunx prisma db seed`, run twice | pass. The second run takes the "already present" sentinel path |
-| Typecheck | `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit` (it runs out of memory with the default heap) | 8 errors, all in files this branch does not touch (see Known failures). A comparison run on clean `develop` is in progress |
+| Typecheck | `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit` (it runs out of memory with the default heap) | 8 errors, the same set as clean `develop`. None are new. A rerun covering the new test files is pending |
 | Lint/format | `bunx eslint <changed files>` and `bunx prettier --check <changed files>` | pass |
-| Unit tests | `bunx vitest run src/server/routers/finance src/app/api/v1/invoices src/lib/ai/tools/finance src/lib/finance` | not run yet. Expected to fail until the `invoice.count` mocks are updated |
+| Unit tests (affected) | `bunx vitest run src/server/routers/finance src/server/routers/clients src/app/api/v1/invoices src/lib/ai/tools/finance src/lib/ai/tools/finance.create-invoice.test.ts src/lib/finance` | pass (DB suites that need other env vars are skipped) |
+| Unit tests (full) | `bunx vitest run` | running next |
 | DB test | `TEST_DATABASE_URL=$U bunx vitest run src/lib/finance/invoice-number.db.test.ts` (admin URL: the suite creates its own restricted role) | 3/3 pass |
 | DB test, CI-style | `TEST_DATABASE_URL=postgresql://gate_runtime:gate_runtime@localhost:5432/devfathom_test bunx vitest run src/lib/finance/invoice-number.db.test.ts` | 3/3 pass, fixtures cleaned up |
 | Build | `bun run build` | not run yet |
@@ -82,7 +89,8 @@ not real secrets.
 - Typecheck errors in files this branch does not touch: `src/components/pharmacy/counter/counter-console.test.tsx`,
   `src/lib/ai/tools-routing.test.ts`, `src/lib/ai/tools/restaurant-reports.test.ts`,
   `src/lib/pharmacy/duplicate-salt-acknowledgement.db.test.ts`, `src/server/routers/pharmacy-inventory.test.ts`,
-  `src/server/routers/restaurant-catering.test.ts`. Still to confirm against `develop` with the same command.
+  `src/server/routers/restaurant-catering.test.ts`. **These also fail on `develop`:** a clean `develop`
+  worktree produces the identical error list. No new errors.
 
 #### Decisions and open questions
 

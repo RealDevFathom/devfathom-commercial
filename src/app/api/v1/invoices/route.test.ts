@@ -13,6 +13,19 @@ vi.mock('@/server/activity', () => ({ logActivity: mocks.logActivity }));
 
 import { POST } from './route';
 
+/** A request-transaction db that answers allocateInvoiceNumber's statements. */
+function tenantDb() {
+  const db = {
+    invoice: { create: mocks.create },
+    $queryRaw: vi.fn(async (query: { sql: string }) => {
+      if (query.sql.includes('current_setting')) return [{ organizationId: 'org-1' }];
+      if (query.sql.includes('pg_advisory_xact_lock')) return [];
+      return [{ sequence: 4n }];
+    }),
+  };
+  return { ...db, $transaction: vi.fn(async (work: (tx: typeof db) => unknown) => work(db)) };
+}
+
 describe('POST /api/v1/invoices money calculation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -25,15 +38,7 @@ describe('POST /api/v1/invoices money calculation', () => {
   });
 
   it('rounds each half-cent line and the tax half up before persisting totals', async () => {
-    const authCtx = {
-      userId: 'user-1',
-      db: {
-        invoice: {
-          count: vi.fn().mockResolvedValue(0),
-          create: mocks.create,
-        },
-      },
-    };
+    const authCtx = { userId: 'user-1', db: tenantDb() };
     const handler = POST as unknown as (authCtx: unknown, request: Request) => Promise<Response>;
     const response = await handler(
       authCtx,
@@ -55,6 +60,7 @@ describe('POST /api/v1/invoices money calculation', () => {
     expect(mocks.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
+          invoiceNumber: `INV-${new Date().getFullYear()}-005`,
           items: [
             { description: 'First', quantity: 1, rate: 1.005, amount: 1.01 },
             { description: 'Second', quantity: 3, rate: 0.335, amount: 1.01 },
@@ -79,10 +85,7 @@ describe('POST /api/v1/invoices money calculation', () => {
     ],
     ['total', [{ description: 'At limit', quantity: 1, rate: 9_999_999_999.99 }], 0.01],
   ])('rejects a derived %s overflow before persistence', async (_kind, items, tax) => {
-    const authCtx = {
-      userId: 'user-1',
-      db: { invoice: { count: vi.fn(), create: mocks.create } },
-    };
+    const authCtx = { userId: 'user-1', db: tenantDb() };
     const handler = POST as unknown as (authCtx: unknown, request: Request) => Promise<Response>;
     const response = await handler(
       authCtx,
