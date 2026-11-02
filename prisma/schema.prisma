@@ -10785,6 +10785,59 @@ model PlatformSetting {
   @@map("platform_settings")
 }
 
+enum AISettingsMode {
+  Auto
+  ForceAnthropic
+  ForceBedrock
+  Disabled
+}
+
+/// Platform-wide AI routing policy. The database enforces the singleton id.
+model AISetting {
+  id                         String         @id @default("default")
+  mode                       AISettingsMode @default(Auto)
+  monthlyAnthropicBudgetUsd Decimal        @default(200) @db.Decimal(12, 4)
+  cheapAnthropicModel        String
+  standardAnthropicModel     String
+  deepAnthropicModel         String
+  cheapBedrockModel          String
+  standardBedrockModel       String
+  deepBedrockModel           String
+  updatedAt                  DateTime       @updatedAt
+  updatedBy                  String?
+
+  @@map("ai_settings")
+}
+
+model AIModelPrice {
+  id                String   @id @default(cuid())
+  provider          String
+  model             String
+  inputUsdPerMTok   Decimal  @db.Decimal(14, 6)
+  outputUsdPerMTok  Decimal  @db.Decimal(14, 6)
+  effectiveFrom     DateTime
+
+  @@unique([provider, model, effectiveFrom])
+  @@index([provider, model, effectiveFrom(sort: Desc)])
+  @@map("ai_model_prices")
+}
+
+model AIUsage {
+  id             String   @id @default(cuid())
+  provider       String
+  tier           String
+  model          String
+  feature        String
+  organizationId String?
+  inputTokens    Int
+  outputTokens   Int
+  costUsd        Decimal  @db.Decimal(18, 8)
+  createdAt      DateTime @default(now())
+
+  @@index([provider, createdAt])
+  @@map("ai_usage")
+}
+
 model PlatformModule {
   id          String                @id @default(cuid())
   key         String                @unique
