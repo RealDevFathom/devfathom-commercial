@@ -18,6 +18,12 @@ import {
   type SeriesRow,
 } from '@/lib/meetings/occurrences';
 import { guestSecretExpiryFor, mintGuestSecret } from '@/lib/meetings/guest-access';
+import {
+  isMeetingTimeOrderValid,
+  MEETING_TIME_ORDER_MESSAGE,
+  meetingTimeOrderError,
+  meetingTimeOrderErrorForPatch,
+} from '@/lib/meetings/time-order';
 import { assertInOrganization, workspaceId } from '../org-refs';
 
 /** Page size `getAll` falls back to when the caller sends no `limit` (#38). */
@@ -334,6 +340,12 @@ export const meetingsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // DEV-249: refuse a meeting that ends at or before it starts, before any
+      // read or write. The `meetings_time_order_check` CHECK is the floor; this
+      // is what turns it into a message instead of a 500.
+      const timeOrderError = meetingTimeOrderError(input.startTime, input.endTime);
+      if (timeOrderError) throw new TRPCError({ code: 'BAD_REQUEST', message: timeOrderError });
+
       // Guard against stale sessions: if the session JWT references a user that
       // no longer exists (e.g. after a DB reset), fail fast with a useful message
       // instead of a cryptic FK violation.
@@ -391,6 +403,15 @@ export const meetingsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertMeetingManage(ctx, input.id);
       const { id, attendeeIds, ...data } = input;
+
+      // DEV-249: judge the range this edit would LEAVE STORED, not just the
+      // fields it carries — a patch with only `startTime` is compared against
+      // the stored `endTime`, and vice versa. Checked before the attendee
+      // replacement below so a rejected edit writes nothing at all.
+      const timeOrderError = await meetingTimeOrderErrorForPatch(data, () =>
+        ctx.db.meeting.findUnique({ where: { id }, select: { startTime: true, endTime: true } })
+      );
+      if (timeOrderError) throw new TRPCError({ code: 'BAD_REQUEST', message: timeOrderError });
 
       if (attendeeIds) {
         const allAttendees = [...new Set([ctx.session.user.id, ...attendeeIds])];
@@ -760,10 +781,13 @@ export const meetingsRouter = router({
           scheduledEnd: z.date(),
         })
         .strict()
-        // The `meeting_occurrences_time_order_check` CHECK enforces this in the
-        // database; rejecting it here turns a 500 into a 400 with a reason.
-        .refine((input) => input.scheduledEnd.getTime() >= input.scheduledStart.getTime(), {
-          message: 'scheduledEnd must not precede scheduledStart.',
+        // DEV-249: the same strict rule every meeting write applies — an
+        // occurrence moved to a zero-length or backwards slot is no more
+        // joinable than a series created that way. Stricter than the
+        // `meeting_occurrences_time_order_check` CHECK (`>=`), which stays the
+        // floor for rows the materialiser derived before series were checked.
+        .refine((input) => isMeetingTimeOrderValid(input.scheduledStart, input.scheduledEnd), {
+          message: MEETING_TIME_ORDER_MESSAGE,
           path: ['scheduledEnd'],
         })
     )

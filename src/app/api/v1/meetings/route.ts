@@ -4,6 +4,7 @@ import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
 import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
+import { meetingTimeOrderError } from '@/lib/meetings/time-order';
 
 export const GET = withApiAuth('meetings:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -54,6 +55,18 @@ export const POST = withApiAuth('meetings:write', async (ctx, request) => {
   }
 
   const { attendeeIds, startTime, endTime, ...rest } = parsed.data;
+
+  // DEV-249: a meeting must end strictly after it starts. Checked before any
+  // read, in the same `{ error, details }` shape as a schema failure so a client
+  // that already handles 400s can point at the offending field.
+  const timeOrderError = meetingTimeOrderError(new Date(startTime), new Date(endTime));
+  if (timeOrderError) {
+    return NextResponse.json(
+      { error: timeOrderError, details: [{ path: ['endTime'], message: timeOrderError }] },
+      { status: 400 }
+    );
+  }
+
   const allAttendees = [...new Set([ctx.userId, ...attendeeIds])];
 
   // REST-07: validate attendee ids exist before insert (bad id → raw FK 500).

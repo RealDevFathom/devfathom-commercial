@@ -339,6 +339,7 @@ Schedule a meeting. The token's user is auto-added as an attendee.
     "attendeeIds": ["userId"]
   }
   \`\`\`
+- **Validation:** \`endTime\` must be strictly after \`startTime\`. An end at or before the start is rejected with 400 and \`{ error, details: [{ path: ["endTime"], message }] }\`.
 - **Response:** \`{ data: Meeting }\` (201)
 
 ---

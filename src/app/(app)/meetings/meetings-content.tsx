@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, memo } from 'react';
+import { useState, useMemo, useCallback, useId, memo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -29,6 +29,7 @@ import { TimePicker } from '@/components/ui/time-picker';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { computePunctuality } from '@/lib/meeting-occurrence';
+import { meetingFormTimeOrderError } from '@/lib/meetings/time-order';
 import { format, isToday, isTomorrow } from 'date-fns';
 
 const recurrenceLabels: Record<string, string> = {
@@ -95,8 +96,13 @@ export function MeetingsContent() {
       {showCreate && (
         <CreateMeetingForm
           onSubmit={createMeeting.mutate}
-          onClose={() => setShowCreate(false)}
+          onClose={() => {
+            setShowCreate(false);
+            // A refusal belongs to the attempt it answered, not the next form.
+            createMeeting.reset();
+          }}
           isPending={createMeeting.isPending}
+          serverError={createMeeting.error?.message ?? null}
           team={team}
         />
       )}
@@ -180,6 +186,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
   onSubmit,
   onClose,
   isPending,
+  serverError,
   team,
 }: {
   onSubmit: (input: {
@@ -193,8 +200,11 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
   }) => void;
   onClose: () => void;
   isPending: boolean;
+  /** The server's refusal of the last submit, shown when the form itself found nothing. */
+  serverError?: string | null;
   team?: Array<{ id: string; name: string; avatar: string | null }>;
 }) {
+  const timeErrorId = useId();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState('');
@@ -206,8 +216,13 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
   );
   const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
 
+  // DEV-249: the same rule the server applies, checked as the times are picked
+  // so a meeting that ends at or before it starts cannot be submitted.
+  const timeOrderError = meetingFormTimeOrderError(date, startTime, endTime);
+  const formError = timeOrderError ?? serverError ?? null;
+
   const handleCreate = () => {
-    if (!title.trim() || !date || !startTime || !endTime) return;
+    if (!title.trim() || !date || !startTime || !endTime || timeOrderError) return;
     onSubmit({
       title: title.trim(),
       description: description.trim() || undefined,
@@ -288,10 +303,17 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               value={endTime}
               onChange={setEndTime}
               aria-label="End time"
+              invalid={!!timeOrderError}
+              aria-describedby={timeOrderError ? timeErrorId : undefined}
               className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
         </div>
+        {formError && (
+          <p id={timeErrorId} role="alert" className="text-xs text-destructive">
+            {formError}
+          </p>
+        )}
 
         {/* Recurrence */}
         <div>
@@ -362,7 +384,9 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           </button>
           <button
             onClick={handleCreate}
-            disabled={!title.trim() || !date || !startTime || !endTime || isPending}
+            disabled={
+              !title.trim() || !date || !startTime || !endTime || !!timeOrderError || isPending
+            }
             className="flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {isPending ? (
@@ -418,6 +442,7 @@ const MeetingCard = memo(function MeetingCard({
     ''
   );
   const [eAttendees, setEAttendees] = useState<string[]>([]);
+  const editTimeErrorId = useId();
 
   const updateMeeting = trpc.meetings.update.useMutation({
     onSuccess: () => {
@@ -464,11 +489,17 @@ const MeetingCard = memo(function MeetingCard({
     setELoc(meeting.location || '');
     setERecurrence((meeting.recurrence as typeof eRecurrence) || '');
     setEAttendees(meeting.attendees.map((a) => a.user.id));
+    // A refusal belongs to the edit it answered, not the next one.
+    updateMeeting.reset();
     setIsEditing(true);
   };
 
+  // DEV-249: the server's rule, applied while editing.
+  const editTimeOrderError = meetingFormTimeOrderError(eDate, eStart, eEnd);
+  const editFormError = editTimeOrderError ?? updateMeeting.error?.message ?? null;
+
   const handleSave = () => {
-    if (!eTitle.trim() || !eDate || !eStart || !eEnd) return;
+    if (!eTitle.trim() || !eDate || !eStart || !eEnd || editTimeOrderError) return;
     updateMeeting.mutate({
       id: meeting.id,
       title: eTitle.trim(),
@@ -538,10 +569,17 @@ const MeetingCard = memo(function MeetingCard({
                 value={eEnd}
                 onChange={setEEnd}
                 aria-label="End time"
+                invalid={!!editTimeOrderError}
+                aria-describedby={editTimeOrderError ? editTimeErrorId : undefined}
                 className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
           </div>
+          {editFormError && (
+            <p id={editTimeErrorId} role="alert" className="text-xs text-destructive">
+              {editFormError}
+            </p>
+          )}
           <div>
             <label className="block text-[10px] font-medium text-foreground mb-1">Repeat</label>
             <div className="flex gap-1">
@@ -603,7 +641,14 @@ const MeetingCard = memo(function MeetingCard({
             </button>
             <button
               onClick={handleSave}
-              disabled={!eTitle.trim() || !eDate || !eStart || !eEnd || updateMeeting.isPending}
+              disabled={
+                !eTitle.trim() ||
+                !eDate ||
+                !eStart ||
+                !eEnd ||
+                !!editTimeOrderError ||
+                updateMeeting.isPending
+              }
               className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
             >
               {updateMeeting.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save
