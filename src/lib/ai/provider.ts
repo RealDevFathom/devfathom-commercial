@@ -18,6 +18,7 @@ import {
 } from './model-defaults';
 import { createRoutedLanguageModel } from './routed-model';
 import { getTierForFeature, type AITier } from './tiers';
+import type { TurnBudget } from './turn-budget';
 
 type Env = Record<string, string | undefined>;
 
@@ -108,7 +109,11 @@ export type AIUnavailableReason =
   /** Every candidate provider has reached its monthly spend cap. */
   | 'CAPPED'
   /** Every candidate provider was attempted and failed. */
-  | 'PROVIDERS_FAILED';
+  | 'PROVIDERS_FAILED'
+  /** The turn has no model calls or time left. A partial answer may already have streamed. */
+  | 'TURN_LIMIT'
+  /** Every remaining candidate's circuit breaker is open after repeated failures. */
+  | 'CIRCUIT_OPEN';
 
 export class AIUnavailableError extends Error {
   constructor(
@@ -287,6 +292,8 @@ export type CreateAIModelOptions = {
   feature?: string;
   /** Attribution only; never a tenancy boundary for the platform ledger. */
   organizationId?: string | null;
+  /** The owner turn's shared limits (Ask Fathom); routed calls only. */
+  turn?: TurnBudget;
 };
 
 export function createAIModel(
@@ -304,6 +311,7 @@ export function createAIModel(
           tier,
           feature: options.feature ?? 'unattributed',
           organizationId: options.organizationId ?? null,
+          ...(options.turn ? { turn: options.turn } : {}),
           env: env === process.env ? undefined : env,
         }),
         provider: 'auto',

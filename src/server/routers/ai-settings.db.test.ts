@@ -115,7 +115,7 @@ suite('AI settings router against PostgreSQL', () => {
       mode: 'Auto',
       fallbackEnabled: true,
       capsUsd: { anthropic: 190, openai: 190, bedrock: 300 },
-      models: { openai: { deep: 'gpt-5.4' } },
+      models: { openai: { deep: 'gpt-6.1-sol' } },
     });
 
     const audits = await withPlatformDb((tx) =>

@@ -286,7 +286,7 @@ describe('AI settings read', () => {
       providerOrder: ['bedrock', 'anthropic'],
       fallbackEnabled: false,
       openaiMonthlyCapUsd: decimal('25.5000'),
-      deepBedrockModel: 'us.anthropic.custom-deep',
+      deepBedrockModel: 'global.anthropic.custom-deep',
       updatedBy: 'platform_super',
     };
 
@@ -310,9 +310,9 @@ describe('AI settings read', () => {
     });
     const bedrock = view.providers.find((entry) => entry.provider === 'bedrock')!;
     expect(bedrock.models.find((entry) => entry.tier === 'deep')).toMatchObject({
-      value: 'us.anthropic.custom-deep',
+      value: 'global.anthropic.custom-deep',
       isOverride: true,
-      defaultValue: 'us.anthropic.claude-opus-5-5',
+      defaultValue: 'global.anthropic.claude-sonnet-5-5',
     });
     expect(view.updatedBy).toBe('platform_super');
   });

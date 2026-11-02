@@ -321,3 +321,47 @@ export async function maybeCreateAIBudgetAlert(
     return 'none';
   }
 }
+
+/** The UTC hour containing `now`, `YYYY-MM-DDTHH`: the dedupe window for auth alerts. */
+export function utcHourKey(now: Date): string {
+  return now.toISOString().slice(0, 13);
+}
+
+/**
+ * A provider answered 401: the platform key (or the AWS role) was rejected. Every
+ * active SUPER_ADMIN is notified once per provider per UTC hour; the deterministic
+ * row id makes repeats and concurrent calls a no-op. The router has already opened
+ * the provider's circuit, so routing skips it for 10 minutes at a time. Never throws.
+ */
+export async function maybeCreateAIAuthFailureAlert(
+  provider: Provider,
+  now = new Date()
+): Promise<boolean> {
+  try {
+    if (!isRoutedProvider(provider)) return false;
+    if (!can(AI_METERING_PRINCIPAL, 'auth-alert:write')) return false;
+    const hour = utcHourKey(now);
+    const label = PROVIDER_LABEL[provider];
+    const credential =
+      provider === 'bedrock'
+        ? 'the AWS role used for Bedrock'
+        : `the ${label} key in Secrets Manager`;
+    const title = `${label} rejected the platform credentials`;
+    const message = `${label} answered 401 (authentication failed) in the hour from ${hour}:00 UTC. Routing skips ${label} for 10 minutes at a time and uses the next provider. Check ${credential}.`;
+    const written = await withPlatformDb((db) =>
+      db.$executeRaw(Prisma.sql`
+        INSERT INTO "platform_notifications" ("id", "platformUserId", "type", "title", "message", "createdAt")
+        SELECT ${`ai_auth_failed:${provider}:${hour}:`}::text || "id", "id", 'ai_auth_failed',
+          ${title}, ${message}, ${now}
+        FROM "platform_users" WHERE "role" = 'SUPER_ADMIN' AND "active" = true
+        ON CONFLICT ("id") DO NOTHING`)
+    );
+    return written > 0;
+  } catch (error) {
+    console.error('[ai-usage] could not write the AI provider auth alert', {
+      provider: isRoutedProvider(provider) ? provider : 'unknown',
+      error: errorName(error),
+    });
+    return false;
+  }
+}

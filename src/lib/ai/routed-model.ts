@@ -1,11 +1,15 @@
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 
 import type { AITier } from './tiers';
+import type { TurnBudget } from './turn-budget';
 
 export type RoutedCallContext = {
+  /** The requested tier; the router resolves the tier actually used (workload.ts). */
   tier: AITier;
   feature: string;
   organizationId: string | null;
+  /** The owner turn's shared limits: every provider attempt, retries included, spends one call. */
+  turn?: TurnBudget;
   /** Injected in tests; production reads process.env at call time. */
   env?: Record<string, string | undefined>;
 };

@@ -211,22 +211,22 @@ describe('shared provider gate with real factory boundary', () => {
     });
     expect(sdk.anthropic).toHaveBeenCalledWith({ apiKey: 'resolved-key' });
     expect(sdk.select).toHaveBeenLastCalledWith('claude-haiku-5-5');
-    createTieredModel({ provider: 'openai', modelId: 'gpt-5.4-mini', apiKey: 'resolved-key' });
+    createTieredModel({ provider: 'openai', modelId: 'gpt-6.1-sol', apiKey: 'resolved-key' });
     expect(sdk.openai).toHaveBeenCalledWith({ apiKey: 'resolved-key' });
-    expect(sdk.select).toHaveBeenLastCalledWith('gpt-5.4-mini');
+    expect(sdk.select).toHaveBeenLastCalledWith('gpt-6.1-sol');
     expect(() => createTieredModel({ provider: 'openai', modelId: 'm', apiKey: null })).toThrow(
       AIUnavailableError
     );
   });
-  it('builds Bedrock with the AWS credential chain in us-east-1 and never forwards static keys', () => {
+  it('builds Bedrock with the AWS credential chain in ap-southeast-1 and never forwards static keys', () => {
     createTieredModel({
       provider: 'bedrock',
-      modelId: 'us.anthropic.claude-sonnet-5-5',
+      modelId: 'global.anthropic.claude-sonnet-5-5',
       env: { AWS_ACCESS_KEY_ID: 'must-not-forward', AWS_SECRET_ACCESS_KEY: 'must-not-forward' },
     });
     expect(sdk.awsCredentialChain).toHaveBeenCalledOnce();
     expect(sdk.bedrock).toHaveBeenCalledWith({
-      region: 'us-east-1',
+      region: 'ap-southeast-1',
       credentialProvider: sdk.credentialProvider,
     });
     const [bedrockOptions] = sdk.bedrock.mock.calls[0] as unknown as [Record<string, unknown>];

@@ -10,6 +10,8 @@ export type AIFeature =
   | 'retention'
   | 'analytics'
   | 'periodic-owner-reports'
+  /** The weekly owner summary: always the deep model, Anthropic only, never failed over. */
+  | 'weekly-owner-summary'
   | 'ask-fathom'
   | 'pharmacy.marketing-assistance'
   | 'pharmacy-rx-ocr'
@@ -28,6 +30,7 @@ const FEATURE_TIERS: Readonly<Partial<Record<AIFeature, AITier>>> = {
   retention: 'standard',
   analytics: 'standard',
   'periodic-owner-reports': 'deep',
+  'weekly-owner-summary': 'deep',
 };
 
 /** Unknown and newly introduced features deliberately start on the lowest-cost tier. */

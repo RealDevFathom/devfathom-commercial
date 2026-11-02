@@ -58,7 +58,7 @@ const ENV = {
   ANTHROPIC_API_KEY_SECRET_ID: 'devfathom/staging/anthropic-api-key',
   OPENAI_API_KEY_SECRET_ID: 'devfathom/staging/openai-api-key',
   AI_SECRETS_REGION: 'ap-southeast-1',
-  BEDROCK_REGION: 'us-east-1',
+  BEDROCK_REGION: 'ap-southeast-1',
   // Bedrock signs with whatever the default AWS chain resolves; in production
   // that is the instance role. Inert values here only let SigV4 run offline.
   AWS_ACCESS_KEY_ID: 'AKIAINERTTESTKEY0000',
@@ -113,7 +113,7 @@ function openaiStream(text: string) {
     id: 'resp_e2e',
     object: 'response',
     created_at: 1_793_000_000,
-    model: 'gpt-5.4-mini',
+    model: 'gpt-6.1-sol',
     status: 'completed',
     output: [],
     incomplete_details: null,
@@ -232,7 +232,7 @@ async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
           { status: 500 }
         );
   }
-  if (url.startsWith('https://bedrock-runtime.us-east-1.amazonaws.com/')) {
+  if (url.startsWith('https://bedrock-runtime.ap-southeast-1.amazonaws.com/')) {
     return outcomes.bedrock === 'ok'
       ? bedrockStream('Hello from Bedrock')
       : Response.json({ message: 'ThrottlingException' }, { status: 429 });
@@ -249,6 +249,10 @@ function routing(stored: StoredAISettings | null, spend: Partial<Record<string, 
       return 0;
     },
     alert: async () => undefined,
+    authAlert: async () => undefined,
+    deepStrategyEnabled: async () => false,
+    // The router's one jittered retry runs without a real wait here.
+    sleep: async () => undefined,
   });
 }
 
@@ -263,14 +267,12 @@ const superAdmin = (overrides: Partial<StoredAISettings>): StoredAISettings => (
   ...overrides,
 });
 
-function ask() {
+function ask(text = 'What were sales today?') {
   return POST(
     new Request('http://test.invalid/api/assistant', {
       method: 'POST',
       body: JSON.stringify({
-        messages: [
-          { id: 'u', role: 'user', parts: [{ type: 'text', text: 'What were sales today?' }] },
-        ],
+        messages: [{ id: 'u', role: 'user', parts: [{ type: 'text', text }] }],
       }),
     })
   );
@@ -325,35 +327,47 @@ describe('Ask Fathom through the routed providers (offline end to end)', () => {
     ]);
   });
 
-  it('falls back to OpenAI, without retention, when Anthropic fails', async () => {
+  it('retries Anthropic once, then falls back to OpenAI without retention', async () => {
     outcomes.anthropic = 'fail';
     const response = await ask();
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('Hello from OpenAI');
+    // 529 overloaded: one jittered retry on Anthropic, then the Responses API.
     expect(calls.map((call) => call.url)).toEqual([
+      'https://api.anthropic.com/v1/messages',
       'https://api.anthropic.com/v1/messages',
       'https://api.openai.com/v1/responses',
     ]);
-    expect(calls[1].headers.get('authorization')).toBe(
-      'Bearer test-openai-key-from-secrets-manager'
-    );
-    expect(calls[1].body).toMatchObject({ model: 'gpt-5.4-mini', store: false });
+    const openai = calls.at(-1)!;
+    expect(openai.headers.get('authorization')).toBe('Bearer test-openai-key-from-secrets-manager');
+    expect(openai.body).toMatchObject({ model: 'gpt-6.1-sol', store: false });
     expect(recorded.map((row) => row.provider)).toEqual(['openai']);
   });
 
-  it('falls back to Bedrock in us-east-1, signed by the AWS credential chain, when both fail', async () => {
+  it('falls back to the Bedrock global profile from ap-southeast-1, signed by the AWS credential chain, with personal data masked', async () => {
     outcomes.anthropic = 'fail';
     outcomes.openai = 'fail';
-    const response = await ask();
+    const response = await ask(
+      'What did the customer on 0300-1234567 (ayesha@example.com, CNIC 35202-1234567-1) buy for PKR 12,450 today?'
+    );
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('Hello from Bedrock');
+    expect(calls.map(providerOf)).toEqual(['api', 'api', 'api', 'api', 'bedrock-runtime']);
     const bedrock = calls.at(-1)!;
     expect(bedrock.url).toBe(
-      `https://bedrock-runtime.us-east-1.amazonaws.com/model/${encodeURIComponent('us.anthropic.claude-sonnet-5-5')}/converse-stream`
+      `https://bedrock-runtime.ap-southeast-1.amazonaws.com/model/${encodeURIComponent('global.anthropic.claude-sonnet-5-5')}/converse-stream`
     );
     expect(bedrock.headers.get('authorization')).toMatch(
-      /^AWS4-HMAC-SHA256 Credential=AKIAINERTTESTKEY0000\/\d{8}\/us-east-1\/bedrock\//
+      /^AWS4-HMAC-SHA256 Credential=AKIAINERTTESTKEY0000\/\d{8}\/ap-southeast-1\/bedrock\//
     );
+    const sent = JSON.stringify(bedrock.body);
+    expect(sent).not.toContain('0300-1234567');
+    expect(sent).not.toContain('ayesha@example.com');
+    expect(sent).not.toContain('35202-1234567-1');
+    expect(sent).toContain('customer on [phone] ([email], CNIC [cnic]) buy for PKR 12,450 today');
+    // Anthropic and OpenAI received the question as asked.
+    expect(JSON.stringify(calls[0].body)).toContain('0300-1234567');
+    expect(JSON.stringify(calls[2].body)).toContain('0300-1234567');
     expect(recorded.map((row) => row.provider)).toEqual(['bedrock']);
   });
 
@@ -364,14 +378,14 @@ describe('Ask Fathom through the routed providers (offline end to end)', () => {
         models: {
           anthropic: {},
           openai: {},
-          bedrock: { standard: 'us.anthropic.claude-haiku-5-5' },
+          bedrock: { standard: 'global.anthropic.claude-haiku-5-5' },
         },
       })
     );
     const response = await ask();
     expect(await response.text()).toContain('Hello from Bedrock');
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toContain(encodeURIComponent('us.anthropic.claude-haiku-5-5'));
+    expect(calls[0].url).toContain(encodeURIComponent('global.anthropic.claude-haiku-5-5'));
   });
 
   it('follows the SuperAdmin switch: OpenAI forced first', async () => {

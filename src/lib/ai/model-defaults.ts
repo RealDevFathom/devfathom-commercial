@@ -17,8 +17,14 @@ export function isRoutedProvider(value: unknown): value is TieredAIProviderName 
 }
 
 /**
- * Model per provider and tier. Bedrock uses the US geo inference profiles: from
- * us-east-1 these models are not served in-Region by bare model id.
+ * Model per provider and tier. Bedrock uses the global cross-Region inference
+ * profiles, called from ap-southeast-1.
+ *
+ * The table is what each tier would use; the router decides which tier a call
+ * really runs on (src/lib/ai/workload.ts): `cheap` runs on the standard model
+ * unless AF_HAIKU_LOOKUPS=true, and `deep` runs on the standard model unless the
+ * call is the weekly owner summary or the organization opted in to deep strategy.
+ * Bedrock is never given a 4.x model by default.
  */
 export const DEFAULT_MODELS = {
   anthropic: {
@@ -27,16 +33,21 @@ export const DEFAULT_MODELS = {
     deep: 'claude-opus-5-5',
   },
   openai: {
-    cheap: 'gpt-5.4-nano',
-    standard: 'gpt-5.4-mini',
-    deep: 'gpt-5.4',
+    cheap: 'gpt-6-luna',
+    standard: 'gpt-6.1-sol',
+    deep: 'gpt-6.1-sol',
   },
   bedrock: {
-    cheap: 'us.anthropic.claude-haiku-5-5',
-    standard: 'us.anthropic.claude-sonnet-5-5',
-    deep: 'us.anthropic.claude-opus-5-5',
+    cheap: 'global.anthropic.claude-haiku-5-5',
+    standard: 'global.anthropic.claude-sonnet-5-5',
+    deep: 'global.anthropic.claude-sonnet-5-5',
   },
 } as const satisfies Record<TieredAIProviderName, Record<AITier, string>>;
+
+/** `AF_HAIKU_LOOKUPS=true` lets the cheap tier use the small model; anything else keeps it on standard. */
+export function haikuLookupsEnabled(env: Env = process.env): boolean {
+  return env.AF_HAIKU_LOOKUPS?.trim().toLowerCase() === 'true';
+}
 
 export const DEFAULT_PROVIDER_ORDER: readonly TieredAIProviderName[] = ROUTED_AI_PROVIDERS;
 
@@ -47,13 +58,14 @@ export const DEFAULT_MONTHLY_CAPS_USD: Readonly<Record<TieredAIProviderName, num
   bedrock: 300,
 };
 
-export const DEFAULT_BEDROCK_REGION = 'us-east-1';
+/** Bedrock source Region. BEDROCK_REGION must still be set for Bedrock to join the chain. */
+export const DEFAULT_BEDROCK_REGION = 'ap-southeast-1';
 export const DEFAULT_AI_SECRETS_REGION = 'ap-southeast-1';
 
 /**
  * List prices in USD per million tokens, used when no `ai_model_prices` row
- * exists. Bedrock geo-profile prices carry a 10% allowance over first-party list
- * prices. A SUPER_ADMIN price row always wins.
+ * exists. Bedrock global profiles are billed at the first-party price, with no
+ * Regional premium. A SUPER_ADMIN price row always wins.
  */
 export const DEFAULT_MODEL_PRICES_USD_PER_MTOK: Readonly<
   Record<string, { input: number; output: number }>
@@ -61,19 +73,11 @@ export const DEFAULT_MODEL_PRICES_USD_PER_MTOK: Readonly<
   'anthropic:claude-haiku-5-5': { input: 0.1, output: 0.5 },
   'anthropic:claude-sonnet-5-5': { input: 2, output: 10 },
   'anthropic:claude-opus-5-5': { input: 4, output: 20 },
-  'openai:gpt-5.4-nano': { input: 0.2, output: 1.25 },
-  'openai:gpt-5.4-mini': { input: 0.75, output: 4.5 },
-  'openai:gpt-5.4': { input: 2.5, output: 15 },
-  'bedrock:us.anthropic.claude-haiku-5-5': { input: 0.11, output: 0.55 },
-  'bedrock:us.anthropic.claude-sonnet-5-5': { input: 2.2, output: 11 },
-  'bedrock:us.anthropic.claude-opus-5-5': { input: 4.4, output: 22 },
-  // Older US profiles that answer on the staging account today, for SuperAdmin or
-  // AI_BEDROCK_MODEL_* overrides while the Claude 5.5 Bedrock agreement is pending.
-  'bedrock:us.anthropic.claude-haiku-4-5-20251001-v1:0': { input: 1.1, output: 5.5 },
-  'bedrock:us.anthropic.claude-sonnet-4-6': { input: 3.3, output: 16.5 },
-  'bedrock:us.anthropic.claude-sonnet-4-5-20250929-v1:0': { input: 3.3, output: 16.5 },
-  'bedrock:us.anthropic.claude-opus-4-6-v1': { input: 5.5, output: 27.5 },
-  'bedrock:us.anthropic.claude-opus-4-5-20251101-v1:0': { input: 5.5, output: 27.5 },
+  'openai:gpt-6-luna': { input: 0.1, output: 0.5 },
+  'openai:gpt-6.1-sol': { input: 2, output: 10 },
+  'bedrock:global.anthropic.claude-haiku-5-5': { input: 0.1, output: 0.5 },
+  'bedrock:global.anthropic.claude-sonnet-5-5': { input: 2, output: 10 },
+  'bedrock:global.anthropic.claude-opus-5-5': { input: 4, output: 20 },
 };
 
 /**

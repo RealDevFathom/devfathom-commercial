@@ -1,4 +1,4 @@
-export type AIMutationCapability = 'usage:write' | 'budget-alert:write';
+export type AIMutationCapability = 'usage:write' | 'budget-alert:write' | 'auth-alert:write';
 
 export type AIMutationPrincipal = Readonly<{
   id: string;
@@ -14,6 +14,6 @@ export function can(principal: AIMutationPrincipal, capability: AIMutationCapabi
 
 export const AI_METERING_PRINCIPAL: AIMutationPrincipal = Object.freeze({
   id: 'system:ai-metering',
-  allow: Object.freeze(['usage:write', 'budget-alert:write'] as const),
+  allow: Object.freeze(['usage:write', 'budget-alert:write', 'auth-alert:write'] as const),
   deny: Object.freeze([] as const),
 });

@@ -210,6 +210,8 @@ export function createVisionRxOcrAdapter(options: VisionRxOcrOptions = {}): RxOc
             },
           ],
           temperature: 0,
+          // Retries belong to the routed chain (one jittered retry, then failover).
+          maxRetries: 0,
           abortSignal: signal,
           providerOptions: selection.providerOptions,
         }));

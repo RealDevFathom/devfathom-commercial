@@ -21,6 +21,7 @@ vi.mock('./spend', async (importOriginal) => ({
 
 import {
   karachiMonth,
+  maybeCreateAIAuthFailureAlert,
   maybeCreateAIBudgetAlert,
   providerCapState,
   readMonthlyAIUsage,
@@ -398,5 +399,37 @@ describe('per-provider cap alerts', () => {
     await expect(maybeCreateAIBudgetAlert('azure' as never, NOV)).resolves.toBe('none');
     expect(mocks.raw).not.toHaveBeenCalled();
     expect(mocks.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('provider 401 alert', () => {
+  const AT = new Date('2026-11-02T12:34:56Z');
+
+  it('notifies every active SuperAdmin once per provider per UTC hour', async () => {
+    mocks.execute.mockResolvedValueOnce(2).mockResolvedValueOnce(0);
+    await expect(maybeCreateAIAuthFailureAlert('anthropic', AT)).resolves.toBe(true);
+    await expect(maybeCreateAIAuthFailureAlert('anthropic', AT)).resolves.toBe(false);
+    const notice = sqlOf(mocks.execute, 0);
+    expect(notice.sql).toContain(`'ai_auth_failed'`);
+    expect(notice.sql).toContain(`"role" = 'SUPER_ADMIN' AND "active" = true`);
+    expect(notice.sql).toContain('ON CONFLICT ("id") DO NOTHING');
+    expect(notice.values).toEqual(
+      expect.arrayContaining([
+        'ai_auth_failed:anthropic:2026-11-02T12:',
+        'Anthropic rejected the platform credentials',
+        expect.stringContaining('the Anthropic key in Secrets Manager'),
+      ])
+    );
+  });
+
+  it('never throws into the router', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mocks.execute.mockRejectedValueOnce(new Error('db down'));
+    await expect(maybeCreateAIAuthFailureAlert('openai', AT)).resolves.toBe(false);
+    expect(log).toHaveBeenCalledWith('[ai-usage] could not write the AI provider auth alert', {
+      provider: 'openai',
+      error: 'Error',
+    });
+    await expect(maybeCreateAIAuthFailureAlert('azure' as never, AT)).resolves.toBe(false);
   });
 });
