@@ -22,7 +22,7 @@ def git(*a):
 # ---------- items in scope
 inv = {o["number"]: o for o in jload(f"{S}/inventory.json", [])}
 g3 = {i["n"]: i for i in jload(f"{S}/g3-items.json", [])}
-G1 = [1193, 1192, 1189, 1181, 1180, 1177, 1172, 1194, 1191, 1190, 1188, 1187, 1186, 1184, 1183, 1182, 1179, 1178, 1176, 1175, 1174, 1173]
+G1 = [1223, 1224, 1193, 1192, 1189, 1181, 1180, 1177, 1172, 1194, 1191, 1190, 1188, 1187, 1186, 1184, 1183, 1182, 1179, 1178, 1176, 1175, 1174, 1173]
 G2 = [1166, 1165, 1164, 1163, 1162, 1161, 1160, 1157, 1156, 1155, 1154, 1153, 1152, 1151, 1150, 1149, 1148, 1158]
 G3 = list(g3.keys())
 titles = {}
@@ -94,7 +94,7 @@ def dev_id(n):
 
 
 def branch_of(n):
-    return (g3.get(n) or {}).get("branch") or (inv.get(n) or {}).get("branch") or "?"
+    return (g3.get(n) or {}).get("branch") or (inv.get(n) or {}).get("branch") or {1223: "saad/nice-thompson-99m17p", 1224: "saad/great-brown-id2w5x"}.get(n, "?")
 
 
 def mc_text(s, retry):
@@ -210,7 +210,7 @@ md = [f"# PR review handoff log", "",
       f"_Generated {now} from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._", "",
       "## Resume here", "", resume, "",
       "## Progress", "",
-      f"- Scope: every open PR into develop without a QA+Security verdict comment: group 1 #1172-#1194 (22), group 2 #1148-#1166 (18), group 3 the other 127 (pharmacy first). 118 older PRs already had verdict comments and are out of scope.",
+      f"- Scope: every open PR into develop without a QA+Security verdict comment: group 1 #1172-#1194 (22, plus #1223 and #1224 opened during the run; #1225 is this tracking PR and is not reviewed), group 2 #1148-#1166 (18), group 3 the other 127 (pharmacy first). 118 older PRs already had verdict comments and are out of scope.",
       f"- Status: done {cnt['done']} · in progress {cnt['in progress']} · blocked {cnt['blocked']} · not started {cnt['not started']} (of {len(states)})",
       f"- Machine-check queue ({len(queue)} left, two lanes, runs serially per lane): {' '.join(queue[:40])}{' …' if len(queue) > 40 else ''}",
       f"- Last finished checks: " + ", ".join(f"#{a}@{b[:8]}" for a, b in done_lines[-6:]),
