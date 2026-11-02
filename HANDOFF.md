@@ -1,17 +1,17 @@
 # HANDOFF — SehatCart develop QA pass + BA recommendations
 
-Last updated: 2026-11-02 23:58 PKT (18:58 UTC)
+Last updated: 2026-11-03 00:01 PKT (19:01 UTC)
 Branch: `saad/great-brown-id2w5x` (base `develop` @ `47518cb`)
 PR: [#1224](https://github.com/RealDevFathom/devfathom-commercial/pull/1224) into `develop` — docs/evidence/harness only, never merge from this session. Session is subscribed to PR activity.
 Linear: no Linear issue is attached to this QA pass (see Open questions)
 
 ## Resume here
 
-- **Single next action:** W8 — write `ba-recommendations.md` (repo root): one entry per suggestion ([P1/P2/P3] Area: …, who it helps, evidence, size, change vs new), link existing GitHub issues (#7xx growth/enhancement backlog), then top-10 ranking and cut/simplify note. `qa-report.md` is DONE (28 new findings, 23 re-verified).
+- **Single next action:** none required — both deliverables are complete (`qa-report.md`, `ba-recommendations.md`). Optional follow-ups: (a) re-run the pass on a two-branch tenant with `AI_PROVIDER` set (Ask Fathom, cross-branch IDOR, transfers); (b) if the team wants, file the 28 new findings as GitHub issues from `qa-report.md`; (c) void the 3 orphan QA bills once an open-bills list exists.
   - Testing is complete. Day 2026-11-02 was CLOSED by QA at 23:48 PKT (variance −4.00, deliberate).
   - Caveat: another tester (`QA-20261102-FUNC-*`, `QA-20261102-CASHCHECK-*`) is using the **same QA Cashier account** on this tenant.
-- **Item:** QA pass (no DEV id). Workstreams W6 then W4.
-- **Half-written / uncommitted:** `qa-report.md` done; `ba-recommendations.md` **not started**. All findings so far are in `qa/sehatcart-2026-11-02/findings-log.md` (N1–N17 + re-verified issues). Nothing else uncommitted after this commit.
+- **Item:** QA pass (no DEV id). All workstreams done.
+- **Half-written / uncommitted:** nothing. `qa-report.md` and `ba-recommendations.md` are final. All findings so far are in `qa/sehatcart-2026-11-02/findings-log.md` (N1–N17 + re-verified issues). Nothing else uncommitted after this commit.
 
 ## Workstreams (items)
 
@@ -24,7 +24,7 @@ Linear: no Linear issue is attached to this QA pass (see Open questions)
 | W5 | AI (Ask Fathom + growth) | done (blocked live) | Ask Fathom 503 (no `AI_PROVIDER` on develop, #1199/#1159) → accuracy/injection/Urdu **not testable live**; tool authz reviewed in code (`src/lib/ai/tools/pharmacy-reports.ts`); growth insights UNAVAILABLE; basket needs completed days | Write up; optional: deterministic replenishment report check (`pharmacyReports.replenishment`) |
 | W6 | UI/UX/a11y sweep (375/768/1440, dark, Urdu RTL, keyboard, axe) | done | Desktop/tablet/phone sweeps done (no doc overflow; #1032/#1069 reproduce); axe done (N25); no app Urdu (N24); dark sweep running | `ROUTES="..." node qa/sehatcart-2026-11-02/harness/sweep.mjs tablet 768 1024 light`, then `phone 375 812`, `desk-dark 1440 900 dark`; Urdu switch via Settings; axe via `@axe-core/playwright` |
 | W7 | Security + data integrity probes | done | XSS pass; CSV pass (Sev4 gap); throttle N19; logout-not-revoked N20; concurrency pass; #521/#636 fixed; offline N21 | Optional: cross-tenant host probe (needs another tenant host) |
-| W8 | Write `qa-report.md` + `ba-recommendations.md` | in progress | `qa-report.md` committed | Draft from `findings-log.md`; dedupe against `issues.tsv` (regenerate with the `gh api` command below) |
+| W8 | Write `qa-report.md` + `ba-recommendations.md` | done | 28 new findings (5 Sev1/7 Sev2/12 Sev3/4 Sev4), 23 re-verified, go/no-go = NO-GO; 40 BA recommendations + top 10 | Draft from `findings-log.md`; dedupe against `issues.tsv` (regenerate with the `gh api` command below) |
 
 ## Environment / test data (no passwords here — creds live only in a local, uncommitted file)
 
