@@ -29,7 +29,7 @@ describe('allocateInvoiceNumber', () => {
   const now = new Date(2027, 0, 15);
 
   it('locks the organization, then reads its latest number for the year', async () => {
-    const tx = tenantTx('org-a', 7n);
+    const tx = tenantTx('org-a', BigInt(7));
 
     await expect(allocateInvoiceNumber(tx as never, now)).resolves.toBe('INV-2027-008');
 

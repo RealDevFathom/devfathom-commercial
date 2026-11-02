@@ -20,7 +20,7 @@ function tenantDb() {
     $queryRaw: vi.fn(async (query: { sql: string }) => {
       if (query.sql.includes('current_setting')) return [{ organizationId: 'org-1' }];
       if (query.sql.includes('pg_advisory_xact_lock')) return [];
-      return [{ sequence: 4n }];
+      return [{ sequence: BigInt(4) }];
     }),
   };
   return { ...db, $transaction: vi.fn(async (work: (tx: typeof db) => unknown) => work(db)) };

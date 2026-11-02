@@ -56,12 +56,14 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 - Commits:
   - `b11234e`: helper, all four callers, schema, migration, seed scoping, and this log.
   - `deb0c5c`: the DB test.
-  - Next commit: unit tests. `finance.invoice-money.test.ts` and `api/v1/invoices/route.test.ts` mocks
+  - `674d17c`: unit tests. `finance.invoice-money.test.ts` and `api/v1/invoices/route.test.ts` mocks
     now answer the allocation queries and assert the allocated number. New
     `src/lib/finance/invoice-number.test.ts` covers formatting, the lock key, MAX query values, the
     first number of a year, per-org keys and the error outside a tenant. New
     `src/lib/ai/tools/finance.create-invoice.test.ts` checks the assistant allocates and inserts in one
     transaction and never touches the per-operation client.
+  - Next commit: use `BigInt(n)` instead of `4n` literals in three test files. The tsconfig target is
+    below ES2020, so `tsc` rejects BigInt literals (TS2737).
 
 #### Checks (rerun commands and latest results)
 
@@ -79,7 +81,7 @@ not real secrets.
 | Typecheck | `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit` (it runs out of memory with the default heap) | 8 errors, the same set as clean `develop`. None are new. A rerun covering the new test files is pending |
 | Lint/format | `bunx eslint <changed files>` and `bunx prettier --check <changed files>` | pass |
 | Unit tests (affected) | `bunx vitest run src/server/routers/finance src/server/routers/clients src/app/api/v1/invoices src/lib/ai/tools/finance src/lib/ai/tools/finance.create-invoice.test.ts src/lib/finance` | pass (DB suites that need other env vars are skipped) |
-| Unit tests (full) | `bunx vitest run` | running next |
+| Unit tests (full) | `env -u TEST_DATABASE_URL bunx vitest run --reporter=json --outputFile=<file>`, on the branch and on the `develop` worktree | running in the background; reports go to the scratchpad as `vitest-branch.json` and `vitest-develop.json` |
 | DB test | `TEST_DATABASE_URL=$U bunx vitest run src/lib/finance/invoice-number.db.test.ts` (admin URL: the suite creates its own restricted role) | 3/3 pass |
 | DB test, CI-style | `TEST_DATABASE_URL=postgresql://gate_runtime:gate_runtime@localhost:5432/devfathom_test bunx vitest run src/lib/finance/invoice-number.db.test.ts` | 3/3 pass, fixtures cleaned up |
 | Build | `bun run build` | not run yet |

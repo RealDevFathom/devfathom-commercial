@@ -12,7 +12,7 @@ function setup() {
     $queryRaw: vi.fn(async (query: { sql: string }) => {
       if (query.sql.includes('current_setting')) return [{ organizationId: 'org-1' }];
       if (query.sql.includes('pg_advisory_xact_lock')) return [];
-      return [{ sequence: 11n }];
+      return [{ sequence: BigInt(11) }];
     }),
     invoice: {
       create: vi.fn(async ({ data }: { data: { invoiceNumber: string } }) => ({
