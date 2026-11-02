@@ -1,0 +1,46 @@
+{
+  "T2": {
+    "ret": {
+      "status": 200,
+      "code": null,
+      "message": null
+    },
+    "ref": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "refundId": "cmvznyou402il4oqr5eft8ox4",
+        "manualReversalRequired": false,
+        "originalTenderId": "cmvzny2ul02hd4oqr7cz6zbkg",
+        "amountMinor": 30000,
+        "replayed": false
+      }
+    },
+    "units": 10,
+    "gross": 30000,
+    "lotId": "cmvzld6t901uv4oqr7xobq1ji"
+  },
+  "T3": {
+    "ret": {
+      "status": 200,
+      "code": null,
+      "message": null
+    },
+    "ref": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "refundId": "cmvznyp2102iz4oqreihzscsk",
+        "manualReversalRequired": false,
+        "originalTenderId": "cmvzny3cd02hz4oqrf8arbrc5",
+        "amountMinor": 2600,
+        "replayed": false
+      }
+    },
+    "units": 10,
+    "gross": 2600,
+    "lotId": "cmvzlu34h026d4oqrilu5mem5"
+  }
+}

@@ -1,0 +1,395 @@
+{
+  "at": "2026-11-03 00:40:00 PKT",
+  "out": {
+    "T1 pharmacist openDrawer": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzny29602gp4oqrhdt3uxp9",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "deviceId": "qa-verify-mvzny1qg-pharm",
+        "businessDate": "2026-11-03T00:00:00.000Z",
+        "status": "OPEN",
+        "openingFloatMinor": 0,
+        "countedCashMinor": null,
+        "controlledCountHook": null,
+        "openedByActorId": "cqaphrm7c1d2e3f4a5b6c7d8e9",
+        "closedByActorId": null,
+        "openedAt": "2026-11-02T19:39:59.082Z",
+        "closedAt": null
+      },
+      "at": "2026-11-03 00:39:59 PKT"
+    },
+    "T1 pharmacist create": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzny2bg02gr4oqrevtq3r5t",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "status": "OPEN",
+        "originalSaleId": null,
+        "createdByUserId": "cqaphrm7c1d2e3f4a5b6c7d8e9",
+        "completedAt": null,
+        "receiptNumber": null,
+        "receiptDeviceId": null,
+        "businessDate": null,
+        "customerId": null,
+        "createdAt": "2026-11-02T19:39:59.164Z",
+        "updatedAt": "2026-11-02T19:39:59.164Z"
+      },
+      "at": "2026-11-03 00:39:59 PKT"
+    },
+    "T1 pharmacist addLine": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "line": {
+          "id": "cmvzny2eo02gv4oqr7mlzaqd9",
+          "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+          "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+          "saleId": "cmvzny2bg02gr4oqrevtq3r5t",
+          "medicineId": "cmvxpws13002v1xqrfsg4p4hz",
+          "presentationId": "cmvxpx8in003a1xqrbz6z4t3n",
+          "packLevelId": "cmvxpy8hn003t1xqr9az7aste",
+          "saleUnit": "STRIP",
+          "quantity": 1,
+          "canonicalUnitsPerSaleUnit": 10,
+          "canonicalUnits": 10,
+          "unitPriceMinor": 2600,
+          "grossMinor": 2600,
+          "proRataCeilingMinor": 2600,
+          "unitCostMinor": 1050,
+          "discountKind": null,
+          "discountMinor": 0,
+          "approvalPolicy": null,
+          "approvedByUserId": null,
+          "prescriptionLineId": null,
+          "prescriptionPatientId": null,
+          "idempotencyKey": "qa-verify-mvzny1qg-T1 pharmacist",
+          "createdAt": "2026-11-02T19:39:59.280Z"
+        },
+        "allocation": {
+          "allocations": [
+            {
+              "inventoryLotId": "cmvzlu34h026d4oqrilu5mem5",
+              "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+              "units": 10
+            }
+          ],
+          "recommendedLotId": "cmvzlu34h026d4oqrilu5mem5",
+          "blocked": [],
+          "overrideId": null,
+          "discrepancyId": null,
+          "movementIds": [
+            "cmvzny2eh02gu4oqrooiqdtfx"
+          ]
+        }
+      },
+      "at": "2026-11-03 00:39:59 PKT"
+    },
+    "T1 pharmacist tender CASH": {
+      "status": 403,
+      "code": "FORBIDDEN",
+      "message": "You do not have permission for this action.",
+      "data": null,
+      "at": "2026-11-03 00:39:59 PKT"
+    },
+    "T1 owner voids pharmacist bill": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzny2bg02gr4oqrevtq3r5t",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "status": "VOID",
+        "originalSaleId": null,
+        "createdByUserId": "cqaphrm7c1d2e3f4a5b6c7d8e9",
+        "completedAt": null,
+        "receiptNumber": null,
+        "receiptDeviceId": null,
+        "businessDate": null,
+        "customerId": null,
+        "createdAt": "2026-11-02T19:39:59.164Z",
+        "updatedAt": "2026-11-02T19:39:59.457Z",
+        "lines": [
+          {
+            "id": "cmvzny2eo02gv4oqr7mlzaqd9",
+            "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+            "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+            "saleId": "cmvzny2bg02gr4oqrevtq3r5t",
+            "medicineId": "cmvxpws13002v1xqrfsg4p4hz",
+            "presentationId": "cmvxpx8in003a1xqrbz6z4t3n",
+            "packLevelId": "cmvxpy8hn003t1xqr9az7aste",
+            "saleUnit": "STRIP",
+            "quantity": 1,
+            "canonicalUnitsPerSaleUnit": 10,
+            "canonicalUnits": 10,
+            "unitPriceMinor": 2600,
+            "grossMinor": 2600,
+            "proRataCeilingMinor": 2600,
+            "unitCostMinor": 1050,
+            "discountKind": null,
+            "discountMinor": 0,
+            "approvalPolicy": null,
+            "approvedByUserId": null,
+            "prescriptionLineId": null,
+            "prescriptionPatientId": null,
+            "idempotencyKey": "qa-verify-mvzny1qg-T1 pharmacist",
+            "createdAt": "2026-11-02T19:39:59.280Z",
+            "medicine": {
+              "id": "cmvxpws13002v1xqrfsg4p4hz",
+              "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+              "productName": "Paracetamol 500mg Tablets",
+              "brandName": "QA Panadol",
+              "manufacturer": "QA Pharma",
+              "marketingAuthorizationHolder": null,
+              "drapRegistrationNumber": "000001",
+              "drapRegistrationStatus": null,
+              "drapRegisteredAt": null,
+              "productFamily": "PHARMACEUTICAL",
+              "rx": false,
+              "otc": false,
+              "restricted": false,
+              "controlled": false,
+              "highAlert": false,
+              "lasa": false,
+              "coldChain": false,
+              "saleable": true,
+              "createdAt": "2026-11-01T10:59:26.055Z",
+              "updatedAt": "2026-11-01T10:59:47.446Z"
+            }
+          }
+        ]
+      },
+      "at": "2026-11-03 00:39:59 PKT"
+    },
+    "T2 owner openDrawer": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzny2mc02h34oqrf8bzlhji",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "deviceId": "qa-verify-mvzny1qg-owner",
+        "businessDate": "2026-11-03T00:00:00.000Z",
+        "status": "OPEN",
+        "openingFloatMinor": 0,
+        "countedCashMinor": null,
+        "controlledCountHook": null,
+        "openedByActorId": "cqaoytv76jtk0pbjipb3ump87",
+        "closedByActorId": null,
+        "openedAt": "2026-11-02T19:39:59.556Z",
+        "closedAt": null
+      },
+      "at": "2026-11-03 00:39:59 PKT"
+    },
+    "T2 owner Rx-no-prescription create": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzny2ob02h54oqr5dphq71j",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "status": "OPEN",
+        "originalSaleId": null,
+        "createdByUserId": "cqaoytv76jtk0pbjipb3ump87",
+        "completedAt": null,
+        "receiptNumber": null,
+        "receiptDeviceId": null,
+        "businessDate": null,
+        "customerId": null,
+        "createdAt": "2026-11-02T19:39:59.627Z",
+        "updatedAt": "2026-11-02T19:39:59.627Z"
+      },
+      "at": "2026-11-03 00:39:59 PKT"
+    },
+    "T2 owner Rx-no-prescription addLine": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "line": {
+          "id": "cmvzny2qy02h94oqrk7ckevku",
+          "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+          "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+          "saleId": "cmvzny2ob02h54oqr5dphq71j",
+          "medicineId": "cmvzld6dm01uc4oqrs4vn5m0a",
+          "presentationId": "cmvzld6dn01ud4oqr4bh2j2z9",
+          "packLevelId": "cmvzld6hf01ui4oqrzi7bnemw",
+          "saleUnit": "STRIP",
+          "quantity": 1,
+          "canonicalUnitsPerSaleUnit": 10,
+          "canonicalUnits": 10,
+          "unitPriceMinor": 30000,
+          "grossMinor": 30000,
+          "proRataCeilingMinor": 30000,
+          "unitCostMinor": 15000,
+          "discountKind": null,
+          "discountMinor": 0,
+          "approvalPolicy": null,
+          "approvedByUserId": null,
+          "prescriptionLineId": null,
+          "prescriptionPatientId": null,
+          "idempotencyKey": "qa-verify-mvzny1qg-T2 owner Rx-no-prescription",
+          "createdAt": "2026-11-02T19:39:59.722Z"
+        },
+        "allocation": {
+          "allocations": [
+            {
+              "inventoryLotId": "cmvzld6t901uv4oqr7xobq1ji",
+              "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+              "units": 10
+            }
+          ],
+          "recommendedLotId": "cmvzld6t901uv4oqr7xobq1ji",
+          "blocked": [],
+          "overrideId": null,
+          "discrepancyId": null,
+          "movementIds": [
+            "cmvzny2qu02h84oqrenh3x8my"
+          ]
+        }
+      },
+      "at": "2026-11-03 00:39:59 PKT"
+    },
+    "T2 owner tender CASH (no prescription)": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "tenderId": "cmvzny2ul02hd4oqr7cz6zbkg",
+        "settled": true,
+        "receiptNumber": 1,
+        "remainingMinor": 0,
+        "replayed": false
+      },
+      "at": "2026-11-03 00:39:59 PKT"
+    },
+    "T3 owner openDrawer future date": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzny2xm02hp4oqr5oohpgpt",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "deviceId": "qa-verify-mvzny1qg-owner-future",
+        "businessDate": "2026-11-05T00:00:00.000Z",
+        "status": "OPEN",
+        "openingFloatMinor": 0,
+        "countedCashMinor": null,
+        "controlledCountHook": null,
+        "openedByActorId": "cqaoytv76jtk0pbjipb3ump87",
+        "closedByActorId": null,
+        "openedAt": "2026-11-02T19:39:59.962Z",
+        "closedAt": null
+      },
+      "at": "2026-11-03 00:39:59 PKT"
+    },
+    "T3 owner future-dated create": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "id": "cmvzny31y02hr4oqr2fef702o",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "status": "OPEN",
+        "originalSaleId": null,
+        "createdByUserId": "cqaoytv76jtk0pbjipb3ump87",
+        "completedAt": null,
+        "receiptNumber": null,
+        "receiptDeviceId": null,
+        "businessDate": null,
+        "customerId": null,
+        "createdAt": "2026-11-02T19:40:00.118Z",
+        "updatedAt": "2026-11-02T19:40:00.118Z"
+      },
+      "at": "2026-11-03 00:40:00 PKT"
+    },
+    "T3 owner future-dated addLine": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "line": {
+          "id": "cmvzny37202hv4oqrbrm04mft",
+          "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+          "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+          "saleId": "cmvzny31y02hr4oqr2fef702o",
+          "medicineId": "cmvxpws13002v1xqrfsg4p4hz",
+          "presentationId": "cmvxpx8in003a1xqrbz6z4t3n",
+          "packLevelId": "cmvxpy8hn003t1xqr9az7aste",
+          "saleUnit": "STRIP",
+          "quantity": 1,
+          "canonicalUnitsPerSaleUnit": 10,
+          "canonicalUnits": 10,
+          "unitPriceMinor": 2600,
+          "grossMinor": 2600,
+          "proRataCeilingMinor": 2600,
+          "unitCostMinor": 1050,
+          "discountKind": null,
+          "discountMinor": 0,
+          "approvalPolicy": null,
+          "approvedByUserId": null,
+          "prescriptionLineId": null,
+          "prescriptionPatientId": null,
+          "idempotencyKey": "qa-verify-mvzny1qg-T3 owner future-dated",
+          "createdAt": "2026-11-02T19:40:00.302Z"
+        },
+        "allocation": {
+          "allocations": [
+            {
+              "inventoryLotId": "cmvzlu34h026d4oqrilu5mem5",
+              "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+              "units": 10
+            }
+          ],
+          "recommendedLotId": "cmvzlu34h026d4oqrilu5mem5",
+          "blocked": [],
+          "overrideId": null,
+          "discrepancyId": null,
+          "movementIds": [
+            "cmvzny36s02hu4oqr6e3ez17d"
+          ]
+        }
+      },
+      "at": "2026-11-03 00:40:00 PKT"
+    },
+    "T3 owner tender on future date": {
+      "status": 200,
+      "code": null,
+      "message": null,
+      "data": {
+        "tenderId": "cmvzny3cd02hz4oqrf8arbrc5",
+        "settled": true,
+        "receiptNumber": 1,
+        "remainingMinor": 0,
+        "replayed": false
+      },
+      "at": "2026-11-03 00:40:00 PKT"
+    },
+    "T2 cleanup refund": {
+      "status": 400,
+      "code": "BAD_REQUEST",
+      "message": "REFUND_EXCEEDS_TENDER",
+      "data": null,
+      "at": "2026-11-03 00:40:00 PKT"
+    },
+    "T3 cleanup refund": {
+      "status": 400,
+      "code": "BAD_REQUEST",
+      "message": "REFUND_EXCEEDS_TENDER",
+      "data": null,
+      "at": "2026-11-03 00:40:00 PKT"
+    }
+  }
+}

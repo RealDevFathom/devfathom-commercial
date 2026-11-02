@@ -1,13 +1,13 @@
 # HANDOFF — SehatCart develop QA pass + BA recommendations
 
-Last updated: 2026-11-03 00:08 PKT (19:08 UTC)
+Last updated: 2026-11-03 00:42 PKT (19:42 UTC)
 Branch: `saad/great-brown-id2w5x` (base `develop` @ `47518cb`)
 PR: [#1224](https://github.com/RealDevFathom/devfathom-commercial/pull/1224) into `develop` — docs/evidence/harness only, never merge from this session. Session is subscribed to PR activity.
 Linear: no Linear issue is attached to this QA pass (see Open questions)
 
 ## Resume here
 
-- **Single next action:** when workflow run `wf_7026951b-8f2` (adversarial verification of `qa-report.md`, 9 agents) finishes, apply its corrections plus finding N27 (dark-mode brand tokens, see `findings-log.md`) to `qa-report.md` in one commit, update the summary table/totals, and push. If this session is gone, re-run the check by hand: verify each finding's cited `file:line`, search issue bodies with `gh api -X GET search/issues -f q='repo:RealDevFathom/devfathom-commercial is:issue <terms>'`, and confirm every evidence path exists.
+- **Single next action:** (1) when workflow `wf_7026951b-8f2` finishes, apply all verification corrections + new findings N27–N30 (see `findings-log.md`) to `qa-report.md`; (2) then, per Saad (2026-11-03), **file every new finding as a GitHub issue** — labels `bug`, `qa`, `pharmacy`, `sevN-…` plus `security`/`ux`/`ui`/`a11y` as relevant, **never the `claude` label**, do **not** start fixing; they sync to Linear and Codex will fix them. Record each issue number back into `qa-report.md` and this log.
   - Testing is complete. Day 2026-11-02 was CLOSED by QA at 23:48 PKT (variance −4.00, deliberate).
   - Caveat: another tester (`QA-20261102-FUNC-*`, `QA-20261102-CASHCHECK-*`) is using the **same QA Cashier account** on this tenant.
 - **Item:** QA pass (no DEV id). All workstreams done.
