@@ -269,6 +269,11 @@ The web service runs on **ECS Fargate**, which has no EC2 instance profile.
   task's role.
 - **Running on EC2.** If the app is ever run directly on an EC2 host, attach the same policy
   to that host's instance-profile role. Nothing in the app changes.
+  - The develop host `devfathom-pharmacy` (us-east-1) runs as `inky-ec2-ssm`.
+  - On 2026-11-02, `iam:SimulatePrincipalPolicy` showed that role and the staging
+    `WebTaskRole` implicitly denied for every action in the policy below.
+  - `inky-ec2-ssm` is shared with the `inky-codex` instance. A dedicated role keeps the grant
+    to the develop host only.
 
 ### IAM policy for the develop / staging role
 
@@ -372,6 +377,31 @@ These are done once, by an administrator, not by the workload role.
   aws secretsmanager describe-secret --region ap-southeast-1 \
     --secret-id devfathom/staging/anthropic-api-key
   ```
+
+**Status on account 892667864163, checked live on 2026-11-02:**
+
+- **Secrets:**
+  - Both staging secrets exist, use the AWS-managed `aws/secretsmanager` key and hold
+    `{"value": "<key>"}`.
+  - Neither is owned by a CloudFormation stack. Removing branch 5's `AnthropicApiKeySecret`
+    from the template therefore cannot delete them.
+- **Bedrock:**
+  - `us.anthropic.claude-{haiku,sonnet,opus}-5-5` are ACTIVE, with destinations us-east-1,
+    us-east-2 and us-west-2.
+  - Invoking them fails with `AccessDeniedException: … is not available for this account`
+    (`agreementAvailability: NOT_AVAILABLE`). This is an account entitlement, not IAM. Ask AWS
+    to enable the Claude 5.5 models on this account.
+  - These older profiles answered: `us.anthropic.claude-haiku-4-5-20251001-v1:0`,
+    `us.anthropic.claude-opus-4-5-20251101-v1:0` and `us.anthropic.claude-opus-4-6-v1`.
+  - The Sonnet 4.5 / 4.6 profiles answered once, then returned "Model use case details have
+    not been submitted". Submit the Anthropic use-case form.
+  - Until Claude 5.5 is enabled, point the Bedrock tiers at the working profiles (SuperAdmin
+    → AI, or `AI_BEDROCK_MODEL_*`). Otherwise the last-resort fallback has nothing that
+    answers.
+- **Live check after rollout:** `bun run ai:smoke` (`scripts/ai-provider-smoke.ts`) calls each
+  provider directly, the routed chain, and a forced Anthropic → OpenAI fallback. It uses the
+  app's own key loader and prints no key. Run it from a checkout with credentials that carry
+  the policy above.
 
 ### Rolling it out (not done by this change)
 

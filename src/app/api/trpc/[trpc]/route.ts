@@ -150,29 +150,32 @@ async function servePlatformAiSettings(req: Request) {
     );
   }
 
-  return withPlatformDb(async (platformDb) => {
-    let procedureFailed = false;
-    const response = await fetchRequestHandler({
-      endpoint: TRPC_ENDPOINT,
-      req,
-      router: appRouter,
-      // One platform transaction covers the whole HTTP batch. The procedures
-      // reuse it, rather than committing independently before a sibling fails.
-      createContext: () =>
-        ({
-          platformDb,
-          requestMeta: { ip: clientIp(req), userAgent: req.headers.get('user-agent') },
-        }) as never,
-      onError: ({ error, path }) => {
-        procedureFailed = true;
-        if (error.code === 'INTERNAL_SERVER_ERROR') {
-          console.error(`[trpc] ${path ?? 'request'} failed:`, error);
-        }
-      },
-    });
-    if (procedureFailed) throw new TransactionAborted(response);
-    return response;
-  }, { timeout: 60_000 }).catch((error: unknown) => {
+  return withPlatformDb(
+    async (platformDb) => {
+      let procedureFailed = false;
+      const response = await fetchRequestHandler({
+        endpoint: TRPC_ENDPOINT,
+        req,
+        router: appRouter,
+        // One platform transaction covers the whole HTTP batch. The procedures
+        // reuse it, rather than committing independently before a sibling fails.
+        createContext: () =>
+          ({
+            platformDb,
+            requestMeta: { ip: clientIp(req), userAgent: req.headers.get('user-agent') },
+          }) as never,
+        onError: ({ error, path }) => {
+          procedureFailed = true;
+          if (error.code === 'INTERNAL_SERVER_ERROR') {
+            console.error(`[trpc] ${path ?? 'request'} failed:`, error);
+          }
+        },
+      });
+      if (procedureFailed) throw new TransactionAborted(response);
+      return response;
+    },
+    { timeout: 60_000 }
+  ).catch((error: unknown) => {
     if (!(error instanceof TransactionAborted)) throw error;
     return req.method === 'POST' ? withoutDiscardedResults(req, error.response) : error.response;
   });
