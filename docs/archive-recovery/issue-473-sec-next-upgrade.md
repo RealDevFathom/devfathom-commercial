@@ -17,13 +17,13 @@ The decision below compares that patch with develop at
 
 Current `package.json` already scopes Undici to its consumers:
 
-| Consumer | Current Undici override |
-| --- | --- |
+| Consumer                    | Current Undici override                             |
+| --------------------------- | --------------------------------------------------- |
 | `@ai-sdk/provider-utils@^4` | `6.29.1` (provider-utils itself pinned to `4.0.62`) |
-| `@vercel/blob` | `6.29.1` |
-| `@dotenvx/dotenvx` | `7.30.1` |
-| `shadcn` | `7.30.1` |
-| `jsdom` | `8.12.3` |
+| `@vercel/blob`              | `6.29.1`                                            |
+| `@dotenvx/dotenvx`          | `7.30.1`                                            |
+| `shadcn`                    | `7.30.1`                                            |
+| `jsdom`                     | `8.12.3`                                            |
 
 There is no global Undici override. Other current consumer-specific resolutions
 include `exceljs` / `uuid` at `11.1.1` and `prisma` / `mysql2` at `3.24.6`.
