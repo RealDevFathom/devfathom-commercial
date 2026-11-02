@@ -32,12 +32,15 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 }));
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
+  createSale: vi.fn(async () => ({ sale: { id: 'sale-a' } })),
+  addSaleLine: vi.fn(async () => ({ line: { id: 'line-a' } })),
   changeSaleStatus: vi.fn(async () => ({ sale: { id: 'sale-a', status: 'HELD' } })),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
   returnSaleLine: vi.fn(async () => ({ returnLineId: 'return-line-1' })),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
+  openPharmacyDrawer: vi.fn(async () => ({ drawerSessionId: 'drawer-a' })),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
   refundPharmacyTender: vi.fn(async () => ({ refundId: 'refund-1' })),
 }));
@@ -67,8 +70,18 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { changeSaleStatus, readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
-import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
+import {
+  addSaleLine,
+  changeSaleStatus,
+  createSale,
+  readReturnHistory,
+  returnSaleLine,
+} from '@/lib/pharmacy/sales';
+import {
+  applyPharmacyTender,
+  openPharmacyDrawer,
+  refundPharmacyTender,
+} from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -100,12 +113,14 @@ function fixture(
       })),
     },
     pharmacyBranch: {
-      findMany: vi.fn(async (args: { where: { id: { in: string[] }; organizationId?: string } }) =>
+      findMany: vi.fn(async (args: {
+        where: { id?: { in: string[] }; organizationId?: string };
+      }) =>
         args.where.organizationId && args.where.organizationId !== 'org-a'
           ? []
-          : args.where.id.in
+          : (args.where.id?.in ?? ['branch-a', 'branch-b'])
               .filter((id) => id !== 'foreign-branch' && id !== 'closed-branch')
-              .map((id) => ({ id }))
+              .map((id) => ({ id, code: id, name: id, city: 'Lahore' }))
       ),
       findFirst: vi.fn(async (args?: { where?: { id?: string; organizationId?: string } }) => {
         const id = args?.where?.id;
@@ -133,7 +148,10 @@ function fixture(
         },
       ]),
     },
-    organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
+    medicine: { findFirst: vi.fn(async () => ({ id: 'medicine-a', controlled: false })) },
+    organization: {
+      findUnique: vi.fn(async () => ({ currency: 'PKR', timezone: 'Asia/Karachi' })),
+    },
     $transaction: vi.fn(),
   };
   db.$transaction.mockImplementation(async (fn: (inner: typeof db) => Promise<unknown>) => fn(db));
@@ -327,6 +345,126 @@ describe('counter receipt authorization', () => {
       'hold',
       undefined,
       undefined
+    );
+  });
+
+  it.each([
+    {
+      name: 'owner',
+      role: 'ADMIN' as const,
+      permissions: [{ capability: '*', effect: 'ALLOW' as const }],
+    },
+    {
+      name: 'manager',
+      role: 'EMPLOYEE' as const,
+      permissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' as const }],
+    },
+    {
+      name: 'pharmacist',
+      role: 'EMPLOYEE' as const,
+      permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' as const }],
+    },
+    {
+      name: 'cashier',
+      role: 'EMPLOYEE' as const,
+      permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' as const }],
+    },
+  ])('$name can create, open a drawer, read the cart, and tender when admitted', async (actor) => {
+    const f = fixture(actor.permissions, actor.role);
+    if (actor.role !== 'ADMIN') assign(f, ['branch-a']);
+
+    await expect(f.caller().create({ branchId: 'branch-a', quotation: false })).resolves.toEqual({
+      sale: { id: 'sale-a' },
+    });
+    await expect(
+      f.caller().openDrawer({
+        branchId: 'branch-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        openingFloatMinor: 1_000,
+      })
+    ).resolves.toEqual({ drawerSessionId: 'drawer-a' });
+    await expect(
+      f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({ saleId: 'sale-a' });
+    await expect(
+      f.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        type: 'CASH',
+        amountMinor: 100,
+        idempotencyKey: `${actor.name}-tender`,
+      })
+    ).resolves.toEqual({ tenderId: 'tender-1' });
+  });
+
+  it('denies every stock, drawer, cart, and tender entry point to unassigned staff', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    const denied = { code: 'FORBIDDEN', message: 'Branch is outside your scope.' };
+
+    await expect(f.caller().create({ branchId: 'branch-a', quotation: false })).rejects.toMatchObject(
+      denied
+    );
+    await expect(
+      f.caller().addLine({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        medicineId: 'medicine-a',
+        presentationId: 'presentation-a',
+        packLevelId: 'pack-a',
+        saleUnit: 'STRIP',
+        quantity: 2,
+        canonicalUnitsPerSaleUnit: 10,
+        idempotencyKey: 'unassigned-line',
+      })
+    ).rejects.toMatchObject(denied);
+    await expect(
+      f.caller().openDrawer({
+        branchId: 'branch-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        openingFloatMinor: 1_000,
+      })
+    ).rejects.toMatchObject(denied);
+    await expect(
+      f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject(denied);
+    await expect(
+      f.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        type: 'CASH',
+        amountMinor: 100,
+        idempotencyKey: 'unassigned-tender',
+      })
+    ).rejects.toMatchObject(denied);
+    expect(createSale).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(openPharmacyDrawer).not.toHaveBeenCalled();
+    expect(readCounterCart).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('lists only assigned active branches for staff and all active branches for an owner', async () => {
+    const staff = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(staff, ['branch-b']);
+    await expect(staff.caller().counterBranches()).resolves.toMatchObject({
+      branches: [{ id: 'branch-b' }],
+    });
+    expect(staff.db.pharmacyBranch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: { in: ['branch-b'] } }) })
+    );
+
+    const owner = fixture([{ capability: '*', effect: 'ALLOW' }], 'ADMIN');
+    await expect(owner.caller().counterBranches()).resolves.toMatchObject({
+      branches: [{ id: 'branch-a' }, { id: 'branch-b' }],
+    });
+    expect(owner.db.pharmacyBranch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-a', active: true } })
     );
   });
 
