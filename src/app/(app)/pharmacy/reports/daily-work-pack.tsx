@@ -34,6 +34,14 @@ export type DailyWorkPackProps = {
 
 const linkClass =
   'inline-flex min-h-11 items-center break-words text-sm underline focus-visible:outline-2 focus-visible:outline-ring';
+/**
+ * DEV-601: the shared Button dims a disabled control with `opacity-50`, which leaves this
+ * outline button's label and border almost invisible on the dark card. Keep it at full
+ * opacity on contrast-checked tokens (`--text-muted` on `--surface-sunken`, 4.5:1+ in both
+ * themes). Remove once the shared Button stops dimming disabled controls with opacity.
+ */
+const refreshButtonClass =
+  'min-h-11 disabled:border-border-default disabled:bg-surface-sunken disabled:text-text-muted disabled:opacity-100';
 const disclosureClass =
   'min-h-11 cursor-pointer py-3 text-sm font-medium text-text-strong focus-visible:outline-2 focus-visible:outline-ring';
 
@@ -43,7 +51,7 @@ function Refresh({ fields, retry = false }: { fields: Record<string, string>; re
       {Object.entries(fields).map(([name, value]) => (
         <input key={name} type="hidden" name={name} value={value} />
       ))}
-      <Button variant="outline" className="min-h-11" type="submit">
+      <Button variant="outline" className={refreshButtonClass} type="submit">
         {retry ? 'Try again' : 'Refresh'}
       </Button>
     </form>
@@ -56,7 +64,7 @@ export function DailyWorkPackLoading() {
       <p role="status" className="mb-4 text-sm text-text-body">
         Loading today&apos;s to-do list. The other reports on this page are ready to use.
       </p>
-      <Button variant="outline" className="min-h-11" disabled>
+      <Button variant="outline" className={refreshButtonClass} disabled>
         Refresh
       </Button>
     </SectionCard>
