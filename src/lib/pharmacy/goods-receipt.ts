@@ -162,6 +162,16 @@ export async function lockReceivablePurchaseOrder(
   scope: ReceivingScope,
   input: { purchaseOrderId: string; supplierId: string }
 ) {
+  // Authorize the branch before locking or reading mutable order state.
+  const reference = await db.pharmacyPurchaseOrder.findFirst({
+    where: { id: input.purchaseOrderId, organizationId: scope.organizationId },
+    select: { branchId: true },
+  });
+  if (!reference) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+  if (reference.branchId !== null && reference.branchId !== scope.branchId) {
+    throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
+  }
+
   await db.$queryRaw`SELECT id FROM pharmacy_purchase_orders WHERE id=${input.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
   const order = await db.pharmacyPurchaseOrder.findFirst({
     where: {

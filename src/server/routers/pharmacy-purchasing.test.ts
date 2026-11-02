@@ -837,21 +837,44 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(line).not.toHaveProperty('organizationId');
   });
 
-  it('locks the purchase order in the receipt transaction until the draft is created', async () => {
+  it('checks the branch through the receipt transaction before locking and revalidating the order', async () => {
+    const tx = { ...db, pharmacyPurchaseOrder: model(), $queryRaw: vi.fn().mockResolvedValue([]) };
+    tx.pharmacyPurchaseOrder.findFirst
+      .mockResolvedValueOnce({ branchId: 'branch_a' })
+      .mockResolvedValueOnce({
+        id: 'po_a',
+        supplierId: 'supplier_a',
+        branchId: 'branch_a',
+        status: 'SENT',
+      });
+    db.$transaction.mockImplementationOnce(async (fn) => fn(tx));
+
     await caller().createGoodsReceipt(RECEIPT);
 
     expect(db.$transaction).toHaveBeenCalledTimes(1);
-    expect(db.$queryRaw).toHaveBeenCalledTimes(1);
-    const lockSql = (db.$queryRaw.mock.calls[0]![0] as TemplateStringsArray).join('?');
+    expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    expect(tx.pharmacyPurchaseOrder.findFirst).toHaveBeenNthCalledWith(1, {
+      where: { id: 'po_a', organizationId: 'org_a' },
+      select: { branchId: true },
+    });
+    expect(tx.pharmacyPurchaseOrder.findFirst).toHaveBeenNthCalledWith(2, {
+      where: { id: 'po_a', organizationId: 'org_a', supplierId: 'supplier_a' },
+    });
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    const lockSql = (tx.$queryRaw.mock.calls[0]![0] as TemplateStringsArray).join('?');
     expect(lockSql).toContain('pharmacy_purchase_orders');
     expect(lockSql).toContain('FOR UPDATE');
-    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
-      db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]!
+    expect(tx.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.$queryRaw.mock.invocationCallOrder[0]!
     );
-    expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[1]!
+    );
+    expect(tx.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[1]).toBeLessThan(
       db.pharmacySupplier.findFirst.mock.invocationCallOrder[0]!
     );
-    expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(tx.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[1]).toBeLessThan(
       db.pharmacyGoodsReceipt.create.mock.invocationCallOrder[0]!
     );
   });
@@ -919,21 +942,44 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
-  it('refuses a receipt for a different branch than its purchase order', async () => {
-    db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_b' });
-    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
-      id: 'po_a',
-      supplierId: 'supplier_a',
-      branchId: 'branch_a',
-      status: 'SENT',
-    });
+  it.each(['SENT', 'CANCELLED'])(
+    'refuses a cross-branch %s order before locking or reading its status',
+    async (status) => {
+      db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_b' });
+      db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+        id: 'po_a',
+        supplierId: 'supplier_a',
+        branchId: 'branch_a',
+        status,
+      });
 
-    await expect(
-      caller().createGoodsReceipt({ ...RECEIPT, branchId: 'branch_b' })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'CROSS_BRANCH_REFERENCE' });
-    expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
-      where: { id: 'po_a', organizationId: 'org_a', supplierId: 'supplier_a' },
+      await expect(
+        caller().createGoodsReceipt({ ...RECEIPT, branchId: 'branch_b' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'CROSS_BRANCH_REFERENCE' });
+      expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledOnce();
+      expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
+        where: { id: 'po_a', organizationId: 'org_a' },
+        select: { branchId: true },
+      });
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+      expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a cross-tenant order before acquiring a purchase-order lock', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue(null);
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'CROSS_TENANT_REFERENCE',
     });
+    expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledOnce();
+    expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
+      where: { id: 'po_a', organizationId: 'org_a' },
+      select: { branchId: true },
+    });
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
@@ -999,7 +1045,9 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   });
 
   it('refuses a receipt when the purchase order belongs to another supplier', async () => {
-    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue(null);
+    db.pharmacyPurchaseOrder.findFirst
+      .mockResolvedValueOnce({ branchId: 'branch_a' })
+      .mockResolvedValueOnce(null);
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'CROSS_TENANT_REFERENCE',
@@ -1011,6 +1059,23 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
         supplierId: 'supplier_a',
       },
     });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the branch when the order changes after the preflight', async () => {
+    db.pharmacyPurchaseOrder.findFirst
+      .mockResolvedValueOnce({ branchId: 'branch_a' })
+      .mockResolvedValueOnce({
+        id: 'po_a',
+        supplierId: 'supplier_a',
+        branchId: 'branch_b',
+        status: 'SENT',
+      });
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'CROSS_BRANCH_REFERENCE',
+    });
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
