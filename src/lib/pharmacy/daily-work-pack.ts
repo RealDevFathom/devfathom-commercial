@@ -398,7 +398,11 @@ export async function readPharmacyDailyWorkPack(
       'inventory-review',
       'Current available lot balances with expiry after as-of; trailing 30-day completed-sales history before as-of. Requested period is not applied.',
       async (source) => {
-        const rows = await readExpiryAdvice(db, [branchId], asOf);
+        const rows = await readExpiryAdvice(
+          db,
+          { organizationId: input.organizationId, branchIds: [branchId] },
+          asOf
+        );
         source.returnedRows = rows.length;
         for (const row of rows) {
           if (row.branchId !== branchId) throw new Error('Source scope mismatch');
