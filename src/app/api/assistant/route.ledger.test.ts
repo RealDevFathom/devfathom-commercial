@@ -317,9 +317,10 @@ describe('Ask Fathom write ledger through the route', () => {
     const approved = approve(proposed);
     const { message } = await readTurn(await post([user, approved]), approved);
 
-    // The write ran first; the default provider then failed and the turn moved
-    // to the fallback, which answered without running the write again.
-    expect(h.sequence).toEqual(['write', 'anthropic', 'openai']);
+    // The write ran first; the default provider then failed (one jittered retry for a
+    // transient error) and the turn moved to the fallback, which answered without
+    // running the write again.
+    expect(h.sequence).toEqual(['write', 'anthropic', 'anthropic', 'openai']);
     expect(h.write).toHaveBeenCalledTimes(1);
     const part = toolPart(message);
     expect(part).toMatchObject({
