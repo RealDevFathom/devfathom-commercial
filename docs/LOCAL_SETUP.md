@@ -1,6 +1,6 @@
 # Running DevFathom Locally
 
-Last reviewed: 2026-10-21
+Last reviewed: 2026-11-02
 
 ## Prerequisites
 
@@ -52,6 +52,36 @@ openssl rand -base64 32
 
 Keep `.env.local` private. It is ignored by Git.
 
+### Which values win
+
+Every `prisma` CLI command (through `prisma.config.ts`), `bun run db:seed`, `prisma/seed-demo.ts`,
+`prisma/create-admin.ts`, `prisma/reset-admin-password.ts`, and the `platform:jobs`,
+`assistant:eval`, `assistant:diag`, and `email:smoke` scripts load environment files through
+`prisma/load-env.ts`, with the same precedence as Next.js:
+
+1. a variable already set in the process environment (exported in your shell, or set by CI or a
+   container);
+2. `.env.local`;
+3. `.env`.
+
+A file that does not exist is skipped silently. A value exported in the shell therefore overrides
+both files without editing them, for example `MIGRATION_DATABASE_URL=... bun run db:seed`. When no
+database URL is set anywhere, these commands stop with a message that names the variables and the
+files they searched, instead of failing to connect. The seed accepts `MIGRATION_DATABASE_URL` or
+`DATABASE_URL`; the other scripts read `DATABASE_URL`.
+
+`prisma/bootstrap.ts` is production-only and reads the real process environment only.
+
+### Required seed values
+
+- `SEED_PASSWORD` is mandatory. The seed refuses to run without it (it accepts `ADMIN_PASSWORD` as
+  a fallback) and assigns it to every seeded `@company.com` tenant user.
+- The platform operator needs **both** `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`.
+  Setting only one of them fails the seed. Leaving both unset leaves any existing operator
+  untouched, so a new database then has no account that can sign in to the platform.
+- `ADMIN_EMAIL` is optional. When it is set, `ADMIN_PASSWORD` is required too, and the seed creates
+  that separate workspace administrator.
+
 ## 2. Create the databases
 
 ```bash
@@ -72,9 +102,10 @@ GRANT CONNECT, TEMPORARY ON DATABASE devfathom TO devfathom_app;
 ```
 
 `DATABASE_URL` must use `devfathom_app`. `MIGRATION_DATABASE_URL` is the role that applies
-migrations and seed (a local superuser is enough). Prisma CLI and the seed read
-`MIGRATION_DATABASE_URL` from `.env` and `.env.local` when it is set, and otherwise fall
-back to `DATABASE_URL`. The running server reads `DATABASE_URL` only.
+migrations and seed (a local superuser is enough). Prisma CLI and the seed use
+`MIGRATION_DATABASE_URL` when it is set, and otherwise fall back to `DATABASE_URL`, resolved with
+the precedence in [Which values win](#which-values-win). The running server reads `DATABASE_URL`
+only.
 
 `next start` and any production process refuse to boot when that application role is
 `SUPERUSER` or `BYPASSRLS`, and when `CLIENT_IP_HEADER`, `TRUSTED_PROXY_CIDRS`, and
@@ -97,8 +128,9 @@ bun prisma/prepare-extensions.ts
 bunx prisma migrate deploy
 ```
 
-Prisma and the seed load `.env`, then `.env.local`. After migrate, grant the application role
-access to the objects the migration role owns:
+Prisma and the seed take an exported variable first, then `.env.local`, then `.env` (see
+[Which values win](#which-values-win)). After migrate, grant the application role access to the
+objects the migration role owns:
 
 ```sql
 GRANT USAGE ON SCHEMA public TO devfathom_app;

@@ -1,4 +1,6 @@
-import 'dotenv/config';
+// First: loads .env.local and .env (real environment wins) before anything below reads it.
+import { requireDatabaseUrl } from '../prisma/load-env';
+
 import { generateText, stepCountIs } from 'ai';
 import { db } from '../src/lib/db';
 import { createAIModel } from '../src/lib/ai/provider';
@@ -6,6 +8,7 @@ import { assistantToolChoice, buildAssistantTools } from '../src/lib/ai/tools';
 import { assistantSystemPrompt } from '../src/lib/ai/prompt';
 
 async function main() {
+  requireDatabaseUrl(['DATABASE_URL']);
   const admin = await db.user.findFirst({
     where: { role: 'ADMIN' },
     select: { id: true, name: true, role: true },

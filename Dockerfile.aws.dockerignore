@@ -6,6 +6,7 @@
 !package.json
 !postcss.config.mjs
 !prisma.config.ts
+!prisma/load-env.ts
 !prisma/schema.prisma
 !public/apple-touch-icon.png
 !public/favicon-16x16.png

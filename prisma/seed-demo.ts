@@ -26,14 +26,16 @@
  *
  *   bunx tsx prisma/seed-demo.ts
  */
+// First: loads .env.local and .env (real environment wins) before anything below reads it.
+import { requireDatabaseUrl } from './load-env.js';
+
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { randomBytes } from 'crypto';
 import { hash } from 'bcryptjs';
-import 'dotenv/config';
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new pg.Pool({ connectionString: requireDatabaseUrl(['DATABASE_URL']) });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 

@@ -22,6 +22,8 @@ ENV NODE_OPTIONS=--max-old-space-size=8192 \
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json bun.lock next.config.ts tsconfig.json postcss.config.mjs prisma.config.ts ./
 COPY prisma/schema.prisma ./prisma/schema.prisma
+# prisma.config.ts imports its env loader.
+COPY prisma/load-env.ts ./prisma/load-env.ts
 COPY src ./src
 COPY public ./public
 RUN node node_modules/prisma/build/index.js generate \

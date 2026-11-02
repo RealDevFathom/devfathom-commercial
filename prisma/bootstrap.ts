@@ -1,8 +1,13 @@
 // Production-only, create-only bootstrap. Never use this script to reset credentials.
+//
+// Reads the real process environment only, deliberately not prisma/load-env.ts:
+// its inputs are the first production administrators' credentials, which the
+// migration task injects from the vault. A developer's .env.local or .env must
+// never be able to supply a missing one. Bun auto-loads env files on its own, so
+// run it only where none exist, as the container image (.dockerignore) ensures.
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
-import 'dotenv/config';
 
 import {
   bootstrapProduction,
