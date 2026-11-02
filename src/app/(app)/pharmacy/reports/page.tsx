@@ -16,6 +16,7 @@ import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
+import { ReportPrintButton } from './report-print-button';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -329,6 +330,7 @@ export default async function PharmacyReportsPage({
                 Compare branches
               </Link>
             ) : null}
+            {result ? <ReportPrintButton /> : null}
           </nav>
         }
       />
