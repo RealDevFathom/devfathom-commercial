@@ -167,6 +167,7 @@ describe('Ask Fathom settings and the assistant route agree', () => {
         const expectedStatus = {
           COMPANY_DISABLED: 403,
           AI_NOT_CONFIGURED: 503,
+          AI_UNAVAILABLE: 503,
         } as const;
         expect(response.status).toBe(
           settings.unavailableReason ? expectedStatus[settings.unavailableReason] : 200
