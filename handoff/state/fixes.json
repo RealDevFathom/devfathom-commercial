@@ -88,5 +88,23 @@
   "initialSha": "9504a99faad15d2073dd708bb7bc481a5facaf4f",
   "what": "only shows the no-match message for a typed search and applies Prettier",
   "initialFailure": "Prettier: the new prescriptions-console-search.test.tsx unformatted"
+ },
+ "1165": {
+  "sha": "7601bd98b290f97ff1620aaf2403869a0cb0928b",
+  "initialSha": "6855b75dca8ad06d871bb7018456222ed0b55124",
+  "what": "restores hold/resume and quotation reopening, keeps updates off the retention mutex, fixes the void-returning lock query, and schedules the AUDIT purge job with DB tests",
+  "initialFailure": "Prettier: src/lib/pharmacy/retention.ts and the new tests/pharmacy-retention.test.mjs unformatted"
+ },
+ "1157": {
+  "sha": "87d91d58f844bad6ab85eb786ce0684344c99906",
+  "initialSha": "4c7b6768b8eac16fd2e30c6b1424ecd0b92c9189",
+  "what": "renames the Inventory link to 'Imported stock references' with a test, and applies Prettier",
+  "initialFailure": "Prettier: 3 changed files unformatted"
+ },
+ "1155": {
+  "sha": "098316e48bdcc8a1880030c757edbf95904b21f1",
+  "initialSha": "7365a9b98d3cd89733a2d9492bdb89b86f33c864",
+  "what": "groups the pharmacy owner's desktop navigation, separates the 'Current' label, updates the e2e spec",
+  "initialFailure": "1 regression: sidebar.test.tsx 'marks the active group and destination...' fails (no menuitem 'Inventory Current')"
  }
 }

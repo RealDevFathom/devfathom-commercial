@@ -84,5 +84,35 @@
    "verdict": "PASS",
    "details": "Fix 63c8b16 adds only a client-side boolean guard and a component test. Medicine search still filters the tenant-scoped workspace list already in the browser. The search text never reaches the server, and React escapes the names it shows. No server, router, schema, SQL, auth or capability code changed: capture still goes through the pharmacy:prescriptions check. No secrets and no new data exposure."
   }
+ },
+ "1165": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Verified 7601bd98b on a disposable PostgreSQL 16. The SQL fixture passes and fails on the old migration. Held and quoted carts reopen; COMPLETED/VOID carts cannot. Counter updates skip the mutex, and a line delete waits for the sale's completion and is then refused. retention-owners.db.test passes under an RLS role and fails with the old void lock. A real worker run queued and ran one daily job. Lint, prettier, node 9/9 and tsc are clean. Note: a 100-row daily batch can trail audit volume. Non-blocking follow-ups: the AUDIT purge can stall for a tenant with 100+ rows older than its first branch profile (fail-closed, nothing wrongly deleted), and a follow-up issue for regulator-approved PRESCRIPTION/CONTROLLED_REGISTER/FISCAL purge guards still needs to be opened"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Re-checked 7601bd98b. The audit purge runs per tenant in withTenantDb (RLS-scoped) with parameterized tagged SQL only. It deletes exactly one row by organization and id, or throws. Each candidate is rechecked under the mutex and the DB guards. The cron is secret-gated and queues pharmacy tenants only. FOR SHARE takes no global lock, and the SECURITY DEFINER lock is unchanged. The Rx, controlled-register and fiscal guards are not loosened. Nothing blocking."
+  }
+ },
+ "1157": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Fix commit 87d91d58f changes the Inventory header link to 'Imported stock references' (one line in inventory/page.tsx). It also adds a test that checks the link name, its href /pharmacy/inventory/imports and that no 'awaiting verification' text renders. With the old label restored the test fails. The other changes are prettier formatting only, and all six PR files now pass the prettier check. vitest related (4 files, 21 tests) and eslint are clean. No user-facing 'Awaiting verification' text remains."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix commit 87d91d58f changes only a static link label and adds test assertions, plus formatting. The link href and every other attribute are unchanged. It adds no data access, inputs, SQL, secrets or permission changes. The PR as a whole matches the earlier security review: the GET date form still feeds the unchanged server-side branchComparison validation and access checks, values render as escaped React attributes, and errors show fixed strings only."
+  }
+ },
+ "1155": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 098316e48 the pharmacy owner's desktop nav uses the shared Sell/Stock/Buy/Reports/Settings menus with scroll={false} links. Agency, hospitality and unlicensed pharmacy keep the flat strip. The menu item name now reads 'Inventory Current'. sidebar.test.tsx passes 60/60, while the keyboard test fails at 7365a9b98. The 3 changed unit test files pass 189/189, and removing the PHARMACY entry fails 13 tests. eslint and prettier are clean. I read the e2e edits but did not run them."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "098316e48 changes only client-side presentation. Pharmacy menus are built from the same permission-filtered visibleNavigation output, and leftover entries go to Settings, so nothing is dropped or added. The new ADMIN/MEMBER test checks that the hrefs equal visibleNavigation. Role, module and vertical gates are unchanged. There are no server, API, SQL, auth, storage or secret changes, and the e2e edits only change selectors. No vulnerabilities found."
+  }
  }
 }

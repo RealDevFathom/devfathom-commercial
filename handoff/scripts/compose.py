@@ -143,6 +143,12 @@ for key, label in (("qa", "QA"), ("security", "Security")):
     ov = overrides.get(n, {}).get(key)
     if ov:
         v, d = ov["verdict"], ov["details"]
+        orig = (r or {}).get(key) or {}
+        conf = [f for f in orig.get("verifiedBlocking", []) if f.get("confirmed")]
+        fxn = fixes.get(n)
+        if conf and fxn and fxn["sha"] == head and orig.get("verdict") == "FAIL" and "first review" not in d.lower():
+            short = "; ".join(re.split(r"(?<=[.!?])\s", f["problem"].strip(), maxsplit=1)[0][:140].rstrip(".") for f in conf[:3])
+            d = f"First review FAIL ({short}), fixed in {fxn['sha'][:10]}. Re-review: {d}"
     else:
         if not r or not r.get(key):
             sys.exit(f"no {key} review for {n}")
