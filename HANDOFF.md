@@ -5,11 +5,11 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 ## Resume here
 
 - **Item:** DEV-258 (per-organization invoice numbers).
-- **Single next action:** wait for the final branch typecheck. Its output goes to the scratchpad as
-  `tsc-branch3.txt`; compare it with `tsc-develop.txt` there (the list should be the same 8 errors).
-  Then run `NODE_OPTIONS=--max-old-space-size=8192 bun run build`.
-- **Then:** open the PR into `develop` (never merge) using the drafted body in the scratchpad
-  (`pr-body.md`), and comment on DEV-258 with the PR link.
+- **Single next action:** read the result of `NODE_OPTIONS=--max-old-space-size=8192 bun run build`. It is
+  running in the background and writes to `build-branch.log` in the scratchpad. Put the result in the PR #1226
+  body (replace the "`bun run build`: running" line) and in the Checks table below.
+- **Then:** respond to PR #1226 review comments and failing checks. This session is subscribed to the PR's
+  activity. Never merge the PR.
 - **Uncommitted / half-written:** nothing.
 
 ## Items
@@ -19,8 +19,8 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 - Linear: https://linear.app/devfathom/issue/DEV-258/qasev2-agency-invoices-invoice-number-comes-from-a-non-atomic-count1
 - GitHub issue: https://github.com/RealDevFathom/devfathom-commercial/issues/441
 - Branch: `saad/exciting-ramanujan-w973fo`
-- PR: not opened yet. It will target `develop`.
-- Status: **in progress**
+- PR: [#1226](https://github.com/RealDevFathom/devfathom-commercial/pull/1226), `saad/exciting-ramanujan-w973fo` into `develop`. Open and not merged.
+- Status: **in review** (the build check is still running)
 
 #### Done so far
 
@@ -64,6 +64,17 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
   - `3cce7e2`: use `BigInt(n)` instead of `4n` literals in three test files. The tsconfig target is
     below ES2020, so `tsc` rejects BigInt literals (TS2737).
 
+- `1afbacf`: full-suite comparison recorded in this log. This is the PR head as opened.
+- Linear: DEV-258 has comments for "in progress" (after `b11234e`) and "in review" (after the PR opened).
+
+#### Review verdicts (PR #1226)
+
+| Gate | Verdict | Notes |
+| --- | --- | --- |
+| Machine checks | pending | Per your instruction no GitHub Actions were triggered from here; any checks that run on their own will be recorded here |
+| QA | queued | DEV-258 asks QA to retest at runtime |
+| Security | queued | Nothing reviewed yet |
+
 #### Checks (rerun commands and latest results)
 
 Local disposable DB (Postgres 16 in this container, started with `pg_ctlcluster 16 main start`):
@@ -77,13 +88,13 @@ not real secrets.
 | Migrations | `EXTENSION_ADMIN_DATABASE_URL=$U DATABASE_URL=$U MIGRATION_DATABASE_URL=$U bun prisma/prepare-extensions.ts && DATABASE_URL=$U MIGRATION_DATABASE_URL=$U bunx prisma migrate deploy` | pass, new migration applied |
 | Schema vs migrations | `DATABASE_URL=$U bunx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script`, compared before and after | identical. All remaining drift existed before (migration-only constraints) |
 | Seed | `SEED_PASSWORD=... DATABASE_URL=$U MIGRATION_DATABASE_URL=$U bunx prisma db seed`, run twice | pass. The second run takes the "already present" sentinel path |
-| Typecheck | `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit` (it runs out of memory with the default heap) | 8 errors, the same set as clean `develop`. None are new. A rerun covering the new test files is pending |
+| Typecheck | `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit` (it runs out of memory with the default heap) | 8 errors, the same set as clean `develop`, after all the test changes. None are new |
+| Build | `NODE_OPTIONS=--max-old-space-size=8192 bun run build` | running |
 | Lint/format | `bunx eslint <changed files>` and `bunx prettier --check <changed files>` | pass |
 | Unit tests (affected) | `bunx vitest run src/server/routers/finance src/server/routers/clients src/app/api/v1/invoices src/lib/ai/tools/finance src/lib/ai/tools/finance.create-invoice.test.ts src/lib/finance` | pass (DB suites that need other env vars are skipped) |
 | Unit tests (full) | `env -u TEST_DATABASE_URL bunx vitest run --reporter=json --outputFile=<file>`, on the branch and on the `develop` worktree | branch: 12967 passed, 47 failed out of 14762. develop: 12960 passed, 47 failed out of 14752. **The 47 failures are the same tests on both, so none are new.** The branch has 10 more tests: 7 new unit tests that pass and 3 DB cases skipped without `TEST_DATABASE_URL` |
 | DB test | `TEST_DATABASE_URL=$U bunx vitest run src/lib/finance/invoice-number.db.test.ts` (admin URL: the suite creates its own restricted role) | 3/3 pass |
 | DB test, CI-style | `TEST_DATABASE_URL=postgresql://gate_runtime:gate_runtime@localhost:5432/devfathom_test bunx vitest run src/lib/finance/invoice-number.db.test.ts` | 3/3 pass, fixtures cleaned up |
-| Build | `bun run build` | not run yet |
 
 #### Known failures
 
