@@ -37,5 +37,8 @@
  ],
  "1101": [
   "PR-introduced failure in its new test src/components/pharmacy/counter/day-close-console.currency.test.ts: 'TypeError: The URL must be of scheme file' at readFileSync(new URL(..., import.meta.url)) line 8. Under the repo's jsdom vitest environment import.meta.url is not a file: URL; read the file via a path (e.g. fileURLToPath-free path.resolve(__dirname...) or a // @vitest-environment node docblock)."
+ ],
+ "1086": [
+  "11 test failures caused by the PR vs its merge-base 16a2a3705a (PR is 438 behind develop and conflicts with it in abac/index.ts, pharmacy-sales.ts and its tests): pharmacy-sales.open-drawer.test.ts (5), pharmacy-sales.branch-scope.test.ts (4), pharmacy-sales.counter-receipt-auth.test.ts (2). The new drawer authorization rejects earlier (FORBIDDEN / 'Branch is outside your scope') than these tests expect (BAD_REQUEST / CONFLICT), and their mocks lack pharmacyBranch.findFirst. Overlaps #1163, which now gates openDrawer on pharmacy:counter. Lint errors all already exist at the merge-base."
  ]
 }
