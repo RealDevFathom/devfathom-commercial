@@ -5,12 +5,11 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 ## Resume here
 
 - **Item:** DEV-258 (per-organization invoice numbers).
-- **Single next action:** run the full unit suite, `bunx vitest run` with no `TEST_DATABASE_URL`, and
-  compare any failures against clean `develop` (worktree at
-  `/tmp/claude-0/-home-user-devfathom-commercial/a6ad6b21-ce9d-5725-948b-7911b27f069f/scratchpad/develop-wt`,
-  which has `node_modules` symlinked and its own generated Prisma client).
-- **Then:** run the final typecheck and `bun run build`, then open the PR into `develop` (never merge) and
-  comment on DEV-258.
+- **Single next action:** wait for the final branch typecheck. Its output goes to the scratchpad as
+  `tsc-branch3.txt`; compare it with `tsc-develop.txt` there (the list should be the same 8 errors).
+  Then run `NODE_OPTIONS=--max-old-space-size=8192 bun run build`.
+- **Then:** open the PR into `develop` (never merge) using the drafted body in the scratchpad
+  (`pr-body.md`), and comment on DEV-258 with the PR link.
 - **Uncommitted / half-written:** nothing.
 
 ## Items
@@ -62,7 +61,7 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
     first number of a year, per-org keys and the error outside a tenant. New
     `src/lib/ai/tools/finance.create-invoice.test.ts` checks the assistant allocates and inserts in one
     transaction and never touches the per-operation client.
-  - Next commit: use `BigInt(n)` instead of `4n` literals in three test files. The tsconfig target is
+  - `3cce7e2`: use `BigInt(n)` instead of `4n` literals in three test files. The tsconfig target is
     below ES2020, so `tsc` rejects BigInt literals (TS2737).
 
 #### Checks (rerun commands and latest results)
@@ -81,7 +80,7 @@ not real secrets.
 | Typecheck | `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit` (it runs out of memory with the default heap) | 8 errors, the same set as clean `develop`. None are new. A rerun covering the new test files is pending |
 | Lint/format | `bunx eslint <changed files>` and `bunx prettier --check <changed files>` | pass |
 | Unit tests (affected) | `bunx vitest run src/server/routers/finance src/server/routers/clients src/app/api/v1/invoices src/lib/ai/tools/finance src/lib/ai/tools/finance.create-invoice.test.ts src/lib/finance` | pass (DB suites that need other env vars are skipped) |
-| Unit tests (full) | `env -u TEST_DATABASE_URL bunx vitest run --reporter=json --outputFile=<file>`, on the branch and on the `develop` worktree | running in the background; reports go to the scratchpad as `vitest-branch.json` and `vitest-develop.json` |
+| Unit tests (full) | `env -u TEST_DATABASE_URL bunx vitest run --reporter=json --outputFile=<file>`, on the branch and on the `develop` worktree | branch: 12967 passed, 47 failed out of 14762. develop: 12960 passed, 47 failed out of 14752. **The 47 failures are the same tests on both, so none are new.** The branch has 10 more tests: 7 new unit tests that pass and 3 DB cases skipped without `TEST_DATABASE_URL` |
 | DB test | `TEST_DATABASE_URL=$U bunx vitest run src/lib/finance/invoice-number.db.test.ts` (admin URL: the suite creates its own restricted role) | 3/3 pass |
 | DB test, CI-style | `TEST_DATABASE_URL=postgresql://gate_runtime:gate_runtime@localhost:5432/devfathom_test bunx vitest run src/lib/finance/invoice-number.db.test.ts` | 3/3 pass, fixtures cleaned up |
 | Build | `bun run build` | not run yet |
@@ -93,6 +92,16 @@ not real secrets.
   `src/lib/pharmacy/duplicate-salt-acknowledgement.db.test.ts`, `src/server/routers/pharmacy-inventory.test.ts`,
   `src/server/routers/restaurant-catering.test.ts`. **These also fail on `develop`:** a clean `develop`
   worktree produces the identical error list. No new errors.
+- **Full vitest: 47 failing tests across 39 suites, the same set on `develop`. None are new.** They are
+  all in areas this branch does not touch:
+  - restaurant: recipe migration, tax, daily close, tenders, growth review;
+  - pharmacy: reports, baskets, inventory, finance evidence;
+  - platform: opportunity conversion and organization create;
+  - ABAC capability pins, hotel foundation, vertical foundation;
+  - `src/lib/projects/membership-lock.db.test.ts`.
+
+  Several are DB suites that fall back to this container's ambient `DATABASE_URL`
+  (`dev@localhost/devfathom`), which does not exist here.
 
 #### Decisions and open questions
 
