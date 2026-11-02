@@ -424,6 +424,64 @@ describe('pharmacy owner digest capability boundary', () => {
   });
 });
 
+describe('DEV-59 expiry advice reporting period', () => {
+  const input = { from: '2026-11-01', to: '2026-12-01' };
+
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.expiryRead.mockResolvedValue([]);
+  });
+
+  it('passes the authorized ADMIN owner range with an exclusive next-day cutoff', async () => {
+    const ctx = context('ADMIN');
+    await expect(pharmacyReportsRouter.createCaller(ctx).expiryAdvice(input)).resolves.toEqual(
+      []
+    );
+    expect(mocks.expiryRead).toHaveBeenCalledExactlyOnceWith(ctx.db, ['branch_1'], undefined, {
+      from: new Date('2026-11-01T00:00:00.000Z'),
+      to: new Date('2026-12-02T00:00:00.000Z'),
+      days: 31,
+    });
+    expect(mocks.branchFindMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', active: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+    expect(mocks.can.mock.calls.map((call) => call[1])).toEqual([
+      'reports:operational',
+      'reports:financial',
+    ]);
+  });
+
+  it.each([
+    { from: '2026-11-31' },
+    { to: '2026-02-30' },
+    { from: '2026-12-02' },
+    { from: '2025-01-01' },
+  ])('rejects invalid reporting periods before reading advice: %j', async (overrides) => {
+    await expect(caller().expiryAdvice({ ...input, ...overrides })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mocks.expiryRead).not.toHaveBeenCalled();
+  });
+
+  it('preserves the owner restriction even with financial capability', async () => {
+    await expect(caller('EMPLOYEE').expiryAdvice(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.expiryRead).not.toHaveBeenCalled();
+  });
+
+  it('rejects a branch outside the owner tenant before reading advice', async () => {
+    await expect(
+      caller().expiryAdvice({ ...input, branchId: 'foreign_branch' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.expiryRead).not.toHaveBeenCalled();
+  });
+});
+
 describe('RX-08 pharmacovigilance state boundaries', () => {
   it('completing internal review does not mark the report externally submitted', async () => {
     mocks.reportFindFirst.mockResolvedValue({
