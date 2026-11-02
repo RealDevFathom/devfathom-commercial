@@ -216,6 +216,13 @@ describe('plain local dates become the UTC period the server expects (DEV-591)',
       cutoff: new Date('2026-11-01T19:00:00.000Z'),
     });
   });
+  it('answers empty dates with a message instead of a silent no-op (DEV-597)', async () => {
+    const result = await marketingAction(
+      form({ operation: 'growth-generate', ...PKT, firstDay: '', lastDay: '' })
+    );
+    expect(result).toEqual({ error: true, message: 'Choose a first day and a last day.' });
+    expect(mocks.generateGrowth).not.toHaveBeenCalled();
+  });
   it.each([
     [{ firstDay: '2026-10-10', lastDay: '2026-10-01' }, 'on or after the first day'],
     [{ firstDay: '2026-11-02', lastDay: '2026-11-02' }, 'must already be over'],

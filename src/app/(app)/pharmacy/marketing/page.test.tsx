@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { TRPCError } from '@trpc/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -478,6 +478,17 @@ describe('AI growth insights explain the next step and use plain inputs (DEV-591
     expect(within(note).getByRole('link', { name: 'Open Organization settings' })).toBeVisible();
     expect(note).toHaveTextContent('contact DevFathom support');
     expect(generate()).toBeEnabled();
+  });
+
+  it('says which dates are missing when they are cleared and Generate is clicked (DEV-597)', async () => {
+    render(await Page({ searchParams: Promise.resolve({}) }));
+    const form = generate().closest('form')!;
+    for (const label of ['First day', 'Last day'])
+      fireEvent.change(within(form).getByLabelText(label), { target: { value: '' } });
+    fireEvent.click(generate());
+    const alert = await within(form).findByRole('alert');
+    expect(alert).toHaveTextContent('First day:');
+    expect(alert).toHaveTextContent('Last day:');
   });
 
   it('shows no blocker and enables generation when AI is ready', async () => {
