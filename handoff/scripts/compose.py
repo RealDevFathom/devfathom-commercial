@@ -54,15 +54,19 @@ elif tc["exit"] >= 128:
     fail.append("typecheck")
     parts.append(f"typecheck did not complete (signal {tc['exit'] - 128})")
 else:
-    parts.append(f"typecheck: no new errors (`tsc --noEmit` exits {tc['exit']} only on the {tc['errors']} errors already on develop in test files)")
+    where = "at its merge-base " + open(f"{cdir}/typecheck.baseline-ref").read().strip()[:10] if os.path.exists(f"{cdir}/typecheck.baseline-ref") else "on develop"
+    parts.append(f"typecheck: no new errors (`tsc --noEmit` exits {tc['exit']} only on the {tc['errors']} errors already present {where})")
 # lint + format
 lint = s["lint"]
 if lint.get("parseError") or (lint["exit"] != 0 and not lint["errors"]):
     fail.append("lint")
     parts.append(f"ESLint did not complete (exit {lint['exit']}, no report)")
+elif "newErrors" in lint and lint["errors"] and not lint["newErrors"]:
+    parts.append(f"ESLint (`eslint src/`): no new errors ({lint['errors']} already present at its {'merge-base' if lint.get('baseline') == 'merge-base' else 'base'})")
 elif lint["errors"]:
     fail.append("lint")
-    parts.append(f"ESLint FAIL: {lint['errors']} error(s): " + "; ".join(m[:140] for m in lint["errorMessages"][:4]))
+    new = lint.get("newErrors") or lint["errorMessages"]
+    parts.append(f"ESLint FAIL: {len(new)} new error(s): " + "; ".join(m[:140] for m in new[:4]))
 else:
     parts.append("ESLint (`eslint src/`): 0 errors")
 intro = [u["file"] for u in fmt["unformatted"] if not u["alreadyUnformattedOnDevelop"]]

@@ -1,6 +1,6 @@
 # PR review handoff log
 
-_Generated 2026-11-02 19:51 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
+_Generated 2026-11-02 19:52 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
 
 ## Resume here
 
@@ -14,8 +14,8 @@ _Generated 2026-11-02 19:51 UTC from the live run state by `handoff/scripts/gen-
 
 - Scope: every open PR into develop without a QA+Security verdict comment: group 1 #1172-#1194 (22, plus #1223 and #1224 opened during the run; #1225 is this tracking PR and is not reviewed), group 2 #1148-#1166 (18), group 3 the other 127 (pharmacy first). 118 older PRs already had verdict comments and are out of scope.
 - Status: done 31 · in progress 55 · blocked 0 · not started 83 (of 169)
-- Machine-check queue (128 left, two lanes, runs serially per lane): 1160 1156 1152 1118 1117 1116 1114 1101 1087 1086 1072 1068 1061 1060 1056 1050 1008 1006 1005 1004 1003 1002 1001 1000 999 998 997 996 995 994 993 986 985 984 983 982 966 965 960 959 …
-- Last finished checks: #1158@c642d2bd, #1161@7013e12d, #1164@019e8894, #1150@bc698680, #1119@3d56d691, #1120@94d20521
+- Machine-check queue (128 left, two lanes, runs serially per lane): 1156 1152 1118 1117 1120 1116 1114 1101 1087 1086 1072 1068 1061 1060 1056 1050 1008 1006 1005 1004 1003 1002 1001 1000 999 998 997 996 995 994 993 986 985 984 983 982 966 965 960 959 …
+- Last finished checks: #1161@7013e12d, #1164@019e8894, #1150@bc698680, #1119@3d56d691, #1120@94d20521, #1166@4d41f842
 
 ### Posted verdicts
 
@@ -298,11 +298,11 @@ _Generated 2026-11-02 19:51 UTC from the live run state by `handoff/scripts/gen-
 ### #1166 · DEV-52 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1166 · branch `codex/dev-52-recover-20261102` · head `4d41f84234` · group 2
 - Title: DEV-52: Scope command search to licensed categories
-- Verdicts: machine pending · QA PASS · Security PASS
-- Done so far: fix commit 4d41f84234 (gates palette team search on team:view, restores the forced-colors focus outline, fixes the new test and its lint errors, applies Prettier; first run on 93eac69168 failed on 1 new failing test and 4 ESLint react/display-name errors in the new topbar.search-licensing.test.tsx, plus Prettier on 4 changed files); QA+Security reviews complete
-- Next step: re-check queued for fix 4d41f84234; then `python3 handoff/scripts/compose.py 1166` and post comments/1166.md
-- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1166` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1166`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
-- Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
+- Verdicts: machine ran, see below · QA PASS · Security PASS
+- Done so far: checks on 4d41f84234: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 156 passed / 0 failed in 0 files; build exit 0; fix commit 4d41f84234 (gates palette team search on team:view, restores the forced-colors focus outline, fixes the new test and its lint errors, applies Prettier; first run on 93eac69168 failed on 1 new failing test and 4 ESLint react/display-name errors in the new topbar.search-licensing.test.tsx, plus Prettier on 4 changed files); QA+Security reviews complete
+- Next step: `python3 handoff/scripts/compose.py 1166`, then post comments/1166.md via the poster workflow
+- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1166` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1166`; tests `bunx vitest related --run src/components/layout/topbar.search-licensing.test.tsx src/components/layout/topbar.tsx src/components/ui/command.tsx src/lib/search-access.ts src/server/routers/search.test.ts src/server/routers/search.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
+- Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts) | note: PR-introduced failures in its new test file src/components/layout/topbar.search-licensing.test.tsx: 4 ESLint react/display-name errors (lines 15,18,26,32) and 1 failing test ('keeps all five groups and selection available for a fully licensed agency': no button named 'Matching task Matching project'). File does not exist on develop.
 - Decisions: qa verdict set to PASS by hand: At 4d41f8423 the fully licensed agency test clicks the task button inside the Tasks group. It still checks push('/projects/p1') and that the dialog closes, and both PR test files pass locally (34 tests). Tailwind 4.3.3 compiles not-forced-colors:focus-visible:outline-none! to an @media not (forced-c | security verdict set to PASS by hand: At 4d41f8423, search.global runs the team query only when the hr licence and can(team:view) both allow it, the same ABAC check team.getAll/getRoster use. A denied member gets no directory rows and no email-match probe. The new tests run the real engine: a team:view override DENY and a custom-role te | B1 (qa) confirmed by skeptics: The new acceptance test 'keeps all five groups and selection available for a fully licensed agency' always fails. It queries a button by an accessible name that the rendered markup never produces. | B2 (qa) confirmed by skeptics: The forced-colors outline fallback the PR describes does not exist. `forced-colors:focus-visible:outline-auto!` is not a Tailwind 4 utility, so it generates no CSS. Meanwhile `focus-visible:outline-none!` removes the glo | SEC-1166-1 (security) confirmed by skeptics: The palette's team search is gated only on the 'hr' licence and ignores the ABAC 'team:view' permission. Custom roles and user_permission_overrides can DENY that capability, and every other directory read honours the den
 
 ### #1165 · DEV-96 · in progress
@@ -496,7 +496,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: DEV-117: Qualify balance sheet reconciliation coverage
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 4
+- Next step: wait for machine checks queued at position 3
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1118` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1118`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -505,7 +505,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: DEV-118: Expose profit and loss classification coverage
 - Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 5
+- Next step: wait for machine checks queued at position 4
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1117` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1117`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 

@@ -322,7 +322,7 @@
   "machine": null,
   "comment": null,
   "fix": "4d41f84234bf93901a604026a2260b8cf829dc03",
-  "next": "re-check queued for fix 4d41f84234; then `python3 handoff/scripts/compose.py 1166` and post comments/1166.md"
+  "next": "`python3 handoff/scripts/compose.py 1166`, then post comments/1166.md via the poster workflow"
  },
  {
   "pr": 1165,
@@ -582,7 +582,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 4"
+  "next": "wait for machine checks queued at position 3"
  },
  {
   "pr": 1117,
@@ -595,7 +595,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 5"
+  "next": "wait for machine checks queued at position 4"
  },
  {
   "pr": 1116,

@@ -47,26 +47,43 @@ else SEED=0; fi
 
 # ---- typecheck (full project, incremental info kept per lane)
 T0=$(date +%s)
+rm -rf .next/types .next/dev/types   # generated route types from the lane's previous build; CI typechecks a tree without them
 flock "$S/heavy.lock" env NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit > "$OUT/typecheck.log" 2>&1; TC=$?
 TC_SECS=$(( $(date +%s) - T0 )); [ $TC -ge 128 ] && echo "typecheck killed by signal $((TC-128))" >> "$OUT/typecheck.log"
 grep -E 'error TS[0-9]+' "$OUT/typecheck.log" | sed -E 's/\([0-9]+,[0-9]+\)//' | sort -u > "$OUT/typecheck.errors"
-BASEERR=$S/baseline/typecheck.errors
-if [ -s <(comm -23 "$OUT/typecheck.errors" $BASEERR) ] && [ "$MB" != "$(git rev-parse origin/develop)" ]; then
-  # PR sits on an older develop: compare against its own merge-base instead
-  BASEERR=$S/baseline/typecheck.$MB.errors
-  if [ ! -f "$BASEERR" ]; then
-    git checkout -q --detach "$MB" && bunx prisma generate >/dev/null 2>&1
+
+# ---- lint (project script: eslint src/), content-hash cache per lane
+T0=$(date +%s)
+bunx eslint src/ --cache --cache-strategy content --cache-location "$STATE/eslintcache" -f json -o "$OUT/lint.json" > "$OUT/lint.log" 2>&1; LINT=$?
+lintkeys() { python3 -I -c "
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+for f in d:
+    p=f['filePath'].split('/src/',1)[-1]
+    for m in f['messages']:
+        if m.get('severity')==2: print('src/'+p+' '+str(m.get('ruleId'))+' '+m.get('message','').split(chr(10))[0][:160])
+" "$1" | sort -u; }
+lintkeys "$OUT/lint.json" > "$OUT/lint.errors"
+
+# ---- baselines: develop for PRs on develop's tip, otherwise the PR's own merge-base
+BASEERR=$S/baseline/typecheck.errors; BASELINT=/dev/null
+DEVTIP=$(git rev-parse origin/develop)
+comm -23 "$OUT/typecheck.errors" "$BASEERR" > "$OUT/typecheck.new"
+if [ "$MB" != "$DEVTIP" ] && { [ -s "$OUT/typecheck.new" ] || [ -s "$OUT/lint.errors" ]; }; then
+  BASEERR=$S/baseline/typecheck.$MB.errors; BASELINT=$S/baseline/lint.$MB.errors
+  if [ ! -f "$BASEERR" ] || [ ! -f "$BASELINT" ]; then
+    git checkout -q --detach "$MB" && bunx prisma generate >/dev/null 2>&1 && rm -rf .next/types .next/dev/types
     flock "$S/heavy.lock" env NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit 2>/dev/null | grep -E 'error TS[0-9]+' | sed -E 's/\([0-9]+,[0-9]+\)//' | sort -u > "$BASEERR.tmp" && mv "$BASEERR.tmp" "$BASEERR"
+    bunx eslint src/ --cache --cache-strategy content --cache-location "$STATE/eslintcache-base" -f json -o "$OUT/lint.base.json" >/dev/null 2>&1
+    lintkeys "$OUT/lint.base.json" > "$BASELINT.tmp" && mv "$BASELINT.tmp" "$BASELINT"
     git checkout -q --detach "$SHA" && bunx prisma generate >/dev/null 2>&1; rm -f "$STATE/prismahash"
   fi
   echo "$MB" > "$OUT/typecheck.baseline-ref"
 fi
 comm -23 "$OUT/typecheck.errors" "$BASEERR" > "$OUT/typecheck.new"
 comm -13 "$OUT/typecheck.errors" "$BASEERR" > "$OUT/typecheck.fixed"
-
-# ---- lint (project script: eslint src/), content-hash cache per lane
-T0=$(date +%s)
-bunx eslint src/ --cache --cache-strategy content --cache-location "$STATE/eslintcache" -f json -o "$OUT/lint.json" > "$OUT/lint.log" 2>&1; LINT=$?
+comm -23 "$OUT/lint.errors" <(sort -u "$BASELINT") > "$OUT/lint.new"
 LINT_SECS=$(( $(date +%s) - T0 ))
 
 # ---- tests related to changed files
@@ -114,7 +131,7 @@ s=dict(pr=int("$N"),sha="$SHA",mergeBase="$MB",lane="$LANE",
   install={"exit":$INSTALL,"note":"$INSTALL_NOTE"},
   migrate={"exit":$MIGRATE},seed={"exit":$SEED},
   typecheck={"exit":$TC,"secs":$TC_SECS,"errors":len(lines("typecheck.errors")),"newErrors":lines("typecheck.new"),"fixedBaselineErrors":lines("typecheck.fixed")},
-  lint=dict(lint,exit=$LINT,secs=$LINT_SECS),
+  lint=dict(lint,exit=$LINT,secs=$LINT_SECS,newErrors=lines("lint.new"),baseline="develop" if not os.path.exists(os.path.join(out,"typecheck.baseline-ref")) else "merge-base"),
   tests=dict(tests,exit=$TESTS,secs=$TEST_SECS,codeFilesChanged=${#CODE[@]}),
   build={"exit":$BUILD,"secs":$BUILD_SECS},
   changed=lines("changed.txt"),totalSecs=$(( $(date +%s) - START )))
