@@ -1,0 +1,44 @@
+{
+ "1189": {
+  "sha": "18789590ed409477f38c5b236862c4a983689e80",
+  "initialSha": "458caf2732f43db4e056c37f2cfb682211b94da4",
+  "what": "types the new test's receipt lookup with closest<HTMLElement>()",
+  "initialFailure": "1 new typecheck error (TS2345 at counter-console.test.tsx:387)"
+ },
+ "1174": {
+  "sha": "765302d8c9d3e60304957870c5135c8e279d45ea",
+  "initialSha": "29a738f1fc678467fc05cc2dd60e95b533eb0f60",
+  "what": "Prettier on src/lib/platform/commands.ts",
+  "initialFailure": "Prettier: src/lib/platform/commands.ts unformatted"
+ },
+ "1193": {
+  "sha": "d5543e9bc7bf085d800c07dae49dfd02d7d76647",
+  "initialSha": "f1407983928a54048220e589186931f601c5261c",
+  "what": "Prettier on goods-receipt-expiry.test.ts",
+  "initialFailure": "Prettier: src/lib/pharmacy/goods-receipt-expiry.test.ts unformatted"
+ },
+ "1191": {
+  "sha": "8135d4788ee5d6145d6e465688be918b3ac1cf1d",
+  "initialSha": "4d1f259b0a6a7a98b051e83d6588ab9ff1b6874e",
+  "what": "Prettier on tests/restaurant-terminal-payments.test.ts",
+  "initialFailure": "Prettier: tests/restaurant-terminal-payments.test.ts unformatted"
+ },
+ "1188": {
+  "sha": "56de66cb6c596c73f79cd5ade40f39d114f15093",
+  "initialSha": "82550105a74dccd1c0ee989441da8ea68d1efb60",
+  "what": "Prettier on the new archive-recovery doc",
+  "initialFailure": "Prettier: docs/archive-recovery/issue-473-sec-next-upgrade.md unformatted"
+ },
+ "1186": {
+  "sha": "d1236f8082e0d39144a42090aece1b749430e92c",
+  "initialSha": "0495117293fa99eac03071fc56425b6eb90589af",
+  "what": "Prettier on the two new recipe-measurements files",
+  "initialFailure": "Prettier: src/lib/restaurant/recipe-measurements.ts and its test unformatted"
+ },
+ "1184": {
+  "sha": "3c317f346a23c71eee00b6e541fa0b52e24e1f3b",
+  "initialSha": "875bcc24b1bfc23a7a905adfcfa5038538a89a33",
+  "what": "Prettier on the new archive-recovery doc",
+  "initialFailure": "Prettier: docs/archive-recovery/issue-506-white-ui-dirty.md unformatted"
+ }
+}

@@ -1,0 +1,20 @@
+{
+ "1174": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Develop already guards organization.update; this PR moves the guard into one shared assertDedicatedProvisioningConfigured() used by create and update with identical behaviour: it still runs after the row lock and current-state read, an unchanged DEDICATED mode never checks the config, and the tests are stronger, not weaker. The one QA failure (src/lib/platform/commands.ts:1972 no longer Prettier-formatted, while develop's copy was clean) is fixed in 765302d8c9"
+  }
+ },
+ "1184": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Verified the DEV-213 disposition (close as obsolete) against the archived commits via the GitHub API: c85ea42a adds the Nuxt app/, the FastAPI backend/ and a migration doc that makes src/ and Prisma historical; 43a72f44 changes 8 Nuxt shell files; f6f72ee0 has the same tree as its parent (15f6215b). The cited Next.js shell, token and tRPC files exist. Docs and test only, so nothing regresses; the doc's Prettier formatting is fixed in 3c317f346a"
+  }
+ },
+ "1181": {
+  "qa": {
+   "verdict": "FAIL",
+   "details": "The five fixture repairs are correct (duplicate mock keys removed, required grossMinor and recipeId added, the resolve wrapped in act, no assertion weakened) and they take typecheck to 0 errors. But DEV-222 asks to recover or explicitly retire the archive/fix/qa-b3-pharmacy work (10d268de), and none of it is recovered or ruled on: the PKT licence dates (regulatory.ts:93), the PKT week bucket (khata-reminders.ts:51), the quiet-hours counter and the platform-login tabIndex and skip link are still absent, yet the body says \"Fixes DEV-222\". No fix commit was pushed, because those items overlap other open PRs (#812, #105, #104, #103) and need the owner's per-commit decision. Change \"Fixes\" to \"Refs DEV-222\" or record that decision"
+  }
+ }
+}
