@@ -5,9 +5,11 @@ import {
   appendControlledCorrection,
   appendControlledPurchaseEntries,
   appendControlledSaleEntries,
+  DEFAULT_EMERGENCY_SUPPLY_POLICY,
   derivedCorrectionDelta,
   emergencyNoRxDecision,
   registerBalanceAfter,
+  resolveEmergencySupplyPolicy,
 } from './controlled-register';
 
 describe('registerBalanceAfter', () => {
@@ -32,16 +34,118 @@ describe('derivedCorrectionDelta', () => {
 
 describe('emergencyNoRxDecision', () => {
   it('caps quantity and refuses a repeat while a follow-up is open', () => {
-    expect(emergencyNoRxDecision({ units: 10, recentSupplies: 0, openFollowUp: false })).toBeNull();
-    expect(emergencyNoRxDecision({ units: 11, recentSupplies: 0, openFollowUp: false })).toMatch(
-      /limited to 10/
-    );
-    expect(emergencyNoRxDecision({ units: 1, recentSupplies: 1, openFollowUp: false })).toMatch(
-      /missing prescription/
-    );
-    expect(emergencyNoRxDecision({ units: 1, recentSupplies: 0, openFollowUp: true })).toMatch(
-      /missing prescription/
-    );
+    const policy = resolveEmergencySupplyPolicy(null);
+    expect(
+      emergencyNoRxDecision({ units: 10, recentSupplies: 0, openFollowUp: false, policy })
+    ).toBeNull();
+    expect(
+      emergencyNoRxDecision({ units: 11, recentSupplies: 0, openFollowUp: false, policy })
+    ).toMatch(/limited to 10/);
+    expect(
+      emergencyNoRxDecision({ units: 1, recentSupplies: 1, openFollowUp: false, policy })
+    ).toMatch(/missing prescription/);
+    expect(
+      emergencyNoRxDecision({ units: 1, recentSupplies: 0, openFollowUp: true, policy })
+    ).toMatch(/missing prescription/);
+  });
+});
+
+describe('resolveEmergencySupplyPolicy', () => {
+  it.each([
+    { id: 'pk_pb_v2', maxUnits: 4, repeatWindowHours: 24 },
+    { id: 'pk_sd_v2', maxUnits: 20, repeatWindowHours: 48 },
+  ])('uses the configured cap and repeat window for $id', ({ id, ...configured }) => {
+    const policy = resolveEmergencySupplyPolicy({
+      id,
+      controlledRegisterFlags: { values: { emergencySupply: configured } },
+    });
+    expect(policy).toEqual({
+      ...configured,
+      source: 'JURISDICTION_RULE_SET',
+      ruleSetId: id,
+      repeatWindowMs: configured.repeatWindowHours * 60 * 60 * 1000,
+    });
+    expect(
+      emergencyNoRxDecision({
+        units: configured.maxUnits,
+        recentSupplies: 0,
+        openFollowUp: false,
+        policy,
+      })
+    ).toBeNull();
+    expect(
+      emergencyNoRxDecision({
+        units: configured.maxUnits + 1,
+        recentSupplies: 0,
+        openFollowUp: false,
+        policy,
+      })
+    ).toContain(`limited to ${configured.maxUnits} units`);
+    expect(
+      emergencyNoRxDecision({ units: 1, recentSupplies: 1, openFollowUp: false, policy })
+    ).toMatch(/missing prescription/);
+    expect(
+      emergencyNoRxDecision({ units: 1, recentSupplies: 0, openFollowUp: true, policy })
+    ).toMatch(/missing prescription/);
+  });
+
+  it.each([
+    undefined,
+    null,
+    { maxUnits: [], repeatWindowHours: 72 },
+    {},
+    { maxUnits: 0, repeatWindowHours: 72 },
+    { maxUnits: -1, repeatWindowHours: 72 },
+    { maxUnits: 1.5, repeatWindowHours: 72 },
+    { maxUnits: Number.MAX_SAFE_INTEGER + 1, repeatWindowHours: 72 },
+    { maxUnits: '20', repeatWindowHours: 72 },
+    { maxUnits: 20, repeatWindowHours: 0 },
+    { maxUnits: 20, repeatWindowHours: -1 },
+    { maxUnits: 20, repeatWindowHours: 1.5 },
+    { maxUnits: 20, repeatWindowHours: Infinity },
+    { maxUnits: 20, repeatWindowHours: 2_400_000_001 },
+    { maxUnits: 20, repeatWindowHours: 72, source: 'UNKNOWN' },
+  ])('falls back safely for malformed or absent policy %j', (emergencySupply) => {
+    const policy = resolveEmergencySupplyPolicy({
+      id: 'legacy',
+      controlledRegisterFlags: { values: { emergencySupply } },
+    });
+    expect(policy).toEqual({
+      ...DEFAULT_EMERGENCY_SUPPLY_POLICY,
+      ruleSetId: 'legacy',
+      repeatWindowMs: 72 * 60 * 60 * 1000,
+    });
+    expect(
+      emergencyNoRxDecision({ units: 11, recentSupplies: 0, openFollowUp: false, policy })
+    ).toMatch(/limited to 10/);
+  });
+
+  it.each([null, {}, { values: [] }, { values: null }])(
+    'falls back safely for malformed rule fields %j',
+    (controlledRegisterFlags) => {
+      expect(resolveEmergencySupplyPolicy({ id: 'legacy', controlledRegisterFlags })).toEqual({
+        ...DEFAULT_EMERGENCY_SUPPLY_POLICY,
+        ruleSetId: 'legacy',
+        repeatWindowMs: 72 * 60 * 60 * 1000,
+      });
+    }
+  );
+
+  it('identifies defaults explicitly, including backfilled and placeholder policies', () => {
+    expect(resolveEmergencySupplyPolicy(null)).toEqual({
+      ...DEFAULT_EMERGENCY_SUPPLY_POLICY,
+      ruleSetId: null,
+      repeatWindowMs: 72 * 60 * 60 * 1000,
+    });
+    expect(
+      resolveEmergencySupplyPolicy({
+        id: 'placeholder',
+        controlledRegisterFlags: {
+          values: { recordEverySale: true, emergencySupply: DEFAULT_EMERGENCY_SUPPLY_POLICY },
+          provisional: false,
+        },
+      }).source
+    ).toBe('DEFAULT_POLICY');
   });
 });
 

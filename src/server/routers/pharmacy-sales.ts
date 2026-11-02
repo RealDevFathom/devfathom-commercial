@@ -20,8 +20,8 @@ import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   appendControlledSaleEntries,
   earlierRegisterEntry,
-  EMERGENCY_NO_RX_WINDOW_MS,
   emergencyNoRxDecision,
+  resolveEmergencySupplyPolicy,
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
@@ -1165,7 +1165,40 @@ export const pharmacySalesRouter = router({
             });
             if (!patient?.cnic?.trim() || !authorization.prescriberName) return blocked;
             const units = input.quantity * input.canonicalUnitsPerSaleUnit;
-            const since = new Date(now.getTime() - EMERGENCY_NO_RX_WINDOW_MS);
+            const regulatoryProfile = await db.branchRegulatoryProfile.findFirst({
+              where: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                effectiveFrom: { lte: now },
+                OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+                jurisdictionRuleSet: {
+                  effectiveFrom: { lte: now },
+                  OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+                },
+              },
+              select: {
+                provinceCode: true,
+                jurisdictionRuleSet: { select: { id: true, controlledRegisterFlags: true } },
+              },
+              orderBy: { effectiveFrom: 'desc' },
+            });
+            const policy = resolveEmergencySupplyPolicy(
+              regulatoryProfile?.jurisdictionRuleSet ?? null
+            );
+            annotateAudit(ctx, {
+              metadata: {
+                emergencySupply: {
+                  ruleSetId: policy.ruleSetId,
+                  provinceCode: regulatoryProfile?.provinceCode ?? null,
+                  source: policy.source,
+                  maxUnits: policy.maxUnits,
+                  repeatWindowHours: policy.repeatWindowHours,
+                  medicineId: medicine.id,
+                  requestedCanonicalUnits: units,
+                },
+              },
+            });
+            const since = new Date(now.getTime() - policy.repeatWindowMs);
             // The limit is organization-wide, so serialize this patient/medicine eligibility
             // check independently of the branch lock used for stock and register numbering.
             await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':controlled-emergency:' + authorization.patientId + ':' + medicine.id},0))`;
@@ -1192,6 +1225,7 @@ export const pharmacySalesRouter = router({
               units,
               recentSupplies,
               openFollowUp: Boolean(openFollowUp),
+              policy,
             });
             if (emergencyRefusal) return { blocked: emergencyRefusal };
             const consent = await db.patientConsent.findFirst({
