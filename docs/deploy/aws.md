@@ -170,7 +170,10 @@ Builds cost cents.
 ## Not yet on AWS
 
 - **Email** stays in `capture` mode, as on Azure: nothing is sent.
-- **AI** (`AI_PROVIDER`) is `disabled`; Azure OpenAI was Azure-only.
+- **AI** is not rolled out yet. The template defaults `AiProvider` to `auto`, the routed chain (Anthropic, OpenAI, then
+  Bedrock in us-east-1). The keys are read at runtime from existing Secrets Manager secrets through
+  the web task role. Variables, IAM and the rollout steps are in [AI providers](../ai-providers.md).
+  Azure OpenAI was Azure-only and is never configured here.
 - **Meetings:** the LiveKit server (`infra/meetings.bicep`) is not ported. Calls need `NEXT_PUBLIC_LIVEKIT_URL`.
 - **Public URLs:** the metadata base URL and the plain-text email footer still name `dev-fathom-hub.vercel.app` until the production domain is final.
 

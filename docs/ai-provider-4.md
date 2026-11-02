@@ -1,5 +1,8 @@
 # AI provider spend report and cap alerts (DEV-576)
 
+> Detail for the spend report and cap alerts. The overview, env vars and IAM are in
+> [AI providers](./ai-providers.md).
+
 Originally piece 4 (`feat/ai-provider-4-usage`). It replaced a single Anthropic budget with
 per-provider monthly caps for Anthropic, OpenAI and Bedrock. Code: `src/lib/ai/usage.ts`,
 `src/components/platform/ai-usage-panel.tsx`, `src/server/routers/platform-ai-usage.ts`.

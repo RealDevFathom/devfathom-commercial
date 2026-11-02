@@ -1,3 +1,5 @@
+> Superseded by [AI providers](./ai-providers.md) (DEV-576). Kept for history; do not follow it.
+
 # AI provider piece 3: SuperAdmin settings
 
 ## Design

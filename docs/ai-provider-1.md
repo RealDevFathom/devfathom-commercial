@@ -1,3 +1,5 @@
+> Superseded by [AI providers](./ai-providers.md) (DEV-576). Kept for history; do not follow it.
+
 # AI provider adapters — piece 1
 
 ## Design

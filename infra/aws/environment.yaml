@@ -107,21 +107,74 @@ Parameters:
   EmailDeliveryMode:
     Type: String
     Default: capture
+  # AI providers (docs/ai-providers.md). The Anthropic and OpenAI keys live in
+  # existing Secrets Manager secrets that this template neither creates nor
+  # injects: the app reads them at runtime through the web task role. Bedrock
+  # uses the same role and no static keys. Azure is never configured here.
   AiProvider:
     Type: String
-    Default: disabled
-  AiBedrockHaikuModelId:
+    Default: auto
+    AllowedValues: [auto, anthropic, openai, bedrock, disabled]
+    Description: >-
+      AI_PROVIDER. auto is the routed chain in AiProviderOrder; anthropic,
+      openai or bedrock puts that provider first; disabled turns AI off and
+      the SuperAdmin settings cannot turn it back on.
+  AiProviderOrder:
     Type: String
-    Default: anthropic.claude-3-5-haiku-20241022-v1:0
-    Description: Bedrock foundation model ID for the low-cost Haiku route.
-  AiBedrockSonnetModelId:
+    Default: anthropic,openai,bedrock
+    AllowedPattern: '^(anthropic|openai|bedrock)(,(anthropic|openai|bedrock)){0,2}$'
+    Description: AI_PROVIDER_ORDER, the fallback order. A saved SuperAdmin order wins.
+  AnthropicApiKeySecretId:
     Type: String
-    Default: anthropic.claude-3-5-sonnet-20241022-v2:0
-    Description: Bedrock foundation model ID for the standard Sonnet route.
-  AiBedrockOpusModelId:
+    Default: ''
+    AllowedPattern: '^[A-Za-z0-9/_+=.@-]*$'
+    Description: >-
+      Name (not ARN) of the existing secret holding the Anthropic API key.
+      Empty means devfathom/<EnvironmentName>/anthropic-api-key.
+  OpenAiApiKeySecretId:
     Type: String
-    Default: anthropic.claude-3-opus-20240229-v1:0
-    Description: Bedrock foundation model ID for the high-capability Opus route.
+    Default: ''
+    AllowedPattern: '^[A-Za-z0-9/_+=.@-]*$'
+    Description: >-
+      Name (not ARN) of the existing secret holding the OpenAI API key.
+      Empty means devfathom/<EnvironmentName>/openai-api-key.
+  AiSecretsRegion:
+    Type: String
+    Default: ap-southeast-1
+    AllowedPattern: '^[a-z]{2}(-[a-z]+)+-[0-9]$'
+    Description: AI_SECRETS_REGION, the region of the two API key secrets.
+  # US geo inference profiles, called from us-east-1. The foundation model each
+  # one routes to is its ID without the "us." prefix.
+  AiBedrockCheapModelId:
+    Type: String
+    Default: us.anthropic.claude-haiku-5-5
+    AllowedPattern: '^us\.anthropic\.[A-Za-z0-9][A-Za-z0-9.:-]*$'
+    Description: AI_BEDROCK_MODEL_CHEAP, the US inference profile for the cheap tier.
+  AiBedrockStandardModelId:
+    Type: String
+    Default: us.anthropic.claude-sonnet-5-5
+    AllowedPattern: '^us\.anthropic\.[A-Za-z0-9][A-Za-z0-9.:-]*$'
+    Description: AI_BEDROCK_MODEL_STANDARD, the US inference profile for the standard tier.
+  AiBedrockDeepModelId:
+    Type: String
+    Default: us.anthropic.claude-opus-5-5
+    AllowedPattern: '^us\.anthropic\.[A-Za-z0-9][A-Za-z0-9.:-]*$'
+    Description: AI_BEDROCK_MODEL_DEEP, the US inference profile for the deep tier.
+  AiAnthropicMonthlyCapUsd:
+    Type: Number
+    Default: 190
+    MinValue: 0
+    Description: AI_ANTHROPIC_MONTHLY_CAP_USD. A saved SuperAdmin cap wins.
+  AiOpenAiMonthlyCapUsd:
+    Type: Number
+    Default: 190
+    MinValue: 0
+    Description: AI_OPENAI_MONTHLY_CAP_USD. A saved SuperAdmin cap wins.
+  AiBedrockMonthlyCapUsd:
+    Type: Number
+    Default: 300
+    MinValue: 0
+    Description: AI_BEDROCK_MONTHLY_CAP_USD. A saved SuperAdmin cap wins.
   StorageAdapter:
     Type: String
     Default: disabled
@@ -138,10 +191,6 @@ Parameters:
       Needs CertificateArn and live DNS, because it calls the public HTTPS host.
 
 Rules:
-  SingaporeOnly:
-    Assertions:
-      - Assert: !Equals [!Ref AWS::Region, ap-southeast-1]
-        AssertDescription: The environment stack and its Bedrock permissions are restricted to ap-southeast-1.
   SeedOnlyInStaging:
     RuleCondition: !Equals [!Ref MigrationMode, seed]
     Assertions:
@@ -163,6 +212,8 @@ Conditions:
   IsProduction: !Equals [!Ref EnvironmentName, production]
   IsStaging: !Equals [!Ref EnvironmentName, staging]
   DbMultiAzEnabled: !Equals [!Ref DbMultiAz, 'true']
+  HasAnthropicApiKeySecretId: !Not [!Equals [!Ref AnthropicApiKeySecretId, '']]
+  HasOpenAiApiKeySecretId: !Not [!Equals [!Ref OpenAiApiKeySecretId, '']]
   JobsEnabled: !And
     - !Equals [!Ref EnableJobsSchedule, 'true']
     - !Condition HasCertificate
@@ -422,20 +473,11 @@ Resources:
         PasswordLength: 48
         ExcludePunctuation: true
 
-  # Create an AWSCURRENT placeholder so adding this resource to an environment
-  # with running tasks is atomic: ECS can resolve the secret during the same
-  # stack update. Rotate the generated value to the real API key out of band.
-  # CloudFormation never receives or exposes either value.
-  AnthropicApiKeySecret:
-    Type: AWS::SecretsManager::Secret
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      Name: !Sub devfathom/${EnvironmentName}/anthropic-api-key
-      Description: Replace the generated placeholder with ANTHROPIC_API_KEY out of band.
-      GenerateSecretString:
-        PasswordLength: 64
-        ExcludePunctuation: true
+  # The Anthropic and OpenAI API keys are not created here: they already exist,
+  # outside this stack (AnthropicApiKeySecretId, OpenAiApiKeySecretId), and the
+  # app reads them at runtime through WebTaskRole. A stack that ever held the
+  # old AnthropicApiKeySecret resource keeps that secret when it is removed
+  # (its DeletionPolicy was Retain).
 
   # Initialization-only credentials, passed to the migration task only when it
   # seeds (staging) or bootstraps (production): sign-in passwords for the seeded
@@ -651,7 +693,8 @@ Resources:
                 Resource:
                   - !Ref DatabaseAdminUrlSecret
                   - !Ref DatabaseAppUrlSecret
-                  - !Ref SeedPasswordSecret
+                  # The seed password exists in staging only.
+                  - !If [IsStaging, !Ref SeedPasswordSecret, !Ref AWS::NoValue]
                   - !Ref AdminPasswordSecret
                   - !Ref PlatformAdminPasswordSecret
                   - !If [MigrationSeeds, !Ref DemoAccessCodeSecret, !Ref AWS::NoValue]
@@ -684,7 +727,6 @@ Resources:
                   - !If [IsStaging, !Ref SeedPasswordSecret, !Ref AWS::NoValue]
                   - !Ref AdminPasswordSecret
                   - !Ref PlatformAdminPasswordSecret
-                  - !Ref AnthropicApiKeySecret
                   - !If [MigrationSeeds, !Ref DemoAccessCodeSecret, !Ref AWS::NoValue]
 
   WebTaskRole:
@@ -713,21 +755,87 @@ Resources:
               - Effect: Allow
                 Action: s3:ListBucket
                 Resource: !GetAtt UploadsBucket.Arn
-        - PolicyName: invoke-approved-bedrock-models
+        # The app reads the two existing API key secrets at runtime (the SDK's
+        # default credential chain resolves this task role inside the container).
+        # The -?????? suffix matches the six random characters Secrets Manager
+        # appends to a secret's ARN, and nothing longer.
+        - PolicyName: read-ai-provider-keys
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
+              - Sid: ReadAIProviderKeys
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub
+                    - 'arn:${AWS::Partition}:secretsmanager:${AiSecretsRegion}:${AWS::AccountId}:secret:${Name}-??????'
+                    - Name: !If
+                        - HasAnthropicApiKeySecretId
+                        - !Ref AnthropicApiKeySecretId
+                        - !Sub devfathom/${EnvironmentName}/anthropic-api-key
+                  - !Sub
+                    - 'arn:${AWS::Partition}:secretsmanager:${AiSecretsRegion}:${AWS::AccountId}:secret:${Name}-??????'
+                    - Name: !If
+                        - HasOpenAiApiKeySecretId
+                        - !Ref OpenAiApiKeySecretId
+                        - !Sub devfathom/${EnvironmentName}/openai-api-key
+        # Bedrock in us-east-1 through the three US geo inference profiles.
+        # Converse and ConverseStream are authorized by these two actions; there
+        # is no separate Converse IAM action. A profile call needs the profile ARN
+        # and the foundation model in every destination Region of the US profile
+        # (us-east-1, us-east-2, us-west-2), the latter only through the profile.
+        - PolicyName: invoke-bedrock-us-profiles
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: InvokeUsInferenceProfiles
+                Effect: Allow
                 Action:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
                 Resource:
-                  - !Sub 'arn:${AWS::Partition}:bedrock:ap-southeast-1::foundation-model/${AiBedrockHaikuModelId}'
-                  - !Sub 'arn:${AWS::Partition}:bedrock:ap-southeast-1::foundation-model/${AiBedrockSonnetModelId}'
-                  - !Sub 'arn:${AWS::Partition}:bedrock:ap-southeast-1::foundation-model/${AiBedrockOpusModelId}'
-                  - !Sub 'arn:${AWS::Partition}:bedrock:ap-southeast-1:${AWS::AccountId}:inference-profile/apac.${AiBedrockHaikuModelId}'
-                  - !Sub 'arn:${AWS::Partition}:bedrock:ap-southeast-1:${AWS::AccountId}:inference-profile/apac.${AiBedrockSonnetModelId}'
-                  - !Sub 'arn:${AWS::Partition}:bedrock:ap-southeast-1:${AWS::AccountId}:inference-profile/apac.${AiBedrockOpusModelId}'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:us-east-1:${AWS::AccountId}:inference-profile/${AiBedrockCheapModelId}'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:us-east-1:${AWS::AccountId}:inference-profile/${AiBedrockStandardModelId}'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:us-east-1:${AWS::AccountId}:inference-profile/${AiBedrockDeepModelId}'
+              - Sid: InvokeProfileModelsOnlyThroughProfiles
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub
+                    - 'arn:${AWS::Partition}:bedrock:us-east-1::foundation-model/anthropic.${Model}'
+                    - Model: !Select [1, !Split ['us.anthropic.', !Ref AiBedrockCheapModelId]]
+                  - !Sub
+                    - 'arn:${AWS::Partition}:bedrock:us-east-2::foundation-model/anthropic.${Model}'
+                    - Model: !Select [1, !Split ['us.anthropic.', !Ref AiBedrockCheapModelId]]
+                  - !Sub
+                    - 'arn:${AWS::Partition}:bedrock:us-west-2::foundation-model/anthropic.${Model}'
+                    - Model: !Select [1, !Split ['us.anthropic.', !Ref AiBedrockCheapModelId]]
+                  - !Sub
+                    - 'arn:${AWS::Partition}:bedrock:us-east-1::foundation-model/anthropic.${Model}'
+                    - Model: !Select [1, !Split ['us.anthropic.', !Ref AiBedrockStandardModelId]]
+                  - !Sub
+                    - 'arn:${AWS::Partition}:bedrock:us-east-2::foundation-model/anthropic.${Model}'
+                    - Model: !Select [1, !Split ['us.anthropic.', !Ref AiBedrockStandardModelId]]
+                  - !Sub
+                    - 'arn:${AWS::Partition}:bedrock:us-west-2::foundation-model/anthropic.${Model}'
+                    - Model: !Select [1, !Split ['us.anthropic.', !Ref AiBedrockStandardModelId]]
+                  - !Sub
+                    - 'arn:${AWS::Partition}:bedrock:us-east-1::foundation-model/anthropic.${Model}'
+                    - Model: !Select [1, !Split ['us.anthropic.', !Ref AiBedrockDeepModelId]]
+                  - !Sub
+                    - 'arn:${AWS::Partition}:bedrock:us-east-2::foundation-model/anthropic.${Model}'
+                    - Model: !Select [1, !Split ['us.anthropic.', !Ref AiBedrockDeepModelId]]
+                  - !Sub
+                    - 'arn:${AWS::Partition}:bedrock:us-west-2::foundation-model/anthropic.${Model}'
+                    - Model: !Select [1, !Split ['us.anthropic.', !Ref AiBedrockDeepModelId]]
+                Condition:
+                  StringEquals:
+                    bedrock:InferenceProfileArn:
+                      - !Sub 'arn:${AWS::Partition}:bedrock:us-east-1:${AWS::AccountId}:inference-profile/${AiBedrockCheapModelId}'
+                      - !Sub 'arn:${AWS::Partition}:bedrock:us-east-1:${AWS::AccountId}:inference-profile/${AiBedrockStandardModelId}'
+                      - !Sub 'arn:${AWS::Partition}:bedrock:us-east-1:${AWS::AccountId}:inference-profile/${AiBedrockDeepModelId}'
 
   MigrateTaskRole:
     Type: AWS::IAM::Role
@@ -780,16 +888,40 @@ Resources:
               Value: org_devfathom
             - Name: EMAIL_DELIVERY_MODE
               Value: !Ref EmailDeliveryMode
+            # AI providers (docs/ai-providers.md). Secret ids only: the app
+            # reads the key values at runtime through WebTaskRole, so they never
+            # appear in the task definition or the container environment.
             - Name: AI_PROVIDER
               Value: !Ref AiProvider
-            - Name: AI_BEDROCK_REGION
-              Value: ap-southeast-1
-            - Name: AI_BEDROCK_HAIKU_MODEL_ID
-              Value: !Sub 'apac.${AiBedrockHaikuModelId}'
-            - Name: AI_BEDROCK_SONNET_MODEL_ID
-              Value: !Sub 'apac.${AiBedrockSonnetModelId}'
-            - Name: AI_BEDROCK_OPUS_MODEL_ID
-              Value: !Sub 'apac.${AiBedrockOpusModelId}'
+            - Name: AI_PROVIDER_ORDER
+              Value: !Ref AiProviderOrder
+            - Name: ANTHROPIC_API_KEY_SECRET_ID
+              Value: !If
+                - HasAnthropicApiKeySecretId
+                - !Ref AnthropicApiKeySecretId
+                - !Sub devfathom/${EnvironmentName}/anthropic-api-key
+            - Name: OPENAI_API_KEY_SECRET_ID
+              Value: !If
+                - HasOpenAiApiKeySecretId
+                - !Ref OpenAiApiKeySecretId
+                - !Sub devfathom/${EnvironmentName}/openai-api-key
+            - Name: AI_SECRETS_REGION
+              Value: !Ref AiSecretsRegion
+            # The IAM statements above are pinned to us-east-1 and these profiles.
+            - Name: BEDROCK_REGION
+              Value: us-east-1
+            - Name: AI_BEDROCK_MODEL_CHEAP
+              Value: !Ref AiBedrockCheapModelId
+            - Name: AI_BEDROCK_MODEL_STANDARD
+              Value: !Ref AiBedrockStandardModelId
+            - Name: AI_BEDROCK_MODEL_DEEP
+              Value: !Ref AiBedrockDeepModelId
+            - Name: AI_ANTHROPIC_MONTHLY_CAP_USD
+              Value: !Ref AiAnthropicMonthlyCapUsd
+            - Name: AI_OPENAI_MONTHLY_CAP_USD
+              Value: !Ref AiOpenAiMonthlyCapUsd
+            - Name: AI_BEDROCK_MONTHLY_CAP_USD
+              Value: !Ref AiBedrockMonthlyCapUsd
             - Name: STORAGE_ADAPTER
               Value: !Ref StorageAdapter
             - Name: S3_UPLOADS_BUCKET
@@ -812,8 +944,6 @@ Resources:
               ValueFrom: !Sub '${CameraCredentialKeySecret}:value::'
             - Name: CRON_SECRET
               ValueFrom: !Sub '${CronSecret}:value::'
-            - Name: ANTHROPIC_API_KEY
-              ValueFrom: !Ref AnthropicApiKeySecret
             - !If
               - MigrationSeeds
               - Name: DEMO_ACCESS_CODE
@@ -1223,5 +1353,3 @@ Outputs:
   SeedPasswordSecretName:
     Condition: IsStaging
     Value: !Sub devfathom/${EnvironmentName}/seed-password
-  AnthropicApiKeySecretName:
-    Value: !Sub devfathom/${EnvironmentName}/anthropic-api-key

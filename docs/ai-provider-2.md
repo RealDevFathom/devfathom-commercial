@@ -1,3 +1,5 @@
+> Superseded by [AI providers](./ai-providers.md) (DEV-576). Kept for history; do not follow it.
+
 # AI provider routing and spend tracking (piece 2/5)
 
 ## Design

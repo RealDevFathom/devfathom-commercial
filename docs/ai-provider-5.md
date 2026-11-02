@@ -1,3 +1,5 @@
+> Superseded by [AI providers](./ai-providers.md) (DEV-576). Kept for history; do not follow it.
+
 # AI provider infrastructure (piece 5 of 5)
 
 This branch contains only the AWS CloudFormation changes for the AI-provider work. It is
