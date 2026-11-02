@@ -59,9 +59,7 @@
           },
           "meta": {
             "values": {
-              "createdAt": [
-                "Date"
-              ]
+              "createdAt": ["Date"]
             },
             "v": 1
           }

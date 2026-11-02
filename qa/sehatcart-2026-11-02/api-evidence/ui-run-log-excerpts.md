@@ -125,7 +125,7 @@ Steps: as qa.manager (Procurement), open Goods-in (`/pharmacy/purchasing/receivi
 
 Runner output logged at 2026-11-02T18:13:19.898Z (UTC).
 
-Options of the "Line 1 — medicine and pack" select in *Direct purchase — no purchase order*:
+Options of the "Line 1 — medicine and pack" select in _Direct purchase — no purchase order_:
 
 - Skip this line
 - Amoxicillin 250mg Capsules — BOX (1 BOX = 100 units)

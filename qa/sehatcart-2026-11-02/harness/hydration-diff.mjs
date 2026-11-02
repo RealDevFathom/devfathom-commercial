@@ -2,12 +2,21 @@ import { browser, closeBrowser, statePath, BASE } from './lib.mjs';
 const route = process.argv[2] ?? '/pharmacy/orders';
 const b = await browser();
 async function textOf(js) {
-  const ctx = await b.newContext({ storageState: statePath('owner'), javaScriptEnabled: js, viewport: { width: 1440, height: 900 } });
+  const ctx = await b.newContext({
+    storageState: statePath('owner'),
+    javaScriptEnabled: js,
+    viewport: { width: 1440, height: 900 },
+  });
   const p = await ctx.newPage();
   await p.goto(BASE + route, { waitUntil: js ? 'networkidle' : 'load' });
-  const t = await p.evaluate(() => document.querySelector('main')?.innerText ?? document.body.innerText);
+  const t = await p.evaluate(
+    () => document.querySelector('main')?.innerText ?? document.body.innerText
+  );
   await ctx.close();
-  return t.split('\n').map((s) => s.trim()).filter(Boolean);
+  return t
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 const ssr = await textOf(false);
 const csr = await textOf(true);

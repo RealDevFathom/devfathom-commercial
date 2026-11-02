@@ -1,13 +1,22 @@
 [
- {"goto":"/pharmacy/counter/close"},
- {"wait":2000},
- {"eval":"[...document.querySelectorAll('main input[type=text]')].map(i=>(i.labels?.[0]?.innerText||'?')).join(' | ')","max":800},
- {"eval":"(()=>{const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;const ins=[...document.querySelectorAll('main input[type=text]')].filter(i=>/Counted cash for drawer/.test(i.labels?.[0]?.innerText||''));const cards=ins.map(i=>i.closest('div[class]')?.parentElement?.innerText?.replace(/\\s+/g,' ').slice(0,140));ins.forEach(i=>{const txt=i.closest('div[class]')?.parentElement?.innerText||'';const v=/Expected: PKR 104\\.00/.test(txt)?'100.00':'0';set.call(i,v);i.dispatchEvent(new Event('input',{bubbles:true}));});return cards})()","max":1500},
- {"fill":{"label":"Variance note"},"value":"QA test: drawer short by PKR 4 (deliberate)"},
- {"check":{"label":"I have counted every drawer"}},
- {"wait":800,"shot":"own-dayclose-filled","full":true},
- {"eval":"[...document.querySelectorAll('main')].map(m=>m.innerText.replace(/\\s+/g,' ').match(/Expected cash[^|]{0,200}/)?.[0])","max":400},
- {"click":{"role":"button","name":"Close and lock day"}},
- {"wait":4000,"shot":"own-dayclose-done","full":true},
- {"text":"main","max":2500}
+  { "goto": "/pharmacy/counter/close" },
+  { "wait": 2000 },
+  {
+    "eval": "[...document.querySelectorAll('main input[type=text]')].map(i=>(i.labels?.[0]?.innerText||'?')).join(' | ')",
+    "max": 800
+  },
+  {
+    "eval": "(()=>{const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;const ins=[...document.querySelectorAll('main input[type=text]')].filter(i=>/Counted cash for drawer/.test(i.labels?.[0]?.innerText||''));const cards=ins.map(i=>i.closest('div[class]')?.parentElement?.innerText?.replace(/\\s+/g,' ').slice(0,140));ins.forEach(i=>{const txt=i.closest('div[class]')?.parentElement?.innerText||'';const v=/Expected: PKR 104\\.00/.test(txt)?'100.00':'0';set.call(i,v);i.dispatchEvent(new Event('input',{bubbles:true}));});return cards})()",
+    "max": 1500
+  },
+  { "fill": { "label": "Variance note" }, "value": "QA test: drawer short by PKR 4 (deliberate)" },
+  { "check": { "label": "I have counted every drawer" } },
+  { "wait": 800, "shot": "own-dayclose-filled", "full": true },
+  {
+    "eval": "[...document.querySelectorAll('main')].map(m=>m.innerText.replace(/\\s+/g,' ').match(/Expected cash[^|]{0,200}/)?.[0])",
+    "max": 400
+  },
+  { "click": { "role": "button", "name": "Close and lock day" } },
+  { "wait": 4000, "shot": "own-dayclose-done", "full": true },
+  { "text": "main", "max": 2500 }
 ]

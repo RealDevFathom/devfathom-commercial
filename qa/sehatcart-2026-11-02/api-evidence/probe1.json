@@ -237,42 +237,18 @@
             },
             "meta": {
               "referentialEqualities": {
-                "bindings.focusSearch": [
-                  "preset.bindings.focusSearch"
-                ],
-                "bindings.selectPackUnit": [
-                  "preset.bindings.selectPackUnit"
-                ],
-                "bindings.selectStripUnit": [
-                  "preset.bindings.selectStripUnit"
-                ],
-                "bindings.selectLooseUnit": [
-                  "preset.bindings.selectLooseUnit"
-                ],
-                "bindings.addToCart": [
-                  "preset.bindings.addToCart"
-                ],
-                "bindings.holdSale": [
-                  "preset.bindings.holdSale"
-                ],
-                "bindings.resumeSale": [
-                  "preset.bindings.resumeSale"
-                ],
-                "bindings.openTender": [
-                  "preset.bindings.openTender"
-                ],
-                "bindings.printReceipt": [
-                  "preset.bindings.printReceipt"
-                ],
-                "bindings.focusPrescriptionPanel": [
-                  "preset.bindings.focusPrescriptionPanel"
-                ],
-                "bindings.captureDemand": [
-                  "preset.bindings.captureDemand"
-                ],
-                "bindings.voidSale": [
-                  "preset.bindings.voidSale"
-                ]
+                "bindings.focusSearch": ["preset.bindings.focusSearch"],
+                "bindings.selectPackUnit": ["preset.bindings.selectPackUnit"],
+                "bindings.selectStripUnit": ["preset.bindings.selectStripUnit"],
+                "bindings.selectLooseUnit": ["preset.bindings.selectLooseUnit"],
+                "bindings.addToCart": ["preset.bindings.addToCart"],
+                "bindings.holdSale": ["preset.bindings.holdSale"],
+                "bindings.resumeSale": ["preset.bindings.resumeSale"],
+                "bindings.openTender": ["preset.bindings.openTender"],
+                "bindings.printReceipt": ["preset.bindings.printReceipt"],
+                "bindings.focusPrescriptionPanel": ["preset.bindings.focusPrescriptionPanel"],
+                "bindings.captureDemand": ["preset.bindings.captureDemand"],
+                "bindings.voidSale": ["preset.bindings.voidSale"]
               },
               "v": 1
             }
@@ -618,42 +594,18 @@
             },
             "meta": {
               "referentialEqualities": {
-                "bindings.focusSearch": [
-                  "preset.bindings.focusSearch"
-                ],
-                "bindings.selectPackUnit": [
-                  "preset.bindings.selectPackUnit"
-                ],
-                "bindings.selectStripUnit": [
-                  "preset.bindings.selectStripUnit"
-                ],
-                "bindings.selectLooseUnit": [
-                  "preset.bindings.selectLooseUnit"
-                ],
-                "bindings.addToCart": [
-                  "preset.bindings.addToCart"
-                ],
-                "bindings.holdSale": [
-                  "preset.bindings.holdSale"
-                ],
-                "bindings.resumeSale": [
-                  "preset.bindings.resumeSale"
-                ],
-                "bindings.openTender": [
-                  "preset.bindings.openTender"
-                ],
-                "bindings.printReceipt": [
-                  "preset.bindings.printReceipt"
-                ],
-                "bindings.focusPrescriptionPanel": [
-                  "preset.bindings.focusPrescriptionPanel"
-                ],
-                "bindings.captureDemand": [
-                  "preset.bindings.captureDemand"
-                ],
-                "bindings.voidSale": [
-                  "preset.bindings.voidSale"
-                ]
+                "bindings.focusSearch": ["preset.bindings.focusSearch"],
+                "bindings.selectPackUnit": ["preset.bindings.selectPackUnit"],
+                "bindings.selectStripUnit": ["preset.bindings.selectStripUnit"],
+                "bindings.selectLooseUnit": ["preset.bindings.selectLooseUnit"],
+                "bindings.addToCart": ["preset.bindings.addToCart"],
+                "bindings.holdSale": ["preset.bindings.holdSale"],
+                "bindings.resumeSale": ["preset.bindings.resumeSale"],
+                "bindings.openTender": ["preset.bindings.openTender"],
+                "bindings.printReceipt": ["preset.bindings.printReceipt"],
+                "bindings.focusPrescriptionPanel": ["preset.bindings.focusPrescriptionPanel"],
+                "bindings.captureDemand": ["preset.bindings.captureDemand"],
+                "bindings.voidSale": ["preset.bindings.voidSale"]
               },
               "v": 1
             }
@@ -924,42 +876,18 @@
             },
             "meta": {
               "referentialEqualities": {
-                "bindings.focusSearch": [
-                  "preset.bindings.focusSearch"
-                ],
-                "bindings.selectPackUnit": [
-                  "preset.bindings.selectPackUnit"
-                ],
-                "bindings.selectStripUnit": [
-                  "preset.bindings.selectStripUnit"
-                ],
-                "bindings.selectLooseUnit": [
-                  "preset.bindings.selectLooseUnit"
-                ],
-                "bindings.addToCart": [
-                  "preset.bindings.addToCart"
-                ],
-                "bindings.holdSale": [
-                  "preset.bindings.holdSale"
-                ],
-                "bindings.resumeSale": [
-                  "preset.bindings.resumeSale"
-                ],
-                "bindings.openTender": [
-                  "preset.bindings.openTender"
-                ],
-                "bindings.printReceipt": [
-                  "preset.bindings.printReceipt"
-                ],
-                "bindings.focusPrescriptionPanel": [
-                  "preset.bindings.focusPrescriptionPanel"
-                ],
-                "bindings.captureDemand": [
-                  "preset.bindings.captureDemand"
-                ],
-                "bindings.voidSale": [
-                  "preset.bindings.voidSale"
-                ]
+                "bindings.focusSearch": ["preset.bindings.focusSearch"],
+                "bindings.selectPackUnit": ["preset.bindings.selectPackUnit"],
+                "bindings.selectStripUnit": ["preset.bindings.selectStripUnit"],
+                "bindings.selectLooseUnit": ["preset.bindings.selectLooseUnit"],
+                "bindings.addToCart": ["preset.bindings.addToCart"],
+                "bindings.holdSale": ["preset.bindings.holdSale"],
+                "bindings.resumeSale": ["preset.bindings.resumeSale"],
+                "bindings.openTender": ["preset.bindings.openTender"],
+                "bindings.printReceipt": ["preset.bindings.printReceipt"],
+                "bindings.focusPrescriptionPanel": ["preset.bindings.focusPrescriptionPanel"],
+                "bindings.captureDemand": ["preset.bindings.captureDemand"],
+                "bindings.voidSale": ["preset.bindings.voidSale"]
               },
               "v": 1
             }
@@ -1230,42 +1158,18 @@
             },
             "meta": {
               "referentialEqualities": {
-                "bindings.focusSearch": [
-                  "preset.bindings.focusSearch"
-                ],
-                "bindings.selectPackUnit": [
-                  "preset.bindings.selectPackUnit"
-                ],
-                "bindings.selectStripUnit": [
-                  "preset.bindings.selectStripUnit"
-                ],
-                "bindings.selectLooseUnit": [
-                  "preset.bindings.selectLooseUnit"
-                ],
-                "bindings.addToCart": [
-                  "preset.bindings.addToCart"
-                ],
-                "bindings.holdSale": [
-                  "preset.bindings.holdSale"
-                ],
-                "bindings.resumeSale": [
-                  "preset.bindings.resumeSale"
-                ],
-                "bindings.openTender": [
-                  "preset.bindings.openTender"
-                ],
-                "bindings.printReceipt": [
-                  "preset.bindings.printReceipt"
-                ],
-                "bindings.focusPrescriptionPanel": [
-                  "preset.bindings.focusPrescriptionPanel"
-                ],
-                "bindings.captureDemand": [
-                  "preset.bindings.captureDemand"
-                ],
-                "bindings.voidSale": [
-                  "preset.bindings.voidSale"
-                ]
+                "bindings.focusSearch": ["preset.bindings.focusSearch"],
+                "bindings.selectPackUnit": ["preset.bindings.selectPackUnit"],
+                "bindings.selectStripUnit": ["preset.bindings.selectStripUnit"],
+                "bindings.selectLooseUnit": ["preset.bindings.selectLooseUnit"],
+                "bindings.addToCart": ["preset.bindings.addToCart"],
+                "bindings.holdSale": ["preset.bindings.holdSale"],
+                "bindings.resumeSale": ["preset.bindings.resumeSale"],
+                "bindings.openTender": ["preset.bindings.openTender"],
+                "bindings.printReceipt": ["preset.bindings.printReceipt"],
+                "bindings.focusPrescriptionPanel": ["preset.bindings.focusPrescriptionPanel"],
+                "bindings.captureDemand": ["preset.bindings.captureDemand"],
+                "bindings.voidSale": ["preset.bindings.voidSale"]
               },
               "v": 1
             }

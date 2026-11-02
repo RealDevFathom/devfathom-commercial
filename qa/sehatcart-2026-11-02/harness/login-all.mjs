@@ -14,6 +14,17 @@ for (const role of roles) {
   const s = await (await import('./lib.mjs')).api(role).then((a) => a.get('/api/auth/session'));
   const j = await s.json().catch(() => null);
   const u = j?.user ?? {};
-  console.log(role, 'session:', JSON.stringify({ id: u.id, role: u.role, status: u.status, org: u.organizationId, name: u.name, keys: Object.keys(u) }));
+  console.log(
+    role,
+    'session:',
+    JSON.stringify({
+      id: u.id,
+      role: u.role,
+      status: u.status,
+      org: u.organizationId,
+      name: u.name,
+      keys: Object.keys(u),
+    })
+  );
 }
 await disposeApis();

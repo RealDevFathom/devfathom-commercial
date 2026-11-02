@@ -1,11 +1,11 @@
 [
- {"goto":"/pharmacy/counter"},
- {"press":"F2"},
- {"type":{"label":"Scan or search"},"value":"panadol","delay":30},
- {"wait":1500},
- {"press":"ArrowDown"},
- {"press":"Enter"},
- {"wait":1200,"map":true,"max":2500,"log":"after ArrowDown+Enter"},
- {"click":{"role":"button","name":"Paracetamol 500mg Tablets"}},
- {"wait":1500,"map":true,"max":4000,"shot":"cash-sale-clicked","log":"after click"}
+  { "goto": "/pharmacy/counter" },
+  { "press": "F2" },
+  { "type": { "label": "Scan or search" }, "value": "panadol", "delay": 30 },
+  { "wait": 1500 },
+  { "press": "ArrowDown" },
+  { "press": "Enter" },
+  { "wait": 1200, "map": true, "max": 2500, "log": "after ArrowDown+Enter" },
+  { "click": { "role": "button", "name": "Paracetamol 500mg Tablets" } },
+  { "wait": 1500, "map": true, "max": 4000, "shot": "cash-sale-clicked", "log": "after click" }
 ]

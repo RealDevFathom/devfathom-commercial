@@ -175,9 +175,7 @@
         "blocked": [],
         "overrideId": null,
         "discrepancyId": null,
-        "movementIds": [
-          "cmvzlu3gg026t4oqrv0ax5z01"
-        ]
+        "movementIds": ["cmvzlu3gg026t4oqrv0ax5z01"]
       }
     },
     {
@@ -223,10 +221,7 @@
         "blocked": [],
         "overrideId": null,
         "discrepancyId": null,
-        "movementIds": [
-          "cmvzlu3kb026y4oqr5hos3e4r",
-          "cmvzlu3ke026z4oqrg77osusu"
-        ]
+        "movementIds": ["cmvzlu3kb026y4oqr5hos3e4r", "cmvzlu3ke026z4oqrg77osusu"]
       }
     },
     {
@@ -267,9 +262,7 @@
         "blocked": [],
         "overrideId": null,
         "discrepancyId": null,
-        "movementIds": [
-          "cmvzlu3mh027a4oqr20skub1h"
-        ]
+        "movementIds": ["cmvzlu3mh027a4oqr20skub1h"]
       }
     },
     {
@@ -310,9 +303,7 @@
         "blocked": [],
         "overrideId": null,
         "discrepancyId": null,
-        "movementIds": [
-          "cmvzlu3lo02754oqrby9f81x4"
-        ]
+        "movementIds": ["cmvzlu3lo02754oqrby9f81x4"]
       }
     }
   ]

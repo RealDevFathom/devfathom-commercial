@@ -5,7 +5,12 @@ import { roleContext, capture, closeBrowser, SCRATCH, BASE, pkt } from './lib.mj
 
 const [tag = 'desk', w = '1440', h = '900', scheme = 'light', ...rolesArg] = process.argv.slice(2);
 const roles = rolesArg.length ? rolesArg : ['owner', 'cashier', 'manager', 'pharmacist'];
-const ROUTES = (process.env.ROUTES ?? `/dashboard /pharmacy /pharmacy/counter /pharmacy/counter/close /pharmacy/inventory /pharmacy/inventory/expiry /pharmacy/inventory/import /pharmacy/inventory/imports /pharmacy/inventory/transfers /pharmacy/medicines /pharmacy/medicines/prices /pharmacy/medicines/staged /pharmacy/purchasing /pharmacy/purchasing/orders /pharmacy/purchasing/receiving /pharmacy/purchasing/returns /pharmacy/purchasing/suppliers /pharmacy/prescriptions /pharmacy/pharmacist-queue /pharmacy/substitution /pharmacy/controlled-register /pharmacy/reports /pharmacy/reports/branch-comparison /pharmacy/reports/repeat-purchasing /pharmacy/reports/replenishment /pharmacy/reports/supplier-credit-follow-up /pharmacy/finance /pharmacy/accounts/profit-loss /pharmacy/accounts/balance-sheet /pharmacy/accounts/cash-flow /pharmacy/accounts/trial-balance-control /pharmacy/accounts/account-activity-bridge /pharmacy/marketing /pharmacy/loyalty /pharmacy/orders /pharmacy/regulatory /pharmacy/regulatory/fbr-tier-1 /pharmacy/settings/branches /pharmacy/cameras /settings /settings/receipts /team /organization /audit-logs /finance /api-docs`).split(/\s+/).filter(Boolean);
+const ROUTES = (
+  process.env.ROUTES ??
+  `/dashboard /pharmacy /pharmacy/counter /pharmacy/counter/close /pharmacy/inventory /pharmacy/inventory/expiry /pharmacy/inventory/import /pharmacy/inventory/imports /pharmacy/inventory/transfers /pharmacy/medicines /pharmacy/medicines/prices /pharmacy/medicines/staged /pharmacy/purchasing /pharmacy/purchasing/orders /pharmacy/purchasing/receiving /pharmacy/purchasing/returns /pharmacy/purchasing/suppliers /pharmacy/prescriptions /pharmacy/pharmacist-queue /pharmacy/substitution /pharmacy/controlled-register /pharmacy/reports /pharmacy/reports/branch-comparison /pharmacy/reports/repeat-purchasing /pharmacy/reports/replenishment /pharmacy/reports/supplier-credit-follow-up /pharmacy/finance /pharmacy/accounts/profit-loss /pharmacy/accounts/balance-sheet /pharmacy/accounts/cash-flow /pharmacy/accounts/trial-balance-control /pharmacy/accounts/account-activity-bridge /pharmacy/marketing /pharmacy/loyalty /pharmacy/orders /pharmacy/regulatory /pharmacy/regulatory/fbr-tier-1 /pharmacy/settings/branches /pharmacy/cameras /settings /settings/receipts /team /organization /audit-logs /finance /api-docs`
+)
+  .split(/\s+/)
+  .filter(Boolean);
 
 const outDir = path.join(SCRATCH, 'sweep', tag);
 fs.mkdirSync(outDir, { recursive: true });
@@ -29,13 +34,31 @@ async function runRole(role) {
     let info = {};
     try {
       info = await page.evaluate(() => {
-        const h1 = [...document.querySelectorAll('h1')].map((e) => e.innerText.trim()).filter(Boolean);
-        const navLinks = [...document.querySelectorAll('nav a')].map((a) => ({ t: a.innerText.trim().slice(0, 40), h: a.getAttribute('href') }));
+        const h1 = [...document.querySelectorAll('h1')]
+          .map((e) => e.innerText.trim())
+          .filter(Boolean);
+        const navLinks = [...document.querySelectorAll('nav a')].map((a) => ({
+          t: a.innerText.trim().slice(0, 40),
+          h: a.getAttribute('href'),
+        }));
         const text = document.body?.innerText ?? '';
         const docW = document.documentElement.scrollWidth;
         const vw = window.innerWidth;
-        const skeletons = document.querySelectorAll('[class*="skeleton"],[class*="animate-pulse"]').length;
-        return { h1, navLinks, text: text.slice(0, 3000), docW, vw, skeletons, title: document.title, dir: document.documentElement.dir, lang: document.documentElement.lang, theme: document.documentElement.dataset.theme ?? null };
+        const skeletons = document.querySelectorAll(
+          '[class*="skeleton"],[class*="animate-pulse"]'
+        ).length;
+        return {
+          h1,
+          navLinks,
+          text: text.slice(0, 3000),
+          docW,
+          vw,
+          skeletons,
+          title: document.title,
+          dir: document.documentElement.dir,
+          lang: document.documentElement.lang,
+          theme: document.documentElement.dataset.theme ?? null,
+        };
       });
     } catch (e) {
       info = { evalErr: String(e).slice(0, 200) };
@@ -45,7 +68,20 @@ async function runRole(role) {
     try {
       await page.screenshot({ path: shotPath, fullPage: false });
     } catch {}
-    results.push({ role, route, final: page.url().replace(BASE, ''), loadMs, navErr, ...info, console: log.console, http: log.http, failed: log.failed, slow: log.slow, at: pkt(), shot: shotPath });
+    results.push({
+      role,
+      route,
+      final: page.url().replace(BASE, ''),
+      loadMs,
+      navErr,
+      ...info,
+      console: log.console,
+      http: log.http,
+      failed: log.failed,
+      slow: log.slow,
+      at: pkt(),
+      shot: shotPath,
+    });
     await page.close();
   }
   await ctx.close();
@@ -55,7 +91,8 @@ async function runRole(role) {
 const all = (await Promise.all(roles.map(runRole))).flat();
 fs.writeFileSync(path.join(outDir, 'results.json'), JSON.stringify(all, null, 1));
 const wrongTheme = all.filter((r) => r.theme && r.theme !== scheme);
-if (wrongTheme.length) console.log(`WARNING: ${wrongTheme.length} page(s) rendered data-theme other than "${scheme}"`);
+if (wrongTheme.length)
+  console.log(`WARNING: ${wrongTheme.length} page(s) rendered data-theme other than "${scheme}"`);
 console.log('done', all.length, 'pages ->', outDir);
 await Promise.race([closeBrowser(), new Promise((r) => setTimeout(r, 5000))]);
 process.exit(0);

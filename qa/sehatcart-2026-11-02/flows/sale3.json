@@ -1,13 +1,13 @@
 [
- {"goto":"/pharmacy/counter"},
- {"press":"F2"},
- {"type":{"label":"Scan or search"},"value":"panadol","delay":30},
- {"wait":1500},
- {"click":{"role":"button","name":"Paracetamol 500mg Tablets"}},
- {"wait":800},
- {"fill":{"sel":"main input[type=number]"},"value":"2"},
- {"press":"F6"},
- {"wait":2500,"map":true,"max":4000,"shot":"cash-sale-cart","log":"after F6"},
- {"press":"F9"},
- {"wait":1500,"map":true,"max":4000,"shot":"cash-sale-tender","log":"after F9"}
+  { "goto": "/pharmacy/counter" },
+  { "press": "F2" },
+  { "type": { "label": "Scan or search" }, "value": "panadol", "delay": 30 },
+  { "wait": 1500 },
+  { "click": { "role": "button", "name": "Paracetamol 500mg Tablets" } },
+  { "wait": 800 },
+  { "fill": { "sel": "main input[type=number]" }, "value": "2" },
+  { "press": "F6" },
+  { "wait": 2500, "map": true, "max": 4000, "shot": "cash-sale-cart", "log": "after F6" },
+  { "press": "F9" },
+  { "wait": 1500, "map": true, "max": 4000, "shot": "cash-sale-tender", "log": "after F9" }
 ]

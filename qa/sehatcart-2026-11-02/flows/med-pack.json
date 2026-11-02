@@ -1,7 +1,7 @@
 [
- {"goto":"/pharmacy/medicines"},
- {"eval":"document.querySelectorAll('details').forEach(d=>d.open=true)"},
- {"fill":{"label":"Medicine name"},"value":"Paracetamol"},
- {"click":{"role":"button","name":"Find medicine"},"map":true,"max":5000},
- {"wait":1500,"map":true,"max":5000,"shot":"own-medicine-packs","full":true}
+  { "goto": "/pharmacy/medicines" },
+  { "eval": "document.querySelectorAll('details').forEach(d=>d.open=true)" },
+  { "fill": { "label": "Medicine name" }, "value": "Paracetamol" },
+  { "click": { "role": "button", "name": "Find medicine" }, "map": true, "max": 5000 },
+  { "wait": 1500, "map": true, "max": 5000, "shot": "own-medicine-packs", "full": true }
 ]

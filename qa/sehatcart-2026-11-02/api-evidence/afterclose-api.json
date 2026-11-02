@@ -263,36 +263,16 @@
           },
           "meta": {
             "values": {
-              "businessDate": [
-                "Date"
-              ],
-              "drawers.0.openedAt": [
-                "Date"
-              ],
-              "drawers.1.openedAt": [
-                "Date"
-              ],
-              "drawers.2.openedAt": [
-                "Date"
-              ],
-              "drawers.3.openedAt": [
-                "Date"
-              ],
-              "drawers.4.openedAt": [
-                "Date"
-              ],
-              "drawers.5.openedAt": [
-                "Date"
-              ],
-              "drawers.6.openedAt": [
-                "Date"
-              ],
-              "close.businessDate": [
-                "Date"
-              ],
-              "close.createdAt": [
-                "Date"
-              ]
+              "businessDate": ["Date"],
+              "drawers.0.openedAt": ["Date"],
+              "drawers.1.openedAt": ["Date"],
+              "drawers.2.openedAt": ["Date"],
+              "drawers.3.openedAt": ["Date"],
+              "drawers.4.openedAt": ["Date"],
+              "drawers.5.openedAt": ["Date"],
+              "drawers.6.openedAt": ["Date"],
+              "close.businessDate": ["Date"],
+              "close.createdAt": ["Date"]
             },
             "v": 1
           }

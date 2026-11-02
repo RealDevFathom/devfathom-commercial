@@ -1,17 +1,35 @@
 [
- {"goto":"/pharmacy/counter"},
- {"wait":1200},
- {"press":"F2"},
- {"type":{"label":"Scan or search"},"value":"panadol","delay":30},
- {"wait":1500},
- {"click":{"role":"button","name":"Paracetamol 500mg Tablets"}},
- {"wait":800},
- {"fill":{"sel":"main input[type=number]"},"value":"2"},
- {"wait":900,"eval":"document.querySelector('main').innerText.replace(/\\s+/g,' ').match(/CANONICAL UNITS.{0,160}/i)?.[0]","max":300},
- {"eval":"document.querySelector('main').innerText.replace(/\\s+/g,' ').match(/CANONICAL UNITS.{0,160}/i)?.[0]","max":300,"shot":"cash-preview-mixed-before-add","log":"preview before add"},
- {"click":{"role":"button","name":"Add to cart (F6)"}},
- {"wait":2500},
- {"eval":"(()=>{const t=document.querySelector('main').innerText.replace(/\\s+/g,' '); return {cart: t.match(/POS-03 Cart and FEFO allocation.{0,420}/)?.[0]}})()","max":700,"shot":"cash-preview-mixed-after-add","log":"cart after add"},
- {"press":"Shift+F4"},
- {"wait":1500,"eval":"[...document.querySelectorAll('[role=dialog]')].map(d=>d.innerText.replace(/\\s+/g,' ').slice(0,300))","max":500}
+  { "goto": "/pharmacy/counter" },
+  { "wait": 1200 },
+  { "press": "F2" },
+  { "type": { "label": "Scan or search" }, "value": "panadol", "delay": 30 },
+  { "wait": 1500 },
+  { "click": { "role": "button", "name": "Paracetamol 500mg Tablets" } },
+  { "wait": 800 },
+  { "fill": { "sel": "main input[type=number]" }, "value": "2" },
+  {
+    "wait": 900,
+    "eval": "document.querySelector('main').innerText.replace(/\\s+/g,' ').match(/CANONICAL UNITS.{0,160}/i)?.[0]",
+    "max": 300
+  },
+  {
+    "eval": "document.querySelector('main').innerText.replace(/\\s+/g,' ').match(/CANONICAL UNITS.{0,160}/i)?.[0]",
+    "max": 300,
+    "shot": "cash-preview-mixed-before-add",
+    "log": "preview before add"
+  },
+  { "click": { "role": "button", "name": "Add to cart (F6)" } },
+  { "wait": 2500 },
+  {
+    "eval": "(()=>{const t=document.querySelector('main').innerText.replace(/\\s+/g,' '); return {cart: t.match(/POS-03 Cart and FEFO allocation.{0,420}/)?.[0]}})()",
+    "max": 700,
+    "shot": "cash-preview-mixed-after-add",
+    "log": "cart after add"
+  },
+  { "press": "Shift+F4" },
+  {
+    "wait": 1500,
+    "eval": "[...document.querySelectorAll('[role=dialog]')].map(d=>d.innerText.replace(/\\s+/g,' ').slice(0,300))",
+    "max": 500
+  }
 ]

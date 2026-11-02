@@ -10,7 +10,12 @@ for (const role of ['owner', 'pharmacist', 'cashier', 'manager']) {
   ]) {
     const r = await trpc(role, p, input);
     out[`${role} ${p}`] = r;
-    console.log(role.padEnd(10), p.padEnd(34), short(r, role === 'owner' ? 900 : 160), r.status >= 500 ? r.at : '');
+    console.log(
+      role.padEnd(10),
+      p.padEnd(34),
+      short(r, role === 'owner' ? 900 : 160),
+      r.status >= 500 ? r.at : ''
+    );
   }
 }
 save('reports1.json', out);

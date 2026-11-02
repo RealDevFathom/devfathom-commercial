@@ -1,16 +1,22 @@
 [
- {"goto":"/pharmacy/purchasing/receiving"},
- {"select":{"label":"Purchase order"},"value":"QA-RBAC-mvzktau8-PO — QA-RBAC-mvzktau8 supplier (1 lines)"},
- {"click":{"role":"button","name":"Open order"}},
- {"wait":1500},
- {"fill":{"label":"Receipt reference"},"value":"QA-RBAC-GRN-1"},
- {"fill":{"label":"Supplier invoice number"},"value":"INV-QA-RBAC-1"},
- {"fill":{"label":"Warranty / source evidence"},"value":"Warranty printed on invoice INV-QA-RBAC-1"},
- {"fill":{"label":"Batch number"},"nth":0,"value":"QA-B1"},
- {"fill":{"label":"Printed expiry"},"nth":0,"value":"2027-06-30"},
- {"fill":{"label":"Printed MRP (PKR)"},"nth":0,"value":"25.00"},
- {"select":{"label":"Receive into"},"nth":0,"value":"Main Shelf (STORE)"},
- {"wait":300,"shot":"mgr-grn-filled","full":true},
- {"click":{"role":"button","name":"File receipt (draft)"}},
- {"wait":2500,"map":true,"max":2500,"shot":"mgr-grn-filed","full":false}
+  { "goto": "/pharmacy/purchasing/receiving" },
+  {
+    "select": { "label": "Purchase order" },
+    "value": "QA-RBAC-mvzktau8-PO — QA-RBAC-mvzktau8 supplier (1 lines)"
+  },
+  { "click": { "role": "button", "name": "Open order" } },
+  { "wait": 1500 },
+  { "fill": { "label": "Receipt reference" }, "value": "QA-RBAC-GRN-1" },
+  { "fill": { "label": "Supplier invoice number" }, "value": "INV-QA-RBAC-1" },
+  {
+    "fill": { "label": "Warranty / source evidence" },
+    "value": "Warranty printed on invoice INV-QA-RBAC-1"
+  },
+  { "fill": { "label": "Batch number" }, "nth": 0, "value": "QA-B1" },
+  { "fill": { "label": "Printed expiry" }, "nth": 0, "value": "2027-06-30" },
+  { "fill": { "label": "Printed MRP (PKR)" }, "nth": 0, "value": "25.00" },
+  { "select": { "label": "Receive into" }, "nth": 0, "value": "Main Shelf (STORE)" },
+  { "wait": 300, "shot": "mgr-grn-filled", "full": true },
+  { "click": { "role": "button", "name": "File receipt (draft)" } },
+  { "wait": 2500, "map": true, "max": 2500, "shot": "mgr-grn-filed", "full": false }
 ]

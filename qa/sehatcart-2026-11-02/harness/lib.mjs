@@ -8,10 +8,14 @@ const require = createRequire(`${REPO}/package.json`);
 const { chromium, request: pwRequest } = require('playwright');
 
 // Working dir for session state and raw outputs. Never inside the repo: it holds session cookies.
-export const SCRATCH = process.env.QA_SCRATCH ?? '/tmp/claude-0/-home-user-devfathom-commercial/bd6f7ae8-902c-5eda-9008-d081b386469b/scratchpad';
+export const SCRATCH =
+  process.env.QA_SCRATCH ??
+  '/tmp/claude-0/-home-user-devfathom-commercial/bd6f7ae8-902c-5eda-9008-d081b386469b/scratchpad';
 export const EVIDENCE = process.env.QA_EVIDENCE ?? `${REPO}/qa-evidence`;
 // Credentials file (never committed): {baseUrl, owner|cashier|manager|pharmacist: {email, password}}
-const CREDS = JSON.parse(fs.readFileSync(process.env.QA_CREDS ?? path.join(SCRATCH, 'secrets/creds.json'), 'utf8'));
+const CREDS = JSON.parse(
+  fs.readFileSync(process.env.QA_CREDS ?? path.join(SCRATCH, 'secrets/creds.json'), 'utf8')
+);
 export const BASE = CREDS.baseUrl;
 export const ROLES = ['owner', 'cashier', 'manager', 'pharmacist'];
 const STATE_DIR = path.join(SCRATCH, 'state');
@@ -28,7 +32,11 @@ export function statePath(role) {
 
 let _browser;
 export async function browser() {
-  if (!_browser) _browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--headless=new', '--no-sandbox'] });
+  if (!_browser)
+    _browser = await chromium.launch({
+      executablePath: '/opt/pw-browsers/chromium',
+      args: ['--headless=new', '--no-sandbox'],
+    });
   return _browser;
 }
 export async function closeBrowser() {
@@ -98,7 +106,9 @@ export function capture(page) {
       log.console.push({ type: m.type(), text: m.text().slice(0, 400) });
     }
   });
-  page.on('pageerror', (e) => log.console.push({ type: 'pageerror', text: String(e).slice(0, 400) }));
+  page.on('pageerror', (e) =>
+    log.console.push({ type: 'pageerror', text: String(e).slice(0, 400) })
+  );
   page.on('requestfailed', (r) =>
     log.failed.push({ url: r.url().slice(0, 300), err: r.failure()?.errorText })
   );
@@ -114,7 +124,13 @@ export function capture(page) {
       try {
         body = (await r.text()).slice(0, 600);
       } catch {}
-      log.http.push({ status: r.status(), method: req.method(), url: u.slice(0, 400), body, at: pkt() });
+      log.http.push({
+        status: r.status(),
+        method: req.method(),
+        url: u.slice(0, 400),
+        body,
+        at: pkt(),
+      });
     }
     if (ms !== null && ms > 2000 && !u.includes('/_next/static')) {
       log.slow.push({ ms, status: r.status(), url: u.slice(0, 300) });

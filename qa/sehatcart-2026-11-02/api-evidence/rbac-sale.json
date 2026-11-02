@@ -89,9 +89,7 @@
         "blocked": [],
         "overrideId": null,
         "discrepancyId": null,
-        "movementIds": [
-          "cmvzl0mc901ks4oqr8fpgxdsn"
-        ]
+        "movementIds": ["cmvzl0mc901ks4oqr8fpgxdsn"]
       }
     },
     "at": "2026-11-02 23:17:59 PKT"
@@ -175,9 +173,7 @@
         "blocked": [],
         "overrideId": null,
         "discrepancyId": null,
-        "movementIds": [
-          "cmvzl0mic01l04oqrwilpixvr"
-        ]
+        "movementIds": ["cmvzl0mic01l04oqrwilpixvr"]
       }
     },
     "at": "2026-11-02 23:17:59 PKT"
@@ -261,9 +257,7 @@
         "blocked": [],
         "overrideId": null,
         "discrepancyId": null,
-        "movementIds": [
-          "cmvzl0moi01l84oqrmgts8zf2"
-        ]
+        "movementIds": ["cmvzl0moi01l84oqrmgts8zf2"]
       }
     },
     "at": "2026-11-02 23:18:00 PKT"

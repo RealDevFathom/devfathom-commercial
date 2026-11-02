@@ -4,7 +4,21 @@ console.log('search', short(r1, 1500));
 const r0 = await trpc('owner', 'pharmacyMedicine.search', { query: 'tab', limit: 100 });
 console.log('search tab', short(r0, 300), Array.isArray(r0.data) ? r0.data.length : '');
 const sup = await trpc('owner', 'pharmacyPurchasing.suppliers', { includeInactive: true });
-for (const s of sup.data ?? []) console.log('SUP', s.name, s.authorized, JSON.stringify(s.eligibility), JSON.stringify((s.licences||[]).map(l=>({t:l.licenceType,exp:l.expiresAt,ver:l.verifiedAt,by:l.verifiedByUserId}))));
+for (const s of sup.data ?? [])
+  console.log(
+    'SUP',
+    s.name,
+    s.authorized,
+    JSON.stringify(s.eligibility),
+    JSON.stringify(
+      (s.licences || []).map((l) => ({
+        t: l.licenceType,
+        exp: l.expiresAt,
+        ver: l.verifiedAt,
+        by: l.verifiedByUserId,
+      }))
+    )
+  );
 const m = await trpc('owner', 'pharmacyMedicine.get', { medicineId: 'cmvxpws13002v1xqrfsg4p4hz' });
 console.log('get', short(m, 2500));
 save('data2.json', { r1, m, sup });

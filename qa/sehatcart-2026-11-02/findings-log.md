@@ -1,11 +1,13 @@
 # Running findings log (scratch)
 
 ## NEW
+
 - N1 [Sev3] Catalogue: Create pack accepts exact duplicate pack level (STRIP/10 twice on same presentation). owner. ev: qa-evidence/own-medicine-pack-created.png; API pharmacyMedicine.get packLevels cmvxpy8hn003t1xqr9az7aste (2026-11-01) + cmvzkrtdx01aw4oqrwe45y3zt (2026-11-02 18:11 UTC). Code TBD (createPackLevel no uniqueness).
 - N2 [Sev4] /pharmacy/orders: React #418 hydration error for all roles (console pageerror). ev sweep desk results.
 - N3 [Sev3/UX] Pack form says "Available from this date at midnight UTC" (owner-facing UTC). ev own-medicine-pack-created.png
 
 ## RE-VERIFIED (still reproduce)
+
 - #1013/#1046 dashboard for cashier/manager/pharmacist: Owner command centre + "Branches could not be loaded" (403 pharmacyReports.branches/catalog/getPreferences). ev sweep cashier__dashboard.png
 - #1018/#462/#979 nav shows Day close, Purchasing, Reports, Rx, Pharmacist queue, Substitution to cashier.
 - #1010 createSupplier/recordSupplierLicence/setSupplierAuthorization/createPO/approvePO no capability check (code). LIVE TBD.

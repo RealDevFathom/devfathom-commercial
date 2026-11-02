@@ -1,14 +1,20 @@
 [
- {"goto":"/pharmacy/counter"},
- {"wait":1500,"map":true,"max":1200,"log":"counter after close"},
- {"press":"F2"},
- {"type":{"label":"Scan or search"},"value":"panadol","delay":30},
- {"wait":1500},
- {"click":{"role":"button","name":"Paracetamol 500mg Tablets"}},
- {"wait":800},
- {"click":{"role":"button","name":"Add to cart (F6)"}},
- {"wait":2500,"map":true,"max":1500,"log":"after add on closed day"},
- {"fill":{"label":"Cash received"},"value":"30","optional":true},
- {"click":{"role":"button","name":"Take payment"},"optional":true},
- {"wait":3500,"map":true,"max":2500,"shot":"cash-after-close-pay","log":"after pay on closed day"}
+  { "goto": "/pharmacy/counter" },
+  { "wait": 1500, "map": true, "max": 1200, "log": "counter after close" },
+  { "press": "F2" },
+  { "type": { "label": "Scan or search" }, "value": "panadol", "delay": 30 },
+  { "wait": 1500 },
+  { "click": { "role": "button", "name": "Paracetamol 500mg Tablets" } },
+  { "wait": 800 },
+  { "click": { "role": "button", "name": "Add to cart (F6)" } },
+  { "wait": 2500, "map": true, "max": 1500, "log": "after add on closed day" },
+  { "fill": { "label": "Cash received" }, "value": "30", "optional": true },
+  { "click": { "role": "button", "name": "Take payment" }, "optional": true },
+  {
+    "wait": 3500,
+    "map": true,
+    "max": 2500,
+    "shot": "cash-after-close-pay",
+    "log": "after pay on closed day"
+  }
 ]

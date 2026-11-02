@@ -1,6 +1,9 @@
 [
- {"goto":"/pharmacy/purchasing/receiving"},
- {"select":{"label":"Purchase order"},"value":"QA-RBAC-mvzktau8-PO — QA-RBAC-mvzktau8 supplier (1 lines)"},
- {"click":{"role":"button","name":"Open order"}},
- {"wait":2000,"map":true,"max":7000,"shot":"mgr-grn-open-order","full":true}
+  { "goto": "/pharmacy/purchasing/receiving" },
+  {
+    "select": { "label": "Purchase order" },
+    "value": "QA-RBAC-mvzktau8-PO — QA-RBAC-mvzktau8 supplier (1 lines)"
+  },
+  { "click": { "role": "button", "name": "Open order" } },
+  { "wait": 2000, "map": true, "max": 7000, "shot": "mgr-grn-open-order", "full": true }
 ]

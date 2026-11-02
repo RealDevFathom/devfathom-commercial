@@ -81,9 +81,7 @@
       "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
       "from": "2026-11-01",
       "to": "2026-11-02",
-      "branchIds": [
-        "cmvx5fc4p000cy5qrcgzjrc3b"
-      ]
+      "branchIds": ["cmvx5fc4p000cy5qrcgzjrc3b"]
     },
     "metricScopes": {
       "safetyQueue": "organization"

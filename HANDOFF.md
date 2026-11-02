@@ -17,22 +17,23 @@ Linear: no Linear issue is attached to this QA pass (see Open questions)
 
 Filed 2026-11-03 01:15–01:30 PKT with labels `bug`, `qa`, severity (`sev1-critical`…`sev4-trivial`) plus `pharmacy`/`security`/`ux`/`a11y` where relevant. **No `claude` label, no assignees, no fixes.**
 
-| Finding | Issue | Finding | Issue |
-|---|---|---|---|
-| 2 Sev1 reload-lost bills leak stock | #1242 | 15 Sev3 refused payment locks counter | #1254 |
-| 3 Sev1 no prescriber/patient creation | #1245 | 16 Sev3 change disappears | #1255 |
-| 4 Sev1 pharmacist can't tender | #1241 | 17 Sev3 receipt text/identity | #1256 |
-| 6 Sev1 exportPatient unmasked | #1243 | 18 Sev3 receipt numbers per device | #1257 |
-| 7 Sev2 pharmacovigilance 500 | #1244 | 19 Sev3 returns "1 BOX" | #1258 |
-| 8 Sev2 Expiry board cost exposure | #1246 | 20 Sev3 duplicate pack sizes | #1259 |
-| 9 Sev2 write-off witness | #1248 | 23 Sev3 login throttle message | #1260 |
-| 10 Sev2 Rx without prescription (API) | #1249 | 24 Sev3 no offline indicator | #1261 |
-| 11 Sev2 client business date | #1250 | 27 Sev3 opening import cost basis | #1262 |
-| 12 Sev2 day close blocks until midnight | #1251 | 31 Sev4 category growth undercount | #1263 |
-| 13 Sev2 sign-out doesn't revoke | #1252 | 32 Sev4 no H1 / day-close aria | #1264 |
-| 14 Sev3 keyboard search | #1253 | | |
+| Finding                                 | Issue | Finding                               | Issue |
+| --------------------------------------- | ----- | ------------------------------------- | ----- |
+| 2 Sev1 reload-lost bills leak stock     | #1242 | 15 Sev3 refused payment locks counter | #1254 |
+| 3 Sev1 no prescriber/patient creation   | #1245 | 16 Sev3 change disappears             | #1255 |
+| 4 Sev1 pharmacist can't tender          | #1241 | 17 Sev3 receipt text/identity         | #1256 |
+| 6 Sev1 exportPatient unmasked           | #1243 | 18 Sev3 receipt numbers per device    | #1257 |
+| 7 Sev2 pharmacovigilance 500            | #1244 | 19 Sev3 returns "1 BOX"               | #1258 |
+| 8 Sev2 Expiry board cost exposure       | #1246 | 20 Sev3 duplicate pack sizes          | #1259 |
+| 9 Sev2 write-off witness                | #1248 | 23 Sev3 login throttle message        | #1260 |
+| 10 Sev2 Rx without prescription (API)   | #1249 | 24 Sev3 no offline indicator          | #1261 |
+| 11 Sev2 client business date            | #1250 | 27 Sev3 opening import cost basis     | #1262 |
+| 12 Sev2 day close blocks until midnight | #1251 | 31 Sev4 category growth undercount    | #1263 |
+| 13 Sev2 sign-out doesn't revoke         | #1252 | 32 Sev4 no H1 / day-close aria        | #1264 |
+| 14 Sev3 keyboard search                 | #1253 |                                       |       |
 
 Not filed because already tracked (no duplicates created):
+
 - 1 → #1227 and 5 → #1227 + closed #509: **comment added** (capability half, onboarding gap, evidence).
 - 21 → Linear DEV-498 F14 and 22 → DEV-498 F11 / #1239: **comment added** (F14's proposed fix would block adding controlled items; desktop clipping details).
 - 25 → #1233 (names; contrast is #1081/#1092). 26 → #1234: **comment added** (all `text-primary` in dark, token-level fix).
@@ -42,26 +43,26 @@ Corrections after the completeness critic (`wf_7026951b-8f2`, agent `a2d620bc093
 
 ## PR #1224 review status
 
-| Check | Verdict | Notes |
-|---|---|---|
-| Machine checks (CI) | none configured | 0 check runs on the PR head; repo workflows only deploy. `mergeable_state: clean`. No Claude Approvals check in this repo. |
-| Codex code review (`dd6cf1d`) | 2 × P2 → fixed | (1) dark sweeps only set `prefers-color-scheme`; the app reads `localStorage['theme']`, so the "dark" sweep rendered light → `roleContext` now stores the app theme and sweeps record `data-theme`. (2) `print-receipt.mjs` wrote HTML to a hard-coded path → now `path.join(EVIDENCE, …)`. Threads replied to and resolved. |
-| Codex security review (`dd6cf1d`) | completed, no findings | — |
-| QA re-check after fix | done | Genuine dark pass: 34/34 pages `data-theme=dark`, no errors/overflow. New dark finding (report #26). Adversarial verification applied to `qa-report.md` (one finding withdrawn, three added from live follow-ups). |
+| Check                             | Verdict                | Notes                                                                                                                                                                                                                                                                                                                        |
+| --------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Machine checks (CI)               | none configured        | 0 check runs on the PR head; repo workflows only deploy. `mergeable_state: clean`. No Claude Approvals check in this repo.                                                                                                                                                                                                   |
+| Codex code review (`dd6cf1d`)     | 2 × P2 → fixed         | (1) dark sweeps only set `prefers-color-scheme`; the app reads `localStorage['theme']`, so the "dark" sweep rendered light → `roleContext` now stores the app theme and sweeps record `data-theme`. (2) `print-receipt.mjs` wrote HTML to a hard-coded path → now `path.join(EVIDENCE, …)`. Threads replied to and resolved. |
+| Codex security review (`dd6cf1d`) | completed, no findings | —                                                                                                                                                                                                                                                                                                                            |
+| QA re-check after fix             | done                   | Genuine dark pass: 34/34 pages `data-theme=dark`, no errors/overflow. New dark finding (report #26). Adversarial verification applied to `qa-report.md` (one finding withdrawn, three added from live follow-ups).                                                                                                           |
 
 ## Workstreams (items)
 
-| # | Item | Status | Done so far | Exact next step |
-|---|------|--------|-------------|-----------------|
-| W1 | Recon + GitHub issue index | done | 573 issues indexed (`gh api search/issues`), permission model + role templates mapped (`src/lib/vertical-catalog.ts:764-826`) | — |
-| W2 | Harness (per-role sessions, tRPC caller, UI step runner, page sweep) | done | `qa/sehatcart-2026-11-02/harness/*.mjs`; desktop sweep 46 routes × 4 roles | — |
-| W3 | RBAC UI + API denial matrix | done | Live: #1010/#507, #1012, #1016, #1036, #412, #517, #509(closed→reproduces) confirmed; new N4, N15, N17. Static audit: `rbac-static.tsv` (350 procs) | — |
-| W4 | Functional E2E (purchasing → goods-in → counter → returns → Rx → day close → reports) | done | PO/GRN/post via UI+API, cash sale + receipt print (EN/UR), return + refund, Rx gate, day-close preview; command-centre sales reconciled to 5 receipts (PKR 505.98) | Report accuracy (above) → day close + lock-after-close test (owner; do last, it locks the business day for everyone) → stock count/transfer/write-off/recall/opening-stock CSV import |
-| W5 | AI (Ask Fathom + growth) | done (blocked live) | Ask Fathom 503 (no `AI_PROVIDER` on develop, #1199/#1159) → accuracy/injection/Urdu **not testable live**; tool authz reviewed in code (`src/lib/ai/tools/pharmacy-reports.ts`); growth insights UNAVAILABLE; basket needs completed days | Write up; optional: deterministic replenishment report check (`pharmacyReports.replenishment`) |
-| W6 | UI/UX/a11y sweep (375/768/1440, dark, Urdu RTL, keyboard, axe) | done | Desktop/tablet/phone sweeps done (no doc overflow; #1032/#1069 reproduce); axe done (N25); no app Urdu (N24); dark sweep running | `ROUTES="..." node qa/sehatcart-2026-11-02/harness/sweep.mjs tablet 768 1024 light`, then `phone 375 812`, `desk-dark 1440 900 dark`; Urdu switch via Settings; axe via `@axe-core/playwright` |
-| W7 | Security + data integrity probes | done | XSS pass; CSV pass (Sev4 gap); throttle N19; logout-not-revoked N20; concurrency pass; #521/#636 fixed; offline N21 | Optional: cross-tenant host probe (needs another tenant host) |
-| W8 | Write `qa-report.md` + `ba-recommendations.md` | done | After verification: 32 new findings (6 Sev1/7 Sev2/15 Sev3/4 Sev4), 23 re-verified, go/no-go = NO-GO; 39 BA recommendations (24 P1, 14 P2, 1 P3) + top 10 | — |
-| W9 | File new findings as GitHub issues (no `claude` label, no fixes) | done | 23 issues #1241–#1264; 9 already tracked (see table above); 4 evidence comments | — |
+| #   | Item                                                                                  | Status              | Done so far                                                                                                                                                                                                                               | Exact next step                                                                                                                                                                                |
+| --- | ------------------------------------------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| W1  | Recon + GitHub issue index                                                            | done                | 573 issues indexed (`gh api search/issues`), permission model + role templates mapped (`src/lib/vertical-catalog.ts:764-826`)                                                                                                             | —                                                                                                                                                                                              |
+| W2  | Harness (per-role sessions, tRPC caller, UI step runner, page sweep)                  | done                | `qa/sehatcart-2026-11-02/harness/*.mjs`; desktop sweep 46 routes × 4 roles                                                                                                                                                                | —                                                                                                                                                                                              |
+| W3  | RBAC UI + API denial matrix                                                           | done                | Live: #1010/#507, #1012, #1016, #1036, #412, #517, #509(closed→reproduces) confirmed; new N4, N15, N17. Static audit: `rbac-static.tsv` (350 procs)                                                                                       | —                                                                                                                                                                                              |
+| W4  | Functional E2E (purchasing → goods-in → counter → returns → Rx → day close → reports) | done                | PO/GRN/post via UI+API, cash sale + receipt print (EN/UR), return + refund, Rx gate, day-close preview; command-centre sales reconciled to 5 receipts (PKR 505.98)                                                                        | Report accuracy (above) → day close + lock-after-close test (owner; do last, it locks the business day for everyone) → stock count/transfer/write-off/recall/opening-stock CSV import          |
+| W5  | AI (Ask Fathom + growth)                                                              | done (blocked live) | Ask Fathom 503 (no `AI_PROVIDER` on develop, #1199/#1159) → accuracy/injection/Urdu **not testable live**; tool authz reviewed in code (`src/lib/ai/tools/pharmacy-reports.ts`); growth insights UNAVAILABLE; basket needs completed days | Write up; optional: deterministic replenishment report check (`pharmacyReports.replenishment`)                                                                                                 |
+| W6  | UI/UX/a11y sweep (375/768/1440, dark, Urdu RTL, keyboard, axe)                        | done                | Desktop/tablet/phone sweeps done (no doc overflow; #1032/#1069 reproduce); axe done (N25); no app Urdu (N24); dark sweep running                                                                                                          | `ROUTES="..." node qa/sehatcart-2026-11-02/harness/sweep.mjs tablet 768 1024 light`, then `phone 375 812`, `desk-dark 1440 900 dark`; Urdu switch via Settings; axe via `@axe-core/playwright` |
+| W7  | Security + data integrity probes                                                      | done                | XSS pass; CSV pass (Sev4 gap); throttle N19; logout-not-revoked N20; concurrency pass; #521/#636 fixed; offline N21                                                                                                                       | Optional: cross-tenant host probe (needs another tenant host)                                                                                                                                  |
+| W8  | Write `qa-report.md` + `ba-recommendations.md`                                        | done                | After verification: 32 new findings (6 Sev1/7 Sev2/15 Sev3/4 Sev4), 23 re-verified, go/no-go = NO-GO; 39 BA recommendations (24 P1, 14 P2, 1 P3) + top 10                                                                                 | —                                                                                                                                                                                              |
+| W9  | File new findings as GitHub issues (no `claude` label, no fixes)                      | done                | 23 issues #1241–#1264; 9 already tracked (see table above); 4 evidence comments                                                                                                                                                           | —                                                                                                                                                                                              |
 
 ## Environment / test data (no passwords here — creds live only in a local, uncommitted file)
 

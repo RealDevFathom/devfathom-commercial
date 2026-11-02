@@ -1,9 +1,12 @@
 [
- {"goto":"/pharmacy/purchasing/receiving"},
- {"click":{"role":"link","name":"QA-RBAC-GRN-1"}},
- {"wait":1500},
- {"click":{"role":"button","name":"Post into stock"}},
- {"wait":3000,"map":true,"max":1500},
- {"eval":"[...document.querySelectorAll('main section, main [class*=card]')].map(s=>s.innerText.replace(/\\s+/g,' ').slice(0,400)).filter(t=>/QA-RBAC-GRN-1/.test(t)).slice(0,3)","max":2000},
- {"shot":"mgr-grn-posted","full":false}
+  { "goto": "/pharmacy/purchasing/receiving" },
+  { "click": { "role": "link", "name": "QA-RBAC-GRN-1" } },
+  { "wait": 1500 },
+  { "click": { "role": "button", "name": "Post into stock" } },
+  { "wait": 3000, "map": true, "max": 1500 },
+  {
+    "eval": "[...document.querySelectorAll('main section, main [class*=card]')].map(s=>s.innerText.replace(/\\s+/g,' ').slice(0,400)).filter(t=>/QA-RBAC-GRN-1/.test(t)).slice(0,3)",
+    "max": 2000
+  },
+  { "shot": "mgr-grn-posted", "full": false }
 ]
