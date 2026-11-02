@@ -49,5 +49,8 @@
  ],
  "1005": [
   "NEW ESLint error(s): src/components/layout/topbar.command-palette.test.tsx react/display-name Component definition is missing display name;"
+ ],
+ "1001": [
+  "REGRESSION: 2 existing tests fail on the PR and pass on develop: supplier-credit-follow-up/packet.test.tsx ('shows people-readable times while the CSV keeps exact instants': no text /Prepared 4 Sep 2026, 12:00 UTC/) and supplier-credit-follow-up/page.test.tsx ('renders observations and independent next pages...': no text /Observed: 12 Sep 2026, 07:00 UTC/). The PR changed the reports date/time presentation those tests assert."
  ]
 }
