@@ -54,5 +54,6 @@ async function runRole(role) {
 
 const all = (await Promise.all(roles.map(runRole))).flat();
 fs.writeFileSync(path.join(outDir, 'results.json'), JSON.stringify(all, null, 1));
-await closeBrowser();
 console.log('done', all.length, 'pages ->', outDir);
+await Promise.race([closeBrowser(), new Promise((r) => setTimeout(r, 5000))]);
+process.exit(0);

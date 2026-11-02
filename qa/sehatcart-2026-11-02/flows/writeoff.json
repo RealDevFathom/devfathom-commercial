@@ -1,0 +1,15 @@
+[
+ {"goto":"/pharmacy/inventory"},
+ {"wait":1500},
+ {"select":{"label":"Lot","exact":true},"value":"Paracetamol 500mg Tablets · QA-B3 · Main Shelf · Available","optional":true},
+ {"eval":"(()=>{const s=[...document.querySelectorAll('main select')].find(x=>[...x.options].some(o=>/QA-B3 · Main Shelf · Available/.test(o.text)));const o=[...s.options].find(o=>/QA-B3 · Main Shelf · Available/.test(o.text));s.value=o.value;s.dispatchEvent(new Event('change',{bubbles:true}));return o.text})()"},
+ {"eval":"(()=>{const sec=[...document.querySelectorAll('main section, main [class*=card]')].find(e=>/Adjustments and write-off custody/.test(e.innerText));const u=[...sec.querySelectorAll('input[type=number]')][0];const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;set.call(u,'10');u.dispatchEvent(new Event('input',{bubbles:true}));return 'units set'})()"},
+ {"select":{"label":"Co-authorizing witness"},"value":"QA Cashier · Cashier (QA test login)"},
+ {"fill":{"label":"Evidence reference"},"value":"QA photo ref WO-1"},
+ {"fill":{"label":"Reason"},"nth":0,"value":"QA write-off probe: strip damaged"},
+ {"click":{"role":"button","name":"Record write-off"}},
+ {"wait":2500,"eval":"[...document.querySelectorAll('[role=alert],[role=status]')].map(e=>e.innerText.trim()).filter(Boolean).join(' || ')","max":800,"shot":"own-writeoff-cashier-witness","log":"witness=cashier"},
+ {"select":{"label":"Co-authorizing witness"},"value":"QA Manager · Procurement approver (QA test login)"},
+ {"click":{"role":"button","name":"Record write-off"}},
+ {"wait":2500,"eval":"[...document.querySelectorAll('[role=alert],[role=status]')].map(e=>e.innerText.trim()).filter(Boolean).join(' || ')","max":800,"shot":"own-writeoff-manager-witness","log":"witness=manager"}
+]
