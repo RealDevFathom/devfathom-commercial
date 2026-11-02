@@ -1,6 +1,6 @@
 # PR review handoff log
 
-_Generated 2026-11-02 19:35 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
+_Generated 2026-11-02 19:36 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
 
 ## Resume here
 
@@ -779,9 +779,9 @@ _Generated 2026-11-02 19:35 UTC from the live run state by `handoff/scripts/gen-
 ### #982 · DEV-12 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/982 · branch `inky/issue-976` · head `7b898f0abf` · group 3
 - Title: feat(#976): Pharmacy inventory: Create location fails with generic "could not be completed"
-- Verdicts: machine pending · QA pending · Security PASS (partial)
-- Done so far: 
-- Next step: wait for machine checks queued at position 33 and QA/Security review running
+- Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
+- Done so far: QA+Security reviews complete
+- Next step: wait for machine checks queued at position 33
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 982` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/982`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 

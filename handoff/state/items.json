@@ -993,12 +993,12 @@
   "branch": "inky/issue-976",
   "head": "7b898f0abf19f892f520607b4c804025480cb019",
   "status": "in progress",
-  "qa": null,
+  "qa": "FAIL",
   "security": "PASS",
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 33 and QA/Security review running"
+  "next": "wait for machine checks queued at position 33"
  },
  {
   "pr": 966,
