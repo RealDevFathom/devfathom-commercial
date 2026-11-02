@@ -1,17 +1,17 @@
 # HANDOFF — SehatCart develop QA pass + BA recommendations
 
-Last updated: 2026-11-03 00:04 PKT (19:04 UTC)
+Last updated: 2026-11-03 00:08 PKT (19:08 UTC)
 Branch: `saad/great-brown-id2w5x` (base `develop` @ `47518cb`)
 PR: [#1224](https://github.com/RealDevFathom/devfathom-commercial/pull/1224) into `develop` — docs/evidence/harness only, never merge from this session. Session is subscribed to PR activity.
 Linear: no Linear issue is attached to this QA pass (see Open questions)
 
 ## Resume here
 
-- **Single next action:** none required — both deliverables are complete (`qa-report.md`, `ba-recommendations.md`). Optional follow-ups: (a) re-run the pass on a two-branch tenant with `AI_PROVIDER` set (Ask Fathom, cross-branch IDOR, transfers); (b) if the team wants, file the 28 new findings as GitHub issues from `qa-report.md`; (c) void the 3 orphan QA bills once an open-bills list exists.
+- **Single next action:** when workflow run `wf_7026951b-8f2` (adversarial verification of `qa-report.md`, 9 agents) finishes, apply its corrections plus finding N27 (dark-mode brand tokens, see `findings-log.md`) to `qa-report.md` in one commit, update the summary table/totals, and push. If this session is gone, re-run the check by hand: verify each finding's cited `file:line`, search issue bodies with `gh api -X GET search/issues -f q='repo:RealDevFathom/devfathom-commercial is:issue <terms>'`, and confirm every evidence path exists.
   - Testing is complete. Day 2026-11-02 was CLOSED by QA at 23:48 PKT (variance −4.00, deliberate).
   - Caveat: another tester (`QA-20261102-FUNC-*`, `QA-20261102-CASHCHECK-*`) is using the **same QA Cashier account** on this tenant.
 - **Item:** QA pass (no DEV id). All workstreams done.
-- **Half-written / uncommitted:** nothing. `qa-report.md` and `ba-recommendations.md` are final. Raw working notes stay in `qa/sehatcart-2026-11-02/findings-log.md` (superseded by the report; N7 was withdrawn after re-check). Nothing else uncommitted after this commit.
+- **Half-written / uncommitted:** nothing uncommitted. `qa-report.md` will get one more correction commit (dark-mode finding N27 + verification results); `ba-recommendations.md` is final. Raw working notes stay in `qa/sehatcart-2026-11-02/findings-log.md` (superseded by the report; N7 was withdrawn after re-check). Nothing else uncommitted after this commit.
 
 ## PR #1224 review status
 
@@ -20,7 +20,7 @@ Linear: no Linear issue is attached to this QA pass (see Open questions)
 | Machine checks (CI) | none configured | 0 check runs on the PR head; repo workflows only deploy. `mergeable_state: clean`. No Claude Approvals check in this repo. |
 | Codex code review (`dd6cf1d`) | 2 × P2 → fixed | (1) dark sweeps only set `prefers-color-scheme`; the app reads `localStorage['theme']`, so the "dark" sweep rendered light → `roleContext` now stores the app theme and sweeps record `data-theme`. (2) `print-receipt.mjs` wrote HTML to a hard-coded path → now `path.join(EVIDENCE, …)`. Threads replied to and resolved. |
 | Codex security review (`dd6cf1d`) | completed, no findings | — |
-| QA re-check after fix | in progress | Re-running the genuine dark-mode sweep + axe in dark; `qa-report.md` dark-mode statements will be corrected if results differ. |
+| QA re-check after fix | done (report edit pending) | Genuine dark pass: 34/34 pages `data-theme=dark`, no errors/overflow. New dark finding N27 (tenant brand `--primary:#111110` kept in dark → `text-primary` links 1.21:1). Adversarial verification workflow `wf_7026951b-8f2` running. |
 
 ## Workstreams (items)
 
