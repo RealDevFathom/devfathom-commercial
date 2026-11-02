@@ -5,11 +5,11 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 ## Resume here
 
 - **Item:** DEV-258 (per-organization invoice numbers).
-- **Single next action:** read the result of `NODE_OPTIONS=--max-old-space-size=8192 bun run build`. It is
-  running in the background and writes to `build-branch.log` in the scratchpad. Put the result in the PR #1226
-  body (replace the "`bun run build`: running" line) and in the Checks table below.
-- **Then:** respond to PR #1226 review comments and failing checks. This session is subscribed to the PR's
-  activity. Never merge the PR.
+- **Single next action:** none pending. PR #1226 is waiting on QA's runtime retest and on human review.
+  When either reports back, handle the comments or failures on the PR and record the verdict in the table
+  below. Never merge the PR.
+- A safety-net check-in on the PR is scheduled for about 19:54 UTC (scheduled task
+  `trig_0183UsoUBhcd194C9pVHhEmq`).
 - **Uncommitted / half-written:** nothing.
 
 ## Items
@@ -90,7 +90,7 @@ not real secrets.
 | Schema vs migrations | `DATABASE_URL=$U bunx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script`, compared before and after | identical. All remaining drift existed before (migration-only constraints) |
 | Seed | `SEED_PASSWORD=... DATABASE_URL=$U MIGRATION_DATABASE_URL=$U bunx prisma db seed`, run twice | pass. The second run takes the "already present" sentinel path |
 | Typecheck | `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit` (it runs out of memory with the default heap) | 8 errors, the same set as clean `develop`, after all the test changes. None are new |
-| Build | `NODE_OPTIONS=--max-old-space-size=8192 bun run build` | running |
+| Build | `NODE_OPTIONS=--max-old-space-size=8192 bun run build` | **fails on the branch and on `develop` in the same way.** Both compile ("Compiled successfully"), then stop at Next's "Failed to type check" on the same 8 pre-existing test-file errors (see Known failures). No new build errors. `develop` was built by checking out `origin/develop` in the main checkout. A separate worktree with symlinked `node_modules` cannot build, because Turbopack cannot resolve `next` there |
 | Lint/format | `bunx eslint <changed files>` and `bunx prettier --check <changed files>` | pass |
 | Unit tests (affected) | `bunx vitest run src/server/routers/finance src/server/routers/clients src/app/api/v1/invoices src/lib/ai/tools/finance src/lib/ai/tools/finance.create-invoice.test.ts src/lib/finance` | pass (DB suites that need other env vars are skipped) |
 | Unit tests (full) | `env -u TEST_DATABASE_URL bunx vitest run --reporter=json --outputFile=<file>`, on the branch and on the `develop` worktree | branch: 12967 passed, 47 failed out of 14762. develop: 12960 passed, 47 failed out of 14752. **The 47 failures are the same tests on both, so none are new.** The branch has 10 more tests: 7 new unit tests that pass and 3 DB cases skipped without `TEST_DATABASE_URL` |
@@ -104,6 +104,7 @@ not real secrets.
   `src/lib/pharmacy/duplicate-salt-acknowledgement.db.test.ts`, `src/server/routers/pharmacy-inventory.test.ts`,
   `src/server/routers/restaurant-catering.test.ts`. **These also fail on `develop`:** a clean `develop`
   worktree produces the identical error list. No new errors.
+- **`bun run build` fails on `develop` as well**, at the same type-check step with the same 8 errors.
 - **Full vitest: 47 failing tests across 39 suites, the same set on `develop`. None are new.** They are
   all in areas this branch does not touch:
   - restaurant: recipe migration, tax, daily close, tenders, growth review;
@@ -128,3 +129,5 @@ not real secrets.
 - **`@@index([organizationId])` kept on `Invoice`.** The new composite unique index makes it redundant,
   but removing it is out of scope.
 - Commit messages carry no Co-Authored-By lines and no model names, per your instruction.
+- Open question for the team: `develop`'s production build is red because of the 8 test-file type errors
+  above. Fixing them is outside DEV-258, so this PR leaves them alone.
