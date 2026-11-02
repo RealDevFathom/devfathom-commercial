@@ -46,16 +46,40 @@ PR body when it is updated.
 
 **In flight**
 
-- **Workflow `wf_6b764edf-fc8`:** four worktree agents on branches `dev576-router`,
-  `dev576-guards`, `dev576-ledger` and `dev576-infra`, all from `9d360630`.
-  1. When it reports, cherry-pick the commits with the plain-pick script (trailers stripped,
-     model-name scan).
-  2. Resolve `route.ts` overlaps between guards and ledger. The ledger agent reports its
-     route lines.
-  3. Run the AI suites, the DB tests, and a Dockerfile-style build:
-     `AUTH_SECRET=container-build-only NEXT_BUILD_SKIP_TYPECHECK=1 next build`.
-  4. Push, then reply on any new Codex threads.
-- **If the agent worktrees are lost:** redo the streams from the contract.
+- **Integrated and pushed (20:45 UTC, head `ae075739`).** Agent commits were cherry-picked
+  with plain messages:
+
+  | Commit                 | Change                                                             |
+  | ---------------------- | ------------------------------------------------------------------ |
+  | `b1de6073`             | deep-strategy opt-in                                               |
+  | `1d6f4f96`             | decided routing, failover rules, retry, breaker, masking           |
+  | `0cc4a36c`             | grounding and dosing guard                                         |
+  | `767837a2`             | turn limits, quick-lookup tier, guards in route                    |
+  | `34e245f8`             | marketing drafts reject tenant medicine names                      |
+  | `a946e9e0`, `99d2ee0d` | infra: prod off, global profiles ap-southeast-1, widened IAM; docs |
+  | `2dabb6ff`, `a45c8db3` | write ledger, approval signing                                     |
+  | `e57e4af7`             | e2e within the 4-call limit                                        |
+  | `ae075739`             | fresh-db writer column, initializer pins, ledger test              |
+
+  Earlier fix: `d0af5dc4` (unset `AI_PROVIDER` means off).
+
+- **Test results:** 1001/1001 pass on `dev576_int`, which has all three new migrations and the
+  LOCAL_SETUP grants. The initializer context test passes. The initializer offline-guard test
+  fails here and on develop alike, because this container has no
+  `/home/user/initializer-context`.
+- **Running now:**
+  - The full tsc and a Dockerfile-style build (logs: scratchpad `dev576-tsc4.txt`,
+    `dev576-build-docker2.txt`).
+  - Adversarial review workflow `wf_66fd213d-49e`, with four lenses and every finding verified.
+    Fix whatever it confirms before deploying.
+- **Develop prep already done:**
+  - Inline policy `devfathom-ai-providers` is attached to `inky-ec2-ssm`. The simulator shows
+    both secrets, the global profile and the foundation models allowed, and other secrets
+    denied.
+  - The develop DB has default privileges (`sehatcart_migrator` → `sehatcart_app`), so the new
+    tables are granted automatically.
+  - It has 198 migrations up to `20261101172600` and none pending.
+  - None of the AI tables exist yet.
 
 **Then deploy to develop and run the live test** (Saad approved: IAM change plus a branch
 deploy).
