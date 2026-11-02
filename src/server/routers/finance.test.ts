@@ -17,7 +17,7 @@ describe('createInvoiceInputSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it.each(['subtotal', 'tax', 'total'] as const)('rejects a negative %s', (field) => {
+  it.each(['subtotal', 'discount', 'tax', 'total'] as const)('rejects a negative %s', (field) => {
     const result = createInvoiceInputSchema.safeParse({ ...validInvoice, [field]: -1 });
 
     expect(result.success).toBe(false);
@@ -25,5 +25,16 @@ describe('createInvoiceInputSchema', () => {
 
   it('accepts a non-negative invoice with a line item', () => {
     expect(createInvoiceInputSchema.safeParse(validInvoice).success).toBe(true);
+  });
+
+  it('no longer needs the server-derived subtotal and total, and defaults the discount', () => {
+    const result = createInvoiceInputSchema.safeParse({
+      ...validInvoice,
+      subtotal: undefined,
+      total: undefined,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({ discount: 0, tax: 0 });
   });
 });

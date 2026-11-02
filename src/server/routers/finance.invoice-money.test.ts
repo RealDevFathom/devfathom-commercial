@@ -132,6 +132,78 @@ describe('finance.createInvoice money calculation', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.create).not.toHaveBeenCalled();
   });
+
+  it('persists tax and discount with cent-exact lines, subtotal and total (#448)', async () => {
+    await caller().createInvoice({
+      clientId: 'client-1',
+      items: [
+        { description: 'Pack', quantity: 3, rate: 0.335, amount: 0 },
+        { description: 'Third', quantity: 1, rate: 1 / 3, amount: 0 },
+        { description: 'Third', quantity: 1, rate: 1 / 3, amount: 0 },
+      ],
+      discount: 0.005,
+      tax: 1 / 3,
+      currency: 'USD',
+      dueDate: new Date('2026-11-30T00:00:00.000Z'),
+    });
+
+    const { data } = mocks.create.mock.calls[0][0];
+    expect(data.items.map((item: { amount: number }) => item.amount)).toEqual([1.01, 0.33, 0.33]);
+    expect(data).toMatchObject({ subtotal: 1.67, discount: 0.01, tax: 0.33, total: 1.99 });
+  });
+
+  it('ignores a caller-sent subtotal and total', async () => {
+    await caller().createInvoice({
+      clientId: 'client-1',
+      items: [{ description: 'Work', quantity: 2, rate: 50, amount: 1 }],
+      subtotal: 1,
+      discount: 10,
+      tax: 5,
+      total: 1,
+      currency: 'USD',
+      dueDate: new Date('2026-11-30T00:00:00.000Z'),
+    });
+
+    expect(mocks.create.mock.calls[0][0].data).toMatchObject({
+      items: [{ description: 'Work', quantity: 2, rate: 50, amount: 100 }],
+      subtotal: 100,
+      discount: 10,
+      tax: 5,
+      total: 95,
+    });
+  });
+
+  it('refuses a discount larger than the subtotal (#448)', async () => {
+    await expect(
+      caller().createInvoice({
+        clientId: 'client-1',
+        items: [{ description: 'Work', quantity: 1, rate: 100, amount: 0 }],
+        discount: 100.01,
+        currency: 'USD',
+        dueDate: new Date('2026-11-30T00:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Discount cannot be more than the subtotal.',
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['discount', { discount: -1 }],
+    ['tax', { tax: -0.01 }],
+  ])('refuses a negative %s (#448)', async (_field, money) => {
+    await expect(
+      caller().createInvoice({
+        clientId: 'client-1',
+        items: [{ description: 'Work', quantity: 1, rate: 100, amount: 0 }],
+        currency: 'USD',
+        dueDate: new Date('2026-11-30T00:00:00.000Z'),
+        ...money,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('finance.updateInvoice money calculation and settlement serialization', () => {
@@ -166,11 +238,80 @@ describe('finance.updateInvoice money calculation and settlement serialization',
             { description: 'Second', quantity: 3, rate: 0.335, amount: 1.01 },
           ],
           subtotal: 2.02,
+          discount: 0,
           tax: 0.01,
           total: 2.03,
         },
       })
     );
+  });
+
+  it('persists an edited discount with total = subtotal − discount + tax (#448)', async () => {
+    mocks.findUnique.mockResolvedValue({ status: 'SENT', discount: 0 });
+    mocks.update.mockResolvedValue({ id: 'invoice-1', total: 9.34, payments: [] });
+
+    await caller().updateInvoice({
+      id: 'invoice-1',
+      items: [{ description: 'Third', quantity: 3, rate: 1 / 3 }],
+      discount: 0.33,
+      tax: 8.675,
+    });
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          items: [{ description: 'Third', quantity: 3, rate: 1 / 3, amount: 1 }],
+          subtotal: 1,
+          discount: 0.33,
+          tax: 8.68,
+          total: 9.35,
+        },
+      })
+    );
+  });
+
+  it('keeps the stored discount when an edit omits it (#448)', async () => {
+    mocks.findUnique.mockResolvedValue({ status: 'DRAFT', discount: '12.50' });
+    mocks.update.mockResolvedValue({ id: 'invoice-1', total: 87.5, payments: [] });
+
+    await caller().updateInvoice({
+      id: 'invoice-1',
+      items: [{ description: 'Work', quantity: 1, rate: 100 }],
+    });
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ subtotal: 100, discount: 12.5, tax: 0, total: 87.5 }),
+      })
+    );
+  });
+
+  it('refuses an edit that shrinks the lines below the stored discount (#448)', async () => {
+    mocks.findUnique.mockResolvedValue({ status: 'DRAFT', discount: 50 });
+
+    await expect(
+      caller().updateInvoice({
+        id: 'invoice-1',
+        items: [{ description: 'Work', quantity: 1, rate: 40 }],
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Discount cannot be more than the subtotal.',
+    });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a discount above the edited subtotal before taking the lock (#448)', async () => {
+    await expect(
+      caller().updateInvoice({
+        id: 'invoice-1',
+        items: [{ description: 'Work', quantity: 1, rate: 40 }],
+        discount: 40.01,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
   });
 
   it('rejects an updated line amount overflow before opening a transaction', async () => {

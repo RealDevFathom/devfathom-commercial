@@ -383,17 +383,21 @@ Create an invoice. \`finance:write\`. Logs \`invoice_created\`.
 {
   "clientId": "string (required)",
   "items": [
-    { "description": "string", "quantity": 1, "rate": 100, "amount": 100 }
+    { "description": "string", "quantity": 1, "rate": 100 }
   ],
-  "subtotal": 100,
+  "discount": 0,
   "tax": 0,
-  "total": 100,
   "currency": "USD | PKR",
   "dueDate": "ISO 8601 (required)",
   "projectId": "string",
   "notes": "string"
 }
 \`\`\`
+
+\`discount\` and \`tax\` are amounts in the invoice currency (not percentages), default 0. The
+server derives every figure: each line \`amount\` = quantity × rate rounded to cents, \`subtotal\` =
+the sum of those line amounts, \`total\` = subtotal − discount + tax. A line \`amount\`, \`subtotal\`
+or \`total\` in the body is ignored. A negative value or a discount above the subtotal is a 400.
 
 ### \`GET /invoices/:id\` / \`PATCH /invoices/:id\`
 Get or update invoice status. \`finance:read\` / \`finance:write\`.

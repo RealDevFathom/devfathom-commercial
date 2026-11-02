@@ -10,6 +10,18 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { allowedInvoiceStatuses, type InvoiceStatusValue } from '@/lib/finance/invoice-status';
 import { invoiceTotalLabel, type InvoiceTotal } from '@/lib/finance/invoice-display';
+import {
+  centsToMoney,
+  computeInvoiceAmounts,
+  lineAmountCents,
+} from '@/lib/finance/invoice-amounts';
+import { moneyLabel } from '@/lib/finance/currency';
+import {
+  amountsErrorFor,
+  InvoiceMoneyInput,
+  InvoiceTotalsSummary,
+  parseMoneyInput,
+} from '@/components/finance/invoice-money-fields';
 import { format } from 'date-fns';
 
 const statusConfig: Record<string, { bg: string; label: string }> = {
@@ -99,7 +111,7 @@ export function InvoicesTab() {
         <p className="text-sm text-muted-foreground">{invoices?.length ?? 0} invoices</p>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+          className="flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
         >
           <Plus className="h-3.5 w-3.5" />
           New Invoice
@@ -313,6 +325,11 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState([{ description: '', quantity: 1, rate: 0 }]);
+  // #448: discount and tax are amounts in the invoice currency (the form creates
+  // USD invoices — it sends no currency, so the server default applies).
+  const [discount, setDiscount] = useState('');
+  const [tax, setTax] = useState('');
+  const currency = 'USD';
 
   const addItem = () => setItems([...items, { description: '', quantity: 1, rate: 0 }]);
   const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
@@ -322,18 +339,31 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
     setItems(updated);
   };
 
-  const subtotal = items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
-  const total = subtotal;
+  // The live totals are the shared calculation the server persists: each line
+  // rounded to cents, subtotal = Σ lines, total = subtotal − discount + tax.
+  const amounts = computeInvoiceAmounts({
+    items,
+    discount: parseMoneyInput(discount),
+    tax: parseMoneyInput(tax),
+  });
+  const lines = computeInvoiceAmounts({ items });
+  const lineAmount = (quantity: number, rate: number) => {
+    const cents = lineAmountCents(quantity, rate);
+    return cents === null ? 0 : centsToMoney(cents);
+  };
+  const discountError = amountsErrorFor(amounts, 'discount');
+  const taxError = amountsErrorFor(amounts, 'tax');
+  const totalsError = amountsErrorFor(amounts, 'items', 'subtotal', 'total');
 
   const handleSubmit = () => {
     if (!clientId || !dueDate || items.length === 0 || items.some((i) => !i.description)) return;
+    if (!amounts.ok) return;
     createInvoice.mutate({
       clientId,
       projectId: projectId || undefined,
-      items: items.map((i) => ({ ...i, amount: i.quantity * i.rate })),
-      subtotal,
-      tax: 0,
-      total,
+      items: amounts.amounts.items,
+      discount: amounts.amounts.discount,
+      tax: amounts.amounts.tax,
       dueDate: new Date(dueDate),
       notes: notes || undefined,
     });
@@ -419,7 +449,7 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
                   className="col-span-2 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground text-right focus:border-primary focus:outline-none"
                 />
                 <span className="col-span-2 text-sm font-medium text-foreground text-right tabular-nums">
-                  ${(item.quantity * item.rate).toLocaleString()}
+                  {moneyLabel(lineAmount(item.quantity, item.rate), currency)}
                 </span>
                 <button
                   onClick={() => removeItem(i)}
@@ -445,15 +475,41 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {/* Total */}
-        <div className="flex justify-end border-t border-border/60 pt-3">
-          <div className="text-right">
-            <p className="text-xs text-muted-foreground">Total</p>
-            <p className="font-display text-xl font-bold text-foreground">
-              ${total.toLocaleString()}
+        {/* Discount, tax and totals (#448) */}
+        <div className="grid grid-cols-1 gap-4 border-t border-border/60 pt-3 sm:grid-cols-2">
+          <div className="grid grid-cols-2 content-start gap-3">
+            <InvoiceMoneyInput
+              label="Discount"
+              currency={currency}
+              value={discount}
+              onChange={setDiscount}
+              error={discountError}
+            />
+            <InvoiceMoneyInput
+              label="Tax"
+              currency={currency}
+              value={tax}
+              onChange={setTax}
+              error={taxError}
+            />
+            <p className="col-span-2 text-xs text-muted-foreground">
+              Amounts, not percentages. The discount comes off the subtotal; tax is added.
             </p>
           </div>
+          <div className="sm:flex sm:justify-end">
+            <InvoiceTotalsSummary
+              result={amounts}
+              subtotal={lines.ok ? lines.amounts.subtotal : null}
+              currency={currency}
+              className="sm:max-w-[260px]"
+            />
+          </div>
         </div>
+        {totalsError && (
+          <p role="alert" className="text-xs text-destructive">
+            {totalsError}
+          </p>
+        )}
 
         {/* Notes */}
         <div>
@@ -466,6 +522,12 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           />
         </div>
 
+        {createInvoice.error && (
+          <p role="alert" className="text-xs text-destructive">
+            {createInvoice.error.message}
+          </p>
+        )}
+
         <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
@@ -475,8 +537,10 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!clientId || !dueDate || items.length === 0 || createInvoice.isPending}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            disabled={
+              !clientId || !dueDate || items.length === 0 || !amounts.ok || createInvoice.isPending
+            }
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary-hover disabled:opacity-40 transition-colors"
           >
             {createInvoice.isPending ? (
               <>

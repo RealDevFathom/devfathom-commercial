@@ -81,6 +81,41 @@ describe('InvoicePrintView seller identity (#458)', () => {
   });
 });
 
+describe('InvoicePrintView discount (#448)', () => {
+  const row = (label: string) => screen.getByText(label).nextElementSibling;
+
+  it('prints subtotal, discount, tax and total beneath the agency identity', () => {
+    mocks.useQuery.mockReturnValue({
+      isLoading: false,
+      data: invoice({
+        subtotal: '1000.00',
+        discount: '150.50',
+        tax: '85.05',
+        total: '934.55',
+        amountPaid: 0,
+        balance: 934.55,
+      }),
+    });
+
+    render(<InvoicePrintView invoiceId="invoice-497" />);
+
+    expect(screen.getByText('Northwind Agency LLC')).toBeInTheDocument();
+    expect(row('Subtotal')).toHaveTextContent('$1,000');
+    expect(row('Discount')).toHaveTextContent('−$150.5');
+    expect(row('Tax')).toHaveTextContent('$85.05');
+    expect(row('Total')).toHaveTextContent('$934.55');
+  });
+
+  it('prints no discount line on an undiscounted invoice', () => {
+    mocks.useQuery.mockReturnValue({ isLoading: false, data: invoice({ discount: '0.00' }) });
+
+    render(<InvoicePrintView invoiceId="invoice-497" />);
+
+    expect(screen.queryByText('Discount')).not.toBeInTheDocument();
+    expect(row('Tax')).toHaveTextContent('$0');
+  });
+});
+
 describe('InvoicePrintView', () => {
   it('prints the server-computed amount paid and balance after a partial payment', () => {
     mocks.useQuery.mockReturnValue({

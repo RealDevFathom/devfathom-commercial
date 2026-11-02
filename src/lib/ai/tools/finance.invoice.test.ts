@@ -78,3 +78,58 @@ describe('assistant getInvoice seller identity (#458)', () => {
     });
   });
 });
+
+describe('assistant createInvoice tax and discount (#448)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('persists the shared cent-exact amounts, discount included', async () => {
+    const { db, tools } = setup();
+    db.invoice.create.mockResolvedValue({
+      id: 'invoice-9',
+      invoiceNumber: 'INV-2026-001',
+      total: 1.64,
+      client: { name: 'Acme' },
+    });
+
+    const result = await tools.createInvoice.execute({
+      clientName: 'Acme',
+      items: [
+        { description: 'Pack', quantity: 3, unitPrice: 0.335 },
+        { description: 'Third', quantity: 3, unitPrice: 1 / 3 },
+      ],
+      discount: 0.5,
+      tax: 0.125,
+      dueDate: '2026-11-30',
+    });
+
+    expect(db.invoice.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          items: [
+            { description: 'Pack', quantity: 3, rate: 0.335, amount: 1.01 },
+            { description: 'Third', quantity: 3, rate: 1 / 3, amount: 1 },
+          ],
+          subtotal: 2.01,
+          discount: 0.5,
+          tax: 0.13,
+          total: 1.64,
+        }),
+      })
+    );
+    expect(result).toMatchObject({ subtotal: 2.01, total: 1.64 });
+  });
+
+  it('refuses a discount above the subtotal without writing', async () => {
+    const { db, tools } = setup();
+
+    const result = await tools.createInvoice.execute({
+      clientName: 'Acme',
+      items: [{ description: 'Work', quantity: 1, unitPrice: 100 }],
+      discount: 150,
+      dueDate: '2026-11-30',
+    });
+
+    expect(result).toEqual({ error: 'Discount cannot be more than the subtotal.' });
+    expect(db.invoice.create).not.toHaveBeenCalled();
+  });
+});
