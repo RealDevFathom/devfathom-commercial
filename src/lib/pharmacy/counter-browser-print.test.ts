@@ -8,10 +8,7 @@ import {
   printCounterBrowserReceipt,
 } from './counter-browser-print';
 import type { CounterReceipt, CounterReceiptLocale } from './counter-receipt';
-import {
-  buildPharmacyReceiptPrintDocument,
-  readPharmacyReceiptTaxIdentity,
-} from './receipt-print';
+import { buildPharmacyReceiptPrintDocument, readPharmacyReceiptTaxIdentity } from './receipt-print';
 
 const receipt: CounterReceipt = {
   saleId: 'sale-1',
@@ -51,7 +48,12 @@ afterEach(() => vi.restoreAllMocks());
 describe('isolated Pharmacy browser receipt', () => {
   it('reads and normalizes the profile in force at completion', async () => {
     const at = new Date('2026-09-05T10:00:00Z');
-    const findFirst = vi.fn(async () => ({ ntn: ' NTN-HISTORICAL ', strn: '   ' }));
+    const findFirst = vi.fn(async () => ({
+      premises: { addressLine: ' 12 Mall Road ', city: ' Lahore ', phone: ' 042-1234567 ' },
+      licenceNumber: ' DSL-42 ',
+      ntn: ' NTN-HISTORICAL ',
+      strn: '   ',
+    }));
 
     await expect(
       readPharmacyReceiptTaxIdentity(
@@ -59,7 +61,13 @@ describe('isolated Pharmacy browser receipt', () => {
         { organizationId: 'org-1', branchId: 'branch-1' },
         at
       )
-    ).resolves.toEqual({ ntn: 'NTN-HISTORICAL', strn: null });
+    ).resolves.toEqual({
+      address: '12 Mall Road, Lahore',
+      phone: '042-1234567',
+      licenceNumber: 'DSL-42',
+      ntn: 'NTN-HISTORICAL',
+      strn: null,
+    });
     expect(findFirst).toHaveBeenCalledWith({
       where: {
         organizationId: 'org-1',
@@ -68,7 +76,7 @@ describe('isolated Pharmacy browser receipt', () => {
         OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
       },
       orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
-      select: { ntn: true, strn: true },
+      select: { premises: true, licenceNumber: true, ntn: true, strn: true },
     });
   });
 
@@ -81,7 +89,13 @@ describe('isolated Pharmacy browser receipt', () => {
         { organizationId: 'org-1', branchId: 'branch-1' },
         new Date('2026-09-05T10:00:00Z')
       )
-    ).resolves.toEqual({ ntn: null, strn: null });
+    ).resolves.toEqual({
+      address: null,
+      phone: null,
+      licenceNumber: null,
+      ntn: null,
+      strn: null,
+    });
   });
 
   it.each([
@@ -99,29 +113,77 @@ describe('isolated Pharmacy browser receipt', () => {
     const html = buildCounterBrowserReceipt(settled, locale, format);
     expect(html).toContain('NTN: NTN-HISTORICAL');
     expect(html).toContain('STRN: STRN-HISTORICAL');
-    expect(html.replace(/\s+/g, ' ')).toContain(
-      locale === 'ur'
-        ? 'رسید کے ماخذ میں ٹیکس کی تفصیل دستیاب نہیں'
-        : 'Tax breakdown unavailable in receipt source'
-    );
+    expect(html).not.toContain('Tax breakdown unavailable');
   });
 
   it('matches the settled-sale tax identity in raw thermal output', () => {
-    const taxIdentity = { ntn: 'NTN-HISTORICAL', strn: 'STRN-HISTORICAL' };
-    const thermal = buildPharmacyReceiptPrintDocument(
-      { ...receipt, taxIdentity },
-      'en',
-      { layout: DEFAULT_RECEIPT_LAYOUT, taxIdentity, reprint: false }
-    );
+    const taxIdentity = {
+      address: '12 Mall Road, Lahore',
+      phone: '042-1234567',
+      licenceNumber: 'DSL-42',
+      ntn: 'NTN-HISTORICAL',
+      strn: 'STRN-HISTORICAL',
+    };
+    const thermal = buildPharmacyReceiptPrintDocument({ ...receipt, taxIdentity }, 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity,
+      reprint: false,
+    });
     expect(thermal.receiptSnapshot?.facts.taxLines).toEqual(
       expect.arrayContaining([
+        '12 Mall Road, Lahore',
+        'Phone: 042-1234567',
+        'Drug-sale licence: DSL-42',
         'NTN: NTN-HISTORICAL',
         'STRN: STRN-HISTORICAL',
-        'Tax breakdown unavailable in receipt source',
       ])
     );
   });
 
+  it('prints the completion time, cashier and localized receipt/payment labels', () => {
+    const source = { ...receipt, cashierName: 'Ayesha Khan' };
+    const english = buildCounterBrowserReceipt(source, 'en', 'THERMAL');
+    const urdu = new DOMParser().parseFromString(
+      buildCounterBrowserReceipt(source, 'ur', 'THERMAL'),
+      'text/html'
+    ).body.textContent!;
+
+    expect(english).toContain('Receipt: 12');
+    expect(english).toContain('Date: 2026-09-05 15:00 PKT');
+    expect(english).toContain('Cashier: Ayesha Khan');
+    expect(english).toContain('Cash: 1.90');
+    expect(urdu).toContain('رسید: 12');
+    expect(urdu).toContain('کیشیئر: Ayesha Khan');
+    expect(urdu).toContain('نقد: 1.90');
+    expect(urdu).not.toContain('Invoice:');
+    expect(urdu).not.toContain('CASH:');
+  });
+
+  it('prints PKT across UTC midnight consistently in browser and raw thermal receipts', () => {
+    const source = { ...receipt, completedAt: '2026-09-05T20:12:00Z', cashierName: 'Ayesha' };
+    const browser = buildCounterBrowserReceipt(source, 'en', 'THERMAL');
+    const raw = buildPharmacyReceiptPrintDocument(source, 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity: { ntn: null, strn: null },
+      reprint: false,
+    });
+    expect(browser).toContain('Date: 2026-09-06 01:12 PKT');
+    expect(raw.receiptSnapshot?.facts.issuedAt).toContain('Date: 2026-09-06 01:12 PKT');
+    expect(raw.receiptSnapshot?.facts.issuedAt).toContain('Cashier: Ayesha');
+  });
+  it.each([
+    ['WALLET', 'والٹ'],
+    ['RAAST', 'راست'],
+    ['JAZZCASH', 'جاز کیش'],
+    ['EASYPAISA', 'ایزی پیسہ'],
+    ['CREDIT', 'کھاتہ'],
+  ])('localizes %s and PKR in Urdu', (type, label) => {
+    const source = { ...receipt, tenders: [{ ...receipt.tenders[0], type }] };
+    const html = buildCounterBrowserReceipt(source, 'ur', 'THERMAL');
+    expect(html).toContain(label + ':');
+    expect(html).toContain('پاکستانی روپے');
+    expect(html).not.toContain(type + ':');
+  });
   it('omits blank identifiers and escapes regulatory identity in browser output', () => {
     const html = buildCounterBrowserReceipt(
       { ...receipt, taxIdentity: { ntn: '   ', strn: '<STRN & historical>' } },
@@ -232,7 +294,6 @@ describe('isolated Pharmacy browser receipt', () => {
     expect(thermal.receiptSnapshot?.facts.taxLines).toEqual([
       'NTN: HISTORICAL-NTN',
       'STRN: HISTORICAL-STRN',
-      'Tax breakdown unavailable in receipt source',
     ]);
     for (const identity of thermal.receiptSnapshot!.facts.taxLines.slice(0, 2)) {
       expect(browser).toContain(identity);
@@ -277,8 +338,8 @@ describe('isolated Pharmacy browser receipt', () => {
       expect(parsed.querySelector('img')).toBeNull();
       const text = parsed.body.textContent!.replace(/\s+/g, ' ');
       expect(text).toContain('دوا 👩‍⚕️');
-      expect(text).toContain('Batch: <img src=x> · Expiry: 2027-01-01 · Canonical units: 3');
-      expect(text).toContain('Batch: بیچ ب · Expiry: 2028-02-02 · Canonical units: 7');
+      expect(text).toContain('Batch: <img src=x> · Expiry: 2027-01-01 · Tablets/units: 3');
+      expect(text).toContain('Batch: بیچ ب · Expiry: 2028-02-02 · Tablets/units: 7');
       expect(text.match(/Amount: 1.79/g)).toHaveLength(1);
       expect(text).toContain('Total: 1.79');
       expect(JSON.stringify(source)).toBe(before);
@@ -379,4 +440,29 @@ describe('isolated Pharmacy browser receipt', () => {
     expect(() => printCounterBrowserReceipt(receipt, 'en', 'A4')).toThrow('Retry Print receipt');
     expect(popup.close).toHaveBeenCalledOnce();
   });
+});
+
+it('isolates phone, licence and PKT date identifiers on RTL paper without permitting markup', () => {
+  const html = buildCounterBrowserReceipt(
+    {
+      ...receipt,
+      taxIdentity: {
+        ntn: 'NTN-SYNTHETIC',
+        strn: null,
+        phone: '042-0000000',
+        licenceNumber: 'DSL-42',
+      },
+    },
+    'ur',
+    'THERMAL'
+  );
+  const dom = new DOMParser().parseFromString(html, 'text/html');
+  const isolated = [...dom.querySelectorAll('bdi[dir="ltr"]')].map((element) =>
+    element.textContent!.trim()
+  );
+  expect(isolated).toEqual(
+    expect.arrayContaining(['042-0000000', 'DSL-42', '2026-09-05 15:00 PKT'])
+  );
+  expect(dom.querySelector('script')).toBeNull();
+  expect(dom.querySelector('img')).toBeNull();
 });

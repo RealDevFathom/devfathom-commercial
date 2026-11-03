@@ -98,6 +98,7 @@ function validateAsciiPrintText<T extends PrintDocument>(document: T): T {
       layout.footerText,
       facts.businessName,
       facts.invoiceNumber,
+      facts.invoiceLabel ?? '',
       facts.issuedAt,
       facts.orderNumber ?? '',
       facts.channel ?? '',

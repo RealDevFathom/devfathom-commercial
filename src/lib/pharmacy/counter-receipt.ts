@@ -1,3 +1,4 @@
+import { formatKarachiDateTime } from './karachi-time';
 /**
  * PH-POS / POS-08 — the counter receipt: thermal and A4, Urdu and English.
  *
@@ -23,7 +24,13 @@ import type { SaleUnitKind } from './counter-pricing';
 export type CounterReceiptLocale = 'en' | 'ur';
 
 /** Regulatory identity in force when this receipt's sale completed. */
-export type PharmacyReceiptTaxIdentity = { ntn: string | null; strn: string | null };
+export type PharmacyReceiptTaxIdentity = {
+  address?: string | null;
+  phone?: string | null;
+  licenceNumber?: string | null;
+  ntn: string | null;
+  strn: string | null;
+};
 
 export type CounterReceiptLine = {
   saleLineId: string;
@@ -72,6 +79,7 @@ export type CounterReceipt = {
   branchName: string;
   businessDate: string | null;
   completedAt: string | null;
+  cashierName?: string | null;
   currency: string;
   lines: CounterReceiptLine[];
   tenders: CounterReceiptTender[];
@@ -103,6 +111,11 @@ type Strings = {
   tendered: string;
   change: string;
   tenders: string;
+  invoice: string;
+  cashier: string;
+  licence: string;
+  phone: string;
+  tenderName: Record<string, string>;
   saleUnit: Record<SaleUnitKind, string>;
   noReceiptNumber: string;
 };
@@ -132,6 +145,21 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     tendered: 'Tendered',
     change: 'Change',
     tenders: 'Payments',
+    invoice: 'Receipt',
+    cashier: 'Cashier',
+    licence: 'Drug-sale licence',
+    phone: 'Phone',
+    tenderName: {
+      CASH: 'Cash',
+      CARD: 'Card',
+      BANK_TRANSFER: 'Bank transfer',
+      CREDIT: 'Khata',
+      KHATA: 'Khata',
+      WALLET: 'Wallet',
+      RAAST: 'Raast',
+      JAZZCASH: 'JazzCash',
+      EASYPAISA: 'Easypaisa',
+    },
     saleUnit: { PACK: 'pack', STRIP: 'strip', UNIT: 'unit' },
     noReceiptNumber: 'This bill is not settled, so no receipt number has been issued.',
   },
@@ -154,6 +182,21 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     tendered: 'ادا شدہ',
     change: 'واپسی',
     tenders: 'ادائیگیاں',
+    invoice: 'رسید',
+    cashier: 'کیشیئر',
+    licence: 'ادویات فروشی لائسنس',
+    phone: 'فون',
+    tenderName: {
+      CASH: 'نقد',
+      CARD: 'کارڈ',
+      BANK_TRANSFER: 'بینک منتقلی',
+      CREDIT: 'کھاتہ',
+      KHATA: 'کھاتہ',
+      WALLET: 'والٹ',
+      RAAST: 'راست',
+      JAZZCASH: 'جاز کیش',
+      EASYPAISA: 'ایزی پیسہ',
+    },
     saleUnit: { PACK: 'پیک', STRIP: 'پتّا', UNIT: 'یونٹ' },
     noReceiptNumber: 'یہ بل ادا نہیں ہوا، اس لیے رسید نمبر جاری نہیں ہوا۔',
   },
@@ -309,7 +352,9 @@ export function counterReceiptTotals(input: {
   const tenderedMinor = input.tenders.reduce(
     (total, tender) =>
       total +
-      (tender.type === 'CASH' ? (tender.cashReceivedMinor ?? tender.amountMinor) : tender.amountMinor),
+      (tender.type === 'CASH'
+        ? (tender.cashReceivedMinor ?? tender.amountMinor)
+        : tender.amountMinor),
     0
   );
   const changeMinor = input.tenders.reduce(
@@ -323,4 +368,11 @@ export function counterReceiptTotals(input: {
     tenderedMinor,
     changeMinor,
   };
+}
+
+/** Completion wall time on customer paper; the accounting business date stays separate. */
+export function formatReceiptIssuedAt(value: string | null): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : formatKarachiDateTime(date);
 }

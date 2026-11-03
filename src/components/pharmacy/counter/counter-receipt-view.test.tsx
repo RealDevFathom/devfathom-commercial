@@ -158,9 +158,9 @@ it('shows both allocation subrows, Unicode and one unchanged financial line', ()
   expect(region.getAllByRole('listitem')).toHaveLength(1);
   expect(region.getByText(/دوا 👩‍⚕️/)).toBeTruthy();
   expect(
-    region.getByText('Batch: <img src=x> · Expiry: 2027-01-01 · Canonical units: 3')
+    region.getByText('Batch: <img src=x> · Expiry: 2027-01-01 · Tablets/units: 3')
   ).toBeTruthy();
-  expect(region.getByText('Batch: بیچ ب · Expiry: 2028-02-02 · Canonical units: 7')).toBeTruthy();
+  expect(region.getByText('Batch: بیچ ب · Expiry: 2028-02-02 · Tablets/units: 7')).toBeTruthy();
   expect(within(region.getByRole('listitem')).getAllByText('1.00')).toHaveLength(1);
   expect(container.querySelector('img')).toBeNull();
   expect(container.querySelector('pre')).toHaveClass('whitespace-pre-wrap');
@@ -188,7 +188,7 @@ it.each(['UNAVAILABLE', undefined] as const)(
     const region = within(screen.getByRole('region', { name: 'رسید 12' }));
     expect(region.getByText('تاریخی شناخت دستیاب نہیں')).toBeTruthy();
     expect(
-      region.getByText('بیچ: دستیاب نہیں · میعاد: دستیاب نہیں · بنیادی اکائیاں: 7')
+      region.getByText('بیچ: دستیاب نہیں · میعاد: دستیاب نہیں · گولیاں/یونٹس: 7')
     ).toBeTruthy();
     expect(screen.queryByText(/LIVE_CATALOG/)).toBeNull();
   }
