@@ -53,7 +53,7 @@ describe('owner importer wizard', () => {
     render(<OwnerImportWizard />);
     await uploadAndPreview();
     fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.change(screen.getByLabelText('Cost per base unit (PKR) *'), { target: { value: '4' } });
+    fireEvent.change(screen.getByLabelText('Cost per tablet/unit (PKR) *'), { target: { value: '4' } });
     expect(screen.queryByRole('button', { name: 'Commit opening stock' })).toBeNull();
     expect(mocks.commit.mutateAsync).not.toHaveBeenCalled();
   });
@@ -67,7 +67,7 @@ describe('owner importer wizard', () => {
     fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
     fireEvent.click(await screen.findByRole('button', { name: 'Run dry-run diff' }));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('different column'));
-    expect(screen.getByLabelText('Cost per base unit (PKR) *')).toHaveValue('5');
+    expect(screen.getByLabelText('Cost per tablet/unit (PKR) *')).toHaveValue('5');
     expect(screen.getByText(/stock.csv · 1 stock rows/)).toBeVisible();
   });
   it('shows permission denial without upload controls', () => {
@@ -82,4 +82,24 @@ describe('owner importer wizard', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Loading your branches');
     expect(screen.queryByLabelText('CSV or XLSX file')).toBeNull();
   });
+});
+
+it('shows a cost-basis warning and still requires explicit review before a valid import',async()=>{
+  const preview=await mocks.preview.mutateAsync();
+  preview.lines[0].warnings=['Cost per tablet/unit is greater than or equal to MRP per tablet/unit. Check the unit basis.'];
+  mocks.preview.mutateAsync.mockResolvedValue(preview);
+  render(<OwnerImportWizard/>);await uploadAndPreview();
+  expect(screen.getByText('Review cost warnings')).toBeVisible();expect(screen.getByText('Review cost basis')).toBeVisible();
+  expect(screen.getByText(/Cost per tablet\/unit is greater/)).toBeVisible();
+  const commit=screen.getByRole('button',{name:'Commit opening stock'});expect(commit).toBeDisabled();
+  fireEvent.click(screen.getByRole('checkbox'));expect(commit).toBeEnabled();
+  expect(mocks.commit.mutateAsync).not.toHaveBeenCalled();
+});
+it('shows rejected rows outside the valid-unit valuation and leaves commit disabled',async()=>{
+  const preview=await mocks.preview.mutateAsync();preview.canCommit=false;
+  preview.lines.push({...preview.lines[0],rowNumber:3,sourceRef:'INVALID',errors:['Invalid pack'],countedUnits:20});
+  mocks.preview.mutateAsync.mockResolvedValue(preview);
+  render(<OwnerImportWizard/>);await uploadAndPreview();
+  expect(screen.getByText(/1 of 2 valid rows · 10 counted base units · PKR 12.50 opening valuation/)).toBeVisible();
+  expect(screen.getByText(/Rejected rows are excluded/)).toBeVisible();expect(screen.getByRole('button',{name:'Commit opening stock'})).toBeDisabled();
 });

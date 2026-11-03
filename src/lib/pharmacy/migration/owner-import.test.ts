@@ -62,6 +62,29 @@ describe('owner opening import dry run', () => {
     expect(preview.canCommit).toBe(true);
     expect(preview.lines[0]).toMatchObject({ countedUnits: 0, expectedUnits: 0, unitCostMinor: 0, printedMrpMinor: 0 });
   });
+  it.each(['2.70', '10.50'])('warns about cost %s without blocking legitimate historical stock', async (cost) => {
+    const preview = await previewOwnerImport(scoped(), scope, input(`SRC-1,00123,B1,2099-06,27,${cost},10,10,`));
+    expect(preview.canCommit).toBe(true);
+    expect(preview.lines[0]!.errors).toEqual([]);
+    expect(preview.lines[0]!.warnings.join(' ')).toContain('Cost per tablet/unit');
+    expect(preview.totalUnits).toBe(10);
+    expect(preview.totalValueMinor).toBe(cost === '2.70' ? '2700' : '10500');
+  });
+  it('compares cost and pack MRP exactly without rounding a fractional unit MRP', async () => {
+    const preview = await previewOwnerImport(scoped(), scope, input('SRC-1,00123,B1,2099-06,27.01,2.70,10,10,'));
+    expect(preview.canCommit).toBe(true);
+    expect(preview.lines[0]!.warnings).toEqual([]);
+  });
+  it('excludes rejected rows from dry-run units and valuation', async () => {
+    const value = input('SRC-1,00123,B1,2099-06,25,1.25,10,10,');
+    value.content = Buffer.from(`${Buffer.from(value.content, 'base64').toString()}\nSRC-2,unknown,B2,2099-06,25,1.25,20,20,`).toString('base64');
+    db.packLevel.findMany.mockResolvedValueOnce(await db.packLevel.findMany()).mockResolvedValueOnce([]);
+    const preview = await previewOwnerImport(scoped(), scope, value);
+    expect(preview.canCommit).toBe(false);
+    expect(preview.lines[1]!.errors).not.toHaveLength(0);
+    expect(preview.totalUnits).toBe(10);
+    expect(preview.totalValueMinor).toBe('1250');
+  });
   it('requires distinct mapped columns and rejects columns outside the upload', async () => {
     await expect(previewOwnerImport(scoped(), scope, { ...input(), mapping: { ...mapping, counted: mapping.expected } })).rejects.toThrow('different column');
     await expect(previewOwnerImport(scoped(), scope, { ...input(), mapping: { ...mapping, counted: 39 } })).rejects.toThrow('different column');
@@ -138,4 +161,19 @@ describe('owner opening import dry run', () => {
     expect(db.pharmacyStockMovement.count).not.toHaveBeenCalled();
     expect(db.pharmacyOpeningSession.create).not.toHaveBeenCalled();
   });
+});
+
+it('matches the reported 58 valid units and PKR609 valuation while excluding 20 rejected units',async()=>{
+  const packs=await db.packLevel.findMany();
+  db.packLevel.findMany.mockResolvedValueOnce(packs).mockResolvedValueOnce(packs).mockResolvedValueOnce([]);
+  const value=input('VALID-1,00123,B1,2099-06,27,10.50,30,30,');
+  value.content=Buffer.from(Buffer.from(value.content,'base64').toString()+'\nVALID-2,00123,B2,2099-06,27,10.50,28,28,\nREJECT,unknown,B3,2099-06,27,10.50,20,20,').toString('base64');
+  const preview=await previewOwnerImport(scoped(),scope,value);
+  expect(preview.lines).toHaveLength(3);expect(preview.lines[2]!.errors.length).toBeGreaterThan(0);
+  expect(preview.lines.slice(0,2).every(line=>line.errors.length===0&&line.warnings.length===1)).toBe(true);
+  expect(preview.totalUnits).toBe(58);expect(preview.totalValueMinor).toBe('60900');expect(preview.canCommit).toBe(false);
+});
+it('warns on positive cost with zero MRP while retaining zero-count and zero-cost imports',async()=>{
+  const preview=await previewOwnerImport(scoped(),scope,input('SRC-1,00123,B1,2099-06,0,1.00,0,0,'));
+  expect(preview.canCommit).toBe(true);expect(preview.lines[0]!.warnings).toHaveLength(1);expect(preview.totalValueMinor).toBe('0');
 });

@@ -35,6 +35,7 @@ export function OwnerImportWizard() {
   const [confirmed, setConfirmed] = useState(false);
   const [reading, setReading] = useState(false);
   const [error, setError] = useState('');
+  const hasCostWarnings = preview?.lines.some((line) => Boolean(line.warnings?.length)) ?? false;
   const busy = reading || upload.isPending || dryRun.isPending || commit.isPending;
   const clearPreview = () => { setPreview(null); setConfirmed(false); setError(''); };
   const denied = options.error?.data?.code === 'FORBIDDEN' || options.error?.data?.code === 'UNAUTHORIZED';
@@ -84,7 +85,7 @@ export function OwnerImportWizard() {
           </ol></nav>
           {error && <div role="alert" id="import-error" className="rounded-sm border border-destructive p-4 text-sm text-destructive">{error}</div>}
           <SectionCard title="1. Upload the opening count" titleLevel={2}>
-            <p className="mb-4 text-sm text-text-muted">Complete opening imports before sales or receiving begin. Publish your medicines and configure their packs first. Counts and costs use individual base units; printed MRP is per selected pack. Physical counts are entered separately from the old system’s quantities. Large handovers may use several files with distinct medicine/batch/pack rows.</p>
+            <p className="mb-4 text-sm text-text-muted">Complete opening imports before sales or receiving begin. Publish your medicines and configure their packs first. Counts and costs use individual tablets/base units; printed MRP is per selected pack. Physical counts are entered separately from the old system’s quantities. Large handovers may use several files with distinct medicine/batch/pack rows.</p>
             <div className="mb-5 flex flex-wrap gap-3">
               <a href={`data:text/csv;charset=utf-8,${encodeURIComponent(OPENING_TEMPLATE)}`} download="pharmacy-opening-stock.csv" className={buttonVariants({ variant: 'secondary' })}>Download CSV template</a>
               <Link href="/pharmacy/medicines" className={buttonVariants({ variant: 'ghost' })}>Medicine catalogue and packs</Link>
@@ -130,12 +131,12 @@ export function OwnerImportWizard() {
           </SectionCard>}
           {preview && source && <SectionCard title="3. Review the opening-stock diff" titleLevel={2}>
             <div role="status" className="mb-4 space-y-2 text-sm text-text-body">
-              <StatusPill status={preview.canCommit ? 'success' : 'blocked'} label={preview.canCommit ? 'Ready for review' : 'Commit blocked'} />
-              <p>{preview.lines.length} rows · {preview.totalUnits} counted base units · {money(preview.totalValueMinor)} opening valuation.</p>
-              <p>No inventory has changed during this dry run. Each valid row adds its physical count as a new opening lot. The export is comparison evidence. Previously imported lots cannot be imported again.</p>
+              <StatusPill status={preview.canCommit ? hasCostWarnings ? 'warning' : 'success' : 'blocked'} tone={preview.canCommit && hasCostWarnings ? 'warning' : undefined} label={preview.canCommit ? hasCostWarnings ? 'Review cost warnings' : 'Ready for review' : 'Commit blocked'} />
+              <p>{preview.lines.filter((line) => line.errors.length === 0).length} of {preview.lines.length} valid rows · {preview.totalUnits} counted base units · {money(preview.totalValueMinor)} opening valuation.</p>
+              <p>No inventory has changed during this dry run. Rejected rows are excluded from these totals. Each valid row adds its physical count as a new opening lot. The export is comparison evidence. Previously imported lots cannot be imported again.</p>
             </div>
             {preview.blockers.length > 0 && <ul className="mb-4 list-disc space-y-2 pl-5 text-sm text-destructive">{preview.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>}
-            <Table><caption className="sr-only">Opening stock rows, count differences, and blocking validation errors</caption>
+            <Table><caption className="sr-only">Opening stock rows, count differences, cost warnings and blocking validation errors</caption>
               <TableHeader><TableRow>
                 <TableHead>Row / source</TableHead><TableHead>Medicine / pack / batch</TableHead><TableHead>Expiry</TableHead><TableHead numeric>Current</TableHead><TableHead numeric>Exported</TableHead><TableHead numeric>Counted / added</TableHead><TableHead numeric>Proposed total</TableHead><TableHead numeric>Variance</TableHead><TableHead>Validation</TableHead>
               </TableRow></TableHeader>
@@ -145,14 +146,15 @@ export function OwnerImportWizard() {
                 <TableCell>{line.expiryDate ? new Date(line.expiryDate).toISOString().slice(0, line.expiryPrecision === 'MONTH' ? 7 : 10) : 'Missing'}</TableCell>
                 <TableCell numeric>{line.currentUnits}</TableCell><TableCell numeric>{line.expectedUnits ?? 'Invalid'}</TableCell><TableCell numeric>{line.countedUnits ?? 'Invalid'}</TableCell><TableCell numeric>{line.proposedUnits ?? 'Unknown'}</TableCell><TableCell numeric>{line.varianceUnits ?? 'Unknown'}</TableCell>
                 <TableCell className="min-w-64 max-w-96 whitespace-normal">
-                  {line.errors.length ? <ul className="list-disc space-y-1 pl-4 text-destructive">{line.errors.map((message) => <li key={message}>{message}</li>)}</ul> : <><StatusPill status="success" label="Ready" /><p className="mt-2 text-xs">MRP {money(String(line.printedMrpMinor))} per pack · Cost {money(String(line.unitCostMinor))} per base unit</p></>}
+                  {line.errors.length ? <ul className="list-disc space-y-1 pl-4 text-destructive">{line.errors.map((message) => <li key={message}>{message}</li>)}</ul> : <><StatusPill status={line.warnings?.length ? "warning" : "success"} tone={line.warnings?.length ? "warning" : undefined} label={line.warnings?.length ? "Review cost basis" : "Ready"} /><p className="mt-2 text-xs">MRP {money(String(line.printedMrpMinor))} per pack · Cost {money(String(line.unitCostMinor))} per tablet/unit</p></>}
+                  {Boolean(line.warnings?.length) && <ul className="mt-2 list-disc space-y-1 pl-4 text-warning">{line.warnings.map((message) => <li key={message}>{message}</li>)}</ul>}
                   {line.varianceNote && <p className="mt-2 break-words text-xs text-text-muted">Variance note: {line.varianceNote}</p>}
                 </TableCell>
               </TableRow>)}</TableBody>
             </Table>
             <label className="mt-5 flex min-h-11 items-start gap-3 text-sm text-text-body">
               <input type="checkbox" className="mt-1 size-5 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-ring" checked={confirmed} disabled={busy || !preview.canCommit} onChange={(event) => setConfirmed(event.target.checked)} />
-              <span>I verified the physical counts, unit costs, printed pack MRPs, pack conversions, batches, expiry dates and destination. Commit all rows as opening stock and record their valuation.</span>
+              <span>I verified the physical counts, unit costs, printed pack MRPs, pack conversions, batches, expiry dates and destination, and reviewed every cost warning. Commit all rows as opening stock and record their valuation.</span>
             </label>
             <Button className="mt-4 min-h-11" disabled={busy || !preview.canCommit || !confirmed} onClick={async () => {
               setError('');

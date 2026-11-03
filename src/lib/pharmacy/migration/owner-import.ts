@@ -79,6 +79,7 @@ export async function previewOwnerImport(db: ScopedDb, scope: LedgerScope, input
       return position === undefined ? '' : row[position]!.trim();
     };
     const errors: string[] = [];
+    const warnings: string[] = [];
     const sourceRef = cell('sourceRef');
     const batchNumber = cell('batch');
     const packReference = cell('pack');
@@ -121,6 +122,10 @@ export async function previewOwnerImport(db: ScopedDb, scope: LedgerScope, input
     const pack = packs.length === 1 ? packs[0]! : null;
     const unitsPerPack = pack ? conversion(pack.presentation.packLevels, pack.id, now) : null;
     if (!pack || !pack.presentation.medicine.saleable || unitsPerPack === null) errors.push('Match exactly one published medicine pack with a valid current conversion, using its barcode or pack ID.');
+    if (printedMrpMinor !== null && unitCostMinor !== null && unitCostMinor > 0 && unitsPerPack !== null &&
+        BigInt(unitCostMinor) * BigInt(unitsPerPack) >= BigInt(printedMrpMinor)) {
+      warnings.push('Cost per tablet/unit is greater than or equal to MRP per tablet/unit. Check that cost uses individual base units, not the selected pack.');
+    }
     if (pack?.presentation.medicine.coldChain && !location.coldChain) errors.push('This medicine requires a cold-chain stock location.');
     const medicineId = pack?.presentation.medicineId ?? null;
     const lotKey = JSON.stringify([medicineId, batchNumber, pack?.id]);
@@ -153,7 +158,8 @@ export async function previewOwnerImport(db: ScopedDb, scope: LedgerScope, input
       select: { id: true },
     }) : null;
     if (referenceTaken) errors.push('This source reference was already used for this batch in an earlier opening import (possibly another branch). Use a distinct source reference, e.g. prefix it with the branch code.');
-    if (countedUnits !== null && unitCostMinor !== null) {
+    // Headline totals include only rows that pass row validation.
+    if (errors.length === 0 && countedUnits !== null && unitCostMinor !== null) {
       totalUnits += countedUnits;
       totalValueMinor += BigInt(countedUnits) * BigInt(unitCostMinor);
     }
@@ -165,7 +171,7 @@ export async function previewOwnerImport(db: ScopedDb, scope: LedgerScope, input
       printedMrpMinor, unitCostMinor, expectedUnits, countedUnits, currentUnits,
       proposedUnits: countedUnits === null ? null : currentUnits + countedUnits, varianceNote,
       varianceUnits: countedUnits !== null && expectedUnits !== null ? countedUnits - expectedUnits : null,
-      errors,
+      errors, warnings,
     });
   }
   if (totalUnits > INT_MAX || totalValueMinor > BigInt(INT_MAX)) blockers.push('The total exceeds the supported stock or journal amount range. Arrange the handover with staff assistance.');
