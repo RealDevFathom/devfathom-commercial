@@ -1215,6 +1215,26 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
   });
 
+  it('shows drawer confirmation as an overlay and dismisses it automatically', async () => {
+    vi.useFakeTimers();
+    mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
+    try {
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const toast = screen
+        .getByText('Cash drawer opened for this counter.')
+        .closest('[role=status]');
+      expect(toast).toHaveClass('fixed');
+      act(() => vi.advanceTimersByTime(4_000));
+      expect(screen.queryByText('Cash drawer opened for this counter.')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     // 16:30 UTC on the 21st is already the 22nd in Tokyo, still the 21st on the device.
     ['the workspace zone', 'Asia/Tokyo', '2026-10-21T16:30:00.000Z', '2026-10-22'],
@@ -1739,6 +1759,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
       } else scan(entry === 'GS1' ? gs1 : '654321');
       await screen.findByText(/Controlled medicine needs the patient address/);
       expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      expect(screen.getByTestId('controlled-authorization')).toBeInTheDocument();
     }
   );
 
@@ -1746,8 +1767,9 @@ describe('PharmacyCounterConsole barcode safety', () => {
     'sends %s authorization for a controlled scan and clears the PIN',
     async (authorization) => {
       const row = barcodeRow();
+      const controlledRow = { ...row, restriction: { ...row.restriction, controlled: true } };
       mocks.searchQuery.mockResolvedValue({
-        rows: [{ ...row, restriction: { ...row.restriction, controlled: true } }],
+        rows: [controlledRow],
         truncated: false,
       });
       mocks.queries.counterPatientPanel = query({
@@ -1760,6 +1782,9 @@ describe('PharmacyCounterConsole barcode safety', () => {
         phone: null,
       });
       render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      scan();
+      await screen.findByText(/Controlled medicine needs the patient address/);
+      expect(screen.getByTestId('controlled-authorization')).toBeInTheDocument();
       act(() => {
         const props = mocks.rxPanelProps.mock.lastCall![0];
         props.onSelectPatient('patient-a');
@@ -1803,7 +1828,13 @@ describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', 
     expect(screen.queryByTestId('controlled-authorization')).toBeNull();
   });
 
-  it('shows the controlled authorization panel to a dispenser', () => {
+  it('does not show controlled authorization for a bill without controlled medicine', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByTestId('controlled-authorization')).toBeNull();
+  });
+
+  it('shows the controlled authorization panel when the bill contains controlled medicine', () => {
+    mocks.queries.counterCart = query(cart({ lines: [{ ...cart().lines[0], controlled: true }] }));
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
   });
@@ -1822,6 +1853,7 @@ describe('PharmacyCounterConsole module boundaries', () => {
   });
 
   it('asks for approving pharmacists when Pharmacy Safety is licensed', () => {
+    mocks.queries.counterCart = query(cart({ lines: [{ ...cart().lines[0], controlled: true }] }));
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: true });
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
