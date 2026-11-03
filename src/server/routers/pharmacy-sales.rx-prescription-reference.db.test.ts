@@ -44,6 +44,9 @@ const RX_DENIED = refused(
   'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.',
   'FORBIDDEN'
 );
+const PRESCRIPTION_REQUIRED = refused(
+  'A verified prescription must be attached before adding a prescription-only or restricted medicine.'
+);
 
 type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 type Medicine = { medicineId: string; presentationId: string; packLevelId: string };
@@ -441,6 +444,10 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     await expectRefused(ids.pharmacist, rx, withReference(`rx-invented-${suffix}`), NOT_FOUND);
   });
 
+  it('refuses an Rx line when the API omits the prescription', async () => {
+    await expectRefused(ids.pharmacist, rx, {}, PRESCRIPTION_REQUIRED);
+  });
+
   it("refuses another organization's prescription", async () => {
     await expectRefused(ids.pharmacist, rx, withReference(lines.otherOrg), NOT_FOUND);
   });
@@ -566,6 +573,26 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     );
   }
 
+  async function signPrescription(saleLineId: string, prescriptionLineId: string) {
+    await withTenantDb(ids.org, async (tx) => {
+      const review = await tx.pharmacyPharmacistReviewItem.create({
+        data: {
+          prescriptionLineId,
+          saleLineId,
+          requestedByUserId: ids.pharmacist,
+        },
+      });
+      await tx.pharmacyPharmacistReviewDecision.create({
+        data: {
+          reviewItemId: review.id,
+          kind: 'SIGN',
+          actorUserId: ids.pharmacist,
+          signedAt: new Date(),
+        },
+      });
+    });
+  }
+
   it('leaves prescription quantity unconsumed when an added line is voided', async () => {
     const added = await addReferencedSale(lines.voided);
     await act(ids.pharmacist, (api) =>
@@ -606,6 +633,7 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     // Exercises the real completion path (no mocks in this case): QA found completion
     // dropped prescriptionPatientId/saleId when recording the reference.
     const added = await addReferencedSale(lines.fullCompletion);
+    await signPrescription(added.saleLineId, lines.fullCompletion);
     const { completePaidPharmacySale, completionSaleInclude } =
       await import('@/lib/pharmacy/sale-completion');
     await withTenantDb(

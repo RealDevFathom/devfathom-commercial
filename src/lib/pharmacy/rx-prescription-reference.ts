@@ -9,6 +9,10 @@ const REASONS = {
   PRESCRIPTION_PATIENT_MISMATCH: 'That prescription belongs to a different patient.',
   PRESCRIPTION_NOT_IN_DATE: 'That prescription is outside its validity period.',
   PRESCRIPTION_EXHAUSTED: 'That prescription has no remaining quantity or repeats for this line.',
+  PRESCRIPTION_REQUIRED:
+    'A verified prescription must be attached before adding a prescription-only or restricted medicine.',
+  PRESCRIPTION_NOT_VERIFIED:
+    'A pharmacist must verify and sign the attached prescription before payment.',
   PRESCRIPTION_NEEDS_PHARMACIST:
     'Only a pharmacist with the dispensing permission can record a prescription against a line.',
   CONTROLLED_AUTHORIZATION_NOT_APPLICABLE:
@@ -32,6 +36,36 @@ export class PharmacyRxReferenceError extends Error {
 }
 
 export type PrescriptionReference = { prescriptionLineId: string; patientId: string };
+
+type RegulatedSaleLine = {
+  id: string;
+  prescriptionLineId: string | null;
+  medicine: { rx: boolean; restricted: boolean; controlled: boolean };
+};
+
+/**
+ * Final server-side release gate for ordinary Rx/restricted lines. Controlled medicines have
+ * their own witnessed authorization and audited emergency-supply path; all other regulated
+ * lines must retain the attached prescription reference and a signed RX-03 decision.
+ */
+export async function assertVerifiedPrescriptionRelease(
+  db: ScopedDb,
+  lines: readonly RegulatedSaleLine[]
+): Promise<void> {
+  for (const line of lines) {
+    if (line.medicine.controlled || (!line.medicine.rx && !line.medicine.restricted)) continue;
+    if (!line.prescriptionLineId) throw new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED');
+    const signed = await db.pharmacyPharmacistReviewDecision.findFirst({
+      where: {
+        reviewItem: { saleLineId: line.id, prescriptionLineId: line.prescriptionLineId },
+        kind: 'SIGN',
+        signedAt: { not: null },
+      },
+      select: { id: true },
+    });
+    if (!signed) throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_VERIFIED');
+  }
+}
 
 /**
  * #518: a prescription reference must resolve to a real prescription line of this organization,

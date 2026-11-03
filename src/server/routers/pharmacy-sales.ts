@@ -6,8 +6,15 @@ import {
   resolvePrescriptionReference,
 } from '@/lib/pharmacy/rx-prescription-reference';
 import { hasModule } from '@/lib/entitlements';
-import { manualPaymentSettingsSchema, isManualTender, manualMerchantPolicies } from '@/lib/pharmacy/manual-payments';
-import { readManualPaymentSettings, saveManualPaymentSettings } from '@/lib/pharmacy/manual-payment-settings';
+import {
+  manualPaymentSettingsSchema,
+  isManualTender,
+  manualMerchantPolicies,
+} from '@/lib/pharmacy/manual-payments';
+import {
+  readManualPaymentSettings,
+  saveManualPaymentSettings,
+} from '@/lib/pharmacy/manual-payment-settings';
 import {
   executeSandboxPayment,
   sandboxPaymentInput,
@@ -132,13 +139,26 @@ const tenderInput = z
     saleId: z.string().min(1),
     deviceId: z.string().min(1),
     businessDate: z.date(),
-    type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT', 'KHATA', 'RAAST', 'JAZZCASH', 'EASYPAISA']),
+    type: z.enum([
+      'CASH',
+      'CARD',
+      'BANK_TRANSFER',
+      'WALLET',
+      'CREDIT',
+      'KHATA',
+      'RAAST',
+      'JAZZCASH',
+      'EASYPAISA',
+    ]),
     amountMinor: z.number().int().positive(),
     cashReceivedMinor: z.number().int().nonnegative().optional(),
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
-    providerRef: z.string().regex(/^\d{4,6}$/).optional(),
+    providerRef: z
+      .string()
+      .regex(/^\d{4,6}$/)
+      .optional(),
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
   })
@@ -507,21 +527,39 @@ async function requireCloseAccess(ctx: TRPCContext) {
 }
 
 export const pharmacySalesRouter = router({
-  manualPaymentSettings: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
-    const scope = ctx.session!.user.role === 'ADMIN'
-      ? await branchScopeOrForbidden(ctx, input.branchId)
-      : await requireCounterReceiptAccess(ctx, input.branchId, true);
-    return readManualPaymentSettings(ctx.db, scope);
-  }),
-  saveManualPaymentSettings: adminProcedure.input(z.object({
-    branchId, revision: z.number().int().nonnegative(), settings: manualPaymentSettingsSchema,
-  }).strict()).mutation(async ({ ctx, input }) => {
-    // QR and payer destinations must not be copied into request audit payloads.
-    annotateAudit(ctx, { skipInput: true, targetType: 'PharmacyBranch', targetId: input.branchId,
-      metadata: { revision: input.revision, manualMerchantPolicies: manualMerchantPolicies(input.settings) } });
-    const scope = await branchScopeOrForbidden(ctx, input.branchId);
-    return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
-  }),
+  manualPaymentSettings: protectedProcedure
+    .input(z.object({ branchId }))
+    .query(async ({ ctx, input }) => {
+      const scope =
+        ctx.session!.user.role === 'ADMIN'
+          ? await branchScopeOrForbidden(ctx, input.branchId)
+          : await requireCounterReceiptAccess(ctx, input.branchId, true);
+      return readManualPaymentSettings(ctx.db, scope);
+    }),
+  saveManualPaymentSettings: adminProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          settings: manualPaymentSettingsSchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // QR and payer destinations must not be copied into request audit payloads.
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacyBranch',
+        targetId: input.branchId,
+        metadata: {
+          revision: input.revision,
+          manualMerchantPolicies: manualMerchantPolicies(input.settings),
+        },
+      });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
+    }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {
@@ -1068,6 +1106,8 @@ export const pharmacySalesRouter = router({
               throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
+            if (medicine && (medicine.rx || medicine.restricted) && !input.prescription)
+              throw new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED');
             const { prescription, ...lineInput } = input;
             if (!prescription) return addSaleLine(db, scope, lineInput);
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.

@@ -7,7 +7,10 @@ import { postSaleLineEntry } from './finance-postings';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
 import { assertRxSaleAllowed } from './rx-sale-gate';
-import { recordCompletedPrescriptionReference } from './rx-prescription-reference';
+import {
+  assertVerifiedPrescriptionRelease,
+  recordCompletedPrescriptionReference,
+} from './rx-prescription-reference';
 
 export const completionSaleInclude = {
   lines: {
@@ -35,6 +38,8 @@ export async function completePaidPharmacySale(
     scope,
     sale.lines.map((line) => line.medicine)
   );
+  // Defense in depth for non-tender completion callers.
+  await assertVerifiedPrescriptionRelease(db, sale.lines);
   // #633: re-check every batch under lock before a receipt number is drawn. The receipt
   // snapshot below records these checked facts, not the ones loaded with the sale.
   const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
