@@ -1,0 +1,4 @@
+Source reference,Pack barcode or pack ID,Manufacturing batch,Expiry,MRP,Cost,Exported base units,Physically counted base units,Variance explanation
+OLD-POS-1,cmvxpy8hn003t1xqr9az7aste,QA-OPEN-1,2027-08-31,27.00,10.50,50,50,
+OLD-POS-2,UNKNOWN-PACK-999,QA-OPEN-2,2027-08-31,27.00,10.50,20,20,
+"=HYPERLINK(""http://example.invalid"",""click"")",cmvxpy8hn003t1xqr9az7aste,QA-OPEN-3,2027-09-30,27.00,10.50,10,8,=1+1 counted short

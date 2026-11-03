@@ -1,0 +1,15 @@
+[
+  { "goto": "/pharmacy/counter" },
+  { "wait": 1200 },
+  { "click": { "role": "button", "name": "Returns & refunds" } },
+  { "wait": 800 },
+  { "fill": { "label": "Receipt number" }, "value": "2" },
+  { "click": { "role": "button", "name": "Find receipt" } },
+  { "wait": 2000 },
+  { "click": { "role": "button", "name": "Receipt 2 ·" } },
+  { "wait": 2500, "text": "[role=dialog]", "max": 3000, "shot": "cash-return-lines" },
+  {
+    "eval": "[...document.querySelectorAll('[role=dialog] button,[role=dialog] input,[role=dialog] select,[role=dialog] textarea')].map(e=>e.tagName+':'+(e.innerText||e.getAttribute('aria-label')||(e.labels&&e.labels[0]&&e.labels[0].innerText)||e.name||e.type)+(e.disabled?'(x)':'')).join(' | ')",
+    "max": 2500
+  }
+]

@@ -1,0 +1,296 @@
+[
+  {
+    "l": "owner onHand before",
+    "status": 200,
+    "ms": 491,
+    "ok": true,
+    "code": null,
+    "message": null,
+    "data": [
+      {
+        "inventoryLotId": "cmvzkvxwv01ev4oqrasq0rcbu",
+        "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+        "disposition": "AVAILABLE",
+        "onHandUnits": 80,
+        "sealedPacks": 8,
+        "looseUnits": 0,
+        "unitsPerPack": 10,
+        "blockedBy": null
+      }
+    ],
+    "at": "2026-11-02 23:17:59 PKT"
+  },
+  {
+    "l": "manager pharmacySales.create",
+    "status": 200,
+    "ms": 72,
+    "ok": true,
+    "code": null,
+    "message": null,
+    "data": {
+      "id": "cmvzl0m9f01kp4oqrq5jmq7vh",
+      "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+      "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+      "status": "OPEN",
+      "originalSaleId": null,
+      "createdByUserId": "cqamgrd345d9c39d10ed4f66c",
+      "completedAt": null,
+      "receiptNumber": null,
+      "receiptDeviceId": null,
+      "businessDate": null,
+      "customerId": null,
+      "createdAt": "2026-11-02T18:17:59.475Z",
+      "updatedAt": "2026-11-02T18:17:59.475Z"
+    },
+    "at": "2026-11-02 23:17:59 PKT"
+  },
+  {
+    "l": "manager pharmacySales.addLine",
+    "status": 200,
+    "ms": 112,
+    "ok": true,
+    "code": null,
+    "message": null,
+    "data": {
+      "line": {
+        "id": "cmvzl0mch01kt4oqrm8rh3wxq",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "saleId": "cmvzl0m9f01kp4oqrq5jmq7vh",
+        "medicineId": "cmvxpws13002v1xqrfsg4p4hz",
+        "presentationId": "cmvxpx8in003a1xqrbz6z4t3n",
+        "packLevelId": "cmvxpy8hn003t1xqr9az7aste",
+        "saleUnit": "STRIP",
+        "quantity": 1,
+        "canonicalUnitsPerSaleUnit": 10,
+        "canonicalUnits": 10,
+        "unitPriceMinor": 2500,
+        "grossMinor": 2500,
+        "proRataCeilingMinor": 2500,
+        "unitCostMinor": 1000,
+        "discountKind": null,
+        "discountMinor": 0,
+        "approvalPolicy": null,
+        "approvedByUserId": null,
+        "prescriptionLineId": null,
+        "prescriptionPatientId": null,
+        "idempotencyKey": "qa-manager-1793643479479",
+        "createdAt": "2026-11-02T18:17:59.585Z"
+      },
+      "allocation": {
+        "allocations": [
+          {
+            "inventoryLotId": "cmvzkvxwv01ev4oqrasq0rcbu",
+            "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+            "units": 10
+          }
+        ],
+        "recommendedLotId": "cmvzkvxwv01ev4oqrasq0rcbu",
+        "blocked": [],
+        "overrideId": null,
+        "discrepancyId": null,
+        "movementIds": ["cmvzl0mc901ks4oqr8fpgxdsn"]
+      }
+    },
+    "at": "2026-11-02 23:17:59 PKT"
+  },
+  {
+    "l": "manager pharmacySales.counterCart",
+    "status": 403,
+    "ms": 67,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "You do not have permission for this action.",
+    "data": null,
+    "at": "2026-11-02 23:17:59 PKT"
+  },
+  {
+    "l": "pharmacist pharmacySales.create",
+    "status": 200,
+    "ms": 63,
+    "ok": true,
+    "code": null,
+    "message": null,
+    "data": {
+      "id": "cmvzl0mgb01kx4oqro37or4ki",
+      "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+      "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+      "status": "OPEN",
+      "originalSaleId": null,
+      "createdByUserId": "cqaphrm7c1d2e3f4a5b6c7d8e9",
+      "completedAt": null,
+      "receiptNumber": null,
+      "receiptDeviceId": null,
+      "businessDate": null,
+      "customerId": null,
+      "createdAt": "2026-11-02T18:17:59.723Z",
+      "updatedAt": "2026-11-02T18:17:59.723Z"
+    },
+    "at": "2026-11-02 23:17:59 PKT"
+  },
+  {
+    "l": "pharmacist pharmacySales.addLine",
+    "status": 200,
+    "ms": 77,
+    "ok": true,
+    "code": null,
+    "message": null,
+    "data": {
+      "line": {
+        "id": "cmvzl0mif01l14oqrxirxnrsj",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "saleId": "cmvzl0mgb01kx4oqro37or4ki",
+        "medicineId": "cmvxpws13002v1xqrfsg4p4hz",
+        "presentationId": "cmvxpx8in003a1xqrbz6z4t3n",
+        "packLevelId": "cmvxpy8hn003t1xqr9az7aste",
+        "saleUnit": "STRIP",
+        "quantity": 1,
+        "canonicalUnitsPerSaleUnit": 10,
+        "canonicalUnits": 10,
+        "unitPriceMinor": 2500,
+        "grossMinor": 2500,
+        "proRataCeilingMinor": 2500,
+        "unitCostMinor": 1000,
+        "discountKind": null,
+        "discountMinor": 0,
+        "approvalPolicy": null,
+        "approvedByUserId": null,
+        "prescriptionLineId": null,
+        "prescriptionPatientId": null,
+        "idempotencyKey": "qa-pharmacist-1793643479725",
+        "createdAt": "2026-11-02T18:17:59.799Z"
+      },
+      "allocation": {
+        "allocations": [
+          {
+            "inventoryLotId": "cmvzkvxwv01ev4oqrasq0rcbu",
+            "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+            "units": 10
+          }
+        ],
+        "recommendedLotId": "cmvzkvxwv01ev4oqrasq0rcbu",
+        "blocked": [],
+        "overrideId": null,
+        "discrepancyId": null,
+        "movementIds": ["cmvzl0mic01l04oqrwilpixvr"]
+      }
+    },
+    "at": "2026-11-02 23:17:59 PKT"
+  },
+  {
+    "l": "pharmacist pharmacySales.counterCart",
+    "status": 403,
+    "ms": 64,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "Branch is outside your scope.",
+    "data": null,
+    "at": "2026-11-02 23:17:59 PKT"
+  },
+  {
+    "l": "cashier pharmacySales.create",
+    "status": 200,
+    "ms": 65,
+    "ok": true,
+    "code": null,
+    "message": null,
+    "data": {
+      "id": "cmvzl0mm501l54oqrp4vxwa68",
+      "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+      "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+      "status": "OPEN",
+      "originalSaleId": null,
+      "createdByUserId": "cqargoiyjfibo71r34xrmnago",
+      "completedAt": null,
+      "receiptNumber": null,
+      "receiptDeviceId": null,
+      "businessDate": null,
+      "customerId": null,
+      "createdAt": "2026-11-02T18:17:59.933Z",
+      "updatedAt": "2026-11-02T18:17:59.933Z"
+    },
+    "at": "2026-11-02 23:17:59 PKT"
+  },
+  {
+    "l": "cashier pharmacySales.addLine",
+    "status": 200,
+    "ms": 105,
+    "ok": true,
+    "code": null,
+    "message": null,
+    "data": {
+      "line": {
+        "id": "cmvzl0mow01l94oqrhwlbuk7h",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "saleId": "cmvzl0mm501l54oqrp4vxwa68",
+        "medicineId": "cmvxpws13002v1xqrfsg4p4hz",
+        "presentationId": "cmvxpx8in003a1xqrbz6z4t3n",
+        "packLevelId": "cmvxpy8hn003t1xqr9az7aste",
+        "saleUnit": "STRIP",
+        "quantity": 1,
+        "canonicalUnitsPerSaleUnit": 10,
+        "canonicalUnits": 10,
+        "unitPriceMinor": 2500,
+        "grossMinor": 2500,
+        "proRataCeilingMinor": 2500,
+        "unitCostMinor": 1000,
+        "discountKind": null,
+        "discountMinor": 0,
+        "approvalPolicy": null,
+        "approvedByUserId": null,
+        "prescriptionLineId": null,
+        "prescriptionPatientId": null,
+        "idempotencyKey": "qa-cashier-1793643479935",
+        "createdAt": "2026-11-02T18:18:00.032Z"
+      },
+      "allocation": {
+        "allocations": [
+          {
+            "inventoryLotId": "cmvzkvxwv01ev4oqrasq0rcbu",
+            "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+            "units": 10
+          }
+        ],
+        "recommendedLotId": "cmvzkvxwv01ev4oqrasq0rcbu",
+        "blocked": [],
+        "overrideId": null,
+        "discrepancyId": null,
+        "movementIds": ["cmvzl0moi01l84oqrmgts8zf2"]
+      }
+    },
+    "at": "2026-11-02 23:18:00 PKT"
+  },
+  {
+    "l": "cashier pharmacySales.counterCart",
+    "status": 403,
+    "ms": 107,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "Branch is outside your scope.",
+    "data": null,
+    "at": "2026-11-02 23:18:00 PKT"
+  },
+  {
+    "l": "owner onHand after",
+    "status": 200,
+    "ms": 123,
+    "ok": true,
+    "code": null,
+    "message": null,
+    "data": [
+      {
+        "inventoryLotId": "cmvzkvxwv01ev4oqrasq0rcbu",
+        "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+        "disposition": "AVAILABLE",
+        "onHandUnits": 50,
+        "sealedPacks": 5,
+        "looseUnits": 0,
+        "unitsPerPack": 10,
+        "blockedBy": null
+      }
+    ],
+    "at": "2026-11-02 23:18:00 PKT"
+  }
+]
