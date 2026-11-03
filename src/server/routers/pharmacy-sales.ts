@@ -975,6 +975,7 @@ export const pharmacySalesRouter = router({
     .input(
       z
         .object({
+          includeCounterState: z.literal(true).optional(),
           controlledAuthorization: z
             .object({
               prescriptionLineId: z.string().min(1).optional(),
@@ -1055,9 +1056,12 @@ export const pharmacySalesRouter = router({
         });
       }
       try {
+        if (input.includeCounterState && !hasModule(ctx.entitlements, 'pharmacy-counter')) throw new TRPCError({ code: 'FORBIDDEN' });
+        const counterScope = input.includeCounterState ? await requireCounterReceiptAccess(ctx, input.branchId, true) : null;
+        if (counterScope) annotateAudit(ctx, { targetType: 'PharmacySale', targetId: input.saleId, metadata: { branchId: input.branchId, medicineId: input.medicineId, counterProjection: true, ...(input.override ? { reason: input.override.reason } : {}) } });
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
+          const scope = counterScope ?? await scopeFor(ctx, input.branchId);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
@@ -1068,8 +1072,16 @@ export const pharmacySalesRouter = router({
               throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
-            const { prescription, ...lineInput } = input;
-            if (!prescription) return addSaleLine(db, scope, lineInput);
+            const { prescription, includeCounterState, ...lineInput } = input;
+            if (!prescription) {
+              const result = await addSaleLine(db, scope, lineInput);
+              if (!includeCounterState || !medicine || medicine.rx || medicine.restricted) return result;
+              const [cart, catalogue] = await Promise.all([
+                readCounterCart(db, scope, input.saleId),
+                searchCounterCatalog(db, scope, { query: '', medicineId: input.medicineId, limit: 1 }),
+              ]);
+              return { ...result, counterState: { cart, medicine: catalogue.rows[0] ?? null } };
+            }
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
               !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
@@ -1745,6 +1757,22 @@ export const pharmacySalesRouter = router({
         return await searchCounterCatalog(ctx.db, await scopeFor(ctx, input.branchId), {
           query: input.query,
           limit: input.limit,
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /** Scanner fast path: one indexed barcode lookup, never a fuzzy catalogue scan. */
+  counterScan: protectedProcedure
+    .input(z.object({ branchId, barcode: z.string().trim().min(2).max(120) }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        if (!hasModule(ctx.entitlements, 'pharmacy-counter')) throw new TRPCError({ code: 'FORBIDDEN' });
+        return await searchCounterCatalog(ctx.db, await requireCounterReceiptAccess(ctx, input.branchId, true), {
+          query: input.barcode,
+          limit: 1,
+          exactBarcode: true,
         });
       } catch (error) {
         fail(error);

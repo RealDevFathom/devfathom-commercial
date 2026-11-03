@@ -28,10 +28,12 @@ vi.mock('@/server/audit', () => ({
 vi.mock('@/lib/pharmacy/counter', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/counter')>()),
   readCounterReceipt: vi.fn(),
+  searchCounterCatalog: vi.fn(async () => ({ rows: [], truncated: false })),
   readCounterCart: vi.fn(async () => ({ saleId: 'sale-a', lines: [] })),
 }));
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
+  addSaleLine: vi.fn(),
   changeSaleStatus: vi.fn(async () => ({ sale: { id: 'sale-a', status: 'HELD' } })),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
   returnSaleLine: vi.fn(async () => ({ returnLineId: 'return-line-1' })),
@@ -65,9 +67,14 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 }));
 
 import { hasModule } from '@/lib/entitlements';
-import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
+import { readCounterCart, readCounterReceipt, searchCounterCatalog } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { changeSaleStatus, readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
+import {
+  addSaleLine,
+  changeSaleStatus,
+  readReturnHistory,
+  returnSaleLine,
+} from '@/lib/pharmacy/sales';
 import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -849,5 +856,92 @@ describe('counter receipt authorization', () => {
         }),
       })
     );
+  });
+});
+
+describe('indexed barcode endpoint admission', () => {
+  it('requires the counter module before reading the catalogue', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(
+      f.caller().counterScan({ branchId: 'branch-a', barcode: '123456' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(searchCounterCatalog).not.toHaveBeenCalled();
+  });
+  it.each([
+    { name: 'missing', permissions: [] as Permission[] },
+    {
+      name: 'denied',
+      permissions: [{ capability: 'pharmacy:counter', effect: 'DENY' }] as Permission[],
+    },
+  ])('refuses $name capability before lookup', async ({ permissions }) => {
+    const f = fixture(permissions);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterScan({ branchId: 'branch-a', barcode: '123456' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(searchCounterCatalog).not.toHaveBeenCalled();
+  });
+  it('refuses unassigned branches and permits only the assigned tenant branch', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterScan({ branchId: 'branch-b', barcode: '123456' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(searchCounterCatalog).not.toHaveBeenCalled();
+    await f.caller().counterScan({ branchId: 'branch-a', barcode: '123456' });
+    expect(searchCounterCatalog).toHaveBeenCalledWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      { query: '123456', limit: 1, exactBarcode: true }
+    );
+  });
+});
+
+describe('authorized scan write projections', () => {
+  const input = {
+    includeCounterState: true as const,
+    branchId: 'branch-a',
+    saleId: 'sale-a',
+    medicineId: 'med-a',
+    presentationId: 'presentation-a',
+    packLevelId: 'pack-a',
+    saleUnit: 'PACK' as const,
+    quantity: 1,
+    canonicalUnitsPerSaleUnit: 10,
+    idempotencyKey: 'scan-intent-a',
+  };
+  it('refuses an unassigned projection request before writing or reading the bill', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    await expect(f.caller().addLine(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(readCounterCart).not.toHaveBeenCalled();
+  });
+  it('reads committed cart and stock projections inside the authorized write transaction', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    Object.assign(f.db, {
+      medicine: {
+        findFirst: vi.fn(async () => ({ controlled: false, rx: false, restricted: false })),
+      },
+    });
+    vi.mocked(addSaleLine).mockResolvedValueOnce({
+      line: { id: 'line-new' },
+      allocation: {},
+    } as never);
+    const result = await f.caller().addLine(input);
+    expect(result).toMatchObject({ counterState: { cart: { saleId: 'sale-a' }, medicine: null } });
+    expect(addSaleLine).toHaveBeenCalledWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      expect.not.objectContaining({ includeCounterState: true })
+    );
+    expect(searchCounterCatalog).toHaveBeenCalledWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      { query: '', medicineId: 'med-a', limit: 1 }
+    );
+    expect(f.db.$transaction).toHaveBeenCalledOnce();
   });
 });
