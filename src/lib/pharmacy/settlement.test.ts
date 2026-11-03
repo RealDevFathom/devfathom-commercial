@@ -435,6 +435,15 @@ describe('readPharmacyTenderOutcome', () => {
     return { db, input, sale, prior, tender, saleRead, keyRead, tenderRead };
   }
 
+  it('DEV-499 recovers a wallet without a payer name and still rejects altered evidence', async () => {
+    const f = fixture({...original,type:'RAAST',cashReceivedMinor:undefined,providerRef:'001234'});
+    const stored = {...f.tender,provider:'MANUAL_MERCHANT',providerRef:'001234',payerName:null,referenceSkipped:false};
+    f.tenderRead.mockResolvedValue(stored);
+    expect(await readPharmacyTenderOutcome(f.db as never,scope,f.input)).toMatchObject({status:'ACCEPTED'});
+    f.tenderRead.mockResolvedValue({...stored,payerName:'Different payer'});
+    expect(await readPharmacyTenderOutcome(f.db as never,scope,f.input)).toEqual({status:'UNKNOWN',replayUnsafe:true});
+  });
+
   it('#710 recovers the exact manual tender and rejects altered capture evidence', async () => {
     const f = fixture({ ...original, type: 'RAAST', cashReceivedMinor: undefined,
       providerRef: '001234', payerName: 'Ayesha' });

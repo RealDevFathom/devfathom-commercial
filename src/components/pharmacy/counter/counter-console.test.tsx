@@ -291,7 +291,20 @@ function renderPayment(element: Parameters<typeof render>[0]) {
 }
 
 function enterPayment(type = 'CASH') {
-  fireEvent.change(screen.getByLabelText('Tender'), { target: { value: type } });
+  fireEvent.click(
+    screen.getByRole('button', {
+      name:
+        type === 'BANK_TRANSFER'
+          ? 'Bank transfer'
+          : type === 'CASH'
+            ? 'Cash'
+            : type === 'BANK_TRANSFER'
+              ? 'Bank transfer'
+              : type === 'KHATA'
+                ? 'Khata / credit'
+                : type[0] + type.slice(1).toLowerCase(),
+    })
+  );
   fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
   if (type === 'CASH')
     fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '200.00' } });
@@ -463,15 +476,60 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
 });
 
 describe('PharmacyCounterConsole tender recovery', () => {
+  it('DEV-499 takes exact cash with F9 then Enter without editing a field', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    search.focus();
+    fireEvent.keyDown(search, { key: 'F9' });
+    const panel = screen.getByLabelText('Amount').closest('[tabindex="-1"]')!;
+    await waitFor(() => expect(document.activeElement).toBe(panel));
+    expect(screen.getByLabelText('Cash received')).toHaveValue('250.00');
+    fireEvent.keyDown(panel, { key: 'Enter' });
+    await waitFor(() =>
+      expect(mocks.mutations.tender).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ type: 'CASH', amountMinor: 25000, cashReceivedMinor: 25000 })
+      )
+    );
+    expect(mocks.searchQuery).not.toHaveBeenCalled();
+  });
+
+  it('DEV-499 uses distinct durable keys for unnamed wallet attempts of the same amount', async () => {
+    mocks.queries.manualPaymentSettings = query({
+      settings: { RAAST: { destination: 'Merchant till', allowReferenceSkip: false } },
+      revision: 0,
+    });
+    mocks.mutations.tender!.mockResolvedValue(accepted(12500));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    for (const [index, reference] of ['001234', '005678'].entries()) {
+      fireEvent.click(screen.getByRole('button', { name: 'Raast' }));
+      fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.00' } });
+      fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), {
+        target: { value: reference },
+      });
+      fireEvent.submit(
+        screen.getByRole('button', { name: 'Take payment', hidden: true }).closest('form')!
+      );
+      await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(index + 1));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Raast' })).not.toBeDisabled());
+    }
+    const first = mocks.mutations.tender!.mock.calls[0]![0];
+    const second = mocks.mutations.tender!.mock.calls[1]![0];
+    expect(first.idempotencyKey).not.toBe(second.idempotencyKey);
+    expect(first).not.toHaveProperty('payerName');
+    expect(second).toMatchObject({ type: 'RAAST', providerRef: '005678', amountMinor: 12500 });
+  });
+
   it('#710 submits manual evidence and clears its recovery record only after acceptance', async () => {
     mocks.queries.manualPaymentSettings = query({
       settings: { RAAST: { destination: 'Merchant till', allowReferenceSkip: false } },
       revision: 0,
     });
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Raast' }));
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
-    fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
+    fireEvent.change(screen.getByLabelText('Payer’s name (optional)'), {
+      target: { value: 'Ayesha' },
+    });
     fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), {
       target: { value: '001234' },
     });
@@ -505,7 +563,18 @@ describe('PharmacyCounterConsole tender recovery', () => {
     enterPayment(type);
     await screen.findByText(/Payment was not accepted/);
     expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
-    expect(screen.getByLabelText('Tender')).toHaveValue(type);
+    expect(
+      screen.getByRole('button', {
+        name:
+          type === 'CASH'
+            ? 'Cash'
+            : type === 'BANK_TRANSFER'
+              ? 'Bank transfer'
+              : type === 'KHATA'
+                ? 'Khata / credit'
+                : type[0] + type.slice(1).toLowerCase(),
+      })
+    ).toHaveAttribute('aria-pressed', 'true');
     if (type === 'CASH') expect(screen.getByLabelText('Cash received')).toHaveValue('200.00');
     expect(mocks.mutations.tender).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -1074,7 +1143,7 @@ describe('PharmacyCounterConsole durable tender recovery', () => {
 describe('PharmacyCounterConsole Khata wiring', () => {
   it('persists and dispatches the selected family with no password fields', async () => {
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Khata / credit' }));
     await screen.findByText(/Ledger balance/);
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
@@ -1127,7 +1196,7 @@ describe('PharmacyCounterConsole Khata wiring', () => {
       close: vi.fn(),
     } as never);
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Khata / credit' }));
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByRole('button', { name: 'Print Khata statement' }));
     await waitFor(() => expect(print).toHaveBeenCalledOnce());
@@ -1155,7 +1224,7 @@ it.each([404, 200])(
       })
     );
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Khata / credit' }));
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
     fireEvent.change(screen.getByLabelText('Owner password (current account)'), {

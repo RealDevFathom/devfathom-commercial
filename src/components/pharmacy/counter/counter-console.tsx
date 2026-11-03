@@ -1291,7 +1291,10 @@ function ScopedPharmacyCounterConsole({
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
           idempotencyKey:
-            input.familyAccountId || input.payerName !== undefined
+            input.familyAccountId ||
+            input.payerName !== undefined ||
+            input.providerRef !== undefined ||
+            input.referenceSkipped !== undefined
               ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
               : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId

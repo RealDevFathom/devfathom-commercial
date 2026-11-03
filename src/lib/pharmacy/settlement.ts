@@ -212,7 +212,7 @@ export async function readPharmacyTenderOutcome(
       return unknown;
 
     if (isManualTender(input.type) && (tender.provider !== 'MANUAL_MERCHANT' ||
-      tender.providerRef !== (input.providerRef ?? null) || tender.payerName !== input.payerName?.trim() ||
+      tender.providerRef !== (input.providerRef ?? null) || tender.payerName !== (input.payerName?.trim() ?? null) ||
       tender.referenceSkipped !== (input.referenceSkipped ?? false))) return unknown;
 
     return { status: 'ACCEPTED', replayUnsafe: true, result };

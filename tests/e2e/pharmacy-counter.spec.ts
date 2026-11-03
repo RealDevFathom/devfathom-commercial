@@ -139,13 +139,9 @@ async function setQuantity(page: Page, quantity: number) {
 
 async function tenderCash(page: Page, amount: string) {
   await page.keyboard.press('F9');
-  const amountField = page.getByLabel('Amount');
-  await amountField.focus();
-  await amountField.fill(amount);
-  const received = page.getByLabel('Cash received');
-  await received.focus();
-  await received.fill(amount);
-  await pressControl(page.getByRole('button', { name: 'Take payment' }));
+  const received = page.getByLabel('Cash received', { exact: true });
+  await expect(received).toHaveValue(amount);
+  await page.keyboard.press('Enter');
 }
 
 test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt', async ({ page }) => {
@@ -580,7 +576,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
       await expect(page.getByText('Loyalty customer linked to this bill.')).toBeVisible();
     };
     await makeBill();
-    await page.getByLabel('Tender', { exact: true }).selectOption('KHATA');
+    await page.getByRole('button', { name: 'Khata / credit', exact: true }).click();
     await page.getByLabel('Family Khata account').selectOption(familyId);
     await page.getByLabel('Amount', { exact: true }).fill('1.00');
     await pressControl(page.getByRole('button', { name: 'Take payment' }));
