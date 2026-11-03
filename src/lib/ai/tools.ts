@@ -40,6 +40,7 @@ import { buildMeetingsTools } from '@/lib/ai/tools/meetings';
 import { buildInsightsTools } from '@/lib/ai/tools/insights';
 import { buildPharmacyReportTools } from '@/lib/ai/tools/pharmacy-reports';
 import { buildRestaurantReportTools } from '@/lib/ai/tools/restaurant-reports';
+import { withActionLedger, type ActionLedgerContext } from '@/lib/ai/action-ledger';
 
 export type { AssistantContext } from '@/lib/ai/context';
 
@@ -154,8 +155,13 @@ function selectDomains(hint: string): Set<Domain> {
 /**
  * Build the toolset for one request. `opts.hint` is the recent user text used to
  * route which domains to load; omit it (or pass empty) to get the full set.
+ * `opts.ledger` puts every approval-gated write behind the confirmed-write ledger
+ * (see action-ledger.ts); the assistant route always passes it.
  */
-export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string } = {}): ToolSet {
+export function buildAssistantTools(
+  ctx: AssistantContext,
+  opts: { hint?: string; ledger?: ActionLedgerContext } = {}
+): ToolSet {
   const hint = (opts.hint ?? '').trim();
   if (hint && UNSUPPORTED_TOOL_INTENT.test(hint)) return {};
   if (
@@ -240,5 +246,7 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
     };
   }
 
-  return tools;
+  // The ledger wraps outside the try/catch above, so a thrown write is recorded
+  // as FAILED with the same clean { error } the model sees.
+  return opts.ledger ? withActionLedger(tools, opts.ledger) : tools;
 }

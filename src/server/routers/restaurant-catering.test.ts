@@ -387,7 +387,12 @@ describe('restaurant catering lifecycle', () => {
     'rejects line updates beyond their durable database scale',
     async (decimals) => {
       await expect(
-        caller().updateLine({ orderId: 'order_1', lineId: 'line_1', ...decimals })
+        caller().updateLine({
+          orderId: 'order_1',
+          lineId: 'line_1',
+          recipeId: 'recipe_1',
+          ...decimals,
+        })
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
       expect(db.restaurantCateringOrderLine.updateMany).not.toHaveBeenCalled();
     }
