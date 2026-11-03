@@ -2,8 +2,20 @@
 
 import { browserUuid } from '@/lib/browser-uuid';
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+  type RefObject,
+  type KeyboardEventHandler,
+} from 'react';
+import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import Link from 'next/link';
+import { ShieldCheck, Star, UserRound } from 'lucide-react';
 import { signIn, useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -49,6 +61,14 @@ import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import {
+  Dialog,
+  DialogPortal,
+  DialogOverlay,
+  DialogTitle,
+  DialogDescription,
+  DialogClose,
+} from '@/components/ui/dialog';
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
 import {
   counterAlertsFor,
@@ -68,7 +88,11 @@ import { COUNTER_ERROR_MESSAGES, counterErrorMessage } from '@/lib/pharmacy/coun
 import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import { previewSaleLine, type SaleUnitKind } from '@/lib/pharmacy/counter-pricing';
-import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
+import {
+  formatMinor,
+  formatReceiptDate,
+  type CounterReceiptLocale,
+} from '@/lib/pharmacy/counter-receipt';
 import {
   buildCounterBrowserReceipt,
   printCounterBrowserReceipt,
@@ -349,6 +373,12 @@ function ScopedPharmacyCounterConsole({
   const searchRef = useRef<HTMLInputElement>(null);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
+  const [paymentOpen, setPaymentOpen] = useState(false);
+  const [receiptOpen, setReceiptOpen] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [checksOpen, setChecksOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [loyaltyOpen, setLoyaltyOpen] = useState(false);
 
   // ── Data ──────────────────────────────────────────────────────────────────
 
@@ -555,6 +585,7 @@ function ScopedPharmacyCounterConsole({
     (nextSaleId: string | null) => {
       discardReceiptIntent();
       setReceiptSettlement(null);
+      setReceiptOpen(false);
       setSaleId(nextSaleId);
       setReceiptRenders(0);
       setCustomerId(null);
@@ -571,6 +602,12 @@ function ScopedPharmacyCounterConsole({
   const cart = cartQuery.data ?? null;
   const patient = patientPanelQuery.data ?? null;
   const patientAddress = patientAddressDraft ?? patient?.address ?? '';
+  const locationName = activeRow?.storage.locationName?.trim() || activeRow?.storage.locationKind;
+  const locationCode = activeRow?.storage.locationCode;
+  const locationLabel =
+    !locationCode || locationName === locationCode || locationName?.endsWith(` ${locationCode}`)
+      ? locationName
+      : `${locationName ?? 'Location'} ${locationCode}`;
 
   const selectedOption = useMemo(
     () => activeRow?.saleUnits.find((option) => option.kind === saleUnit) ?? null,
@@ -663,6 +700,12 @@ function ScopedPharmacyCounterConsole({
   }, [cart, patient]);
 
   const blocked = hasBlockingAlert(alerts);
+  const safetyLabel = blocked
+    ? `${alerts.filter((alert) => alert.severity === 'SAFETY_BLOCK').length} safety block · payment locked`
+    : `No safety blocks · ${alerts.length} notes to pass on`;
+  const loyaltyLabel = customerQuery.data
+    ? `${customerQuery.data.pointsBalance} loyalty points${customerQuery.data.customer.creditLimitMinor > 0 || customerQuery.data.creditBalanceMinor > 0 ? ' · Khata' : ''}`
+    : 'Loyalty and khata · not linked';
   const currentBill = hasValidBill(cart, saleId);
   const balanceMinor = currentBill ? cart.totals.netMinor - cart.totals.tenderedMinor : null;
   const unknownTender = tenderOutcome?.status === 'unknown';
@@ -778,7 +821,11 @@ function ScopedPharmacyCounterConsole({
           }
         }
         setTenderReadRequired(false);
-        if (confirmed) setReceiptSettlement(confirmed);
+        if (confirmed) {
+          setReceiptSettlement(confirmed);
+          setPaymentOpen(false);
+          setReceiptOpen(true);
+        }
         return true;
       } catch {
         setTenderReadRequired(true);
@@ -818,6 +865,17 @@ function ScopedPharmacyCounterConsole({
     searchRef.current?.focus();
     searchRef.current?.select();
   }, []);
+
+  const openPayment = useCallback(() => {
+    setPaymentOpen(true);
+  }, []);
+
+  const openChecks = useCallback(() => setChecksOpen(true), []);
+
+  useEffect(() => {
+    if (!paymentOpen) return;
+    tenderRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [paymentOpen]);
 
   const runSearch = useCallback(
     async (submittedQuery?: string) => {
@@ -926,7 +984,7 @@ function ScopedPharmacyCounterConsole({
             message:
               'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
           });
-          rxPanelRef.current?.focus();
+          openChecks();
           return;
         }
         const refSerial = Number(controlledAuth.refSerial);
@@ -1007,6 +1065,7 @@ function ScopedPharmacyCounterConsole({
       ensureSale,
       focusSearch,
       lotOverride,
+      openChecks,
       preview,
       quantity,
       refreshCart,
@@ -1584,13 +1643,13 @@ function ScopedPharmacyCounterConsole({
           void runTransition('resume');
           return;
         case 'openTender':
-          tenderRef.current?.focus();
+          openPayment();
           return;
         case 'printReceipt':
           printReceipt();
           return;
         case 'focusPrescriptionPanel':
-          rxPanelRef.current?.focus();
+          openChecks();
           return;
         case 'captureDemand':
           void captureShortfall();
@@ -1600,7 +1659,16 @@ function ScopedPharmacyCounterConsole({
           return;
       }
     },
-    [activeRow, addToCart, captureShortfall, focusSearch, printReceipt, runTransition]
+    [
+      activeRow,
+      addToCart,
+      captureShortfall,
+      focusSearch,
+      openChecks,
+      openPayment,
+      printReceipt,
+      runTransition,
+    ]
   );
 
   useEffect(() => {
@@ -1613,7 +1681,12 @@ function ScopedPharmacyCounterConsole({
         (tenderRef.current?.contains(event.target) || event.target === autoPrintRef.current)
       )
         return;
-      if (!shouldHandleCounterKey(event, document.querySelector('[role="dialog"]') !== null))
+      if (
+        !shouldHandleCounterKey(
+          event,
+          document.querySelector('[role="dialog"]:not([hidden])') !== null
+        )
+      )
         return;
       const action = matchCounterAction(keymap.bindings, event);
       if (!action) return;
@@ -1762,42 +1835,102 @@ function ScopedPharmacyCounterConsole({
   }
 
   return (
-    <div className="pos-calm flex h-full min-h-0 flex-col overflow-hidden">
-      <header className="shrink-0 border-b border-border-subtle bg-surface-card px-3 py-3 sm:px-4">
-        <div className="flex flex-wrap items-start gap-3">
-          <div className="min-w-[12rem] flex-1">
-            <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
-              Pharmacy · Sales
-            </p>
-            <div className="mt-1 flex flex-wrap items-center gap-3">
-              <h1 className="text-2xl font-semibold tracking-[-0.04em] text-text-strong">
-                Counter
-              </h1>
-              <label className="sr-only" htmlFor="counter-branch">
-                Branch
-              </label>
-              <select
-                id="counter-branch"
-                value={branchId}
-                disabled={busy}
-                onChange={(event) => {
-                  scannerRevision.current += 1;
-                  setSelectedBranchId(event.target.value);
-                  setActiveRow(null);
-                  setActiveSale(null);
-                  setHeldSaleId(null);
-                }}
-                className="h-8 max-w-56 rounded-[var(--radius-xs)] border border-border-default bg-surface-sunken px-2 text-xs font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-              >
-                {branches.map((branch) => (
-                  <option key={branch.id} value={branch.id}>
-                    {branch.name} · {branch.code}
-                  </option>
-                ))}
-              </select>
+    <div
+      className="pos-calm h-full min-h-0 overflow-y-auto bg-surface-page px-4 pt-3 pb-28 xl:pb-4"
+      data-counter-console=""
+    >
+      <header className="mb-3 space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
+          <Button
+            variant="outline"
+            className="ml-auto h-11 rounded-[var(--radius-sm)] md:hidden"
+            aria-expanded={actionsOpen}
+            aria-controls="counter-actions"
+            onClick={() => setActionsOpen(!actionsOpen)}
+          >
+            Actions
+          </Button>
+          <div className="order-2 flex w-full flex-wrap items-center gap-3 md:order-none md:w-auto">
+            <label className="sr-only" htmlFor="counter-branch">
+              Branch
+            </label>
+            <select
+              id="counter-branch"
+              value={branchId}
+              disabled={busy}
+              onChange={(event) => {
+                scannerRevision.current += 1;
+                setSelectedBranchId(event.target.value);
+                setActiveRow(null);
+                setActiveSale(null);
+                setHeldSaleId(null);
+              }}
+              className="h-11 max-w-full rounded-[var(--radius-xs)] border border-border-default bg-surface-sunken px-3 text-sm font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+            >
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name} · {branch.code}
+                </option>
+              ))}
+            </select>
+
+            <div className="flex flex-wrap items-center gap-2" aria-label="Bill status">
+              <StatusPill
+                status={saleId ? 'open' : 'idle'}
+                tone={cart?.receiptNumber ? 'success' : 'neutral'}
+                className="font-mono text-[10px] uppercase"
+                label={
+                  cart?.receiptNumber
+                    ? `Receipt ${cart.receiptNumber}`
+                    : saleId
+                      ? `Bill open · ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`
+                      : 'No open bill'
+                }
+              />
+              {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
+              {openDrawerSession ? (
+                <StatusPill status="drawer-open" tone="success" label="Drawer open" />
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                  disabled={busy || !drawerStatusKnown}
+                  onClick={() => {
+                    setPending('drawer');
+                    openDrawer
+                      .mutateAsync({
+                        branchId,
+                        deviceId: counterDeviceId(),
+                        businessDate: todayBusinessDate(),
+                        openingFloatMinor: 0,
+                      })
+                      .then(() =>
+                        setNotice({
+                          tone: 'success',
+                          message: 'Cash drawer opened for this counter.',
+                        })
+                      )
+                      .catch((error: unknown) =>
+                        setNotice({ tone: 'warning', message: messageFrom(error) })
+                      )
+                      // Either way the server now holds the truth about this device's drawer.
+                      .finally(() => {
+                        setPending(null);
+                        void utils.pharmacySales.drawerStatus.invalidate();
+                      });
+                  }}
+                >
+                  Open drawer
+                </Button>
+              )}
             </div>
           </div>
-          <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+          <div
+            id="counter-actions"
+            className={`${actionsOpen ? 'flex' : 'hidden'} order-3 w-full flex-wrap items-center gap-2 md:order-none md:ml-auto md:flex md:w-auto [&>button]:rounded-[var(--radius-sm)]`}
+          >
             <CounterReturnPanel
               branchId={branchId}
               organizationId={organizationId}
@@ -1808,7 +1941,8 @@ function ScopedPharmacyCounterConsole({
             <Link
               className={buttonVariants({
                 variant: 'outline',
-                className: 'h-8 shadow-none hover:translate-y-0 active:translate-y-0',
+                className:
+                  'h-11 rounded-[var(--radius-sm)] shadow-none hover:translate-y-0 active:translate-y-0',
               })}
               href="/pharmacy/orders"
             >
@@ -1817,219 +1951,296 @@ function ScopedPharmacyCounterConsole({
             <Button
               type="button"
               variant="outline"
-              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-              onClick={() =>
-                document.getElementById('counter-shortcuts')?.scrollIntoView({ behavior: 'smooth' })
-              }
+              className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+              onClick={() => setShortcutsOpen(true)}
             >
               Shortcuts
             </Button>
-            {/*
-              UX rule 1: never show the operator an identifier the application
-              already knows. A sale id fragment names nothing a pharmacist can
-              act on; the receipt number is the only bill identity that exists
-              in the real world, and it exists only once the bill is settled.
-              Before that, describe the bill by what it holds.
-            */}
-            <StatusPill
-              status={saleId ? 'open' : 'idle'}
-              tone={saleId ? 'info' : 'neutral'}
-              label={
-                cart?.receiptNumber
-                  ? `Receipt ${cart.receiptNumber}`
-                  : saleId
-                    ? `Bill open · ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`
-                    : 'No open bill'
-              }
-            />
-            {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
-            {blocked ? <StatusPill status="blocked" tone="danger" label="Safety block" /> : null}
-            {openDrawerSession ? (
-              <StatusPill status="drawer-open" tone="success" label="Drawer open" />
-            ) : (
-              <Button
-                type="button"
-                variant="outline"
-                className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                disabled={busy || !drawerStatusKnown}
-                onClick={() => {
-                  setPending('drawer');
-                  openDrawer
-                    .mutateAsync({
-                      branchId,
-                      deviceId: counterDeviceId(),
-                      businessDate: todayBusinessDate(),
-                      openingFloatMinor: 0,
-                    })
-                    .then(() =>
-                      setNotice({
-                        tone: 'success',
-                        message: 'Cash drawer opened for this counter.',
-                      })
-                    )
-                    .catch((error: unknown) =>
-                      setNotice({ tone: 'warning', message: messageFrom(error) })
-                    )
-                    // Either way the server now holds the truth about this device's drawer.
-                    .finally(() => {
-                      setPending(null);
-                      void utils.pharmacySales.drawerStatus.invalidate();
-                    });
-                }}
-              >
-                Open drawer
-              </Button>
-            )}
           </div>
         </div>
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-0.5 text-xs" aria-label="Bill context">
-          <button
-            type="button"
-            className="min-h-8 shrink-0 rounded-full border border-border-default bg-surface-sunken px-3 font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-            onClick={() => rxPanelRef.current?.focus()}
+        <div className="flex flex-wrap gap-2 text-xs" aria-label="Bill context">
+          <Button
+            variant="outline"
+            className="min-h-11 rounded-full px-3 text-xs"
+            onClick={openChecks}
+            aria-label={`${patient?.displayName ?? 'Patient + prescription'} · ${formatBinding(keymap.bindings.focusPrescriptionPanel)}`}
           >
-            {patient ? patient.displayName : 'Patient + prescription'} ·{' '}
-            {formatBinding(keymap.bindings.focusPrescriptionPanel)}
-          </button>
-          <span
-            className={`flex min-h-8 shrink-0 items-center rounded-full border px-3 font-semibold ${blocked ? 'border-destructive/30 bg-destructive/10 text-destructive' : 'border-success/30 bg-success/10 text-success'}`}
+            <UserRound aria-hidden="true" />
+            <span>{patient?.displayName ?? 'Patient'}</span>
+            <span className="hidden md:inline">
+              {patient ? '' : ' + prescription'} ·{' '}
+              {formatBinding(keymap.bindings.focusPrescriptionPanel)}
+            </span>
+          </Button>
+          <Button
+            variant="outline"
+            className={`min-h-11 rounded-full px-3 text-xs ${blocked ? 'border-destructive text-destructive' : ''}`}
+            onClick={openChecks}
+            aria-label={safetyLabel}
           >
-            {blocked
-              ? 'Safety block · payment locked'
-              : alerts.length
-                ? `${alerts.length} safety notes`
-                : 'No safety blocks'}
-          </span>
-          <span className="flex min-h-8 shrink-0 items-center rounded-full border border-border-default bg-surface-sunken px-3 font-semibold text-text-strong">
-            {customerQuery.data
-              ? `${customerQuery.data.pointsBalance} loyalty points · Khata`
-              : 'Loyalty + khata'}
-          </span>
+            <ShieldCheck aria-hidden="true" />
+            <span className="hidden md:inline">{safetyLabel}</span>
+            <span className="md:hidden">{blocked ? 'Safety block' : 'No blocks'}</span>
+          </Button>
+          <Button
+            variant="outline"
+            className="min-h-11 rounded-full px-3 text-xs"
+            onClick={() => setLoyaltyOpen(true)}
+            aria-label={loyaltyLabel}
+          >
+            <Star aria-hidden="true" />
+            <span className="hidden md:inline">{loyaltyLabel}</span>
+            <span className="md:hidden">Loyalty</span>
+          </Button>
         </div>
       </header>
-
-      <div className="flex min-h-8 shrink-0 items-center px-2">
-        {notice ? (
-          <div
-            role={notice.tone === 'success' ? 'status' : 'alert'}
-            aria-live="polite"
-            className={`flex items-center gap-3 rounded-lg border p-3 ${
-              notice.tone === 'danger'
-                ? 'border-destructive/30 bg-destructive/10'
-                : notice.tone === 'warning'
-                  ? 'border-warning/30 bg-warning/10'
-                  : notice.tone === 'success'
-                    ? 'border-success/30 bg-success/10'
-                    : 'border-border-subtle bg-surface-sunken'
-            }`}
-          >
-            <StatusPill status={notice.tone} tone={notice.tone} />
-            <div className="min-w-0 space-y-2 text-sm">
-              <p className="text-text-body">{notice.message}</p>
-              {notice.inventoryBranchId ? (
-                <Link
-                  href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  prefetch={false}
-                  className={buttonVariants({
-                    variant: 'outline',
-                    className: 'h-auto min-h-11 whitespace-normal',
-                  })}
+      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="min-w-0 space-y-3">
+          <SectionCard className="overflow-hidden rounded-xl p-0" aria-label="Counter bill">
+            <div className="border-b border-border-subtle p-4">
+              <h2 className="mb-2 text-sm font-semibold text-text-strong">Scan or search</h2>
+              {notice ? (
+                <div
+                  role={notice.tone === 'success' ? 'status' : 'alert'}
+                  aria-live="polite"
+                  className={`flex items-center gap-3 rounded-lg border p-3 ${
+                    notice.tone === 'danger'
+                      ? 'border-destructive/30 bg-destructive/10'
+                      : notice.tone === 'warning'
+                        ? 'border-warning/30 bg-warning/10'
+                        : notice.tone === 'success'
+                          ? 'border-success/30 bg-success/10'
+                          : 'border-border-subtle bg-surface-sunken'
+                  }`}
                 >
-                  Open Inventory to review pack breaking (new tab)
-                </Link>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-      </div>
-
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
-        <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">
-          <SectionCard
-            compact
-            eyebrow={formatBinding(keymap.bindings.focusSearch)}
-            title="Scan or search"
-          >
-            <div className="space-y-2">
-              <div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="counter-search">Scan or search</Label>
-                  <Input
-                    id="counter-search"
-                    ref={searchRef}
-                    // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
-                    data-counter-scan=""
-                    autoFocus
-                    autoComplete="off"
-                    value={query}
-                    disabled={busy}
-                    placeholder="Brand, generic, ingredient, strength, form, barcode, alias"
-                    aria-describedby="counter-search-help"
-                    onChange={(event) => {
-                      scannerRevision.current += 1;
-                      setQuery(event.target.value);
-                      setActiveRow(null);
-                      setSaleUnit(null);
-                      setQuantity(1);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Enter') return;
-                      event.preventDefault();
-                      const trimmed = event.currentTarget.value.trim();
-                      const barcode =
-                        /^\d{6,}$/.test(trimmed) ||
-                        trimmed.startsWith(']d2') ||
-                        trimmed.startsWith('(01)');
-                      if (barcode) {
-                        void addBarcode(trimmed);
-                        return;
-                      }
-                      if (activeRow) {
-                        void addToCart();
-                        return;
-                      }
-                      void runSearch();
-                    }}
-                    className="h-9"
-                  />
-                  <p id="counter-search-help" className="text-xs text-text-muted">
-                    {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
-                    selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
-                    opens pay.
-                  </p>
+                  <StatusPill status={notice.tone} tone={notice.tone} />
+                  <div className="min-w-0 space-y-2 text-sm">
+                    <p className="text-text-body">{notice.message}</p>
+                    {notice.inventoryBranchId ? (
+                      <Link
+                        href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        prefetch={false}
+                        className={buttonVariants({
+                          variant: 'outline',
+                          className: 'h-auto min-h-11 whitespace-normal',
+                        })}
+                      >
+                        Open Inventory to review pack breaking (new tab)
+                      </Link>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
+              ) : null}
 
-              <CounterSearchResults
-                rows={
-                  searchCurrent && !searchQuery.isPlaceholderData
-                    ? (searchQuery.data?.rows ?? [])
-                    : []
-                }
+              <div className="space-y-2">
+                <div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="counter-search" className="sr-only">
+                      Scan or search
+                    </Label>
+                    <Input
+                      id="counter-search"
+                      ref={searchRef}
+                      // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
+                      data-counter-scan=""
+                      autoFocus
+                      autoComplete="off"
+                      value={query}
+                      disabled={busy}
+                      placeholder="Brand, generic or barcode"
+                      aria-describedby="counter-search-help"
+                      onChange={(event) => {
+                        scannerRevision.current += 1;
+                        setQuery(event.target.value);
+                        setActiveRow(null);
+                        setSaleUnit(null);
+                        setQuantity(1);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter') return;
+                        event.preventDefault();
+                        const trimmed = event.currentTarget.value.trim();
+                        const barcode =
+                          /^\d{6,}$/.test(trimmed) ||
+                          trimmed.startsWith(']d2') ||
+                          trimmed.startsWith('(01)');
+                        if (barcode) {
+                          void addBarcode(trimmed);
+                          return;
+                        }
+                        if (activeRow) {
+                          void addToCart();
+                          return;
+                        }
+                        void runSearch();
+                      }}
+                      className="h-12"
+                    />
+                    <p id="counter-search-help" className="text-xs text-text-muted">
+                      {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
+                      selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
+                      opens pay.
+                    </p>
+                  </div>
+                </div>
+
+                <CounterSearchResults
+                  rows={
+                    searchCurrent && !searchQuery.isPlaceholderData
+                      ? (searchQuery.data?.rows ?? [])
+                      : []
+                  }
+                  state={
+                    !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
+                      ? 'idle'
+                      : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
+                        ? 'loading'
+                        : searchQuery.isError
+                          ? 'error'
+                          : 'ready'
+                  }
+                  query={trimmedQuery}
+                  disabled={busy || !branchAuthorized}
+                  activeMedicineId={activeRow?.medicineId ?? null}
+                  error={searchQuery.error ? messageFrom(searchQuery.error) : null}
+                  onSelect={stageRow}
+                  onCaptureDemand={() => void captureShortfall()}
+                  onRetry={() => {
+                    if (searchCurrent) void searchQuery.refetch();
+                  }}
+                />
+              </div>
+            </div>
+            {activeRow ? (
+              <section
+                aria-label="Next line"
+                className="m-4 rounded-lg border border-border-subtle bg-surface-sunken p-3"
+              >
+                <div className="grid items-center gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(0,2fr)_auto]">
+                  <div className="min-w-0">
+                    <h2 className="font-mono text-[10px] uppercase tracking-widest text-text-muted">
+                      Next line
+                    </h2>
+                    <p className="mt-1 text-sm font-semibold text-text-strong">
+                      {activeRow.displayName}
+                      {activeRow.strength ? ` ${activeRow.strength}` : ''}
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                      {[
+                        activeRow.presentation,
+                        activeRow.dosageForm,
+                        activeRow.batchNumber ? `Batch ${activeRow.batchNumber}` : null,
+                        activeRow.nearestSafeExpiry
+                          ? `Exp ${formatReceiptDate(activeRow.nearestSafeExpiry)}`
+                          : null,
+                        locationLabel,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
+                  </div>
+                  <div className="counter-next-controls space-y-3">
+                    <CounterUnitToggle
+                      inline
+                      options={activeRow.saleUnits}
+                      selected={saleUnit}
+                      quantity={quantity}
+                      preview={preview}
+                      disabled={busy}
+                      onSelect={setSaleUnit}
+                      onQuantityChange={setQuantity}
+                      chordFor={chordFor}
+                    />
+                    {activeRow.saleUnits.length === 0 ? (
+                      <div className="space-y-1.5">
+                        <Label htmlFor="counter-demand-units">Requested canonical units</Label>
+                        <Input
+                          id="counter-demand-units"
+                          type="number"
+                          min={1}
+                          step={1}
+                          className="h-11 w-32"
+                          value={quantity}
+                          disabled={busy}
+                          onChange={(event) => {
+                            const next = Number(event.target.value);
+                            setQuantity(Number.isSafeInteger(next) && next > 0 ? next : 1);
+                          }}
+                        />
+                      </div>
+                    ) : null}
+                    {shortfallUnits > 0 ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-auto min-h-11 whitespace-normal"
+                        disabled={busy || !branchAuthorized}
+                        onClick={() => void captureShortfall()}
+                      >
+                        {pending === 'captureDemand'
+                          ? 'Capturing…'
+                          : `Capture shortfall: ${shortfallUnits} canonical units`}
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  <Button
+                    type="button"
+                    className="min-h-12 rounded-[var(--radius-sm)]"
+                    disabled={busy || !preview?.sufficient}
+                    onClick={() => void addToCart()}
+                  >
+                    {pending === 'addToCart'
+                      ? 'Adding…'
+                      : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
+                  </Button>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-text-muted">
+                  <span>
+                    {lotOverride?.inventoryLotId
+                      ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
+                      : activeRow.recommendedLotId && activeRow.batchNumber
+                        ? `FEFO batch ${activeRow.batchNumber} is used; additional batches are allocated if needed.`
+                        : 'No sellable FEFO batch is available.'}
+                  </span>
+                  <CounterLotOverride
+                    value={lotOverride}
+                    lots={lotOptionsQuery.data ?? []}
+                    state={
+                      lotOptionsQuery.isError
+                        ? 'error'
+                        : lotOptionsQuery.isSuccess
+                          ? 'ready'
+                          : 'loading'
+                    }
+                    error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
+                    disabled={busy}
+                    onChange={setLotOverride}
+                    onRetry={() => void lotOptionsQuery.refetch()}
+                  />
+                </div>
+              </section>
+            ) : null}
+            <section aria-label="Cart">
+              <CounterCartPanel
+                cart={cart}
+                alerts={alerts}
                 state={
-                  !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
+                  !saleId
                     ? 'idle'
-                    : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
+                    : cartQuery.isLoading
                       ? 'loading'
-                      : searchQuery.isError
+                      : cartQuery.isError
                         ? 'error'
                         : 'ready'
                 }
-                query={trimmedQuery}
-                disabled={busy || !branchAuthorized}
-                activeMedicineId={activeRow?.medicineId ?? null}
-                error={searchQuery.error ? messageFrom(searchQuery.error) : null}
-                onSelect={stageRow}
-                onCaptureDemand={() => void captureShortfall()}
-                onRetry={() => {
-                  if (searchCurrent) void searchQuery.refetch();
-                }}
+                error={cartQuery.error ? messageFrom(cartQuery.error) : null}
+                onRetry={() => void refreshTenderBill()}
               />
-            </div>
+            </section>
           </SectionCard>
-
           {substituteInput ? (
             <SectionCard compact eyebrow="AI-05 · RX-04" title="Exact substitute suggestions">
               <CounterSubstituteProposals
@@ -2073,482 +2284,557 @@ function ScopedPharmacyCounterConsole({
               setActiveRow(null);
             }}
           />
-
-          <SectionCard
-            compact
-            eyebrow="POS-03"
-            title="Next line"
-            actions={
-              <Button
-                type="button"
-                className="h-9 shadow-none hover:translate-y-0 active:translate-y-0"
-                disabled={busy || !activeRow || !preview?.sufficient}
-                onClick={() => void addToCart()}
-              >
-                {pending === 'addToCart'
-                  ? 'Adding…'
-                  : `Add to cart (${formatBinding(keymap.bindings.addToCart)})`}
-              </Button>
-            }
-          >
-            {activeRow ? (
-              <div className="space-y-2">
-                <CounterUnitToggle
-                  options={activeRow.saleUnits}
-                  selected={saleUnit}
-                  quantity={quantity}
-                  preview={preview}
-                  disabled={busy}
-                  onSelect={setSaleUnit}
-                  onQuantityChange={setQuantity}
-                  chordFor={chordFor}
-                />
-                {activeRow.saleUnits.length === 0 ? (
-                  <div className="space-y-1.5">
-                    <Label htmlFor="counter-demand-units">Requested canonical units</Label>
-                    <Input
-                      id="counter-demand-units"
-                      type="number"
-                      min={1}
-                      step={1}
-                      className="h-11 w-32"
-                      value={quantity}
-                      disabled={busy}
-                      onChange={(event) => {
-                        const next = Number(event.target.value);
-                        setQuantity(Number.isSafeInteger(next) && next > 0 ? next : 1);
-                      }}
-                    />
-                  </div>
-                ) : null}
-                {shortfallUnits > 0 ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-auto min-h-11 whitespace-normal"
-                    disabled={busy || !branchAuthorized}
-                    onClick={() => void captureShortfall()}
-                  >
-                    {pending === 'captureDemand'
-                      ? 'Capturing…'
-                      : `Capture shortfall: ${shortfallUnits} canonical units`}
-                  </Button>
-                ) : null}
-                <CounterLotOverride
-                  value={lotOverride}
-                  lots={lotOptionsQuery.data ?? []}
-                  state={
-                    lotOptionsQuery.isError
-                      ? 'error'
-                      : lotOptionsQuery.isSuccess
-                        ? 'ready'
-                        : 'loading'
-                  }
-                  error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
-                  disabled={busy}
-                  onChange={setLotOverride}
-                  onRetry={() => void lotOptionsQuery.refetch()}
-                />
-              </div>
-            ) : (
-              <p className="text-sm text-text-muted">
-                Select a search result to choose its sale unit.
-              </p>
-            )}
-          </SectionCard>
-
-          <SectionCard compact id="counter-shortcuts" eyebrow="Keyboard" title="Shortcuts">
-            <CounterKeymapLegend
-              keymap={keymap}
-              saving={saveKeymap.isPending}
-              disabled={busy}
-              onPresetChange={(preset: CounterKeymapPresetKey) =>
-                saveKeymap.mutate({ preset, overrides: {} })
-              }
-            />
-          </SectionCard>
         </div>
-
-        <div className="flex min-h-0 flex-col gap-2 overflow-hidden md:col-start-2 md:row-span-2">
+        <aside
+          id="counter-bill-total"
+          aria-label="Bill total"
+          className="min-w-0 xl:sticky xl:top-0 [&_button]:rounded-[var(--radius-sm)]"
+        >
           <SectionCard
-            compact
-            className="min-h-0 flex-1 overflow-y-auto"
-            eyebrow="POS-03"
-            title="Cart"
-            actions={
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                  disabled={busy || !saleId}
-                  onClick={() => void runTransition('hold')}
-                >
-                  Hold
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                  disabled={busy || !heldSaleId}
-                  onClick={() => void runTransition('resume')}
-                >
-                  Resume
-                </Button>
-              </div>
-            }
+            className="rounded-xl p-4"
+            eyebrow="Bill total"
+            actions={<span className="text-xs text-text-muted">{lineCount} lines</span>}
           >
-            <CounterCartPanel
-              cart={cart}
-              state={
-                !saleId
-                  ? 'idle'
-                  : cartQuery.isLoading
-                    ? 'loading'
-                    : cartQuery.isError
-                      ? 'error'
-                      : 'ready'
-              }
-              error={cartQuery.error ? messageFrom(cartQuery.error) : null}
-              onRetry={() => void refreshTenderBill()}
-            />
-          </SectionCard>
-
-          <SectionCard compact className="shrink-0" eyebrow="Payment" title="Bill total">
-            <div className="mb-4 space-y-1">
-              <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
-                <input
-                  ref={autoPrintRef}
-                  id="counter-auto-print"
-                  type="checkbox"
-                  checked={autoPrint}
-                  disabled={busy}
-                  onChange={(event) => setAutoPrint(event.target.checked)}
-                  aria-describedby="counter-auto-print-help"
-                  className="size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-                />
-                Automatically open print dialog after payment
-              </Label>
-              <p id="counter-auto-print-help" className="text-xs text-text-muted">
-                This counter session only. Requires a newly settled bill and issued receipt.
-                Physical printing is not confirmed.
+            <dl className="space-y-2 text-sm">
+              {(
+                [
+                  ['Gross', cart?.totals.grossMinor],
+                  ['Discount', cart?.totals.discountMinor],
+                  ['Tendered', cart?.totals.tenderedMinor],
+                ] as const
+              ).map(([label, value]) => (
+                <div key={label} className="flex justify-between gap-3">
+                  <dt className="text-text-muted">{label}</dt>
+                  <dd className="font-mono tabular-nums">
+                    {currentBill && value !== undefined ? formatMinor(value) : '—'}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            <div className="my-4 border-y border-border-subtle py-4">
+              <p className="font-mono text-xs text-text-muted">
+                {billState === 'settled' ? `Paid · receipt ${cart?.receiptNumber}` : 'Balance due'}
+              </p>
+              <p className="mt-1 font-mono text-4xl font-semibold tracking-tight text-text-strong tabular-nums">
+                {billState === 'settled' && currentBill
+                  ? formatMinor(cart.totals.tenderedMinor)
+                  : balanceMinor === null
+                    ? '—'
+                    : formatMinor(balanceMinor)}
               </p>
             </div>
-            {branchesQuery.data?.paymentSandboxAvailable && saleId ? (
-              <PaymentSandboxPanel
-                key={`${branchId}:${saleId}`}
-                branchId={branchId}
-                saleId={saleId}
-                deviceId={counterDeviceId()}
-                businessDate={todayBusinessDate()}
-                disabled={busy || blocked}
-                onRecorded={refreshCart}
-              />
-            ) : null}
-            <CounterTenderPanel
-              key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
-              ref={tenderRef}
-              manualSettings={manualSettings.data?.settings}
-              manualSettingsLoading={manualSettings.isLoading}
-              manualSettingsError={manualSettings.isError}
-              onReloadManualSettings={() => void manualSettings.refetch()}
-              loadKhataAccounts={loadKhataAccounts}
-              reauthenticateOwner={reauthenticateOwner}
-              printKhataStatement={printKhataStatement}
-              balanceMinor={balanceMinor}
-              state={billState}
-              blocked={blocked}
-              pending={pending === 'tender'}
-              disabled={busy || !saleId}
-              initialDraft={
-                restoredAttempt
-                  ? {
-                      ...restoredAttempt.draft,
-                      type: restoredAttempt.input.type,
-                      payerName: restoredAttempt.input.payerName,
-                      providerRef: restoredAttempt.input.providerRef,
-                      referenceSkipped: restoredAttempt.input.referenceSkipped,
-                    }
-                  : undefined
-              }
-              recoveryOutcome={tenderOutcome}
-              checkingOutcome={checkingOutcome}
-              onCheckOutcome={
-                attempt && tenderOutcome?.status === 'unknown' ? checkPaymentOutcome : undefined
-              }
-              error={
-                storageError
-                  ? TENDER_STORAGE_MESSAGE
-                  : cartQuery.isError
-                    ? 'This bill could not be read. Check your access and refresh this bill before taking payment.'
-                    : tenderReadRequired && pending !== 'tender'
-                      ? tenderOutcome?.status === 'accepted'
-                        ? 'Payment recorded, but the bill refresh is incomplete. Refresh this bill before taking another payment.'
-                        : 'Refresh this bill to verify its current state.'
-                      : null
-              }
-              onRetry={() => void refreshTenderBill()}
-              onTender={takePayment}
-            />
-          </SectionCard>
-
-          <SectionCard
-            compact
-            className="min-h-0 max-h-24 shrink overflow-y-auto"
-            eyebrow="POS-08"
-            title="Receipt"
-          >
-            <CounterReceiptView
-              branchId={branchId}
-              receipt={
-                billState === 'settled' &&
-                !receiptQuery.isError &&
-                !receiptQuery.isFetching &&
-                receiptQuery.data?.saleId === saleId &&
-                receiptQuery.data.receiptNumber === cart?.receiptNumber
-                  ? receiptQuery.data
-                  : null
-              }
-              state={
-                billState !== 'settled'
-                  ? 'idle'
-                  : receiptQuery.isLoading
-                    ? 'loading'
-                    : receiptQuery.isError
-                      ? 'error'
-                      : 'ready'
-              }
-              evidence={evidenceEligible && !evidenceQuery.isError ? evidenceQuery.data : null}
-              evidenceError={evidenceEligible && evidenceQuery.isError}
-              evidenceRefreshing={evidenceQuery.isFetching}
-              onEvidenceRefresh={evidenceEligible ? () => void evidenceQuery.refetch() : undefined}
-              locale={receiptLocale}
-              format={receiptFormat}
-              reprint={receiptRenders > 0}
-              printing={receiptQuery.isFetching}
-              error={receiptQuery.error ? messageFrom(receiptQuery.error) : null}
-              onLocaleChange={setReceiptLocale}
-              onFormatChange={setReceiptFormat}
-              onPrint={printReceipt}
-              onRetry={() => void receiptQuery.refetch()}
-              settlement={receiptSettlement}
-              onSettlementPresented={receiptPresented}
-            />
-          </SectionCard>
-        </div>
-
-        <div className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card p-3 shadow-[0_-8px_24px_rgba(0,0,0,0.08)] md:hidden">
-          <div className="min-w-0 flex-1">
-            <p className="font-mono text-[10px] uppercase tracking-wider text-text-muted">
-              Balance due
-            </p>
-            <p className="text-lg font-semibold tabular-nums text-text-strong">
-              {balanceMinor === null ? '—' : formatMinor(balanceMinor)}
-            </p>
-          </div>
-          <Button
-            type="button"
-            className="h-11 min-w-32"
-            disabled={!saleId || blocked || busy}
-            onClick={() => tenderRef.current?.focus()}
-          >
-            Pay · {formatBinding(keymap.bindings.openTender)}
-          </Button>
-        </div>
-
-        <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">
-          <SectionCard
-            compact
-            eyebrow="CRM-L01"
-            title="Customer loyalty and khata"
-            actions={
+            {billState === 'settled' ? (
+              <div className="space-y-2">
+                <Button
+                  className="h-14 w-full"
+                  onClick={() => {
+                    setActiveSale(null);
+                    setActiveRow(null);
+                    focusSearch();
+                  }}
+                >
+                  Start next bill
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full"
+                  onClick={() => setReceiptOpen(true)}
+                >
+                  Preview receipt
+                </Button>
+                <Button variant="outline" className="h-11 w-full" onClick={printReceipt}>
+                  Print · {formatBinding(keymap.bindings.printReceipt)}
+                </Button>
+              </div>
+            ) : (
               <Button
-                type="button"
-                variant="outline"
-                className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                disabled={busy || !patient || !saleId}
-                onClick={() => void attachCustomer()}
+                className="h-14 w-full justify-between"
+                disabled={billState !== 'ready' || blocked || busy}
+                onClick={openPayment}
               >
-                {pending === 'customer' ? 'Linking…' : 'Link selected patient'}
+                <span>Pay</span>
+                <span className="sr-only">·</span>
+                <kbd className="rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1.5 py-0.5 font-mono text-xs">
+                  {formatBinding(keymap.bindings.openTender)}
+                </kbd>
               </Button>
-            }
-          >
-            {customerQuery.data ? (
-              <div className="space-y-4 text-sm text-text-body">
-                <div>
-                  <p className="font-semibold text-text-strong">
-                    {customerQuery.data.customer.displayName}
-                  </p>
-                  <p className="text-text-muted">
-                    {customerQuery.data.pointsBalance} points · Khata{' '}
-                    {formatMinor(customerQuery.data.creditBalanceMinor)} /{' '}
-                    {formatMinor(customerQuery.data.customer.creditLimitMinor)}
-                  </p>
-                  <p className="text-text-muted">
-                    Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <Label htmlFor="counter-redeem-points" className="sr-only">
-                    Points to redeem
-                  </Label>
-                  <Input
-                    id="counter-redeem-points"
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={redeemPoints || ''}
-                    disabled={busy || balanceMinor === null || balanceMinor <= 0}
-                    onChange={(event) => setRedeemPoints(Number(event.target.value))}
-                    placeholder="Points"
-                    className="h-8"
-                  />
-                  <Button
-                    type="button"
-                    className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                    disabled={
-                      busy || redeemPoints <= 0 || balanceMinor === null || balanceMinor <= 0
+            )}
+            <p className={`mt-2 text-xs ${blocked ? 'text-destructive' : 'text-text-muted'}`}>
+              {blocked
+                ? 'This bill carries an unresolved safety block. Resolve it in patient and checks before taking payment.'
+                : unknownTender
+                  ? 'Payment locked until its outcome is checked. Review payment status before taking more money.'
+                  : storageError
+                    ? 'Browser recovery is unavailable. Review payment status before continuing.'
+                    : tenderReadRequired
+                      ? 'Refresh this bill to verify payment before taking more money.'
+                      : 'Cash, card, bank transfer, wallet or khata.'}
+            </p>
+            {billState !== 'ready' && billState !== 'settled' && saleId ? (
+              <Button variant="outline" className="mt-2 min-h-11 w-full" onClick={openPayment}>
+                Review payment status
+              </Button>
+            ) : null}
+            <div className="mt-3 grid grid-cols-3 gap-2" aria-label="Bill actions">
+              <Button
+                variant="outline"
+                className="h-11 px-2 text-xs"
+                disabled={busy || !saleId || cart?.status !== 'OPEN'}
+                onClick={() => void runTransition('hold')}
+              >
+                Hold{' '}
+                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px]">
+                  {formatBinding(keymap.bindings.holdSale)}
+                </kbd>
+              </Button>
+              <Button
+                variant="outline"
+                className="h-11 px-2 text-xs"
+                disabled={busy || !heldSaleId}
+                onClick={() => void runTransition('resume')}
+              >
+                Resume{' '}
+                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px]">
+                  {formatBinding(keymap.bindings.resumeSale)}
+                </kbd>
+              </Button>
+              <Button
+                variant="outline"
+                className="h-11 px-2 text-xs text-destructive"
+                disabled={busy || !saleId || cart?.status !== 'OPEN'}
+                onClick={() => void runTransition('void', 'Voided from the counter.')}
+              >
+                Void
+              </Button>
+            </div>
+          </SectionCard>
+        </aside>
+      </div>
+      <div
+        aria-label="Phone payment"
+        className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] xl:hidden"
+      >
+        <div className="min-w-0 flex-1">
+          <p className="text-xs text-text-muted">
+            {blocked ? 'Payment locked · safety block' : 'Balance due'}
+          </p>
+          <p className="font-mono text-xl font-semibold text-text-strong tabular-nums">
+            {balanceMinor === null ? '—' : formatMinor(balanceMinor)}
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          className="h-13 rounded-[var(--radius-sm)]"
+          onClick={() =>
+            document.getElementById('counter-bill-total')?.scrollIntoView({ block: 'start' })
+          }
+        >
+          Bill
+        </Button>
+        <Button
+          className="h-13 min-w-28 rounded-[var(--radius-sm)]"
+          disabled={billState !== 'ready' || blocked || busy}
+          onClick={openPayment}
+        >
+          Pay <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
+        </Button>
+      </div>
+      <CounterOverlay
+        title="Payment"
+        open={paymentOpen}
+        onOpenChange={setPaymentOpen}
+        initialFocus={tenderRef}
+        finalFocus={searchRef}
+      >
+        <p className="text-xs text-text-muted">
+          {lineCount} lines · Tendered {currentBill ? formatMinor(cart.totals.tenderedMinor) : '—'}
+        </p>
+        <div className="mb-4 space-y-1">
+          <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
+            <input
+              ref={autoPrintRef}
+              id="counter-auto-print"
+              type="checkbox"
+              checked={autoPrint}
+              disabled={busy}
+              onChange={(event) => setAutoPrint(event.target.checked)}
+              aria-describedby="counter-auto-print-help"
+              className="size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+            />
+            Automatically open print dialog after payment
+          </Label>
+          <p id="counter-auto-print-help" className="text-xs text-text-muted">
+            This counter session only. Requires a newly settled bill and issued receipt. Physical
+            printing is not confirmed.
+          </p>
+        </div>
+        {branchesQuery.data?.paymentSandboxAvailable && saleId ? (
+          <PaymentSandboxPanel
+            key={`${branchId}:${saleId}`}
+            branchId={branchId}
+            saleId={saleId}
+            deviceId={counterDeviceId()}
+            businessDate={todayBusinessDate()}
+            disabled={busy || blocked}
+            onRecorded={refreshCart}
+          />
+        ) : null}
+        <CounterTenderPanel
+          key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
+          ref={tenderRef}
+          manualSettings={manualSettings.data?.settings}
+          manualSettingsLoading={manualSettings.isLoading}
+          manualSettingsError={manualSettings.isError}
+          onReloadManualSettings={() => void manualSettings.refetch()}
+          loadKhataAccounts={loadKhataAccounts}
+          reauthenticateOwner={reauthenticateOwner}
+          printKhataStatement={printKhataStatement}
+          balanceMinor={balanceMinor}
+          state={billState}
+          blocked={blocked}
+          pending={pending === 'tender'}
+          disabled={busy || !saleId}
+          initialDraft={
+            restoredAttempt
+              ? {
+                  ...restoredAttempt.draft,
+                  type: restoredAttempt.input.type,
+                  payerName: restoredAttempt.input.payerName,
+                  providerRef: restoredAttempt.input.providerRef,
+                  referenceSkipped: restoredAttempt.input.referenceSkipped,
+                }
+              : undefined
+          }
+          recoveryOutcome={tenderOutcome}
+          checkingOutcome={checkingOutcome}
+          onCheckOutcome={
+            attempt && tenderOutcome?.status === 'unknown' ? checkPaymentOutcome : undefined
+          }
+          error={
+            storageError
+              ? TENDER_STORAGE_MESSAGE
+              : cartQuery.isError
+                ? 'This bill could not be read. Check your access and refresh this bill before taking payment.'
+                : tenderReadRequired && pending !== 'tender'
+                  ? tenderOutcome?.status === 'accepted'
+                    ? 'Payment recorded, but the bill refresh is incomplete. Refresh this bill before taking another payment.'
+                    : 'Refresh this bill to verify its current state.'
+                  : null
+          }
+          onRetry={() => void refreshTenderBill()}
+          onTender={takePayment}
+        />
+
+        <Button variant="outline" className="h-11" onClick={() => setPaymentOpen(false)}>
+          Back to bill
+        </Button>
+      </CounterOverlay>
+      <CounterOverlay
+        title="Patient, prescription and checks"
+        open={checksOpen}
+        onOpenChange={setChecksOpen}
+        initialFocus={rxPanelRef}
+        finalFocus={searchRef}
+        drawer
+      >
+        <CounterRxPanel
+          ref={rxPanelRef}
+          controlled={
+            // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A
+            // FORBIDDEN read means this actor cannot dispense, so the controlled
+            // authorization panel is not offered (the server refuses it anyway).
+            // Without Pharmacy Safety the read is not made at all, with the same outcome.
+            !safetyLicensed ||
+            (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code ===
+              'FORBIDDEN'
+              ? undefined
+              : {
+                  ...controlledAuth,
+                  pharmacists: pharmacistsQuery.data ?? [],
+                  loading: pharmacistsQuery.isLoading,
+                  error: pharmacistsQuery.isError,
+                  patientAddress,
+                  onChange: (field, value) => {
+                    if (field === 'patientAddress') {
+                      setPatientAddressDraft(typeof value === 'string' ? value : '');
+                      return;
                     }
-                    onClick={() => void redeemCustomerPoints()}
-                  >
-                    Redeem
-                  </Button>
-                </div>
-                <div>
-                  <p className="font-mono text-xs uppercase tracking-wide text-text-muted">
-                    Points ledger · latest 25 entries
-                  </p>
-                  <ul className="mt-2 space-y-2" aria-label="Points ledger">
-                    {customerQuery.data.pointsHistory?.map((entry) => (
+                    setControlledAuth((current) => {
+                      if (field === 'emergency' || field === 'rxSerialWritten') {
+                        return { ...current, [field]: value === true };
+                      }
+                      if (typeof value !== 'string') return current;
+                      return { ...current, [field]: value };
+                    });
+                  },
+                }
+          }
+          alerts={alerts}
+          acknowledgementScope={saleId && branchId ? { branchId, saleId } : null}
+          patient={patient}
+          candidates={patientsQuery.data?.patients ?? []}
+          query={patientQuery}
+          state={
+            patientPanelQuery.isError &&
+            (patientPanelQuery.error?.data?.code === 'FORBIDDEN' ||
+              patientsQuery.error?.data?.code === 'FORBIDDEN')
+              ? 'denied'
+              : patientsQuery.isLoading || patientPanelQuery.isLoading
+                ? 'loading'
+                : patientsQuery.isError || patientPanelQuery.isError
+                  ? 'error'
+                  : submittedPatientQuery.trim().length >= 2
+                    ? 'ready'
+                    : 'idle'
+          }
+          error={
+            patientsQuery.error
+              ? messageFrom(patientsQuery.error)
+              : patientPanelQuery.error
+                ? messageFrom(patientPanelQuery.error)
+                : null
+          }
+          disabled={busy}
+          onQueryChange={setPatientQuery}
+          onSearch={() => setSubmittedPatientQuery(patientQuery.trim())}
+          onSelectPatient={(id) => {
+            setPatientId(id);
+            setPatientAddressDraft(null);
+          }}
+          onClearPatient={() => {
+            setPatientId(null);
+            setPatientAddressDraft(null);
+            setSubmittedPatientQuery('');
+            setPatientQuery('');
+          }}
+        />
+      </CounterOverlay>
+      <CounterOverlay
+        title="Customer loyalty and khata"
+        open={loyaltyOpen}
+        onOpenChange={setLoyaltyOpen}
+        finalFocus={searchRef}
+        drawer
+      >
+        <SectionCard
+          compact
+          eyebrow="CRM-L01"
+          title="Customer loyalty and khata"
+          actions={
+            <Button
+              type="button"
+              variant="outline"
+              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+              disabled={busy || !patient || !saleId}
+              onClick={() => void attachCustomer()}
+            >
+              {pending === 'customer' ? 'Linking…' : 'Link selected patient'}
+            </Button>
+          }
+        >
+          {customerQuery.data ? (
+            <div className="space-y-4 text-sm text-text-body">
+              <div>
+                <p className="font-semibold text-text-strong">
+                  {customerQuery.data.customer.displayName}
+                </p>
+                <p className="text-text-muted">
+                  {customerQuery.data.pointsBalance} points · Khata{' '}
+                  {formatMinor(customerQuery.data.creditBalanceMinor)} /{' '}
+                  {formatMinor(customerQuery.data.customer.creditLimitMinor)}
+                </p>
+                <p className="text-text-muted">
+                  Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Label htmlFor="counter-redeem-points" className="sr-only">
+                  Points to redeem
+                </Label>
+                <Input
+                  id="counter-redeem-points"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={redeemPoints || ''}
+                  disabled={busy || balanceMinor === null || balanceMinor <= 0}
+                  onChange={(event) => setRedeemPoints(Number(event.target.value))}
+                  placeholder="Points"
+                  className="h-8"
+                />
+                <Button
+                  type="button"
+                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                  disabled={busy || redeemPoints <= 0 || balanceMinor === null || balanceMinor <= 0}
+                  onClick={() => void redeemCustomerPoints()}
+                >
+                  Redeem
+                </Button>
+              </div>
+              <div>
+                <p className="font-mono text-xs uppercase tracking-wide text-text-muted">
+                  Points ledger · latest 25 entries
+                </p>
+                <ul className="mt-2 space-y-2" aria-label="Points ledger">
+                  {customerQuery.data.pointsHistory?.map((entry) => (
+                    <li
+                      key={entry.id}
+                      className="flex flex-wrap justify-between gap-2 border-b border-border-subtle pb-2"
+                    >
+                      <span>
+                        {entry.kind} · Receipt {entry.sale.receiptNumber ?? '—'} ·{' '}
+                        {new Date(entry.occurredAt).toISOString().slice(0, 10)}
+                      </span>
+                      <span className="font-mono tabular-nums">
+                        {entry.points > 0 ? '+' : ''}
+                        {entry.points}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-3 font-mono text-xs uppercase tracking-wide text-text-muted">
+                  Purchase history
+                </p>
+                {customerQuery.data.history.length ? (
+                  <ul className="mt-2 space-y-2">
+                    {customerQuery.data.history.map((sale) => (
                       <li
-                        key={entry.id}
-                        className="flex flex-wrap justify-between gap-2 border-b border-border-subtle pb-2"
+                        key={sale.saleId}
+                        className="flex justify-between border-b border-border-subtle pb-2 tabular-nums"
                       >
-                        <span>
-                          {entry.kind} · Receipt {entry.sale.receiptNumber ?? '—'} ·{' '}
-                          {new Date(entry.occurredAt).toISOString().slice(0, 10)}
-                        </span>
-                        <span className="font-mono tabular-nums">
-                          {entry.points > 0 ? '+' : ''}
-                          {entry.points}
-                        </span>
+                        <span>Receipt {sale.receiptNumber ?? '—'}</span>
+                        <span>{formatMinor(sale.totalMinor)}</span>
                       </li>
                     ))}
                   </ul>
-                  <p className="mt-3 font-mono text-xs uppercase tracking-wide text-text-muted">
-                    Purchase history
-                  </p>
-                  {customerQuery.data.history.length ? (
-                    <ul className="mt-2 space-y-2">
-                      {customerQuery.data.history.map((sale) => (
-                        <li
-                          key={sale.saleId}
-                          className="flex justify-between border-b border-border-subtle pb-2 tabular-nums"
-                        >
-                          <span>Receipt {sale.receiptNumber ?? '—'}</span>
-                          <span>{formatMinor(sale.totalMinor)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-2 text-text-muted">No completed purchases at this branch.</p>
-                  )}
-                </div>
+                ) : (
+                  <p className="mt-2 text-text-muted">No completed purchases at this branch.</p>
+                )}
               </div>
-            ) : (
-              <p className="text-sm text-text-muted">
-                Select a patient, open a bill, then link. Current loyalty consent is required.
-              </p>
-            )}
-          </SectionCard>
-          <SectionCard
-            compact
-            eyebrow="POS-09"
-            title="Prescription and patient"
-            actions={
-              <kbd className="rounded-[3px] border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-strong">
-                {formatBinding(keymap.bindings.focusPrescriptionPanel)}
-              </kbd>
-            }
-          >
-            <CounterRxPanel
-              ref={rxPanelRef}
-              controlled={
-                // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A
-                // FORBIDDEN read means this actor cannot dispense, so the controlled
-                // authorization panel is not offered (the server refuses it anyway).
-                // Without Pharmacy Safety the read is not made at all, with the same outcome.
-                !safetyLicensed ||
-                (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code ===
-                  'FORBIDDEN'
-                  ? undefined
-                  : {
-                      ...controlledAuth,
-                      pharmacists: pharmacistsQuery.data ?? [],
-                      loading: pharmacistsQuery.isLoading,
-                      error: pharmacistsQuery.isError,
-                      patientAddress,
-                      onChange: (field, value) => {
-                        if (field === 'patientAddress') {
-                          setPatientAddressDraft(typeof value === 'string' ? value : '');
-                          return;
-                        }
-                        setControlledAuth((current) => {
-                          if (field === 'emergency' || field === 'rxSerialWritten') {
-                            return { ...current, [field]: value === true };
-                          }
-                          if (typeof value !== 'string') return current;
-                          return { ...current, [field]: value };
-                        });
-                      },
-                    }
-              }
-              alerts={alerts}
-              acknowledgementScope={saleId && branchId ? { branchId, saleId } : null}
-              patient={patient}
-              candidates={patientsQuery.data?.patients ?? []}
-              query={patientQuery}
-              state={
-                patientPanelQuery.isError &&
-                (patientPanelQuery.error?.data?.code === 'FORBIDDEN' ||
-                  patientsQuery.error?.data?.code === 'FORBIDDEN')
-                  ? 'denied'
-                  : patientsQuery.isLoading || patientPanelQuery.isLoading
-                    ? 'loading'
-                    : patientsQuery.isError || patientPanelQuery.isError
-                      ? 'error'
-                      : submittedPatientQuery.trim().length >= 2
-                        ? 'ready'
-                        : 'idle'
-              }
-              error={
-                patientsQuery.error
-                  ? messageFrom(patientsQuery.error)
-                  : patientPanelQuery.error
-                    ? messageFrom(patientPanelQuery.error)
-                    : null
-              }
-              disabled={busy}
-              onQueryChange={setPatientQuery}
-              onSearch={() => setSubmittedPatientQuery(patientQuery.trim())}
-              onSelectPatient={(id) => {
-                setPatientId(id);
-                setPatientAddressDraft(null);
-              }}
-              onClearPatient={() => {
-                setPatientId(null);
-                setPatientAddressDraft(null);
-                setSubmittedPatientQuery('');
-                setPatientQuery('');
-              }}
-            />
-          </SectionCard>
-        </div>
-      </div>
-
+            </div>
+          ) : (
+            <p className="text-sm text-text-muted">
+              Select a patient, open a bill, then link. Current loyalty consent is required.
+            </p>
+          )}
+        </SectionCard>
+      </CounterOverlay>
+      <CounterOverlay
+        title="Shortcuts"
+        open={shortcutsOpen}
+        onOpenChange={setShortcutsOpen}
+        finalFocus={searchRef}
+      >
+        <CounterKeymapLegend
+          keymap={keymap}
+          saving={saveKeymap.isPending}
+          disabled={busy}
+          onPresetChange={(preset: CounterKeymapPresetKey) =>
+            saveKeymap.mutate({ preset, overrides: {} })
+          }
+        />
+      </CounterOverlay>
+      <CounterOverlay
+        title="Receipt preview"
+        open={receiptOpen}
+        onOpenChange={setReceiptOpen}
+        finalFocus={searchRef}
+        onKeyDown={(event) => {
+          if (
+            shouldHandleCounterKey(event) &&
+            matchCounterAction(keymap.bindings, event) === 'printReceipt'
+          ) {
+            event.preventDefault();
+            printReceipt();
+          }
+        }}
+        drawer
+      >
+        <CounterReceiptView
+          branchId={branchId}
+          receipt={
+            billState === 'settled' &&
+            !receiptQuery.isError &&
+            !receiptQuery.isFetching &&
+            receiptQuery.data?.saleId === saleId &&
+            receiptQuery.data.receiptNumber === cart?.receiptNumber
+              ? receiptQuery.data
+              : null
+          }
+          state={
+            billState !== 'settled'
+              ? 'idle'
+              : receiptQuery.isLoading
+                ? 'loading'
+                : receiptQuery.isError
+                  ? 'error'
+                  : 'ready'
+          }
+          evidence={evidenceEligible && !evidenceQuery.isError ? evidenceQuery.data : null}
+          evidenceError={evidenceEligible && evidenceQuery.isError}
+          evidenceRefreshing={evidenceQuery.isFetching}
+          onEvidenceRefresh={evidenceEligible ? () => void evidenceQuery.refetch() : undefined}
+          locale={receiptLocale}
+          format={receiptFormat}
+          reprint={receiptRenders > 0}
+          printing={receiptQuery.isFetching}
+          error={receiptQuery.error ? messageFrom(receiptQuery.error) : null}
+          onLocaleChange={setReceiptLocale}
+          onFormatChange={setReceiptFormat}
+          onPrint={printReceipt}
+          onRetry={() => void receiptQuery.refetch()}
+          settlement={receiptSettlement}
+          onSettlementPresented={receiptPresented}
+        />
+      </CounterOverlay>
       <p className="sr-only" aria-live="polite">
         {COUNTER_ACTION_LABELS.focusSearch}: {formatBinding(keymap.bindings.focusSearch)}
       </p>
     </div>
+  );
+}
+
+/** Keep tender drafts and receipt settlement deduplication mounted across drawer toggles. */
+function CounterOverlay({
+  title,
+  open,
+  onOpenChange,
+  initialFocus,
+  finalFocus,
+  onKeyDown,
+  drawer = false,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  initialFocus?: RefObject<HTMLDivElement | null>;
+  finalFocus: RefObject<HTMLInputElement | null>;
+  onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
+  drawer?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPortal keepMounted>
+        <DialogOverlay hidden={!open} className="bg-foreground/40 backdrop-blur-none" />
+        <DialogPrimitive.Popup
+          hidden={!open}
+          initialFocus={initialFocus}
+          finalFocus={finalFocus}
+          onKeyDown={onKeyDown}
+          className={`pos-calm fixed z-50 flex flex-col overflow-hidden border border-border-subtle bg-surface-card text-text-strong outline-none [&_:is([data-slot=button],[data-slot=dialog-close]):not(.rounded-full)]:rounded-[var(--radius-sm)] ${drawer ? 'inset-y-0 right-0 w-full lg:max-w-[30rem]' : 'top-1/2 left-1/2 max-h-[90dvh] w-[calc(100%-2rem)] max-w-[38.75rem] -translate-x-1/2 -translate-y-1/2 rounded-xl'}`}
+        >
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle p-5">
+            <DialogTitle className="text-lg font-semibold">{title}</DialogTitle>
+            <DialogClose render={<Button variant="outline" className="h-11" />}>Close</DialogClose>
+          </div>
+          <DialogDescription className="sr-only">
+            {title} for the current counter bill.
+          </DialogDescription>
+          <div className="grid min-h-0 gap-4 overflow-y-auto p-5">{children}</div>
+        </DialogPrimitive.Popup>
+      </DialogPortal>
+    </Dialog>
   );
 }
