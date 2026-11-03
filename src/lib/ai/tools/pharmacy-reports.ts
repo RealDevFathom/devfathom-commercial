@@ -51,7 +51,7 @@ const UNSUPPORTED =
 const UNAVAILABLE = 'Pharmacy report data is currently unavailable. No stale figures were used.';
 
 const financeBranch = z.string().trim().min(1).max(128);
-const financeInsightInput = z.discriminatedUnion('report', [
+const financeReportInput = z.discriminatedUnion('report', [
   z
     .object({
       report: z.literal('inventory_capital'),
@@ -68,6 +68,7 @@ const financeInsightInput = z.discriminatedUnion('report', [
     })
     .strict(),
 ]);
+const financeInsightInput = z.object({ report: financeReportInput }).strict();
 
 function utcDate() {
   return new Date().toISOString().slice(0, 10);
@@ -122,7 +123,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
     askPharmacyWorkPacks: pharmacyWorkPackTool(h),
     askPharmacyFinanceInsights: tool({
       description:
-        'Read-only owner pharmacy inventory-capital or leakage explanations for one exact active branch. Ledger book value is not cash or recoverable savings. Unsupported breakdowns and currency remain unknown. No clinical advice, patient data, purchases or provider calls.',
+        'Read-only owner pharmacy inventory-capital or leakage explanations for one exact active branch. Pass the report discriminator, branch and dates inside the report object. Ledger book value is not cash or recoverable savings. Unsupported breakdowns and currency remain unknown. No clinical advice, patient data, purchases or provider calls.',
       inputSchema: financeInsightInput,
       execute: async (input) => {
         try {
@@ -139,7 +140,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
               kind: 'invalid_input',
               message: 'Use one exact branch and valid report dates.',
             };
-          const filters = parsed.data;
+          const filters = parsed.data.report;
           try {
             if (filters.report === 'inventory_capital') {
               if (new Date(filters.at).getTime() > Date.now()) throw new Error('Future cutoff');

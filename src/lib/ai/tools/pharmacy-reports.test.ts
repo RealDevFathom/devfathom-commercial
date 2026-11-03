@@ -245,6 +245,109 @@ function insightExecute(role = 'ADMIN') {
   ) => Promise<Record<string, unknown>>;
 }
 
+const inventoryReport = {
+  report: 'inventory_capital',
+  branch: 'Main Pharmacy',
+  at: '2026-06-01T00:00:00Z',
+};
+const leakageInput = {
+  report: 'leakage',
+  branch: 'branch_1',
+  from: '2026-06-01',
+  to: '2026-07-01',
+};
+
+function financeExecute(role = 'ADMIN') {
+  return insightTools(role).askPharmacyFinanceInsights.execute! as (
+    input: unknown
+  ) => Promise<Record<string, unknown>>;
+}
+
+describe('pharmacy finance insight input', () => {
+  it('reads inventory capital from the nested report with the authorized scope and cutoff', async () => {
+    queryRaw.mockResolvedValue([{ branchId: 'branch_1', valueMinor: 1200, unitCostMinor: null }]);
+    expect(await financeExecute()({ report: inventoryReport })).toMatchObject({
+      kind: 'answer',
+      scope: { organizationId: 'org_1', branchIds: ['branch_1'] },
+      period: { at: '2026-06-01T00:00:00.000Z', endInclusive: true, timezone: 'UTC' },
+      facts: [{ bookValueMinor: 1200, unitCostMinor: null }],
+      currency: null,
+    });
+    expect(branchFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_1', active: true } })
+    );
+    expect(queryRaw).toHaveBeenCalledOnce();
+    expect(queryRaw.mock.calls[0][0].values).toEqual([
+      'org_1',
+      new Date(inventoryReport.at),
+      'branch_1',
+    ]);
+  });
+
+  it('reads leakage from the nested report with the half-open period and signed amounts', async () => {
+    const amounts = { discountMinor: 100, writeOffMinor: 50, shrinkageMinor: -20, totalMinor: 130 };
+    queryRaw.mockResolvedValue([{ branchId: 'branch_1', ...amounts }]);
+    expect(await financeExecute()({ report: leakageInput })).toMatchObject({
+      kind: 'answer',
+      scope: { organizationId: 'org_1', branchIds: ['branch_1'] },
+      period: { from: leakageInput.from, to: leakageInput.to, endExclusive: true, timezone: 'UTC' },
+      facts: [amounts],
+      currency: null,
+    });
+    expect(queryRaw).toHaveBeenCalledOnce();
+    expect(queryRaw.mock.calls[0][0].values).toEqual([
+      'org_1',
+      new Date(leakageInput.from),
+      new Date(leakageInput.to),
+      'branch_1',
+    ]);
+  });
+
+  it.each([
+    null,
+    {},
+    inventoryReport,
+    leakageInput,
+    { report: null },
+    { report: { ...inventoryReport, report: 'unsupported' } },
+    { report: { ...inventoryReport, at: undefined } },
+    { report: { ...inventoryReport, at: 'invalid' } },
+    { report: { ...inventoryReport, at: '2099-01-01T00:00:00Z' } },
+    { report: { ...inventoryReport, branch: ' ' } },
+    { report: { ...inventoryReport, branch: 'x'.repeat(129) } },
+    { report: { ...inventoryReport, organizationId: 'foreign' } },
+    { report: inventoryReport, organizationId: 'foreign' },
+    { report: { ...leakageInput, from: '2026-02-30' } },
+    { report: { ...leakageInput, to: undefined } },
+    { report: { ...leakageInput, to: leakageInput.from } },
+    { report: { ...leakageInput, to: '2026-05-01' } },
+    { report: { ...leakageInput, to: '2026-10-01' } },
+    { report: { ...leakageInput, at: inventoryReport.at } },
+  ])('rejects malformed or invalid nested input before report access: %j', async (input) => {
+    expect(await financeExecute()(input)).toMatchObject({ kind: 'invalid_input' });
+    expect(branchFindMany).not.toHaveBeenCalled();
+    expect(queryRaw).not.toHaveBeenCalled();
+  });
+
+  it.each([inventoryReport, leakageInput])('retains authorization for $report', async (report) => {
+    expect(await financeExecute('EMPLOYEE')({ report })).toMatchObject({ kind: 'refusal' });
+    expect(insightTools('ADMIN', [])).toEqual({});
+    for (const denied of ['reports:operational', 'reports:financial']) {
+      abacCan.mockImplementation(async (_subject, action) => action !== denied);
+      expect(await financeExecute()({ report })).toMatchObject({ kind: 'refusal' });
+    }
+    expect(branchFindMany).not.toHaveBeenCalled();
+    expect(queryRaw).not.toHaveBeenCalled();
+  });
+
+  it.each([inventoryReport, leakageInput])('retains branch scope for $report', async (report) => {
+    expect(await financeExecute()({ report: { ...report, branch: 'foreign' } })).toMatchObject({
+      kind: 'refusal',
+    });
+    expect(queryRaw).not.toHaveBeenCalled();
+  });
+});
+
 describe('pharmacy business insight execution', () => {
   beforeEach(() => {
     vi.mocked(readRepeatPurchasing).mockResolvedValue(repeatResult);
