@@ -1,16 +1,18 @@
 // QA harness: per-role sessions, tRPC caller, page capture.
 // Credentials are read from secrets/creds.json and are never printed.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-const REPO = process.env.QA_REPO ?? '/home/user/devfathom-commercial';
+import { fileURLToPath } from 'node:url';
+// Repository root: QA_REPO, or three levels up from this file (qa/sehatcart-2026-11-02/harness).
+export const REPO =
+  process.env.QA_REPO ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const require = createRequire(`${REPO}/package.json`);
 const { chromium, request: pwRequest } = require('playwright');
 
 // Working dir for session state and raw outputs. Never inside the repo: it holds session cookies.
-export const SCRATCH =
-  process.env.QA_SCRATCH ??
-  '/tmp/claude-0/-home-user-devfathom-commercial/bd6f7ae8-902c-5eda-9008-d081b386469b/scratchpad';
+export const SCRATCH = process.env.QA_SCRATCH ?? path.join(os.tmpdir(), 'qa-sehatcart-2026-11-02');
 export const EVIDENCE = process.env.QA_EVIDENCE ?? `${REPO}/qa-evidence`;
 // Credentials file (never committed): {baseUrl, owner|cashier|manager|pharmacist: {email, password}}
 const CREDS = JSON.parse(

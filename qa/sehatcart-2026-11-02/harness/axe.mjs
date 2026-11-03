@@ -1,9 +1,7 @@
 // axe-core WCAG 2.0/2.1 A+AA scan of key pages. Usage: node axe.mjs [scheme]
 import { createRequire } from 'node:module';
-import { roleContext, closeBrowser, BASE, save } from './lib.mjs';
-const require = createRequire(
-  (process.env.QA_REPO ?? '/home/user/devfathom-commercial') + '/package.json'
-);
+import { roleContext, closeBrowser, BASE, REPO, save } from './lib.mjs';
+const require = createRequire(`${REPO}/package.json`);
 const { AxeBuilder } = require('@axe-core/playwright');
 const scheme = process.argv[2] ?? 'light';
 const targets = [

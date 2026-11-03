@@ -1,9 +1,7 @@
 // Login throttle probe with a NON-EXISTENT account (never a real QA user).
 import { createRequire } from 'node:module';
-import { BASE, pkt, save } from './lib.mjs';
-const require = createRequire(
-  (process.env.QA_REPO ?? '/home/user/devfathom-commercial') + '/package.json'
-);
+import { BASE, REPO, pkt, save } from './lib.mjs';
+const require = createRequire(`${REPO}/package.json`);
 const { request } = require('playwright');
 const email = `qa.ratelimit.probe.${Date.now()}@example.com`;
 const ctx = await request.newContext({ baseURL: BASE, maxRedirects: 0 });

@@ -2,10 +2,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { browser, closeBrowser, BASE, SCRATCH, pkt, save } from './lib.mjs';
-const require = createRequire(
-  (process.env.QA_REPO ?? '/home/user/devfathom-commercial') + '/package.json'
-);
+import { browser, closeBrowser, BASE, REPO, SCRATCH, pkt, save } from './lib.mjs';
+const require = createRequire(`${REPO}/package.json`);
 const { request } = require('playwright');
 const CREDS = JSON.parse(
   fs.readFileSync(process.env.QA_CREDS ?? path.join(SCRATCH, 'secrets/creds.json'), 'utf8')
