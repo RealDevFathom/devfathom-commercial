@@ -1,0 +1,351 @@
+router_key	procedure	query|mutation	base_procedure	enforced_check	where	min_input	notes
+organizationAdmin	askFathomSettings	query	protectedProcedure	NONE beyond login (organizationAdmin not in PROCEDURE_MODULES, so no module gate either)	src/server/trpc.ts:312-315	z.void()	Any logged-in member reads org Ask Fathom settings; read-only
+organizationAdmin	setAskFathomEnabled	mutation	adminProcedure	admin:access + explicit role==='ADMIN' recheck	src/server/routers/organization-admin.ts:85-88	{askFathomEnabled:boolean}	double-guarded ADMIN
+organizationAdmin	departments	query	adminProcedure	admin:access (role ADMIN)	src/server/trpc.ts:331-334; src/lib/abac/policies.ts:118	none	
+organizationAdmin	roles	query	adminProcedure	admin:access	src/server/trpc.ts:331-334	none	
+organizationAdmin	upsertDepartment	mutation	adminProcedure	admin:access	src/server/routers/organization-admin.ts:124	{id?,key,name,active?,sortOrder?}	
+organizationAdmin	removeDepartment	mutation	adminProcedure	admin:access	src/server/routers/organization-admin.ts:159	{id}	
+organizationAdmin	overview	query	adminProcedure	admin:access	src/server/routers/organization-admin.ts:184	none	
+organizationAdmin	updateProfile	mutation	adminProcedure	admin:access	src/server/routers/organization-admin.ts:304	{displayName,legalName?,timezone,locale,primaryContactName?|null,primaryContactEmail?}	
+organizationAdmin	updateBrand	mutation	adminProcedure	admin:access	src/server/routers/organization-admin.ts:328	{logoUrl?,markUrl?,faviconUrl?,primaryColor,accentColor,supportEmail?,fromName?|null}	
+organizationAdmin	updateEmail	mutation	adminProcedure	admin:access	src/server/routers/organization-admin.ts:355	{provider,fromName?|null,fromAddress?,replyTo?,apiKey?,configuration}	
+organizationAdmin	upsertRole	mutation	adminProcedure	admin:access + isSystem guard	src/server/routers/organization-admin.ts:392	{id?,key,name,description|null,permissions:[{capability,effect:ALLOW|DENY}]}	ADMIN mints org roles with any capability string (incl pharmacy:*); self-service privilege source
+organizationAdmin	removeRole	mutation	adminProcedure	admin:access + isSystem + no-users guard	src/server/routers/organization-admin.ts:453	{id}	
+organizationAdmin	updateMember	mutation	adminProcedure	admin:access	src/server/routers/organization-admin.ts:481	{id,role:ADMIN|HR|EMPLOYEE,status,organizationRoleId|null,title,department}	assigns tenant role + org role; ADMIN only
+organizationAdmin	createMember	mutation	adminProcedure	admin:access	src/server/routers/organization-admin.ts:563	{name,email,password,title,role,department,organizationRoleId?|null,branchIds?[]}	
+organizationAdmin	resetMemberPassword	mutation	adminProcedure	admin:access	src/server/routers/organization-admin.ts:667	{id,password}	
+organizationAdmin	addDomain	mutation	adminProcedure	admin:access	src/server/routers/organization-admin.ts:694	{host,kind,isPrimary}	
+organizationAdmin	retryDomain	mutation	adminProcedure	admin:access	src/server/routers/organization-admin.ts:732	{id}	
+organizationAdmin	createScimToken	mutation	adminProcedure	admin:access	src/server/routers/organization-admin.ts:757	{name,expiresAt|null}	
+organizationAdmin	revokeScimToken	mutation	adminProcedure	admin:access	src/server/routers/organization-admin.ts:792	{id}	
+team	getAll	query	protectedProcedure	hr module + resolver can(team:view); non-ADMIN/HR get only own row + PII redacted	src/server/routers/team.ts:138-167	none	
+team	getRoster	query	protectedProcedure	hr module + can(team:view)	src/server/routers/team.ts:176-188	none	
+team	inviteMember	mutation	adminProcedure	admin:access + module 'admin'	src/server/routers/team.ts:195; src/lib/module-catalog.ts:295	{name,email,role?,organizationRoleId?|null,department,title,phone?,bio?,skills?}	
+team	getById	query	protectedProcedure	self=account(no module); other=hr module + can(team:view); PII redacted unless ADMIN/HR/self	src/server/routers/team.ts:330-364	{id}	
+team	getLeaveRequests	query	hrProcedure	hr:access (ADMIN or HR)	src/server/trpc.ts:346-349; src/lib/abac/policies.ts:119	{limit?,cursor?}?	
+team	createLeaveRequest	mutation	protectedProcedure	hr module; writes own userId only	src/server/routers/team.ts:434-480	{type,startDate,endDate,...}	self-service
+team	cancelLeaveRequest	mutation	protectedProcedure	resolver: leave.userId===self + PENDING	src/server/routers/team.ts:481-493	{id}	
+team	updateLeaveRequest	mutation	protectedProcedure	resolver: own + PENDING	src/server/routers/team.ts:506-518	{id,type?,startDate?,endDate?,...}	
+team	updateLeaveStatus	mutation	capabilityProcedure('leave:approve')	can(leave:approve)=ADMIN/HR + not own + PENDING	src/server/routers/team.ts:571; src/lib/abac/policies.ts:123	{id,status:APPROVED|REJECTED}	
+team	setLeaveBalance	mutation	hrProcedure	hr:access	src/server/routers/team.ts:652	{userId,year,type,entitledDays}	
+team	getLeaveBalances	query	protectedProcedure	hr module; resolver: own unless ADMIN/HR	src/server/routers/team.ts:682-690	{userId?,year?}?	
+team	getTeamLeaveCalendar	query	protectedProcedure	hr module; any member	src/server/routers/team.ts:727	{startDate,endDate,includePending?}	
+team	getNotifications	query	protectedProcedure	account (no module); own rows	src/server/routers/team.ts:757; src/lib/module-catalog.ts:257	none	
+team	markNotificationRead	mutation	protectedProcedure	own (assertNotificationOwner)	src/server/routers/team.ts:765	{id}	
+team	markAllNotificationsRead	mutation	protectedProcedure	own	src/server/routers/team.ts:775	none	
+team	updateProfile	mutation	protectedProcedure	account; own	src/server/routers/team.ts:783	{name?,phone?|null,bio?|null,skills?[]}	
+team	changePassword	mutation	protectedProcedure	account; own + current password	src/server/routers/team.ts:799	{currentPassword,newPassword}	
+team	signOutEverywhere	mutation	protectedProcedure	account; own	src/server/routers/team.ts:837	none	
+team	mySignIns	query	protectedProcedure	account; own	src/server/routers/team.ts:852	none	
+team	getNotificationPrefs	query	protectedProcedure	account; own	src/server/routers/team.ts:867	none	
+team	updateNotificationPrefs	mutation	protectedProcedure	account; own	src/server/routers/team.ts:877	notificationPrefs	
+team	adminUpdateMember	mutation	adminProcedure	admin:access + last-admin guard	src/server/routers/team.ts:887	{id,name?,email?,role?,status?,department?,organizationRoleId?,...}	
+team	adminResetPassword	mutation	adminProcedure	admin:access	src/server/routers/team.ts:1002	{id,newPassword}	
+team	layOffMember	mutation	hrProcedure	hr:access + can(team:layoff){targetRole} + not own + last-admin	src/server/routers/team.ts:1037-1070	{id,reason}	HR cannot lay off ADMIN
+team	listPerformanceNotes	query	protectedProcedure	resolver: ADMIN or self	src/server/routers/team.ts:1125-1136	{userId}	
+team	addPerformanceNote	mutation	adminProcedure	admin:access	src/server/routers/team.ts:1140	{userId,content}	
+team	deletePerformanceNote	mutation	adminProcedure	admin:access + own-author	src/server/routers/team.ts:1158	{id}	
+team	getHrOverview	query	hrProcedure	hr:access	src/server/routers/team.ts:1170	none	
+pharmacySales	manualPaymentSettings	query	protectedProcedure	ADMIN->branchScopeOrForbidden; else requireCounterReceiptAccess(canonical counter)=can(pharmacy:counter)+branch assignment	src/server/routers/pharmacy-sales.ts:510-514	{branchId}	
+pharmacySales	saveManualPaymentSettings	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-sales.ts:516	{branchId,revision,settings}	
+pharmacySales	sandboxPayment	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-sales.ts:525	{branchId,...}	
+pharmacySales	customerDirectory	query	adminProcedure	admin:access + pharmacy-crm module	src/server/routers/pharmacy-sales.ts:535-538	{branchId,query?}	
+pharmacySales	counterEvidence	query	adminProcedure	admin:access + pharmacy-core module	src/server/routers/pharmacy-sales.ts:559-562	{branchId,saleId}	
+pharmacySales	dailyCloseEvidence	query	adminProcedure	admin:access	src/server/routers/pharmacy-sales.ts:565	{branchId,closeId}	
+pharmacySales	khataAccounts	query	protectedProcedure	khataScope(read): can(pharmacy:counter) OR can(reports:financial) + Khata capability family + branch assignment (ADMIN bypasses assignment)	src/server/routers/pharmacy-sales.ts:571-574,170-204	{branchId,saleId}	
+pharmacySales	khataStatement	query	protectedProcedure	khataScope(read)	src/server/routers/pharmacy-sales.ts:581	{branchId,saleId,familyAccountId}	
+pharmacySales	closePreview	query	protectedProcedure	requireCloseAccess: session role ADMIN OR can(pharmacy:close); scopeFor branch-in-org ONLY (no branch assignment)	src/server/routers/pharmacy-sales.ts:600-603,493-507	{branchId,businessDate(UTC midnight)}	
+pharmacySales	closeDay	mutation	protectedProcedure	requireCloseAccess (ADMIN or pharmacy:close); branch-in-org only	src/server/routers/pharmacy-sales.ts:612-634	{branchId,businessDate,sourceHash(64),counts:[{drawerSessionId,countedCashMinor}],varianceNote}	#1015 close; #654 needs ADMIN-or-pharmacy:close (no manager cap)
+pharmacySales	customerSnapshot	query	protectedProcedure	NONE beyond scopeFor (branch active in org; no capability, no assignment)	src/server/routers/pharmacy-sales.ts:643	{branchId,customerId,page?}	returns creditBalance/available credit/history
+pharmacySales	linkCustomer	mutation	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:665	{branchId,saleId,patientId,displayName,phoneLast4?}	
+pharmacySales	redeemPoints	mutation	capabilityProcedure('pharmacy:dispense')	can(pharmacy:dispense) exact grant	src/server/routers/pharmacy-sales.ts:691	{branchId,saleId,points,deviceId,businessDate,idempotencyKey}	
+pharmacySales	drawerStatus	query	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:714	{branchId,deviceId}	
+pharmacySales	openDrawer	mutation	protectedProcedure	NONE beyond scopeFor (no counter cap, no assignment)	src/server/routers/pharmacy-sales.ts:726	{branchId,deviceId,businessDate,openingFloatMinor}	#412; #1015
+pharmacySales	drawerMovement	mutation	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:746	{branchId,drawerSessionId,kind:PAID_IN|PAID_OUT,amountMinor,reason}	#412 any member can PAID_OUT cash
+pharmacySales	closeDrawer	mutation	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:767	{branchId,drawerSessionId,countedCashMinor,controlledCountHook?}	#412; #1015
+pharmacySales	dailyClose	mutation	protectedProcedure	requireCloseAccess (ADMIN or pharmacy:close)	src/server/routers/pharmacy-sales.ts:787-799	{branchId,businessDate,reopenReason?,controlledCountHook?}	#1015
+pharmacySales	tenderOutcome	query	protectedProcedure	KHATA/CREDIT/family->khataScope(read); manual tender->requireCounterReceiptAccess(counter); else scopeFor only	src/server/routers/pharmacy-sales.ts:808-816	tenderInput	
+pharmacySales	tender	mutation	protectedProcedure	non-credit->requireCounterReceiptAccess(canonical counter)+assignment; KHATA/CREDIT->khataScope(write)=can(pharmacy:counter)+Khata family+assignment	src/server/routers/pharmacy-sales.ts:818-881	tenderInput{branchId,saleId,deviceId,businessDate,type,amountMinor,idempotencyKey,cashReceivedMinor?,familyAccountId?,ownerOverride?,...}	
+pharmacySales	refundTender	mutation	protectedProcedure	requireCounterReceiptAccess (counter ALLOW, or Khata family ALLOW for CREDIT) + branch assignment; NO manager/owner approval, NO self-approval separation	src/server/routers/pharmacy-sales.ts:882-907	{branchId,originalTenderId,deviceId,businessDate,amountMinor,reason,idempotencyKey,manualCashFallback?,requireReturnedValue?}	#1016; #606
+pharmacySales	create	mutation	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:967	{branchId,quotation?}	
+pharmacySales	addLine	mutation	protectedProcedure	OTC: NONE beyond scopeFor. Rx/restricted->assertRxSaleAllowed(can pharmacy:dispense). controlled->can(pharmacy:dispense)+independent PIN witness. discount/FEFO-override approver is caller-supplied, NOT authorization-checked	src/server/routers/pharmacy-sales.ts:974-1363; src/lib/pharmacy/sales.ts:161-176	{branchId,saleId,medicineId,presentationId,packLevelId,saleUnit,quantity,canonicalUnitsPerSaleUnit,idempotencyKey; +discountMinor?&approvedByUserId?&approvalPolicy?; +override{inventoryLotId,reason,approvalPolicy}?; +controlledAuthorization?; +prescription?}	#520 discount/override approval = free text
+pharmacySales	transition	mutation	protectedProcedure	requireCounterReceiptAccess(counter family)+assignment; void of controlled needs witness PIN	src/server/routers/pharmacy-sales.ts:1364-1385	{branchId,saleId,action:hold|resume|convertQuotation|void,reason?,controlledWitness?}	NOTE action 'complete' not present here (removed per #409)
+pharmacySales	lookupReceiptByNumber	query	auditedProtectedProcedure	requireCounterReceiptAccess	src/server/routers/pharmacy-sales.ts:1401	{branchId,receiptNumber}	
+pharmacySales	returnHistory	query	protectedProcedure	requireCounterReceiptAccess	src/server/routers/pharmacy-sales.ts:1418	{branchId,saleId}	
+pharmacySales	returnLine	mutation	protectedProcedure	requireCounterReceiptAccess(counter family)+assignment; NO manager approval	src/server/routers/pharmacy-sales.ts:1428-1451	{branchId,saleLineId,canonicalUnits,reason,integrityDecision,idempotencyKey,disposition?,lotId?,quarantineLocationId?,controlledWitness?}	#1016; #606
+pharmacySales	captureDemand	mutation	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1465	{branchId,saleUnit,quantity,reason,inventoryRuleSnapshot,...}	
+pharmacySales	substituteProposals	query	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1494	{branchId,medicineId,presentationId,quantityCanonicalUnits,referencePriceMinor?}	
+pharmacySales	upsellSuggestions	query	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1520	{branchId,medicineIds[],limit?}	
+pharmacySales	declineSubstitute	mutation	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1536	{branchId,requestedMedicineId,requestedText,saleUnit,quantity,inventoryRuleSnapshot,...}	
+pharmacySales	acknowledgeDuplicateSalt	mutation	protectedProcedure	requireCounterReceiptAccess	src/server/routers/pharmacy-sales.ts:1575-1586	{branchId,saleId,ingredientKey}	
+pharmacySales	recoverDemand	mutation	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1618	{branchId,demandId,saleLineId}	
+pharmacySales	demandAggregate	query	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1634	{branchId,from,to}	returns _sum estimatedMarginMinor/estimatedValueMinor
+pharmacySales	addRestockInterest	mutation	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1639	{branchId,demandEventId,quantityUnits,patientId?,channel?,reserveOnArrival?,campaignKey?}	
+pharmacySales	captureSafeRestockArrival	mutation	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1662	{branchId,inventoryLotId}	
+pharmacySales	optOutRestockInterest	mutation	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1673	{branchId,interestId}	
+pharmacySales	recoverRestockInterest	mutation	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1684	{branchId,interestId,saleLineId}	
+pharmacySales	restockRecoveryReport	query	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1697	{branchId,campaignKey?}	
+pharmacySales	counterBranches	query	protectedProcedure	NONE (module only); lists every active org branch	src/server/routers/pharmacy-sales.ts:1708	none	
+pharmacySales	counterSearch	query	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1733	{branchId,query,limit?}	
+pharmacySales	authenticatePack	mutation	auditedProtectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1755	{branchId,payload}	
+pharmacySales	counterLotOptions	query	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-sales.ts:1773	{branchId,medicineId}	
+pharmacySales	counterCart	query	protectedProcedure	requireCounterReceiptAccess	src/server/routers/pharmacy-sales.ts:1815	{branchId,saleId}	
+pharmacySales	counterReceipt	query	auditedProtectedProcedure	requireCounterReceiptAccess	src/server/routers/pharmacy-sales.ts:1832	{branchId,saleId}	
+pharmacySales	counterReceiptPrintJob	query	auditedProtectedProcedure	requireCounterReceiptAccess	src/server/routers/pharmacy-sales.ts:1862	{branchId,saleId,locale:en|ur,reprint}	
+pharmacySales	counterReceiptFormat	query	auditedProtectedProcedure	requireCounterReceiptAccess	src/server/routers/pharmacy-sales.ts:1912	{branchId}	
+pharmacySales	counterSaveReceiptFormat	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-sales.ts:1919	SaveReceiptLayoutSchema{branchId,...}	
+pharmacySales	counterKeymap	query	protectedProcedure	NONE (own preference)	src/server/routers/pharmacy-sales.ts:1930	none	
+pharmacySales	counterSaveKeymap	mutation	protectedProcedure	NONE (own preference)	src/server/routers/pharmacy-sales.ts:1958	{preset,overrides}	
+pharmacyPurchasing	createSupplier	mutation	protectedProcedure	NONE beyond pharmacy-procurement module (no can(pharmacy:procurement))	src/server/routers/pharmacy-purchasing.ts:372	{name,legalName?,serviceArea?,contactName?,contactPhone?,paymentTermsDays?,creditLimitMinor?}	#1010; #507
+pharmacyPurchasing	recordSupplierLicence	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:389	{supplierId,licenceType,licenceNumber,issuingAuthority,issuedAt,expiresAt,verified?,evidenceUri?,supersedesId?}	#1010
+pharmacyPurchasing	setSupplierAuthorization	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:422	{supplierId,authorized:boolean}	#1010; #507 any member flips supplier authorization
+pharmacyPurchasing	createRequisition	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:435	{reference,branchId?,neededBy?,note?,lines:[{medicineId,packLevelId,quantityPacks,canonicalUnitsPerPack,note?}]}	#1010
+pharmacyPurchasing	submitRequisition	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:490	{requisitionId}	#1010
+pharmacyPurchasing	recordQuote	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:510	{requisitionId,supplierId,quotedAt,validUntil,lines:[{requisitionLineId,pricePerPackMinor,forecastSellThroughPacks,canonicalUnitsPerPack,...}]}	#1010
+pharmacyPurchasing	compareQuotes	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:577	{requisitionLineId,at?}	returns prices
+pharmacyPurchasing	createPurchaseOrder	mutation	protectedProcedure	NONE beyond module (+supplier eligibility, not authz)	src/server/routers/pharmacy-purchasing.ts:629	{reference,supplierId,branchId?,requisitionId?,quoteId?,lines:[{medicineId,packLevelId,orderedPacks,canonicalUnitsPerPack,listPricePerPackMinor,...}],...}	#1010; #507
+pharmacyPurchasing	submitPurchaseOrder	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:758	{purchaseOrderId}	#1010
+pharmacyPurchasing	approvePurchaseOrder	mutation	protectedProcedure	NONE beyond module + SELF_APPROVAL only (approver != creator and != requisition requester)	src/server/routers/pharmacy-purchasing.ts:781-806; src/lib/pharmacy/purchasing.ts:138-146	{purchaseOrderId,decision:APPROVED|REJECTED,reason?}	#1010; #507 any member approves PO if not creator
+pharmacyPurchasing	sendPurchaseOrder	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:859	{purchaseOrderId}	#1010
+pharmacyPurchasing	landedCost	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:886	{purchaseOrderId}	returns landed cost figures
+pharmacyPurchasing	createGoodsReceipt	mutation	protectedProcedure	assertProcurement = actorCanProcure (pharmacy:procurement grant, or tenant ADMIN with no org role); directPurchase bypass approver id is caller-supplied, only self-approval checked	src/server/routers/pharmacy-purchasing.ts:943,1029; src/lib/pharmacy/procurement-access.ts:21-55; src/lib/pharmacy/receiving.ts:163-176	{reference,branchId,supplierId,supplierInvoiceRef,supplierInvoiceDate,warrantyEvidenceRef,receivedAt,(directPurchase{reason,approvedByUserId} XOR purchaseOrderId),lines:[...]}	bypass approvedByUserId not verified as real/capable
+pharmacyPurchasing	postGoodsReceipt	mutation	protectedProcedure	assertProcurement	src/server/routers/pharmacy-purchasing.ts:1207,1222	{branchId,goodsReceiptId,staffProfileId?,pin?}	
+pharmacyPurchasing	controlledWitnesses	query	protectedProcedure	resolver: can(pharmacy:safety) OR can(pharmacy:dispense)	src/server/routers/pharmacy-purchasing.ts:1249,1262-1266	{branchId,goodsReceiptId}	
+pharmacyPurchasing	reverseGoodsReceipt	mutation	protectedProcedure	assertProcurement	src/server/routers/pharmacy-purchasing.ts:1292,1303	{branchId,goodsReceiptId,reason}	
+pharmacyPurchasing	receivingExceptions	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1319	{branchId,status?,goodsReceiptId?}	
+pharmacyPurchasing	resolveReceivingException	mutation	protectedProcedure	NONE beyond module (no assertProcurement)	src/server/routers/pharmacy-purchasing.ts:1339	{branchId,receivingExceptionId,resolutionNote}	#1010
+pharmacyPurchasing	createPurchaseReturn	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1367	{branchId,supplierId,kind:PURCHASE_RETURN|EXPIRY_CLAIM,reference,lines:[{inventoryLotId,stockLocationId,quantityUnits,reason,returnWindowEndsAt,expectedCreditMinor}]}	#1010
+pharmacyPurchasing	submitPurchaseReturn	mutation	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1411	{branchId,purchaseReturnId}	#1010
+pharmacyPurchasing	dispatchPurchaseReturn	mutation	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1428	{branchId,purchaseReturnId,idempotencyKey}	#1010
+pharmacyPurchasing	issueDebitNote	mutation	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1453	{branchId,purchaseReturnId,reference}	#1010
+pharmacyPurchasing	recordSupplierCredit	mutation	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1476	{branchId,supplierId,reference,amountMinor,receivedAt}	#1010
+pharmacyPurchasing	allocateSupplierCredit	mutation	auditedProtectedProcedure	NONE beyond module + SELF_APPROVAL (submitter != allocator)	src/server/routers/pharmacy-purchasing.ts:1502; src/lib/pharmacy/supplier-returns.ts:96-106	{branchId,supplierCreditId,debitNoteId,amountMinor}	#1010
+pharmacyPurchasing	debitNotePositions	query	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1530	{branchId,supplierId?}	
+pharmacyPurchasing	workspace	query	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1556	none	
+pharmacyPurchasing	suppliers	query	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1564	{includeInactive?}?	returns creditLimitMinor/paymentTermsDays
+pharmacyPurchasing	requisitions	query	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1576	none	
+pharmacyPurchasing	purchaseOrders	query	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1579	none	
+pharmacyPurchasing	receivedAgainstOrder	query	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1588	{purchaseOrderId}	
+pharmacyPurchasing	goodsReceipts	query	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1597	{branchId}	
+pharmacyPurchasing	receivingExceptionQueue	query	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1602	{branchId,status?}	
+pharmacyPurchasing	lotsFromReceipt	query	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1614	{branchId,goodsReceiptId}	returns unitCostMinor
+pharmacyPurchasing	purchaseReturns	query	protectedProcedure	supplierFollowUpScope: pharmacy-procurement module + can(reports:financial) + branch-in-org	src/server/routers/pharmacy-purchasing.ts:1621; 346-367	{branchId,page?,...}	
+pharmacyPurchasing	returnableLots	query	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1628	{branchId}	returns unitCostMinor
+pharmacyPurchasing	resolveScan	query	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1636	{term}	
+pharmacyPurchasing	authenticatePack	mutation	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-purchasing.ts:1641	{branchId,payload}	
+pharmacyPurchasing	supplierCredits	query	protectedProcedure	supplierFollowUpScope (procurement module + can(reports:financial))	src/server/routers/pharmacy-purchasing.ts:1655	{branchId,page?,...}	
+pharmacyPurchasing	centralDemand	query	auditedProtectedProcedure	purchasingAccess: pharmacyCentralPurchasingAccess grant (branch or org-wide)	src/server/routers/pharmacy-purchasing.ts:1662; src/lib/pharmacy/central-purchasing.ts:13-27	{branchId?}	
+pharmacyPurchasing	createCentralPurchaseOrder	mutation	auditedProtectedProcedure	requireOrganizationPurchaser (org-wide central grant)	src/server/routers/pharmacy-purchasing.ts:1680; src/lib/pharmacy/central-purchasing.ts:29-31,79	{reference,supplierId,receivingBranchId,lines:[...]}	
+pharmacyPurchasing	allocateCentralReceipt	mutation	auditedProtectedProcedure	requireOrganizationPurchaser	src/server/routers/pharmacy-purchasing.ts:1719,1743	{goodsReceiptId,allocations:[{goodsReceiptLineId,destinationBranchId,destinationStockLocationId,quantityUnits}]}	
+pharmacyInventory	ingestDrapManual	mutation	regulatory=capabilityProcedure('pharmacy:safety')	can(pharmacy:safety) exact grant	src/server/routers/pharmacy-inventory.ts:590	{notices:[{kind:PRICE|RECALL,...}]}	
+pharmacyInventory	ingestDrapFile	mutation	regulatory	can(pharmacy:safety)	src/server/routers/pharmacy-inventory.ts:602	{contents}	
+pharmacyInventory	confirmDrapPrice	mutation	regulatory	can(pharmacy:safety)	src/server/routers/pharmacy-inventory.ts:610	{proposalId}	
+pharmacyInventory	drapRecallActions	query	auditedProtectedProcedure	NONE beyond pharmacy-inventory module	src/server/routers/pharmacy-inventory.ts:616	{recallNoticeId}	returns patient name/phone via recall trace
+pharmacyInventory	reverseDrapRecall	mutation	regulatory	can(pharmacy:safety)	src/server/routers/pharmacy-inventory.ts:620	{recallNoticeId,reason}	
+pharmacyInventory	createLocation	mutation	inventoryControl=capabilityProcedure('pharmacy:inventory')	can(pharmacy:inventory) + scopeFor branch-in-org ONLY (no branch assignment)	src/server/routers/pharmacy-inventory.ts:632	{branchId,code,name,kind,coldChain?,minimumTemperatureC?,maximumTemperatureC?,...}	#508
+pharmacyInventory	recordTemperature	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:675	{branchId,stockLocationId,temperatureC,recordedAt}	
+pharmacyInventory	importTemperatureCsv	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:700	{branchId,stockLocationId,csv}	
+pharmacyInventory	temperatureZoneStatuses	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-inventory.ts:724	{branchId}	
+pharmacyInventory	configureTemperatureMonitoring	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:731	{branchId,stockLocationId,expectedTemperatureReadingIntervalMinutes,temperatureExcursionDurationMinutes}	
+pharmacyInventory	registerBatch	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:766	{medicineId,batchNumber,printedExpiry,expiryPrecision}	
+pharmacyInventory	setBatchState	mutation	regulatory	can(pharmacy:safety)	src/server/routers/pharmacy-inventory.ts:800	{manufacturingBatchId,state:ACTIVE|RECALLED|QUARANTINED,reason?}	
+pharmacyInventory	receiveLot	mutation	inventoryControl	can(pharmacy:inventory) + scopeFor (no assignment)	src/server/routers/pharmacy-inventory.ts:829	{branchId,manufacturingBatchId,packLevelId,stockLocationId,unitsPerPack,supplierName,supplierInvoiceRef,unitCostMinor,printedMrpMinor,printedExpiry,expiryPrecision,quantityUnits,idempotencyKey}	#508 caller-supplied cost/qty
+pharmacyInventory	allocateForSale	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:883	{branchId,medicineId,requiredUnits,idempotencyKeyPrefix,override?,emergency?}	
+pharmacyInventory	breakPack	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:927	{branchId,inventoryLotId,stockLocationId,requiredLooseUnits,idempotencyKey}	
+pharmacyInventory	transfer	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:953	{branchId,inventoryLotId,fromStockLocationId,toStockLocationId,units,idempotencyKeyPrefix}	
+pharmacyInventory	createCount	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:988	{branchId,varianceThreshold,readings:[{inventoryLotId,stockLocationId,countedSealedPacks,countedLooseUnits}]}	#508
+pharmacyInventory	approveCount	mutation	inventoryControl	can(pharmacy:inventory) + COAUTH (approver != count creator)	src/server/routers/pharmacy-inventory.ts:1019; src/lib/pharmacy/inventory-operations.ts:287-288	{branchId,countId,idempotencyKeyPrefix}	
+pharmacyInventory	writeOff	mutation	inventoryControl	can(pharmacy:inventory) + witness != actor and witness branch-assigned	src/server/routers/pharmacy-inventory.ts:1044; src/lib/pharmacy/inventory-operations.ts:331-347	{branchId,inventoryLotId,stockLocationId,units,witnessId,reason,evidenceRef,idempotencyKey,disposition?}	#508
+pharmacyInventory	quarantinePart	mutation	regulatory	can(pharmacy:safety)	src/server/routers/pharmacy-inventory.ts:1077	{branchId,inventoryLotId,stockLocationId,units,reason,idempotencyKeyPrefix,damaged?}	
+pharmacyInventory	releaseQuarantinedPart	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1101	{branchId,inventoryLotId,stockLocationId,units,reason,idempotencyKeyPrefix}	
+pharmacyInventory	allocateTransfer	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1124	{branchId,toBranchId,lines:[{sourceLotId,sourceStockLocationId,destinationStockLocationId,quantityUnits}]}	
+pharmacyInventory	approveTransfer	mutation	inventoryControl	can(pharmacy:inventory) + COAUTH (approver != allocator)	src/server/routers/pharmacy-inventory.ts:1153; src/lib/pharmacy/inventory-operations.ts:581	{branchId,transferId}	
+pharmacyInventory	dispatchTransfer	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1163	{branchId,transferId,idempotencyKeyPrefix}	
+pharmacyInventory	receiveTransferLine	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1188	{branchId,transferId,lineId,receivedUnits,idempotencyKeyPrefix}	
+pharmacyInventory	createRecall	mutation	regulatory	can(pharmacy:safety)	src/server/routers/pharmacy-inventory.ts:1212	{reference,reason,batchId?,medicineId?}	
+pharmacyInventory	recallTrace	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-inventory.ts:1233	{recallNoticeId}	
+pharmacyInventory	acknowledgeRecall	mutation	regulatory	can(pharmacy:safety)	src/server/routers/pharmacy-inventory.ts:1243	{branchId,recallNoticeId}	
+pharmacyInventory	closeRecall	mutation	regulatory	can(pharmacy:safety)	src/server/routers/pharmacy-inventory.ts:1256	{recallNoticeId}	
+pharmacyInventory	reserveSupplierClaim	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1268	{branchId,inventoryLotId,reservedUnits,returnBy}	
+pharmacyInventory	nearExpiryBoard	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-inventory.ts:1290	{branchId}	
+pharmacyInventory	onHand	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-inventory.ts:1296	{branchId,medicineId}	
+pharmacyInventory	approveSafetyStock	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1311	{branchId,medicineId,safetyStockUnits,coverageDays?}	
+pharmacyInventory	refreshStockSignals	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1354	{branchId}	
+pharmacyInventory	markStaleSignals	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1367	{branchId}	
+pharmacyInventory	acknowledgeSignal	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1373	{branchId,signalId}	
+pharmacyInventory	snoozeSignal	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1387	{branchId,signalId,until,reason}	
+pharmacyInventory	dismissSignal	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1411	{branchId,signalId,reason}	
+pharmacyInventory	createDraftAction	mutation	inventoryControl	can(pharmacy:inventory) + per-kind: DRAFT_TRANSFER->pharmacy:inventory, DRAFT_REQUISITION/CLAIM->pharmacy:procurement	src/server/routers/pharmacy-inventory.ts:1437; src/lib/pharmacy/stock-signals-operations.ts:698-711	discriminated {kind,branchId,signalId,...}	
+pharmacyInventory	stockSignalDashboard	query	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-inventory.ts:1514	{branchId}	
+pharmacyInventory	stockSignalDigest	query	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-inventory.ts:1526	{branchId,ownerUserId}	
+pharmacyInventory	expiryBoardLots	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-inventory.ts:1545	{branchId,withinDays?}	returns unitCostMinor/printedMrpMinor/valueAtRiskMinor
+pharmacyInventory	draftExpiryMarkdown	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1769	{branchId,inventoryLotId,stockLocationId,markdownPercent,reason}	
+pharmacyInventory	draftExpiryReturn	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:1910	{branchId,inventoryLotId,stockLocationId,supplierId,units,reason}	
+pharmacyInventory	quarantineExpiring	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:2003	{branchId,inventoryLotId,stockLocationId,units,reason,requestKey}	
+pharmacyInventory	transferBoard	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-inventory.ts:2057	{branchId}	
+pharmacyInventory	receiveTransferWithVariance	mutation	inventoryControl	can(pharmacy:inventory)	src/server/routers/pharmacy-inventory.ts:2062	{branchId,transferId,lines:[{lineId,receivedUnits}],variance?,idempotencyKeyPrefix}	
+pharmacyMedicine	priceNotices	query	capabilityProcedure('pharmacy:safety')	can(pharmacy:safety)	src/server/routers/pharmacy-medicine.ts:247	none	
+pharmacyMedicine	confirmPrices	mutation	capabilityProcedure('pharmacy:safety')	can(pharmacy:safety)	src/server/routers/pharmacy-medicine.ts:253	{proposalIds[]}	
+pharmacyMedicine	ingestPriceNotices	mutation	capabilityProcedure('pharmacy:safety')	can(pharmacy:safety)	src/server/routers/pharmacy-medicine.ts:262	{contents}	
+pharmacyMedicine	setPackPrice	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-medicine.ts:277	{packLevelId,branchId?,mrpMinor,sellingPriceMinor|null,effectiveFrom}	
+pharmacyMedicine	priceOverrides	query	adminProcedure	admin:access	src/server/routers/pharmacy-medicine.ts:296	{branchId?}	
+pharmacyMedicine	configureReferenceConnector	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-medicine.ts:306	{label?,enabled?,schedule}	
+pharmacyMedicine	referenceConnectorState	query	adminProcedure	admin:access	src/server/routers/pharmacy-medicine.ts:333	none	
+pharmacyMedicine	runReferenceConnectorNow	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-medicine.ts:340	{connectorId:'manual-file',batchId,fileName,triggerKind?,rows:[...]}	
+pharmacyMedicine	referenceConnectorProposals	query	capabilityProcedure('pharmacy:catalogue-review')	can(pharmacy:catalogue-review) exact grant	src/server/routers/pharmacy-medicine.ts:422	none	
+pharmacyMedicine	decideReferenceConnectorProposal	mutation	capabilityProcedure('pharmacy:catalogue-review')	can(pharmacy:catalogue-review) exact	src/server/routers/pharmacy-medicine.ts:431	{proposalId,decision:CONFIRM|REJECT}	
+pharmacyMedicine	referenceCandidates	query	adminProcedure	admin:access	src/server/routers/pharmacy-medicine.ts:549	none	
+pharmacyMedicine	createIngredient	mutation	protectedProcedure	NONE beyond pharmacy-core module	src/server/routers/pharmacy-medicine.ts:576	{name}	#1012
+pharmacyMedicine	createMedicine	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-medicine.ts:580	{productName,productFamily,brandName?,manufacturer?,rx?,otc?,restricted?,controlled?,presentation?,strengths?,provenance?,saleable?}	#1012 any staff creates catalogue entries
+pharmacyMedicine	get	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-medicine.ts:662	{id}	
+pharmacyMedicine	createPackLevel	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-medicine.ts:677	{presentationId,versionGroupId,level:CARTON|BOX|STRIP|UNIT,unitsPerParent,effectiveFrom,parentPackLevelId?}	#1012
+pharmacyMedicine	revisePackLevel	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-medicine.ts:709	{id,unitsPerParent,effectiveFrom}	#1012
+pharmacyMedicine	recordPrintedMrp	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-medicine.ts:742	{packLevelId,batchReference,printedMrpMinor,roundingIncrementMinor?}	#1012
+pharmacyMedicine	deriveLooseUnitPrice	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-medicine.ts:762	{mrpId,canonicalUnitsInPack}	
+pharmacyMedicine	addBarcode	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-medicine.ts:778	{presentationId,type:GTIN|MANUFACTURER|INTERNAL,code,packLevelId?}	#1012
+pharmacyMedicine	addAlias	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-medicine.ts:795	{medicineId,type:BRAND|GENERIC|URDU|TRANSLITERATION|LEGACY_CODE,value}	#1012
+pharmacyMedicine	resolveScan	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-medicine.ts:811	{code}	
+pharmacyMedicine	search	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-medicine.ts:854	{query,limit?}	
+pharmacyMedicine	duplicateGroups	query	adminProcedure	admin:access	src/server/routers/pharmacy-medicine.ts:894	none	
+pharmacyMedicine	recordReviewDecision	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-medicine.ts:915	reviewDecisionInput{duplicateKey,action,medicineIds[],payload}	
+pharmacyMedicine	publishAssertions	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-medicine.ts:1029	{assertionIds[]}	
+pharmacyMedicine	supersedePublication	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-medicine.ts:1181	{batchId}	
+pharmacyPrescriptions	workspace	query	fileProcedure	pharmacy-dispensing module + can(pharmacy:prescriptions) (exact dispense alias, or tenant ADMIN fallback)	src/server/routers/pharmacy-prescriptions.ts:110,59-77	{branchId?}?	
+pharmacyPrescriptions	createPatient	mutation	protectedProcedure	NONE beyond pharmacy-dispensing module	src/server/routers/pharmacy-prescriptions.ts:193	{displayName,cnic?,phone?,dateOfBirth?}	#1036
+pharmacyPrescriptions	recordConsent	mutation	protectedProcedure	NONE beyond module	src/server/routers/pharmacy-prescriptions.ts:206	{patientId,purpose,channel,granted,version?,source?,supersedesId?}	#1036
+pharmacyPrescriptions	uploadSource	mutation	fileProcedure	can(pharmacy:prescriptions)	src/server/routers/pharmacy-prescriptions.ts:233	{patientId,contentType,dataBase64}	#418 Cashier passes via pharmacy:dispense alias? no-dispense cashier blocked; tenant ADMIN allowed via policy fallback
+pharmacyPrescriptions	readSource	query	fileProcedure	can(pharmacy:prescriptions)	src/server/routers/pharmacy-prescriptions.ts:243	{sourceFileRef}	
+pharmacyPrescriptions	extractSource	mutation	fileProcedure	can(pharmacy:prescriptions)	src/server/routers/pharmacy-prescriptions.ts:255	{sourceFileRef}	
+pharmacyPrescriptions	capture	mutation	fileProcedure	can(pharmacy:prescriptions) + file uploaded by self	src/server/routers/pharmacy-prescriptions.ts:292	{patientId,prescriberId,sourceKind,sourceFileRef,validFrom,validUntil,authorizedRepeats,lines:[...]}	
+pharmacyPrescriptions	readPatient	query	auditedProtectedProcedure	NONE beyond pharmacy-dispensing module	src/server/routers/pharmacy-prescriptions.ts:393	{patientId}	returns masked patient; any dispensing-licensed member
+pharmacyPrescriptions	exportPatient	query	auditedProtectedProcedure	NONE beyond module	src/server/routers/pharmacy-prescriptions.ts:407	{patientId}	full patient incl consents+prescriptions+fills; no capability gate
+pharmacyPrescriptions	fill	mutation	capabilityProcedure('pharmacy:dispense')	can(pharmacy:dispense) exact; controlled rejected (counter flow only)	src/server/routers/pharmacy-prescriptions.ts:428	{id,prescriptionLineId,fillSequence,quantityCanonicalUnits,idempotencyKey}	
+pharmacyPrescriptions	captureRefillReminder	mutation	capabilityProcedure('pharmacy:dispense')	can(pharmacy:dispense) exact	src/server/routers/pharmacy-prescriptions.ts:464	{branchId,fillId,channel,directionsUrdu,idempotencyKey}	
+pharmacyPrescriptions	counterPatients	query	protectedProcedure	requireCounterPatientAccess: can(pharmacy:counter) OR can(pharmacy:dispense)	src/server/routers/pharmacy-prescriptions.ts:507-509	{query}	#515 (module exemption widened reach; capability check now present)
+pharmacyPrescriptions	counterPatientPanel	query	auditedProtectedProcedure	requireCounterPatientAccess (counter OR dispense)	src/server/routers/pharmacy-prescriptions.ts:534	{patientId}	#515
+pharmacyDispensing	returnVerificationQueue	query	capabilityProcedure('pharmacy:dispense')	can(pharmacy:dispense) exact	src/server/routers/pharmacy-dispensing.ts:10	{branchId}	
+pharmacyDispensing	reviewQueue	query	capabilityProcedure('pharmacy:dispense')	can(pharmacy:dispense)	src/server/routers/pharmacy-dispensing.ts:32	none	
+pharmacyDispensing	substitutionWorkspace	query	capabilityProcedure('pharmacy:dispense')	can(pharmacy:dispense)	src/server/routers/pharmacy-dispensing.ts:48	none	
+pharmacyDispensing	enqueueReview	mutation	capabilityProcedure('pharmacy:dispense')	can(pharmacy:dispense)	src/server/routers/pharmacy-dispensing.ts:62	{prescriptionLineId,saleLineId}	
+pharmacyDispensing	decideReview	mutation	capabilityProcedure('pharmacy:dispense')	can(pharmacy:dispense)	src/server/routers/pharmacy-dispensing.ts:71	{reviewItemId,kind,reason?}	no segregation: dispenser can SIGN own review
+pharmacyDispensing	recordSubstitution	mutation	capabilityProcedure('pharmacy:dispense')	can(pharmacy:dispense)	src/server/routers/pharmacy-dispensing.ts:90	{prescriptionLineId,saleLineId,prescribedPresentationId,suppliedPresentationId,equivalenceBasis,patientCommunication,jurisdictionRuleRef}	
+pharmacySafety	access	query	protectedProcedure	NONE (returns boolean can(pharmacy:safety))	src/server/routers/pharmacy-safety.ts:45	none	
+pharmacySafety	controlledPharmacists	query	protectedProcedure	resolver: can(pharmacy:safety) OR can(pharmacy:dispense)	src/server/routers/pharmacy-safety.ts:55-61	none	
+pharmacySafety	branches	query	capabilityProcedure('pharmacy:safety')	can(pharmacy:safety) + assignedRegisterBranchIds	src/server/routers/pharmacy-safety.ts:67	none	
+pharmacySafety	controlledRegister	query	capabilityProcedure('pharmacy:safety')	can(pharmacy:safety) + organizationBranch (register branch assignment)	src/server/routers/pharmacy-safety.ts:79,23-40	{branchId}	
+pharmacySafety	recordCorrection	mutation	capabilityProcedure('pharmacy:safety')	can(pharmacy:safety) + organizationBranch + PIN	src/server/routers/pharmacy-safety.ts:134	{branchId,correctsEntryId,correctionReason,quantityCanonicalUnits,staffProfileId,pin}	
+pharmacySafety	createInspectionPack	query	capabilityProcedure('pharmacy:safety')	can(pharmacy:safety)	src/server/routers/pharmacy-safety.ts:240	{branchId,from,to}	NOTE: no organizationBranch assignment check (unlike register reads)
+pharmacySafety	installSopLibrary	mutation	capabilityProcedure('pharmacy:safety')	can(pharmacy:safety)	src/server/routers/pharmacy-safety.ts:260	none	
+pharmacySafety	setRetentionClass	mutation	capabilityProcedure('pharmacy:safety')	can(pharmacy:safety)	src/server/routers/pharmacy-safety.ts:261	{id,recordClass,retentionDays,effectiveFrom,reason}	
+pharmacySafety	recordLegalHold	mutation	capabilityProcedure('pharmacy:safety')	can(pharmacy:safety)	src/server/routers/pharmacy-safety.ts:278	{id,holdKey,recordClass,recordId,kind:PLACED|RELEASED,reason}	
+pharmacySafety	legalHoldStatus	query	capabilityProcedure('pharmacy:safety')	can(pharmacy:safety)	src/server/routers/pharmacy-safety.ts:296	{recordClass,recordId}	
+pharmacySafety	approveRegisterIncident	mutation	capabilityProcedure('pharmacy:safety')	can(pharmacy:safety)	src/server/routers/pharmacy-safety.ts:309	{incidentId,reason}	
+pharmacyReports	categoryGrowth	query	capabilityProcedure('reports:operational')	can(reports:operational) + ownerFilters (can(reports:financial)+session ADMIN+pharmacy-reports module)	src/server/routers/pharmacy-reports.ts:181,151-166	{branchId?,from,to,configuration[]}	
+pharmacyReports	marketing	query	capabilityProcedure('reports:operational')	ops + ownerFilters	src/server/routers/pharmacy-reports.ts:219	{branchId?,from,to}	
+pharmacyReports	createPharmacovigilanceReport	mutation	auditedProtectedProcedure	NONE beyond module (requirePvBranch = branch-in-org only; pharmacyReports namespace not module-mapped so no middleware module gate either)	src/server/routers/pharmacy-reports.ts:233,110-117	{branchId,kind,occurredAt,assertedDescription,patientId?,medicineId?,inventoryLotId?,prescriberId?}	#517
+pharmacyReports	transitionPharmacovigilanceReport	mutation	auditedProtectedProcedure	NONE (requirePvBranch only)	src/server/routers/pharmacy-reports.ts:279	{id,branchId,state}	#517
+pharmacyReports	recordPharmacovigilanceSubmission	mutation	auditedProtectedProcedure	NONE (requirePvBranch only)	src/server/routers/pharmacy-reports.ts:316	{id,branchId,state,externalReference?,failureReason?}	#517
+pharmacyReports	exportPharmacovigilanceDrap	query	auditedProtectedProcedure	NONE (requirePvBranch only)	src/server/routers/pharmacy-reports.ts:385	{branchId,from,to}	#517 exports patient-linked safety records
+pharmacyReports	branches	query	capabilityProcedure('reports:operational')	ops + scope() pharmacy-reports module	src/server/routers/pharmacy-reports.ts:420,133-142	none	
+pharmacyReports	replenishment	query	capabilityProcedure('reports:operational')	ops + scope (module) + branch-in-scope; financial figures only if session ADMIN AND can(reports:financial)	src/server/routers/pharmacy-reports.ts:421	pharmacyReplenishmentReportInput{branchId,medicineId,historyStartDate,originDate,horizonDays,method,...}	
+pharmacyReports	dailyWorkPack	query	capabilityProcedure('reports:operational')	ops + scope; financial sources only if session ADMIN + can(reports:financial)	src/server/routers/pharmacy-reports.ts:457	{branchId?,from,to,asOf}	
+pharmacyReports	catalog	query	capabilityProcedure('reports:operational')	ops	src/server/routers/pharmacy-reports.ts:500	none	
+pharmacyReports	branchComparison	query	capabilityProcedure('reports:operational')	ops + requireFinancialReports(can reports:financial) + session ADMIN	src/server/routers/pharmacy-reports.ts:511	{from,to}	
+pharmacyReports	repeatPurchasing	query	capabilityProcedure('reports:operational')	ops + ownerFilters (financial + ADMIN)	src/server/routers/pharmacy-reports.ts:543	{branchId?,from,to,asOf}	
+pharmacyReports	commandCentre	query	capabilityProcedure('reports:operational')	ops + scope (module); money metrics nulled unless can(reports:financial)	src/server/routers/pharmacy-reports.ts:562	{branchId?,from,to,supplierId?,ingredientId?,batchId?}	expiryValueMinor* are reports:operational metrics (cost at-risk visible to operational)
+pharmacyReports	anomalySignals	query	capabilityProcedure('reports:operational')	ops + ownerFilters	src/server/routers/pharmacy-reports.ts:607	{branchId?,from,to,...}	
+pharmacyReports	expiryAdvice	query	capabilityProcedure('reports:operational')	ops + ownerFilters	src/server/routers/pharmacy-reports.ts:611	{branchId?,from,to,...}	
+pharmacyReports	proposeExpiryReturn	mutation	capabilityProcedure('reports:operational')	ops + requireFinancialReports + requireOwnerBranch (ADMIN)	src/server/routers/pharmacy-reports.ts:615	{branchId,lotId}	
+pharmacyReports	packAuthenticationFlags	query	capabilityProcedure('reports:operational')	ops + ownerFilters	src/server/routers/pharmacy-reports.ts:637	{branchId?,from,to,...}	
+pharmacyReports	acknowledgePackAuthenticationFlag	mutation	capabilityProcedure('reports:operational')	ops + requireFinancialReports + requireOwnerBranch	src/server/routers/pharmacy-reports.ts:641	{branchId,signalId,reason}	
+pharmacyReports	refreshAnomalies	mutation	capabilityProcedure('reports:operational')	ops + ownerFilters	src/server/routers/pharmacy-reports.ts:655	{branchId?,from,to,...}	
+pharmacyReports	acknowledgeAnomaly	mutation	capabilityProcedure('reports:operational')	ops + requireFinancialReports + requireOwnerBranch	src/server/routers/pharmacy-reports.ts:659	{branchId,signalId,reason}	
+pharmacyReports	snoozeAnomaly	mutation	capabilityProcedure('reports:operational')	ops + requireFinancialReports + requireOwnerBranch	src/server/routers/pharmacy-reports.ts:667	{branchId,signalId,reason,snoozedUntil}	
+pharmacyReports	digestOverview	query	capabilityProcedure('reports:operational')	ops + requireFinancialReports + session ADMIN	src/server/routers/pharmacy-reports.ts:676	none	
+pharmacyReports	updateDigestSetting	mutation	capabilityProcedure('reports:operational')	ops + requireFinancialReports + session ADMIN	src/server/routers/pharmacy-reports.ts:717	{branchId,enabled,time}	
+pharmacyReports	getPreferences	query	capabilityProcedure('reports:operational')	ops (own preference blob)	src/server/routers/pharmacy-reports.ts:759	none	
+pharmacyReports	updatePreferences	mutation	capabilityProcedure('reports:operational')	ops (own preference blob)	src/server/routers/pharmacy-reports.ts:772	preference{version:1,widgets[]}	
+pharmacyFinance	cashFlowForecast	query	ledgerReportProcedure	session ADMIN + pharmacy-reports module + can(reports:operational) + can(reports:financial) + branch-in-org	src/server/routers/pharmacy-finance.ts:173,80-118	{branchId,asOfDate,openingCashMinor,minimumCashReserveMinor,annualCashValueBps,salesCashEstimates[],khataCollectionEstimates[],payables[]}	
+pharmacyFinance	financialStatements	query	ledgerReportProcedure	ADMIN + reports module + ops + financial + branch	src/server/routers/pharmacy-finance.ts:183	{branchId,from,to,page?}	
+pharmacyFinance	perpetualValuation	query	ledgerReportProcedure	ADMIN + reports + ops + financial + branch	src/server/routers/pharmacy-finance.ts:196	{branchId,at}	
+pharmacyFinance	grossMargin	query	ledgerReportProcedure	ADMIN + reports + ops + financial + branch	src/server/routers/pharmacy-finance.ts:218	{branchId,from,to,by:line|batch|product|branch}	
+pharmacyFinance	leakageReport	query	ledgerReportProcedure	ADMIN + reports + ops + financial + branch	src/server/routers/pharmacy-finance.ts:234	{branchId,from,to}	
+pharmacyFinance	marginComparison	query	adminProcedure	admin:access + session ADMIN + pharmacy-reports module + can(ops) + can(financial) + branch	src/server/routers/pharmacy-finance.ts:247-290	{branchId,from,to}	
+pharmacyFinance	workspace	query	adminProcedure (bookkeepingProcedure)	admin:access + pharmacy-finance module + org match	src/server/routers/pharmacy-finance.ts:296,35-44	{branchId}	
+pharmacyFinance	post	mutation	bookkeepingProcedure	admin:access + pharmacy-finance module	src/server/routers/pharmacy-finance.ts:364	{branchId,reference,kind,amountMinor,occurredAt,idempotencyKey,fundingAccount?,allocations?,...}	
+pharmacyFinance	reverse	mutation	bookkeepingProcedure	admin + finance	src/server/routers/pharmacy-finance.ts:402	{branchId,transactionId,reason,idempotencyKey}	
+pharmacyFinance	closePeriod	mutation	bookkeepingProcedure	admin + finance	src/server/routers/pharmacy-finance.ts:423	{branchId,startsAt,endsAt}	
+pharmacyFinance	reopenPeriod	mutation	bookkeepingProcedure	admin + finance	src/server/routers/pharmacy-finance.ts:434	{branchId,periodId,reason}	
+pharmacyFinance	importBankLine	mutation	bookkeepingProcedure	admin + finance	src/server/routers/pharmacy-finance.ts:445	{branchId,statementRef,lineReference,bookedAt,description,...}	
+pharmacyFinance	reconcile	mutation	bookkeepingProcedure	admin + finance	src/server/routers/pharmacy-finance.ts:466	{branchId,statementLineId,transactionId?,settlementBatchId?,amountMinor}	
+pharmacyFinance	createSettlementBatch	mutation	bookkeepingProcedure	admin + finance	src/server/routers/pharmacy-finance.ts:484	{branchId,reference,provider,tenderType,businessDate,tenderIds[]}	
+pharmacyFinance	publishTaxProfile	mutation	bookkeepingProcedure	admin + finance	src/server/routers/pharmacy-finance.ts:504	{branchId,name,effectiveFrom,approvalReference,idempotencyKey,rules[...],effectiveTo?}	
+pharmacyMarketing	basketHistory	query	protectedProcedure	growthExecute: owner()=session ADMIN + pharmacy-crm module, re-check DB role ADMIN/ACTIVE + can(reports:operational) + can(reports:financial)	src/server/routers/pharmacy-marketing.ts:206,152-201	{branchId}	
+pharmacyMarketing	generateBaskets	mutation	protectedProcedure	growthExecute (ADMIN + crm + ops + financial)	src/server/routers/pharmacy-marketing.ts:209	{branchId,from,cutoff,config?}	#1015 marketing: requires session ADMIN (owner()), so a Cashier is refused
+pharmacyMarketing	reviewBasket	mutation	protectedProcedure	growthExecute	src/server/routers/pharmacy-marketing.ts:216	{branchId,insightId,recommendation,decision:APPROVE|REJECT,pinCredential?}	
+pharmacyMarketing	growthHistory	query	protectedProcedure	growthExecute	src/server/routers/pharmacy-marketing.ts:225	{branchId}	
+pharmacyMarketing	generateGrowth	mutation	protectedProcedure	growthExecute	src/server/routers/pharmacy-marketing.ts:228	{branchId,from,cutoff}	
+pharmacyMarketing	reviewGrowth	mutation	protectedProcedure	growthExecute	src/server/routers/pharmacy-marketing.ts:243	{branchId,insightId,recommendation,decision:EDIT|REJECT|APPROVE,...}	
+pharmacyMarketing	branches	query	protectedProcedure	owner() (session ADMIN + pharmacy-crm + active PHARMACY org)	src/server/routers/pharmacy-marketing.ts:248,57-76	none	
+pharmacyMarketing	history	query	protectedProcedure	execute->scope->owner() (ADMIN + crm)	src/server/routers/pharmacy-marketing.ts:256	{branchId}	
+pharmacyMarketing	approveTemplate	mutation	protectedProcedure	owner() (session ADMIN + crm)	src/server/routers/pharmacy-marketing.ts:259	{branchId,name,body,reviewed:true}	#1015 requires ADMIN
+pharmacyMarketing	createDraft	mutation	protectedProcedure	owner() (ADMIN + crm)	src/server/routers/pharmacy-marketing.ts:264	{branchId,name,templateId,definition,scheduledAt,quietHours,frequencyCap,promotesRegulatedItem:false}	
+pharmacyMarketing	review	query	protectedProcedure	owner()	src/server/routers/pharmacy-marketing.ts:269	{branchId,campaignId}	
+pharmacyMarketing	approve	mutation	protectedProcedure	owner() (ADMIN + crm)	src/server/routers/pharmacy-marketing.ts:276	{branchId,campaignId}	#1015 requires ADMIN
+pharmacyMarketing	preview	query	protectedProcedure	owner()	src/server/routers/pharmacy-marketing.ts:283	{branchId,campaignId}	
+pharmacyMarketing	capture	mutation	protectedProcedure	owner() (ADMIN + crm)	src/server/routers/pharmacy-marketing.ts:290	{branchId,campaignId}	
+pharmacyMarketing	deliveryHistory	query	protectedProcedure	owner()	src/server/routers/pharmacy-marketing.ts:297	{branchId,campaignId}	
+pharmacyMarketing	sandboxDue	mutation	protectedProcedure	scope()+sandboxTransaction re-check DB role ADMIN	src/server/routers/pharmacy-marketing.ts:304	{branchId,requestKey,campaignIds[]}	
+pharmacyMarketing	sandbox	mutation	protectedProcedure	scope()+DB role ADMIN	src/server/routers/pharmacy-marketing.ts:308	{branchId,campaignId,requestKey,retry?}	
+pharmacyMarketing	attributeReceipts	mutation	protectedProcedure	execute->owner() (ADMIN + crm)	src/server/routers/pharmacy-marketing.ts:312	{branchId,from,cutoff}	
+pharmacyMarketing	assist	mutation	protectedProcedure	scope()->owner() (ADMIN + crm)	src/server/routers/pharmacy-marketing.ts:321	{branchId,occasion,tone}	
+pharmacyOrdering	deliveryCommand	mutation	staffProcedure=capabilityProcedure('pharmacy:orders')	can(pharmacy:orders)	src/server/routers/pharmacy-ordering.ts:74	deliveryCommandInput{branchId,orderId,action,...}	
+pharmacyOrdering	branches	query	protectedProcedure	NONE (module only)	src/server/routers/pharmacy-ordering.ts:83	none	
+pharmacyOrdering	catalog	query	protectedProcedure	NONE beyond scopeFor	src/server/routers/pharmacy-ordering.ts:103	{branchId,search?}	storefront; customer-facing
+pharmacyOrdering	mine	query	protectedProcedure	own orders (userId)	src/server/routers/pharmacy-ordering.ts:111	none	
+pharmacyOrdering	place	mutation	protectedProcedure	NONE beyond scopeFor; staff flag derived from can(pharmacy:orders); customerId requires staff	src/server/routers/pharmacy-ordering.ts:115-134	{branchId,fulfillment,intendedPaymentMethod,lines[],customerId?,addressLine?,city?,deliveryInstructions?}	
+pharmacyOrdering	cancelMine	mutation	protectedProcedure	own order	src/server/routers/pharmacy-ordering.ts:141	{branchId,orderId}	
+pharmacyOrdering	staffQueue	query	staffProcedure	can(pharmacy:orders)	src/server/routers/pharmacy-ordering.ts:153	{branchId}	
+pharmacyOrdering	runners	query	staffProcedure	can(pharmacy:orders)	src/server/routers/pharmacy-ordering.ts:161	none	
+pharmacyOrdering	customers	query	staffProcedure	can(pharmacy:orders)	src/server/routers/pharmacy-ordering.ts:173	none	
+pharmacyOrdering	transition	mutation	staffProcedure	can(pharmacy:orders)	src/server/routers/pharmacy-ordering.ts:182	{branchId,orderId,action:accept|pack|ready|dispatch|cancel|expire,runnerUserId?}	
+pharmacyOrdering	startCheckout	mutation	staffProcedure	can(pharmacy:orders)	src/server/routers/pharmacy-ordering.ts:203	{branchId,orderId}	
+pharmacyOrdering	complete	mutation	staffProcedure	can(pharmacy:orders) + counterSale must be COMPLETED	src/server/routers/pharmacy-ordering.ts:215; src/lib/pharmacy/customer-ordering.ts:862-871	{branchId,orderId}	
+pharmacyOffline	enroll	mutation	adminProcedure	admin:access + pharmacy-counter module + active branch	src/server/routers/pharmacy-offline.ts:62	{branchId,name}	HTTP counter replay (not in this file's router) authenticates by device secret, not tRPC role
+pharmacyOffline	rotate	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-offline.ts:77	{branchId,deviceId}	
+pharmacyOffline	revoke	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-offline.ts:103	{branchId,deviceId}	
+pharmacyOwnerImport	options	query	adminProcedure	admin:access + pharmacy-inventory module	src/server/routers/pharmacy-owner-import.ts:38	none	
+pharmacyOwnerImport	upload	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-owner-import.ts:49	{fileName,content(base64)}	opening-stock import = ADMIN only
+pharmacyOwnerImport	preview	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-owner-import.ts:54	ownerImportInput{fileName,content,branchId,stockLocationId,mapping,...}	
+pharmacyOwnerImport	commit	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-owner-import.ts:60	ownerImportInput + {previewHash(64),confirmed:true}	
+pharmacyOnboarding	overview	query	adminProcedure	admin:access + pharmacy-core module	src/server/routers/pharmacy-onboarding.ts:266	none	
+pharmacyOnboarding	recordGate	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-onboarding.ts:276	{gate,evidenceRef,note?}	
+pharmacyOnboarding	fbrTier1Status	query	adminProcedure (fbrTier1Procedure)	admin:access + pharmacy-core module	src/server/routers/pharmacy-onboarding.ts:354,62-65	none	
+pharmacyOnboarding	recordFbrTier1Check	mutation	fbrTier1Procedure	admin:access + core	src/server/routers/pharmacy-onboarding.ts:363	fbrTier1Input{chainOutlet,...,annualTurnoverRupees}	
+pharmacyOnboarding	regulatory	query	adminProcedure	admin:access	src/server/routers/pharmacy-onboarding.ts:423	{branchId?}?	
+pharmacyOnboarding	saveRegulatoryProfile	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-onboarding.ts:524	regulatoryProfileInput{branchId,effectiveFrom,...}	
+pharmacyBranchAssignments	list	query	adminProcedure	admin:access + pharmacy-core module	src/server/routers/pharmacy-branch-assignments.ts:73	none	
+pharmacyBranchAssignments	assign	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-branch-assignments.ts:129	{branchId,userId}	
+pharmacyBranchAssignments	unassign	mutation	adminProcedure	admin:access	src/server/routers/pharmacy-branch-assignments.ts:179	{assignmentId}	
+pharmacyCameras	workspace	query	cameraProcedure	admin:access + pharmacy-core + org match	src/server/routers/pharmacy-cameras.ts:63,24-33	none	
+pharmacyCameras	enrollGateway	mutation	cameraProcedure	admin:access + core	src/server/routers/pharmacy-cameras.ts:105	{branchId,name,retentionDays}	
+pharmacyCameras	testConnection	mutation	cameraProcedure	admin:access + core	src/server/routers/pharmacy-cameras.ts:149	{branchId,sourceRef}	
+pharmacyCameras	register	mutation	cameraProcedure	admin:access + core	src/server/routers/pharmacy-cameras.ts:159	{branchId,gatewayId,name,sourceRef,username,password,registerAnyway?}	
+pharmacyCameras	configure	mutation	cameraProcedure	admin:access + core	src/server/routers/pharmacy-cameras.ts:231	{cameraId,preset|null,temperatureZoneId?,enabled}	
+pharmacyCameras	setRetention	mutation	cameraProcedure	admin:access + core	src/server/routers/pharmacy-cameras.ts:264	{branchId,days}	
+pharmacyCameras	issueViewerGrant	mutation	cameraProcedure	admin:access + core	src/server/routers/pharmacy-cameras.ts:281	{cameraId,previousGrantId?}	
+pharmacyCameras	revokeViewerGrant	mutation	cameraProcedure	admin:access + core	src/server/routers/pharmacy-cameras.ts:317	{cameraId,grantId}	
+pharmacyCameras	evidence	query	cameraProcedure	admin:access + core	src/server/routers/pharmacy-cameras.ts:335	{cameraId,grantId}	
+pharmacyCameras	capturePending	mutation	cameraProcedure	admin:access + core	src/server/routers/pharmacy-cameras.ts:378	{cameraId}	
+pharmacySupplierLinks	get	query	publicProcedure	NONE (public; action-link token in input)	src/server/routers/pharmacy-supplier-links.ts:48	{token}	unauthenticated supplier portal
+pharmacySupplierLinks	submit	mutation	publicProcedure	NONE (public; token)	src/server/routers/pharmacy-supplier-links.ts:55	supplierLinkSubmitInput{token,...}	
+pharmacySupplierLinks	uploadDocument	mutation	publicProcedure	NONE (public; token)	src/server/routers/pharmacy-supplier-links.ts:62	supplierLinkUploadInput{token,contentBase64,...}	
+pharmacySupplierLinks	createRelationship	mutation	protectedProcedure	NONE (login only; supplier-links not module-mapped) + assertBranch (branch in org)	src/server/routers/pharmacy-supplier-links.ts:74	{branchId,supplierId}	#1010
+pharmacySupplierLinks	issue	mutation	protectedProcedure	NONE + assertBranch	src/server/routers/pharmacy-supplier-links.ts:82	{branchId,relationshipId,purchaseOrderId,expiresAt}	#1010 any member mints supplier action link
+pharmacySupplierLinks	revoke	mutation	protectedProcedure	NONE (no capability, no branch check)	src/server/routers/pharmacy-supplier-links.ts:102	{linkId}	#1010
+pharmacySupplierLinks	recordManual	mutation	protectedProcedure	NONE + assertBranch	src/server/routers/pharmacy-supplier-links.ts:108	{actionLinkId,branchId,kind,source,sourceEvidence,idempotencyKey,payload}	#1010
+pharmacySupplierLinks	approveProposal	mutation	protectedProcedure	NONE + assertBranch (no capability, no segregation)	src/server/routers/pharmacy-supplier-links.ts:130	{submissionId,branchId,approved,reason?}	#1010 any member approves supplier substitution proposal
+pharmacyStagedReview	pharmacyMedicine.stagedBranches	query	adminProcedure	admin:access	src/server/routers/pharmacy-staged-review.ts:28	none	NOTE: router NOT mounted in _app.ts (server-page caller only)
+pharmacyStagedReview	pharmacyMedicine.stagedBatches	query	adminProcedure	admin:access + assertReviewBranch	src/server/routers/pharmacy-staged-review.ts:35	{branchId,page?}	not mounted in appRouter
+pharmacyStagedReview	pharmacyMedicine.stagedRows	query	adminProcedure	admin:access	src/server/routers/pharmacy-staged-review.ts:58	reviewListInput{branchId,sourceId,batchId,query?,page?,filter?}	not mounted
+pharmacyStagedReview	pharmacyMedicine.stagedDetail	query	adminProcedure	admin:access	src/server/routers/pharmacy-staged-review.ts:61	{branchId,sourceId,batchId,rowId}	not mounted

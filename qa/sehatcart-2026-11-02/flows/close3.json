@@ -1,0 +1,20 @@
+[
+  { "goto": "/pharmacy/counter/close" },
+  { "waitText": "Counted cash for drawer 2" },
+  { "fill": { "label": "Counted cash for drawer 2 (PKR)" }, "value": "0" },
+  { "fill": { "label": "Counted cash for drawer 3 (PKR)" }, "value": "100.00" },
+  { "fill": { "label": "Counted cash for drawer 5 (PKR)" }, "value": "0" },
+  {
+    "fill": { "label": "Variance note" },
+    "value": "QA test: drawer 3 short by PKR 4 (deliberate)"
+  },
+  { "check": { "label": "I have counted every drawer" } },
+  { "wait": 800, "shot": "own-dayclose-filled", "full": true },
+  {
+    "eval": "document.querySelector('main').innerText.replace(/\\s+/g,' ').match(/Expected cash.{0,160}/)?.[0]",
+    "max": 300
+  },
+  { "click": { "role": "button", "name": "Close and lock day" } },
+  { "wait": 4500, "shot": "own-dayclose-done", "full": true },
+  { "text": "main", "max": 2500 }
+]

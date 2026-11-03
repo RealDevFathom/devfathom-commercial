@@ -1,0 +1,8 @@
+[
+  { "goto": "/pharmacy/counter" },
+  { "press": "F2" },
+  { "type": { "label": "Scan or search" }, "value": "panadol", "delay": 30 },
+  { "wait": 1500, "map": true, "max": 3000, "shot": "cash-sale-search" },
+  { "press": "Enter" },
+  { "wait": 1500, "map": true, "max": 3500, "shot": "cash-sale-selected" }
+]
