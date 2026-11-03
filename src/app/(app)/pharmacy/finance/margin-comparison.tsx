@@ -1,3 +1,5 @@
+import { reportMoney, reportDate, reportDayStart } from '@/lib/pharmacy/report-presentation';
+import { workspaceToday } from '@/lib/timezone';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
@@ -9,14 +11,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import type { grossMarginComparison } from '@/lib/pharmacy/finance-reports';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 
-type Comparison = Awaited<ReturnType<typeof grossMarginComparison>>;
-const money = (minor: number) =>
-  `${(minor / 100).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (currency unknown)`;
+type Comparison = Awaited<ReturnType<ReturnType<typeof pharmacyFinanceRouter.createCaller>['marginComparison']>>;
 
 export function MarginComparisonLedger({ report }: { report: Comparison }) {
+  const money = (minor: number) => reportMoney(minor, report.currency);
   const rows = [
     [
       'Revenue',
@@ -31,7 +31,7 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
       -report.discountDeltaMinor,
     ],
     [
-      'COGS (subtracted)',
+      'Medicine costs (subtracted)',
       report.previous.cogsMinor,
       report.current.cogsMinor,
       -report.cogsDeltaMinor,
@@ -46,10 +46,10 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
   return (
     <div className="min-w-0 space-y-3">
       <p className="break-words text-sm text-text-muted">
-        Previous: {report.periods.previous.from.toISOString()} to{' '}
-        {report.periods.previous.to.toISOString()}. Current:{' '}
-        {report.periods.current.from.toISOString()} to {report.periods.current.to.toISOString()}.{' '}
-        UTC; start inclusive, end exclusive. Same branch, equal elapsed duration.
+        Previous: {reportDate(report.periods.previous.from, report.timezone)} to{' '}
+        {reportDate(report.periods.previous.to, report.timezone)}. Current:{' '}
+        {reportDate(report.periods.current.from, report.timezone)} to {reportDate(report.periods.current.to, report.timezone)}.{' '}
+        {report.timezone}; start included, end excluded. Same branch, equal elapsed duration.
       </p>
       {!report.previous.hasEntries || !report.current.hasEntries ? (
         <p role="status" className="text-sm text-text-muted">
@@ -64,7 +64,7 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
       ) : null}
       <Table>
         <caption className="text-left text-sm text-text-muted">
-          Accounting decomposition · currency unknown · posted revenue, discounts and COGS,
+          Margin changes · {report.currency} · recorded revenue, discounts and medicine costs,
           including reversals and returns recorded in the journal.
         </caption>
         <TableHeader>
@@ -89,8 +89,8 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
         </TableBody>
       </Table>
       <p className="text-sm text-text-body">
-        Revenue delta {money(report.revenueDeltaMinor)} minus discount delta{' '}
-        {money(report.discountDeltaMinor)} minus COGS delta {money(report.cogsDeltaMinor)} ={' '}
+        Revenue change {money(report.revenueDeltaMinor)} minus discount change{' '}
+        {money(report.discountDeltaMinor)} minus medicine cost change {money(report.cogsDeltaMinor)} ={' '}
         {money(report.reconciledMinor)} gross-margin change.
       </p>
       <p className="text-sm text-text-muted">
@@ -112,6 +112,7 @@ export async function MarginComparisonSection({
   ledgerTo,
   ledgerAt,
   ledgerBy,
+  timezone = 'UTC',
 }: {
   caller: ReturnType<typeof pharmacyFinanceRouter.createCaller>;
   branch: { id: string; name: string };
@@ -121,19 +122,20 @@ export async function MarginComparisonSection({
   ledgerTo?: string;
   ledgerAt?: string;
   ledgerBy?: string;
+  timezone?: string;
 }) {
   const end = new Date();
   end.setUTCHours(0, 0, 0, 0);
   const start = new Date(end.getTime() - 30 * 86_400_000);
   const fromDate = from ?? start.toISOString().slice(0, 10);
-  const toDate = to ?? end.toISOString().slice(0, 10);
+  const toDate = to ?? workspaceToday(timezone);
   let report: Comparison | undefined;
   let denied = false;
   try {
     report = await caller.marginComparison({
       branchId: branch.id,
-      from: `${fromDate}T00:00:00Z`,
-      to: `${toDate}T00:00:00Z`,
+      from: reportDayStart(fromDate, timezone).toISOString(),
+      to: reportDayStart(toDate, timezone).toISOString(),
     });
   } catch (error) {
     denied =
@@ -143,7 +145,7 @@ export async function MarginComparisonSection({
       (error.code === 'FORBIDDEN' || error.code === 'UNAUTHORIZED');
   }
   return (
-    <SectionCard title="Gross-margin comparison" titleLevel={2} eyebrow="Accounting drivers">
+    <SectionCard title="Gross-margin comparison" titleLevel={2} eyebrow="Revenue · discounts · medicine costs">
       <p className="mb-4 text-sm text-text-muted">
         Branch: {branch.name}. Compare up to 92 days with the immediately preceding equal-length
         period.
@@ -155,7 +157,7 @@ export async function MarginComparisonSection({
           value !== undefined ? <input key={name} type="hidden" name={name} value={value} /> : null
         )}
         <label className="text-sm">
-          Current start (UTC)
+          Current start ({timezone})
           <Input
             className="mt-1 min-h-11"
             name="marginFrom"
@@ -165,7 +167,7 @@ export async function MarginComparisonSection({
           />
         </label>
         <label className="text-sm">
-          Current end (UTC, exclusive)
+          Current end ({timezone}, excluded)
           <Input
             className="mt-1 min-h-11"
             name="marginTo"

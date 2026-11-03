@@ -1,3 +1,4 @@
+import { reportDate, reportDayStart } from '@/lib/pharmacy/report-presentation';
 import { TRPCError } from '@trpc/server';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,12 +35,14 @@ export async function BalanceSheetReport({
   caller,
   branchId,
   cutoff,
+  timezone = 'UTC',
 }: {
   caller: ReturnType<typeof pharmacyFinanceRouter.createCaller>;
   branchId: string;
   cutoff: string;
+  timezone?: string;
 }) {
-  const to = new Date(`${cutoff}T00:00:00.000Z`);
+  const to = reportDayStart(cutoff, timezone);
   const from = new Date(to.getTime() - 86_400_000);
   let result: Awaited<ReturnType<typeof caller.financialStatements>>;
   try {
@@ -69,7 +72,7 @@ export async function BalanceSheetReport({
         <form className="flex flex-wrap items-end gap-3">
           <input type="hidden" name="branch" value={branchId} />
           <label className="grid gap-2 text-sm">
-            As of (exclusive cutoff, UTC)
+            As of (excluded cutoff, {timezone})
             <Input type="date" name="cutoff" defaultValue={cutoff} required />
           </label>
           <Button className="min-h-11" type="submit">
@@ -77,7 +80,7 @@ export async function BalanceSheetReport({
           </Button>
         </form>
         <p className="mt-4 text-sm text-text-muted">
-          Posted journal balances before {to.toISOString()}, grouped by recorded currency. The
+          Posted journal balances before {reportDate(to, timezone)} ({timezone}), grouped by recorded currency. The
           one-day reader window still includes every earlier posting in each closing balance; it is
           not a selected-window earnings calculation.
         </p>
@@ -164,7 +167,7 @@ export async function BalanceSheetReport({
           <p className="mt-4 text-xs text-text-muted">
             Source: {result.source}; {result.coverage.basis}. Coverage and completeness remain{' '}
             {result.coverage.completeness}. Before unrecorded tax; not statutory or audited.
-            Retrieved {result.freshness.retrievedAt.toISOString()}.
+            Retrieved {reportDate(result.freshness.retrievedAt, timezone)}.
           </p>
         </SectionCard>
       ))}

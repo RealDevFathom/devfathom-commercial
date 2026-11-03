@@ -213,8 +213,8 @@ describe('finance parent GET filter round-trip', () => {
     await MarginComparisonSection(sectionProps(next, MarginComparisonSection));
     expect(mocks.marginComparison).toHaveBeenLastCalledWith({
       branchId: expectedBranch,
-      from: '2026-09-04T00:00:00Z',
-      to: '2026-09-06T00:00:00Z',
+      from: '2026-09-04T00:00:00.000Z',
+      to: '2026-09-06T00:00:00.000Z',
     });
     // The already-working ledger-to-comparison direction retains the chosen dates too.
     expect(submit(getForm(afterElement))).toMatchObject({

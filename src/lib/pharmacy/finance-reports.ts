@@ -46,6 +46,11 @@ export type ValuationRow = {
   manufacturingBatchId: string | null;
   unitCostMinor: number | null;
   valueMinor: number;
+  branchName?: string | null;
+  lotReference?: string | null;
+  batchNumber?: string | null;
+  medicineName?: string | null;
+  locationName?: string | null;
 };
 
 /**
@@ -70,6 +75,8 @@ export async function perpetualValuation(
            batch."medicineId",
            lot."manufacturingBatchId",
            lot."unitCostMinor",
+           branch.name AS "branchName", lot."supplierInvoiceRef" AS "lotReference",
+           batch."batchNumber", medicine."productName" AS "medicineName", location.name AS "locationName",
            SUM(CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END)::int AS "valueMinor"
       FROM "finance_journal_lines" line
       JOIN "finance_journal_entries" entry
@@ -78,13 +85,17 @@ export async function perpetualValuation(
         ON lot."organizationId" = line."organizationId" AND lot."id" = line."lotId"
       LEFT JOIN "pharmacy_manufacturing_batches" batch
         ON batch."organizationId" = lot."organizationId" AND batch."id" = lot."manufacturingBatchId"
+      LEFT JOIN "pharmacy_branches" branch ON branch."organizationId" = line."organizationId" AND branch.id = line."branchId"
+      LEFT JOIN "pharmacy_medicines" medicine ON medicine."organizationId" = batch."organizationId" AND medicine.id = batch."medicineId"
+      LEFT JOIN "pharmacy_stock_locations" location ON location."organizationId" = line."organizationId" AND location.id = line."locationId"
      WHERE line."organizationId" = ${scope.organizationId}
        AND line."accountCode" IN ('INVENTORY', 'INVENTORY_IN_TRANSIT')
        AND line."lotId" IS NOT NULL
        AND entry."occurredAt" <= ${at}
        ${branchFilter(scope)}
      GROUP BY line."branchId", line."lotId", line."locationId",
-              batch."medicineId", lot."manufacturingBatchId", lot."unitCostMinor"
+              batch."medicineId", lot."manufacturingBatchId", lot."unitCostMinor",
+              branch.name, lot."supplierInvoiceRef", batch."batchNumber", medicine."productName", location.name
     HAVING SUM(CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END) <> 0
      ORDER BY line."branchId", line."lotId", line."locationId"`);
 }
@@ -93,6 +104,7 @@ export type MarginDimension = 'line' | 'batch' | 'product' | 'branch';
 
 export type MarginRow = {
   key: string | null;
+  label?: string | null;
   revenueMinor: number;
   discountMinor: number;
   cogsMinor: number;
@@ -131,9 +143,18 @@ export function grossMarginQuery(
     branch: Prisma.sql`line."branchId"`,
   }[input.by];
 
+  const label = {
+    line: Prisma.sql`medicine."productName" || ' · Sale line'`,
+    batch: Prisma.sql`batch."batchNumber" || ' · ' || medicine."productName"`,
+    product: Prisma.sql`medicine."productName"`,
+    branch: Prisma.sql`branch.name`,
+  }[input.by];
+  const missing = input.by === 'batch' ? 'Entries without batch' : `Entries without ${input.by}`;
+  const refunds = input.by === 'batch' ? 'Refunds without batch' : `Refunds without ${input.by}`;
   return Prisma.sql`
     WITH signed AS (
-      SELECT ${key} AS "key",
+      SELECT ${key} AS "key", ${label} AS "label",
+             entry."sourceKind" IN ('PHARMACY_SALE_RETURN_LINE', 'PHARMACY_UNIDENTIFIED_RETURN_HOLD', 'PHARMACY_REFUND') AS "refund",
              line."accountCode",
              CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END AS "debitMinor"
         FROM "finance_journal_lines" line
@@ -141,13 +162,17 @@ export function grossMarginQuery(
           ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
         LEFT JOIN "pharmacy_inventory_lots" lot
           ON lot."organizationId" = line."organizationId" AND lot."id" = line."lotId"
+        LEFT JOIN "pharmacy_manufacturing_batches" batch ON batch."organizationId" = lot."organizationId" AND batch.id = lot."manufacturingBatchId"
+        LEFT JOIN "pharmacy_medicines" medicine ON medicine."organizationId" = line."organizationId" AND medicine.id = COALESCE(line."productId", batch."medicineId")
+        LEFT JOIN "pharmacy_branches" branch ON branch."organizationId" = line."organizationId" AND branch.id = line."branchId"
        WHERE line."organizationId" = ${scope.organizationId}
          AND line."accountCode" IN ('SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD')
          AND entry."occurredAt" >= ${input.from}
          AND entry."occurredAt" < ${input.to}
          ${branchFilter(scope)}
     )
-    SELECT "key",
+    SELECT "key", COALESCE(MAX("label"), CASE WHEN "key" IS NULL THEN
+           CASE WHEN BOOL_AND("refund") THEN ${refunds} ELSE ${missing} END ELSE 'Name not recorded' END) AS "label",
            -- Revenue is a credit account: a credit increases it, so its signed
            -- debit total is negated to read as earned revenue.
            COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_REVENUE' THEN -"debitMinor" ELSE 0 END), 0)::int AS "revenueMinor",
@@ -269,6 +294,8 @@ export async function grossMarginComparison(
 export type LeakageRow = {
   branchId: string | null;
   medicineId: string | null;
+  branchName?: string | null;
+  medicineName?: string | null;
   discountMinor: number;
   writeOffMinor: number;
   shrinkageMinor: number;
@@ -292,19 +319,21 @@ export async function leakageReport(
 ): Promise<LeakageRow[]> {
   return db.$queryRaw<LeakageRow[]>(Prisma.sql`
     WITH signed AS (
-      SELECT line."branchId", line."productId",
+      SELECT line."branchId", line."productId", branch.name AS "branchName", medicine."productName" AS "medicineName",
              line."accountCode",
              CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END AS "debitMinor"
         FROM "finance_journal_lines" line
         JOIN "finance_journal_entries" entry
           ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
+        LEFT JOIN "pharmacy_branches" branch ON branch."organizationId" = line."organizationId" AND branch.id = line."branchId"
+        LEFT JOIN "pharmacy_medicines" medicine ON medicine."organizationId" = line."organizationId" AND medicine.id = line."productId"
        WHERE line."organizationId" = ${scope.organizationId}
          AND line."accountCode" IN ('SALES_DISCOUNT', 'INVENTORY_WRITE_OFF', 'INVENTORY_SHRINKAGE')
          AND entry."occurredAt" >= ${input.from}
          AND entry."occurredAt" < ${input.to}
          ${branchFilter(scope)}
     )
-    SELECT "branchId",
+    SELECT "branchId", MAX("branchName") AS "branchName", MAX("medicineName") AS "medicineName",
            "productId" AS "medicineId",
            COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_DISCOUNT' THEN "debitMinor" ELSE 0 END), 0)::int AS "discountMinor",
            COALESCE(SUM(CASE WHEN "accountCode" = 'INVENTORY_WRITE_OFF' THEN "debitMinor" ELSE 0 END), 0)::int AS "writeOffMinor",

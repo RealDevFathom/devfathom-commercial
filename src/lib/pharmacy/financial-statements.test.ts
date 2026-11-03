@@ -1,5 +1,127 @@
-import { describe, expect, it } from 'vitest';
-import { projectProfitAndLoss } from './financial-statements';
+import { describe, expect, it, vi } from 'vitest';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { financialStatements, projectProfitAndLoss } from './financial-statements';
+
+vi.mock('server-only', () => ({}));
+
+const scope = { organizationId: 'organization_1', branchId: 'branch_1' };
+const period = { from: new Date('2026-10-01Z'), to: new Date('2026-11-01Z'), page: 1 };
+const entry = (changes: Record<string, unknown> = {}) => ({
+  id: 'entry_1',
+  sourceKind: 'PHARMACY_REFUND',
+  sourceId: 'refund_1',
+  description: 'Refund of tender tender_1',
+  currency: 'PKR',
+  occurredAt: new Date('2026-10-25Z'),
+  reversesEntryId: null,
+  lines: [{ id: 'line_1', accountCode: 'CASH', side: 'CREDIT', amountMinor: 35400, lotId: null }],
+  ...changes,
+});
+
+function fixture(journal: ReturnType<typeof entry>[]) {
+  const db = {
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    financeJournalEntry: {
+      findMany: vi.fn().mockResolvedValue(journal),
+      count: vi.fn().mockResolvedValue(journal.length),
+    },
+    pharmacyRefund: {
+      findMany: vi.fn().mockResolvedValue([
+        { id: 'refund_1', originalTenderId: 'tender_1', originalTender: { type: 'CASH' }, sale: { receiptNumber: 123 } },
+      ]),
+    },
+    pharmacyTender: {
+      findMany: vi.fn().mockResolvedValue([
+        { id: 'tender_1', type: 'BANK_TRANSFER', sale: { receiptNumber: 124 } },
+      ]),
+    },
+    pharmacyInventoryLot: {
+      findMany: vi.fn().mockResolvedValue([
+        { id: 'lot_1', supplierInvoiceRef: 'INV-12', batch: { batchNumber: 'B-100', medicine: { productName: 'Paracetamol' } } },
+      ]),
+    },
+  };
+  return { db, read: () => financialStatements(db as unknown as ScopedDb, scope, period) };
+}
+
+describe('financial statement journal labels', () => {
+  it('names the refund payment method and receipt without changing recorded evidence', async () => {
+    const original = entry();
+    const { read } = fixture([original]);
+    const result = await read();
+    expect(result.journal[0]).toMatchObject({
+      ...original,
+      displayTitle: 'Refund · Cash',
+      sourceLabel: 'Refund · Cash · Receipt 123',
+      originalTenderId: 'tender_1',
+    });
+    expect(original.description).toBe('Refund of tender tender_1');
+  });
+
+  it('preserves custom descriptions including identifiers and reversal notes', async () => {
+    const custom = 'Refund of tender tender_1 approved after customer complaint';
+    const { read } = fixture([
+      entry({ description: custom }),
+      entry({ id: 'entry_reversal', description: 'Reversal of entry_1: operator correction', reversesEntryId: 'entry_1' }),
+    ]);
+    const result = await read();
+    expect(result.journal.map((row) => row.displayTitle)).toEqual([
+      custom,
+      'Reversal of entry_1: operator correction',
+    ]);
+    expect(result.journal[1].reversesEntryId).toBe('entry_1');
+  });
+
+  it('uses human fallbacks for unresolved generated titles, preserving raw evidence', async () => {
+    const { db, read } = fixture([entry()]);
+    db.pharmacyRefund.findMany.mockResolvedValue([]);
+    expect((await read()).journal[0]).toMatchObject({
+      displayTitle: 'Refund', sourceLabel: 'Refund', originalTenderId: null,
+      description: 'Refund of tender tender_1', sourceId: 'refund_1',
+    });
+  });
+
+  it('bulk resolves payment and stock labels within organization and branch scope', async () => {
+    const { db, read } = fixture([
+      entry(),
+      entry({ id: 'entry_2', sourceKind: 'PHARMACY_TENDER', sourceId: 'tender_1', description: 'Pharmacy tender tender_1', currency: 'USD' }),
+      entry({ id: 'entry_3', sourceKind: 'PHARMACY_GOODS_RECEIPT', sourceId: 'receipt_1', description: 'Received stock', lines: [{ id: 'line_3', accountCode: 'INVENTORY', side: 'DEBIT', amountMinor: 22500, lotId: 'lot_1' }] }),
+      entry({ id: 'entry_4' }),
+    ]);
+    const result = await read();
+    for (const model of [db.pharmacyRefund, db.pharmacyTender, db.pharmacyInventoryLot]) {
+      expect(model.findMany).toHaveBeenCalledTimes(1);
+      expect(model.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining(scope),
+      }));
+    }
+    expect(db.pharmacyInventoryLot.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { ...scope, id: { in: ['lot_1'] } },
+    }));
+    expect(result.journal[1]).toMatchObject({ displayTitle: 'Payment · Bank transfer', currency: 'USD' });
+    expect(result.journal[2].lines[0]).toMatchObject({ lotId: 'lot_1', lotLabel: 'B-100 · Paracetamol · Receipt INV-12' });
+  });
+
+  it('does not apply payment lookup labels to another source kind with the same ID', async () => {
+    const { read } = fixture([
+      entry(),
+      entry({ id: 'entry_other', sourceKind: 'PHARMACY_BOOKKEEPING_TRANSACTION', description: 'Manual adjustment for refund_1' }),
+    ]);
+    expect((await read()).journal[1]).toMatchObject({
+      displayTitle: 'Manual adjustment for refund_1',
+      sourceLabel: 'Bookkeeping transaction',
+      originalTenderId: null,
+    });
+  });
+
+  it('skips all enrichment reads on an empty journal page', async () => {
+    const { db, read } = fixture([]);
+    expect((await read()).journal).toEqual([]);
+    expect(db.pharmacyRefund.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacyTender.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacyInventoryLot.findMany).not.toHaveBeenCalled();
+  });
+});
 
 const total = (accountCode: string, currency: string, debit: bigint, credit: bigint) => ({
   accountCode,

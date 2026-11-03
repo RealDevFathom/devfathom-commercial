@@ -1,3 +1,5 @@
+import { reportMoney, reportDate } from '@/lib/pharmacy/report-presentation';
+import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { browserUuid } from '@/lib/browser-uuid';
 import { FinancialStatements } from './financial-statements';
 import { Suspense } from 'react';
@@ -36,10 +38,6 @@ const label = (value: string) =>
     .toLowerCase()
     .replaceAll('_', ' ')
     .replace(/^./, (c) => c.toUpperCase());
-const money = (minor: number) =>
-  `PKR ${(minor / 100).toLocaleString('en-PK', { minimumFractionDigits: 2 })}`;
-const dated = (value: Date | string) =>
-  new Intl.DateTimeFormat('en-PK', { dateStyle: 'medium' }).format(new Date(value));
 const destination = (branchId: string, notice: string, kind: 'success' | 'error' = 'success') =>
   `${route}?${new URLSearchParams({ branch: branchId, notice, kind })}`;
 
@@ -87,6 +85,10 @@ export default async function PharmacyFinancePage({
       </main>
     );
   }
+  const currency = ctx.organization?.currency ?? null;
+  const timezone = workspaceTimezone(ctx.organization?.timezone);
+  const money = (minor: number) => reportMoney(minor, currency);
+  const dated = (value: Date | string) => reportDate(value, timezone);
   const organizationId = ctx.entitlements.organizationId;
   const branches = await ctx.db.pharmacyBranch.findMany({
     where: { organizationId, active: true },
@@ -268,12 +270,12 @@ export default async function PharmacyFinancePage({
   }
 
   const now = new Date();
-  const today = now.toISOString().slice(0, 10);
-  // Shared UTC [from, to) posting window includes today; valuation stays independent.
+  const today = workspaceToday(timezone, now);
+  // Shared tenant-local posting window includes today; valuation stays independent.
   const ledgerFrom =
-    query.ledgerFrom ?? new Date(now.getTime() - 30 * 86_400_000).toISOString().slice(0, 10);
+    query.ledgerFrom ?? workspaceToday(timezone, new Date(now.getTime() - 30 * 86_400_000));
   const ledgerTo =
-    query.ledgerTo ?? new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
+    query.ledgerTo ?? workspaceToday(timezone, new Date(now.getTime() + 86_400_000));
   return (
     <main className="min-w-0 space-y-6">
       <PageHeader
@@ -292,6 +294,7 @@ export default async function PharmacyFinancePage({
       <Suspense fallback={<LedgerReportsLoading />}>
         <FinancialStatements
           caller={caller}
+          timezone={timezone}
           branchId={branch.id}
           from={ledgerFrom}
           to={ledgerTo}
@@ -304,6 +307,7 @@ export default async function PharmacyFinancePage({
       >
         <LedgerReportsSection
           caller={caller}
+          timezone={timezone}
           branch={branch}
           from={ledgerFrom}
           to={ledgerTo}
@@ -322,6 +326,7 @@ export default async function PharmacyFinancePage({
       >
         <MarginComparisonSection
           caller={caller}
+          timezone={timezone}
           branch={branch}
           from={query.marginFrom}
           to={query.marginTo}
@@ -486,7 +491,7 @@ export default async function PharmacyFinancePage({
               />
             </label>
             <label className="text-sm text-text-body">
-              Amount (PKR)
+              Amount ({currency ?? 'currency not configured'})
               <Input
                 className="mt-1 min-h-11"
                 name="amount"
@@ -688,7 +693,7 @@ export default async function PharmacyFinancePage({
                   ))}
                 </select>
               </label>
-              <label className="text-sm">Amount to match (PKR)
+              <label className="text-sm">Amount to match ({currency ?? 'currency not configured'})
                 <Input className="mt-1 min-h-11" name="amount" type="number" min="0.01" step="0.01" required />
               </label>
               <Button type="submit">Match POS settlement to statement</Button>
@@ -710,7 +715,7 @@ export default async function PharmacyFinancePage({
               <Input className="mt-1 min-h-11" name="bookedAt" type="date" required />
             </label>
             <label className="text-sm">
-              Amount (PKR)
+              Amount ({currency ?? 'currency not configured'})
               <Input className="mt-1 min-h-11" name="amount" type="number" step="0.01" required />
             </label>
             <label className="text-sm sm:col-span-2">

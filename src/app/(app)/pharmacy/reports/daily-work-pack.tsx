@@ -3,12 +3,15 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
-import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { reportMoney, reportDate, reportLabel } from '@/lib/pharmacy/report-presentation';
+import { ReportIdentity } from '@/components/pharmacy/report-identity';
 import type { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 
 type Reader = ReturnType<typeof pharmacyReportsRouter.createCaller>['dailyWorkPack'];
 type WorkPack = Awaited<ReturnType<Reader>>;
 export type DailyWorkPackProps = {
+  currency?: string | null;
+  timezone?: string;
   read: Reader;
   filters: Omit<Parameters<Reader>[0], 'asOf'>;
   branches: { id: string; name: string }[];
@@ -63,6 +66,8 @@ export async function DailyWorkPack({
   filters,
   branches,
   refreshFields,
+  currency,
+  timezone = 'UTC',
 }: DailyWorkPackProps) {
   let pack: WorkPack | null = null;
   try {
@@ -82,7 +87,7 @@ export async function DailyWorkPack({
       </SectionCard>
     );
   }
-  const branchName = (id: string) => branches.find((branch) => branch.id === id)?.name ?? id;
+  const branchName = (id: string) => branches.find((branch) => branch.id === id)?.name ?? 'Branch name not recorded';
   const tasks = pack.groups.flatMap((group) => group.tasks).filter((task) => task.evidence.length);
   return (
     <SectionCard
@@ -101,7 +106,7 @@ export async function DailyWorkPack({
           {pack.scope.branchIds.map(branchName).join(', ')}.
         </p>
         <p className="break-words">
-          As of: {pack.asOf}. Read at: {pack.readAt}.
+          As of: {reportDate(pack.asOf, timezone)}. Read at: {reportDate(pack.readAt, timezone)}.
         </p>
         <p>
           Each source keeps its own time basis below. Supplier, ingredient and batch filters do not
@@ -111,7 +116,7 @@ export async function DailyWorkPack({
         <p>
           Refresh rereads existing evidence; it does not refresh domain signals or create drafts. No
           money or time saved is calculated. Amounts use pharmacy integer minor units, displayed to
-          two decimal places. Source currency is unknown; — means unavailable, not zero.
+          two decimal places. Currency uses the organization setting ({currency ?? 'not configured'}); — means unavailable, not zero.
         </p>
         {!pack.permissions.financial ? (
           <p>Operational evidence only. Financial sources were not queried for your role.</p>
@@ -141,9 +146,9 @@ export async function DailyWorkPack({
                       key={evidence.id}
                       className="min-w-0 space-y-2 border-l border-border-subtle pl-4"
                     >
-                      <p className="break-all">
-                        {evidence.reference.kind}: {evidence.reference.id}
-                      </p>
+                      <div className="break-all">
+                        <ReportIdentity name={reportLabel(evidence.reference.kind)} id={evidence.reference.id} />
+                      </div>
                       <StatusPill status={evidence.state} tone="neutral" />
                       <div>
                         <a
@@ -170,7 +175,7 @@ export async function DailyWorkPack({
                             <dt className="break-all">{fieldLabel(amount.key)}</dt>
                             <dd className="break-words font-mono tabular-nums">
                               {Number.isSafeInteger(amount.value)
-                                ? `${formatMinor(amount.value)} (currency unknown)`
+                                ? reportMoney(amount.value, currency)
                                 : '—'}
                             </dd>
                             <dd className="text-text-muted">{amount.definition}</dd>
@@ -178,10 +183,10 @@ export async function DailyWorkPack({
                         ))}
                       </dl>
                       <p className="break-words text-text-muted">
-                        Observed: {evidence.observedAt ?? 'Unavailable'}. Computed:{' '}
-                        {evidence.computedAt ?? 'Unavailable'}. Source freshness seconds:{' '}
+                        Observed: {reportDate(evidence.observedAt, timezone)}. Computed:{' '}
+                        {reportDate(evidence.computedAt, timezone)}. Source freshness seconds:{' '}
                         {evidence.freshnessSeconds ?? 'Unavailable'}. Source due/expiry time:{' '}
-                        {evidence.dueAt ?? 'Unavailable'}.
+                        {reportDate(evidence.dueAt, timezone)}.
                       </p>
                       {evidence.missingInputs.map((reason) => (
                         <p key={reason} className="text-text-muted">
@@ -234,9 +239,9 @@ export async function DailyWorkPack({
             <p className="break-words text-text-muted">
               Window:{' '}
               {source.window
-                ? `${source.window.from} to ${source.window.toExclusive} (exclusive end)`
+                ? `${reportDate(source.window.from, timezone)} to ${reportDate(source.window.toExclusive, timezone)} (end excluded)`
                 : 'Not period-bounded'}
-              . Evaluated as of: {source.evaluatedAsOf ?? 'Unavailable'}. Read at: {source.readAt}.{' '}
+              . Evaluated as of: {reportDate(source.evaluatedAsOf, timezone)}. Read at: {reportDate(source.readAt, timezone)}.{' '}
               Freshness:{' '}
               {source.freshness === 'persisted-unverified'
                 ? 'Persisted; freshness unverified'

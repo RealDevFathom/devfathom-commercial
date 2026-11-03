@@ -1,3 +1,5 @@
+import { reportDayStart } from '@/lib/pharmacy/report-presentation';
+import { workspaceTimezone } from '@/lib/timezone';
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
@@ -73,6 +75,7 @@ export default async function AccountActivityBridgePage({
   if (!branch)
     return <State title="No active branch">Create an active pharmacy branch first.</State>;
 
+  const timezone = workspaceTimezone(ctx.organization?.timezone);
   const now = new Date();
   const fallbackTo = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
   const fallbackFrom = new Date(now.getTime() - 30 * 86_400_000).toISOString().slice(0, 10);
@@ -81,7 +84,7 @@ export default async function AccountActivityBridgePage({
   if (!validDate(from) || !validDate(to) || from >= to)
     return (
       <State title="Invalid date window">
-        Choose a valid UTC date window with an exclusive end.
+        Choose a valid date window with an exclusive end.
       </State>
     );
   if (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`) > MAX_WINDOW_MS)
@@ -93,8 +96,8 @@ export default async function AccountActivityBridgePage({
   try {
     statement = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
       branchId: branch.id,
-      from: `${from}T00:00:00Z`,
-      to: `${to}T00:00:00Z`,
+      from: reportDayStart(from, timezone).toISOString(),
+      to: reportDayStart(to, timezone).toISOString(),
       page: 1,
     });
     assertAccountActivityScope(statement.scope, { organizationId, branchId: branch.id });
@@ -150,11 +153,11 @@ export default async function AccountActivityBridgePage({
             </select>
           </label>
           <label className="grid gap-2 text-sm">
-            From (UTC)
+            From ({timezone})
             <Input name="from" type="date" defaultValue={from} required />
           </label>
           <label className="grid gap-2 text-sm">
-            To, exclusive (UTC)
+            To, excluded ({timezone})
             <Input name="to" type="date" defaultValue={to} required />
           </label>
           <label className="grid gap-2 text-sm">

@@ -1,3 +1,4 @@
+import { workspaceTimezone } from '@/lib/timezone';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -110,23 +111,29 @@ const ledgerReportProcedure = adminProcedure
     }
     const branch = await ctx.db.pharmacyBranch.findFirst({
       where: { organizationId, id: input.branchId, active: true },
-      select: { id: true },
+      select: { id: true, name: true },
     });
     if (!branch)
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
-    return next({ ctx: { ...ctx, reportScope: { organizationId, branchId: branch.id } } });
+    return next({
+      ctx: {
+        ...ctx,
+        reportScope: { organizationId, branchId: branch.id, branchName: branch.name },
+      },
+    });
   });
 
 function ledgerMetadata(
-  reportScope: { organizationId: string; branchId: string },
-  definition: string
+  reportScope: { organizationId: string; branchId: string; branchName: string },
+  definition: string,
+  organization: TRPCContext['organization']
 ) {
   return {
     scope: reportScope,
-    timezone: 'UTC' as const,
+    timezone: workspaceTimezone(organization?.timezone),
     moneyUnit: 'integer_minor' as const,
-    currency: null,
-    currencyStatus: 'not_recorded_by_ledger_reader' as const,
+    currency: organization?.currency ?? null,
+    currencyStatus: 'organization_setting' as const,
     definition,
     source: 'finance_journal_lines' as const,
     coverage: {
@@ -185,7 +192,8 @@ export const pharmacyFinanceRouter = router({
     .query(async ({ ctx, input }) => ({
       ...ledgerMetadata(
         ctx.reportScope,
-        'Branch journal lines posted before the exclusive cutoff. Opening balances precede from; movements use [from,to). Net P&L is projected only from canonical revenue, contra-revenue, and expense journal movements in that window. Receivables are debit balances; payables are credit balances. CASH and BANK are netted per entry, excluding internal transfers from cash inflow/outflow. Unposted activity and due-date aging remain unknown.'
+        'Branch journal lines posted before the exclusive cutoff. Opening balances precede from; movements use [from,to). Net P&L is projected only from canonical revenue, contra-revenue, and expense journal movements in that window. Receivables are debit balances; payables are credit balances. CASH and BANK are netted per entry, excluding internal transfers from cash inflow/outflow. Unposted activity and due-date aging remain unknown.',
+        ctx.organization
       ),
       ...(await financialStatements(ctx.db, ctx.reportScope, {
         from: new Date(input.from),
@@ -208,7 +216,8 @@ export const pharmacyFinanceRouter = router({
       return {
         ...ledgerMetadata(
           ctx.reportScope,
-          'Net posted inventory and inventory-in-transit value by lot/location through the inclusive instant; zero-net lots omitted. Missing unit cost remains unknown.'
+          'Net posted inventory and inventory-in-transit value by lot/location through the inclusive instant; zero-net lots omitted. Missing unit cost remains unknown.',
+          ctx.organization
         ),
         period: { at, bounds: 'through_inclusive' as const },
         rows,
@@ -223,7 +232,8 @@ export const pharmacyFinanceRouter = router({
       return {
         ...ledgerMetadata(
           ctx.reportScope,
-          'Posted gross revenue minus discounts minus posted lot COGS; reversals net against postings. Gross margin is neither net profit nor cash flow; unposted costs are unknown.'
+          'Posted gross revenue minus discounts minus posted lot COGS; reversals net against postings. Gross margin is neither net profit nor cash flow; unposted costs are unknown.',
+          ctx.organization
         ),
         period: { ...period, bounds: '[from,to)' as const },
         by: input.by,
@@ -237,7 +247,8 @@ export const pharmacyFinanceRouter = router({
     return {
       ...ledgerMetadata(
         ctx.reportScope,
-        'Posted discounts plus write-offs plus signed shrinkage by branch/product; stock found offsets stock lost. This is recorded ledger leakage, not expiry exposure or inferred causation.'
+        'Posted discounts plus write-offs plus signed shrinkage by branch/product; stock found offsets stock lost. This is recorded ledger leakage, not expiry exposure or inferred causation.',
+        ctx.organization
       ),
       period: { ...period, bounds: '[from,to)' as const },
       rows,
@@ -278,14 +289,18 @@ export const pharmacyFinanceRouter = router({
       const organizationId = ctx.entitlements.organizationId;
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { organizationId, id: input.branchId, active: true },
-        select: { id: true },
+        select: { id: true, name: true },
       });
       if (!branch)
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
       const period = { from: new Date(input.from), to: new Date(input.to) };
       try {
         marginComparisonPeriods(period.from, period.to);
-        return await grossMarginComparison(ctx.db, { organizationId, branchId: branch.id }, period);
+        return {
+          ...(await grossMarginComparison(ctx.db, { organizationId, branchId: branch.id }, period)),
+          currency: ctx.organization?.currency ?? null,
+          timezone: workspaceTimezone(ctx.organization?.timezone),
+        };
       } catch (error) {
         if (error instanceof RangeError)
           throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
@@ -465,17 +480,31 @@ export const pharmacyFinanceRouter = router({
 
   reconcile: bookkeepingProcedure
     .input(
-      z.object({ branchId: id, statementLineId: id, transactionId: id.optional(),
-        settlementBatchId: id.optional(), amountMinor: moneyMinor }).strict()
-        .refine((value) => Boolean(value.transactionId) !== Boolean(value.settlementBatchId),
-          'Choose exactly one posted transaction or POS settlement batch.')
+      z
+        .object({
+          branchId: id,
+          statementLineId: id,
+          transactionId: id.optional(),
+          settlementBatchId: id.optional(),
+          amountMinor: moneyMinor,
+        })
+        .strict()
+        .refine(
+          (value) => Boolean(value.transactionId) !== Boolean(value.settlementBatchId),
+          'Choose exactly one posted transaction or POS settlement batch.'
+        )
     )
     .mutation(async ({ ctx, input }) => {
       try {
         const scoped = await scope(ctx, input.branchId);
-        return await ctx.db.$transaction((tx) => input.settlementBatchId
-          ? reconcileSettlementBankLine(txDb(tx), scoped, { ...input, settlementBatchId: input.settlementBatchId })
-          : reconcileBankLine(txDb(tx), scoped, { ...input, transactionId: input.transactionId! }));
+        return await ctx.db.$transaction((tx) =>
+          input.settlementBatchId
+            ? reconcileSettlementBankLine(txDb(tx), scoped, {
+                ...input,
+                settlementBatchId: input.settlementBatchId,
+              })
+            : reconcileBankLine(txDb(tx), scoped, { ...input, transactionId: input.transactionId! })
+        );
       } catch (error) {
         fail(error);
       }

@@ -3,7 +3,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
-import { StatusPill } from '@/components/ui/status-pill';
 import {
   Table,
   TableBody,
@@ -12,7 +11,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { reportMoney as money, reportDate, reportDayStart } from '@/lib/pharmacy/report-presentation';
+import { workspaceToday } from '@/lib/timezone';
+import { ReportIdentity } from '@/components/pharmacy/report-identity';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 
 type Caller = Pick<
@@ -28,19 +29,6 @@ const day = 86_400_000;
 const groups: Group[] = ['line', 'batch', 'product', 'branch'];
 const unknown = 'Not recorded';
 
-// Guard the receipt formatter's invalid-number fallback: missing/unsafe money is never zero.
-function money(value: number | bigint | null, currency: string | null) {
-  if (value === null) return 'Unknown';
-  if (
-    typeof value === 'bigint' &&
-    (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER))
-  )
-    return 'Unavailable (amount exceeds safe bounds)';
-  const minor = Number(value);
-  if (!Number.isSafeInteger(minor)) return 'Unavailable (invalid minor amount)';
-  return `${currency ?? 'Currency unknown'} ${formatMinor(minor)}`;
-}
-
 function total(values: number[]): bigint | null {
   if (!values.every(Number.isSafeInteger)) return null;
   return values.reduce((sum, value) => sum + BigInt(value), BigInt(0));
@@ -51,34 +39,19 @@ function net(row: Margin['rows'][number]) {
 }
 
 function Metadata({ report }: { report: Report }) {
-  return (
-    <div className="space-y-2 break-words text-sm text-text-muted">
-      <p>
-        {'at' in report.period
-          ? `Through ${report.period.at.toISOString()} (inclusive).`
-          : `${report.period.from.toISOString()} to ${report.period.to.toISOString()} (start inclusive, end exclusive).`}{' '}
-        Timezone: {report.timezone}. Branch: {report.scope.branchId}.
-      </p>
-      <p>
-        Currency: {report.currency ?? 'unknown — not recorded by the ledger reader'}. Integer minor
-        units displayed with two decimals.
-      </p>
+  return <div className="space-y-2 break-words text-sm text-text-muted">
+    <p>{report.scope.branchName || 'Selected branch'} · {report.timezone} · {report.currency || 'Currency not configured'} · {'at' in report.period
+      ? `Through ${reportDate(report.period.at, report.timezone)} (inclusive)`
+      : `${reportDate(report.period.from, report.timezone)} to ${reportDate(report.period.to, report.timezone)} (end excluded)`}</p>
+    <details>
+      <summary className="min-h-11 cursor-pointer py-3 focus-visible:outline-2 focus-visible:outline-ring">Report details and coverage</summary>
       <p>{report.definition}</p>
-      <p>
-        Source: {report.source}. Coverage: posted entries only; completeness{' '}
-        {report.coverage.completeness}. Refunds included only when posted as reversals.
-      </p>
-      <p>
-        Retrieved: {report.freshness.retrievedAt.toISOString()}. Latest posting:{' '}
-        {report.freshness.latestPostingAt ?? 'unknown'}.
-      </p>
-      <StatusPill status="warning" label={`Cost coverage: ${report.coverage.costCoverage}`} />
-      <p>
-        Missing costs are unknown, not zero. These values do not establish complete business
-        activity.
-      </p>
-    </div>
-  );
+      <p>Posted entries only; completeness and missing costs are not verified. Recorded refunds and reversals are included. Missing costs are not zero.</p>
+      <p>Currency uses the current organization setting; historical transaction currency is not revalued. Amounts use integer minor units, displayed to two decimals.</p>
+      <p>Read at {reportDate(report.freshness.retrievedAt, report.timezone)}. Latest posting: {reportDate(report.freshness.latestPostingAt, report.timezone)}.</p>
+      <p>Technical source: {report.source}. Branch reference: {report.scope.branchId}. Cost coverage: {report.coverage.costCoverage}; completeness: {report.coverage.completeness}.</p>
+    </details>
+  </div>;
 }
 
 function LedgerTable({
@@ -93,8 +66,7 @@ function LedgerTable({
   if (!rows.length)
     return (
       <p role="status" className="text-sm text-text-muted">
-        No matching posted ledger rows. This is not proof of zero activity or complete cost
-        coverage. Try another period or branch.
+        No recorded entries match these filters. Try another period or branch; unrecorded activity is not included.
       </p>
     );
   return (
@@ -144,22 +116,22 @@ export function ValuationLedger({ report }: { report: Valuation }) {
         unverified. Lot unit cost is current metadata, not a historical cost reconstruction.
       </p>
       <LedgerTable
-        caption="Perpetual valuation by lot and location"
+        caption="Inventory value by receipt lot and location"
         columns={[
           { label: 'Branch' },
-          { label: 'Lot' },
+          { label: 'Receipt lot' },
           { label: 'Batch' },
           { label: 'Medicine' },
           { label: 'Location' },
-          { label: 'Lot unit cost', numeric: true },
-          { label: 'Ledger value', numeric: true },
+          { label: 'Current cost per unit', numeric: true },
+          { label: 'Net posted value', numeric: true },
         ]}
         rows={report.rows.map((row) => [
-          row.branchId ?? unknown,
-          row.lotId,
-          row.manufacturingBatchId ?? unknown,
-          row.medicineId ?? unknown,
-          row.locationId ?? unknown,
+          <ReportIdentity name={row.branchName ?? unknown} id={row.branchId} />,
+          <ReportIdentity name={row.lotReference ? `Receipt ${row.lotReference}` : unknown} id={row.lotId} />,
+          <ReportIdentity name={row.batchNumber ?? unknown} id={row.manufacturingBatchId} />,
+          <ReportIdentity name={row.medicineName ?? unknown} id={row.medicineId} />,
+          <ReportIdentity name={row.locationName ?? unknown} id={row.locationId} />,
           money(row.unitCostMinor, report.currency),
           money(row.valueMinor, report.currency),
         ])}
@@ -176,22 +148,22 @@ export function MarginLedger({ report }: { report: Margin }) {
       {report.rows.length > 0 && (
         <div className="grid min-w-0 gap-5 md:grid-cols-3">
           <Stat
-            label="Net ledger revenue"
+            label="Net sales revenue"
             value={money(revenue, report.currency)}
             valueClassName="break-words text-xl"
             sub="Posted sales revenue less posted discounts; tax excluded."
           />
           <Stat
-            label="Posted COGS"
+            label="Cost of medicines sold"
             value={money(total(report.rows.map((row) => row.cogsMinor)), report.currency)}
             valueClassName="break-words text-xl"
             sub="Posted lot costs; unposted costs remain unknown."
           />
           <Stat
-            label="Ledger gross margin"
+            label="Gross margin"
             value={money(total(report.rows.map((row) => row.grossMarginMinor)), report.currency)}
             valueClassName="break-words text-xl"
-            sub="Net ledger revenue less posted COGS; not net profit or cash flow."
+            sub="Net sales revenue less posted COGS; not net profit or cash flow."
           />
         </div>
       )}
@@ -206,11 +178,11 @@ export function MarginLedger({ report }: { report: Margin }) {
           { label: 'Gross revenue', numeric: true },
           { label: 'Discounts', numeric: true },
           { label: 'Net revenue', numeric: true },
-          { label: 'Posted COGS', numeric: true },
+          { label: 'Cost of medicines sold', numeric: true },
           { label: 'Gross margin', numeric: true },
         ]}
         rows={report.rows.map((row) => [
-          row.key ?? unknown,
+          <ReportIdentity name={row.label ?? (row.key ? 'Name not recorded' : 'Entries without attribution')} id={row.key} />,
           money(row.revenueMinor, report.currency),
           money(row.discountMinor, report.currency),
           money(net(row), report.currency),
@@ -227,23 +199,21 @@ export function LeakageLedger({ report }: { report: Leakage }) {
     <div className="min-w-0 space-y-4">
       <Metadata report={report} />
       <p className="text-sm text-text-body">
-        Recorded categories only: discounts, write-offs and signed shrinkage. Stock found offsets
-        stock lost. Discounts are commercial decisions; these totals are not all realized loss.
-        Expiry exposure and reasons for changes are not inferred.
+        Recorded discounts, stock written off, and stock lost less stock found; these totals are not all cash losses.
       </p>
       <LedgerTable
         caption="Recorded leakage by branch and product"
         columns={[
           { label: 'Branch' },
-          { label: 'Product' },
+          { label: 'Medicine' },
           { label: 'Discounts', numeric: true },
           { label: 'Write-offs', numeric: true },
-          { label: 'Signed shrinkage', numeric: true },
+          { label: 'Stock lost less found', numeric: true },
           { label: 'Recorded total', numeric: true },
         ]}
         rows={report.rows.map((row) => [
-          row.branchId ?? unknown,
-          row.medicineId ?? unknown,
+          <ReportIdentity name={row.branchName ?? unknown} id={row.branchId} />,
+          <ReportIdentity name={row.medicineName ?? unknown} id={row.medicineId} />,
           money(row.discountMinor, report.currency),
           money(row.writeOffMinor, report.currency),
           money(row.shrinkageMinor, report.currency),
@@ -282,10 +252,10 @@ export function LedgerReportsLoading() {
   );
 }
 
-function dateOnly(value: string) {
+function dateOnly(value: string, timezone: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const date = new Date(`${value}T00:00:00Z`);
-  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? date : null;
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? reportDayStart(value, timezone) : null;
 }
 
 export async function LedgerReportsSection({
@@ -297,6 +267,7 @@ export async function LedgerReportsSection({
   by,
   marginFrom,
   marginTo,
+  timezone = 'UTC',
 }: {
   caller: Caller;
   branch: { id: string; name: string };
@@ -306,18 +277,19 @@ export async function LedgerReportsSection({
   by?: string;
   marginFrom?: string;
   marginTo?: string;
+  timezone?: string;
 }) {
   const now = new Date();
-  const today = now.toISOString().slice(0, 10);
+  const today = workspaceToday(timezone, now);
   const end = to ?? today;
   const start =
     from ??
     new Date(new Date(`${today}T00:00:00Z`).getTime() - 30 * day).toISOString().slice(0, 10);
   const cutoff = at ?? today;
   const group = by ?? 'batch';
-  const fromDate = dateOnly(start),
-    toDate = dateOnly(end),
-    atDate = dateOnly(cutoff);
+  const fromDate = dateOnly(start, timezone),
+    toDate = dateOnly(end, timezone),
+    atDate = dateOnly(cutoff, timezone);
   const periodValid =
     !!fromDate &&
     !!toDate &&
@@ -341,8 +313,7 @@ export async function LedgerReportsSection({
     <section aria-label="Pharmacy ledger reports" className="min-w-0 space-y-6">
       <SectionCard title="Ledger reports" titleLevel={2} eyebrow="Valuation · margin · leakage">
         <p className="mb-4 break-words text-sm text-text-muted">
-          Branch: {branch.name}. Reporting period uses UTC midnight, start inclusive and end
-          exclusive, up to 92 days. Valuation uses its separate inclusive cutoff at UTC midnight.
+          Branch: {branch.name}. Dates use {timezone}, from midnight on the start date to midnight before the end date, up to 92 days. Inventory value uses its separate midnight cutoff.
         </p>
         <form
           action="/pharmacy/finance"
@@ -355,19 +326,19 @@ export async function LedgerReportsSection({
           {[
             {
               name: 'ledgerFrom',
-              label: 'Period start (UTC)',
+              label: `Period start (${timezone})`,
               value: start,
               invalid: !periodValid,
             },
             {
               name: 'ledgerTo',
-              label: 'Period end (UTC, exclusive)',
+              label: `Period end (${timezone}, excluded)`,
               value: end,
               invalid: !periodValid,
             },
             {
               name: 'ledgerAt',
-              label: 'Valuation cutoff (00:00 UTC)',
+              label: `Valuation cutoff (00:00 ${timezone})`,
               value: cutoff,
               invalid: !atValid,
             },
@@ -417,14 +388,14 @@ export async function LedgerReportsSection({
       </SectionCard>
       {results && (
         <>
-          <SectionCard title="Perpetual valuation" titleLevel={2}>
+          <SectionCard title="Inventory valuation" titleLevel={2}>
             {results[0].status === 'fulfilled' ? (
               <ValuationLedger report={results[0].value} />
             ) : (
               <Failure error={results[0].reason} />
             )}
           </SectionCard>
-          <SectionCard title="Ledger gross margin" titleLevel={2}>
+          <SectionCard title="Gross margin" titleLevel={2}>
             {results[1].status === 'fulfilled' ? (
               <MarginLedger report={results[1].value} />
             ) : (

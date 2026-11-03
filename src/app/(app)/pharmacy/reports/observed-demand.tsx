@@ -1,3 +1,5 @@
+import { reportMoney, reportDate, reportLabel } from '@/lib/pharmacy/report-presentation';
+import { ReportIdentity } from '@/components/pharmacy/report-identity';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import type { demandAggregate } from '@/lib/pharmacy/sales';
@@ -9,7 +11,11 @@ export function ObservedDemand({
   failed,
   selected,
   financial,
+  currency,
+  timezone = 'UTC',
 }: {
+  currency?: string | null;
+  timezone?: string;
   report: Demand | null;
   failed: boolean;
   selected: boolean;
@@ -31,8 +37,8 @@ export function ObservedDemand({
         <>
           <p className="mb-4 text-sm text-text-muted">
             Explicit recorded requests, not unique customers or total market demand. Selected
-            branch; UTC event dates {report.window.from.toISOString().slice(0, 10)} to{' '}
-            {report.window.to.toISOString().slice(0, 10)} (end exclusive). Supplier, ingredient and
+            branch; event dates ({timezone}) {reportDate(report.window.from, timezone)} to{' '}
+            {reportDate(report.window.to, timezone)} (end exclusive). Supplier, ingredient and
             batch filters do not apply. Events may subsequently be recovered; this is not an open
             backlog.
           </p>
@@ -51,7 +57,7 @@ export function ObservedDemand({
           <ul className="mt-4 space-y-2 text-sm text-text-body">
             {report.rows.slice(0, 10).map((row, index) => (
               <li key={index}>
-                {row.requestedMedicineId ?? 'Unresolved item'} · {row.reason} · {row._count._all}{' '}
+                <ReportIdentity name={row.medicineName ?? 'Unresolved item'} id={row.requestedMedicineId} /> · {reportLabel(row.reason)} · {row._count._all}{' '}
                 events · {row._sum.quantity ?? 'Unknown'} requested units
                 {financial ? (
                   <>
@@ -59,7 +65,7 @@ export function ObservedDemand({
                     · estimated value{' '}
                     {row._sum.estimatedValueMinor == null
                       ? 'unavailable'
-                      : `${(row._sum.estimatedValueMinor / 100).toFixed(2)} (currency unknown)`}
+                      : reportMoney(row._sum.estimatedValueMinor, currency)}
                   </>
                 ) : null}
               </li>

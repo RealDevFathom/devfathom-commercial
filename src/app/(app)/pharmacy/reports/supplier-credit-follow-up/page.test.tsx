@@ -312,7 +312,7 @@ describe('supplier-credit Reports preparation', () => {
       organization: { id: scope.organizationId, currency: null },
     });
     await show();
-    expect(screen.getByText('Currency unknown 75.01')).toBeVisible();
+    expect(screen.getByText('Currency not configured 75.01')).toBeVisible();
     expect(screen.queryByText('CREDIT-CANDIDATE')).toBeNull();
   });
 

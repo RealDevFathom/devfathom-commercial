@@ -65,7 +65,7 @@ function caller(role = 'ADMIN', context: Partial<TRPCContext> = {}) {
       expires: 'later',
       user: { id: 'user_admin', role, status: 'ACTIVE', organizationId: 'org_1' },
     },
-    organization: { id: 'org_1' },
+    organization: { id: 'org_1', currency: 'PKR', timezone: 'Asia/Karachi' },
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
@@ -79,7 +79,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.can.mockResolvedValue(true);
   vi.mocked(hasModule).mockReturnValue(true);
-  mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
+  mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1', name: 'Main pharmacy' });
   mocks.transaction.mockImplementation(async (callback) => callback({ ledger: true }));
   mocks.comparison.mockResolvedValue({ differenceMinor: 42 });
   mocks.valuation.mockResolvedValue([
@@ -165,20 +165,20 @@ describe.each(ledgerCases)(
       const result = await invoke(caller(), valid);
       expect(reader).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ pharmacyBranch: expect.any(Object) }),
-        { organizationId: 'org_1', branchId: 'branch_1' },
+        { organizationId: 'org_1', branchId: 'branch_1', branchName: 'Main pharmacy' },
         expectedReaderInput
       );
       expect(mocks.branchFindFirst).toHaveBeenCalledWith({
         where: { organizationId: 'org_1', id: 'branch_1', active: true },
-        select: { id: true },
+        select: { id: true, name: true },
       });
       expect(result.rows).toBe(await reader.mock.results[0].value);
       expect(result).toMatchObject({
         scope: { organizationId: 'org_1', branchId: 'branch_1' },
-        timezone: 'UTC',
+        timezone: 'Asia/Karachi',
         moneyUnit: 'integer_minor',
-        currency: null,
-        currencyStatus: 'not_recorded_by_ledger_reader',
+        currency: 'PKR',
+        currencyStatus: 'organization_setting',
         definition: expect.any(String),
         source: 'finance_journal_lines',
         coverage: {
@@ -356,12 +356,12 @@ describe('finance comparison boundary', () => {
     await expect(caller().marginComparison(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.branchFindFirst).toHaveBeenCalledWith({
       where: { organizationId: 'org_1', id: 'branch_1', active: true },
-      select: { id: true },
+      select: { id: true, name: true },
     });
     expect(mocks.comparison).not.toHaveBeenCalled();
   });
   it('passes tenant-scoped arguments to the single-statement read', async () => {
-    await expect(caller().marginComparison(input)).resolves.toEqual({ differenceMinor: 42 });
+    await expect(caller().marginComparison(input)).resolves.toEqual({ differenceMinor: 42, currency: 'PKR', timezone: 'Asia/Karachi' });
     expect(mocks.comparison).toHaveBeenCalledWith(
       expect.objectContaining({ pharmacyBranch: expect.any(Object) }),
       { organizationId: 'org_1', branchId: 'branch_1' },
@@ -453,7 +453,7 @@ describe('cash-flow forecast boundary', () => {
     ]);
     expect(mocks.branchFindFirst).toHaveBeenCalledWith({
       where: { organizationId: 'org_1', id: 'branch_1', active: true },
-      select: { id: true },
+      select: { id: true, name: true },
     });
     expect(mocks.transaction).not.toHaveBeenCalled();
   });

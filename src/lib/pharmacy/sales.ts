@@ -1015,13 +1015,19 @@ export async function demandAggregate(
     _sum: { quantity: true, estimatedValueMinor: true, estimatedMarginMinor: true },
     orderBy: { _count: { requestedMedicineId: 'desc' } },
   });
+  const ids = [...new Set(rows.flatMap(row => row.requestedMedicineId ? [row.requestedMedicineId] : []))];
+  const medicines = ids.length ? await db.medicine.findMany({
+    where: { organizationId: scope.organizationId, id: { in: ids } },
+    select: { id: true, productName: true },
+  }) : [];
+  const names = new Map(medicines.map(medicine => [medicine.id, medicine.productName]));
   return {
     label: 'Estimate',
     method: 'Explicit POS-10 events grouped by requested item and cause',
     window: { from, to },
     exclusions: ['searches without an explicit event', 'abandoned carts'],
     confidence: 'observed-events-only',
-    rows,
+    rows: rows.map(row => ({ ...row, medicineName: row.requestedMedicineId ? names.get(row.requestedMedicineId) ?? null : null })),
   };
 }
 

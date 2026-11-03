@@ -4,10 +4,11 @@ import { explainGrossMargin, marginComparisonPeriods } from '@/lib/pharmacy/fina
 import { MarginComparisonLedger, MarginComparisonSection } from './margin-comparison';
 
 describe('gross-margin comparison UI', () => {
-  it('renders reconciled money, UTC boundaries and evidence limits', () => {
+  it('renders reconciled money, tenant-timezone boundaries and evidence limits', () => {
     const report = {
       branchId: 'branch_1',
-      timezone: 'UTC' as const,
+      timezone: 'Asia/Karachi',
+      currency: 'PKR',
       periods: marginComparisonPeriods(new Date('2026-09-01Z'), new Date('2026-09-03Z')),
       ...explainGrossMargin(undefined, {
         key: 'branch_1',
@@ -19,9 +20,9 @@ describe('gross-margin comparison UI', () => {
     };
     const html = renderToStaticMarkup(<MarginComparisonLedger report={report} />);
     for (const text of [
-      '25.00 (currency unknown)',
-      '2026-08-30T00:00:00.000Z',
-      'start inclusive, end exclusive',
+      'PKR 25.00',
+      '30 Aug 2026, 05:00',
+      'start included, end excluded',
       'the previous period',
       'not a causal price/volume/mix',
       'missing evidence is not zero',
@@ -49,14 +50,14 @@ describe('gross-margin comparison UI', () => {
       expect(html).toContain(
         code === 'FORBIDDEN' ? 'Permission required' : 'Comparison unavailable'
       );
-      expect(html).not.toContain('0.00 (currency unknown)');
+      expect(html).not.toContain('PKR 0.00');
       expect(html).toContain('name="marginFrom"');
       expect(html).toContain('value="2026-09-01"');
       expect(html).toContain('value="branch_1"');
       expect(marginComparison).toHaveBeenCalledWith({
         branchId: 'branch_1',
-        from: '2026-09-01T00:00:00Z',
-        to: '2026-09-03T00:00:00Z',
+        from: '2026-09-01T00:00:00.000Z',
+        to: '2026-09-03T00:00:00.000Z',
       });
     }
   );

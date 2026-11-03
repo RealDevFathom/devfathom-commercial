@@ -190,7 +190,7 @@ describe('pharmacy report catalog filters', () => {
     actor.role = 'MANAGER';
     render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
     expect(screen.getByRole('heading', { name: 'Anomaly review signals' })).toBeVisible();
-    expect(screen.getByText('Staff drill-down · cashier_1')).toBeVisible();
+    expect(screen.getByText('Staff reference available in the audit trail')).toBeVisible();
     expect(screen.getByText('Related audit trail requires an administrator.')).toBeVisible();
     expect(
       screen.queryByRole('link', { name: 'Open related audit trail' })

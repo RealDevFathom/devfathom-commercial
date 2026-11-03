@@ -63,7 +63,7 @@ describe('repeat purchasing page', () => {
     });
     render(await Page({ searchParams: Promise.resolve({}) }));
     expect(screen.getByText('50.0%')).toBeInTheDocument();
-    expect(screen.getByText(/1 repeat \/ 2 eligible customers · 1 immature/)).toBeInTheDocument();
+    expect(screen.getByText(/1 repeat \/ 2 eligible customers · 1 still awaiting follow-up/)).toBeInTheDocument();
   });
   it.each(['FORBIDDEN', 'BAD_REQUEST', 'INTERNAL_SERVER_ERROR'] as const)(
     'handles %s without partial rates',

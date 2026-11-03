@@ -95,10 +95,14 @@ describe('gross-margin accounting comparison', () => {
         result.periods.previous.from,
         result.periods.previous.to,
         'branch_1',
+        'Refunds without branch',
+        'Entries without branch',
         'org_1',
         result.periods.current.from,
         result.periods.current.to,
         'branch_1',
+        'Refunds without branch',
+        'Entries without branch',
       ]);
     }
     expect(result.differenceMinor).toBe(-40);

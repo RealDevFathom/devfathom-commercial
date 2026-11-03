@@ -1,3 +1,6 @@
+import { reportDate, reportDayStart } from '@/lib/pharmacy/report-presentation';
+import { workspaceTimezone } from '@/lib/timezone';
+import { ReportIdentity } from '@/components/pharmacy/report-identity';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
@@ -30,8 +33,10 @@ export default async function ProfitAndLossPage({
     ReturnType<ReturnType<typeof pharmacyFinanceRouter.createCaller>['financialStatements']>
   > | null = null;
   let error: string | null = null;
+  let timezone = 'UTC';
   try {
     const ctx = await createTRPCContext();
+    timezone = workspaceTimezone(ctx.organization?.timezone);
     branches = (await pharmacyReportsRouter.createCaller(ctx).branches()).branches;
     if ([query.branch, query.from, query.to].some(Array.isArray)) {
       throw new TRPCError({ code: 'BAD_REQUEST' });
@@ -44,8 +49,8 @@ export default async function ProfitAndLossPage({
       // active branch and UTC period validation. No bookkeeping workspace call.
       result = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
         branchId,
-        from: `${from}T00:00:00Z`,
-        to: `${to}T00:00:00Z`,
+        from: reportDayStart(from, timezone).toISOString(),
+        to: reportDayStart(to, timezone).toISOString(),
         page: 1,
       });
     }
@@ -54,7 +59,7 @@ export default async function ProfitAndLossPage({
       cause instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED', 'NOT_FOUND'].includes(cause.code)
         ? 'Owner financial-report permission, Pharmacy Reports access and an authorized active branch are required.'
         : cause instanceof TRPCError && cause.code === 'BAD_REQUEST'
-          ? 'Choose one branch and a valid UTC date window of up to 92 days, with the exclusive end after the start, then retry.'
+          ? 'Choose one branch and a valid date window of up to 92 days, with the exclusive end after the start, then retry.'
           : 'Profit and loss could not be read. Retry the report.';
   }
   return (
@@ -93,11 +98,11 @@ export default async function ProfitAndLossPage({
             </select>
           </label>
           <label className="grid gap-2 text-sm">
-            From (UTC)
+            From ({timezone})
             <Input className="min-h-11" name="from" type="date" defaultValue={from} required />
           </label>
           <label className="grid gap-2 text-sm">
-            To, exclusive (UTC)
+            To, excluded ({timezone})
             <Input className="min-h-11" name="to" type="date" defaultValue={to} required />
           </label>
           <Button className="min-h-11" disabled={!branches.length}>
@@ -114,12 +119,11 @@ export default async function ProfitAndLossPage({
       )}
       {result && (
         <SectionCard title="Posted profit and loss">
-          <p className="break-words text-sm text-text-muted">
-            Branch {result.scope.branchId}. UTC [{result.from.toISOString()},{' '}
-            {result.to.toISOString()}). Source: {result.source}. Coverage: posted entries only;
+          <div className="break-words text-sm text-text-muted">
+            <ReportIdentity name={result.scope.branchName ?? branches.find(branch => branch.id === result.scope.branchId)?.name} id={result.scope.branchId} /> · {timezone}: {reportDate(result.from, timezone)} to {reportDate(result.to, timezone)} (end excluded). Source: {result.source}. Coverage: posted entries only;
             completeness and cost coverage unknown. Amounts use each recorded currency. Retrieved{' '}
-            {result.freshness.retrievedAt.toISOString()}.
-          </p>
+            {reportDate(result.freshness.retrievedAt, timezone)}.
+          </div>
           <ProfitAndLossReport statements={result.profitAndLoss} />
         </SectionCard>
       )}

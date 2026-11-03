@@ -1,3 +1,4 @@
+import { reportDate } from '@/lib/pharmacy/report-presentation';
 'use client';
 
 import { useState } from 'react';
@@ -14,6 +15,7 @@ export type FollowUpPacketData = {
   to: string;
   preparedAt: string;
   currency: string | null;
+  timezone?: string;
   coverage: 'complete' | 'partial';
   excluded: number;
   rows: {
@@ -43,7 +45,7 @@ const FRESHNESS =
 const SOURCE = 'pharmacyPurchasing.purchaseReturns + pharmacyPurchasing.supplierCredits';
 const amount = (value: number | null) =>
   value !== null && Number.isSafeInteger(value) && value >= 0 ? formatMinor(value) : 'Unknown';
-const currencyLabel = (packet: FollowUpPacketData) => packet.currency ?? 'Currency unknown';
+const currencyLabel = (packet: FollowUpPacketData) => packet.currency ?? 'Currency not configured';
 const currencyBasis =
   'Currency is the current organization setting; source records do not establish historical currency. Amounts use integer minor units (100 per major unit).';
 const uniqueCredits = (rows: FollowUpPacketData['rows']) => [
@@ -213,7 +215,7 @@ export function FollowUpPacket({ packet }: { packet: FollowUpPacketData }) {
         <StatusPill status="draft" label="Draft · read-only" />
         <p className="mt-3 text-sm text-text-body">
           Branch: {packet.branch.name}. Return creation period: {packet.from} to {packet.to},
-          inclusive UTC. Prepared at: {packet.preparedAt}. Currency: {currencyLabel(packet)}.
+          inclusive UTC. Prepared at: {reportDate(packet.preparedAt, packet.timezone)}. Currency: {currencyLabel(packet)}.
         </p>
         <p className="mt-2 text-sm text-text-muted">{currencyBasis}</p>
         <p className="mt-2 text-sm text-text-muted">{DEFINITION}</p>
@@ -314,7 +316,7 @@ export function FollowUpPacket({ packet }: { packet: FollowUpPacketData }) {
                               </p>
                               {row.deadline ? (
                                 <p className="text-xs">
-                                  Earliest recorded return deadline: {row.deadline}
+                                  Earliest recorded return deadline: {reportDate(row.deadline, packet.timezone)}
                                 </p>
                               ) : null}
                             </>
@@ -356,7 +358,7 @@ export function FollowUpPacket({ packet }: { packet: FollowUpPacketData }) {
                   prove none exists.
                 </p>
               )}
-              <PacketActions key={packet.preparedAt} packet={packet} supplierId={supplierId} />
+              <PacketActions key={reportDate(packet.preparedAt, packet.timezone)} packet={packet} supplierId={supplierId} />
             </SectionCard>
           );
         })

@@ -1,3 +1,4 @@
+import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import type { Metadata } from 'next';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -65,7 +66,8 @@ export default async function PharmacyBalanceSheetPage({
     );
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const timezone = workspaceTimezone(ctx.organization?.timezone);
+  const today = workspaceToday(timezone);
   const requestedCutoff = query.cutoff ?? '';
   const parsedCutoff = new Date(`${requestedCutoff}T00:00:00.000Z`);
   const cutoff =
@@ -85,6 +87,7 @@ export default async function PharmacyBalanceSheetPage({
         caller={pharmacyFinanceRouter.createCaller(ctx)}
         branchId={branch.id}
         cutoff={cutoff}
+        timezone={timezone}
       />
     </main>
   );

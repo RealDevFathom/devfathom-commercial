@@ -12,6 +12,7 @@ const report: Awaited<ReturnType<typeof demandAggregate>> = {
   rows: [
     {
       requestedMedicineId: 'item-a',
+      medicineName: 'Paracetamol',
       requestedText: 'never render free text',
       reason: 'STOCKOUT',
       _count: { _all: 2 },
@@ -19,6 +20,7 @@ const report: Awaited<ReturnType<typeof demandAggregate>> = {
     },
     {
       requestedMedicineId: null,
+      medicineName: null,
       requestedText: 'never render free text',
       reason: 'PRICE_REJECTED',
       _count: { _all: 1 },
@@ -30,13 +32,13 @@ const report: Awaited<ReturnType<typeof demandAggregate>> = {
 describe('observed demand evidence', () => {
   it('distinguishes observations, units, null estimates and exclusions', () => {
     const html = renderToStaticMarkup(
-      <ObservedDemand report={report} failed={false} selected financial />
+      <ObservedDemand report={report} failed={false} selected financial currency="PKR" timezone="Asia/Karachi" />
     );
     for (const value of [
       'Recorded demand events',
       'Stockout events',
       '3 requested units',
-      '5.00 (currency unknown)',
+      'PKR 5.00',
       'estimated value unavailable',
       'not unique customers',
       'abandoned carts',

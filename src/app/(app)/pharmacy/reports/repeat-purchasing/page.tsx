@@ -1,3 +1,4 @@
+import { reportDate } from '@/lib/pharmacy/report-presentation';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
@@ -32,8 +33,11 @@ export default async function RepeatPurchasingPage({
     ReturnType<ReturnType<typeof pharmacyReportsRouter.createCaller>['repeatPurchasing']>
   > | null = null;
   let error: string | null = null;
+  let timezone: string | undefined;
   try {
-    const caller = pharmacyReportsRouter.createCaller(await createTRPCContext());
+    const ctx = await createTRPCContext();
+    timezone = ctx.organization?.timezone;
+  const caller = pharmacyReportsRouter.createCaller(ctx);
     branches = (await caller.branches()).branches;
     result = await caller.repeatPurchasing({ from, to, asOf, ...(branchId ? { branchId } : {}) });
   } catch (cause) {
@@ -118,7 +122,7 @@ export default async function RepeatPurchasingPage({
           <SectionCard title="Identity coverage" titleLevel={2}>
             <p className="mb-4 text-sm text-text-muted">
               Completed original receipts in enrollment window, before purchase exclusions. Frozen
-              cutoff: {result.asOf}.
+              cutoff: {reportDate(result.asOf, timezone)}.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               <Stat
@@ -143,7 +147,7 @@ export default async function RepeatPurchasingPage({
                   key={h.days}
                   label={`${h.days}-day repeat purchasing`}
                   value={percent(h.ratePercent)}
-                  sub={`${h.repeated} repeat / ${h.eligible} eligible customers · ${h.immature} immature, excluded from denominator`}
+                  sub={`${h.repeated} repeat / ${h.eligible} eligible customers · ${h.immature} still awaiting follow-up, excluded from the rate`}
                 />
               ))}
             </div>
@@ -159,7 +163,7 @@ export default async function RepeatPurchasingPage({
               Across all selected data through cutoff: {result.missingTimestamp} completed originals
               missing completion timestamps; {result.missingReceipt} timestamped originals missing
               receipt numbers. Earliest available completion:{' '}
-              {result.earliestObservedAt ?? 'Unavailable'}. This is not a verified data-start date.
+              {reportDate(result.earliestObservedAt, timezone)}. This is not a verified data-start date.
             </p>
           </SectionCard>
         </>

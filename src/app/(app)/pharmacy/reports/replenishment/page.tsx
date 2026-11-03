@@ -35,6 +35,8 @@ export default async function ReplenishmentPage({
       (!branchId || !scope.branches.some((branch) => branch.id === branchId));
     scopedProps = {
       organizationId: scope.organizationId,
+      tenantCurrency: actor.organization.currency,
+      tenantTimezone: actor.organization.timezone,
       branches: scope.branches,
       financial: ctx.session?.user?.role === 'ADMIN' && catalog.permissions.financial,
       initialBranchId: invalidBranch ? '' : branchId,

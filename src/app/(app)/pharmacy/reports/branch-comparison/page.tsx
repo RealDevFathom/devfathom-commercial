@@ -2,7 +2,8 @@ import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
-import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { reportMoney } from '@/lib/pharmacy/report-presentation';
+import { workspaceToday } from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -14,10 +15,11 @@ export default async function BranchComparisonPage({
   searchParams: Promise<{ from?: string; to?: string }>;
 }) {
   const query = await searchParams;
-  const today = new Date().toISOString().slice(0, 10);
+  const ctx = await createTRPCContext();
+  const today = workspaceToday(ctx.organization?.timezone);
   const from = query.from ?? today;
   const to = query.to ?? today;
-  const caller = pharmacyReportsRouter.createCaller(await createTRPCContext());
+  const caller = pharmacyReportsRouter.createCaller(ctx);
   let comparison: Awaited<ReturnType<typeof caller.branchComparison>> | null = null;
   let errorMessage: string | null = null;
   try {
@@ -31,7 +33,7 @@ export default async function BranchComparisonPage({
           : 'The comparison could not be loaded. Try again or contact support if the problem continues.';
   }
   const money = (value: number | null) =>
-    value == null ? '—' : formatMinor(value).replace(/\B(?=(\d{3})+\.)/g, ',');
+    reportMoney(value, ctx.organization?.currency);
 
   return (
     <main className="min-w-0 space-y-6">
@@ -49,8 +51,7 @@ export default async function BranchComparisonPage({
       ) : (
         <SectionCard title="Branch performance" titleLevel={2}>
           <p className="mb-4 text-sm text-text-muted">
-            {from} to {to}, inclusive. Money uses minor-unit values shown to two decimal places; the
-            organization currency is not asserted. Expiry at risk is available stock expiring in 30
+            {from} to {to}, inclusive. Currency: {ctx.organization?.currency ?? 'not configured'} (organization setting). Amounts use two decimals. Expiry at risk is available stock expiring in 30
             days and is not realized loss. Lost demand is an <strong>Estimate</strong>:{' '}
             {comparison.estimateMethod} Excludes {comparison.estimateExclusions.join(' and ')}.
           </p>

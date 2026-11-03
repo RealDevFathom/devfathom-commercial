@@ -9,7 +9,8 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
-import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { reportMoney, reportDate, reportLabel } from '@/lib/pharmacy/report-presentation';
+import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
@@ -79,7 +80,7 @@ export default async function PharmacyReportsPage({
         <PageHeader
           eyebrow="Pharmacy operations"
           heading="Reports"
-          description="Bounded, permission-scoped command centre and report catalog."
+          description="Sales, stock, customer demand, and daily follow-up for your pharmacy."
         />
         <ReportNotice
           title="Reports unavailable"
@@ -93,12 +94,9 @@ export default async function PharmacyReportsPage({
     ctx.organization?.id === ctx.entitlements.organizationId ? ctx.organization?.currency : null;
   const currency =
     organizationCurrency && /^[A-Z]{3}$/.test(organizationCurrency) ? organizationCurrency : null;
-  const money = (minor: number | null) => {
-    if (minor == null || !Number.isSafeInteger(minor)) return '—';
-    const amount = formatMinor(minor).replace(/\B(?=(\d{3})+\.)/g, ',');
-    return currency ? `${currency} ${amount}` : `${amount} (currency unknown)`;
-  };
-  const today = new Date().toISOString().slice(0, 10);
+  const timezone = workspaceTimezone(ctx.organization?.timezone);
+  const money = (minor: number | null) => reportMoney(minor, currency);
+  const today = workspaceToday(timezone);
   const fromDate = new Date(`${today}T00:00:00.000Z`);
   fromDate.setUTCDate(fromDate.getUTCDate() - 6);
   const from = value(query.from) ?? fromDate.toISOString().slice(0, 10);
@@ -295,7 +293,7 @@ export default async function PharmacyReportsPage({
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Reports"
-        description="Bounded, permission-scoped command centre and report catalog. Values are ledger-derived and freshness-labelled."
+        description="Sales, stock, customer demand, and daily follow-up for your pharmacy."
         actions={
           // The sub-reports are the page's secondary actions, so they sit in the
           // header's action slot as Studio controls rather than as bare links.
@@ -391,12 +389,15 @@ export default async function PharmacyReportsPage({
         </form>
       </SectionCard>
       <MarketingSummary
+        timezone={timezone}
         report={marketing}
         money={money}
         branch={branch}
         financial={catalog.permissions.financial}
       />
       <ObservedDemand
+        currency={currency}
+        timezone={timezone}
         report={demand}
         failed={demandError}
         selected={!!branch}
@@ -405,6 +406,8 @@ export default async function PharmacyReportsPage({
       {workPackScopeValid ? (
         <Suspense key={returnQuery.toString()} fallback={<DailyWorkPackLoading />}>
           <DailyWorkPack
+            currency={currency}
+            timezone={timezone}
             read={caller.dailyWorkPack}
             filters={{ ...(branch ? { branchId: branch } : {}), from, to }}
             branches={branchResult.branches}
@@ -433,7 +436,7 @@ export default async function PharmacyReportsPage({
               status={result.freshness.status === 'CURRENT' ? 'Current' : result.freshness.status}
               tone={result.freshness.status === 'CURRENT' ? 'success' : 'warning'}
             />
-            <span>As of {new Date(result.freshness.asOf).toLocaleString()}</span>
+            <span>As of {reportDate(result.freshness.asOf, timezone)}</span>
             <span>Source: {result.freshness.source}</span>
           </div>
           <SectionCard
@@ -444,12 +447,12 @@ export default async function PharmacyReportsPage({
             <p className="mb-4 text-sm text-text-muted">
               Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
               {branch
-                ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
+                ? (branchResult.branches.find((item) => item.id === branch)?.name ?? 'Branch name not recorded')
                 : 'All available branches'}
               .{' '}
               {currency
                 ? `Currency basis: current organization setting (${currency}); historical transaction currency is not verified.`
-                : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
+                : 'Currency not configured in organization settings; historical transaction currency is not verified.'}{' '}
               Amounts use the pharmacy minor-unit scale, shown to two decimal places. — means
               unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the
               selected period. Stock signals, recommended orders and expiry exposure are current
@@ -628,12 +631,11 @@ export default async function PharmacyReportsPage({
                               <h3 className="font-semibold text-text-strong">
                                 {signal.kind.replaceAll('_', ' ').toLowerCase()}
                               </h3>
-                              <p className="mt-1 font-mono text-[11px] text-text-muted">
-                                Scope ·{' '}
-                                {Object.entries(scope)
-                                  .map(([key, item]) => `${key}: ${item}`)
-                                  .join(' · ')}
-                              </p>
+                              <p className="mt-1 text-sm text-text-muted">{branchResult.branches.find(branch => branch.id === signal.branchId)?.name ?? 'Branch name not recorded'}</p>
+                              <details className="mt-1 text-xs text-text-muted">
+                                <summary className="min-h-11 cursor-pointer py-3 focus-visible:outline-2 focus-visible:outline-ring">Technical scope</summary>
+                                <p className="break-all">{Object.entries(scope).map(([key, item]) => `${key}: ${item}`).join(' · ')}</p>
+                              </details>
                             </div>
                             <div className="flex flex-wrap gap-2">
                               <StatusPill
@@ -652,21 +654,21 @@ export default async function PharmacyReportsPage({
                           <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[11px] text-text-muted tabular-nums">
                             {Object.entries(exactNumbers).map(([key, item]) => (
                               <div key={key}>
-                                <dt className="inline font-semibold text-text-body">{key}: </dt>
-                                <dd className="inline">{item}</dd>
+                                <dt className="inline font-semibold text-text-body">{reportLabel(key.replace(/([a-z])([A-Z])/g, '$1_$2'))}: </dt>
+                                <dd className="inline">{key.endsWith('Minor') ? money(item) : item}</dd>
                               </div>
                             ))}
                           </dl>
                           <p className="mt-3 text-xs leading-5 text-text-muted">
-                            Window {new Date(signal.dataWindowStart).toLocaleString()}–
-                            {new Date(signal.dataWindowEnd).toLocaleString()} · source observed{' '}
-                            {new Date(signal.sourceObservedAt).toLocaleString()} · policy{' '}
+                            Window {reportDate(signal.dataWindowStart, timezone)}–
+                            {reportDate(signal.dataWindowEnd, timezone)} · source observed{' '}
+                            {reportDate(signal.sourceObservedAt, timezone)} · policy{' '}
                             {signal.policyVersion}
                           </p>
                           <div className="mt-3 flex flex-wrap gap-3 text-xs">
                             {scope.userId ? (
                               <span className="font-mono text-text-body">
-                                Staff drill-down · {scope.userId}
+                                Staff reference available in the audit trail
                               </span>
                             ) : null}
                             {ctx.session?.user?.role === 'ADMIN' ? (
@@ -1000,7 +1002,7 @@ export default async function PharmacyReportsPage({
                   </div>
                   <p className="mt-2 text-sm text-text-muted">
                     {digest.channels.whatsapp.configured
-                      ? 'Provider credentials detected, but this P0-lite stub never sends messages.'
+                      ? 'WhatsApp is configured; sending is not enabled.'
                       : 'No provider configuration detected. No messages are sent.'}
                   </p>
                 </div>

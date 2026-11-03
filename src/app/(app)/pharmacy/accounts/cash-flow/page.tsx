@@ -1,3 +1,5 @@
+import { reportDate, reportDayStart, reportLabel } from '@/lib/pharmacy/report-presentation';
+import { workspaceTimezone } from '@/lib/timezone';
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 import { unstable_rethrow } from 'next/navigation';
@@ -32,6 +34,7 @@ export default async function CashFlowPage({
   // Exclusive UTC upper bound defaults to tomorrow so today's postings are included.
   const to = query.to ?? new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
   const requestedPage = Number.parseInt(query.page ?? '1', 10);
+  let timezone = 'UTC';
   let branches: Array<{ id: string; name: string }> = [];
   let projection: Awaited<ReturnType<typeof loadCashFlowProjection>> | null = null;
   let message = query.branch
@@ -45,14 +48,15 @@ export default async function CashFlowPage({
       organization: actor.organization,
       support: actor.support,
     });
+    timezone = workspaceTimezone(ctx.organization?.timezone);
     branches = await ctx.db.pharmacyBranch.findMany({
       where: { organizationId: ctx.entitlements.organizationId, active: true },
       orderBy: { name: 'asc' },
       select: { id: true, name: true },
     });
     if (query.branch) {
-      const start = new Date(`${from}T00:00:00Z`),
-        end = new Date(`${to}T00:00:00Z`);
+      const start = reportDayStart(from, timezone),
+        end = reportDayStart(to, timezone);
       if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
         throw new TRPCError({ code: 'BAD_REQUEST' });
       }
@@ -89,7 +93,7 @@ export default async function CashFlowPage({
       message =
         'Owner Pharmacy Reports access and operational plus financial report capabilities are required.';
     } else if (error instanceof TRPCError && error.code === 'BAD_REQUEST') {
-      message = 'Choose an active branch and a valid UTC window of at most 92 days, then retry.';
+      message = 'Choose an active branch and a valid date window of at most 92 days, then retry.';
     } else {
       message = 'The cash-flow projection could not be read. Please retry.';
     }
@@ -113,7 +117,7 @@ export default async function CashFlowPage({
         heading="Classified cash-flow projection"
         description="A conservative posted-ledger projection with transfer netting and visible unclassified evidence."
       />
-      <SectionCard title="Scope and UTC period">
+      <SectionCard title={`Branch and period · ${timezone}`}>
         <form className="flex flex-wrap items-end gap-3">
           <label className="grid min-w-64 gap-2 text-sm">
             Active branch
@@ -155,7 +159,7 @@ export default async function CashFlowPage({
           <SectionCard title="Opening-to-closing reconciliation">
             <p className="text-sm text-text-muted">
               Recorded currency minor-unit totals from every scoped posted cash/bank line. Retrieved{' '}
-              {projection.metadata.retrievedAt.toISOString()}. Completeness: unknown —{' '}
+              {reportDate(projection.metadata.retrievedAt, timezone)}. Completeness: unknown —{' '}
               {projection.metadata.completenessReason} Discrepancy is canonical CASH plus BANK
               account closing from the financial statements, read in the same snapshot, minus the
               projected closing.
@@ -224,15 +228,17 @@ export default async function CashFlowPage({
             {evidencePage.map((entry) => (
               <details className="mt-3 rounded-sm border border-border-default p-3" key={entry.id}>
                 <summary className="min-h-11 cursor-pointer">
-                  {entry.occurredAt.toISOString()} · {entry.classification} · {entry.currency}{' '}
-                  {money(entry.netMinor)} · {entry.description}
+                  {reportDate(entry.occurredAt, timezone)} · {reportLabel(entry.classification)} · {entry.currency}{' '}
+                  {money(entry.netMinor)} · {reportLabel(entry.sourceKind)}
                 </summary>
-                <p className="break-all text-xs text-text-muted">
-                  Entry {entry.id} · source {entry.sourceKind}/{entry.sourceId}
+                <p className="mt-2 text-sm">{entry.description}</p>
+                <details className="mt-2 text-xs text-text-muted">
+                  <summary className="min-h-11 cursor-pointer py-3 focus-visible:outline-2 focus-visible:outline-ring">Technical details</summary>
+                  <p className="break-all">Entry {entry.id} · source {entry.sourceKind}/{entry.sourceId}
                   {entry.sourceDetail ? `/${entry.sourceDetail}` : ''}
                   {entry.reversesEntryId ? ` · reverses ${entry.reversesEntryId}` : ''} ·{' '}
-                  {entry.reason}
-                </p>
+                  {entry.reason}</p>
+                </details>
               </details>
             ))}
             {evidenceRange.pages > 1 && (

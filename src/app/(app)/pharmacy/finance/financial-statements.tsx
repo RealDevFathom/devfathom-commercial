@@ -1,3 +1,5 @@
+import { reportDate, reportDayStart, reportLabel, reportMoney } from '@/lib/pharmacy/report-presentation';
+import { ReportIdentity } from '@/components/pharmacy/report-identity';
 import Link from 'next/link';
 import { ProfitAndLossReport } from '../accounts/profit-loss/report';
 import { TRPCError } from '@trpc/server';
@@ -17,12 +19,14 @@ export async function FinancialStatements({
   from,
   to,
   page,
+  timezone = 'UTC',
 }: {
   caller: ReturnType<typeof pharmacyFinanceRouter.createCaller>;
   branchId: string;
   from?: string;
   to?: string;
   page?: string;
+  timezone?: string;
 }) {
   const now = new Date();
   const start = from || new Date(now.getTime() - 30 * 86400000).toISOString().slice(0, 10);
@@ -31,8 +35,8 @@ export async function FinancialStatements({
   try {
     result = await caller.financialStatements({
       branchId,
-      from: `${start}T00:00:00Z`,
-      to: `${end}T00:00:00Z`,
+      from: reportDayStart(start, timezone).toISOString(),
+      to: reportDayStart(end, timezone).toISOString(),
       page: Number(page || 1),
     });
   } catch (error) {
@@ -66,18 +70,18 @@ export async function FinancialStatements({
       <form className="mb-4 flex flex-wrap items-end gap-3">
         <input type="hidden" name="branch" value={branchId} />
         <label className="grid gap-2 text-sm">
-          From (UTC)
+          From ({timezone})
           <Input type="date" name="ledgerFrom" defaultValue={start} required />
         </label>
         <label className="grid gap-2 text-sm">
-          To, exclusive (UTC)
+          To, excluded ({timezone})
           <Input type="date" name="ledgerTo" defaultValue={end} required />
         </label>
         <Button className="min-h-11">Read statements</Button>
       </form>
       <p className="text-sm text-text-muted">
         {result.definition} Amounts shown in the recorded currency. Retrieved{' '}
-        {result.freshness.retrievedAt.toISOString()}.
+        {reportDate(result.freshness.retrievedAt, result.timezone)}.
       </p>
       <ProfitAndLossReport statements={result.profitAndLoss} />
       <h3 className="mt-6 font-semibold">Receivables, payables and cash at cutoff</h3>
@@ -92,7 +96,7 @@ export async function FinancialStatements({
             key={`${a.currency}-${a.accountCode}`}
             className="flex flex-wrap justify-between gap-3 border-b border-border-subtle py-2"
           >
-            <span>{a.accountCode.replaceAll('_', ' ')}</span>
+            <ReportIdentity name={reportLabel(a.accountCode)} id={a.accountCode} />
             <span className="font-mono">
               {a.currency}{' '}
               {money(
@@ -107,7 +111,11 @@ export async function FinancialStatements({
       {!positions.length && (
         <p className="mt-3 text-sm">No recorded balance postings; completeness unknown.</p>
       )}
-      <h3 className="mt-6 font-semibold">Trial balance</h3>
+      <h3 className="mt-6 font-semibold">Account balances (trial balance)</h3>
+      <p className="mt-2 text-sm text-text-muted">
+        Opening and closing balances show debits less credits (Dr−Cr). Debits and credits record
+        each side of a transaction; they do not mean profit or loss.
+      </p>
       <div className="overflow-x-auto">
         <table className="mt-3 w-full text-sm">
           <thead className="font-mono text-xs uppercase">
@@ -129,7 +137,7 @@ export async function FinancialStatements({
             {result.accounts.map((a) => (
               <tr key={`${a.currency}-${a.accountCode}`} className="border-t border-border-subtle">
                 <td className="p-3">
-                  {a.accountCode} / {a.currency}
+                  <ReportIdentity name={`${reportLabel(a.accountCode)} / ${a.currency}`} id={a.accountCode} />
                 </td>
                 {[a.openingMinor, a.debitMinor, a.creditMinor, a.closingMinor].map((v, i) => (
                   <td key={i} className="p-3 text-right font-mono">
@@ -161,7 +169,7 @@ export async function FinancialStatements({
             {result.cashflow.map((a) => (
               <tr key={`${a.currency}-${a.sourceKind}`} className="border-t border-border-subtle">
                 <td className="p-3">
-                  {a.sourceKind} / {a.currency}
+                  <ReportIdentity name={`${reportLabel(a.sourceKind)} / ${a.currency}`} id={a.sourceKind} />
                 </td>
                 {[a.inflowMinor, a.outflowMinor, a.netMinor].map((v, i) => (
                   <td key={i} className="p-3 text-right font-mono">
@@ -193,12 +201,17 @@ export async function FinancialStatements({
       {result.journal.map((e) => (
         <details key={e.id} className="mt-3 rounded-sm border border-border p-3">
           <summary className="min-h-11 cursor-pointer break-words focus-visible:outline-2 focus-visible:outline-ring">
-            {e.occurredAt.toISOString()} · {e.description} · {e.sourceKind}
+            {reportDate(e.occurredAt, result.timezone)} · {e.displayTitle}
             {e.reversesEntryId ? ' · reversal' : ''}
           </summary>
-          <p className="my-2 break-all text-xs text-text-muted">
-            Entry {e.id} · source {e.sourceId}
-          </p>
+          <p className="my-2 text-sm">Source: {e.sourceLabel} · Recorded journal entry</p>
+          <details className="my-2 text-xs text-text-muted">
+            <summary className="min-h-11 cursor-pointer py-3 focus-visible:outline-2 focus-visible:outline-ring">Technical details</summary>
+            <p className="break-all">Entry: {e.id} · Source: {e.sourceId} · Type: {e.sourceKind}</p>
+            <p className="break-words">Original description: {e.description}</p>
+            {e.originalTenderId ? <p className="break-all">Original tender: {e.originalTenderId}</p> : null}
+            {e.reversesEntryId ? <p className="break-all">Reverses entry: {e.reversesEntryId}</p> : null}
+          </details>
           <ul>
             {e.lines.map((l) => (
               <li
@@ -206,11 +219,11 @@ export async function FinancialStatements({
                 className="flex flex-wrap justify-between gap-3 border-t border-border-subtle py-2 text-sm"
               >
                 <span>
-                  {l.accountCode} · {l.side}
-                  {l.lotId ? ` · lot ${l.lotId}` : ''}
-                </span>
+                  <ReportIdentity name={`${reportLabel(l.accountCode)} · ${l.side === 'DEBIT' ? 'Debit' : 'Credit'}`} id={l.accountCode} />
+                  {l.lotId ? <> · <ReportIdentity name={l.lotLabel ?? 'Lot details not recorded'} id={l.lotId} /></> : null}
+                </div>
                 <span className="font-mono">
-                  {e.currency} {money(l.amountMinor)}
+                  {reportMoney(l.amountMinor, e.currency || result.currency)}
                 </span>
               </li>
             ))}

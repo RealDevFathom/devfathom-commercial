@@ -1,3 +1,4 @@
+import { reportDate } from '@/lib/pharmacy/report-presentation';
 import Link from 'next/link';
 import { SectionCard } from '@/components/ui/section-card';
 import { buttonVariants } from '@/components/ui/button';
@@ -8,11 +9,13 @@ export function MarketingSummary({
   money,
   branch,
   financial = false,
+  timezone = 'UTC',
 }: {
   report: Awaited<ReturnType<typeof readPharmacyMarketingReport>> | null;
   money: (minor: number | null) => string;
   branch?: string;
   financial?: boolean;
+  timezone?: string;
 }) {
   return (
     <SectionCard
@@ -36,7 +39,7 @@ export function MarketingSummary({
         <div className="space-y-4 text-sm">
           <p className="text-text-muted">
             {report.period.from}–{report.period.to} ({report.period.timezone}); evidence cutoff{' '}
-            {report.cutoff}. Branch and date filters apply. Supplier, ingredient and batch filters
+            {reportDate(report.cutoff, timezone)}. Branch and date filters apply. Supplier, ingredient and batch filters
             do not scope these figures.
           </p>
           <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
