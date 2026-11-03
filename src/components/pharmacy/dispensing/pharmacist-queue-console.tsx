@@ -69,9 +69,9 @@ export function PharmacistQueueConsole() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Pharmacy · RX-03"
+        eyebrow="Pharmacy"
         heading="Pharmacist queue"
-        description="Triage in request order, leave an explicit clinical decision, then sign to release."
+        description="Review each request in order, record your decision, then approve it for sale."
       />
       {queue.isLoading ? (
         <WorkspaceState title="Loading review queue">
@@ -119,6 +119,9 @@ export function PharmacistQueueConsole() {
             actions={
               <StatusPill
                 status={active.decisions.some((d) => d.kind === 'SIGN') ? 'signed' : 'in review'}
+                label={
+                  active.decisions.some((d) => d.kind === 'SIGN') ? 'Approved' : 'In review'
+                }
               />
             }
           >
@@ -140,10 +143,13 @@ export function PharmacistQueueConsole() {
               <ol className="mb-5 space-y-2" aria-label="Decision history">
                 {active.decisions.map((decision) => (
                   <li key={decision.id} className="flex items-start justify-between gap-3 text-sm">
-                    <StatusPill status={decision.kind} />
+                    <StatusPill
+                      status={decision.kind}
+                      label={decision.kind === 'SIGN' ? 'Approved' : undefined}
+                    />
                     <span className="text-right text-text-muted">
                       {decision.reason ??
-                        (decision.kind === 'SIGN' ? 'Signed release' : 'Recorded')}
+                        (decision.kind === 'SIGN' ? 'Approved and released' : 'Recorded')}
                     </span>
                   </li>
                 ))}

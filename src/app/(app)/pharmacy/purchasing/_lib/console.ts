@@ -16,11 +16,11 @@ import { createTRPCContext } from '@/server/trpc';
 export const PURCHASING_ROUTE = '/pharmacy/purchasing';
 
 export const PURCHASING_TABS = [
-  { href: PURCHASING_ROUTE, label: 'Overview', requirement: 'PUR-01..06' },
-  { href: `${PURCHASING_ROUTE}/suppliers`, label: 'Suppliers', requirement: 'PUR-01' },
-  { href: `${PURCHASING_ROUTE}/orders`, label: 'Requisitions & orders', requirement: 'PUR-02/03' },
-  { href: `${PURCHASING_ROUTE}/receiving`, label: 'Goods in', requirement: 'PUR-02/04/05' },
-  { href: `${PURCHASING_ROUTE}/returns`, label: 'Returns & claims', requirement: 'PUR-06' },
+  { href: PURCHASING_ROUTE, label: 'Overview' },
+  { href: `${PURCHASING_ROUTE}/suppliers`, label: 'Suppliers' },
+  { href: `${PURCHASING_ROUTE}/orders`, label: 'Requisitions & orders' },
+  { href: `${PURCHASING_ROUTE}/receiving`, label: 'Goods in' },
+  { href: `${PURCHASING_ROUTE}/returns`, label: 'Returns & claims' },
 ] as const;
 
 /**
@@ -77,7 +77,7 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
   },
   SUPPLIER_LICENCE_EXPIRED: {
     message:
-      'This supplier has no unexpired verified licence on file. Record and verify a current licence first.',
+      'This supplier has no checked, in-date licence on file. Record a current licence and confirm it first.',
     field: 'supplierId',
   },
   SELF_APPROVAL: {

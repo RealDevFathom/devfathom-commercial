@@ -41,5 +41,9 @@ describe('branch comparison accessibility', () => {
     expect(region).toHaveFocus();
     expect(within(region).getByRole('table')).toBeVisible();
     expect(within(region).getByRole('columnheader', { name: 'Khata overdue' })).toBeVisible();
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('01-Oct-2026 to 07-Oct-2026');
+    for (const jargon of ['minor-unit', 'not asserted', 'inclusive'])
+      expect(text).not.toContain(jargon);
   });
 });

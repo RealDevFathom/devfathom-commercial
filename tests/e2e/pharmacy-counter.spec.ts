@@ -191,11 +191,11 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(page.getByText('Bill open · 1 line')).toBeVisible();
 
   // POS-03: the cart shows the FEFO allocation, batch and expiry included.
-  const allocation = page.getByRole('list', { name: `FEFO allocation for ${otc.name}` });
+  const allocation = page.getByRole('list', { name: `Batches used for ${otc.name}` });
   await expect(allocation).toContainText(`Batch ${otc.batchNumber}`);
   await expect(allocation).toContainText('Exp 2028-06-30');
   await expect(allocation).toContainText('20 units');
-  await expect(allocation).toContainText('FEFO');
+  await expect(allocation).toContainText('Earliest expiry');
   await expect(allocation).not.toContainText('Batch override');
 
   // POS-02: a scanned barcode resolves to exactly one presentation, and Enter on a barcode
@@ -355,7 +355,7 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
 }) => {
   await openCounter(page);
 
-  const legend = page.getByRole('heading', { name: 'Workflow map' });
+  const legend = page.getByRole('heading', { name: 'Keyboard shortcuts' });
   await expect(legend).toBeVisible();
   // The chords a cashier needs are readable without opening help.
   //
@@ -366,7 +366,7 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
   await expect(page.getByText('Focus scan and search', { exact: true })).toBeVisible();
   await expect(page.getByText('Open tender', { exact: true })).toBeVisible();
 
-  const preset = page.getByLabel('Keymap');
+  const preset = page.getByLabel('Shortcut layout');
   await preset.focus();
   await preset.selectOption('legacySpeed');
 
@@ -474,11 +474,11 @@ test('PH-A4 — two lots on the shelf: the counter sells the earliest-expiring a
   const cart = page.getByRole('list', { name: 'Cart lines' });
   await expect(cart).toContainText(syrup.name, { timeout: 15_000 });
 
-  const allocation = page.getByRole('list', { name: `FEFO allocation for ${syrup.name}` });
+  const allocation = page.getByRole('list', { name: `Batches used for ${syrup.name}` });
   await expect(allocation).toContainText(`Batch ${batchNumber}`);
   await expect(allocation).not.toContainText(`Batch ${syrup.batchNumber}`);
   await expect(allocation).toContainText(`${syrup.unitsPerPack} units`);
-  await expect(allocation).toContainText('FEFO');
+  await expect(allocation).toContainText('Earliest expiry');
   await expect(allocation).not.toContainText('Batch override');
   await expect(allocation).toContainText(/Near expiry · 4[4-6] d/);
 

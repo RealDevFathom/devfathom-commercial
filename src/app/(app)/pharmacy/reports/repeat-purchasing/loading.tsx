@@ -6,7 +6,7 @@ export default function Loading() {
       <PageHeader
         eyebrow="Pharmacy reports"
         heading="Repeat purchasing"
-        description="Reading selected authorized branches."
+        description="Loading the report for your branches."
       />
       <SectionCard title="Calculating cohorts" titleLevel={2}>
         <p role="status" className="text-sm text-text-muted">

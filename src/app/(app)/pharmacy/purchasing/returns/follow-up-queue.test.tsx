@@ -14,15 +14,15 @@ const empty = () =>
   });
 it('explains empty state without claiming branch debt or recovery', () => {
   render(<FollowUpQueue queue={empty()} branchId="branch" />);
-  expect(screen.getByText('No open issued debit notes in validated loaded records.')).toBeVisible();
-  expect(screen.getByText('No submitted, undispatched returns in loaded records.')).toBeVisible();
+  expect(screen.getByText('No debit notes are waiting for credit.')).toBeVisible();
+  expect(screen.getByText('No submitted returns are waiting to be sent.')).toBeVisible();
   expect(screen.queryByRole('link')).toBeNull();
 });
 it('warns on capped data and excludes invalid records visibly', () => {
   render(
     <FollowUpQueue queue={{ ...empty(), coverage: 'partial', excluded: 2 }} branchId="branch" />
   );
-  expect(screen.getByText(/capped source data/)).toBeVisible();
+  expect(screen.getByText(/Partial list/)).toBeVisible();
   expect(screen.getByText(/2 records excluded/)).toBeVisible();
 });
 it('bounds the queue and links the existing return and credit detail', () => {
@@ -41,7 +41,7 @@ it('bounds the queue and links the existing return and credit detail', () => {
     ],
   }));
   render(<FollowUpQueue queue={queue} branchId="branch" />);
-  expect(screen.getByText('Showing 5 of 6 qualifying loaded notes.')).toBeVisible();
+  expect(screen.getByText('Showing 5 of 6 debit notes.')).toBeVisible();
   expect(screen.queryByRole('link', { name: 'Note 5 · Supplier' })).toBeNull();
   expect(screen.getByRole('link', { name: 'Note 0 · Supplier' })).toHaveAttribute(
     'href',
@@ -61,7 +61,7 @@ it('does not suggest dispatch for expired or unknown deadlines', () => {
   render(<FollowUpQueue queue={queue} branchId="branch" />);
   expect(screen.getByText('Deadline passed — do not dispatch.')).toBeVisible();
   expect(
-    screen.getByText('Deadline unknown — verify recorded windows before dispatch.')
+    screen.getByText('Deadline unknown — check the return window dates before sending.')
   ).toBeVisible();
   expect(screen.queryByRole('button')).toBeNull();
 });

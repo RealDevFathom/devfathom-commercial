@@ -899,11 +899,17 @@ export function TopNavigation() {
                 />
               )}
               <span>{item.label}</span>
+              {/*
+                The pill sits in the active link's own stacking context, under its label. A
+                pill shared across links (one that travels from the old tab to the new one)
+                paints over neighbouring labels and leaves the new white label on a bare
+                background while a slow page loads, so it stays put here.
+              */}
               {isActive && (
-                <m.span
-                  layoutId="topnav-active"
+                <span
+                  aria-hidden
+                  data-active-pill=""
                   className="absolute inset-0 -z-10 rounded-full bg-primary"
-                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                 />
               )}
             </Link>

@@ -159,7 +159,7 @@ export async function readPharmacyDailyWorkPack(
       uniqueProblemCount: null,
       additiveSavings: false,
       definition:
-        'Review groups are not distinct problems. Signals may overlap across sources. Amounts are source observations or exposure, never additive savings. Empty persisted reads do not prove all clear or detector coverage.',
+        'The same issue can appear in more than one list, so do not add them up. Amounts are recorded values or value at risk, not savings. An empty list does not mean everything is fine.',
     },
     sources: [],
     groups: [],
@@ -266,8 +266,8 @@ export async function readPharmacyDailyWorkPack(
             : 'live-inputs-not-historical',
         missingInputs: [
           kind.startsWith('stock') || kind === 'anomalies'
-            ? 'Detector coverage and current source freshness are not established by a persisted read.'
-            : 'Current records are not a historical snapshot at the requested as-of instant.',
+            ? 'Based on saved alerts, which may be out of date or miss some problems.'
+            : 'Shows records as they are now, not as they were on past dates.',
         ],
       };
       result.sources.push(source);
@@ -275,15 +275,21 @@ export async function readPharmacyDailyWorkPack(
         await run(source);
         if (source.rowLimit !== null) {
           source.limitReached = (source.returnedRows ?? 0) >= source.rowLimit;
-          source.missingInputs.push(
-            source.limitReached
-              ? '200-row source cap reached; further records may be omitted.'
-              : 'Anomaly reader caps at 200 before scope-payload filtering; completeness remains unknown.'
-          );
-          if (source.limitReached) source.coverage = 'partial';
+          if (source.limitReached) {
+            source.missingInputs.push('Only the first 200 records were read; some may be missing.');
+            source.coverage = 'partial';
+          } else {
+            // The reader stops at 200 records before it filters to this scope, so a shorter
+            // filtered list can still be incomplete; coverage stays 'unknown'.
+            source.missingInputs.push(
+              'Some records may be missing, because only the first 200 are read before filtering.'
+            );
+          }
         }
         if (source.returnedRows === 0)
-          source.missingInputs.push('No returned evidence; this is not an all-clear result.');
+          source.missingInputs.push(
+            'Nothing to review. This only covers what has been recorded so far.'
+          );
       } catch {
         // Never expose provider/database messages, raw payloads, or partly projected source rows.
         for (const bucket of result.groups)
@@ -292,7 +298,9 @@ export async function readPharmacyDailyWorkPack(
         source.status = 'unavailable';
         source.coverage = 'partial';
         source.returnedRows = null;
-        source.missingInputs.push('Source unavailable; review the existing report before acting.');
+        source.missingInputs.push(
+          'This section could not load. Check the full report before acting.'
+        );
       }
       task(group).missingInputs.push(...source.missingInputs);
       result.missingInputs.push(
@@ -303,7 +311,7 @@ export async function readPharmacyDailyWorkPack(
     await read(
       'stock-dashboard',
       'inventory-review',
-      'Current live persisted signals across owners; overdue evaluated at as-of. Requested period is not applied.',
+      'Open stock alerts for everyone, as they stand now. Not limited to the selected dates.',
       async (source) => {
         const rows = await roleDashboard(db, scope, asOf);
         source.returnedRows = rows.length;
@@ -320,7 +328,7 @@ export async function readPharmacyDailyWorkPack(
     await read(
       'stock-digest',
       'inventory-review',
-      'Current persisted signals for the session actor only; overdue, next 24 hours, stale and resuming at as-of. Requested period is not applied.',
+      'Your own stock alerts that are overdue, due in the next 24 hours, out of date or back from snooze. Not limited to the selected dates.',
       async (source) => {
         const digest = await ownerDigest(db, scope, input.actorId, asOf);
         if (digest.branchId !== branchId || digest.ownerUserId !== input.actorId)
@@ -328,16 +336,16 @@ export async function readPharmacyDailyWorkPack(
         const rows = [...digest.overdue, ...digest.dueSoon, ...digest.stale, ...digest.resuming];
         source.returnedRows = rows.length;
         source.missingInputs.push(
-          'Digest omits other owners, future-due and still-snoozed signals; dashboard counts overlap this digest.'
+          'Only your alerts are listed; later and snoozed alerts are left out. Some also appear in the stock dashboard.'
         );
         for (const row of rows) {
           const item = evidence(source, 'stock-signal', row.signalId, row.status);
           item.dueAt = row.dueAt.toISOString();
           if (row.confidence === 'PARTIAL')
-            item.missingInputs.push('Underlying stock facts are partial.');
+            item.missingInputs.push('Some stock details behind this alert are missing.');
           if (row.status === 'STALE')
             item.missingInputs.push(
-              'Persisted signal is stale; verify source facts before acting.'
+              'This alert is out of date; check the stock before acting.'
             );
           add('inventory-review', item);
         }
@@ -349,7 +357,7 @@ export async function readPharmacyDailyWorkPack(
     await read(
       'anomalies',
       'anomaly-review',
-      'Persisted live anomaly records matching the exact requested data window; not refreshed or historical as-of reconstruction.',
+      'Unusual activity already flagged for the selected dates. Not re-checked when this page loads.',
       async (source) => {
         const rows = await readPharmacyAnomalySignals(db, {
           branchIds: [branchId],
@@ -365,10 +373,10 @@ export async function readPharmacyDailyWorkPack(
           item.computedAt = row.computedAt.toISOString();
           item.freshnessSeconds = row.freshnessSeconds;
           if (row.status === 'STALE')
-            item.missingInputs.push('Persisted anomaly is stale; verify its source facts.');
+            item.missingInputs.push('This flag is out of date; check the records before acting.');
           if (row.computedAt > asOf || row.sourceObservedAt > asOf)
             item.missingInputs.push(
-              'Record contains evidence observed or computed after requested as-of.'
+              'This record includes data from after the report time.'
             );
           const numbers =
             row.exactNumbers &&
@@ -396,7 +404,7 @@ export async function readPharmacyDailyWorkPack(
     await read(
       'expiry',
       'inventory-review',
-      'Current available lot balances with expiry after as-of; trailing 30-day completed-sales history before as-of. Requested period is not applied.',
+      'Sellable stock that has not expired yet, compared with the last 30 days of sales. Not limited to the selected dates.',
       async (source) => {
         const rows = await readExpiryAdvice(db, [branchId], asOf);
         source.returnedRows = rows.length;
@@ -414,16 +422,16 @@ export async function readPharmacyDailyWorkPack(
             item,
             'valueAtRiskMinor',
             row.valueAtRiskMinor,
-            'Source projected unsold units times frozen lot cost; exposure, not realized loss or savings.'
+            'Units expected to stay unsold, times their cost. Value at risk, not a loss or a saving.'
           );
           if (row.classification === 'INSUFFICIENT_HISTORY')
             item.missingInputs.push(
-              'Completed-sales history is insufficient; source exposure is not a demand forecast.'
+              'Not enough sales history yet; this is not a sales forecast.'
             );
           if (!row.returnWindowDays)
             item.missingInputs.push('Supplier return window is not recorded.');
           if (!row.proposalAllowed)
-            item.missingInputs.push('Source does not establish eligibility for a return proposal.');
+            item.missingInputs.push('Not confirmed as eligible for a supplier return.');
           add('inventory-review', item);
         }
       }
@@ -431,7 +439,7 @@ export async function readPharmacyDailyWorkPack(
     await read(
       'supplier-credit',
       'supplier-credit-review',
-      'Current returns, debit notes, credits and allocations; age and recorded dispatch deadlines evaluated at as-of. Requested period is not applied.',
+      'Current supplier returns, debit notes and credits, with their age and dispatch deadlines. Not limited to the selected dates.',
       async (source) => {
         const returns = await listPurchaseReturns(db, scope, { at: asOf });
         const credits = await listSupplierCredits(db, scope);
@@ -445,26 +453,26 @@ export async function readPharmacyDailyWorkPack(
         });
         if (followUp.excluded) {
           source.coverage = 'partial';
-          source.missingInputs.push('Source excluded invalid or out-of-scope supplier records.');
+          source.missingInputs.push('Some supplier records were left out because they were incomplete or outside this branch.');
         }
         for (const row of followUp.claims) {
           const item = evidence(source, 'debit-note', row.id, 'OUTSTANDING');
           if (row.ageDays !== null) item.counts.ageDays = row.ageDays;
-          else item.missingInputs.push('Valid issue time is missing; age is unknown.');
+          else item.missingInputs.push('Issue date is missing, so age is unknown.');
           amount(
             item,
             'outstandingMinor',
             row.outstandingMinor,
-            'Issued debit-note expected credit less recorded allocations; not cash received or guaranteed recovery.'
+            'Credit expected from the debit note, minus credit already matched. Not cash received or guaranteed.'
           );
           amount(
             item,
             'allocatedMinor',
             row.allocatedMinor,
-            'Recorded allocations to this debit note; not an additional claim or saving.'
+            'Credit already matched to this debit note. Not an extra claim or saving.'
           );
           item.missingInputs.push(
-            'Supplier credit matching requires human verification; age is not contractual overdue status.'
+            'Check the credit match yourself. Age does not mean the credit is overdue under the contract.'
           );
           add('supplier-credit-review', item);
         }
@@ -472,7 +480,7 @@ export async function readPharmacyDailyWorkPack(
           const item = evidence(source, 'return', row.id, row.state);
           item.dueAt = row.deadline === null ? null : new Date(row.deadline).toISOString();
           if (row.state === 'unknown')
-            item.missingInputs.push('Complete recorded dispatch deadlines are missing.');
+            item.missingInputs.push('Dispatch deadline is not recorded.');
           add('supplier-credit-review', item);
         }
       }

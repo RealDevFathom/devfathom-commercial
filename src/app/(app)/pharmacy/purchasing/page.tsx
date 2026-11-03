@@ -28,7 +28,7 @@ export const metadata: Metadata = { title: 'Purchasing · Pharmacy' };
 
 const HEADING = 'Purchasing & receiving';
 const DESCRIPTION =
-  'Suppliers, requisitions, orders, the goods-in bench and supplier returns. Everything a pharmacy buys passes through here on its way to being saleable stock.';
+  'Suppliers, requisitions, orders, goods in and supplier returns. Everything a pharmacy buys passes through here on its way to being saleable stock.';
 
 type ReadState =
   { kind: 'known'; value: number } | { kind: 'unavailable' | 'denied' | 'unselected' };
@@ -143,7 +143,7 @@ export default async function PharmacyPurchasingPage({
       ? scope.branch.name
       : invalidBranch
         ? 'The requested branch is not available in this workspace.'
-        : 'Choose a branch on the goods-in bench';
+        : 'Choose a branch under Goods in';
 
   let openExceptions: ReadState = { kind: invalidBranch ? 'denied' : 'unselected' };
   let creditOutstanding: ReadState = { kind: invalidBranch ? 'denied' : 'unselected' };
@@ -186,7 +186,7 @@ export default async function PharmacyPurchasingPage({
     {
       met: workspace.branches.length > 0,
       label: 'An active pharmacy branch',
-      why: 'Stock is held by a branch, and a goods receipt posts into one branch’s ledger.',
+      why: 'Stock is held by a branch, and a delivery is added to one branch’s stock.',
       href: '/pharmacy',
       action: 'Open pharmacy onboarding',
     },
@@ -207,7 +207,7 @@ export default async function PharmacyPurchasingPage({
     {
       met: orderable.length > 0,
       label: 'A supplier that can be ordered from',
-      why: 'PUR-01 refuses an order or a receipt unless the supplier is authorized and holds an unexpired verified licence.',
+      why: 'You can only order from, or receive from, a supplier you have authorized to trade with and whose licence is on file and still valid.',
       href: `${PURCHASING_ROUTE}/suppliers`,
       action: 'Open the supplier register',
     },
@@ -227,8 +227,8 @@ export default async function PharmacyPurchasingPage({
           titleLevel={2}
         >
           <p className="text-sm text-text-muted">
-            Each one is a gate the domain enforces, not a suggestion. Everything already in place is
-            listed below it, so you can see how far along this workspace is.
+            Purchasing needs each of these before it can be used. Items already in place are marked
+            Ready, so you can see what is left.
           </p>
           <ul className="mt-4 space-y-3">
             {gates.map((gate) => (
@@ -262,9 +262,13 @@ export default async function PharmacyPurchasingPage({
 
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
-          label="Orderable suppliers"
+          label="Suppliers you can order from"
           value={`${orderable.length} of ${workspace.suppliers.length}`}
-          sub="Authorized and licensed"
+          sub={
+            orderable.length < workspace.suppliers.length
+              ? 'The others are not yet authorized to trade or have no valid licence on file'
+              : 'Authorized to trade, with a valid licence'
+          }
         />
         <Stat
           label="Awaiting approval"
@@ -272,7 +276,7 @@ export default async function PharmacyPurchasingPage({
           sub="Needs a second person"
         />
         <Stat
-          label="Open match exceptions"
+          label="Open delivery mismatches"
           value={readLabel(openExceptions)}
           valueClassName="break-words"
           sub={
@@ -281,9 +285,9 @@ export default async function PharmacyPurchasingPage({
               {openExceptions.kind === 'denied'
                 ? ' Ask a workspace administrator to check your branch access and session.'
                 : openExceptions.kind === 'known'
-                  ? ' · Current open receiving exceptions, read on this page load.'
+                  ? ' · Deliveries that did not match the order, still to resolve.'
                   : openExceptions.kind === 'unavailable'
-                    ? ' · Exception count could not be read.'
+                    ? ' · Mismatch count could not be loaded.'
                     : ''}
             </>
           }
@@ -298,9 +302,9 @@ export default async function PharmacyPurchasingPage({
               {creditOutstanding.kind === 'denied'
                 ? ' Ask a workspace administrator to check your branch access and session.'
                 : creditOutstanding.kind === 'known'
-                  ? ` Current debit-note outstanding positions across all returns for this branch; read on this page load.${knownCurrency ? '' : ' Credit read succeeded; workspace currency is unavailable.'}`
+                  ? ` Across all returns for this branch.${knownCurrency ? '' : ' The amount loaded, but the workspace currency is not set.'}`
                   : creditOutstanding.kind === 'unavailable'
-                    ? ' Credit balance could not be read; this is not a confirmed zero.'
+                    ? ' Credit balance could not be loaded. Do not read it as zero.'
                     : ''}
             </>
           }
@@ -322,27 +326,27 @@ export default async function PharmacyPurchasingPage({
           {[
             {
               href: `${PURCHASING_ROUTE}/suppliers`,
-              title: 'Suppliers (PUR-01)',
+              title: 'Suppliers',
               detail:
-                'Licence evidence, terms, credit and the standing decision to trade. A supplier is orderable only while both the authorization and an unexpired verified licence hold.',
+                'Licences, payment terms, credit and whether you trade with them. You can order from a supplier once you authorize it and its licence is valid.',
             },
             {
               href: `${PURCHASING_ROUTE}/orders`,
-              title: 'Requisitions & orders (PUR-02/03)',
+              title: 'Requisitions & orders',
               detail:
-                'State the demand, record what each distributor quoted, read the ranked and explained comparison, then approve and send the order. Approval is refused to whoever raised it.',
+                'List what you need, record each supplier’s quote, compare them, then approve and send the order. Someone other than the person who raised an order must approve it.',
             },
             {
               href: `${PURCHASING_ROUTE}/receiving`,
-              title: 'Goods in (PUR-02/04/05)',
+              title: 'Goods in',
               detail:
-                'Capture batch, expiry, printed MRP, pack level, quantity, bonus and cost; post into the batch ledger; work the match-exception queue; or take a direct purchase with a recorded bypass.',
+                'Check in deliveries with batch, expiry, price and quantity, and add them to stock. Sort out deliveries that do not match the order, or record a purchase made without an order.',
             },
             {
               href: `${PURCHASING_ROUTE}/returns`,
-              title: 'Returns & claims (PUR-06)',
+              title: 'Returns & claims',
               detail:
-                'Purchase returns and expiry claims with the supplier window each is racing, the debit notes they raise, and expected against received credit side by side.',
+                'Send stock back or claim for expired stock before the supplier’s deadline, and track the credit you are owed against what you have received.',
             },
           ].map((card) => (
             <Link
@@ -361,7 +365,7 @@ export default async function PharmacyPurchasingPage({
         <SectionCard title="Nothing has been ordered yet" titleLevel={2}>
           <EmptyState
             title="No purchase orders"
-            detail="Once the gates above are met, draft a requisition, compare the quotes you were given, and raise the order from the one you award."
+            detail="Once you have at least one authorized, licensed supplier, draft a requisition, compare the quotes you were given, and raise the order from the one you choose."
             steps={[
               { label: 'Draft a requisition', href: `${PURCHASING_ROUTE}/orders` },
               { label: 'Add a supplier', href: `${PURCHASING_ROUTE}/suppliers` },

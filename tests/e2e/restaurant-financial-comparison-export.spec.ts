@@ -38,7 +38,7 @@ if (process.env.RESTAURANT_INTEGRATED_E2E !== '1') {
 const EXPORT_BUTTON = 'Export comparison CSV';
 const COMPARISON_HEADING = 'Financial comparison';
 const STALE_MESSAGE = 'Filters changed. Apply the report filters again before exporting.';
-const FINANCIAL_PERMISSION_NOTICE = 'Permission required: reports:financial is required.';
+const FINANCIAL_PERMISSION_NOTICE = 'Your role does not include financial figures. Ask an administrator for access.';
 /** Curly apostrophe, exactly as `financial-comparison.tsx` renders it. */
 const POS_PACKAGE_NOTICE = 'Restaurant POS is not included in this organization’s current package.';
 /** `financialComparisonExport` emits a fixed record count; see the WHA-1484 receipt. */

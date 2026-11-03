@@ -10,6 +10,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Field, WorkspaceState, fieldClass } from './field';
 import { MedicationCard } from './medication-card';
+import { prescriptionCustodyLabel } from '@/components/pharmacy/counter/counter-display';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -250,9 +251,9 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Pharmacy · RX-02"
+        eyebrow="Pharmacy"
         heading="Prescriptions"
-        description="Capture the original evidence, authority and every authorized unit before dispensing."
+        description="Record each prescription before you dispense it: who it is for, who wrote it, a photo of it, and how much of each medicine is prescribed."
       />
       {workspace.isLoading ? (
         <WorkspaceState title="Loading prescriptions">
@@ -317,7 +318,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                     </Field>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Evidence type">
+                    <Field label="Prescription type">
                       <select name="sourceKind" className={fieldClass}>
                         <option value="PAPER_IMAGE">Paper prescription</option>
                         <option value="WHATSAPP_PHOTO">Photo received digitally</option>
@@ -373,7 +374,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                     <Field label="Valid until">
                       <input required name="validUntil" type="date" className={fieldClass} />
                     </Field>
-                    <Field label="Repeats">
+                    <Field label="Refills allowed">
                       <input
                         required
                         name="authorizedRepeats"
@@ -384,10 +385,10 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                       />
                     </Field>
                   </div>
-                  <Field label="Original custody">
+                  <Field label="Original prescription kept?">
                     <select name="custodyState" className={fieldClass}>
-                      <option value="NOT_HELD">Returned / not held</option>
-                      <option value="HELD_AT_PHARMACY">Held at pharmacy</option>
+                      <option value="NOT_HELD">No, the patient kept it</option>
+                      <option value="HELD_AT_PHARMACY">Yes, we kept it at the pharmacy</option>
                     </select>
                   </Field>
                   <div className="border-t border-border-subtle pt-4">
@@ -412,7 +413,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                           ))}
                         </select>
                       </Field>
-                      <Field label="Presentation">
+                      <Field label="Strength / form">
                         <select
                           required
                           name="presentationId"
@@ -421,7 +422,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                           defaultValue=""
                         >
                           <option value="" disabled>
-                            Select presentation
+                            Select strength / form
                           </option>
                           {medicine?.presentations.map((p) => (
                             <option key={p.id} value={p.id}>
@@ -432,7 +433,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                       </Field>
                     </div>
                     <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                      <Field label="Authorized units">
+                      <Field label="Quantity prescribed">
                         <input
                           required
                           name="quantity"
@@ -504,7 +505,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
             <SectionCard title="Prescription register" titleLevel={2}>
               {workspace.data.prescriptions.length === 0 ? (
                 <WorkspaceState title="No prescriptions yet">
-                  Captured prescriptions will appear here with the remaining authorized quantity for
+                  Captured prescriptions will appear here with the quantity still left to dispense for
                   every line.
                 </WorkspaceState>
               ) : (
@@ -522,8 +523,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                         <th className="pb-3">Validity</th>
                         <th className="pb-3">Medicine</th>
                         <th className="pb-3 text-right">Remaining</th>
-                        <th className="pb-3">Custody</th>
-                        <th className="pb-3">Evidence</th>
+                        <th className="pb-3">Original</th>
+                        <th className="pb-3">Photo</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -550,7 +551,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                             <td className="py-4">
                               <StatusPill
                                 status={rx.custodyState}
-                                label={rx.custodyState.replaceAll('_', ' ')}
+                                label={prescriptionCustodyLabel(rx.custodyState)}
                               />
                             </td>
                             <td className="py-4">

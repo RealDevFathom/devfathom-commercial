@@ -230,7 +230,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   return (
     <div className="min-w-0 space-y-6">
       <SectionCard
-        eyebrow="PLAT-02"
+        eyebrow="Regulatory profile"
         title="Branch"
         titleLevel={2}
         actions={
@@ -288,7 +288,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
       </SectionCard>
 
       <SectionCard
-        eyebrow="Effective-dated"
+        eyebrow="New version"
         title={inForce ? 'Record the next version' : 'Record the first version'}
         titleLevel={2}
       >

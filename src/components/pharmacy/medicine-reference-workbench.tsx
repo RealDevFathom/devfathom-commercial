@@ -202,6 +202,33 @@ function referenceProposalValues(payload: unknown): Record<string, string> {
   );
 }
 
+/**
+ * Where a reference candidate stands on the way to the counter. Publishing its reviewed
+ * values is what makes the medicine saleable, so the copy says that step plainly instead
+ * of a fixed "non-saleable" line.
+ */
+export function referenceCandidateSaleState(candidate: {
+  saleable: boolean;
+  unreviewedCount: number;
+  publishableCount: number;
+}): { line: string; pill: string; tone: 'success' | 'warning' } {
+  if (candidate.saleable)
+    return { line: 'Published — on sale at the counter.', pill: 'On sale', tone: 'success' };
+  if (candidate.unreviewedCount > 0)
+    return {
+      line: 'Not on sale yet — review these values, then publish them to make it saleable.',
+      pill: 'Needs review',
+      tone: 'warning',
+    };
+  if (candidate.publishableCount > 0)
+    return {
+      line: 'Reviewed — publish to put it on sale.',
+      pill: 'Ready to publish',
+      tone: 'warning',
+    };
+  return { line: 'Not on sale yet.', pill: 'In review', tone: 'warning' };
+}
+
 export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth[] }) {
   const [parsed, setParsed] = useState<ParsedFile | null>(null);
   const [mapping, setMapping] = useState<ManualMappingTemplate>({});
@@ -602,7 +629,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
       </SectionCard>
 
       <SectionCard
-        eyebrow="MED-03 / MED-04 / MED-05"
+        eyebrow="Review and publish"
         title="Reference review workbench"
         titleLevel={2}
       >
@@ -631,16 +658,21 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
             const publishAssertionIds = candidate.provenance
               .filter((item) => item.status === 'ACCEPTED' || item.status === 'CORRECTED')
               .map((item) => item.id);
+            const saleState = referenceCandidateSaleState({
+              saleable: candidate.saleable,
+              unreviewedCount: reviewAssertionIds.length,
+              publishableCount: publishAssertionIds.length,
+            });
             return (
               <article key={candidate.id} className="rounded-md border border-border-subtle p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <h3 className="font-semibold text-text-strong">{candidate.productName}</h3>
                     <p className="mt-1 text-xs text-text-muted">
-                      Non-saleable until reviewed and completed · {candidate.id}
+                      {saleState.line} · {candidate.id}
                     </p>
                   </div>
-                  <StatusPill status="In review" tone="warning" />
+                  <StatusPill status={saleState.pill} tone={saleState.tone} />
                 </div>
                 <dl className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                   {candidate.provenance.map((assertion) => {

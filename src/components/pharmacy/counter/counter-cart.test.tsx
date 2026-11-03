@@ -77,10 +77,10 @@ describe('CounterCartPanel FEFO chips', () => {
         now={NOW}
       />
     );
-    const allocation = screen.getByRole('list', { name: 'FEFO allocation for Synthetic tablet' });
+    const allocation = screen.getByRole('list', { name: 'Batches used for Synthetic tablet' });
     const [first, second] = within(allocation).getAllByRole('listitem');
     expect(first).toHaveTextContent('Batch B-0');
-    expect(first).toHaveTextContent('FEFO');
+    expect(first).toHaveTextContent('Earliest expiry');
     expect(first).toHaveTextContent('Near expiry · 30 d');
     expect(second).toHaveTextContent('Batch B-1');
     expect(second).toHaveTextContent('Batch override');
@@ -164,7 +164,7 @@ describe('CounterLotOverride', () => {
     expect(expired).toBeDisabled();
     expect(expired!.closest('label')).toHaveTextContent('Expired');
     expect(fefo).toBeChecked();
-    expect(fefo!.closest('label')).toHaveTextContent('FEFO');
+    expect(fefo!.closest('label')).toHaveTextContent('Earliest expiry');
     expect(fefo!.closest('label')).toHaveTextContent('Near expiry · 20 d');
     expect(later).not.toBeChecked();
     expect(later!.closest('label')).not.toHaveTextContent('Near expiry');
@@ -198,9 +198,9 @@ describe('CounterLotOverride', () => {
     expect(props.onChange).toHaveBeenLastCalledWith({ inventoryLotId: null, reason: 'x' });
   });
 
-  it('Keep FEFO batch closes the override', () => {
+  it('Keep earliest-expiry batch closes the override', () => {
     const props = picker({ value: { inventoryLotId: 'lot-later', reason: 'x' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Keep FEFO batch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep earliest-expiry batch' }));
     expect(props.onChange).toHaveBeenLastCalledWith(null);
   });
 

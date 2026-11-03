@@ -17,6 +17,7 @@ vi.mock('@/server/routers/pharmacy-finance', () => ({
 }));
 
 import TrialBalanceControlPage from './page';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 const actor = {
   session: { user: { id: 'user-1', organizationId: 'org-1', role: 'ADMIN' } },
@@ -109,7 +110,8 @@ describe('TrialBalanceControlPage', () => {
     expect(mocks.financialStatements).toHaveBeenCalledTimes(1);
     expect(output).toContain('UNKNOWN_RAW_CODE');
     expect(output).toContain('9007199254740993.01');
-    expect(output).toContain('Retrieved 2026-02-02T03:04:05.000Z');
+    expect(output).toContain(`Checked ${formatDisplayDateTime('2026-02-02T03:04:05.000Z')}`);
+    expect(output).not.toContain('finance_journal_lines');
     expect(output).not.toContain('journal must not be consumed');
   });
 

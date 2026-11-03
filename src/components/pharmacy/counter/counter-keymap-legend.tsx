@@ -36,7 +36,7 @@ export function CounterKeymapLegend({
   return (
     <div className="space-y-2">
       <div className="space-y-1.5">
-        <Label htmlFor="counter-keymap-preset">Keymap</Label>
+        <Label htmlFor="counter-keymap-preset">Shortcut layout</Label>
         <select
           id="counter-keymap-preset"
           value={keymap.preset.key}
@@ -63,7 +63,7 @@ export function CounterKeymapLegend({
         ) : null}
         {saving ? (
           <p className="text-sm text-text-muted" role="status">
-            Saving keymap…
+            Saving shortcut layout…
           </p>
         ) : null}
       </div>

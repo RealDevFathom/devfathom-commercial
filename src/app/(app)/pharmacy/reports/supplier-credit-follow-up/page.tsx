@@ -16,6 +16,7 @@ import { pharmacyPurchasingRouter } from '@/server/routers/pharmacy-purchasing';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { tenantContext } from '../../purchasing/_lib/console';
 import { FollowUpPacket, type FollowUpPacketData } from './packet';
+import { formatReportDateTime } from '../report-format';
 
 export const metadata: Metadata = { title: 'Supplier-credit follow-up · Pharmacy reports' };
 
@@ -79,12 +80,14 @@ function SourceCoveragePanel({
   branchId,
   from,
   to,
+  timeZone,
 }: SourcePages & {
   returnsAfter?: PurchasingReadCursor;
   creditsAfter?: PurchasingReadCursor;
   branchId: string;
   from: string;
   to: string;
+  timeZone?: string | null;
 }) {
   const nextHref = (key: 'returnsAfter' | 'creditsAfter', cursor: PurchasingReadCursor) => {
     const params = new URLSearchParams({ branch: branchId, from, to });
@@ -117,7 +120,7 @@ function SourceCoveragePanel({
               </p>
               <p className="break-words text-sm text-text-muted">
                 {page.rows.length} records on this page. Page limit: {page.cap?.limit ?? 'unknown'}.
-                Observed: {observedAt ?? 'unknown'}.
+                Checked: {observedAt ? formatReportDateTime(observedAt, timeZone) : 'unknown'}.
               </p>
               {page.truncated === true && next ? (
                 <a
@@ -374,7 +377,7 @@ export default async function SupplierCreditFollowUpPage({
                   ? 'No branches are available in your report scope.'
                   : !branch
                     ? 'Choose a branch to prepare its draft evidence packs.'
-                    : 'Permission: financial reports. Preparation is read-only and works without Ask Fathom.'}
+                    : 'Needs finance access. Preparing a draft does not change any records.'}
         </p>
       </SectionCard>
       {sourcePages && !readFailed ? (
@@ -385,6 +388,7 @@ export default async function SupplierCreditFollowUpPage({
           branchId={branchId}
           from={from}
           to={to}
+          timeZone={ctx.organization?.timezone}
         />
       ) : null}
       {readFailed ? (
@@ -393,7 +397,7 @@ export default async function SupplierCreditFollowUpPage({
           substituted and no financial records have been changed.
         </Notice>
       ) : packet ? (
-        <FollowUpPacket packet={packet} />
+        <FollowUpPacket packet={packet} timeZone={ctx.organization?.timezone} />
       ) : null}
     </main>
   );

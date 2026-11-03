@@ -172,7 +172,7 @@ export function FinancialComparison({
   validationError?: string;
 }) {
   const notice = !canFinancial
-    ? 'Permission required: reports:financial is required.'
+    ? 'Your role does not include financial figures. Ask an administrator for access.'
     : !posEnabled
       ? 'Restaurant POS is not included in this organization’s current package.'
       : validationError

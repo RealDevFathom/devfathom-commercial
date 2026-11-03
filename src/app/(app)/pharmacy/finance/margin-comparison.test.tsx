@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
+import { formatDisplayDateTime } from '@/lib/display-time';
 import { explainGrossMargin, marginComparisonPeriods } from '@/lib/pharmacy/finance-reports';
 import { MarginComparisonLedger, MarginComparisonSection } from './margin-comparison';
 
@@ -20,8 +21,8 @@ describe('gross-margin comparison UI', () => {
     const html = renderToStaticMarkup(<MarginComparisonLedger report={report} />);
     for (const text of [
       '25.00 (currency unknown)',
-      '2026-08-30T00:00:00.000Z',
-      'start inclusive, end exclusive',
+      formatDisplayDateTime(report.periods.previous.from),
+      'includes its start time and stops just before its end time',
       'the previous period',
       'not a causal price/volume/mix',
       'missing evidence is not zero',
@@ -31,6 +32,8 @@ describe('gross-margin comparison UI', () => {
     ])
       expect(html).toContain(text);
     expect(html).not.toMatch(/NaN|Infinity/);
+    expect(html).not.toContain('2026-08-30T00:00:00.000Z');
+    expect(html).not.toMatch(/UTC\.?\s+UTC/);
   });
   it.each(['FORBIDDEN', 'INTERNAL_SERVER_ERROR'])(
     'shows %s without fabricated totals and preserves filters',

@@ -8,12 +8,12 @@ export default function PharmacyReportsLoading() {
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Reports"
-        description="Loading ledger-derived reporting."
+        description="Loading your reports."
       />
       <SectionCard title="Report filters">
         <Skeleton className="h-20 w-full" />
       </SectionCard>
-      <SectionCard title="Loading command centre">
+      <SectionCard title="Loading overview">
         <Skeleton className="h-32 w-full" />
       </SectionCard>
       <SectionCard title="Loading daily owner digest">

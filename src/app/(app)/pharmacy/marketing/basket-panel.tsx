@@ -5,6 +5,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { bundleProposalWhatsAppText } from '@/lib/pharmacy/basket-analysis';
 import type { listBasketInsights } from '@/lib/pharmacy/basket-workflow';
 import { MarketingActionForm } from './action-form';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 export function BasketPanel({
   branchId,
@@ -104,7 +105,7 @@ export function BasketPanel({
           <article key={insight.id} className="space-y-4 border-t border-border-subtle pt-4">
             <p className="break-words text-sm text-text-muted">
               {insight.snapshot.from} to {insight.snapshot.cutoff} (exclusive). Saved{' '}
-              {insight.createdAt.toISOString()}.
+              {formatDisplayDateTime(insight.createdAt)}.
             </p>
             {!insight.output.recommendations.length && (
               <p className="text-sm">

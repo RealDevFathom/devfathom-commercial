@@ -81,6 +81,14 @@ export function Topbar({
   const [commandLoaded, setCommandLoaded] = useState(false);
   const [searchInput, setSearchInput] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  // One click signs out. The session teardown takes a moment, so say so and ignore
+  // repeat clicks instead of leaving the person wondering whether the first one worked.
+  const [signingOut, setSigningOut] = useState(false);
+  const signOutOnce = (callbackUrl?: string) => {
+    if (signingOut) return;
+    setSigningOut(true);
+    void signOutEverything(callbackUrl).catch(() => setSigningOut(false));
+  };
   const router = useRouter();
   const { data: session } = useSession();
   const { theme, setTheme } = useTheme();
@@ -276,9 +284,18 @@ export function Topbar({
           <NotificationBell />
 
           {/* User dropdown */}
+          {signingOut ? (
+            <span role="status" className="text-xs text-muted-foreground">
+              Signing out…
+            </span>
+          ) : null}
           {session?.user && (
             <DropdownMenu>
-              <DropdownMenuTrigger aria-label="Open account menu" className="studio-avatar-button">
+              <DropdownMenuTrigger
+                aria-label="Open account menu"
+                className="studio-avatar-button"
+                disabled={signingOut}
+              >
                 <Avatar className="h-8 w-8">
                   <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
                   <AvatarFallback className="bg-muted text-foreground text-xs font-medium">
@@ -296,13 +313,13 @@ export function Topbar({
                   <User className="mr-2 h-4 w-4" />
                   Profile
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => void signOutEverything('/login')}>
+                <DropdownMenuItem onClick={() => signOutOnce('/login')}>
                   <Repeat2 className="mr-2 h-4 w-4" />
                   Switch organization
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={() => void signOutEverything()}
+                  onClick={() => signOutOnce()}
                   className="text-destructive focus:text-destructive"
                 >
                   <LogOut className="mr-2 h-4 w-4" />

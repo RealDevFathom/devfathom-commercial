@@ -11,6 +11,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { pharmacyMarketingRouter } from '@/server/routers/pharmacy-marketing';
 import { createTRPCContext } from '@/server/trpc';
 import { MarketingActionForm } from './action-form';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 export const metadata = { title: 'Marketing · Pharmacy' };
 const control =
@@ -193,7 +194,7 @@ export default async function PharmacyMarketingPage({
             />
             <p className="whitespace-pre-wrap break-words text-sm">{review.template.body}</p>
             <p className="text-sm text-text-muted">
-              Scheduled: {review.campaign.scheduledAt.toISOString()}. Rules:{' '}
+              Scheduled: {formatDisplayDateTime(review.campaign.scheduledAt)}. Rules:{' '}
               {review.rules.all
                 .map(
                   (rule) =>
@@ -289,7 +290,7 @@ export default async function PharmacyMarketingPage({
               {delivery.attempts.map((attempt) => (
                 <li key={attempt.id}>
                   {attempt.provider} attempt {attempt.attemptNumber} ·{' '}
-                  {attempt.reservedAt.toISOString()} ·{' '}
+                  {formatDisplayDateTime(attempt.reservedAt)} ·{' '}
                   {attempt.contradictory
                     ? 'Conflicting evidence — resend blocked'
                     : attempt.delivered
@@ -375,7 +376,7 @@ export default async function PharmacyMarketingPage({
                       />
                     </td>
                     <td className="whitespace-nowrap p-3 font-mono text-xs">
-                      {campaign.scheduledAt.toISOString()}
+                      {formatDisplayDateTime(campaign.scheduledAt)}
                     </td>
                     <td className="p-3">
                       <Link

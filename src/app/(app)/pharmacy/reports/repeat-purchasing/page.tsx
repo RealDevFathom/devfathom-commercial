@@ -9,6 +9,7 @@ import { Stat } from '@/components/ui/stat';
 import { REPEAT_DEFINITION, REPEAT_LIMITS } from '@/lib/pharmacy/repeat-purchasing';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
+import { formatReportDateTime } from '../report-format';
 
 export const metadata: Metadata = { title: 'Repeat purchasing · Pharmacy reports' };
 const percent = (n: number | null) => (n === null ? 'Unavailable' : `${n.toFixed(1)}%`);
@@ -32,17 +33,20 @@ export default async function RepeatPurchasingPage({
     ReturnType<ReturnType<typeof pharmacyReportsRouter.createCaller>['repeatPurchasing']>
   > | null = null;
   let error: string | null = null;
+  let timeZone: string | null = null;
   try {
-    const caller = pharmacyReportsRouter.createCaller(await createTRPCContext());
+    const ctx = await createTRPCContext();
+    timeZone = ctx.organization?.timezone ?? null;
+    const caller = pharmacyReportsRouter.createCaller(ctx);
     branches = (await caller.branches()).branches;
     result = await caller.repeatPurchasing({ from, to, asOf, ...(branchId ? { branchId } : {}) });
   } catch (cause) {
     result = null;
     error =
       cause instanceof TRPCError && cause.code === 'FORBIDDEN'
-        ? 'Owner financial-report access, an enabled pharmacy reports module and an authorized active branch are required. Contact your workspace administrator.'
+        ? 'Only an owner with finance access and an active branch can see this report. Ask the pharmacy owner to check your access.'
         : cause instanceof TRPCError && cause.code === 'BAD_REQUEST'
-          ? 'Check the enrollment dates (maximum 90 days) and nonfuture ISO UTC cutoff, then apply again.'
+          ? 'Check the enrollment dates (up to 90 days) and that the cutoff is not in the future, then apply again.'
           : 'Report unavailable. The complete report could not be generated. Retry or select a single branch using the filters; no partial rates are shown.';
   }
   return (
@@ -50,7 +54,7 @@ export default async function RepeatPurchasingPage({
       <PageHeader
         eyebrow="Pharmacy reports"
         heading="Repeat purchasing"
-        description="First-observed commercial customer cohorts in selected authorized branches."
+        description="How many new customers come back to buy again, by branch."
       />
       <Link
         className="text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
@@ -69,7 +73,7 @@ export default async function RepeatPurchasingPage({
             <Input className="mt-1 min-h-11" type="date" name="to" defaultValue={to} required />
           </label>
           <label className="text-sm text-text-body">
-            As-of cutoff (ISO UTC)
+            Report cutoff (UTC date and time)
             <Input
               className="mt-1 min-h-11"
               name="asOf"
@@ -117,8 +121,8 @@ export default async function RepeatPurchasingPage({
         <>
           <SectionCard title="Identity coverage" titleLevel={2}>
             <p className="mb-4 text-sm text-text-muted">
-              Completed original receipts in enrollment window, before purchase exclusions. Frozen
-              cutoff: {result.asOf}.
+              Completed original receipts in the enrollment window, before purchase exclusions.
+              Counted up to {formatReportDateTime(result.asOf, timeZone)}.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               <Stat
@@ -159,7 +163,10 @@ export default async function RepeatPurchasingPage({
               Across all selected data through cutoff: {result.missingTimestamp} completed originals
               missing completion timestamps; {result.missingReceipt} timestamped originals missing
               receipt numbers. Earliest available completion:{' '}
-              {result.earliestObservedAt ?? 'Unavailable'}. This is not a verified data-start date.
+              {result.earliestObservedAt
+                ? formatReportDateTime(result.earliestObservedAt, timeZone)
+                : 'Not available'}
+              . This may not be when your records actually start.
             </p>
           </SectionCard>
         </>

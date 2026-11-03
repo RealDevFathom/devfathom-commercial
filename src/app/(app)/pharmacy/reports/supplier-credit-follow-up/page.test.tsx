@@ -35,6 +35,7 @@ vi.mock('@/server/routers/pharmacy-purchasing', () => ({
 }));
 
 import Page from './page';
+import { formatReportDateTime } from '../report-format';
 
 const scope = { organizationId: 'org-1', branchId: 'branch-1' };
 function claim(): FollowUpReturn & { createdAt: Date } {
@@ -123,7 +124,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('supplier-credit Reports preparation', () => {
-  it('connects existing readers and the real pure service without Ask Fathom', async () => {
+  it('connects existing readers and the real pure service on its own', async () => {
     await show();
     expect(mocks.can).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-1' }),
@@ -152,7 +153,7 @@ describe('supplier-credit Reports preparation', () => {
     expect(screen.getByText('PKR 75.01')).toBeVisible();
     expect(screen.getByText('PKR 25.00 allocated')).toBeVisible();
     expect(screen.getByText('PKR 50.01 unallocated')).toBeVisible();
-    expect(screen.getByText(/works without Ask Fathom/)).toBeVisible();
+    expect(screen.getByText(/Preparing a draft does not change any records/)).toBeVisible();
     expect(screen.getByLabelText('Branch')).toHaveValue('branch-1');
     expect(screen.getByLabelText('From')).toHaveValue(filters.from);
     expect(screen.getByLabelText('To')).toHaveValue(filters.to);
@@ -341,7 +342,9 @@ describe('supplier-credit Reports preparation', () => {
     expect(
       screen.getAllByText('Incomplete coverage: more source records are available.')
     ).toHaveLength(2);
-    expect(screen.getAllByText(/Observed: 2026-09-12T07:00:00.000Z/)).toHaveLength(2);
+    expect(
+      screen.getAllByText(new RegExp(`Checked: ${formatReportDateTime(observedAt, 'UTC')}`))
+    ).toHaveLength(2);
     const next = new URL(
       screen.getByRole('link', { name: 'Next returns page' }).getAttribute('href')!,
       'https://example.test'
@@ -444,6 +447,6 @@ describe('supplier-credit Reports preparation', () => {
     expect(
       screen.getAllByText('All records in this source range were returned by this read.')
     ).toHaveLength(2);
-    expect(screen.queryByText(/Observed: unknown/)).toBeNull();
+    expect(screen.queryByText(/Checked: unknown/)).toBeNull();
   });
 });

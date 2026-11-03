@@ -18,6 +18,8 @@ export type CounterUnitToggleProps = {
   onQuantityChange: (quantity: number) => void;
   /** Rendered beside each unit so the operator sees the chord, not a tooltip. */
   chordFor?: (kind: SaleUnitKind) => string | null;
+  /** Safe units on hand; picks the explanation when no sale unit is offered. */
+  onHandUnits?: number;
 };
 
 const KIND_LABEL: Record<SaleUnitKind, string> = {
@@ -47,14 +49,16 @@ export function CounterUnitToggle({
   onSelect,
   onQuantityChange,
   chordFor,
+  onHandUnits,
 }: CounterUnitToggleProps) {
   const quantityId = useId();
 
   if (options.length === 0) {
     return (
       <p className="text-sm text-text-muted" role="status">
-        No sale unit is available for this medicine. Its pack hierarchy does not match the received
-        lot, so no price can be derived.
+        {onHandUnits === undefined || onHandUnits <= 0
+          ? 'No stock to sell. Ask your manager to receive stock, or record this as unmet demand below.'
+          : 'This medicine cannot be sold yet because its pack sizes do not match the stock received. Ask your manager to check its pack sizes in Inventory.'}
       </p>
     );
   }
@@ -160,7 +164,7 @@ export function CounterUnitToggle({
         >
           <div>
             <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-              Canonical units
+              Total units
             </dt>
             <dd className="font-mono tabular-nums text-text-strong">{preview.canonicalUnits}</dd>
           </div>
@@ -203,8 +207,8 @@ export function CounterUnitToggle({
                   label={`Short by ${preview.shortfallUnits} units`}
                 />
                 <span className="text-sm text-text-body">
-                  Only {preview.availableUnits} safe units are on hand. Reduce the quantity or
-                  capture the shortfall as unfulfilled demand.
+                  Only {preview.availableUnits} units are in stock. Lower the quantity, or record
+                  the rest as unmet demand.
                 </span>
               </span>
             )}

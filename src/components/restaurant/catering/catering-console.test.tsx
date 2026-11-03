@@ -7,6 +7,7 @@ import {
   type UseMutationOptions,
 } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { formatDisplayDateTime } from '@/lib/display-time';
 import type { EntitlementView } from '@/lib/module-catalog';
 
 const mocks = vi.hoisted(() => ({
@@ -1076,7 +1077,11 @@ describe('Persisted catering evidence', () => {
     expect(
       screen.queryByLabelText(/device secret|session token|actor id/i)
     ).not.toBeInTheDocument();
-    expect(screen.getByText(/Order revision 1 · Quote reference/)).toHaveTextContent('2026-10-01');
+    const approvalEntry = screen.getByText(/Order revision 1 · Quote reference/);
+    expect(approvalEntry.textContent).toContain(
+      formatDisplayDateTime(new Date('2026-10-01T00:00:00Z'))
+    );
+    expect(approvalEntry).not.toHaveTextContent('2026-10-01T00:00:00.000Z');
   });
   it('caps canonical quantity and preserves replay key across failed disposition retry', async () => {
     mocks.disposition.mockRejectedValueOnce(new Error('Connection lost')).mockResolvedValueOnce({});

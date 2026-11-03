@@ -8,7 +8,7 @@ it('links the selected branch and explains unavailable evidence without zero tot
     'href',
     '/pharmacy/marketing?branch=branch-a'
   );
-  expect(screen.getByText(/No zero totals inferred/)).toBeInTheDocument();
+  expect(screen.getByText(/Nothing is shown as zero/)).toBeInTheDocument();
 });
 it('shows signed margin and labels sandbox and unverified attribution separately', () => {
   const report = {
@@ -37,9 +37,15 @@ it('shows signed margin and labels sandbox and unverified attribution separately
     <MarketingSummary financial report={report as never} money={(value) => `${value} minor`} />
   );
   expect(screen.getByText('-50 minor')).toBeInTheDocument();
-  expect(screen.getByText(/Sandbox only: 3 captures/)).toBeInTheDocument();
+  expect(screen.getByText(/Test sends: 3 sent, 2 delivered, 1 failed/)).toBeInTheDocument();
   expect(
-    screen.getByText(/Supplier, ingredient and batch filters do not scope/)
+    screen.getByText(/supplier, ingredient and batch filters do not/)
   ).toBeInTheDocument();
-  expect(screen.getByText(/no causal uplift claim/)).toBeInTheDocument();
+  expect(screen.getByText(/does not prove the message caused the purchase/)).toBeInTheDocument();
+  expect(screen.getByText('Opted out: 2')).toBeInTheDocument();
+  expect(screen.getByText('Messages prepared')).toBeInTheDocument();
+  const text = document.body.textContent ?? '';
+  for (const jargon of ['Prepared captures', 'Contradictory evidence', 'Sandbox only', 'cutoff'])
+    expect(text).not.toContain(jargon);
+  expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
 });

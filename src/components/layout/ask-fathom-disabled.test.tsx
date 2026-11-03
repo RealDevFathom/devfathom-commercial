@@ -56,6 +56,8 @@ vi.mock('@/components/motion/page-transition', () => ({
 vi.mock('./sidebar', () => ({
   Sidebar: () => null,
   TopNavigation: () => <nav>Reports and Insights</nav>,
+  // The topbar breadcrumbs read the menu labels from the sidebar's navigation list.
+  navigation: [],
 }));
 vi.mock('@/components/restaurant/administrator-staff-profile-callout', () => ({
   AdministratorStaffProfileCallout: () => null,

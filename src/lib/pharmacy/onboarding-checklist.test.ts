@@ -246,8 +246,8 @@ describe('fresh Pharmacy setup destinations', () => {
   it('offers catalog, receiving and canonical setup links from empty inventory', () => {
     const page = readFileSync('src/app/(app)/pharmacy/inventory/page.tsx', 'utf8');
     const empty = page.slice(
-      page.indexOf('No available lots yet.'),
-      page.indexOf('No available lots yet.') + 1100
+      page.indexOf('No batches in stock yet.'),
+      page.indexOf('No batches in stock yet.') + 1100
     );
     for (const href of ['/pharmacy/medicines', '/pharmacy/purchasing/receiving', '/pharmacy']) {
       expect(empty).toContain(`href="${href}"`);

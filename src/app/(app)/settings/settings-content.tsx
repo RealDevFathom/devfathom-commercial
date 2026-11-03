@@ -648,7 +648,29 @@ export function ProfileSection() {
   );
 }
 
-function PasswordSection() {
+/**
+ * Why "Change password" cannot be pressed yet, in the order a person fills the form —
+ * or null when it can. Rules come from the shared policy the server enforces.
+ */
+export function passwordChangeBlocker({
+  current,
+  newPw,
+  confirm,
+}: {
+  current: string;
+  newPw: string;
+  confirm: string;
+}): string | null {
+  if (!current) return 'Enter your current password.';
+  if (!newPw) return 'Enter a new password.';
+  const unmet = passwordRules.find((rule) => !rule.test(newPw));
+  if (unmet) return `New password needs: ${unmet.label.toLowerCase()}.`;
+  if (!confirm) return 'Type the new password again to confirm it.';
+  if (newPw !== confirm) return 'Passwords don’t match.';
+  return null;
+}
+
+export function PasswordSection() {
   const changePassword = trpc.team.changePassword.useMutation({
     onSuccess: () => {
       setCurrent('');
@@ -672,16 +694,15 @@ function PasswordSection() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
 
+  const blocker = passwordChangeBlocker({ current, newPw, confirm });
+
   const handleSubmit = () => {
     setError('');
-    if (newPw !== confirm) {
-      setError('Passwords do not match');
-      return;
-    }
     // IMP-AUTH-05: enforce the SHARED policy client-side (matches the server +
-    // the invite flow), not just a length check, so the two can't drift.
-    if (!passwordMeetsPolicy(newPw)) {
-      setError('Password does not meet all the requirements below.');
+    // the invite flow), not just a length check, so the two can't drift. The
+    // Enter key reaches here even while the button is disabled.
+    if (blocker || !passwordMeetsPolicy(newPw)) {
+      setError(blocker ?? 'Password does not meet all the requirements below.');
       return;
     }
     changePassword.mutate({ currentPassword: current, newPassword: newPw });
@@ -741,11 +762,14 @@ function PasswordSection() {
             />
           </div>
         </div>
-        {/* IMP-AUTH-05: live password-policy checklist (shared passwordRules). */}
-        {newPw.length > 0 && (
-          <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
+        {/* IMP-AUTH-05: live policy checklist (shared passwordRules), visible before typing. */}
+        <div>
+          <p className="mb-1 text-[11px] font-medium text-foreground" id="password-rules-heading">
+            Your new password needs
+          </p>
+          <ul aria-labelledby="password-rules-heading" className="grid grid-cols-2 gap-x-4 gap-y-1">
             {passwordRules.map((rule) => {
-              const ok = rule.test(newPw);
+              const ok = newPw.length > 0 && rule.test(newPw);
               return (
                 <li
                   key={rule.id}
@@ -760,11 +784,17 @@ function PasswordSection() {
               );
             })}
           </ul>
-        )}
-        <div className="flex justify-end">
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {blocker ? (
+            <p className="text-[11px] text-muted-foreground" id="change-password-blocker">
+              {blocker}
+            </p>
+          ) : null}
           <button
             onClick={handleSubmit}
-            disabled={!current || !newPw || !confirm || changePassword.isPending}
+            aria-describedby={blocker ? 'change-password-blocker' : undefined}
+            disabled={Boolean(blocker) || changePassword.isPending}
             className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {changePassword.isPending ? (
@@ -781,8 +811,8 @@ function PasswordSection() {
           <div>
             <p className="text-xs font-medium text-foreground">Sign out everywhere</p>
             <p className="text-[11px] text-muted-foreground">
-              Revoke all sessions on every device. Use this if you suspect your account is
-              compromised.
+              Revoke all sessions on every device, including this one — you will need to sign in
+              again here too. Use this if you suspect your account is compromised.
             </p>
           </div>
           <button
@@ -1172,13 +1202,21 @@ function TwoFactorSection() {
           </div>
         ) : (
           !recoveryCodes && (
-            <button
-              onClick={() => begin.mutate()}
-              disabled={begin.isPending}
-              className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
-            >
-              {begin.isPending ? 'Starting…' : 'Enable two-factor authentication'}
-            </button>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground" id="two-factor-next-step">
+                Next, you&apos;ll add this account to an authenticator app with a setup key, then
+                enter the 6-digit code the app shows to finish. You&apos;ll also get one-time
+                recovery codes to keep safe.
+              </p>
+              <button
+                onClick={() => begin.mutate()}
+                disabled={begin.isPending}
+                aria-describedby="two-factor-next-step"
+                className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-50"
+              >
+                {begin.isPending ? 'Starting…' : 'Enable two-factor authentication'}
+              </button>
+            </div>
           )
         )}
       </CardContent>

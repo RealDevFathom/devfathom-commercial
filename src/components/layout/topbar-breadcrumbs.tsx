@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { ChevronRight } from 'lucide-react';
 import { useBreadcrumbStore } from '@/lib/breadcrumb-store';
 import { cn } from '@/lib/utils';
+import { navigation } from './sidebar';
 
 export const routeLabels: Record<string, string> = {
   '/dashboard': 'Dashboard',
@@ -32,6 +33,23 @@ export const routeLabels: Record<string, string> = {
   '/hotel/settings/extras': 'Extras',
   '/hotel/settings/journey': 'Guest messages',
 };
+
+// The menu's own name for a page, so a breadcrumb reads like the nav item that opened it.
+// A one-segment section root (e.g. `/pharmacy`, whose menu entry is its onboarding page)
+// keeps its section name instead, since every page under it shares that crumb.
+const navLabels = new Map<string, string>();
+for (const item of navigation) {
+  const isSectionRoot =
+    item.href.split('/').filter(Boolean).length === 1 &&
+    navigation.some((other) => other.href.startsWith(`${item.href}/`));
+  if (!isSectionRoot && !navLabels.has(item.href)) navLabels.set(item.href, item.label);
+}
+
+/** `branch-comparison` -> `Branch comparison`: readable when no named label exists. */
+export function humanizeSegment(segment: string) {
+  const words = segment.replace(/[-_]+/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
 const linkableDetailRoute = /^\/(projects|clients|notes|team|meetings)\/[^/]+$/;
 const subscribeToHydration = () => () => {};
@@ -62,7 +80,8 @@ export function TopbarBreadcrumbs() {
       label:
         routeLabels[href] ||
         breadcrumbLabels[segment] ||
-        segment.charAt(0).toUpperCase() + segment.slice(1),
+        navLabels.get(href) ||
+        humanizeSegment(segment),
       href,
       linkable: isLinkableBreadcrumb(href),
     };

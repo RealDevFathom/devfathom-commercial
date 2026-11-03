@@ -5,6 +5,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 const money = (value: string | number) => {
   const n = BigInt(value),
@@ -77,7 +78,7 @@ export async function FinancialStatements({
       </form>
       <p className="text-sm text-text-muted">
         {result.definition} Amounts shown in the recorded currency. Retrieved{' '}
-        {result.freshness.retrievedAt.toISOString()}.
+        {formatDisplayDateTime(result.freshness.retrievedAt)}.
       </p>
       <ProfitAndLossReport statements={result.profitAndLoss} />
       <h3 className="mt-6 font-semibold">Receivables, payables and cash at cutoff</h3>
@@ -193,7 +194,7 @@ export async function FinancialStatements({
       {result.journal.map((e) => (
         <details key={e.id} className="mt-3 rounded-sm border border-border p-3">
           <summary className="min-h-11 cursor-pointer break-words focus-visible:outline-2 focus-visible:outline-ring">
-            {e.occurredAt.toISOString()} · {e.description} · {e.sourceKind}
+            {formatDisplayDateTime(e.occurredAt)} · {e.description} · {e.sourceKind}
             {e.reversesEntryId ? ' · reversal' : ''}
           </summary>
           <p className="my-2 break-all text-xs text-text-muted">

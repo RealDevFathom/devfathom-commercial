@@ -61,7 +61,7 @@ export const metadata: Metadata = { title: 'Returns & claims · Pharmacy purchas
 const ROUTE = `${PURCHASING_ROUTE}/returns`;
 const HEADING = 'Returns & claims';
 const DESCRIPTION =
-  'Purchase returns and expiry claims, the supplier return window each one is racing, the debit notes they raise and the credit that has actually arrived against them.';
+  'Send stock back to suppliers or claim for expired stock before each supplier’s deadline, and track the credit you are owed against what has arrived.';
 
 const RETURN_SLOTS = [0, 1, 2] as const;
 
@@ -104,7 +104,7 @@ export default async function PharmacyReturnsPage({
   } catch {
     return (
       <Frame notice={notice}>
-        <LoadFailure detail="The returns board could not load its pickers." retryHref={ROUTE} />
+        <LoadFailure detail="Returns could not load its lists." retryHref={ROUTE} />
       </Frame>
     );
   }
@@ -266,7 +266,7 @@ export default async function PharmacyReturnsPage({
           purchaseReturnId,
           reference: field(form, 'debitReference'),
         });
-        message = 'Debit note issued. Expected credit is frozen from the return lines.';
+        message = 'Debit note issued. The expected credit is now fixed from the return lines.';
       } else {
         throw new PurchasingValidationError('Unknown action.');
       }
@@ -333,7 +333,10 @@ export default async function PharmacyReturnsPage({
       revalidatePath(ROUTE);
       next = destination(
         ROUTE,
-        { message: 'Credit allocated. The debit note position has moved.', kind: 'success' },
+        {
+          message: 'Credit allocated. The amount still owed on the debit note has gone down.',
+          kind: 'success',
+        },
         { branch, return: optionalField(form, 'purchaseReturnId') }
       );
     } catch (error) {
@@ -349,7 +352,11 @@ export default async function PharmacyReturnsPage({
   return (
     <Frame branch={scope} notice={notice}>
       <div className="grid gap-6 sm:grid-cols-4">
-        <Stat label="Expected credit" value={money(expectedMinor)} sub="Frozen at issue" />
+        <Stat
+          label="Expected credit"
+          value={money(expectedMinor)}
+          sub="Fixed when the debit note was issued"
+        />
         <Stat label="Received credit" value={money(receivedMinor)} sub="Allocated from suppliers" />
         <Stat
           label="Variance"
@@ -373,11 +380,11 @@ export default async function PharmacyReturnsPage({
       />
 
       {/* ── the near-expiry board's return windows ─────────────────────────── */}
-      <SectionCard eyebrow="PUR-06" title="Return windows" titleLevel={2}>
+      <SectionCard title="Return windows" titleLevel={2}>
         {closingSoon.length === 0 ? (
           <EmptyState
             title="No return window is closing"
-            detail="Every open return and claim at this branch still has more than a week of its supplier window left. A window that closes before dispatch cannot be credited, so this board leads with the deadline rather than the document."
+            detail="Every open return and claim at this branch has more than a week left before the supplier’s deadline. Stock sent after the deadline cannot be credited, so deadlines are shown first."
           />
         ) : (
           <ul className="space-y-2">
@@ -414,7 +421,7 @@ export default async function PharmacyReturnsPage({
       </SectionCard>
 
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,11fr)] xl:items-start">
-        <SectionCard eyebrow="PUR-06" title={`Returns & claims (${returns.length})`} titleLevel={2}>
+        <SectionCard title={`Returns & claims (${returns.length})`} titleLevel={2}>
           {returns.length === 0 ? (
             <EmptyState
               title="Nothing is going back to a supplier"
@@ -470,14 +477,12 @@ export default async function PharmacyReturnsPage({
             </SectionCard>
           )}
 
-          <SectionCard eyebrow="PUR-06" title="Raise a return or expiry claim" titleLevel={2}>
+          <SectionCard title="Raise a return or expiry claim" titleLevel={2}>
             {lots.length === 0 ? (
               <EmptyState
                 title="No available stock to return"
-                detail="A return is raised against a lot that is on hand and available at this branch. Nothing here qualifies — quarantined and already-claimed quantities are deliberately not offered."
-                steps={[
-                  { label: 'Open the goods-in bench', href: `${PURCHASING_ROUTE}/receiving` },
-                ]}
+                detail="You can only return stock that is on hand and available at this branch. There is none right now. Quarantined stock and stock already in a claim are not offered."
+                steps={[{ label: 'Open Goods in', href: `${PURCHASING_ROUTE}/receiving` }]}
               />
             ) : (
               <PurchasingActionForm
@@ -572,7 +577,7 @@ export default async function PharmacyReturnsPage({
             )}
           </SectionCard>
 
-          <SectionCard eyebrow="PUR-06" title="Supplier credit" titleLevel={2}>
+          <SectionCard title="Supplier credit" titleLevel={2}>
             <PurchasingActionForm
               operation={{ resource: `credit:new:${branchId}`, action: 'record' }}
               action={recordCredit}
@@ -754,7 +759,6 @@ function ReturnDetail({
 
   return (
     <SectionCard
-      eyebrow="PUR-06"
       title={purchaseReturn.reference}
       titleLevel={2}
       actions={<StatusPill status={purchaseReturn.status} />}

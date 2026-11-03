@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { GROWTH_METRICS, presentGrowthRecommendation } from '@/lib/ai/growth-recommendations';
 import type { listGrowthInsights } from '@/lib/pharmacy/growth-insights';
 import { MarketingActionForm } from './action-form';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 type History = Awaited<ReturnType<typeof listGrowthInsights>>;
 const REVIEW_WORKSPACES: Partial<
@@ -80,7 +81,7 @@ export function GrowthPanel({
             <StatusPill status={insight.status} label={insight.status.replaceAll('_', ' ')} />
             <p className="break-words text-sm text-text-muted">
               {insight.snapshot.current.from} to {insight.snapshot.current.cutoff} (exclusive).
-              Saved {insight.createdAt.toISOString()}.{' '}
+              Saved {formatDisplayDateTime(insight.createdAt)}.{' '}
               {insight.provider && insight.model
                 ? `${insight.provider} / ${insight.model}`
                 : 'No model output.'}

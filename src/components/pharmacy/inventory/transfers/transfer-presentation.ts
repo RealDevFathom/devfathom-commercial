@@ -107,7 +107,7 @@ export function transferErrorMessage(action: TransferAction, error: unknown): st
         : 'A short receipt needs a reason, an evidence reference and a different active colleague as witness.';
     case 'INSUFFICIENT_STOCK':
       return action === 'receive'
-        ? 'The in-transit balance no longer covers this transfer. Refresh and review the ledger before receiving.'
+        ? 'The stock in transit no longer covers this transfer. Refresh the page and check the stock history before receiving.'
         : 'Not enough available stock at the source location for this quantity.';
     case 'BLOCKED_STOCK':
       return 'This stock is recalled, quarantined or expired and cannot be dispatched.';

@@ -10,7 +10,7 @@ export default function PharmacyReportsError({ reset }: { reset: () => void }) {
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Reports"
-        description="Ledger-derived reporting and owner digest history."
+        description="Sales, stock, expiry and supplier reports for your pharmacy."
       />
       <SectionCard title="Reports could not load">
         <p className="text-sm text-text-muted">

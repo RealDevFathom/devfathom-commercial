@@ -175,7 +175,7 @@ describe('Financial comparison contract presentation', () => {
   });
 
   it.each([
-    [{ canFinancial: false }, /Permission required/],
+    [{ canFinancial: false }, /Your role does not include financial figures/],
     [{ posEnabled: false }, /Restaurant POS is not included/],
     [{ failed: true }, /could not load/],
     [{ validationError: 'Choose a valid report period.' }, /Choose a valid report period/],

@@ -6,6 +6,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { formulaSafeCell } from '@/lib/pharmacy/reference-connectors';
+import { formatReportDateTime, formatReportPeriod } from '../report-format';
 
 type Credit = { id: string; supplierId: string; reference: string; unallocatedMinor: number };
 export type FollowUpPacketData = {
@@ -201,7 +202,14 @@ function PacketActions({ packet, supplierId }: { packet: FollowUpPacketData; sup
   );
 }
 
-export function FollowUpPacket({ packet }: { packet: FollowUpPacketData }) {
+export function FollowUpPacket({
+  packet,
+  timeZone,
+}: {
+  packet: FollowUpPacketData;
+  /** Workspace IANA zone for on-screen times; the CSV keeps exact stored instants. */
+  timeZone?: string | null;
+}) {
   const suppliers = [
     ...new Map(packet.rows.map((row) => [row.supplierId, row.supplier])).entries(),
   ];
@@ -211,9 +219,10 @@ export function FollowUpPacket({ packet }: { packet: FollowUpPacketData }) {
     <div className="min-w-0 space-y-6">
       <SectionCard title="Draft evidence scope" titleLevel={2}>
         <StatusPill status="draft" label="Draft · read-only" />
-        <p className="mt-3 text-sm text-text-body">
-          Branch: {packet.branch.name}. Return creation period: {packet.from} to {packet.to},
-          inclusive UTC. Prepared at: {packet.preparedAt}. Currency: {currencyLabel(packet)}.
+        <p className="mt-3 text-sm text-text-body" suppressHydrationWarning>
+          Branch: {packet.branch.name}. Returns created {formatReportPeriod(packet.from, packet.to)}
+          (UTC dates). Prepared {formatReportDateTime(packet.preparedAt, timeZone)}. Currency:{' '}
+          {currencyLabel(packet)}.
         </p>
         <p className="mt-2 text-sm text-text-muted">{currencyBasis}</p>
         <p className="mt-2 text-sm text-text-muted">{DEFINITION}</p>
@@ -300,8 +309,10 @@ export function FollowUpPacket({ packet }: { packet: FollowUpPacketData }) {
                             }
                           />
                           {row.status === 'DISPATCHED' ? (
-                            <p className="mt-2 text-xs">
-                              {row.dispatchedAt ?? 'Dispatch timestamp not recorded'}
+                            <p className="mt-2 text-xs" suppressHydrationWarning>
+                              {row.dispatchedAt
+                                ? `Dispatched ${formatReportDateTime(row.dispatchedAt, timeZone)}`
+                                : 'Dispatch time not recorded'}
                             </p>
                           ) : (
                             <>
@@ -313,8 +324,9 @@ export function FollowUpPacket({ packet }: { packet: FollowUpPacketData }) {
                                     : 'Return window unknown — verify source records.'}
                               </p>
                               {row.deadline ? (
-                                <p className="text-xs">
-                                  Earliest recorded return deadline: {row.deadline}
+                                <p className="text-xs" suppressHydrationWarning>
+                                  Earliest recorded return deadline:{' '}
+                                  {formatReportDateTime(row.deadline, timeZone)}
                                 </p>
                               ) : null}
                             </>

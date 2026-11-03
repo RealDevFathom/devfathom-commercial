@@ -50,7 +50,8 @@ export async function ColdChainCameraSection({
       <h3 className="font-medium text-text-strong">Fridge cameras</h3>
       {cameras.length === 0 ? (
         <p className="text-sm text-text-muted">
-          No cold-chain camera watches a zone in this branch.
+          No camera is linked to a fridge at this branch yet. Link one in Cameras to see fridge
+          snapshots here.
         </p>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
@@ -97,7 +98,7 @@ export async function ColdChainCameraSection({
           })}
         </div>
       )}
-      <h3 className="font-medium text-text-strong">Excursion timeline</h3>
+      <h3 className="font-medium text-text-strong">Out-of-range temperature snapshots</h3>
       <ExcursionEvidenceTimeline entries={evidence} zoneNames={zoneNames} />
     </div>
   );

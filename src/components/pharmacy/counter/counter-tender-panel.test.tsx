@@ -319,3 +319,33 @@ describe('family Khata tender', () => {
     );
   });
 });
+
+describe('CounterTenderPanel disabled reasons', () => {
+  it('shows a plain balance and next step before a bill exists', () => {
+    setup({ balanceMinor: null, state: 'idle', disabled: true });
+    expect(screen.getByText('No bill yet')).toBeInTheDocument();
+    expect(screen.queryByText('Unavailable')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Add an item to the bill before taking payment.'
+    );
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+  });
+
+  it('says why Take payment is disabled and links the reason to the button', () => {
+    setup();
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '999.00' } });
+    const button = screen.getByRole('button', { name: 'Take payment' });
+    expect(button).toBeDisabled();
+    const reason = screen.getByText('Enter an amount up to the balance due.');
+    expect(button.getAttribute('aria-describedby')).toContain(reason.id);
+    expect(button).toHaveAttribute('title', 'Enter an amount up to the balance due.');
+  });
+
+  it('shows no reason once payment can be taken', () => {
+    setup();
+    const button = screen.getByRole('button', { name: 'Take payment' });
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute('title');
+    expect(button.getAttribute('aria-describedby')).toBe('tender-status tender-error');
+  });
+});

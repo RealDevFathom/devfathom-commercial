@@ -11,6 +11,8 @@ import { browserUuid } from '@/lib/browser-uuid';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { buildCounterBrowserReceipt } from '@/lib/pharmacy/counter-browser-print';
+import { findReceiptDisabledReason } from './counter-display';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 const attemptSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -190,6 +192,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     tender ? tender.amountMinor - tender.refundedMinor : 0
   );
   const locked = busy || !!attempt || !ready || !online;
+  const findReceiptReason = findReceiptDisabledReason({ locked, value: number });
   const stale = history.isFetching || history.isError;
 
   async function execute(next: Attempt, controlledWitness?: ControlledWitness) {
@@ -335,7 +338,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         data.returns
           .map(
             (row) =>
-              `${row.createdAt.toISOString()} ${row.reason}\n${row.lines.map((item) => `${data.lines.find((l) => l.id === item.saleLineId)?.name ?? 'Item'}: ${item.canonicalUnits} units · ${item.integrityDecision}`).join('\n')}`
+              `${formatDisplayDateTime(row.createdAt)} ${row.reason}\n${row.lines.map((item) => `${data.lines.find((l) => l.id === item.saleLineId)?.name ?? 'Item'}: ${item.canonicalUnits} units · ${item.integrityDecision}`).join('\n')}`
           )
           .join('\n') +
         '\n' +
@@ -349,7 +352,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       popup.document.body.append(appendix);
       popup.focus();
       popup.print();
-      setMessage('Browser print dialog requested. Paper delivery is not confirmed.');
+      setMessage('Print window opened. Check that the receipt actually printed.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Receipt could not print.');
     }
@@ -410,9 +413,16 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           variant="outline"
           className="h-11"
           disabled={locked || !Number.isSafeInteger(Number(number)) || Number(number) < 1}
+          title={findReceiptReason ?? undefined}
+          aria-describedby={findReceiptReason ? 'return-receipt-reason' : undefined}
         >
           Find receipt
         </Button>
+        {findReceiptReason ? (
+          <p id="return-receipt-reason" className="basis-full text-xs text-text-muted">
+            {findReceiptReason}
+          </p>
+        ) : null}
       </form>
       {lookup.isFetching && searched > 0 && <p role="status">Looking up receipt…</p>}
       {lookup.isError && (

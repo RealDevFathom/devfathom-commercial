@@ -47,16 +47,16 @@ test.describe('owner importer Studio visual QA', () => {
           await expect(page.getByLabel('Stock location')).toBeEnabled();
           await page.getByLabel('Stock location').selectOption({ index: 1 });
           await file.setInputFiles({ name: 'qa.csv', mimeType: 'text/csv', buffer: Buffer.from('Source reference,Barcode,Batch,Expiry,MRP,Cost,Exported base units,Physically counted base units,Variance explanation\nQA-SRC,QA-UNMATCHED-PACK,B1,2099-06,25,1.25,12,10,Excluded damage') });
-          const dryRun = page.getByRole('button', { name: 'Run dry-run diff' });
+          const dryRun = page.getByRole('button', { name: 'Preview changes' });
           await expect(dryRun).toBeEnabled();
           await dryRun.focus();
           await expect(dryRun).toBeFocused();
           await dryRun.press('Enter');
-          const commit = page.getByRole('button', { name: 'Commit opening stock', exact: true });
+          const commit = page.getByRole('button', { name: 'Save opening stock', exact: true });
           await expect(commit).toBeDisabled();
-          await expect(page.getByText('Commit blocked', { exact: true })).toBeVisible();
+          await expect(page.getByText('Fix errors before saving', { exact: true })).toBeVisible();
           await expect(page.getByRole('checkbox')).toBeDisabled();
-          await page.getByRole('heading', { name: '3. Review the opening-stock diff' }).scrollIntoViewIfNeeded();
+          await page.getByRole('heading', { name: '3. Review and save' }).scrollIntoViewIfNeeded();
           expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1), name).toBe(false);
           await page.screenshot({ path: path.join(output, `${name}-blocked-review.png`), fullPage: true });
         }

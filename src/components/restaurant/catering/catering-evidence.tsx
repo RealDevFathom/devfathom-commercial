@@ -12,6 +12,7 @@ import { browserUuid } from '@/lib/browser-uuid';
 import type { CateringMoneyInput } from '@/lib/restaurant/catering-money';
 import { isDefinitiveMutationFailure } from '../pos/use-terminal-session';
 import { CateringTerminalContext, type CateringTerminal } from './catering-terminal-boundary';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 type Disposition = inferRouterInputs<AppRouter>['restaurantCatering']['recordDisposition'];
 const control =
@@ -184,7 +185,7 @@ export function CateringEvidence({
             {approvals.data.map((approval) => (
               <li className="break-words" key={approval.id}>
                 Order revision {approval.orderRevision} · Quote reference:{' '}
-                {approval.quoteRevisionId} · {new Date(approval.createdAt).toISOString()}
+                {approval.quoteRevisionId} · {formatDisplayDateTime(approval.createdAt)}
                 <p className="text-sm">
                   Approver name unavailable · Staff reference: {approval.actorStaffProfileId}
                 </p>
@@ -243,7 +244,7 @@ export function CateringEvidence({
                       {source.dispositions.map((entry) => (
                         <li key={entry.id}>
                           {entry.kind} · {entry.quantity} {source.canonicalUnit.name} ·{' '}
-                          {entry.reason} · {new Date(entry.createdAt).toISOString()} · Staff
+                          {entry.reason} · {formatDisplayDateTime(entry.createdAt)} · Staff
                           reference: {entry.actorStaffProfileId}
                         </li>
                       ))}

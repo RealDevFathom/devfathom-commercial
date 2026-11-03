@@ -17,6 +17,7 @@ import { CounterDuplicateSaltAcknowledge } from './counter-duplicate-salt-acknow
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import type { CounterPatientPanel } from '@/lib/pharmacy/counter-prescriptions';
 import { formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
+import { prescriptionCustodyLabel } from './counter-display';
 import type { RxOcrPrefill } from '@/lib/pharmacy/rx-ocr';
 import { trpc } from '@/lib/trpc';
 
@@ -389,7 +390,7 @@ function CounterRxPhotoCapture({
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="counter-rx-presentation">Presentation</Label>
+                <Label htmlFor="counter-rx-presentation">Strength / form</Label>
                 <select
                   id="counter-rx-presentation"
                   required
@@ -399,7 +400,7 @@ function CounterRxPhotoCapture({
                   className={selectClass}
                 >
                   <option value="" disabled>
-                    Select presentation
+                    Select strength / form
                   </option>
                   {medicine?.presentations.map((item) => (
                     <option key={item.id} value={item.id}>
@@ -409,7 +410,7 @@ function CounterRxPhotoCapture({
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="counter-rx-quantity">Authorized units</Label>
+                <Label htmlFor="counter-rx-quantity">Quantity prescribed</Label>
                 <Input
                   id="counter-rx-quantity"
                   name="quantity"
@@ -420,15 +421,15 @@ function CounterRxPhotoCapture({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="counter-rx-custody">Original custody</Label>
+                <Label htmlFor="counter-rx-custody">Original prescription kept?</Label>
                 <select
                   id="counter-rx-custody"
                   name="custodyState"
                   defaultValue="NOT_HELD"
                   className={selectClass}
                 >
-                  <option value="NOT_HELD">Returned / not held</option>
-                  <option value="HELD_AT_PHARMACY">Held at pharmacy</option>
+                  <option value="NOT_HELD">No, the patient kept it</option>
+                  <option value="HELD_AT_PHARMACY">Yes, we kept it at the pharmacy</option>
                 </select>
               </div>
             </div>
@@ -872,9 +873,10 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 )}
                 <p className="text-xs text-text-muted">
                   {onCapturePrescription
-                    ? `Capture evidence for ${patient.displayName}.`
-                    : `Opens capture for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
-                  Capture does not replace pharmacist review or dispensing consent.
+                    ? `Record a prescription for ${patient.displayName}.`
+                    : `Opens the prescription form for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
+                  A pharmacist still needs to review it, and the patient still needs to agree to
+                  dispensing.
                 </p>
                 <CounterRxPhotoCapture
                   key={patient.patientId}
@@ -913,8 +915,9 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                       </div>
                       <p className="font-mono text-xs text-text-muted">
                         {formatReceiptDate(prescription.validFrom)} →{' '}
-                        {formatReceiptDate(prescription.validUntil)} · repeats{' '}
-                        {prescription.authorizedRepeats} · {prescription.custodyState.toLowerCase()}
+                        {formatReceiptDate(prescription.validUntil)} · refills{' '}
+                        {prescription.authorizedRepeats} ·{' '}
+                        {prescriptionCustodyLabel(prescription.custodyState).toLowerCase()}
                       </p>
                       <ul className="mt-2 space-y-1">
                         {prescription.lines.map((line) => (

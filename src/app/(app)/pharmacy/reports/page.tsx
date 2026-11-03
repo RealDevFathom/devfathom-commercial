@@ -16,6 +16,13 @@ import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
+import {
+  formatReportDateTime,
+  formatReportPeriod,
+  formatReportWindow,
+  metricDescription,
+  reportScopeLabel,
+} from './report-format';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -79,11 +86,11 @@ export default async function PharmacyReportsPage({
         <PageHeader
           eyebrow="Pharmacy operations"
           heading="Reports"
-          description="Bounded, permission-scoped command centre and report catalog."
+          description="Sales, stock, expiry and supplier reports for your pharmacy."
         />
         <ReportNotice
           title="Reports unavailable"
-          detail="Your pharmacy reports permission or license is not available. Contact your workspace administrator."
+          detail="You don't have access to reports. Ask the pharmacy owner to give you access."
         />
       </main>
     );
@@ -98,6 +105,7 @@ export default async function PharmacyReportsPage({
     const amount = formatMinor(minor).replace(/\B(?=(\d{3})+\.)/g, ',');
     return currency ? `${currency} ${amount}` : `${amount} (currency unknown)`;
   };
+  const timeZone = ctx.organization?.timezone;
   const today = new Date().toISOString().slice(0, 10);
   const fromDate = new Date(`${today}T00:00:00.000Z`);
   fromDate.setUTCDate(fromDate.getUTCDate() - 6);
@@ -295,7 +303,7 @@ export default async function PharmacyReportsPage({
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Reports"
-        description="Bounded, permission-scoped command centre and report catalog. Values are ledger-derived and freshness-labelled."
+        description="How your pharmacy is doing: sales, stock, expiry and supplier reports, worked out from your recorded sales and stock."
         actions={
           // The sub-reports are the page's secondary actions, so they sit in the
           // header's action slot as Studio controls rather than as bare links.
@@ -332,8 +340,12 @@ export default async function PharmacyReportsPage({
           </nav>
         }
       />
-      <SectionCard eyebrow="RPT-01 / RPT-02" title="Report filters" titleLevel={2}>
-        <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
+      <SectionCard title="Report filters" titleLevel={2}>
+        <form
+          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
+          method="get"
+          aria-describedby="report-filter-help"
+        >
           <label className="text-sm text-text-body">
             Branch
             <select
@@ -350,16 +362,31 @@ export default async function PharmacyReportsPage({
             </select>
           </label>
           <label className="text-sm text-text-body">
-            Supplier ID
-            <Input className="mt-1 min-h-11" defaultValue={supplier} name="supplier" />
+            Supplier
+            <Input
+              className="mt-1 min-h-11"
+              defaultValue={supplier}
+              name="supplier"
+              placeholder="Optional · leave blank for all suppliers"
+            />
           </label>
           <label className="text-sm text-text-body">
-            Ingredient ID
-            <Input className="mt-1 min-h-11" defaultValue={ingredient} name="ingredient" />
+            Ingredient
+            <Input
+              className="mt-1 min-h-11"
+              defaultValue={ingredient}
+              name="ingredient"
+              placeholder="Optional · leave blank for all ingredients"
+            />
           </label>
           <label className="text-sm text-text-body">
-            Batch ID
-            <Input className="mt-1 min-h-11" defaultValue={batch} name="batch" />
+            Batch
+            <Input
+              className="mt-1 min-h-11"
+              defaultValue={batch}
+              name="batch"
+              placeholder="Optional · leave blank for all batches"
+            />
           </label>
           <label className="text-sm text-text-body">
             From
@@ -388,6 +415,13 @@ export default async function PharmacyReportsPage({
           <Button className="min-h-11 self-end" type="submit">
             Apply filters
           </Button>
+          <p
+            id="report-filter-help"
+            className="text-sm text-text-muted sm:col-span-2 xl:col-span-4"
+          >
+            Supplier, ingredient and batch are optional; leave them blank to see everything. They
+            only narrow the unusual-activity checks below.
+          </p>
         </form>
       </SectionCard>
       <MarketingSummary
@@ -408,13 +442,14 @@ export default async function PharmacyReportsPage({
             read={caller.dailyWorkPack}
             filters={{ ...(branch ? { branchId: branch } : {}), from, to }}
             branches={branchResult.branches}
+            timeZone={timeZone}
             refreshFields={Object.fromEntries(returnQuery)}
           />
         </Suspense>
       ) : (
         <ReportNotice
           title="Daily work pack unavailable"
-          detail="Select an available branch scope and a valid, unambiguous date range. No work-pack sources were queried."
+          detail="Choose a branch you can access and a valid date range to see the daily work pack."
         />
       )}
       {invalidRange ? (
@@ -433,34 +468,28 @@ export default async function PharmacyReportsPage({
               status={result.freshness.status === 'CURRENT' ? 'Current' : result.freshness.status}
               tone={result.freshness.status === 'CURRENT' ? 'success' : 'warning'}
             />
-            <span>As of {new Date(result.freshness.asOf).toLocaleString()}</span>
-            <span>Source: {result.freshness.source}</span>
+            <span>Updated {formatReportDateTime(result.freshness.asOf, timeZone)}</span>
           </div>
           <SectionCard
-            eyebrow="Owner command centre"
+            eyebrow="Owner overview"
             title="Selected period at a glance"
             titleLevel={2}
           >
-            <p className="mb-4 text-sm text-text-muted">
-              Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
-              {branch
-                ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
-                : 'All available branches'}
-              .{' '}
-              {currency
-                ? `Currency basis: current organization setting (${currency}); historical transaction currency is not verified.`
-                : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
-              Amounts use the pharmacy minor-unit scale, shown to two decimal places. — means
-              unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the
-              selected period. Stock signals, recommended orders and expiry exposure are current
-              snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross
-              margin uses the same exact posted journal as Finance, including returns and reversals,
-              on UTC posting dates (start inclusive, next-day end exclusive). It may differ from
-              sales grouped by business date. Missing journal evidence is unavailable; posted totals
-              do not establish complete source or cost coverage. Supplier, ingredient and batch
-              filters do not apply to these KPI totals, the daily work pack or observed demand.
-              Those panels use branch/date scope only; current snapshots use branch scope only.
-            </p>
+            <div className="mb-4 space-y-2 text-sm text-text-muted">
+              <p>
+                {formatReportPeriod(from, to)} ·{' '}
+                {branch
+                  ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
+                  : 'All available branches'}
+                {currency ? null : ' · Currency not set for this business'}
+              </p>
+              <p>
+                Sales, gross margin, cash, cash variance and refunds cover the selected dates. Stock
+                alerts, recommended orders and expiry value show stock as it is now; expiry value is
+                stock at risk, not a loss yet. Gross margin matches Finance, so it can differ from
+                sales, and it is not cash in hand. A dash (—) means no data, not zero.
+              </p>
+            </div>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               {cards.map(([label, figure]) => (
                 <Stat
@@ -469,11 +498,7 @@ export default async function PharmacyReportsPage({
                   value={figure}
                   className="min-w-0"
                   valueClassName="break-words"
-                  sub={
-                    branch
-                      ? 'Selected branch · ledger source'
-                      : 'All available branches · ledger source'
-                  }
+                  sub={branch ? 'Selected branch' : 'All available branches'}
                 />
               ))}
             </div>
@@ -481,19 +506,17 @@ export default async function PharmacyReportsPage({
               <Stat
                 label="Organization-wide safety queue"
                 value={metrics?.safetyQueue ?? '—'}
-                sub="Current snapshot · organization-wide"
+                sub="As of now · all branches"
               />
               <p className="mt-2 text-sm text-text-muted">
-                The selected branch does not apply to this queue. Date, supplier, ingredient and
-                batch filters do not apply either. Unsigned pharmacist review items plus open
-                controlled-register incidents, from pharmacist review and controlled-register
-                records at read time.
+                Pharmacist reviews waiting for sign-off, plus open controlled-drug incidents, across
+                all branches. Filters do not change this number.
               </p>
             </div>
           </SectionCard>
           {expiryAdvice ? (
             <SectionCard
-              eyebrow="AI-02 · Advisory only"
+              eyebrow="Suggestions only"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
             >
@@ -578,18 +601,18 @@ export default async function PharmacyReportsPage({
             </SectionCard>
           ) : (
             <SectionCard
-              eyebrow="AI-02 · Owner only"
+              eyebrow="Owner only"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
             >
               <p className="text-sm text-text-muted">
-                Financial report and owner permissions are required to view value-at-risk advice.
+                Only an owner with finance access can see this advice.
               </p>
             </SectionCard>
           )}
           {anomalies ? (
             <SectionCard
-              eyebrow="AI-04 / RPT-03 · Review only"
+              eyebrow="Review only"
               title="Anomaly review signals"
               titleLevel={2}
               actions={
@@ -601,9 +624,9 @@ export default async function PharmacyReportsPage({
               }
             >
               <p className="max-w-3xl text-sm leading-6 text-text-muted">
-                Deterministic event checks only. Signals never rank staff, imply misconduct, or
-                create orders, stock movements, price changes, or finance postings. A human opens
-                and reviews the source evidence.
+                Rule-based checks only. Signals never rank staff, imply misconduct, or create
+                orders, stock movements, price changes, or finance postings. A person reviews each
+                one.
               </p>
               {anomalyMessage === 'saved' ? (
                 <p className="mt-3 text-sm text-success" role="status">
@@ -658,10 +681,14 @@ export default async function PharmacyReportsPage({
                             ))}
                           </dl>
                           <p className="mt-3 text-xs leading-5 text-text-muted">
-                            Window {new Date(signal.dataWindowStart).toLocaleString()}–
-                            {new Date(signal.dataWindowEnd).toLocaleString()} · source observed{' '}
-                            {new Date(signal.sourceObservedAt).toLocaleString()} · policy{' '}
-                            {signal.policyVersion}
+                            Covers{' '}
+                            {formatReportWindow(
+                              signal.dataWindowStart,
+                              signal.dataWindowEnd,
+                              timeZone
+                            )}{' '}
+                            · data seen {formatReportDateTime(signal.sourceObservedAt, timeZone)} ·
+                            rule version {signal.policyVersion}
                           </p>
                           <div className="mt-3 flex flex-wrap gap-3 text-xs">
                             {scope.userId ? (
@@ -774,25 +801,25 @@ export default async function PharmacyReportsPage({
                 </ol>
               ) : (
                 <p className="mt-5 text-sm text-text-muted">
-                  No anomaly signals match these filters. Refresh to evaluate the current ledger
-                  window; no operational data will be changed.
+                  Nothing unusual found for these filters. Refresh to check again; this does not
+                  change any data.
                 </p>
               )}
             </SectionCard>
           ) : (
             <SectionCard
-              eyebrow="AI-04 / RPT-03 · Owner only"
+              eyebrow="Owner only"
               title="Anomaly review signals"
               titleLevel={2}
             >
               <p className="text-sm text-text-muted">
-                Financial report and owner permissions are required to view anomaly evidence.
+                Only an owner with finance access can see these signals.
               </p>
             </SectionCard>
           )}
           {authenticationFlags ? (
             <SectionCard
-              eyebrow="SAFE-05 · Advisory"
+              eyebrow="Advisory"
               title="Pack authentication flags"
               titleLevel={2}
             >
@@ -876,7 +903,8 @@ export default async function PharmacyReportsPage({
                 >
                   <h3 className="font-medium text-text-strong">{report.label}</h3>
                   <p className="mt-2 text-sm text-text-muted">
-                    {report.metrics.length} metric contracts · filters: {report.filters.join(', ')}
+                    {report.metrics.length} reports ·
+                    filter by {report.filters.join(', ')}
                   </p>
                   <div className="mt-4 space-y-3">
                     {report.metrics.map((metricKey) => {
@@ -893,24 +921,16 @@ export default async function PharmacyReportsPage({
                               : contract.label.replace(/^Today's /, 'Selected-period ')}
                           </h4>
                           <p className="mt-1 text-xs leading-5 text-text-muted">
-                            {contract.definition}
+                            {metricDescription(metricKey, contract.definition)}
                           </p>
-                          <dl className="mt-2 grid gap-1 font-mono text-[11px] text-text-body">
-                            <div>
-                              <dt className="inline font-semibold">Source: </dt>
-                              <dd className="inline">{contract.source ?? 'Not available'}</dd>
-                            </div>
+                          <dl className="mt-2 text-xs text-text-body">
                             <div>
                               <dt className="inline font-semibold">Scope: </dt>
                               <dd className="inline">
                                 {metricKey === 'safetyQueue'
-                                  ? 'Organization-wide at read time; selected branch does not apply'
-                                  : contract.scope}
+                                  ? 'All branches, as of now'
+                                  : reportScopeLabel(contract.scope)}
                               </dd>
-                            </div>
-                            <div>
-                              <dt className="inline font-semibold">Permission: </dt>
-                              <dd className="inline">{contract.permission}</dd>
                             </div>
                           </dl>
                           {contract.drillThrough ? (
@@ -918,11 +938,11 @@ export default async function PharmacyReportsPage({
                               className="mt-2 inline-flex text-sm font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               href={contract.drillThrough}
                             >
-                              Drill through
+                              Open details
                             </Link>
                           ) : (
                             <p className="mt-2 text-xs text-text-muted">
-                              Drill-through unavailable
+                              No detail page
                             </p>
                           )}
                         </article>
@@ -936,13 +956,13 @@ export default async function PharmacyReportsPage({
           {digest ? (
             <>
               <SectionCard
-                eyebrow="RPT-03 · Scheduled delivery"
+                eyebrow="Scheduled"
                 title="Daily owner digest"
                 titleLevel={2}
               >
                 <p className="text-sm text-text-muted">
-                  Opt in per branch. Times use your workspace timezone. Capture history is always
-                  stored; WhatsApp remains disabled until a provider integration is implemented.
+                  Turn on a daily summary for each branch. Times use your workspace time zone. Past
+                  summaries are kept below. WhatsApp sending is not available yet.
                 </p>
                 {digestMessage === 'saved' ? (
                   <p className="mt-3 text-sm text-success" role="status">
@@ -1000,8 +1020,8 @@ export default async function PharmacyReportsPage({
                   </div>
                   <p className="mt-2 text-sm text-text-muted">
                     {digest.channels.whatsapp.configured
-                      ? 'Provider credentials detected, but this P0-lite stub never sends messages.'
-                      : 'No provider configuration detected. No messages are sent.'}
+                      ? 'WhatsApp details are saved, but sending is not switched on. No messages are sent.'
+                      : 'WhatsApp is not set up. No messages are sent.'}
                   </p>
                 </div>
               </SectionCard>
@@ -1034,10 +1054,10 @@ export default async function PharmacyReportsPage({
               </SectionCard>
             </>
           ) : (
-            <SectionCard eyebrow="RPT-03 · Owner only" title="Daily owner digest" titleLevel={2}>
+            <SectionCard eyebrow="Owner only" title="Daily owner digest" titleLevel={2}>
               <p className="text-sm text-text-muted">
-                Digest settings and history require owner permission. Reports remain available on
-                demand.
+                Only the owner can set up the daily digest. You can still open reports here at any
+                time.
               </p>
             </SectionCard>
           )}
@@ -1045,7 +1065,7 @@ export default async function PharmacyReportsPage({
       ) : branchResult.branches.length === 0 ? (
         <ReportNotice
           title="No reportable branches"
-          detail="An active pharmacy branch is required before reports can be shown. Ask your workspace administrator to activate one."
+          detail="Reports appear once you have an active pharmacy branch. Ask the pharmacy owner to set one up."
         />
       ) : null}
     </main>

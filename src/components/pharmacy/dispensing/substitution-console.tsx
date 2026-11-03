@@ -21,14 +21,14 @@ export function SubstitutionConsole() {
       prescribedPresentationId: item.line.presentationId,
       ...value,
     });
-    setNotice('Substitution evidence recorded.');
+    setNotice('Substitution recorded.');
   }
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Pharmacy · RX-04"
+        eyebrow="Pharmacy"
         heading="Substitution"
-        description="Make prescribed-versus-supplied differences visible and record the patient conversation."
+        description="When you give a different strength, form or brand than prescribed, record what changed and what you told the patient."
       />
       {workspace.isLoading ? (
         <WorkspaceState title="Loading eligible lines">
@@ -77,8 +77,8 @@ export function SubstitutionConsole() {
             />
           ) : (
             <WorkspaceState title="Choose a prescription line">
-              The supplied presentation and evidence fields will appear here. No substitution can be
-              saved silently.
+              Pick a prescription line above to record what you are giving instead. Every
+              substitution must be recorded here.
             </WorkspaceState>
           )}
           {mutation.error ? (

@@ -119,7 +119,8 @@ export const COUNTER_KEYMAP_PRESETS: Readonly<Record<CounterKeymapPresetKey, Cou
     devfathom: {
       key: 'devfathom',
       label: 'DevFathom counter',
-      description: 'F2–F10 follow the bill in workflow order; exceptions sit on Shift+F2–F4.',
+      description:
+        'F2 to F10 follow the steps of a sale in order. Less common actions use Shift with F2 to F4.',
       confirmed: true,
       phaseZeroDecision: null,
       bindings: DEVFATHOM_BINDINGS,
@@ -146,7 +147,7 @@ export const COUNTER_ACTION_LABELS: Readonly<Record<CounterAction, string>> = {
   openTender: 'Open tender',
   printReceipt: 'Print receipt',
   focusPrescriptionPanel: 'Focus prescription panel',
-  captureDemand: 'Capture unfulfilled demand',
+  captureDemand: 'Record unmet demand',
   voidSale: 'Void bill',
 };
 

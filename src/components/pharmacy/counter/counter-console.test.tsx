@@ -1767,3 +1767,37 @@ describe('PharmacyCounterConsole module boundaries', () => {
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
   });
 });
+
+describe('PharmacyCounterConsole plain-language add to cart', () => {
+  it('explains a disabled Add to cart and offers unmet demand for an out-of-stock medicine', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const add = screen.getByRole('button', { name: /Add to cart/ });
+    expect(add).toBeDisabled();
+    expect(
+      await screen.findByText('Select a medicine from the search results first.')
+    ).toBeInTheDocument();
+    expect(add).toHaveAttribute('aria-describedby', 'counter-add-to-cart-reason');
+
+    const { onSelect } = mocks.searchProps.mock.lastCall![0] as ComponentProps<
+      typeof CounterSearchResults
+    >;
+    act(() =>
+      onSelect(
+        barcodeRow({
+          onHandUnits: 0,
+          saleUnits: [],
+          batchNumber: null,
+          nearestSafeExpiry: null,
+          recommendedLotId: null,
+        })
+      )
+    );
+
+    expect(
+      await screen.findByText('Out of stock. Record it as unmet demand instead.')
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Quantity (units)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Record as unmet demand (1 unit)' })).toBeEnabled();
+    expect(screen.queryByText(/canonical|Capture shortfall/i)).toBeNull();
+  });
+});

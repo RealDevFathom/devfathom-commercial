@@ -6,6 +6,24 @@ import { Field, fieldClass } from './field';
 
 export type ReviewKind = 'VERIFY' | 'CLARIFY' | 'REFUSE' | 'OVERRIDE' | 'COUNSEL' | 'SIGN';
 
+const ACTION_LABEL: Record<ReviewKind, string> = {
+  VERIFY: 'Verify',
+  CLARIFY: 'Clarify',
+  REFUSE: 'Refuse',
+  OVERRIDE: 'Override',
+  COUNSEL: 'Counsel',
+  SIGN: 'Approve and release',
+};
+
+const CONFIRM_LABEL: Record<ReviewKind, string> = {
+  VERIFY: 'Confirm verify',
+  CLARIFY: 'Confirm clarify',
+  REFUSE: 'Confirm refuse',
+  OVERRIDE: 'Confirm override',
+  COUNSEL: 'Confirm counsel',
+  SIGN: 'Confirm approve and release',
+};
+
 export function QueueActions({
   canApprove,
   pending = false,
@@ -65,7 +83,7 @@ export function QueueActions({
         role="note"
         className="rounded-sm border border-warning/30 bg-warning/10 p-3 text-sm text-text-strong"
       >
-        Segregation of duties: the cashier who requested this review cannot approve or sign it.
+        You asked for this review, so another pharmacist must approve it.
       </p>
     );
   }
@@ -86,7 +104,7 @@ export function QueueActions({
               onDirtyChange?.(true);
             }}
           >
-            {kind[0] + kind.slice(1).toLowerCase()}
+            {ACTION_LABEL[kind]}
           </Button>
         ))}
       </div>
@@ -142,7 +160,7 @@ export function QueueActions({
           disabled={locked || (reasonRequired && !reason.trim()) || !counselReady}
           onClick={() => void confirm()}
         >
-          {pending || submitting ? 'Recording…' : `Confirm ${mode.toLowerCase()}`}
+          {pending || submitting ? 'Recording…' : CONFIRM_LABEL[mode]}
         </Button>
       ) : null}
       {error ? (
@@ -152,8 +170,8 @@ export function QueueActions({
       ) : null}
       {mode === 'OVERRIDE' ? (
         <p className="text-xs text-text-muted">
-          A second authorized signature remains required when the governing rule marks this override
-          dual-control.
+          Some overrides also need a second pharmacist to approve them. If so, it stays in the queue
+          until they do.
         </p>
       ) : null}
     </div>

@@ -2,7 +2,9 @@
 
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterSearchRow } from '@/lib/pharmacy/counter';
-import { formatMinor, formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
+import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+
+import { counterSearchStockText } from './counter-display';
 
 export type CounterSearchResultsProps = {
   rows: readonly CounterSearchRow[];
@@ -24,14 +26,6 @@ const LOCATION_LABEL: Record<string, string> = {
   QUARANTINE: 'Quarantine',
   TRANSIT: 'Transit',
   RETURNS: 'Returns',
-};
-
-const MATCH_LABEL: Record<CounterSearchRow['matchedOn'], string> = {
-  BARCODE: 'Barcode',
-  ALIAS: 'Alias',
-  NAME: 'Name',
-  INGREDIENT: 'Ingredient',
-  PRESENTATION: 'Form',
 };
 
 /**
@@ -93,7 +87,7 @@ export function CounterSearchResults({
             onClick={onCaptureDemand}
             className="inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           >
-            Capture as unfulfilled demand
+            Record as unmet demand
           </button>
         </div>
       </div>
@@ -110,7 +104,7 @@ export function CounterSearchResults({
           onClick={onCaptureDemand}
           className="inline-flex h-11 items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         >
-          Capture as unfulfilled demand
+          Record as unmet demand
         </button>
       </div>
     );
@@ -154,8 +148,7 @@ export function CounterSearchResults({
             ? 'Over the counter'
             : null,
           location,
-          !sellable ? 'Not sellable' : null,
-        ].filter(Boolean);
+        ].filter((note): note is string => Boolean(note));
         return (
           <li key={row.medicineId}>
             <button
@@ -179,13 +172,15 @@ export function CounterSearchResults({
                 {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
               </span>
               <span className="col-span-2 truncate text-xs text-text-muted">
-                {row.presentation}
-                {row.dosageForm ? ` · ${row.dosageForm}` : ''}
-                {` · Batch ${row.batchNumber ?? '—'}`}
-                {` · Exp ${row.nearestSafeExpiry ? formatReceiptDate(row.nearestSafeExpiry) : '—'}`}
-                {` · ${row.onHandUnits} units`}
-                {notes.length ? ` · ${notes.join(' · ')}` : ''}
-                {` · ${MATCH_LABEL[row.matchedOn]}`}
+                {counterSearchStockText({
+                  presentation: row.presentation,
+                  dosageForm: row.dosageForm,
+                  batchNumber: row.batchNumber,
+                  nearestSafeExpiry: row.nearestSafeExpiry,
+                  onHandUnits: row.onHandUnits,
+                  sellable,
+                  notes,
+                })}
               </span>
               {safety.length > 0 ? (
                 <span className="col-span-2 flex flex-wrap gap-1">

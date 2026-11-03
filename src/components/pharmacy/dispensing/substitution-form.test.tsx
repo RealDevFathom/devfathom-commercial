@@ -14,19 +14,19 @@ describe('SubstitutionForm', () => {
     );
     const button = screen.getByRole('button', { name: 'Record substitution' });
     expect(button).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Supplied presentation'), {
+    fireEvent.change(screen.getByLabelText('Strength / form given instead'), {
       target: { value: 'replacement' },
     });
-    fireEvent.change(screen.getByLabelText('Equivalence basis'), {
+    fireEvent.change(screen.getByLabelText('Why it is equivalent'), {
       target: { value: 'Same active ingredient and strength' },
     });
-    fireEvent.change(screen.getByLabelText('Governing rule reference'), {
+    fireEvent.change(screen.getByLabelText('Rule or approval reference'), {
       target: { value: 'Rule 12' },
     });
-    fireEvent.change(screen.getByLabelText('Patient communication'), {
+    fireEvent.change(screen.getByLabelText('What you told the patient'), {
       target: { value: 'Alternate brand explained' },
     });
-    fireEvent.click(screen.getByLabelText('Patient communication was acknowledged'));
+    fireEvent.click(screen.getByLabelText('The patient confirmed they understood'));
     fireEvent.click(button);
     expect(submit).toHaveBeenCalledWith(
       expect.objectContaining({

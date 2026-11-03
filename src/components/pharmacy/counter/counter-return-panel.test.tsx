@@ -328,3 +328,24 @@ describe('controlled medicine returns', () => {
     expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
   });
 });
+describe('counter returns receipt lookup reason', () => {
+  it('says why Find receipt is disabled and clears the reason for a valid number', () => {
+    render(<ReturnForm {...props} />);
+    const find = screen.getByRole('button', { name: 'Find receipt' });
+    expect(find).toBeDisabled();
+    expect(screen.getByText('Enter a receipt number.')).toBeVisible();
+    expect(find).toHaveAttribute('aria-describedby', 'return-receipt-reason');
+
+    fireEvent.change(screen.getByLabelText('Receipt number'), { target: { value: '-0000' } });
+    expect(find).toBeDisabled();
+    expect(find).toHaveAttribute(
+      'title',
+      'Enter the receipt number as printed, for example 1042.'
+    );
+
+    fireEvent.change(screen.getByLabelText('Receipt number'), { target: { value: '12' } });
+    expect(find).toBeEnabled();
+    expect(find).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByText('Enter a receipt number.')).toBeNull();
+  });
+});

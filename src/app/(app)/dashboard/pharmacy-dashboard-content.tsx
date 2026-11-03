@@ -11,6 +11,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
+import { formatDisplayDateTime } from '@/lib/display-time';
 import { isModuleGranted } from '@/lib/module-catalog';
 import {
   PHARMACY_WIDGET_REGISTRY,
@@ -38,6 +39,17 @@ const formatMetric = (key: string, value: number | null) =>
     : key.toLowerCase().includes('minor')
       ? `PKR ${(value / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
       : value.toLocaleString();
+
+// Owner-facing name for the access a widget needs, instead of the raw permission key.
+const accessLabel = (permission: string) =>
+  permission === 'reports:financial' ? 'Financial figures' : 'Operations';
+
+const RESTRICTED_COPY =
+  'Your role does not include financial figures, so they are hidden here. Ask an administrator if you need them.';
+const restrictedCopy = (permission: string) =>
+  permission === 'reports:financial'
+    ? RESTRICTED_COPY
+    : 'Your role does not include these figures, so they are hidden here. Ask an administrator if you need them.';
 
 // Only reached when the metric catalog has not delivered a label for a key.
 // Reads the camelCase metric key as words rather than the raw, unspaced key the
@@ -84,7 +96,7 @@ function WidgetState({
         <StatusPill status={denied ? 'Restricted' : 'Unavailable'} tone="warning" />
         <p className="text-sm text-text-body">
           {denied
-            ? `${item.permission} is required. No protected values are shown.`
+            ? restrictedCopy(item.permission)
             : 'This widget could not load. Other dashboard tools remain available.'}
         </p>
         {!denied ? (
@@ -99,9 +111,7 @@ function WidgetState({
     return (
       <div role="status" className="space-y-3">
         <StatusPill status="Restricted" tone="warning" />
-        <p className="text-sm text-text-body">
-          reports:financial is required. No protected values are shown.
-        </p>
+        <p className="text-sm text-text-body">{RESTRICTED_COPY}</p>
       </div>
     );
   }
@@ -124,11 +134,7 @@ function WidgetState({
           key={item.metrics[index]}
           label={contract?.label ?? humanizeMetricKey(item.metrics[index]!)}
           value={formatMetric(item.metrics[index]!, value)}
-          sub={
-            value == null
-              ? 'Not available in this release'
-              : `Source: ${contract?.source ?? 'Not asserted'}`
-          }
+          sub={value == null ? 'Not tracked yet' : undefined}
         />
       ))}
     </div>
@@ -153,7 +159,7 @@ function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
       <PageHeader
         eyebrow="Pharmacy workspace"
         heading="Owner command centre"
-        description="Live operational signals with visible source, freshness and permission boundaries."
+        description="Today’s sales, stock and safety at a glance across your branches."
       />
       <SectionCard
         eyebrow="Pharmacy Reports"
@@ -234,7 +240,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
       <PageHeader
         eyebrow="Pharmacy workspace"
         heading="Owner command centre"
-        description="Live operational signals with visible source, freshness and permission boundaries."
+        description="Today’s sales, stock and safety at a glance across your branches."
         actions={
           <Button variant="outline" onClick={begin}>
             <Pencil aria-hidden />
@@ -265,9 +271,9 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
             ))}
           </select>
         </label>
-        <p className="mt-3 font-mono text-xs text-text-muted">
+        <p className="mt-3 text-xs text-text-muted">
           {command.data
-            ? `As of ${new Date(command.data.freshness.asOf).toLocaleString()} · ${command.data.freshness.source}`
+            ? `Updated ${formatDisplayDateTime(command.data.freshness.asOf)}`
             : branches.error
               ? 'Branches could not be loaded.'
               : branches.data?.branches.length === 0
@@ -390,7 +396,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                   className={cn('min-w-0', preference.span === 'wide' && 'lg:col-span-2')}
                 >
                   <SectionCard
-                    eyebrow={item.permission}
+                    eyebrow={accessLabel(item.permission)}
                     title={item.label}
                     titleLevel={2}
                     actions={

@@ -129,9 +129,19 @@ describe('daily Pharmacy work pack source composition', () => {
     }
     expect(
       pack.sources.every((source) =>
-        source.missingInputs.some((reason) => reason.includes('not an all-clear'))
+        source.missingInputs.some((reason) => reason.includes('Nothing to review.'))
       )
     ).toBe(true);
+    const json = JSON.stringify(pack);
+    for (const jargon of [
+      'reader caps',
+      'not an all-clear',
+      'Detector coverage',
+      'historical snapshot',
+      'Requested period is not applied',
+      'as-of',
+    ])
+      expect(json).not.toContain(jargon);
   });
 
   it('does not query or expose financial sources, amounts or metadata without permission', async () => {
@@ -198,7 +208,12 @@ describe('daily Pharmacy work pack source composition', () => {
       rowLimit: 200,
       evaluatedAsOf: null,
       window: { from: '2026-09-01T00:00:00.000Z', toExclusive: '2026-09-11T00:00:00.000Z' },
+      limitReached: false,
     });
+    // Below the cap the filtered list can still be incomplete, so the caveat stays.
+    expect(pack.sources.find((source) => source.kind === 'anomalies')!.missingInputs).toContain(
+      'Some records may be missing, because only the first 200 are read before filtering.'
+    );
   });
 
   it('surfaces the 200 cap and preserves safe source money, negative variance and unknown currency', async () => {
@@ -212,6 +227,9 @@ describe('daily Pharmacy work pack source composition', () => {
       limitReached: true,
       coverage: 'partial',
     });
+    expect(pack.sources.find((source) => source.kind === 'anomalies')!.missingInputs).toContain(
+      'Only the first 200 records were read; some may be missing.'
+    );
     expect(pack.completeness.status).toBe('partial');
     expect(allEvidence(pack)[0]).toMatchObject({
       observedAt: '2026-09-10T01:00:00.000Z',

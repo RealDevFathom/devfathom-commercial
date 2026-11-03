@@ -836,7 +836,7 @@ describe('goods-in scan and duplicate serial', () => {
     render(await ReceivingPage({ searchParams: params({ order: 'po-1', scan: payload }) }));
 
     const scan = screen.getByLabelText(/Scan or search/);
-    const queue = screen.getByRole('heading', { name: /Match exceptions/ });
+    const queue = screen.getByRole('heading', { name: /Delivery mismatches/ });
     expect(scan.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(scan).toHaveFocus();
     const line = screen.getByRole('group', { name: 'Amoxicillin 500mg' });

@@ -31,6 +31,7 @@ import {
   type CounterReceiptPresentationResult,
   type CounterReceiptSettlement,
 } from './counter-receipt-view';
+import { addToCartDisabledReason } from './counter-display';
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
@@ -78,6 +79,7 @@ import {
 } from '@/lib/pharmacy/counter-browser-print';
 import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 type Notice = {
   tone: 'success' | 'warning' | 'danger' | 'neutral';
@@ -698,6 +700,18 @@ function ScopedPharmacyCounterConsole({
     attempt !== null ||
     checkingOutcome;
   const lineCount = cart?.lines.length ?? 0;
+  const addToCartReason = addToCartDisabledReason({
+    busy,
+    row: activeRow
+      ? {
+          onHandUnits: activeRow.onHandUnits,
+          saleUnitCount: activeRow.saleUnits.length,
+          priced: activeRow.printedMrpMinor !== null && activeRow.unitsPerPack !== null,
+        }
+      : null,
+    unitSelected: selectedOption !== null,
+    preview,
+  });
 
   const refreshTenderBill = useCallback(
     async (resolution = tenderOutcome?.status) => {
@@ -891,13 +905,16 @@ function ScopedPharmacyCounterConsole({
       if (!selectionPreview.sufficient) {
         setNotice({
           tone: 'warning',
-          message: `Only ${selectionPreview.availableUnits} safe units are on hand. Reduce the quantity or capture the shortfall.`,
+          message: `Only ${selectionPreview.availableUnits} units are in stock. Lower the quantity, or record the rest as unmet demand.`,
         });
         return;
       }
       const overrideLotId = batchOverride?.inventoryLotId ?? null;
       if (overrideLotId && !batchOverride?.reason.trim()) {
-        setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
+        setNotice({
+          tone: 'warning',
+          message: 'Enter a reason before selling a batch that is not the earliest to expire.',
+        });
         return;
       }
       setPending('addToCart');
@@ -1159,7 +1176,7 @@ function ScopedPharmacyCounterConsole({
         pre.textContent = [
           'Family Khata statement',
           statement.account.displayName,
-          `As of ${statement.generatedAt.toISOString()}`,
+          `As of ${formatDisplayDateTime(statement.generatedAt)}`,
           `Balance PKR ${(statement.account.balanceMinor / 100).toFixed(2)}`,
           `Limit PKR ${(statement.account.creditLimitMinor / 100).toFixed(2)}`,
           statement.truncated
@@ -1167,7 +1184,7 @@ function ScopedPharmacyCounterConsole({
             : 'All ledger entries shown.',
           ...statement.entries.map(
             (row) =>
-              `${row.occurredAt.toISOString()}  ${row.kind}  PKR ${(row.amountMinor / 100).toFixed(2)}`
+              `${formatDisplayDateTime(row.occurredAt)}  ${row.kind}  PKR ${(row.amountMinor / 100).toFixed(2)}`
           ),
         ].join('\n');
         popup.document.body.replaceChildren(pre);
@@ -1417,12 +1434,18 @@ function ScopedPharmacyCounterConsole({
     if (busy || !branchAuthorized) return;
     const requested = activeRow?.displayName ?? query.trim();
     if (!requested) {
-      setNotice({ tone: 'warning', message: 'Search for the medicine first, then capture it.' });
+      setNotice({
+        tone: 'warning',
+        message: 'Search for the medicine first, then record it as unmet demand.',
+      });
       return;
     }
     const capturedUnits = activeRow ? shortfallUnits : quantity;
     if (!Number.isSafeInteger(capturedUnits) || capturedUnits <= 0) {
-      setNotice({ tone: 'warning', message: 'There is no stock shortfall to capture.' });
+      setNotice({
+        tone: 'warning',
+        message: 'There is enough stock, so there is no unmet demand to record.',
+      });
       return;
     }
     setPending('captureDemand');
@@ -1450,7 +1473,7 @@ function ScopedPharmacyCounterConsole({
       });
       setNotice({
         tone: 'success',
-        message: `Captured ${capturedUnits} canonical units of unfulfilled demand for ${requested}.`,
+        message: `Recorded unmet demand for ${capturedUnits} units of ${requested}.`,
       });
       focusSearch();
     } catch (error) {
@@ -1531,7 +1554,7 @@ function ScopedPharmacyCounterConsole({
       setNotice({
         tone: 'success',
         message:
-          'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
+          'Print window opened. Choose the right paper size and printer, then check the receipt printed.',
       });
     } catch (error) {
       setNotice({ tone: 'danger', message: messageFrom(error) });
@@ -1884,7 +1907,7 @@ function ScopedPharmacyCounterConsole({
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
         <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">
-          <SectionCard compact eyebrow="POS-02" title="Scan and search">
+          <SectionCard compact title="Scan and search">
             <div className="space-y-2">
               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                 <div className="space-y-1.5">
@@ -1986,7 +2009,7 @@ function ScopedPharmacyCounterConsole({
           </SectionCard>
 
           {substituteInput ? (
-            <SectionCard compact eyebrow="AI-05 · RX-04" title="Exact substitute suggestions">
+            <SectionCard compact title="Exact substitute suggestions">
               <CounterSubstituteProposals
                 proposals={substitutesQuery.data ?? []}
                 state={
@@ -2031,19 +2054,30 @@ function ScopedPharmacyCounterConsole({
 
           <SectionCard
             compact
-            eyebrow="POS-03"
             title="Sale unit and quantity"
             actions={
-              <Button
-                type="button"
-                className="h-9 shadow-none hover:translate-y-0 active:translate-y-0"
-                disabled={busy || !activeRow || !preview?.sufficient}
-                onClick={() => void addToCart()}
-              >
-                {pending === 'addToCart'
-                  ? 'Adding…'
-                  : `Add to cart (${formatBinding(keymap.bindings.addToCart)})`}
-              </Button>
+              <div className="flex flex-col items-end gap-1">
+                <Button
+                  type="button"
+                  className="h-9 shadow-none hover:translate-y-0 active:translate-y-0"
+                  disabled={busy || !activeRow || !preview?.sufficient}
+                  title={addToCartReason ?? undefined}
+                  aria-describedby={addToCartReason ? 'counter-add-to-cart-reason' : undefined}
+                  onClick={() => void addToCart()}
+                >
+                  {pending === 'addToCart'
+                    ? 'Adding…'
+                    : `Add to cart (${formatBinding(keymap.bindings.addToCart)})`}
+                </Button>
+                {addToCartReason ? (
+                  <p
+                    id="counter-add-to-cart-reason"
+                    className="max-w-64 text-right text-xs text-text-muted"
+                  >
+                    {addToCartReason}
+                  </p>
+                ) : null}
+              </div>
             }
           >
             {activeRow ? (
@@ -2057,10 +2091,11 @@ function ScopedPharmacyCounterConsole({
                   onSelect={setSaleUnit}
                   onQuantityChange={setQuantity}
                   chordFor={chordFor}
+                  onHandUnits={activeRow.onHandUnits}
                 />
                 {activeRow.saleUnits.length === 0 ? (
                   <div className="space-y-1.5">
-                    <Label htmlFor="counter-demand-units">Requested canonical units</Label>
+                    <Label htmlFor="counter-demand-units">Quantity (units)</Label>
                     <Input
                       id="counter-demand-units"
                       type="number"
@@ -2085,8 +2120,10 @@ function ScopedPharmacyCounterConsole({
                     onClick={() => void captureShortfall()}
                   >
                     {pending === 'captureDemand'
-                      ? 'Capturing…'
-                      : `Capture shortfall: ${shortfallUnits} canonical units`}
+                      ? 'Recording…'
+                      : `Record as unmet demand (${shortfallUnits} ${
+                          shortfallUnits === 1 ? 'unit' : 'units'
+                        })`}
                   </Button>
                 ) : null}
                 <CounterLotOverride
@@ -2107,12 +2144,12 @@ function ScopedPharmacyCounterConsole({
               </div>
             ) : (
               <p className="text-sm text-text-muted">
-                Select a search result to choose its sale unit.
+                Pack, strip or unit and the quantity appear here once you pick a medicine.
               </p>
             )}
           </SectionCard>
 
-          <SectionCard compact eyebrow="POS-01" title="Workflow map">
+          <SectionCard compact title="Keyboard shortcuts">
             <CounterKeymapLegend
               keymap={keymap}
               saving={saveKeymap.isPending}
@@ -2128,8 +2165,7 @@ function ScopedPharmacyCounterConsole({
           <SectionCard
             compact
             className="min-h-0 flex-1 overflow-y-auto"
-            eyebrow="POS-03"
-            title="Cart and FEFO allocation"
+            title="Cart"
             actions={
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -2169,7 +2205,7 @@ function ScopedPharmacyCounterConsole({
             />
           </SectionCard>
 
-          <SectionCard compact className="shrink-0" eyebrow="POS-05" title="Tender">
+          <SectionCard compact className="shrink-0" title="Payment">
             <div className="mb-4 space-y-1">
               <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
                 <input
@@ -2185,8 +2221,8 @@ function ScopedPharmacyCounterConsole({
                 Automatically open print dialog after payment
               </Label>
               <p id="counter-auto-print-help" className="text-xs text-text-muted">
-                This counter session only. Requires a newly settled bill and issued receipt.
-                Physical printing is not confirmed.
+                Stays on until you reload this page. Opens the print window after each newly paid
+                bill. Check that the receipt actually printed.
               </p>
             </div>
             {branchesQuery.data?.paymentSandboxAvailable && saleId ? (
@@ -2246,7 +2282,6 @@ function ScopedPharmacyCounterConsole({
           <SectionCard
             compact
             className="min-h-0 max-h-24 shrink overflow-y-auto"
-            eyebrow="POS-08"
             title="Receipt"
           >
             <CounterReceiptView
@@ -2291,7 +2326,6 @@ function ScopedPharmacyCounterConsole({
         <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">
           <SectionCard
             compact
-            eyebrow="CRM-L01"
             title="Customer loyalty and khata"
             actions={
               <Button
@@ -2389,13 +2423,13 @@ function ScopedPharmacyCounterConsole({
               </div>
             ) : (
               <p className="text-sm text-text-muted">
-                Select a patient, open a bill, then link. Current loyalty consent is required.
+                Find the patient below and add an item to the bill, then link them. The patient must
+                have agreed to join the loyalty programme.
               </p>
             )}
           </SectionCard>
           <SectionCard
             compact
-            eyebrow="POS-09"
             title="Prescription and patient"
             actions={
               <kbd className="rounded-[3px] border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-strong">
