@@ -7,6 +7,7 @@ import { forecastPharmacyCashFlow } from '@/lib/pharmacy/cash-flow-forecast';
 import {
   grossMargin,
   grossMarginComparison,
+  landedProfit,
   leakageReport,
   marginComparisonPeriods,
   perpetualValuation,
@@ -230,6 +231,21 @@ export const pharmacyFinanceRouter = router({
         rows,
       };
     }),
+
+  landedProfit: ledgerReportProcedure.input(reportPeriod).query(async ({ ctx, input }) => {
+    const period = { from: new Date(input.from), to: new Date(input.to) };
+    const rows = await landedProfit(ctx.db, ctx.reportScope, period);
+    return {
+      ...ledgerMetadata(
+        ctx.reportScope,
+        'Posted revenue less discounts and exact landed lot COGS, grouped by item, product family, PKT hour and sale staff. Landed cost already includes receipt-level bonus quantity, allocated freight and non-recoverable tax. This is landed gross profit, not net profit or cash flow; unposted costs are unknown.'
+      ),
+      period: { ...period, bounds: '[from,to)' as const },
+      timeZone: 'Asia/Karachi' as const,
+      dimensions: ['item', 'category', 'hour', 'staff'] as const,
+      rows,
+    };
+  }),
 
   leakageReport: ledgerReportProcedure.input(reportPeriod).query(async ({ ctx, input }) => {
     const period = { from: new Date(input.from), to: new Date(input.to) };
@@ -465,17 +481,31 @@ export const pharmacyFinanceRouter = router({
 
   reconcile: bookkeepingProcedure
     .input(
-      z.object({ branchId: id, statementLineId: id, transactionId: id.optional(),
-        settlementBatchId: id.optional(), amountMinor: moneyMinor }).strict()
-        .refine((value) => Boolean(value.transactionId) !== Boolean(value.settlementBatchId),
-          'Choose exactly one posted transaction or POS settlement batch.')
+      z
+        .object({
+          branchId: id,
+          statementLineId: id,
+          transactionId: id.optional(),
+          settlementBatchId: id.optional(),
+          amountMinor: moneyMinor,
+        })
+        .strict()
+        .refine(
+          (value) => Boolean(value.transactionId) !== Boolean(value.settlementBatchId),
+          'Choose exactly one posted transaction or POS settlement batch.'
+        )
     )
     .mutation(async ({ ctx, input }) => {
       try {
         const scoped = await scope(ctx, input.branchId);
-        return await ctx.db.$transaction((tx) => input.settlementBatchId
-          ? reconcileSettlementBankLine(txDb(tx), scoped, { ...input, settlementBatchId: input.settlementBatchId })
-          : reconcileBankLine(txDb(tx), scoped, { ...input, transactionId: input.transactionId! }));
+        return await ctx.db.$transaction((tx) =>
+          input.settlementBatchId
+            ? reconcileSettlementBankLine(txDb(tx), scoped, {
+                ...input,
+                settlementBatchId: input.settlementBatchId,
+              })
+            : reconcileBankLine(txDb(tx), scoped, { ...input, transactionId: input.transactionId! })
+        );
       } catch (error) {
         fail(error);
       }

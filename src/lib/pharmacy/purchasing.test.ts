@@ -221,6 +221,23 @@ describe('PUR-03 landed cost', () => {
     listPricePerPackMinor: 10_000,
   };
 
+  it('spreads a 10+1 scheme over all eleven received packs', () => {
+    const paidMinor = 110_000;
+    const costed = landedCost({
+      lines: [
+        {
+          orderedPacks: 10,
+          bonusPacks: 1,
+          canonicalUnitsPerPack: 1,
+          listPricePerPackMinor: paidMinor / 10,
+        },
+      ],
+    });
+    expect(costed.canonicalUnits).toBe(11);
+    expect(costed.landedCostMinor).toBe(paidMinor);
+    expect(costed.lines[0]!.landedCostPerCanonicalUnitMicroMinor).toBe((paidMinor / 11) * MICRO);
+  });
+
   it('raises quantity and lowers unit cost for bonus units, leaving the money untouched', () => {
     const without = landedCost({ lines: [{ ...baseLine, bonusPacks: 0 }] });
     const with2Free = landedCost({ lines: [{ ...baseLine, bonusPacks: 2 }] });

@@ -3,8 +3,70 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   explainGrossMargin,
   grossMarginComparison,
+  landedProfit,
   marginComparisonPeriods,
 } from './finance-reports';
+
+describe('landed profit dimensions', () => {
+  it('reports item, category, PKT hour and staff fixtures from one posted-cost read', async () => {
+    const fixtures = [
+      {
+        dimension: 'item',
+        key: 'item_1',
+        revenueMinor: 1500,
+        discountMinor: 100,
+        cogsMinor: 900,
+        grossMarginMinor: 500,
+      },
+      {
+        dimension: 'category',
+        key: 'GENERAL',
+        revenueMinor: 1500,
+        discountMinor: 100,
+        cogsMinor: 900,
+        grossMarginMinor: 500,
+      },
+      {
+        dimension: 'hour',
+        key: '2026-09-01T18:00:00+05:00',
+        revenueMinor: 1500,
+        discountMinor: 100,
+        cogsMinor: 900,
+        grossMarginMinor: 500,
+      },
+      {
+        dimension: 'staff',
+        key: 'staff_1',
+        revenueMinor: 1500,
+        discountMinor: 100,
+        cogsMinor: 900,
+        grossMarginMinor: 500,
+      },
+    ];
+    const query = vi.fn().mockResolvedValue(fixtures);
+    const period = { from: new Date('2026-09-01T00:00:00Z'), to: new Date('2026-09-02T00:00:00Z') };
+    await expect(
+      landedProfit(
+        { $queryRaw: query } as unknown as ScopedDb,
+        { organizationId: 'org_1', branchId: 'branch_1' },
+        period
+      )
+    ).resolves.toEqual(fixtures);
+
+    const [statement] = query.mock.calls[0]!;
+    expect(statement.sql).toContain(`medicine."productFamily"::text`);
+    expect(statement.sql).toContain(
+      `date_trunc('hour', entry."occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Karachi')`
+    );
+    expect(statement.sql).toContain(`sale."createdByUserId"`);
+    expect(statement.sql).toContain(`'item'::text`);
+    expect(statement.sql).toContain(`'category'`);
+    expect(statement.sql).toContain(`'hour'`);
+    expect(statement.sql).toContain(`'staff'`);
+    expect(statement.sql).toContain(`'SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD'`);
+    expect(statement.values).toEqual(['org_1', period.from, period.to, 'branch_1']);
+  });
+});
 const row = (revenueMinor: number, discountMinor: number, cogsMinor: number) => ({
   key: 'branch_1',
   revenueMinor,
@@ -115,4 +177,41 @@ describe('gross-margin accounting comparison', () => {
       )
     ).rejects.toThrow('branch group');
   });
+});
+
+it('handles profit totals above the database Int range without losing minor units', async () => {
+  const rows = [
+    {
+      dimension: 'item',
+      key: 'item-a',
+      revenueMinor: BigInt('5000000000'),
+      discountMinor: BigInt('100000000'),
+      cogsMinor: BigInt('3000000000'),
+      grossMarginMinor: BigInt('1900000000'),
+    },
+  ];
+  const db = { $queryRaw: vi.fn().mockResolvedValue(rows) };
+  await expect(
+    landedProfit(
+      db as never,
+      { organizationId: 'org-a' },
+      { from: new Date('2026-11-01'), to: new Date('2026-11-02') }
+    )
+  ).resolves.toEqual([
+    {
+      ...rows[0],
+      revenueMinor: 5000000000,
+      discountMinor: 100000000,
+      cogsMinor: 3000000000,
+      grossMarginMinor: 1900000000,
+    },
+  ]);
+  rows[0]!.revenueMinor = BigInt('9007199254740992');
+  await expect(
+    landedProfit(
+      db as never,
+      { organizationId: 'org-a' },
+      { from: new Date('2026-11-01'), to: new Date('2026-11-02') }
+    )
+  ).rejects.toThrow('numeric range');
 });

@@ -99,6 +99,92 @@ export type MarginRow = {
   grossMarginMinor: number;
 };
 
+export type LandedProfitDimension = 'item' | 'category' | 'hour' | 'staff';
+
+export type LandedProfitRow = MarginRow & {
+  dimension: LandedProfitDimension;
+};
+
+/**
+ * DEV-77: landed-profit report over the canonical finance postings.
+ *
+ * This deliberately extends, rather than recalculates, FIN-03. Receipt posting
+ * has already spread discount, rebate, non-recoverable tax, freight and bonus
+ * quantity into the lot cost; the sale adapter then posts that exact lot cost
+ * to COGS. Reading the postings here therefore also handles mixed lots and
+ * return reversals without introducing a second costing implementation.
+ */
+export async function landedProfit(
+  db: ScopedDb,
+  scope: ReportScope,
+  input: { from: Date; to: Date }
+): Promise<LandedProfitRow[]> {
+  const rows = await db.$queryRaw<
+    Array<
+      Omit<LandedProfitRow, 'revenueMinor' | 'discountMinor' | 'cogsMinor' | 'grossMarginMinor'> & {
+        revenueMinor: bigint | number;
+        discountMinor: bigint | number;
+        cogsMinor: bigint | number;
+        grossMarginMinor: bigint | number;
+      }
+    >
+  >(landedProfitQuery(scope, input));
+  return rows.map((row) => {
+    const amounts = {
+      revenueMinor: Number(row.revenueMinor),
+      discountMinor: Number(row.discountMinor),
+      cogsMinor: Number(row.cogsMinor),
+      grossMarginMinor: Number(row.grossMarginMinor),
+    };
+    if (!Object.values(amounts).every(Number.isSafeInteger))
+      throw new Error('Profit totals exceed the supported numeric range.');
+    return { ...row, ...amounts };
+  });
+}
+
+export function landedProfitQuery(scope: JournalReportScope, input: { from: Date; to: Date }) {
+  return Prisma.sql`
+    WITH posted AS (
+      SELECT line."accountCode",
+             CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END AS "debitMinor",
+             line."productId" AS "itemKey",
+             medicine."productFamily"::text AS "categoryKey",
+             to_char(date_trunc('hour', entry."occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Karachi'), 'YYYY-MM-DD"T"HH24:00:00') || '+05:00' AS "hourKey",
+             sale."createdByUserId" AS "staffKey"
+        FROM "finance_journal_lines" line
+        JOIN "finance_journal_entries" entry
+          ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
+        LEFT JOIN "pharmacy_sale_lines" sale_line
+          ON sale_line."organizationId" = line."organizationId" AND sale_line."branchId" = line."branchId" AND sale_line."id" = line."sourceLineId"
+        LEFT JOIN "pharmacy_sales" sale
+          ON sale."organizationId" = sale_line."organizationId" AND sale."branchId" = sale_line."branchId" AND sale."id" = sale_line."saleId"
+        LEFT JOIN "pharmacy_medicines" medicine
+          ON medicine."organizationId" = line."organizationId" AND medicine."id" = line."productId"
+       WHERE line."organizationId" = ${scope.organizationId}
+         AND line."accountCode" IN ('SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD')
+         AND entry."occurredAt" >= ${input.from}
+         AND entry."occurredAt" < ${input.to}
+         ${branchFilter(scope)}
+    ), dimensions AS (
+      SELECT 'item'::text AS "dimension", "itemKey" AS "key", "accountCode", "debitMinor" FROM posted
+      UNION ALL
+      SELECT 'category', "categoryKey", "accountCode", "debitMinor" FROM posted
+      UNION ALL
+      SELECT 'hour', "hourKey", "accountCode", "debitMinor" FROM posted
+      UNION ALL
+      SELECT 'staff', "staffKey", "accountCode", "debitMinor" FROM posted
+    )
+    SELECT "dimension",
+           "key",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_REVENUE' THEN -"debitMinor" ELSE 0 END), 0)::bigint AS "revenueMinor",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_DISCOUNT' THEN "debitMinor" ELSE 0 END), 0)::bigint AS "discountMinor",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'COST_OF_GOODS_SOLD' THEN "debitMinor" ELSE 0 END), 0)::bigint AS "cogsMinor",
+           COALESCE(-SUM("debitMinor"), 0)::bigint AS "grossMarginMinor"
+      FROM dimensions
+     GROUP BY "dimension", "key"
+     ORDER BY "dimension", "key"`;
+}
+
 /**
  * FIN-03: gross margin by sale line, manufacturing batch, product or branch.
  *

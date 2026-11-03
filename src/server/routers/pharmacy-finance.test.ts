@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   comparison: vi.fn(),
   valuation: vi.fn(),
   margin: vi.fn(),
+  landedProfit: vi.fn(),
   leakage: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/finance-reports', async () => ({
@@ -21,6 +22,7 @@ vi.mock('@/lib/pharmacy/finance-reports', async () => ({
   grossMarginComparison: mocks.comparison,
   perpetualValuation: mocks.valuation,
   grossMargin: mocks.margin,
+  landedProfit: mocks.landedProfit,
   leakageReport: mocks.leakage,
 }));
 vi.mock('server-only', () => ({}));
@@ -96,6 +98,16 @@ beforeEach(() => {
   mocks.margin.mockResolvedValue([
     { key: null, revenueMinor: -100, discountMinor: -10, cogsMinor: -60, grossMarginMinor: -30 },
   ]);
+  mocks.landedProfit.mockResolvedValue([
+    {
+      dimension: 'item',
+      key: 'medicine_1',
+      revenueMinor: 100,
+      discountMinor: 10,
+      cogsMinor: 60,
+      grossMarginMinor: 30,
+    },
+  ]);
   mocks.leakage.mockResolvedValue([
     {
       branchId: 'branch_1',
@@ -139,6 +151,20 @@ const ledgerCases = [
       { to: '2026-12-02T00:00:00.001Z' },
       { by: 'arbitrary_sql' },
       { by: undefined },
+    ],
+  },
+  {
+    name: 'landedProfit',
+    reader: mocks.landedProfit,
+    input,
+    expectedReaderInput: { from: new Date(input.from), to: new Date(input.to) },
+    invoke: (api: FinanceCaller, value: unknown) =>
+      api.landedProfit(value as Parameters<FinanceCaller['landedProfit']>[0]),
+    invalid: [
+      { from: '2026-09-01' },
+      { to: input.from },
+      { to: '2026-08-31T00:00:00Z' },
+      { to: '2026-12-02T00:00:00.001Z' },
     ],
   },
   {
