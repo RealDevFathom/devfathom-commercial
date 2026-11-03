@@ -104,7 +104,7 @@ export function transferErrorMessage(action: TransferAction, error: unknown): st
     case 'COAUTH_REQUIRED':
       return action === 'approve'
         ? 'Approval needs a colleague other than the person who allocated this transfer.'
-        : 'A short receipt needs a reason, an evidence reference and a different active colleague as witness.';
+        : 'A short receipt needs a reason, an evidence reference, and the PIN of a different active colleague assigned to the sending branch.';
     case 'INSUFFICIENT_STOCK':
       return action === 'receive'
         ? 'The in-transit balance no longer covers this transfer. Refresh and review the ledger before receiving.'

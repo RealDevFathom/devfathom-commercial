@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/input';
 import { TransferActionForm, type TransferStepAction } from './transfer-action-form';
 import { transferReference, type TransferBoardRow } from './transfer-presentation';
 
-export type Witness = { id: string; name: string | null; title: string | null };
+export type Witness = { id: string; displayName: string };
 
 export const selectClass =
   'mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
@@ -59,23 +59,39 @@ export function TransferReceiveForm({
         <legend className="px-1 text-xs text-text-muted">
           Shortfall evidence — required only when a line arrived short
         </legend>
+        <p className="text-xs text-text-muted md:col-span-3">
+          A different active colleague assigned to the sending branch must enter their own PIN.
+          {!witnesses.length &&
+            ' No eligible witness is available; a complete receipt needs no witness.'}
+        </p>
         <label className="text-sm md:col-span-3">
           Variance reason
           <Input className="mt-1" maxLength={500} name="varianceReason" />
         </label>
         <label className="text-sm">
           Witness
-          <select className={selectClass} defaultValue="" name="witnessId">
+          <select className={selectClass} defaultValue="" name="staffProfileId">
             <option value="">No shortfall</option>
             {witnesses.map((witness) => (
               <option key={witness.id} value={witness.id}>
-                {witness.name ?? 'Unnamed colleague'}
-                {witness.title ? ` · ${witness.title}` : ''}
+                {witness.displayName}
               </option>
             ))}
           </select>
         </label>
-        <label className="text-sm md:col-span-2">
+        <label className="text-sm">
+          Witness PIN
+          <Input
+            autoComplete="off"
+            className="mt-1"
+            inputMode="numeric"
+            maxLength={8}
+            name="witnessPin"
+            pattern="[0-9]{4,8}"
+            type="password"
+          />
+        </label>
+        <label className="text-sm">
           Evidence reference
           <Input
             className="mt-1"

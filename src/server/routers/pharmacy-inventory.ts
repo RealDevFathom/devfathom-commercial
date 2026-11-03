@@ -9,6 +9,7 @@
  */
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { annotateAudit } from '@/server/audit';
 
 import { Prisma } from '@/generated/prisma/client';
 import { arrangementFor, PharmacyInventoryError } from '@/lib/pharmacy/inventory';
@@ -51,6 +52,7 @@ import {
 } from '@/lib/pharmacy/stock-ledger';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
+import { listInventoryWitnesses, authenticateInventoryWitness } from '@/lib/pharmacy/inventory-witness';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
   expiryRiskBuckets,
@@ -531,7 +533,14 @@ async function receiveTransferWithVariance(
     if (!evidence || evidence.witnessId === scope.actorId)
       throw new PharmacyInventoryError('COAUTH_REQUIRED');
     const witness = await db.user.findFirst({
-      where: { id: evidence.witnessId, organizationId: scope.organizationId, status: 'ACTIVE' },
+      where: {
+        id: evidence.witnessId,
+        organizationId: scope.organizationId,
+        status: 'ACTIVE',
+        pharmacyBranchAssignments: {
+          some: { organizationId: scope.organizationId, branchId: transfer.fromBranchId, active: true },
+        },
+      },
       select: { id: true },
     });
     if (!witness) throw new PharmacyInventoryError('COAUTH_REQUIRED');
@@ -1049,7 +1058,8 @@ export const pharmacyInventoryRouter = router({
           inventoryLotId: z.string().min(1),
           stockLocationId: z.string().min(1),
           units: z.number().int().positive(),
-          witnessId: z.string().trim().min(1),
+          staffProfileId: z.string().trim().min(1).max(200),
+          pin: z.string().regex(/^\d{4,8}$/),
           reason: z.string().trim().min(1).max(500),
           evidenceRef: z.string().trim().min(1).max(500),
           idempotencyKey: z.string().trim().min(1).max(200),
@@ -1059,10 +1069,26 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await scopeFor(ctx, input.branchId);
+        annotateAudit(ctx, { skipInput: true });
+        const authorization = await authenticateInventoryWitness(scope, input);
+        if ('blocked' in authorization) {
+          // This explicit refusal is rendered by both clients without a false success.
+          annotateAudit(ctx, { result: authorization });
+          return authorization;
+        }
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
-          const written = await writeOff(db, scope, input);
+          const written = await writeOff(db, scope, {
+            inventoryLotId: input.inventoryLotId,
+            stockLocationId: input.stockLocationId,
+            units: input.units,
+            reason: input.reason,
+            evidenceRef: input.evidenceRef,
+            idempotencyKey: input.idempotencyKey,
+            disposition: input.disposition,
+            witnessId: authorization.witnessId,
+          });
           await postWriteOffEntry(db, scope, {
             stockMovementId: written.movement.id,
             at: written.movement.occurredAt,
@@ -1072,6 +1098,13 @@ export const pharmacyInventoryRouter = router({
       } catch (error) {
         domainError(error);
       }
+    }),
+
+  inventoryWitnesses: inventoryControl
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      return listInventoryWitnesses(ctx.db, scope.organizationId, scope.branchId, scope.actorId);
     }),
 
   quarantinePart: regulatory
@@ -2079,7 +2112,8 @@ export const pharmacyInventoryRouter = router({
           variance: z
             .object({
               reason: z.string().trim().min(1).max(500),
-              witnessId: z.string().trim().min(1).max(200),
+              staffProfileId: z.string().trim().min(1).max(200),
+              pin: z.string().regex(/^\d{4,8}$/),
               evidenceRef: z.string().trim().min(1).max(200),
             })
             .strict()
@@ -2090,8 +2124,35 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await scopeFor(ctx, input.branchId);
+        annotateAudit(ctx, { skipInput: true });
+        let variance: VarianceReceiptInput['variance'];
+        if (input.variance) {
+          const transfer = await ctx.db.pharmacyInterbranchTransfer.findFirst({
+            where: {
+              id: input.transferId,
+              organizationId: scope.organizationId,
+              toBranchId: scope.branchId,
+            },
+            select: { fromBranchId: true },
+          });
+          if (!transfer) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+          const authorization = await authenticateInventoryWitness(
+            { ...scope, branchId: transfer.fromBranchId },
+            input.variance
+          );
+          if ('blocked' in authorization) {
+            annotateAudit(ctx, { result: authorization });
+            return authorization;
+          }
+          variance = {
+            reason: input.variance.reason,
+            evidenceRef: input.variance.evidenceRef,
+            witnessId: authorization.witnessId,
+          };
+        }
         return await ctx.db.$transaction(async (tx) =>
-          receiveTransferWithVariance(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          receiveTransferWithVariance(txDb(tx), scope, { ...input, variance })
         );
       } catch (error) {
         domainError(error);

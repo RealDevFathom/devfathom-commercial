@@ -2,6 +2,7 @@ import { browserUuid } from '@/lib/browser-uuid';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { TRPCError } from '@trpc/server';
 
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -210,10 +211,10 @@ export default async function PharmacyInventoryPage({
         location: { select: { name: true } },
       },
     }),
-    ctx.db.user.findMany({
-      where: { organizationId, status: 'ACTIVE', id: { not: ctx.session.user.id } },
-      orderBy: { name: 'asc' },
-      select: { id: true, name: true, title: true },
+    caller.inventoryWitnesses({ branchId: branch.id }).catch((error: unknown) => {
+      // Stock readers retain the page; only inventory operators can fetch witnesses.
+      if (error instanceof TRPCError && error.code === 'FORBIDDEN') return [];
+      throw error;
     }),
     caller.nearExpiryBoard({ branchId: branch.id }),
     ctx.db.pharmacyTemperatureLog.findMany({
@@ -260,6 +261,7 @@ export default async function PharmacyInventoryPage({
     'use server';
     const branchId = field(data, 'branchId');
     let destination: string;
+    let witnessRefusal: string | undefined;
     try {
       const actionCtx = await tenantContext();
       if (!actionCtx?.session?.user)
@@ -305,19 +307,21 @@ export default async function PharmacyInventoryPage({
           countId: field(data, 'countId'),
           idempotencyKeyPrefix: `ui-count:${field(data, 'countId')}`,
         });
-      else if (action === 'write-off')
-        await actionCaller.writeOff({
+      else if (action === 'write-off') {
+        const result = await actionCaller.writeOff({
           branchId,
           inventoryLotId: field(data, 'position').split(':')[0]!,
           stockLocationId: field(data, 'position').split(':')[1]!,
           units: number(data, 'units'),
-          witnessId: field(data, 'witnessId'),
+          staffProfileId: field(data, 'staffProfileId'),
+          pin: field(data, 'witnessPin'),
           reason: field(data, 'reason'),
           evidenceRef: field(data, 'evidenceRef'),
           idempotencyKey: `ui-writeoff:${browserUuid()}`,
           disposition: field(data, 'position').split(':')[2] as 'AVAILABLE' | 'QUARANTINE',
         });
-      else if (action === 'release-quarantine')
+        if ('blocked' in result) witnessRefusal = result.blocked;
+      } else if (action === 'release-quarantine')
         await actionCaller.releaseQuarantinedPart({
           branchId,
           inventoryLotId: field(data, 'position').split(':')[0]!,
@@ -398,7 +402,9 @@ export default async function PharmacyInventoryPage({
           quantityPacks: number(data, 'quantityPacks'),
         });
       else throw new Error('Choose a supported inventory action.');
-      destination = url(branchId, 'Inventory action completed.');
+      destination = witnessRefusal
+        ? url(branchId, witnessRefusal, 'error')
+        : url(branchId, 'Inventory action completed.');
     } catch (error) {
       // Keep the thrown value out of the URL entirely: it can contain database, provider,
       // authorization, or validation details that are not safe to return to the browser.
@@ -811,13 +817,26 @@ export default async function PharmacyInventoryPage({
             </label>
             <label className="text-sm">
               Co-authorizing witness
-              <select className={inputClass} name="witnessId">
+              <select className={inputClass} name="staffProfileId" required>
                 {users.map((user) => (
                   <option key={user.id} value={user.id}>
-                    {user.name} · {user.title}
+                    {user.displayName}
                   </option>
                 ))}
               </select>
+            </label>
+            <label className="text-sm">
+              Witness PIN
+              <Input
+                autoComplete="off"
+                className="mt-1"
+                inputMode="numeric"
+                maxLength={8}
+                name="witnessPin"
+                pattern="[0-9]{4,8}"
+                required
+                type="password"
+              />
             </label>
             <label className="text-sm">
               Evidence reference
@@ -838,8 +857,8 @@ export default async function PharmacyInventoryPage({
           </form>
         ) : (
           <Empty>
-            A write-off needs available or quarantined stock and a different active organization
-            member as witness.
+            A write-off needs available or quarantined stock and a different active colleague
+            assigned to this branch with an available PIN as witness.
           </Empty>
         )}
         {releasableQuarantined.length ? (

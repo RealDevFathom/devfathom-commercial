@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { TRPCError } from '@trpc/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -8,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   module: vi.fn(),
   form: vi.fn(),
   writeOff: vi.fn(),
+  witnesses: vi.fn(),
   release: vi.fn(),
   redirect: vi.fn(),
 }));
@@ -98,11 +100,13 @@ beforeEach(() => {
   mocks.context.mockResolvedValue(ctx);
   mocks.module.mockReturnValue(true);
   mocks.caller.mockReturnValue({
+    inventoryWitnesses: mocks.witnesses,
     nearExpiryBoard: nearExpiry,
     temperatureZoneStatuses: vi.fn().mockResolvedValue([]),
     writeOff: mocks.writeOff,
     releaseQuarantinedPart: mocks.release,
   });
+  mocks.witnesses.mockResolvedValue([{ id: 'witness', displayName: 'Witness Pharmacist' }]);
   mocks.writeOff.mockResolvedValue({});
   mocks.release.mockResolvedValue({});
   nearExpiry.mockResolvedValue([]);
@@ -114,9 +118,6 @@ describe('Quarantine resolution forms', () => {
     'submits the selected %s position with write-off custody evidence',
     async (disposition) => {
       lots.mockResolvedValue([{ ...lot, balances: [{ ...available, disposition }] }]);
-      ctx.db.user.findMany.mockResolvedValue([
-        { id: 'witness', name: 'Witness', title: 'Pharmacist' },
-      ]);
       await show();
       const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
       expect(within(form).getByRole('combobox', { name: 'Lot' })).toHaveValue(
@@ -129,6 +130,9 @@ describe('Quarantine resolution forms', () => {
       fireEvent.change(within(form).getByLabelText('Reason'), {
         target: { value: 'Damaged stock' },
       });
+      fireEvent.change(within(form).getByLabelText('Witness PIN'), {
+        target: { value: '1234' },
+      });
       fireEvent.submit(form);
       await waitFor(() =>
         expect(mocks.writeOff).toHaveBeenCalledExactlyOnceWith({
@@ -137,7 +141,8 @@ describe('Quarantine resolution forms', () => {
           stockLocationId: location.id,
           disposition,
           units: 10,
-          witnessId: 'witness',
+          staffProfileId: 'witness',
+          pin: '1234',
           reason: 'Damaged stock',
           evidenceRef: 'certificate-1',
           idempotencyKey: expect.stringMatching(/^ui-writeoff:/),
@@ -187,9 +192,6 @@ describe('Quarantine resolution forms', () => {
         ...lot,
         balances: [available, { ...available, disposition: 'QUARANTINE' }],
       },
-    ]);
-    ctx.db.user.findMany.mockResolvedValue([
-      { id: 'witness', name: 'Witness', title: 'Pharmacist' },
     ]);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -288,4 +290,26 @@ describe('Inventory pack-action integration', () => {
     expect(mocks.form).not.toHaveBeenCalled();
     expect(lots).not.toHaveBeenCalled();
   });
+});
+
+it('reports a committed witness refusal without claiming the stock action succeeded', async () => {
+  mocks.writeOff.mockResolvedValue({
+    blocked: 'A different branch colleague must enter their PIN to co-authorize this write-off.',
+  });
+  await show();
+  const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
+  fireEvent.change(within(form).getByLabelText('Units'), { target: { value: '1' } });
+  fireEvent.change(within(form).getByLabelText('Witness PIN'), { target: { value: '0000' } });
+  fireEvent.submit(form);
+  await waitFor(() => expect(mocks.redirect).toHaveBeenCalled());
+  const target = new URL(mocks.redirect.mock.calls.at(-1)![0], 'https://test.invalid');
+  expect(target.searchParams.get('kind')).toBe('error');
+  expect(target.searchParams.get('notice')).toContain('must enter their PIN');
+  expect(target.href).not.toContain('0000');
+});
+it('keeps the stock page readable when the actor cannot fetch write-off witnesses', async () => {
+  mocks.witnesses.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+  await show();
+  expect(screen.getByText('34 units · 3 sealed + 4 loose')).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Record write-off' })).not.toBeInTheDocument();
 });

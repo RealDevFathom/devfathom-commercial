@@ -17,13 +17,18 @@ const mocks = vi.hoisted(() => {
   return { hasModule, postWriteOffEntry };
 });
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+  withTenantDb: vi.fn(),
+}));
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.hasModule,
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/server/audit', () => ({
+  annotateAudit: vi.fn(),
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
@@ -32,10 +37,35 @@ vi.mock('@/lib/pharmacy/finance-postings', () => ({
   postWriteOffEntry: mocks.postWriteOffEntry,
 }));
 
+vi.mock('@/lib/restaurant/operator-credentials', async (original) => ({
+  ...(await original<typeof import('@/lib/restaurant/operator-credentials')>()),
+  verifyOperatorCredential: vi.fn(async () => true),
+}));
+import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
+
 import { moduleForProcedure } from '@/lib/module-catalog';
 
 import { pharmacyInventoryRouter } from './pharmacy-inventory';
 import type { TRPCContext } from '../trpc';
+
+function witnessCredential(userId = 'witness_a', branchId = 'branch_a') {
+  return {
+    id: 'credential_a',
+    credentialHash: 'synthetic-hash',
+    failedAttempts: 0,
+    lockedUntil: null,
+    staffProfile: {
+      organizationId: 'org_a',
+      status: 'ACTIVE',
+      user: {
+        id: userId,
+        organizationId: 'org_a',
+        status: 'ACTIVE',
+        pharmacyBranchAssignments: [{ organizationId: 'org_a', branchId, active: true }],
+      },
+    },
+  };
+}
 
 function model() {
   return {
@@ -58,6 +88,11 @@ function makeDb() {
       }),
       findFirst: vi.fn().mockResolvedValue(null),
     },
+    restaurantOperatorCredential: {
+      ...model(),
+      findFirst: vi.fn().mockResolvedValue(witnessCredential()),
+    },
+    restaurantStaffProfile: model(),
     medicine: model(),
     packLevel: model(),
     camera: model(),
@@ -154,6 +189,10 @@ const CAPABILITY_REFUSAL = {
 
 beforeEach(() => {
   db = makeDb();
+  vi.mocked(withTenantDb)
+    .mockReset()
+    .mockImplementation(async (_org, run) => run(db as unknown as ScopedDb));
+  vi.mocked(verifyOperatorCredential).mockReset().mockResolvedValue(true);
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
   mocks.postWriteOffEntry.mockReset();
 });
@@ -164,6 +203,7 @@ describe('pharmacy write-off accounting', () => {
     db.user.findFirst.mockResolvedValue({ id: 'user_b' });
     const occurredAt = new Date('2026-10-29T00:02:07.000Z');
     db.user.findFirst.mockResolvedValue({ id: 'user_b' });
+    db.restaurantOperatorCredential.findFirst.mockResolvedValue(witnessCredential('user_b'));
     db.pharmacyInventoryLot.findFirst.mockResolvedValue({
       id: 'lot_1',
       unitsPerPack: 10,
@@ -183,13 +223,15 @@ describe('pharmacy write-off accounting', () => {
       inventoryLotId: 'lot_1',
       stockLocationId: 'location_1',
       units: 10,
-      witnessId: 'user_b',
+      staffProfileId: 'staff_b',
+      pin: '1234',
       reason: 'Expired stock destroyed',
       evidenceRef: 'DEST-1',
       idempotencyKey: 'writeoff-1',
     });
 
     expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(withTenantDb).toHaveBeenCalledOnce();
     expect(mocks.postWriteOffEntry).toHaveBeenCalledWith(
       db,
       { organizationId: 'org_a', branchId: 'branch_a', actorId: 'user_a' },
@@ -440,6 +482,9 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
 
   it('rejects a write-off witness who is not an active member assigned to the branch', async () => {
     grant([allow('pharmacy:inventory')]);
+    db.restaurantOperatorCredential.findFirst.mockResolvedValue(
+      witnessCredential('witness_a', 'other_branch')
+    );
 
     await expect(
       caller().writeOff({
@@ -447,24 +492,15 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
         inventoryLotId: 'lot_1',
         stockLocationId: 'location_1',
         units: 1,
-        witnessId: 'untrusted_string',
+        staffProfileId: 'untrusted_string',
+        pin: '1234',
         reason: 'Damaged package',
         evidenceRef: 'PHOTO-1',
         idempotencyKey: 'write-off-1',
       })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'COAUTH_REQUIRED' });
+    ).resolves.toMatchObject({ blocked: expect.stringContaining('must enter their PIN') });
 
-    expect(db.user.findFirst).toHaveBeenCalledWith({
-      where: {
-        id: 'untrusted_string',
-        organizationId: 'org_a',
-        status: 'ACTIVE',
-        pharmacyBranchAssignments: {
-          some: { organizationId: 'org_a', branchId: 'branch_a', active: true },
-        },
-      },
-      select: { id: true },
-    });
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
     expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
   });
@@ -484,7 +520,8 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       inventoryLotId: 'lot_1',
       stockLocationId: 'location_1',
       units: 1,
-      witnessId: 'witness_a',
+      staffProfileId: 'staff_a',
+      pin: '1234',
       reason: 'Damaged package',
       evidenceRef: 'PHOTO-1',
       idempotencyKey: 'write-off-1',
@@ -859,6 +896,7 @@ describe('manual quarantine resolution authorization', () => {
   it.each(['release', 'write-off'])(
     'refuses regulatory stock through inventory-only %s before posting movements',
     async (operation) => {
+      db.user.findFirst.mockResolvedValue({ id: 'witness_a' });
       db.pharmacyRecallQuarantineAction.findMany.mockResolvedValue([
         { quantityUnits: 20, heldMovementId: 'recall-held-1' },
       ]);
@@ -872,7 +910,8 @@ describe('manual quarantine resolution authorization', () => {
               units: input.units,
               reason: input.reason,
               disposition: 'QUARANTINE',
-              witnessId: 'witness',
+              staffProfileId: 'staff_a',
+              pin: '1234',
               evidenceRef: 'certificate',
               idempotencyKey: 'write-off-1',
             });
@@ -1128,5 +1167,148 @@ describe('PUR-07 — the stock action centre transport', () => {
       })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('authenticated inventory witnesses at the transport boundary', () => {
+  const writeInput = {
+    branchId: 'branch_a',
+    inventoryLotId: 'lot_1',
+    stockLocationId: 'location_1',
+    units: 1,
+    staffProfileId: 'staff_a',
+    pin: '1234',
+    reason: 'Damaged',
+    evidenceRef: 'PHOTO',
+    idempotencyKey: 'auth-test',
+  };
+  const receiveInput = {
+    branchId: 'branch_a',
+    transferId: 'transfer_1',
+    lines: [{ lineId: 'line_1', receivedUnits: 0 }],
+    variance: {
+      staffProfileId: 'staff_a',
+      pin: '1234',
+      reason: 'Missing in transit',
+      evidenceRef: 'Driver report',
+    },
+    idempotencyKeyPrefix: 'variance-test',
+  };
+  beforeEach(() => grant([allow('pharmacy:inventory')]));
+  it('returns a bad-PIN refusal so the HTTP transaction can commit its failure counter', async () => {
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+    await expect(caller().writeOff(writeInput)).resolves.toHaveProperty('blocked');
+    expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'credential_a' },
+      data: { failedAttempts: 1, lockedUntil: null },
+    });
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(withTenantDb).toHaveBeenCalledOnce();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(mocks.postWriteOffEntry).not.toHaveBeenCalled();
+  });
+  it('rejects the old caller-supplied witness identity without touching credentials or stock', async () => {
+    const base: Partial<typeof writeInput> = { ...writeInput };
+    delete base.staffProfileId;
+    delete base.pin;
+    await expect(
+      caller().writeOff({ ...base, witnessId: 'witness_a' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+  it('requires inventory authority for the witness directory', async () => {
+    grant([deny('pharmacy:inventory')]);
+    await expect(caller().inventoryWitnesses({ branchId: 'branch_a' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+  });
+  it('refuses a transfer in another tenant or destination before checking a witness PIN', async () => {
+    await expect(caller().receiveTransferWithVariance(receiveInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+  it('requires assignment to the branch whose in-transit stock is written off', async () => {
+    db.pharmacyInterbranchTransfer.findFirst.mockResolvedValue({ fromBranchId: 'branch_b' });
+    await expect(caller().receiveTransferWithVariance(receiveInput)).resolves.toHaveProperty(
+      'blocked'
+    );
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+  it('commits a bad transfer PIN attempt without entering the stock transaction', async () => {
+    db.pharmacyInterbranchTransfer.findFirst.mockResolvedValue({ fromBranchId: 'branch_b' });
+    db.restaurantOperatorCredential.findFirst.mockResolvedValue(
+      witnessCredential('witness_a', 'branch_b')
+    );
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+    await expect(caller().receiveTransferWithVariance(receiveInput)).resolves.toHaveProperty(
+      'blocked'
+    );
+    expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'credential_a' },
+      data: { failedAttempts: 1, lockedUntil: null },
+    });
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(withTenantDb).toHaveBeenCalledOnce();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+  it('records only the authenticated identity when a complete shortfall closes a transfer', async () => {
+    db.pharmacyInterbranchTransfer.findFirst.mockResolvedValue({
+      id: 'transfer_1',
+      fromBranchId: 'branch_b',
+      status: 'DISPATCHED',
+      lines: [
+        {
+          id: 'line_1',
+          quantityUnits: 20,
+          receivedUnits: 0,
+          sourceLotId: 'lot_1',
+          sourceStockLocationId: 'source_location',
+        },
+      ],
+    });
+    db.restaurantOperatorCredential.findFirst.mockResolvedValue(
+      witnessCredential('witness_a', 'branch_b')
+    );
+    db.user.findFirst.mockResolvedValue({ id: 'witness_a' });
+    db.$queryRaw
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'transfer_1' }] as never)
+      .mockResolvedValueOnce([
+        { onHandUnits: 20, sealedPacks: 2, looseUnits: 0, unitsPerPack: 10 },
+      ] as never);
+    await caller().receiveTransferWithVariance(receiveInput);
+    expect(db.pharmacyStockMovement.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_a',
+        branchId: 'branch_b',
+        kind: 'WRITE_OFF',
+        disposition: 'IN_TRANSIT',
+        quantityUnits: -20,
+      }),
+    });
+    expect(db.user.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'witness_a',
+        organizationId: 'org_a',
+        status: 'ACTIVE',
+        pharmacyBranchAssignments: {
+          some: { organizationId: 'org_a', branchId: 'branch_b', active: true },
+        },
+      },
+      select: { id: true },
+    });
+    const data = db.pharmacyCustodyRecord.create.mock.calls[0]![0].data;
+    expect(data).toMatchObject({ actorId: 'user_a', witnessId: 'witness_a', branchId: 'branch_b' });
+    expect(data).not.toHaveProperty('pin');
+    expect(data).not.toHaveProperty('staffProfileId');
+    expect(db.pharmacyInterbranchTransfer.update).toHaveBeenCalledWith({
+      where: { id: 'transfer_1' },
+      data: { status: 'RECEIVED', receivedAt: expect.any(Date) },
+    });
   });
 });

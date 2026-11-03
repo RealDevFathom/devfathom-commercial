@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { TRPCError } from '@trpc/server';
 
 import {
   ALLOCATE_ROWS,
@@ -116,7 +117,7 @@ export default async function PharmacyTransfersPage({
   }
 
   const caller = pharmacyInventoryRouter.createCaller(ctx);
-  const [transfers, balances, destinationLocations, witnesses] = await Promise.all([
+  const [transfers, balances, destinationLocations] = await Promise.all([
     caller.transferBoard({ branchId: branch.id }),
     ctx.db.pharmacyStockBalance.findMany({
       where: {
@@ -147,12 +148,27 @@ export default async function PharmacyTransfersPage({
       orderBy: { name: 'asc' },
       select: { id: true, name: true, branchId: true },
     }),
-    ctx.db.user.findMany({
-      where: { organizationId, status: 'ACTIVE', id: { not: currentUserId } },
-      orderBy: { name: 'asc' },
-      select: { id: true, name: true, title: true },
-    }),
   ]);
+  const sourceBranchIds = [
+    ...new Set(
+      transfers
+        .filter((transfer) => transfer.direction === 'INBOUND')
+        .map((transfer) => transfer.fromBranch.id)
+    ),
+  ];
+  const witnessEntries = await Promise.all(
+    sourceBranchIds.map(
+      async (sourceBranchId) =>
+        [
+          sourceBranchId,
+          await caller.inventoryWitnesses({ branchId: sourceBranchId }).catch((error: unknown) => {
+            if (error instanceof TRPCError && error.code === 'FORBIDDEN') return [];
+            throw error;
+          }),
+        ] as const
+    )
+  );
+  const witnessesByBranch = new Map(witnessEntries);
   const branchNames = new Map(branches.map((item) => [item.id, item.name]));
   const stock = balances.map((balance) => ({
     value: `${balance.inventoryLotId}:${balance.stockLocationId}`,
@@ -187,9 +203,10 @@ export default async function PharmacyTransfersPage({
           transferId,
           idempotencyKeyPrefix: `ui-dispatch:${transferId}`,
         });
-      else if (action === 'receive')
-        await actionCaller.receiveTransferWithVariance(receiveInput(data));
-      else throw new Error('Choose a supported transfer action.');
+      else if (action === 'receive') {
+        const result = await actionCaller.receiveTransferWithVariance(receiveInput(data));
+        if ('blocked' in result) return url(branchId, result.blocked, 'error');
+      } else throw new Error('Choose a supported transfer action.');
       return url(branchId, SUCCESS[action]);
     } catch (error) {
       return url(branchId, transferErrorMessage(action, error), 'error');
@@ -285,7 +302,7 @@ export default async function PharmacyTransfersPage({
                 currentUserId={currentUserId}
                 key={transfer.id}
                 transfer={transfer}
-                witnesses={witnesses}
+                witnesses={witnessesByBranch.get(transfer.fromBranch.id) ?? []}
               />
             ))}
           </div>
@@ -304,7 +321,7 @@ export default async function PharmacyTransfersPage({
                 currentUserId={currentUserId}
                 key={transfer.id}
                 transfer={transfer}
-                witnesses={witnesses}
+                witnesses={[]}
               />
             ))}
           </div>
