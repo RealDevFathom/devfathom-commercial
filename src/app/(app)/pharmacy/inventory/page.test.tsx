@@ -1,4 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -85,9 +87,9 @@ function makeContext() {
   };
 }
 
-async function show() {
+async function show(notice: { notice?: string; kind?: string } = {}) {
   return render(
-    await PharmacyInventoryPage({ searchParams: Promise.resolve({ branch: branch.id }) })
+    await PharmacyInventoryPage({ searchParams: Promise.resolve({ branch: branch.id, ...notice }) })
   );
 }
 
@@ -107,6 +109,69 @@ beforeEach(() => {
   mocks.release.mockResolvedValue({});
   nearExpiry.mockResolvedValue([]);
   lots.mockResolvedValue([lot]);
+});
+
+describe('inventory success notice', () => {
+  const css = readFileSync(join(__dirname, '../../../globals.css'), 'utf8');
+  function themeVariables(theme: 'light' | 'dark') {
+    const values = new Map<string, string>();
+    for (const block of css.matchAll(/(?:^|\n)(:root|\[data-theme='dark'\])\s*\{([^}]+)\}/g)) {
+      if (block[1] !== ':root' && theme !== 'dark') continue;
+      for (const declaration of block[2]!.matchAll(/(--[\w-]+):\s*([^;]+);/g))
+        values.set(declaration[1]!, declaration[2]!.trim());
+    }
+    return values;
+  }
+  function color(token: string, values: Map<string, string>): number[] {
+    const value = values.get(token);
+    if (!value) throw new Error(`Undefined notice color token ${token}`);
+    const reference = /^var\((--[\w-]+)\)$/.exec(value);
+    if (reference) return color(reference[1]!, values);
+    const hex = /^#([\da-f]{6})$/i.exec(value)?.[1];
+    if (!hex) throw new Error(`Unsupported notice color ${token}`);
+    return [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+  }
+  function luminance(rgb: number[]) {
+    const linear = rgb.map((channel) => {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return linear[0]! * 0.2126 + linear[1]! * 0.7152 + linear[2]! * 0.0722;
+  }
+  it.each(['light', 'dark'] as const)(
+    'meets 4.5:1 text contrast on real %s theme surfaces',
+    async (theme) => {
+      await show({ notice: 'Inventory action completed.', kind: 'success' });
+      const notice = screen.getByText('Inventory action completed.');
+      expect(notice).toHaveAttribute('role', 'status');
+      const classes = notice.className.split(/\s+/);
+      const foreground = classes.find((value) => /^text-success(?:-foreground)?$/.test(value));
+      const background = classes.find((value) =>
+        /^bg-success(?:-background)?(?:\/\d+)?$/.test(value)
+      );
+      if (!foreground || !background) throw new Error('Notice has no semantic success colors');
+      const variables = themeVariables(theme);
+      const text = color(foreground.replace('text-', '--'), variables);
+      const [backgroundClass, opacity = '100'] = background.split('/');
+      const tint = color(backgroundClass!.replace('bg-', '--'), variables);
+      for (const surface of ['--surface-page', '--surface-card']) {
+        const base = color(surface, variables);
+        const alpha = Number(opacity) / 100;
+        const painted = tint.map((channel, index) => channel * alpha + base[index]! * (1 - alpha));
+        const [lower, upper] = [luminance(text), luminance(painted)].sort((a, b) => a - b);
+        expect((upper! + 0.05) / (lower! + 0.05), `${theme} ${surface}`).toBeGreaterThanOrEqual(
+          4.5
+        );
+      }
+    }
+  );
+  it('escapes notice text supplied in the redirect URL', async () => {
+    const text = '<script>alert(1)</script> Inventory action completed.';
+    await show({ notice: text, kind: 'success' });
+    const notice = screen.getByText(text);
+    expect(notice).toHaveAttribute('role', 'status');
+    expect(notice.querySelector('script')).toBeNull();
+  });
 });
 
 describe('Quarantine resolution forms', () => {

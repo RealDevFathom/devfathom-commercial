@@ -433,7 +433,7 @@ export default async function PharmacyInventoryPage({
       />
       {query.notice ? (
         <div
-          className={`rounded-[var(--radius-sm)] border p-3 text-sm ${query.kind === 'error' ? 'border-destructive bg-destructive-background text-destructive-foreground' : 'border-success bg-success-background text-success-foreground'}`}
+          className={`rounded-[var(--radius-sm)] border p-3 text-sm ${query.kind === 'error' ? 'border-destructive bg-destructive-background text-destructive-foreground' : 'border-success/30 bg-success/10 text-success'}`}
           role={query.kind === 'error' ? 'alert' : 'status'}
         >
           {query.notice}
