@@ -1,5 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import { workspaceToday } from '@/lib/timezone';
 
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import {
@@ -68,10 +69,7 @@ const financeInsightInput = z.discriminatedUnion('report', [
     })
     .strict(),
 ]);
-
-function utcDate() {
-  return new Date().toISOString().slice(0, 10);
-}
+const financeInsightRequest = z.object({ request: financeInsightInput }).strict();
 
 function drillThrough(path: string, filters: { branchIds: string[]; from: string; to: string }) {
   const url = new URL(path, 'https://reports.invalid');
@@ -123,7 +121,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
     askPharmacyFinanceInsights: tool({
       description:
         'Read-only owner pharmacy inventory-capital or leakage explanations for one exact active branch. Ledger book value is not cash or recoverable savings. Unsupported breakdowns and currency remain unknown. No clinical advice, patient data, purchases or provider calls.',
-      inputSchema: financeInsightInput,
+      inputSchema: financeInsightRequest,
       execute: async (input) => {
         try {
           if (
@@ -133,7 +131,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
             !(await h.can('reports:financial'))
           )
             return { kind: 'refusal', message: REFUSAL };
-          const parsed = financeInsightInput.safeParse(input);
+          const parsed = financeInsightInput.safeParse(input.request);
           if (!parsed.success)
             return {
               kind: 'invalid_input',
@@ -523,8 +521,8 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
 
           const filters = {
             branchIds: selected.map(({ id }) => id),
-            from: from ?? utcDate(),
-            to: to ?? from ?? utcDate(),
+            from: from ?? workspaceToday('Asia/Karachi'),
+            to: to ?? from ?? workspaceToday('Asia/Karachi'),
           };
           const report = await readPharmacyOwnerCommandCentre(h.db, filters);
           const values = report.metrics as Record<string, number | null>;

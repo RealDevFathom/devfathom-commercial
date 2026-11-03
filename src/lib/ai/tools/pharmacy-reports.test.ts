@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 vi.mock('server-only', () => ({}));
 
@@ -71,8 +72,58 @@ beforeEach(() => {
   queryRaw.mockResolvedValue([]);
   count.mockResolvedValue(0);
 });
+afterEach(() => vi.useRealTimers());
 
 describe('Ask Fathom pharmacy reports', () => {
+  it.each(['2026-11-02T19:00:00Z', '2026-11-02T23:59:59Z', '2026-11-03T00:00:00Z'])(
+    'defaults report dates to today in PKT: %s',
+    async (instant) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(instant));
+      const result = await toolExecute()({ metricKeys: ['openStockSignals'] });
+      expect(result).toMatchObject({
+        kind: 'answer',
+        period: { from: '2026-11-03', to: '2026-11-03' },
+      });
+    }
+  );
+
+  it('unwraps finance requests while preserving authorization, validation and tenant scope', async () => {
+    const input = {
+      request: { report: 'inventory_capital', branch: 'branch_1', at: '2026-09-01T00:00:00Z' },
+    };
+    const execute = (role = 'ADMIN') =>
+      insightTools(role).askPharmacyFinanceInsights.execute! as (
+        input: unknown
+      ) => Promise<Record<string, unknown>>;
+    await expect(execute('EMPLOYEE')(input)).resolves.toMatchObject({ kind: 'refusal' });
+    expect(queryRaw).not.toHaveBeenCalled();
+    await expect(
+      execute()({ request: { ...input.request, at: 'invalid' } })
+    ).resolves.toMatchObject({ kind: 'invalid_input' });
+    await expect(
+      execute()({ request: { ...input.request, branch: 'other-org' } })
+    ).resolves.toMatchObject({ kind: 'refusal' });
+    expect(queryRaw).not.toHaveBeenCalled();
+    await expect(execute()(input)).resolves.toMatchObject({ kind: 'unknown' });
+    expect(branchFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_1', active: true } })
+    );
+    expect(queryRaw).toHaveBeenCalled();
+  });
+  it('exposes an object-root JSON schema for every pharmacy report tool', () => {
+    const schemas = Object.entries(insightTools()).map(
+      ([name, reportTool]) => [name, z.toJSONSchema(reportTool.inputSchema as z.ZodType)] as const
+    );
+
+    expect(schemas.length).toBeGreaterThan(0);
+    for (const [name, schema] of schemas) {
+      expect(schema, `${name} must have an object-root input schema`).toMatchObject({
+        type: 'object',
+      });
+    }
+  });
+
   it('keeps owner Q&A read-only and rejects non-owners and out-of-scope branches', async () => {
     const input = {
       topic: 'lost_demand' as const,
