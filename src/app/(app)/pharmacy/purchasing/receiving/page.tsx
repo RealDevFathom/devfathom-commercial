@@ -3,6 +3,7 @@ import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
 import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
+import { ProgressiveLineSlots } from '../_components/progressive-line-slots';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -872,9 +873,12 @@ export default async function PharmacyReceivingPage({
                 required
               />
             </div>
-            <div className="space-y-3">
-              {DIRECT_SLOTS.map((slot) => (
-                <div key={slot} className="space-y-3">
+            <ProgressiveLineSlots
+              lines={DIRECT_SLOTS.map((slot) => ({
+                key: String(slot),
+                initiallySelected:
+                  slot === 0 && Boolean(directPackValue(scan, workspace.medicines)),
+                selector: (
                   <SelectField
                     defaultValue={
                       slot === 0 ? directPackValue(scan, workspace.medicines) : undefined
@@ -886,6 +890,8 @@ export default async function PharmacyReceivingPage({
                     options={packOptions(workspace.medicines)}
                     placeholder="Skip this line"
                   />
+                ),
+                fields: (
                   <CaptureFieldset
                     keyPrefix={`d${slot}`}
                     locations={locations}
@@ -900,9 +906,9 @@ export default async function PharmacyReceivingPage({
                     title={`Line ${slot + 1} capture`}
                     unitsPerPack={null}
                   />
-                </div>
-              ))}
-            </div>
+                ),
+              }))}
+            />
             <SelectField
               emptyHint="No other active user can sign a controlled-medicine purchase."
               hint="Required only when a line is a controlled medicine. They must be allowed to dispense, and they cannot be you. Their PIN is entered when the receipt is posted."
@@ -1475,7 +1481,8 @@ function readCaptureFields(form: FormData, key: string) {
     invoiceCorrection: field(form, `invoiceCorrection:${key}`) === 'yes',
     gs1Warnings: warningCodes(form, key),
     expiryPrecision: (field(form, `expiryPrecision:${key}`) === 'DAY' ? 'DAY' : 'MONTH') as
-      'DAY' | 'MONTH',
+      | 'DAY'
+      | 'MONTH',
     printedMrpMinor: moneyFieldMinor(form, `printedMrp:${key}`, 'Printed MRP'),
     receivedPacks: integerField(form, `receivedPacks:${key}`, 'Packs received'),
     bonusPacks: optionalIntegerField(form, `bonusPacks:${key}`, 'Free packs', 0),
