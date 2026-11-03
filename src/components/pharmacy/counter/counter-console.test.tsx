@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   searchProps: vi.fn<(props: ComponentProps<typeof CounterSearchResults>) => void>(),
   khataAccounts: vi.fn(),
   khataStatement: vi.fn(),
+  authorizeKhataOverride: vi.fn(),
   signIn: vi.fn(),
   receiptRefetch: vi.fn(),
   drawerStatusInvalidate: vi.fn(),
@@ -84,12 +85,12 @@ vi.mock('@/lib/trpc', () => {
         tenderOutcome: { query: mocks.outcomeQuery },
         khataAccounts: { query: mocks.khataAccounts },
         khataStatement: { query: mocks.khataStatement },
+        authorizeKhataOverride: { mutate: mocks.authorizeKhataOverride },
       },
     },
     pharmacySales: {
       counterSearch: {
         setData: mocks.searchSetData,
-        invalidate: vi.fn(),
         fetch: (...args: unknown[]) => mocks.searchFetch(...args),
         invalidate: vi.fn(),
       },
@@ -356,6 +357,9 @@ beforeEach(() => {
     { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 100000 },
   ]);
   mocks.signIn.mockResolvedValue({ ok: true });
+  mocks.authorizeKhataOverride.mockReset().mockResolvedValue({
+    approvalId: '11111111-1111-4111-8111-111111111111',
+  });
   window.localStorage.clear();
 });
 
@@ -1086,39 +1090,56 @@ describe('PharmacyCounterConsole Khata wiring', () => {
   });
 });
 
-it.each([404, 200])(
-  'reauthenticates through the existing password transport (%s)',
-  async (status) => {
-    Object.assign(mocks.session.data.user, { email: 'owner@example.test' });
+it.each([
+  ['the signed-in approver', undefined],
+  ['a second-person approver', 'manager@example.test'],
+])(
+  'issues operation-bound approval evidence for %s and tenders with it',
+  async (_label, approverEmail) => {
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}', { status: 200 }));
     mocks.khataAccounts.mockResolvedValue([
       { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 0 },
     ]);
-    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ organizations: [{ id: 'org-a', ssoEnforced: false }] }), {
-        status,
-      })
-    );
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
     await screen.findByText(/Ledger balance/);
-    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
-    fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    if (approverEmail)
+      fireEvent.change(screen.getByLabelText(/Approver email/), {
+        target: { value: approverEmail },
+      });
+    fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
+      target: { value: 'Urgent medicine' },
+    });
+    fireEvent.change(screen.getByLabelText('Approver password'), {
       target: { value: 'test-only-password' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledOnce());
-    expect(fetch).toHaveBeenCalledWith(
-      '/api/login',
-      expect.objectContaining({ method: 'POST', credentials: 'include' })
+    expect(mocks.authorizeKhataOverride).toHaveBeenCalledWith(
+      expect.objectContaining({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        familyAccountId: 'family-a',
+        reason: 'Urgent medicine',
+        password: 'test-only-password',
+        ...(approverEmail ? { approverEmail } : {}),
+      })
     );
-    expect(mocks.signIn).toHaveBeenCalledWith(
-      status === 404 ? 'credentials' : 'login-intent',
-      expect.objectContaining(
-        status === 404
-          ? { email: 'owner@example.test', password: 'test-only-password', redirect: false }
-          : { organizationId: 'org-a', redirect: false }
-      )
+    expect(mocks.mutations.tender).toHaveBeenCalledWith(
+      expect.objectContaining({
+        familyAccountId: 'family-a',
+        ownerOverride: true,
+        overrideReason: 'Urgent medicine',
+        approvalId: '11111111-1111-4111-8111-111111111111',
+      })
     );
+    // The approver's secret never rides on the tender or a session sign-in.
+    expect(JSON.stringify(mocks.mutations.tender!.mock.calls)).not.toContain('test-only-password');
+    expect(fetch).not.toHaveBeenCalledWith('/api/login', expect.anything());
+    expect(mocks.signIn).not.toHaveBeenCalled();
   }
 );
 

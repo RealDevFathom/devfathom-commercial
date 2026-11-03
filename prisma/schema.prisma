@@ -242,6 +242,7 @@ model PharmacyBranch {
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
   branchAssignments                        PharmacyBranchAssignment[]
+  khataOverrideApprovals PharmacyKhataOverrideApproval[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -1117,6 +1118,7 @@ model PharmacySale {
   loyaltyEntries            PharmacyLoyaltyPointsEntry[]
   customerOrder             PharmacyCustomerOrder?
   visibilityAnchor          PharmacyBranch               @relation("PharmacySaleVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_sales_visibility_fkey")
+  khataOverrideApprovals PharmacyKhataOverrideApproval[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
@@ -1185,6 +1187,7 @@ model PharmacyFamilyAccount {
   members        PharmacyFamilyMember[]
   khataEvents    PharmacyKhataEvent[]
   limitDecisions PharmacyKhataLimitDecision[]
+  khataOverrideApprovals PharmacyKhataOverrideApproval[]
 
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, payerCustomerId])
@@ -1254,6 +1257,34 @@ model PharmacyKhataLimitDecision {
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, familyAccountId, createdAt])
   @@map("pharmacy_khata_limit_decisions")
+}
+
+/// Single-use proof of an interactive, operation-bound Khata limit approval.
+model PharmacyKhataOverrideApproval {
+  id              String    @id
+  organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  approverId      String
+  saleId          String
+  familyAccountId String
+  amountMinor     Int
+  /// Final credit limit the approver authorized (balance at approval + amount).
+  approvedLimitMinor Int
+  reason          String
+  createdAt       DateTime  @default(now())
+  expiresAt       DateTime
+  consumedAt      DateTime?
+
+  branch        PharmacyBranch        @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_khata_override_approvals_branch_fkey")
+  familyAccount PharmacyFamilyAccount @relation(fields: [organizationId, branchId, familyAccountId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_khata_override_approvals_account_fkey")
+  sale          PharmacySale          @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_khata_override_approvals_sale_fkey")
+  approver      User                  @relation("PharmacyKhataOverrideApprover", fields: [organizationId, approverId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_khata_override_approvals_approver_fkey")
+
+  @@index([organizationId, branchId, id], map: "pharmacy_khata_override_approvals_org_branch_id_idx")
+  @@index([organizationId, branchId, saleId], map: "pharmacy_khata_override_approvals_sale_idx")
+  @@index([organizationId, branchId, familyAccountId], map: "pharmacy_khata_override_approvals_account_idx")
+  @@index([organizationId, approverId], map: "pharmacy_khata_override_approvals_approver_idx")
+  @@map("pharmacy_khata_override_approvals")
 }
 
 /// Append-only, signed whole-point ledger. Branch is stamped at posting time;
@@ -2900,6 +2931,7 @@ model User {
 
   hotelPropertyAssignments HotelPropertyAssignment[]
   pharmacyBranchAssignments PharmacyBranchAssignment[]
+  khataOverrideApprovals PharmacyKhataOverrideApproval[] @relation("PharmacyKhataOverrideApprover")
 
   @@unique([organizationId, id])
   @@unique([organizationId, email])

@@ -24,7 +24,7 @@ import {
   emergencyNoRxDecision,
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
-import { annotateAudit } from '@/server/audit';
+import { annotateAudit, recordAuthAudit } from '@/server/audit';
 import {
   isLockedOut,
   registerFailedAttempt,
@@ -36,10 +36,17 @@ import { workspaceTimezone } from '@/lib/timezone';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { compare } from 'bcryptjs';
+import { randomUUID } from 'node:crypto';
+import { hashRecoveryCode, verifyTotp } from '@/lib/totp';
+import { DUMMY_PASSWORD_HASH } from '@/lib/auth/constants';
+import { emailSchema } from '@/lib/email-address';
+import { rateLimit } from '@/lib/rate-limit';
 import { Prisma } from '@/generated/prisma/client';
 import {
   authorizeKhataCharge,
   FamilyKhataError,
+  isKhataOverrideApprover,
   readSaleKhataAccounts,
   readSaleKhataStatement,
 } from '@/lib/pharmacy/family-khata';
@@ -126,7 +133,9 @@ import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
 // Preserve field order and parsing: settlement hashes JSON.stringify(parsed input).
-const tenderInput = z
+// Outcome reads stay on the unrefined shape so a recovery record saved before override
+// reasons were required (ownerOverride without overrideReason) can still be looked up.
+const tenderOutcomeInput = z
   .object({
     branchId,
     saleId: z.string().min(1),
@@ -141,8 +150,19 @@ const tenderInput = z
     providerRef: z.string().regex(/^\d{4,6}$/).optional(),
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
+    overrideReason: z.string().trim().min(1).max(500).optional(),
+    approvalId: z.string().uuid().optional(),
   })
   .strict();
+const tenderInput = tenderOutcomeInput.superRefine((input, ctx) => {
+    if (input.ownerOverride === true && input.overrideReason === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['overrideReason'],
+        message: 'An override reason is required.',
+      });
+    }
+  });
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
 const demandReason = z.enum([
   'STOCKOUT',
@@ -207,6 +227,84 @@ async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
   await db.$queryRaw(
     Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`
   );
+}
+
+/**
+ * Per-approver budget dedicated to this route: it throttles guessing without letting a
+ * cashier exhaust the approver's own sign-in budget (`login:acct:*`).
+ */
+const KHATA_APPROVAL_ATTEMPTS = 10;
+const KHATA_APPROVAL_WINDOW_MS = 5 * 60_000;
+
+const khataOverrideApprovalInput = z
+  .object({
+    branchId,
+    saleId: z.string().min(1),
+    familyAccountId: z.string().trim().min(1).max(128),
+    amountMinor: z.number().int().positive().max(2147483647),
+    reason: z.string().trim().min(1).max(500),
+    /** A second person (owner/manager) may approve the cashier's tender; omitted means this session. */
+    approverEmail: emailSchema.optional(),
+    password: z.string().min(1).max(200),
+    totp: z.string().trim().max(64).optional(),
+  })
+  .strict();
+
+type KhataSecondFactor = false | { recoveryCodeId: string | null };
+
+/**
+ * Verifies the approver's second factor without spending anything. A matched recovery
+ * code is returned so the caller consumes it inside the transaction that records the
+ * approval: a failed insert then leaves the code usable.
+ */
+async function verifyKhataApproverSecondFactor(
+  ctx: TRPCContext,
+  approver: { id: string; twoFactorEnabledAt: Date | null; twoFactorSecret: string | null },
+  submitted: string | undefined
+): Promise<KhataSecondFactor> {
+  if (!approver.twoFactorEnabledAt) return { recoveryCodeId: null };
+  const code = submitted?.trim() ?? '';
+  if (!code) return false;
+  if (approver.twoFactorSecret && verifyTotp(approver.twoFactorSecret, code))
+    return { recoveryCodeId: null };
+  const match = await ctx.db.twoFactorRecoveryCode.findFirst({
+    where: { userId: approver.id, codeHash: hashRecoveryCode(code), usedAt: null },
+    select: { id: true },
+  });
+  return match ? { recoveryCodeId: match.id } : false;
+}
+
+/** Password approval must honour the workspace's SSO enforcement, exactly like sign-in. */
+async function khataPasswordApprovalBlockedBySso(ctx: TRPCContext) {
+  try {
+    const connection = await ctx.db.organizationIdentityConnection.findFirst({
+      where: { status: 'ACTIVE', enforceSso: true },
+      select: { id: true },
+    });
+    return Boolean(connection);
+  } catch {
+    // Fail closed: if SSO enforcement cannot be ruled out, refuse the password path.
+    return true;
+  }
+}
+
+/** Owner/manager approvers must hold an active assignment to the charge's branch. */
+async function khataApproverAssignedToBranch(
+  ctx: TRPCContext,
+  scope: { organizationId: string; branchId: string },
+  approverId: string
+) {
+  const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      userId: approverId,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { id: true },
+  });
+  return Boolean(assignment);
 }
 
 function ledgerTender(input: z.infer<typeof tenderInput>) {
@@ -805,7 +903,123 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
+  authorizeKhataOverride: protectedProcedure
+    .input(khataOverrideApprovalInput)
+    .mutation(async ({ ctx, input }) => {
+      // Password, authentication code and free-text reason never enter the audit input.
+      annotateAudit(ctx, { skipInput: true });
+      try {
+        const scope = await khataScope(ctx, input.branchId, 'write');
+        const approver = await ctx.db.user.findFirst({
+          where: input.approverEmail
+            ? { organizationId: scope.organizationId, email: input.approverEmail }
+            : { organizationId: scope.organizationId, id: scope.actorId },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            password: true,
+            status: true,
+            role: true,
+            twoFactorEnabledAt: true,
+            twoFactorSecret: true,
+            organizationRole: { select: { key: true, isSystem: true } },
+          },
+        });
+        const accountEmail = (approver?.email ?? input.approverEmail ?? scope.actorId).toLowerCase();
+        const [accountGate, actorGate] = await Promise.all([
+          rateLimit(
+            `khata-approval:acct:${scope.organizationId}:${accountEmail}`,
+            KHATA_APPROVAL_ATTEMPTS,
+            KHATA_APPROVAL_WINDOW_MS
+          ),
+          rateLimit(
+            `khata-approval:actor:${scope.organizationId}:${scope.actorId}`,
+            KHATA_APPROVAL_ATTEMPTS,
+            KHATA_APPROVAL_WINDOW_MS
+          ),
+        ]);
+        if (!accountGate.ok || !actorGate.ok)
+          throw new TRPCError({
+            code: 'TOO_MANY_REQUESTS',
+            message: 'Too many approval attempts. Try again later.',
+          });
+        // Always pay the bcrypt cost so an unknown approver is indistinguishable by timing.
+        const passwordValid =
+          (await compare(input.password, approver?.password ?? DUMMY_PASSWORD_HASH)) &&
+          Boolean(approver?.password);
+        const refuse = (reason: string): never => {
+          // Visible to workspace admins like any failed sign-in; never echoed to the caller.
+          recordAuthAudit({
+            type: 'LOGIN_FAILED',
+            organizationId: scope.organizationId,
+            userId: approver?.id ?? null,
+            name: approver?.name ?? null,
+            email: approver?.email ?? input.approverEmail ?? null,
+            role: approver?.role ?? null,
+            ip: ctx.requestMeta.ip,
+            userAgent: ctx.requestMeta.userAgent,
+            reason: `Khata override approval refused: ${reason}`,
+          });
+          // One indistinct refusal for every failure.
+          throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+        };
+        if (!approver) return refuse('No such account');
+        if (!passwordValid) return refuse('Incorrect password');
+        if (await khataPasswordApprovalBlockedBySso(ctx))
+          return refuse('Password approval disabled by SSO enforcement');
+        if (
+          !isKhataOverrideApprover({
+            status: approver.status,
+            role: approver.role,
+            roleKey: approver.organizationRole?.key ?? null,
+            isSystem: approver.organizationRole?.isSystem ?? null,
+            branchAssigned: true,
+          })
+        )
+          return refuse('Not an active owner or manager');
+        // Same branch boundary the counter applies: only a tenant ADMIN is exempt.
+        if (
+          approver.role !== 'ADMIN' &&
+          !(await khataApproverAssignedToBranch(ctx, scope, approver.id))
+        )
+          return refuse('Approver is not assigned to this branch');
+        const secondFactor = await verifyKhataApproverSecondFactor(ctx, approver, input.totp);
+        if (!secondFactor) return refuse('Invalid authentication code');
+        const approvalId = randomUUID();
+        await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await bindKhataBranch(db, scope);
+          await db.$queryRaw(
+            Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR SHARE`
+          );
+          const account = (await readSaleKhataAccounts(db, scope, input.saleId)).find(
+            (row) => row.id === input.familyAccountId
+          );
+          if (!account) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
+          // Bind the approval to the final limit the approver authorizes, not just an amount.
+          const approvedLimitMinor = account.balanceMinor + input.amountMinor;
+          if (!Number.isSafeInteger(approvedLimitMinor) || approvedLimitMinor < 0 || approvedLimitMinor > 2147483647)
+            throw new FamilyKhataError('INVALID_AMOUNT');
+          // Spend a recovery code in the same transaction as the evidence it unlocks.
+          if (secondFactor.recoveryCodeId) {
+            const used = await db.twoFactorRecoveryCode.updateMany({
+              where: { id: secondFactor.recoveryCodeId, usedAt: null },
+              data: { usedAt: new Date() },
+            });
+            if (used.count !== 1) throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+          }
+          await db.$executeRaw(Prisma.sql`INSERT INTO pharmacy_khata_override_approvals
+            (id, "organizationId", "branchId", "approverId", "saleId", "familyAccountId", "amountMinor", "approvedLimitMinor", reason, "expiresAt")
+            VALUES (${approvalId}, ${scope.organizationId}, ${scope.branchId}, ${approver.id}, ${input.saleId},
+              ${input.familyAccountId}, ${input.amountMinor}, ${approvedLimitMinor}, ${input.reason}, NOW() + INTERVAL '5 minutes')`);
+        });
+        return { approvalId };
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  tenderOutcome: protectedProcedure.input(tenderOutcomeInput).query(async ({ ctx, input }) => {
     if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
     const scope =
       input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
@@ -819,7 +1033,7 @@ export const pharmacySalesRouter = router({
     if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
-        if (input.familyAccountId !== undefined || input.ownerOverride !== undefined)
+        if (input.familyAccountId !== undefined || input.ownerOverride !== undefined || input.overrideReason !== undefined || input.approvalId !== undefined)
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
@@ -832,13 +1046,6 @@ export const pharmacySalesRouter = router({
       const scope = await khataScope(ctx, input.branchId, 'write');
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
       const normalized = ledgerTender(input);
-      const ownerAuthorized =
-        input.ownerOverride === true &&
-        ctx.session!.user.role === 'ADMIN' &&
-        (await can(subjectFromSession(ctx.session!.user), 'admin:access', undefined, {
-          db: ctx.db,
-          source: 'TRPC',
-        }));
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         await bindKhataBranch(db, scope);
@@ -851,10 +1058,7 @@ export const pharmacySalesRouter = router({
           db,
           scope,
           { ...input, familyAccountId: input.familyAccountId! },
-          {
-            authorized: ownerAuthorized,
-            passwordAuthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
-          }
+          { approvalId: input.approvalId }
         );
         const result = await applyPharmacyTender(db, scope, normalized);
         if (!('tenderId' in result) || typeof result.tenderId !== 'string')

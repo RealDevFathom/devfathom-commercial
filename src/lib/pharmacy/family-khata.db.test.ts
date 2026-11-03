@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -19,6 +19,7 @@ type Fixture = {
   saleId: string;
   familyAccountId: string;
   memberId: string;
+  approverId: string;
 };
 let a: Fixture, sibling: Fixture, foreign: Fixture;
 async function fixture(
@@ -40,6 +41,29 @@ async function fixture(
         currency: 'PKR',
       },
     });
+    await db.organizationDepartment.upsert({
+      where: { organizationId_key: { organizationId, key: 'operations' } },
+      update: {},
+      create: { organizationId, key: 'operations', name: 'Operations' },
+    });
+    const ownerRole = await db.organizationRole.upsert({
+      where: { organizationId_key: { organizationId, key: 'owner' } },
+      update: { isSystem: true },
+      create: { organizationId, key: 'owner', name: 'Owner', isSystem: true },
+    });
+    const approver = await db.user.upsert({
+      where: { organizationId_email: { organizationId, email: `${organizationId}@owner.test` } },
+      update: { status: 'ACTIVE', organizationRoleId: ownerRole.id },
+      create: {
+        organizationId,
+        email: `${organizationId}@owner.test`,
+        name: 'Khata owner',
+        department: 'operations',
+        title: 'Owner',
+        status: 'ACTIVE',
+        organizationRoleId: ownerRole.id,
+      },
+    });
     const branch = await db.pharmacyBranch.create({
       data: {
         organizationId,
@@ -51,6 +75,10 @@ async function fixture(
       },
     });
     await db.$queryRawUnsafe("SELECT set_config('app.current_branch_id', $1, true)", branch.id);
+    // Owner/manager approvers must be assigned to the branch whose charge they approve.
+    await db.pharmacyBranchAssignment.create({
+      data: { organizationId, branchId: branch.id, userId: approver.id },
+    });
     const patient = await db.pharmacyPatient.create({
       data: { organizationId, displayName: 'Private clinical name' },
     });
@@ -103,8 +131,33 @@ async function fixture(
       saleId: sale.id,
       familyAccountId: family.id,
       memberId: member.id,
+      approverId: approver.id,
     };
   });
+}
+async function issueApproval(db: ScopedDb, scope: Fixture, amountMinor: number, ageMs = 0) {
+  const id = randomUUID();
+  // Mirrors the endpoint: the approved final limit is the balance at approval + amount.
+  const approvedLimitMinor =
+    (await khata.readKhataBalance(db, scope, scope.familyAccountId)) + amountMinor;
+  await db.$executeRawUnsafe(
+    `INSERT INTO pharmacy_khata_override_approvals
+       (id, "organizationId", "branchId", "approverId", "saleId", "familyAccountId", "amountMinor",
+        "approvedLimitMinor", reason, "createdAt", "expiresAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $9, 'Approved exception',
+       NOW() - ($8::int * INTERVAL '1 millisecond'),
+       NOW() - ($8::int * INTERVAL '1 millisecond') + INTERVAL '5 minutes')`,
+    id,
+    scope.organizationId,
+    scope.branchId,
+    scope.approverId,
+    scope.saleId,
+    scope.familyAccountId,
+    amountMinor,
+    ageMs,
+    approvedLimitMinor
+  );
+  return id;
 }
 function inScope<T>(scope: Fixture, run: (db: ScopedDb) => Promise<T>) {
   return tenant(scope.organizationId, async (db) => {
@@ -139,7 +192,7 @@ suite('family Khata restricted PostgreSQL', () => {
   it('uses all twelve ledger entries and allows the exact limit', async () => {
     await inScope(a, async (db) => {
       expect(await khata.readKhataBalance(db, a, a.familyAccountId)).toBe(600);
-      await khata.authorizeKhataCharge(db, a, { ...a, amountMinor: 400 }, { authorized: false });
+      await khata.authorizeKhataCharge(db, a, { ...a, amountMinor: 400 }, {});
       const statement = await khata.readSaleKhataStatement(db, a, a.saleId, a.familyAccountId);
       expect(statement.entries).toHaveLength(12);
       expect(JSON.stringify(statement)).not.toContain('Private clinical name');
@@ -161,12 +214,12 @@ suite('family Khata restricted PostgreSQL', () => {
   });
   it('rejects stale override and rolls back the limit and audit together', async () => {
     await expect(
-      inScope(a, (db) =>
+      inScope(a, async (db) =>
         khata.authorizeKhataCharge(
           db,
           a,
-          { ...a, amountMinor: 401, ownerOverride: true },
-          { authorized: true, passwordAuthenticatedAt: Date.now() - 301000 }
+          { ...a, amountMinor: 401, ownerOverride: true, overrideReason: 'Approved exception' },
+          { approvalId: await issueApproval(db, a, 401, 301_000) }
         )
       )
     ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
@@ -183,7 +236,7 @@ suite('family Khata restricted PostgreSQL', () => {
   it('serializes competing charges at the family limit', async () => {
     const charge = () =>
       inScope(a, async (db) => {
-        await khata.authorizeKhataCharge(db, a, { ...a, amountMinor: 300 }, { authorized: false });
+        await khata.authorizeKhataCharge(db, a, { ...a, amountMinor: 300 }, {});
         await db.pharmacyKhataEvent.create({
           data: {
             organizationId: orgA,
@@ -203,21 +256,37 @@ suite('family Khata restricted PostgreSQL', () => {
     expect(await inScope(a, (db) => khata.readKhataBalance(db, a, a.familyAccountId))).toBe(900);
   });
   it('audits a fresh owner override and preserves append-only history', async () => {
-    await inScope(a, (db) =>
-      khata.authorizeKhataCharge(
-        db,
-        a,
-        { ...a, amountMinor: 200, ownerOverride: true },
-        { authorized: true, passwordAuthenticatedAt: Date.now() }
+    const approvalId = await inScope(a, (db) => issueApproval(db, a, 200));
+    const override = { ...a, amountMinor: 200, ownerOverride: true, overrideReason: 'Approved exception' };
+    await inScope(a, (db) => khata.authorizeKhataCharge(db, a, override, { approvalId }));
+    // Single-use: the evidence is consumed and its consumption cannot be undone.
+    const [evidence] = await inScope(a, (db) =>
+      db.$queryRawUnsafe<Array<{ consumedAt: Date | null }>>(
+        'SELECT "consumedAt" FROM pharmacy_khata_override_approvals WHERE id=$1',
+        approvalId
       )
     );
+    expect(evidence?.consumedAt).toBeInstanceOf(Date);
+    await expect(
+      inScope(a, (db) =>
+        db.$executeRawUnsafe(
+          'UPDATE pharmacy_khata_override_approvals SET "consumedAt"=NULL WHERE id=$1',
+          approvalId
+        )
+      )
+    ).rejects.toThrow();
+    await expect(
+      inScope(a, (db) =>
+        db.$executeRawUnsafe('DELETE FROM pharmacy_khata_override_approvals WHERE id=$1', approvalId)
+      )
+    ).rejects.toThrow();
     const decision = await inScope(a, (db) =>
       db.pharmacyKhataLimitDecision.findFirst({ where: { familyAccountId: a.familyAccountId } })
     );
     expect(decision).toMatchObject({
       appliedLimitMinor: 1100,
-      ownerActorId: 'owner',
-      reasons: expect.objectContaining({ ownerAuthorizedByUserId: 'owner' }),
+      ownerActorId: a.approverId,
+      reasons: expect.objectContaining({ ownerAuthorizedByUserId: a.approverId, approvalId }),
     });
     await expect(
       inScope(a, (db) =>

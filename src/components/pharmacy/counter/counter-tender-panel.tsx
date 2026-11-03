@@ -45,7 +45,12 @@ export type CounterTenderPanelProps = {
   manualSettingsError?: boolean;
   onReloadManualSettings?: () => void;
   loadKhataAccounts?: () => Promise<KhataAccount[]>;
-  reauthenticateOwner?: (password: string, totp: string) => Promise<void>;
+  /** Issues single-use approval evidence; `approverEmail` lets a second person approve. */
+  reauthenticateOwner?: (
+    password: string,
+    totp: string,
+    approval: { familyAccountId: string; amountMinor: number; reason: string; approverEmail?: string }
+  ) => Promise<string>;
   printKhataStatement?: (familyAccountId: string) => Promise<void>;
   /** Only a known, current bill has a balance; zero alone is not settlement. */
   balanceMinor: number | null;
@@ -69,6 +74,8 @@ export type CounterTenderPanelProps = {
       providerRef?: string;
       payerName?: string;
       referenceSkipped?: boolean;
+      overrideReason?: string;
+      approvalId?: string;
     },
     draft: TenderDraft
   ) => Promise<CounterTenderResult>;
@@ -125,6 +132,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [khataLoading, setKhataLoading] = useState(false);
     const [khataError, setKhataError] = useState('');
     const [ownerOverride, setOwnerOverride] = useState(false);
+    const [overrideReason, setOverrideReason] = useState('');
+    const [approverEmail, setApproverEmail] = useState('');
     const [password, setPassword] = useState('');
     const [totp, setTotp] = useState('');
     const [statementPending, setStatementPending] = useState(false);
@@ -210,7 +219,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       (!isKhata ||
         (Boolean(account) &&
           !khataLoading &&
-          (!overLimit || (ownerOverride && Boolean(password) && Boolean(reauthenticateOwner)))));
+          (!overLimit || (ownerOverride && Boolean(password) && Boolean(overrideReason.trim()) && Boolean(reauthenticateOwner)))));
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -218,13 +227,19 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       setSubmitting(true);
       setOutcome(null);
       try {
+        let approvalId: string | undefined;
         if (isKhata && overLimit) {
           try {
-            await reauthenticateOwner!(password, totp);
+            approvalId = await reauthenticateOwner!(password, totp, {
+              familyAccountId: accountId,
+              amountMinor,
+              reason: overrideReason.trim(),
+              ...(approverEmail.trim() ? { approverEmail: approverEmail.trim() } : {}),
+            });
           } catch {
             setOutcome({
               status: 'rejected',
-              message: 'Owner re-authentication failed. Check password and authentication code.',
+              message: 'Approver re-authentication failed. Check password and authentication code.',
             });
             return;
           } finally {
@@ -237,7 +252,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             type,
             amountMinor,
             ...(isKhata
-              ? { familyAccountId: accountId, ownerOverride: overLimit && ownerOverride }
+              ? { familyAccountId: accountId, ownerOverride: overLimit && ownerOverride, ...(overLimit && ownerOverride ? { overrideReason: overrideReason.trim() } : {}), ...(approvalId ? { approvalId } : {}) }
               : {}),
             ...(type === 'CASH' && cashReceivedMinor !== null ? { cashReceivedMinor } : {}),
             ...(manual && capture?.success ? {
@@ -444,6 +459,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               onChange={(event) => {
                 setAccountId(event.target.value);
                 setOwnerOverride(false);
+                setOverrideReason('');
+                setApproverEmail('');
               }}
             >
               <option value="">Choose family account</option>
@@ -467,7 +484,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             {overLimit ? (
               <>
                 <p role="alert" className="text-sm text-destructive">
-                  This charge exceeds the family credit limit. An owner must re-enter their password
+                  This charge exceeds the family credit limit. An owner or manager must re-enter their password
                   to raise the limit to {formatMinor(account!.balanceMinor + amountMinor!)}.
                 </p>
                 <Label className="flex min-h-11 items-center gap-2">
@@ -477,11 +494,24 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     disabled={!editable}
                     onChange={(event) => setOwnerOverride(event.target.checked)}
                   />
-                  Owner: authorize limit increase
+                  Owner or manager: authorize limit increase
                 </Label>
                 {ownerOverride ? (
                   <>
-                    <Label htmlFor="khata-password">Owner password (current account)</Label>
+                    <Label htmlFor="khata-approver-email">
+                      Approver email (leave blank if you are the approver)
+                    </Label>
+                    <Input
+                      id="khata-approver-email"
+                      type="email"
+                      autoComplete="off"
+                      value={approverEmail}
+                      disabled={!editable}
+                      maxLength={254}
+                      onChange={(event) => setApproverEmail(event.target.value)}
+                      className="h-9"
+                    />
+                    <Label htmlFor="khata-password">Approver password</Label>
                     <Input
                       id="khata-password"
                       type="password"
@@ -499,6 +529,14 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       disabled={!editable}
                       onChange={(event) => setTotp(event.target.value)}
                       className="h-9"
+                    />
+                    <Label htmlFor="khata-override-reason">Reason for limit increase</Label>
+                    <Input
+                      id="khata-override-reason"
+                      value={overrideReason}
+                      disabled={!editable}
+                      maxLength={500}
+                      onChange={(event) => setOverrideReason(event.target.value)}
                     />
                   </>
                 ) : null}

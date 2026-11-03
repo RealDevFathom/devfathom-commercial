@@ -39,6 +39,8 @@ const storedSchema = z
         providerRef: z.string().regex(/^\d{4,6}$/).optional(),
         payerName: z.string().trim().min(1).max(100).optional(),
         referenceSkipped: z.boolean().optional(),
+        overrideReason: z.string().trim().min(1).max(500).optional(),
+        approvalId: z.string().uuid().optional(),
       })
       .strict(),
     draft: z.object({ amount: amountText, cashReceived: amountText }).strict(),
@@ -87,7 +89,10 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
   }
   if (
     (input.type === 'KHATA' && !input.familyAccountId) ||
-    ((input.familyAccountId !== undefined || input.ownerOverride !== undefined) &&
+    ((input.familyAccountId !== undefined ||
+      input.ownerOverride !== undefined ||
+      input.overrideReason !== undefined ||
+      input.approvalId !== undefined) &&
       !['KHATA', 'CREDIT'].includes(input.type)) ||
     !sameScope(stored.scope, scope) ||
     input.branchId !== scope.branchId ||
@@ -120,7 +125,11 @@ export function readTenderAttempt(scope: TenderAttemptScope): TenderAttemptRead 
 
 export function persistTenderAttempt(attempt: TenderAttempt): void {
   const raw = JSON.stringify(attempt);
-  decode(raw, attempt.scope); // Strict allowlist rejects extra/private fields before writing.
+  const decoded = decode(raw, attempt.scope); // Strict allowlist rejects extra/private fields before writing.
+  // New attempts must carry the override reason. Reads stay lenient so a record saved
+  // before reasons were required still restores for outcome recovery instead of blocking.
+  if (decoded.input.ownerOverride === true && decoded.input.overrideReason === undefined)
+    throw new Error(TENDER_STORAGE_MESSAGE);
   const key = tenderAttemptStorageKey(attempt.scope);
   if (window.localStorage.getItem(key) !== null) throw new Error(TENDER_STORAGE_MESSAGE);
   window.localStorage.setItem(key, raw);
