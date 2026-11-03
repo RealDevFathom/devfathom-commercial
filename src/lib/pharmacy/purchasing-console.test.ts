@@ -3,8 +3,108 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   listPurchaseReturns,
   listSupplierCredits,
+  purchasingWorkspace,
   type PurchasingReadBounds,
 } from './purchasing-console';
+
+it('projects owner solo approval eligibility for each branch and the organization separately', async () => {
+  const db = {
+    pharmacyBranch: { findMany: vi.fn().mockResolvedValue([{ id: 'solo' }, { id: 'staffed' }]) },
+    pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([]) },
+    medicine: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacySupplier: { findMany: vi.fn().mockResolvedValue([]) },
+    user: {
+      // The workspace reads live approval capability separately from procurement.
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 'owner',
+          name: 'Owner',
+          email: 'owner@test.invalid',
+          status: 'ACTIVE',
+          role: 'ADMIN',
+          organizationRole: {
+            key: 'owner',
+            isSystem: true,
+            permissions: [{ capability: '*', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        },
+      ]),
+      findUnique: vi.fn().mockResolvedValue({
+        status: 'ACTIVE',
+        role: 'ADMIN',
+        organizationRole: {
+          key: 'owner',
+          isSystem: true,
+          permissions: [{ capability: '*', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+      count: vi
+        .fn()
+        .mockImplementation(({ where }) =>
+          where.OR?.[0]?.pharmacyBranchAssignments?.some?.branchId === 'solo' ? 0 : 1
+        ),
+    },
+  };
+  const workspace = await purchasingWorkspace(db as unknown as ScopedDb, {
+    organizationId: 'org',
+    actorId: 'owner',
+  });
+  expect(workspace.procurementApprovers).toEqual([
+    {
+      id: 'owner',
+      name: 'Owner',
+      email: 'owner@test.invalid',
+      branchIds: ['solo', 'staffed'],
+      soloOrganizationWide: false,
+      soloBranchIds: ['solo'],
+    },
+  ]);
+});
+
+it('offers only procurement staff with approval capability, with approval DENY taking precedence', async () => {
+  const users = ['buyer', 'approver', 'denied'].map((id) => ({
+    id,
+    name: id,
+    email: `${id}@test.invalid`,
+    status: 'ACTIVE',
+    role: 'EMPLOYEE',
+    organizationRole: {
+      permissions: [
+        { capability: 'pharmacy:procurement', effect: 'ALLOW' },
+        ...(id === 'buyer'
+          ? []
+          : [{ capability: 'pharmacy:procurement-approve', effect: 'ALLOW' }]),
+      ],
+    },
+    permissionOverrides:
+      id === 'denied' ? [{ capability: 'pharmacy:procurement-approve', effect: 'DENY' }] : [],
+  }));
+  const db = {
+    pharmacyBranch: { findMany: vi.fn().mockResolvedValue([{ id: 'assigned' }, { id: 'other' }]) },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'assigned' }]),
+    },
+    pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([]) },
+    medicine: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacySupplier: { findMany: vi.fn().mockResolvedValue([]) },
+    user: {
+      findMany: vi.fn().mockResolvedValue(users),
+      findUnique: vi.fn(async ({ where }) => users.find((user) => user.id === where.id) ?? null),
+    },
+  };
+  const workspace = await purchasingWorkspace(db as unknown as ScopedDb, {
+    organizationId: 'org',
+    actorId: 'receiver',
+  });
+  expect(workspace.procurementApprovers.map((user) => user.id)).toEqual(['approver']);
+  expect(workspace.procurementApprovers[0]?.branchIds).toEqual(['assigned']);
+  expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
+    where: { organizationId: 'org', userId: 'approver', active: true },
+    select: { branchId: true },
+  });
+});
 
 const scope = { organizationId: 'org_a', branchId: 'branch_a' };
 const from = new Date('2026-09-01T00:00:00.000Z');

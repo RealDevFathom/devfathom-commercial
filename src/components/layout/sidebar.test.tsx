@@ -270,7 +270,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
   it('renders named, focusable destinations with Chat disabled', () => {
     const onNavigate = renderNavigation();
     for (const [label, href] of destinations) {
-      const link = screen.getByRole('link', { name: new RegExp(`${label}$`) });
+      const link = screen.getByRole('link', { name: (name) => name.endsWith(label) });
       expect(link).toHaveAttribute('href', href);
       expect(link.tabIndex).toBe(0);
       link.focus();
@@ -285,7 +285,9 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     'hides disabled %s without hiding other licensed destinations',
     (label, href, module) => {
       renderNavigation({ granted: [...pharmacyModules.filter((key) => key !== module), 'chat'] });
-      expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
+      ).not.toBeInTheDocument();
       const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
       expect(hrefs).not.toContain(href);
       for (const [, otherHref] of destinations) {
@@ -298,7 +300,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
   it('keeps operational links for non-admins while finance and setup stay admin-only', () => {
     renderNavigation({ role: 'MEMBER' });
     for (const label of ['Inventory', 'Purchasing', 'Reports & Insights']) {
-      expect(screen.getByRole('link', { name: new RegExp(`${label}$`) })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: (name) => name.endsWith(label) })).toBeInTheDocument();
     }
     for (const label of [
       'Finance',
@@ -307,7 +309,9 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
       'Regulatory profile',
       'Branch assignments',
     ]) {
-      expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
+      ).not.toBeInTheDocument();
     }
   });
 
@@ -315,7 +319,9 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     renderNavigation({ role: 'MEMBER', capabilities: [] });
     expect(screen.getByRole('link', { name: /Inventory$/ })).toBeInTheDocument();
     for (const label of ['Purchasing', 'Reports & Insights', 'Day close', 'Team']) {
-      expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
+      ).not.toBeInTheDocument();
     }
   });
 
@@ -338,7 +344,9 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
   it('ignores a cached capability answer for another signed-in identity (#979)', () => {
     renderNavigation({ role: 'MEMBER', railUserId: 'someone-else' });
     for (const label of ['Purchasing', 'Reports & Insights']) {
-      expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
+      ).not.toBeInTheDocument();
     }
   });
 
@@ -386,7 +394,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     ['/pharmacy/inventory', 'Inventory'],
   ])('marks only the longest matching destination current at %s', (pathname, label) => {
     renderNavigation({ pathname });
-    expect(screen.getByRole('link', { name: new RegExp(`${label}$`) })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: (name) => name.endsWith(label) })).toHaveAttribute(
       'aria-current',
       'page'
     );
@@ -467,7 +475,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Hospitality navigation', (surf
       entries.map(([, href]) => href)
     );
     for (const [label, href] of entries) {
-      const link = screen.getByRole('link', { name: new RegExp(`${label}$`) });
+      const link = screen.getByRole('link', { name: (name) => name.endsWith(label) });
       expect(link).toHaveAttribute('href', href);
       expect(link.tabIndex).toBe(0);
     }

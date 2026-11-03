@@ -30,7 +30,7 @@ const previousTemplate = [
 ];
 const ownerOperator = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner-operator')!;
 // `pharmacy:procurement-approve` joined the template later and is backfilled by
-// its own migration (20261101200000_pharmacy_purchasing_authz, covered by
+// its own migration (20261101200100_pharmacy_purchasing_authz, covered by
 // tests/pharmacy-procurement-approve-backfill.db.test.ts).
 const template = {
   ...ownerOperator,

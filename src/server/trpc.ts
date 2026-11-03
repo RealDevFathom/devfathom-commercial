@@ -352,6 +352,17 @@ const requireDeclaredCapabilities = t.middleware(async ({ ctx, next, path, type,
     });
   }
   const session = await assertCapabilities(ctx, path, type, actions);
+  const organizationId = ctx.entitlements?.organizationId;
+  if (
+    !organizationId ||
+    session.user.organizationId !== organizationId ||
+    !(await ctx.db.user.findUnique({
+      where: { id: session.user.id, organizationId, status: 'ACTIVE' },
+      select: { id: true },
+    }))
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'No active tenant actor on this request.' });
+  }
   return next({ ctx: { ...ctx, session } });
 });
 

@@ -101,19 +101,17 @@ export default async function PharmacyOrdersPage({
   // PR J (#979): approving and sending are their own permission. Offer those
   // actions only to the people the server will let through.
   const sessionUser = ctx.session.user;
-  const [canApprove, soloOwner] = await Promise.all([
-    can(subjectFromSession(sessionUser), 'pharmacy:procurement-approve', undefined, {
-      db: ctx.db,
-      source: 'TRPC',
-      ip: ctx.requestMeta?.ip ?? null,
-    }),
-    isSoloPharmacyOwner(ctx.db, {
-      organizationId: ctx.entitlements.organizationId,
-      actorId: sessionUser.id,
-      role: sessionUser.role,
-      actorOrganizationId: sessionUser.organizationId,
-    }),
-  ]);
+  const canApprove = await can(
+    subjectFromSession(sessionUser),
+    'pharmacy:procurement-approve',
+    undefined,
+    { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta?.ip ?? null }
+  );
+  const soloOwner = await isSoloPharmacyOwner(ctx.db, {
+    organizationId: ctx.entitlements.organizationId,
+    actorId: sessionUser.id,
+    actorOrganizationId: sessionUser.organizationId,
+  });
   const caller = await purchasingCaller();
   if (!caller) {
     return (
@@ -434,11 +432,16 @@ export default async function PharmacyOrdersPage({
         await outcome.write(actionCaller.submitPurchaseOrder)({ purchaseOrderId });
         message = 'Order submitted for approval. Somebody else has to approve it.';
       } else if (action === 'approve' || action === 'reject') {
-        await outcome.write(actionCaller.approvePurchaseOrder)({
+        const decision = await outcome.write(actionCaller.approvePurchaseOrder)({
           purchaseOrderId,
           decision: action === 'approve' ? 'APPROVED' : 'REJECTED',
+          pin: optionalField(form, 'approvalPin'),
           reason: optionalField(form, 'reason'),
         });
+        if ('blocked' in decision)
+          throw Object.assign(new PurchasingValidationError(decision.blocked), {
+            field: 'approvalPin',
+          });
         message =
           action === 'approve'
             ? 'Order approved. Send it once you are ready.'
@@ -651,7 +654,15 @@ export default async function PharmacyOrdersPage({
             <OrderDetailPanel
               actorId={ctx.session.user.id}
               canApprove={canApprove}
-              soloOwner={soloOwner}
+              soloOwnerEligible={
+                soloOwner && workspace.procurementApprovers.some(
+                  (person) =>
+                    person.id === ctx.session!.user.id &&
+                    (order.branchId
+                      ? person.soloBranchIds?.includes(order.branchId)
+                      : person.soloOrganizationWide)
+                )
+              }
               comparisons={orderComparisons}
               landed={landed}
               notice={notice}
@@ -1070,7 +1081,7 @@ function OrderDetailPanel({
   landed,
   actorId,
   canApprove,
-  soloOwner,
+  soloOwnerEligible,
   comparisons,
   notice,
   onAdvance,
@@ -1094,7 +1105,7 @@ function OrderDetailPanel({
   } | null;
   actorId: string;
   canApprove: boolean;
-  soloOwner: boolean;
+  soloOwnerEligible: boolean;
   comparisons: LineComparison[];
   notice: Notice | null;
   onAdvance: (form: FormData) => Promise<string>;
@@ -1103,8 +1114,7 @@ function OrderDetailPanel({
   // than as a refusal afterwards.
   // The solo owner is the one exception: there is nobody else to decide.
   const selfApproval =
-    !soloOwner &&
-    (order.createdByUserId === actorId || order.requisition?.requestedByUserId === actorId);
+    order.createdByUserId === actorId || order.requisition?.requestedByUserId === actorId;
   const costByLine = new Map(landed?.lines.map((line) => [line.purchaseOrderLineId, line]) ?? []);
   // The forecast-based cost and assumption apply to the draft being reviewed;
   // once submitted, the order is costed and described per stocked unit.
@@ -1273,7 +1283,7 @@ function OrderDetailPanel({
               Approving an order needs the purchase-order approval permission, which a Manager or
               the Owner holds. Ask one of them to decide.
             </p>
-          ) : selfApproval ? (
+          ) : selfApproval && !soloOwnerEligible ? (
             <p className="text-sm text-text-muted">
               You raised this order, so you cannot approve it. That is the PUR-02 segregation of
               duties rule — ask a second person to decide.
@@ -1292,6 +1302,18 @@ function OrderDetailPanel({
                 notice={notice}
                 hint="Recorded with the decision, including a rejection."
               />
+              {selfApproval ? (
+                <TextField
+                  label="Owner PIN"
+                  name="approvalPin"
+                  notice={notice}
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  required
+                  hint="Sole active owners may approve with PIN reauthentication. The exception is audited."
+                />
+              ) : null}
               <SubmitButton name="action" value="approve">
                 Approve
               </SubmitButton>

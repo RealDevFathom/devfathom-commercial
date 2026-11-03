@@ -1,3 +1,4 @@
+import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import type { Metadata } from 'next';
 import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
@@ -146,6 +147,11 @@ export default async function PharmacyReceivingPage({
   }
 
   const branchId = scope.branch.id;
+  const procurementApprovers = workspace.procurementApprovers.filter(
+    (person) =>
+      person.branchIds.includes(branchId) &&
+      (person.id !== ctx.session!.user.id || person.soloBranchIds?.includes(branchId))
+  );
   const exceptionStatus = param(query, 'exceptions') === 'resolved' ? 'RESOLVED' : 'OPEN';
 
   let receipts: GoodsReceiptDetail[];
@@ -256,6 +262,10 @@ export default async function PharmacyReceivingPage({
         qualifiedPersonUserId: optionalField(form, 'qualifiedPersonUserId'),
         lines,
       });
+      if ('blocked' in receipt)
+        throw Object.assign(new PurchasingValidationError(receipt.blocked), {
+          field: 'bypassApprovalPin',
+        });
       revalidatePath(ROUTE);
       next = destination(
         ROUTE,
@@ -316,11 +326,16 @@ export default async function PharmacyReceivingPage({
         directPurchase: {
           reason: field(form, 'bypassReason'),
           approvedByUserId: field(form, 'bypassApprovedByUserId'),
+          pin: field(form, 'bypassApprovalPin'),
         },
         note: optionalField(form, 'directNote'),
         qualifiedPersonUserId: optionalField(form, 'directQualifiedPersonUserId'),
         lines,
       });
+      if ('blocked' in receipt)
+        throw Object.assign(new PurchasingValidationError(receipt.blocked), {
+          field: 'bypassApprovalPin',
+        });
       revalidatePath(ROUTE);
       next = destination(
         ROUTE,
@@ -354,6 +369,7 @@ export default async function PharmacyReceivingPage({
         goodsReceiptId,
         staffProfileId: optionalField(form, 'witnessStaffProfileId'),
         pin: optionalField(form, 'witnessPin'),
+        approvalPin: optionalField(form, 'receiptApprovalPin'),
       });
       if (result && 'blocked' in result) {
         next = destination(
@@ -362,7 +378,7 @@ export default async function PharmacyReceivingPage({
             message: result.blocked,
             kind: 'error',
             outcome: 'rejected',
-            field: 'witnessPin',
+            field: result.blocked === APPROVAL_BLOCKED ? 'receiptApprovalPin' : 'witnessPin',
           },
           { branch, receipt: goodsReceiptId }
         );
@@ -778,11 +794,11 @@ export default async function PharmacyReceivingPage({
           same as receiving against an order — the only difference is that a bypass reason and a
           named approver stand in place of the order.
         </p>
-        {workspace.approvers.length === 0 ? (
+        {procurementApprovers.length === 0 ? (
           <div className="mt-4">
             <EmptyState
-              title="No second person can approve a bypass"
-              detail="A direct purchase needs an approver who is not you, and this workspace has no other active user. Invite a colleague, or raise a purchase order instead."
+              title="No authorized approver is available"
+              detail="A direct purchase needs a procurement approver with an active PIN. A sole active owner may reauthenticate with their own PIN; other teams need a second approver. Configure staff access and a PIN before continuing."
               steps={[
                 { label: 'Invite a colleague', href: '/team' },
                 { label: 'Raise a purchase order', href: `${PURCHASING_ROUTE}/orders` },
@@ -860,15 +876,24 @@ export default async function PharmacyReceivingPage({
                 hint="Recorded permanently with the receipt."
               />
               <SelectField
-                emptyHint="Nobody else is active in this workspace."
-                hint="You cannot approve your own bypass, so you are not on this list."
+                emptyHint="No authorized procurement approver is available."
+                hint="A second approver is required unless you are the sole active owner at this branch. The approver must enter their PIN."
                 label="Approved by"
                 name="bypassApprovedByUserId"
                 notice={notice}
-                options={workspace.approvers.map((approver) => ({
+                options={procurementApprovers.map((approver) => ({
                   value: approver.id,
                   label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
                 }))}
+                required
+              />
+              <TextField
+                label="Approver PIN"
+                name="bypassApprovalPin"
+                notice={notice}
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
                 required
               />
             </div>
@@ -1378,6 +1403,17 @@ function ReceiptDetail({
                   type="password"
                 />
               </div>
+            ) : null}
+            {receipt.directPurchase ? (
+              <TextField
+                label="Direct purchase approver PIN (existing drafts)"
+                name="receiptApprovalPin"
+                notice={notice}
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                hint="Required if this draft predates verified approval. The recorded approver must enter their PIN."
+              />
             ) : null}
             <SubmitButton>Post into stock</SubmitButton>
             <p className="mt-2 text-sm text-text-muted">

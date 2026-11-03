@@ -42,6 +42,7 @@ const template = (key: string) =>
 
 const PEOPLE: Record<string, { role: 'ADMIN' | 'EMPLOYEE'; grants: readonly string[] }> = {
   cashier: { role: 'EMPLOYEE', grants: template('cashier') },
+  pharmacist: { role: 'EMPLOYEE', grants: template('pharmacist') },
   buyer: { role: 'EMPLOYEE', grants: template('procurement') },
   owner: { role: 'ADMIN', grants: ['*'] },
 };
@@ -64,6 +65,7 @@ function makeDb() {
   return {
     user: model(),
     pharmacyBranch: model(),
+    pharmacySupplier: model(),
     pharmacyBranchAssignment: model(),
     pharmacySupplierRelationship: model(),
     pharmacySupplierActionLink: model(),
@@ -133,6 +135,7 @@ beforeEach(() => {
       ? {
           id: where.id,
           role: person.role,
+          status: 'ACTIVE',
           organizationRole: {
             permissions: person.grants.map((capability) => ({ capability, effect: 'ALLOW' })),
           },
@@ -141,6 +144,7 @@ beforeEach(() => {
       : null;
   });
   db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
+  db.pharmacySupplier.findMany.mockResolvedValue([{ id: 'supplier_a' }]);
   db.pharmacyBranchAssignment.findFirst.mockImplementation(
     async ({ where }: { where: { userId: string; branchId: string } }) =>
       where.userId === 'buyer' && where.branchId === 'branch_a' ? { id: 'asg' } : null
@@ -167,18 +171,21 @@ describe('supplier links deny by default (PR J)', () => {
     );
   });
 
-  it.each(STAFF)('refuses %s to the cashier before any read or write', async (name) => {
-    await expect(CALLS[name](caller('cashier'))).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-      message: PERMISSION,
-    });
-    for (const [table, delegate] of Object.entries(db)) {
-      if (table === 'user') continue;
-      for (const fn of Object.values(delegate)) expect(fn).not.toHaveBeenCalled();
+  it.each(STAFF.flatMap((name) => ['cashier', 'pharmacist'].map((who) => [name, who] as const)))(
+    'refuses %s to the %s before any read or write',
+    async (name, who) => {
+      await expect(CALLS[name](caller(who))).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: PERMISSION,
+      });
+      for (const [table, delegate] of Object.entries(db)) {
+        if (table === 'user') continue;
+        for (const fn of Object.values(delegate)) expect(fn).not.toHaveBeenCalled();
+      }
+      expect(mocks.issueSupplierActionLink).not.toHaveBeenCalled();
+      expect(mocks.recordManualSupplierEvidence).not.toHaveBeenCalled();
     }
-    expect(mocks.issueSupplierActionLink).not.toHaveBeenCalled();
-    expect(mocks.recordManualSupplierEvidence).not.toHaveBeenCalled();
-  });
+  );
 
   it.each(STAFF)('lets the solo owner (tenant admin, no assignment) %s', async (name) => {
     await expect(CALLS[name](caller('owner'))).resolves.toBeDefined();
@@ -203,9 +210,9 @@ describe('supplier links deny by default (PR J)', () => {
 
   it("revoke checks the link's own branch, not a payload branch", async () => {
     db.pharmacySupplierActionLink.findFirst.mockResolvedValue({
-    id: 'link_a',
-    branchId: 'branch_b',
-  });
+      id: 'link_a',
+      branchId: 'branch_b',
+    });
     await expect(CALLS.revoke(caller('buyer'))).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: OUTSIDE_BRANCH,

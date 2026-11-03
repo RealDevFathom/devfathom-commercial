@@ -1,3 +1,4 @@
+import { hashSync } from 'bcryptjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
 
@@ -9,7 +10,10 @@ import { TRPCError } from '@trpc/server';
 
 const mocks = vi.hoisted(() => ({ annotateAudit: vi.fn() }));
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+  withTenantDb: vi.fn(async (_org: string, run: (tx: unknown) => unknown) => run(db)),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
@@ -30,6 +34,7 @@ const FUTURE = new Date('2030-01-01T00:00:00.000Z');
 const PAST = new Date('2020-01-01T00:00:00.000Z');
 const PERMISSION = 'You do not have permission for this action.';
 const OUTSIDE_BRANCH = 'Branch is outside your scope.';
+const APPROVER_HASH = hashSync('1234', 4);
 
 // ── people ────────────────────────────────────────────────────────────────
 
@@ -169,9 +174,13 @@ function caller(userId: string) {
 }
 type Caller = ReturnType<typeof caller>;
 
-/** Active members of the organization, as `isSoloOwner` reads them. */
+/** Active members seen by both the organization and branch solo-owner checks. */
 function activeMembers(...ids: string[]) {
-  m('user').findMany.mockResolvedValue(ids.map((id) => ({ id })));
+  m('user').findMany.mockResolvedValue(ids.map((id) => userRow(id)));
+  m('user').count.mockImplementation(
+    async ({ where }: { where: { id: { not: string } } }) =>
+      ids.filter((id) => id !== where.id.not).length
+  );
 }
 
 /** Which branches each person is assigned to. */
@@ -179,6 +188,12 @@ function assignments(byUser: Record<string, string[]>) {
   m('pharmacyBranchAssignment').findFirst.mockImplementation(
     async ({ where }: { where: { userId: string; branchId: string } }) =>
       byUser[where.userId]?.includes(where.branchId) ? { id: `asg_${where.userId}` } : null
+  );
+  m('pharmacyBranchAssignment').findMany.mockImplementation(
+    async ({ where }: { where: { userId: string; branchId?: { in: string[] } } }) =>
+      (byUser[where.userId] ?? [])
+        .filter((branchId) => !where.branchId || where.branchId.in.includes(branchId))
+        .map((branchId) => ({ branchId }))
   );
 }
 
@@ -210,16 +225,24 @@ beforeEach(() => {
   );
   activeMembers('owner', 'cashier_a', 'cashier_b', 'buyer', 'manager_a', 'manager_b');
   m('pharmacyBranch').findFirst.mockResolvedValue({ id: 'branch_a' });
+  m('pharmacyBranch').findMany.mockResolvedValue([{ id: 'branch_a' }]);
   assignments({
     cashier_a: ['branch_a'],
     cashier_b: ['branch_a'],
     buyer: ['branch_a'],
     manager_a: ['branch_a'],
     manager_b: ['branch_a'],
+    owner_operator: ['branch_a'],
   });
   m('pharmacySupplier').findFirst.mockResolvedValue(SUPPLIER);
   m('medicine').findFirst.mockResolvedValue({ id: 'medicine_a' });
   m('packLevel').findFirst.mockResolvedValue({ id: 'pack_a' });
+  m('restaurantOperatorCredential').findFirst.mockResolvedValue({
+    id: 'credential_a',
+    credentialHash: APPROVER_HASH,
+    failedAttempts: 0,
+    lockedUntil: null,
+  });
 });
 
 // ── one valid call per procedure ──────────────────────────────────────────
@@ -238,6 +261,7 @@ const RECEIPT_LINE = {
 };
 
 const CALLS = {
+  provisionMyPurchasePin: (c: Caller) => c.provisionMyPurchasePin({ pin: '4821' }),
   createSupplier: (c: Caller) => c.createSupplier({ name: 'Karachi Distributors' }),
   recordSupplierLicence: (c: Caller) =>
     c.recordSupplierLicence({
@@ -298,7 +322,7 @@ const CALLS = {
     }),
   submitPurchaseOrder: (c: Caller) => c.submitPurchaseOrder({ purchaseOrderId: 'po_a' }),
   approvePurchaseOrder: (c: Caller) =>
-    c.approvePurchaseOrder({ purchaseOrderId: 'po_a', decision: 'APPROVED' }),
+    c.approvePurchaseOrder({ purchaseOrderId: 'po_a', decision: 'APPROVED', pin: '1234' }),
   sendPurchaseOrder: (c: Caller) => c.sendPurchaseOrder({ purchaseOrderId: 'po_a' }),
   landedCost: (c: Caller) => c.landedCost({ purchaseOrderId: 'po_a' }),
   createGoodsReceipt: (c: Caller) =>
@@ -306,7 +330,7 @@ const CALLS = {
       reference: 'GR-1',
       branchId: 'branch_a',
       supplierId: 'supplier_a',
-      directPurchase: { reason: 'Urgent stock-out', approvedByUserId: 'manager_a' },
+      directPurchase: { reason: 'Urgent stock-out', approvedByUserId: 'manager_a', pin: '1234' },
       supplierInvoiceRef: 'INV-1',
       supplierInvoiceDate: PAST,
       warrantyEvidenceRef: 'WAR-1',
@@ -423,6 +447,7 @@ const FINANCIAL = ['reports:financial'];
 
 /** The permission every procedure must declare. A new procedure needs a row here. */
 const EXPECTED_CAPABILITIES: Record<ProcedureName, string[]> = {
+  provisionMyPurchasePin: PROCUREMENT_AND_APPROVAL,
   createSupplier: PROCUREMENT,
   recordSupplierLicence: PROCUREMENT,
   verifySupplierLicence: PROCUREMENT,
@@ -717,13 +742,13 @@ describe('the solo owner can do all of their purchasing', () => {
       expect.objectContaining({
         targetType: 'PharmacyBranch',
         metadata: expect.objectContaining({
-          reason: 'org-admin-procurement-access-without-branch-assignment',
+          reason: 'owner-procurement-access-without-branch-assignment',
         }),
       })
     );
   });
 
-  it('approves their own order under the solo rule, recorded as such', async () => {
+  it('approves their own order with a PIN and writes the solo-owner audit proof', async () => {
     await expect(CALLS.approvePurchaseOrder(caller('owner'))).resolves.toMatchObject({
       status: 'APPROVED',
       approvedByUserId: 'owner',
@@ -732,6 +757,38 @@ describe('the solo owner can do all of their purchasing', () => {
       actorUserId: 'owner',
       policy: SOLO_OWNER_APPROVAL_POLICY,
     });
+    expect(m('auditLog').create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_a',
+        actorId: 'owner',
+        action: 'pharmacy.purchaseOrderApproval',
+        targetType: 'PharmacyPurchaseOrder',
+        targetId: 'po_a',
+        metadata: {
+          policy: SOLO_OWNER_APPROVAL_POLICY,
+          pinVerified: true,
+          decision: 'APPROVED',
+        },
+      }),
+    });
+    const verifiedPin = db.$queryRaw.mock.calls.find(([sql]) =>
+      (sql as TemplateStringsArray).join('?').includes('app.pharmacy_purchase_pin_verified_user_id')
+    );
+    expect(verifiedPin?.slice(1)).toEqual(['owner']);
+  });
+
+  it.each([undefined, '9999'])('refuses self-approval without the correct PIN (%s)', async (pin) => {
+    await expect(
+      caller('owner').approvePurchaseOrder({ purchaseOrderId: 'po_a', decision: 'APPROVED', pin })
+    ).resolves.toHaveProperty('blocked');
+    expect(m('pharmacyPurchaseOrder').update).not.toHaveBeenCalled();
+    expect(m('pharmacyPurchaseOrderApproval').create).not.toHaveBeenCalled();
+    expect(m('auditLog').create).not.toHaveBeenCalled();
+    expect(
+      db.$queryRaw.mock.calls.some(([sql]) =>
+        (sql as TemplateStringsArray).join('?').includes('app.pharmacy_purchase_pin_verified_user_id')
+      )
+    ).toBe(false);
   });
 
   it('sends their approved order', async () => {
@@ -771,15 +828,19 @@ describe('the solo owner can do all of their purchasing', () => {
     expect(m('pharmacySupplierLicence').create).not.toHaveBeenCalled();
   });
 
-  it('keeps the legacy owner (tenant admin, no role) on procurement and approval', async () => {
+  it('does not turn a legacy ADMIN with no live owner grant into a solo owner', async () => {
     activeMembers('legacy_owner');
+    assignments({ legacy_owner: ['branch_a'] });
     m('pharmacyPurchaseOrder').findFirst.mockResolvedValue(
       order({ createdByUserId: 'legacy_owner' })
     );
     await expect(CALLS.createSupplier(caller('legacy_owner'))).resolves.toBeDefined();
-    await expect(CALLS.approvePurchaseOrder(caller('legacy_owner'))).resolves.toMatchObject({
-      status: 'APPROVED',
+    await expect(CALLS.approvePurchaseOrder(caller('legacy_owner'))).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'SELF_APPROVAL',
     });
+    expect(m('pharmacyPurchaseOrderApproval').create).not.toHaveBeenCalled();
+    expect(m('auditLog').create).not.toHaveBeenCalled();
   });
 });
 

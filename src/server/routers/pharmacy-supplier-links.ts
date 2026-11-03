@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { assertProcurementBranch } from '../pharmacy-procurement-scope';
+import { assertInOrganization } from '../org-refs';
 import {
   denyByDefaultProcedure,
   publicProcedure,
@@ -39,7 +40,7 @@ const genericLinkError = () =>
  * PR J (#979): issuing, revoking and acting on supplier links is procurement
  * work. Every staff procedure is deny-by-default with `pharmacy:procurement`,
  * and the branch must be an active branch the caller is assigned to (or the
- * caller is the tenant administrator), not merely a branch of the tenant.
+ * caller is a live tenant owner), not merely a branch of the tenant.
  */
 const staff = denyByDefaultProcedure;
 const PROCUREMENT = { capabilities: ['pharmacy:procurement'] } as const satisfies ProcedureMeta;
@@ -52,7 +53,12 @@ function mapError(error: unknown): never {
   if (!(error instanceof SupplierLinkError)) throw error;
   if (error.reason === 'INVALID_LINK') throw genericLinkError();
   throw new TRPCError({
-    code: error.reason === 'IDEMPOTENCY_CONFLICT' ? 'CONFLICT' : 'BAD_REQUEST',
+    code:
+      error.reason === 'LINK_LIMIT_EXCEEDED'
+        ? 'TOO_MANY_REQUESTS'
+        : error.reason === 'IDEMPOTENCY_CONFLICT'
+          ? 'CONFLICT'
+          : 'BAD_REQUEST',
     message: error.reason,
   });
 }
@@ -89,6 +95,9 @@ export const pharmacySupplierLinksRouter = router({
     .input(z.object({ branchId: id, supplierId: id }).strict())
     .mutation(async ({ ctx, input }) => {
       await assertBranch(ctx, input.branchId);
+      await assertInOrganization(ctx.db.pharmacySupplier, ctx.entitlements.organizationId, [
+        input.supplierId,
+      ]);
       return ctx.db.pharmacySupplierRelationship.create({
         data: { ...input, organizationId: ctx.entitlements.organizationId },
       });
@@ -127,7 +136,11 @@ export const pharmacySupplierLinksRouter = router({
       if (!link) throw genericLinkError();
       await assertBranch(ctx, link.branchId);
       return ctx.db.pharmacySupplierActionLink.update({
-        where: { id: link.id },
+        where: {
+          id: link.id,
+          organizationId: ctx.entitlements.organizationId,
+          branchId: link.branchId,
+        },
         data: { revokedAt: new Date() },
       });
     }),
@@ -169,7 +182,11 @@ export const pharmacySupplierLinksRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertBranch(ctx, input.branchId);
       const submission = await ctx.db.pharmacySupplierSubmission.findFirst({
-        where: { id: input.submissionId, branchId: input.branchId },
+        where: {
+          id: input.submissionId,
+          branchId: input.branchId,
+          organizationId: ctx.entitlements.organizationId,
+        },
       });
       if (!submission) throw new TRPCError({ code: 'NOT_FOUND' });
       return ctx.db.pharmacySupplierSubmissionApproval.create({

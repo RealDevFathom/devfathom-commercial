@@ -99,7 +99,9 @@ function envelope<T>(
   };
 }
 const context = () => ({
-  session: { user: { id: 'user-1', role: 'ADMIN', status: 'ACTIVE' } },
+  session: {
+    user: { id: 'user-1', role: 'ADMIN', status: 'ACTIVE', organizationId: scope.organizationId },
+  },
   entitlements: { organizationId: scope.organizationId },
   organization: { id: scope.organizationId, currency: 'PKR' },
   requestMeta: { ip: null },
@@ -416,9 +418,21 @@ describe('supplier-credit Reports preparation', () => {
     const caller = pharmacyPurchasingRouter.createCaller({
       ...context(),
       db: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'user-1',
+            status: 'ACTIVE',
+            organizationRole: {
+              permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }],
+            },
+            permissionOverrides: [],
+          }),
+        },
         pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: scope.branchId }) },
-        // #979: the caller must hold an active assignment to the branch it reads.
-        pharmacyBranchAssignment: { findFirst: assignmentRead },
+        pharmacyBranchAssignment: {
+          findFirst: assignmentRead,
+          findMany: vi.fn().mockResolvedValue([{ branchId: scope.branchId }]),
+        },
         pharmacyPurchaseReturn: { findMany: returnsRead },
         pharmacySupplierCredit: { findMany: creditsRead },
       },
