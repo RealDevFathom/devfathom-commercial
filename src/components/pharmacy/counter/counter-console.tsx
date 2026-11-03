@@ -91,6 +91,7 @@ import { previewSaleLine, type SaleUnitKind } from '@/lib/pharmacy/counter-prici
 import {
   formatMinor,
   formatReceiptDate,
+  type CounterReceipt,
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
 import {
@@ -281,7 +282,13 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
   return (
     <ScopedPharmacyCounterConsole
       {...props}
-      key={JSON.stringify([user.organizationId, user.id])}
+      key={JSON.stringify([
+        user.organizationId,
+        user.id,
+        user.role,
+        user.status,
+        [...entitlements.enabledModules].sort(),
+      ])}
       organizationId={user.organizationId}
       accountId={user.id}
       evidenceAuthorized={user.role === 'ADMIN'}
@@ -354,6 +361,13 @@ function ScopedPharmacyCounterConsole({
   const [receiptRenders, setReceiptRenders] = useState(0);
   const [autoPrint, setAutoPrint] = useState(false);
   const [receiptSettlement, setReceiptSettlement] = useState<CounterReceiptSettlement | null>(null);
+  // Keep the receipt the cashier is reviewing independent from query lifecycle
+  // changes. A background invalidation must not replace an issued receipt with
+  // a loading/error state while its drawer is open.
+  const [lastReceipt, setLastReceipt] = useState<{
+    branchId: string;
+    receipt: CounterReceipt;
+  } | null>(null);
   const receiptIntent = useRef<ReceiptIntent | null>(null);
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -478,6 +492,14 @@ function ScopedPharmacyCounterConsole({
 
   const keymapQuery = trpc.pharmacySales.counterKeymap.useQuery(undefined, { staleTime: 300_000 });
   const keymap = keymapQuery.data ?? resolveCounterKeymap({ preset: 'devfathom' });
+  // Preserve operator overrides before offering a receipt-only shortcut.
+  const lastReceiptShift = !matchCounterAction(keymap.bindings, { key: 'r', altKey: true })
+    ? false
+    : !matchCounterAction(keymap.bindings, { key: 'R', altKey: true, shiftKey: true })
+      ? true
+      : null;
+  const lastReceiptShortcut =
+    lastReceiptShift === null ? undefined : lastReceiptShift ? 'Alt+Shift+R' : 'Alt+R';
   const saveKeymap = trpc.pharmacySales.counterSaveKeymap.useMutation({
     onSuccess: () => {
       void utils.pharmacySales.counterKeymap.invalidate();
@@ -587,7 +609,6 @@ function ScopedPharmacyCounterConsole({
       setReceiptSettlement(null);
       setReceiptOpen(false);
       setSaleId(nextSaleId);
-      setReceiptRenders(0);
       setCustomerId(null);
       setRedeemPoints(0);
       setTenderOutcome(null);
@@ -740,6 +761,25 @@ function ScopedPharmacyCounterConsole({
     attempt !== null ||
     checkingOutcome;
   const lineCount = cart?.lines.length ?? 0;
+  // A snapshot is only readable in the operator/branch scope that verified it.
+  // A transient refetch failure can retain it; an explicit access denial cannot.
+  const receiptAccessDenied =
+    receiptQuery.error?.data?.code === 'UNAUTHORIZED' ||
+    receiptQuery.error?.data?.code === 'FORBIDDEN' ||
+    (lastReceipt?.receipt.saleId === saleId && receiptQuery.error?.data?.code === 'NOT_FOUND');
+  const presentedReceipt =
+    branchAuthorized && lastReceipt?.branchId === branchId && !receiptAccessDenied
+      ? lastReceipt.receipt
+      : null;
+  const currentReceipt =
+    (presentedReceipt?.saleId === saleId ? presentedReceipt : null) ??
+    (billState === 'settled' &&
+    !receiptQuery.isError &&
+    receiptQuery.data?.saleId === saleId &&
+    receiptQuery.data.receiptNumber === cart?.receiptNumber
+      ? receiptQuery.data
+      : null);
+  const displayReceipt = presentedReceipt ?? currentReceipt;
 
   const refreshTenderBill = useCallback(
     async (resolution = tenderOutcome?.status) => {
@@ -785,26 +825,33 @@ function ScopedPharmacyCounterConsole({
           if (
             !receipt.isSuccess ||
             receipt.data?.saleId !== saleId ||
-            receipt.data.receiptNumber !== read.data.receiptNumber
+            receipt.data.receiptNumber !== read.data.receiptNumber ||
+            !Number.isSafeInteger(read.data.receiptNumber) ||
+            (read.data.receiptNumber ?? 0) <= 0
           )
             throw new Error('Receipt unavailable');
+          // Validate an issued print model before retaining it beyond this query.
+          buildCounterBrowserReceipt(receipt.data, receiptLocale, receiptFormat);
+          if (presentedReceipt?.saleId !== receipt.data.saleId) setReceiptRenders(0);
+          setLastReceipt({ branchId, receipt: receipt.data });
           const intent = receiptIntent.current;
           if (
             resolution === 'accepted' &&
-            intent?.saleId === saleId &&
-            intent.branchId === branchId &&
-            intent.receiptNumber !== null &&
-            intent.receiptNumber === read.data.receiptNumber &&
+            Number.isSafeInteger(read.data.receiptNumber) &&
+            (read.data.receiptNumber ?? 0) > 0 &&
             read.data.totals.netMinor === read.data.totals.tenderedMinor &&
             read.data.lines.length > 0
           ) {
-            buildCounterBrowserReceipt(receipt.data, receiptLocale, receiptFormat);
+            const matchingIntent =
+              intent?.saleId === saleId &&
+              intent.branchId === branchId &&
+              intent.receiptNumber === read.data.receiptNumber;
             confirmed = {
               status: 'confirmed',
               saleId,
-              receiptNumber: intent.receiptNumber,
-              autoPrint: intent.autoPrint,
-              printReservation: intent.printReservation,
+              receiptNumber: read.data.receiptNumber!,
+              autoPrint: matchingIntent ? intent.autoPrint : false,
+              printReservation: matchingIntent ? intent.printReservation : undefined,
             };
           }
         }
@@ -851,6 +898,7 @@ function ScopedPharmacyCounterConsole({
       receiptFormat,
       receiptLocale,
       receiptQuery,
+      presentedReceipt?.saleId,
       recoveryScope,
       refreshingTenderBill,
       saleId,
@@ -869,6 +917,27 @@ function ScopedPharmacyCounterConsole({
   const openPayment = useCallback(() => {
     setPaymentOpen(true);
   }, []);
+
+  const startNextBill = useCallback(() => {
+    if (busy || attemptRef.current) return;
+    setActiveSale(null);
+    setActiveRow(null);
+    setPatientId(null);
+    setPatientQuery('');
+    setSubmittedPatientQuery('');
+    setPatientAddressDraft(null);
+    setControlledAuth({
+      prescriptionLineId: '',
+      staffProfileId: '',
+      pin: '',
+      rxSerialWritten: false,
+      emergency: false,
+      prescriberName: '',
+      prescriberRegNo: '',
+      refSerial: '',
+    });
+    focusSearch();
+  }, [busy, focusSearch, setActiveSale]);
 
   const openChecks = useCallback(() => setChecksOpen(true), []);
 
@@ -1572,23 +1641,27 @@ function ScopedPharmacyCounterConsole({
   ]);
 
   const printReceipt = useCallback(() => {
-    const receipt = receiptQuery.data;
-    if (
-      !receipt ||
-      receipt.saleId !== saleId ||
-      receipt.receiptNumber !== cart?.receiptNumber ||
-      billState !== 'settled' ||
-      receiptQuery.isFetching ||
-      receiptQuery.isError
-    ) {
-      setNotice({ tone: 'danger', message: 'Load the settled receipt before printing.' });
+    // Outside the receipt drawer, the print shortcut still belongs to the
+    // current bill. Reprinting an earlier bill requires opening Last receipt.
+    const receipt = receiptOpen ? displayReceipt : currentReceipt;
+    if (!receipt || receipt.receiptNumber === null) {
+      setNotice({ tone: 'warning', message: 'Load the settled receipt before printing.' });
       return;
     }
     discardReceiptIntent();
     setReceiptSettlement(null);
     try {
-      printCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, receiptRenders > 0);
-      setReceiptRenders((count) => count + 1);
+      const sameReceipt =
+        presentedReceipt?.saleId === receipt.saleId &&
+        presentedReceipt.receiptNumber === receipt.receiptNumber;
+      printCounterBrowserReceipt(
+        receipt,
+        receiptLocale,
+        receiptFormat,
+        sameReceipt && receiptRenders > 0
+      );
+      setLastReceipt({ branchId, receipt });
+      setReceiptRenders((count) => (sameReceipt ? count + 1 : 1));
       setNotice({
         tone: 'success',
         message:
@@ -1598,16 +1671,15 @@ function ScopedPharmacyCounterConsole({
       setNotice({ tone: 'danger', message: messageFrom(error) });
     }
   }, [
-    billState,
-    cart?.receiptNumber,
+    branchId,
+    currentReceipt,
+    displayReceipt,
     discardReceiptIntent,
+    presentedReceipt,
     receiptFormat,
     receiptLocale,
-    receiptQuery.data,
-    receiptQuery.isError,
-    receiptQuery.isFetching,
+    receiptOpen,
     receiptRenders,
-    saleId,
   ]);
 
   // ── POS-01 keyboard map ───────────────────────────────────────────────────
@@ -1673,6 +1745,21 @@ function ScopedPharmacyCounterConsole({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        event.shiftKey === lastReceiptShift &&
+        !event.repeat &&
+        event.key.toLowerCase() === 'r' &&
+        !matchCounterAction(keymap.bindings, event) &&
+        presentedReceipt &&
+        !document.querySelector('[role="dialog"]:not([hidden])')
+      ) {
+        event.preventDefault();
+        setReceiptOpen(true);
+        return;
+      }
       // Native tender controls own Enter/Space; the counter's Enter shortcut
       // must not also add a staged medicine when payment is activated.
       if (
@@ -1697,7 +1784,7 @@ function ScopedPharmacyCounterConsole({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [keymap.bindings, runAction]);
+  }, [keymap.bindings, lastReceiptShift, presentedReceipt, runAction]);
 
   /**
    * Persistent scan focus (POS-01): the field regains focus after every action.
@@ -1842,6 +1929,16 @@ function ScopedPharmacyCounterConsole({
       <header className="mb-3 space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
+          {presentedReceipt && (
+            <Button
+              variant="outline"
+              className="h-11"
+              aria-keyshortcuts={lastReceiptShortcut}
+              onClick={() => setReceiptOpen(true)}
+            >
+              Last receipt{lastReceiptShortcut ? ` · ${lastReceiptShortcut}` : ''}
+            </Button>
+          )}
           <Button
             variant="outline"
             className="ml-auto h-11 rounded-[var(--radius-sm)] md:hidden"
@@ -1862,6 +1959,8 @@ function ScopedPharmacyCounterConsole({
               onChange={(event) => {
                 scannerRevision.current += 1;
                 setSelectedBranchId(event.target.value);
+                setLastReceipt(null);
+                setReceiptRenders(0);
                 setActiveRow(null);
                 setActiveSale(null);
                 setHeldSaleId(null);
@@ -1976,7 +2075,7 @@ function ScopedPharmacyCounterConsole({
             variant="outline"
             className={`min-h-11 rounded-full px-3 text-xs ${blocked ? 'border-destructive text-destructive' : ''}`}
             onClick={openChecks}
-            aria-label={safetyLabel}
+            aria-label={`${blocked ? 'Safety block' : 'No blocks'} · ${safetyLabel}`}
           >
             <ShieldCheck aria-hidden="true" />
             <span className="hidden md:inline">{safetyLabel}</span>
@@ -2325,20 +2424,22 @@ function ScopedPharmacyCounterConsole({
             </div>
             {billState === 'settled' ? (
               <div className="space-y-2">
-                <Button
-                  className="h-14 w-full"
-                  onClick={() => {
-                    setActiveSale(null);
-                    setActiveRow(null);
-                    focusSearch();
-                  }}
-                >
+                <Button className="h-14 w-full" disabled={busy} onClick={startNextBill}>
                   Start next bill
                 </Button>
                 <Button
                   variant="outline"
                   className="h-11 w-full"
-                  onClick={() => setReceiptOpen(true)}
+                  onClick={() => {
+                    if (
+                      receiptQuery.data?.saleId === saleId &&
+                      receiptQuery.data.receiptNumber === cart?.receiptNumber
+                    ) {
+                      if (presentedReceipt?.saleId !== saleId) setReceiptRenders(0);
+                      setLastReceipt({ branchId, receipt: receiptQuery.data });
+                    }
+                    setReceiptOpen(true);
+                  }}
                 >
                   Preview receipt
                 </Button>
@@ -2746,44 +2847,83 @@ function ScopedPharmacyCounterConsole({
           ) {
             event.preventDefault();
             printReceipt();
+            return;
+          }
+          const target = event.target;
+          if (
+            presentedReceipt &&
+            !busy &&
+            !attemptRef.current &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.altKey &&
+            !event.nativeEvent.isComposing &&
+            event.key.length === 1 &&
+            event.key.trim() &&
+            !(
+              target instanceof HTMLElement &&
+              (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)
+            )
+          ) {
+            event.preventDefault();
+            if (presentedReceipt.saleId === saleId) startNextBill();
+            else setReceiptOpen(false);
+            setQuery(event.key);
+            setActiveRow(null);
+            setSaleUnit(null);
+            setQuantity(1);
+            requestAnimationFrame(() => {
+              const input = searchRef.current;
+              input?.focus();
+              input?.setSelectionRange(input.value.length, input.value.length);
+            });
           }
         }}
         drawer
       >
         <CounterReceiptView
           branchId={branchId}
-          receipt={
-            billState === 'settled' &&
-            !receiptQuery.isError &&
-            !receiptQuery.isFetching &&
-            receiptQuery.data?.saleId === saleId &&
-            receiptQuery.data.receiptNumber === cart?.receiptNumber
-              ? receiptQuery.data
+          receipt={displayReceipt}
+          state={
+            displayReceipt
+              ? 'ready'
+              : billState !== 'settled'
+                ? 'idle'
+                : receiptQuery.isLoading
+                  ? 'loading'
+                  : receiptQuery.isError
+                    ? 'error'
+                    : 'ready'
+          }
+          evidence={
+            displayReceipt?.saleId === saleId && evidenceEligible && !evidenceQuery.isError
+              ? evidenceQuery.data
               : null
           }
-          state={
-            billState !== 'settled'
-              ? 'idle'
-              : receiptQuery.isLoading
-                ? 'loading'
-                : receiptQuery.isError
-                  ? 'error'
-                  : 'ready'
+          evidenceError={
+            displayReceipt?.saleId === saleId && evidenceEligible && evidenceQuery.isError
           }
-          evidence={evidenceEligible && !evidenceQuery.isError ? evidenceQuery.data : null}
-          evidenceError={evidenceEligible && evidenceQuery.isError}
-          evidenceRefreshing={evidenceQuery.isFetching}
-          onEvidenceRefresh={evidenceEligible ? () => void evidenceQuery.refetch() : undefined}
+          evidenceRefreshing={displayReceipt?.saleId === saleId && evidenceQuery.isFetching}
+          onEvidenceRefresh={
+            displayReceipt?.saleId === saleId && evidenceEligible
+              ? () => void evidenceQuery.refetch()
+              : undefined
+          }
           locale={receiptLocale}
           format={receiptFormat}
           reprint={receiptRenders > 0}
-          printing={receiptQuery.isFetching}
-          error={receiptQuery.error ? messageFrom(receiptQuery.error) : null}
+          printing={!displayReceipt && receiptQuery.isFetching}
+          error={!displayReceipt && receiptQuery.error ? messageFrom(receiptQuery.error) : null}
           onLocaleChange={setReceiptLocale}
           onFormatChange={setReceiptFormat}
           onPrint={printReceipt}
           onRetry={() => void receiptQuery.refetch()}
-          settlement={receiptSettlement}
+          settlement={
+            receiptSettlement?.status === 'confirmed' &&
+            displayReceipt?.saleId === receiptSettlement.saleId
+              ? receiptSettlement
+              : null
+          }
           onSettlementPresented={receiptPresented}
         />
       </CounterOverlay>
@@ -2830,7 +2970,7 @@ function CounterOverlay({
             <DialogClose render={<Button variant="outline" className="h-11" />}>Close</DialogClose>
           </div>
           <DialogDescription className="sr-only">
-            {title} for the current counter bill.
+            {drawer ? 'Saved receipt for this branch.' : `${title} for the current counter bill.`}
           </DialogDescription>
           <div className="grid min-h-0 gap-4 overflow-y-auto p-5">{children}</div>
         </DialogPrimitive.Popup>

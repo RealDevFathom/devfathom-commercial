@@ -4,6 +4,7 @@ import type { ComponentProps } from 'react';
 
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
 import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
+import { resolveCounterKeymap } from '@/lib/pharmacy/counter-keymap';
 import type { CounterRxPanel } from './counter-rx-panel';
 import type { CounterSearchResults } from './counter-search-results';
 
@@ -174,6 +175,49 @@ import {
   type TenderAttempt,
 } from './tender-attempt-storage';
 
+function issuedReceipt(): CounterReceipt {
+  return {
+    saleId: 'sale-a',
+    receiptNumber: 42,
+    branchName: 'Synthetic branch',
+    completedAt: '2026-09-11T10:00:00Z',
+    businessDate: '2026-09-11',
+    currency: 'PKR',
+    lines: [
+      {
+        saleLineId: 'line-a',
+        identityStatus: 'ISSUED',
+        medicineName: 'Synthetic item',
+        strength: null,
+        presentation: 'Pack',
+        batchNumber: 'BATCH-A',
+        expiresAt: '2027-09-11',
+        saleUnit: 'PACK',
+        quantity: 1,
+        canonicalUnits: 1,
+        unitPriceMinor: 25000,
+        discountMinor: 0,
+        lineTotalMinor: 25000,
+      },
+    ],
+    tenders: [
+      {
+        tenderId: 'tender-a',
+        type: 'CASH',
+        amountMinor: 25000,
+        changeGivenMinor: 5000,
+      },
+    ],
+    totals: {
+      grossMinor: 25000,
+      discountMinor: 0,
+      netMinor: 25000,
+      tenderedMinor: 25000,
+      changeMinor: 5000,
+    },
+  };
+}
+
 function cart(overrides: Partial<CounterCart> = {}): CounterCart {
   return {
     saleId: 'sale-a',
@@ -312,9 +356,7 @@ beforeEach(() => {
   };
   mocks.outcomeQuery.mockReset().mockResolvedValue({ status: 'UNKNOWN', replayUnsafe: true });
   mocks.searchQuery.mockReset().mockImplementation(async () => mocks.queries.counterSearch?.data);
-  mocks.receiptRefetch
-    .mockReset()
-    .mockResolvedValue({ isSuccess: true, data: { saleId: 'sale-a', receiptNumber: 42 } });
+  mocks.receiptRefetch.mockReset().mockResolvedValue({ isSuccess: true, data: issuedReceipt() });
   for (const name of [
     'manualPaymentSettings',
     'counterBranches',
@@ -599,84 +641,178 @@ describe('PharmacyCounterConsole tender recovery', () => {
     expect(screen.queryByText('Settled')).not.toBeInTheDocument();
   });
 
-  it('clears an accepted full payment and shows settlement after the completed bill is read', async () => {
-    const completeCounterReceipt = {
-      saleId: 'sale-a',
-      receiptNumber: 42,
-      branchName: 'Synthetic branch',
-      completedAt: '2026-09-11T10:00:00Z',
-      businessDate: '2026-09-11',
-      currency: 'PKR',
-      lines: [
-        {
-          saleLineId: 'line-a',
-          identityStatus: 'ISSUED',
-          medicineName: 'Synthetic item',
-          strength: null,
-          presentation: 'Pack',
-          batchNumber: 'BATCH-A',
-          expiresAt: '2027-09-11',
-          saleUnit: 'PACK',
-          quantity: 1,
-          canonicalUnits: 1,
-          unitPriceMinor: 25000,
-          discountMinor: 0,
-          lineTotalMinor: 25000,
-        },
-      ],
-      tenders: [
-        {
-          tenderId: 'tender-a',
-          type: 'CASH',
-          amountMinor: 25000,
-          changeGivenMinor: 5000,
-        },
-      ],
-      totals: {
-        grossMinor: 25000,
-        discountMinor: 0,
-        netMinor: 25000,
-        tenderedMinor: 25000,
-        changeMinor: 5000,
-      },
-    } satisfies CounterReceipt;
-    mocks.receiptRefetch.mockImplementationOnce(async () => {
-      mocks.queries.counterReceipt!.data = completeCounterReceipt;
-      return { isSuccess: true, data: completeCounterReceipt };
-    });
-    mocks.mutations.tender!.mockResolvedValue(accepted(0));
-    mocks.refetch.mockImplementation(async () => {
-      mocks.queries.counterCart!.data = cart({
-        status: 'COMPLETED',
-        receiptNumber: 42,
-        totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+  it.each([
+    'refetch',
+    'custom-shortcut',
+    'time',
+    'read-error',
+    'cart-refetch',
+    'next-bill',
+    'typing',
+    'close',
+    'denied',
+    'branch',
+    'account',
+  ])(
+    'retains an issued receipt safely through %s after a confirmed full payment',
+    async (scenario) => {
+      if (scenario === 'custom-shortcut') {
+        mocks.queries.counterKeymap!.data = resolveCounterKeymap({
+          preset: 'devfathom',
+          overrides: { focusSearch: { key: 'r', alt: true } },
+        });
+      }
+      const completeCounterReceipt = issuedReceipt();
+      mocks.receiptRefetch.mockImplementationOnce(async () => {
+        mocks.queries.counterReceipt!.data = completeCounterReceipt;
+        return { isSuccess: true, data: completeCounterReceipt };
       });
-      return mocks.queries.counterCart;
-    });
-    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '250.00' } });
-    fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '300.00' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
-    await screen.findByText('Payment recorded.');
-    expect(screen.getByLabelText('Amount')).toHaveValue('');
-    expect(screen.getByLabelText('Cash received')).toHaveValue('');
-    expect(screen.getByText('Settled')).toBeInTheDocument();
-    expect(screen.getByText('Take payment').closest('button')).toBeDisabled();
-    const receiptDrawer = screen.getByRole('dialog', { name: 'Receipt preview' });
-    await waitFor(() =>
-      expect(receiptDrawer).toContainElement(document.activeElement as HTMLElement)
-    );
-    fireEvent.keyDown(receiptDrawer, { key: 'F10' });
-    expect(mocks.printReceipt).toHaveBeenCalledExactlyOnceWith(
-      completeCounterReceipt,
-      'en',
-      'THERMAL',
-      false
-    );
-    expect(mocks.mutations.tender).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ amountMinor: 25000, cashReceivedMinor: 30000 })
-    );
-  });
+      mocks.mutations.tender!.mockResolvedValue(accepted(0));
+      mocks.refetch.mockImplementation(async () => {
+        mocks.queries.counterCart!.data = cart({
+          status: 'COMPLETED',
+          receiptNumber: 42,
+          totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+        });
+        return mocks.queries.counterCart;
+      });
+      const view = renderPayment(
+        <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+      );
+      fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '250.00' } });
+      fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '300.00' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+      await screen.findByText('Payment recorded.');
+      expect(screen.getByLabelText('Amount')).toHaveValue('');
+      expect(screen.getByLabelText('Cash received')).toHaveValue('');
+      expect(screen.getByText('Settled')).toBeInTheDocument();
+      expect(screen.getByText('Take payment').closest('button')).toBeDisabled();
+      const receiptDrawer = screen.getByRole('dialog', { name: 'Receipt preview' });
+      await waitFor(() =>
+        expect(receiptDrawer).toContainElement(document.activeElement as HTMLElement)
+      );
+      fireEvent.keyDown(receiptDrawer, { key: 'F10' });
+      expect(mocks.printReceipt).toHaveBeenCalledExactlyOnceWith(
+        completeCounterReceipt,
+        'en',
+        'THERMAL',
+        false
+      );
+      expect(mocks.mutations.tender).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ amountMinor: 25000, cashReceivedMinor: 30000 })
+      );
+
+      // Background cache invalidation must not make an already presented receipt
+      // disappear while the cashier is still reviewing it.
+      Object.assign(mocks.queries.counterReceipt!, {
+        data: undefined,
+        isFetching: true,
+        isSuccess: false,
+      });
+      view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(mocks.receiptProps).toHaveBeenLastCalledWith(
+        expect.objectContaining({ receipt: completeCounterReceipt, state: 'ready' })
+      );
+      if (scenario === 'time') {
+        vi.useFakeTimers();
+        try {
+          act(() => vi.advanceTimersByTime(120_000));
+          expect(receiptDrawer).toBeVisible();
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+      if (scenario === 'read-error' || scenario === 'denied') {
+        Object.assign(mocks.queries.counterReceipt!, {
+          isError: true,
+          error:
+            scenario === 'denied'
+              ? { data: { code: 'FORBIDDEN' } }
+              : new Error('Synthetic network failure'),
+        });
+      }
+      if (scenario === 'cart-refetch') mocks.queries.counterCart!.isFetching = true;
+      if (scenario === 'branch') {
+        mocks.queries.counterBranches!.data = {
+          branches: [
+            { id: 'branch-a', name: 'Synthetic branch', code: 'MT1' },
+            { id: 'branch-b', name: 'Other branch', code: 'MT2' },
+          ],
+        };
+      }
+      view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+      if (scenario === 'denied') {
+        expect(screen.queryByRole('button', { name: /Last receipt/ })).not.toBeInTheDocument();
+        expect(mocks.receiptProps).toHaveBeenLastCalledWith(
+          expect.objectContaining({ receipt: null })
+        );
+        fireEvent.keyDown(receiptDrawer, { key: 'F10' });
+        expect(mocks.printReceipt).toHaveBeenCalledTimes(1);
+        return;
+      }
+      if (scenario === 'typing') {
+        fireEvent.keyDown(receiptDrawer, { key: '8' });
+        await waitFor(() => expect(receiptDrawer).not.toBeVisible());
+        expect(screen.getByLabelText('Scan or search')).toHaveValue('8');
+      } else if (
+        ['close', 'next-bill', 'branch', 'account', 'custom-shortcut'].includes(scenario)
+      ) {
+        fireEvent.click(within(receiptDrawer).getByRole('button', { name: 'Close' }));
+        await waitFor(() => expect(receiptDrawer).not.toBeVisible());
+      }
+      if (scenario === 'next-bill')
+        fireEvent.click(screen.getByRole('button', { name: 'Start next bill' }));
+      if (scenario === 'branch') {
+        fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
+      }
+      if (scenario === 'account') {
+        mocks.session.data!.user!.id = 'account-b';
+        view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      }
+      if (scenario === 'branch' || scenario === 'account') {
+        expect(screen.queryByRole('button', { name: /Last receipt/ })).not.toBeInTheDocument();
+        expect(mocks.receiptProps).toHaveBeenLastCalledWith(
+          expect.objectContaining({ receipt: null })
+        );
+        return;
+      }
+      if (scenario === 'typing' || scenario === 'next-bill') {
+        fireEvent.keyDown(window, { key: 'F10' });
+        expect(mocks.printReceipt).toHaveBeenCalledTimes(1);
+      }
+      if (['typing', 'next-bill', 'close', 'custom-shortcut'].includes(scenario)) {
+        expect(screen.getByRole('button', { name: /Last receipt/ })).toBeVisible();
+        if (scenario === 'custom-shortcut') {
+          fireEvent.keyDown(window, { key: 'r', altKey: true });
+          expect(receiptDrawer).not.toBeVisible();
+          expect(screen.getByRole('button', { name: /Last receipt/ })).toHaveAttribute(
+            'aria-keyshortcuts',
+            'Alt+Shift+R'
+          );
+          fireEvent.keyDown(window, { key: 'R', altKey: true, shiftKey: true });
+        } else fireEvent.keyDown(window, { key: 'r', altKey: true });
+        await waitFor(() => expect(receiptDrawer).toBeVisible());
+      }
+      expect(mocks.receiptProps).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          receipt: completeCounterReceipt,
+          state: 'ready',
+          printing: false,
+          ...(scenario === 'next-bill' || scenario === 'typing' ? { evidence: null } : {}),
+        })
+      );
+      fireEvent.keyDown(receiptDrawer, { key: 'F10' });
+      expect(mocks.printReceipt).toHaveBeenLastCalledWith(
+        completeCounterReceipt,
+        'en',
+        'THERMAL',
+        true
+      );
+      expect(mocks.mutations.tender).toHaveBeenCalledTimes(1);
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(['Enter', ' '])(
     'keeps %s in the native tender control and sends once while pending',
@@ -919,7 +1055,7 @@ describe('PharmacyCounterConsole durable tender recovery', () => {
     }
   );
 
-  it.each(['success', 'failed-receipt', 'wrong-receipt', 'failed-clear'])(
+  it.each(['success', 'failed-receipt', 'invalid-receipt', 'wrong-receipt', 'failed-clear'])(
     'requires current completed cart, receipt and storage resolution: %s',
     async (kind) => {
       const attempt = savedAttempt();
@@ -936,6 +1072,11 @@ describe('PharmacyCounterConsole durable tender recovery', () => {
       });
       if (kind === 'failed-receipt')
         mocks.receiptRefetch.mockRejectedValue(new Error('Receipt failed'));
+      if (kind === 'invalid-receipt')
+        mocks.receiptRefetch.mockResolvedValue({
+          isSuccess: true,
+          data: { saleId: 'sale-a', receiptNumber: 42 },
+        });
       if (kind === 'wrong-receipt')
         mocks.receiptRefetch.mockResolvedValue({
           isSuccess: true,
@@ -950,7 +1091,14 @@ describe('PharmacyCounterConsole durable tender recovery', () => {
       await waitFor(() => expect(mocks.receiptRefetch).toHaveBeenCalledTimes(1));
       await waitFor(() => expect(screen.getByLabelText('Amount')).toHaveValue(''));
       if (kind === 'success') {
-        expect(screen.getByText('Settled')).toBeInTheDocument();
+        expect(await screen.findByRole('dialog', { name: 'Receipt preview' })).toBeVisible();
+        expect(mocks.receiptProps).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            state: 'ready',
+            settlement: expect.objectContaining({ status: 'confirmed', autoPrint: false }),
+          })
+        );
+        expect(mocks.printReceipt).not.toHaveBeenCalled();
         expect(readTenderAttempt(scope)).toEqual({ status: 'empty' });
       } else {
         expect(screen.queryByText('Settled')).not.toBeInTheDocument();
