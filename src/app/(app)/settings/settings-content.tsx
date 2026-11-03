@@ -107,79 +107,81 @@ export function SettingsContent() {
   const isAdmin = session?.user?.role === 'ADMIN';
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="w-full max-w-[1400px]">
       <PageHeader
         eyebrow="WORKSPACE"
         heading="Settings"
         description="Manage your profile, security, and preferences."
       />
 
-      {/* Profile */}
-      <ProfileSection />
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2">
+        {/* Profile */}
+        <ProfileSection />
 
-      {/* Password */}
-      <PasswordSection />
+        {/* Password */}
+        <PasswordSection />
 
-      {/* Two-factor authentication (IMP-AUTH-02) */}
-      <TwoFactorSection />
+        {/* Two-factor authentication (IMP-AUTH-02) */}
+        <TwoFactorSection />
 
-      {/* Recent sign-ins (IMP-AUTH-03 — visibility half) */}
-      <RecentSignInsSection />
+        {/* Recent sign-ins (IMP-AUTH-03 — visibility half) */}
+        <RecentSignInsSection />
 
-      {/* Notification preferences (IMP-AUTH-04) */}
-      <NotificationsSection />
+        {/* Notification preferences (IMP-AUTH-04) */}
+        <NotificationsSection />
 
-      {/* Appearance */}
-      <AppearanceSection />
+        {/* Appearance */}
+        <AppearanceSection />
 
-      {/* API Tokens (admin only) */}
-      {isAdmin && <ApiTokensSection />}
+        {/* API Tokens (admin only) */}
+        {isAdmin && <ApiTokensSection />}
 
-      {/* Outbound webhooks (admin only, IMP-REST-03) */}
-      {isAdmin && <WebhooksSection />}
+        {/* Outbound webhooks (admin only, IMP-REST-03) */}
+        {isAdmin && <WebhooksSection />}
 
-      {/* Branch routing for authenticated print bridges (restaurant vertical only). */}
-      {isAdmin && <RestaurantPrintRoutingSection />}
+        {/* Branch routing for authenticated print bridges (restaurant vertical only). */}
+        {isAdmin && <RestaurantPrintRoutingSection />}
 
-      <ReceiptDesignerLink />
+        <ReceiptDesignerLink />
 
-      {/* Account info */}
-      <Card className="border-border/60">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-[15px] font-semibold text-foreground">Account</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-            <div>
-              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-                Email
-              </p>
-              <p className="text-foreground font-mono text-xs">{session?.user?.email}</p>
+        {/* Account info */}
+        <Card className="border-border/60">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-[15px] font-semibold text-foreground">Account</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
+              <div>
+                <p className="mb-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                  Email
+                </p>
+                <p className="break-all font-mono text-xs text-foreground">{session?.user?.email}</p>
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                  Role
+                </p>
+                <p className="text-foreground">{session?.user?.role}</p>
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                  Department
+                </p>
+                <p className="text-foreground">{session?.user?.department}</p>
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                  Title
+                </p>
+                <p className="text-foreground">{session?.user?.title}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-                Role
-              </p>
-              <p className="text-foreground">{session?.user?.role}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-                Department
-              </p>
-              <p className="text-foreground">{session?.user?.department}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-                Title
-              </p>
-              <p className="text-foreground">{session?.user?.title}</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
 
-      {/* Leave the company */}
-      <ResignationSection />
+        {/* Leave the company */}
+        <ResignationSection />
+      </div>
     </div>
   );
 }
