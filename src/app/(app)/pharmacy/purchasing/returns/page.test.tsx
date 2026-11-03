@@ -25,13 +25,23 @@ const reads = {
   returnableLots: vi.fn(),
 };
 const params = () => Promise.resolve({ branch: 'branch' });
+const findUser = vi.fn();
+const procurementUser = (permissions: { capability: string; effect: 'ALLOW' | 'DENY' }[]) => ({
+  role: 'EMPLOYEE',
+  organizationRole: { permissions },
+  permissionOverrides: [],
+});
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.actor.mockResolvedValue({ session: { user: { id: 'user' } }, organization: { id: 'org' } });
   mocks.context.mockResolvedValue({
     session: { user: { id: 'user' } },
     entitlements: { organizationId: 'org' },
+    db: { user: { findUnique: findUser } },
   });
+  findUser.mockResolvedValue(
+    procurementUser([{ capability: 'pharmacy:procurement', effect: 'ALLOW' }])
+  );
   mocks.module.mockReturnValue(true);
   mocks.caller.mockReturnValue(reads);
   reads.workspace.mockResolvedValue({
@@ -51,6 +61,19 @@ it('does not read or render priorities without module access', async () => {
   expect(
     screen.getByRole('heading', { name: 'Pharmacy Procurement is not licensed' })
   ).toBeVisible();
+  expect(reads.purchaseReturns).not.toHaveBeenCalled();
+  expect(screen.queryByRole('heading', { name: 'Supplier-credit follow-up' })).toBeNull();
+});
+it('closes returns to a counter-only role without procurement (#979)', async () => {
+  findUser.mockResolvedValue(
+    procurementUser([
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+      { capability: 'pharmacy:orders', effect: 'ALLOW' },
+    ])
+  );
+  render(await ReturnsPage({ searchParams: params() }));
+  expect(screen.getByRole('heading', { name: 'You do not have purchasing access' })).toBeVisible();
+  expect(mocks.caller).not.toHaveBeenCalled();
   expect(reads.purchaseReturns).not.toHaveBeenCalled();
   expect(screen.queryByRole('heading', { name: 'Supplier-credit follow-up' })).toBeNull();
 });

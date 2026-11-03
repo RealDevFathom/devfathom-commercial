@@ -235,6 +235,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacySafety: 'pharmacy-safety',
   pharmacySales: 'pharmacy-counter',
   pharmacyBranchAssignments: 'pharmacy-core',
+  // #979: the rail's capability read belongs to every pharmacy workspace.
+  pharmacyAccess: 'pharmacy-core',
   pharmacyCameras: 'pharmacy-core',
   pharmacyMarketing: 'pharmacy-crm',
   pharmacyFinance: 'pharmacy-finance',

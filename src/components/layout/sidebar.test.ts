@@ -103,13 +103,17 @@ describe('pharmacy navigation', () => {
     ['/pharmacy/finance', 'pharmacy-finance'],
     ['/pharmacy/reports', 'pharmacy-reports'],
   ] as const;
+  /** What a manager holding procurement and operational reports is granted (#979). */
+  const operatingCapabilities = ['pharmacy:procurement', 'reports:operational'];
 
   it.each(operations)(
     'shows %s only with its own license, independently of Chat',
     (route, module) => {
       const granted = visibleNavigation(
         { vertical: 'PHARMACY', enabledModules: [module] },
-        'ADMIN'
+        'ADMIN',
+        [],
+        operatingCapabilities
       ).map((item) => item.href);
       expect(granted).toContain(route);
       expect(granted).not.toContain('/chat');
@@ -126,7 +130,9 @@ describe('pharmacy navigation', () => {
             ...operations.map(([, key]) => key).filter((key) => key !== module),
           ],
         },
-        'ADMIN'
+        'ADMIN',
+        [],
+        operatingCapabilities
       ).map((item) => item.href);
       expect(denied).not.toContain(route);
       expect(denied).toContain('/chat');
@@ -141,7 +147,9 @@ describe('pharmacy navigation', () => {
           vertical: 'PHARMACY',
           enabledModules: ['pharmacy-core', ...operations.map(([, module]) => module)],
         },
-        role
+        role,
+        [],
+        operatingCapabilities
       ).map((item) => item.href);
       expect(visible).toEqual(
         expect.arrayContaining(['/pharmacy/inventory', '/pharmacy/purchasing', '/pharmacy/reports'])
@@ -214,6 +222,67 @@ describe('pharmacy navigation', () => {
         (item) => item.href === '/pharmacy/controlled-register'
       )
     ).toBe(true);
+  });
+
+  describe('cashier exposure (#979)', () => {
+    const everyPharmacyModule = {
+      vertical: 'PHARMACY' as const,
+      enabledModules: [
+        'pharmacy-core',
+        'pharmacy-counter',
+        'pharmacy-dispensing',
+        'pharmacy-safety',
+        ...operations.map(([, module]) => module),
+      ],
+    };
+    const withHr = {
+      ...everyPharmacyModule,
+      enabledModules: [...everyPharmacyModule.enabledModules, 'hr'],
+    };
+    const hrefs = (role: string, held: string[] = [], entitlements = everyPharmacyModule) =>
+      visibleNavigation(entitlements, role, [], held).map((item) => item.href);
+    const capabilityGated = [
+      ['/pharmacy/purchasing', 'pharmacy:procurement'],
+      ['/pharmacy/reports', 'reports:operational'],
+      ['/pharmacy/prescriptions', 'pharmacy:prescriptions'],
+      ['/pharmacy/pharmacist-queue', 'pharmacy:dispense'],
+      ['/pharmacy/substitution', 'pharmacy:dispense'],
+    ] as const;
+
+    it('offers a cashier the counter but none of the surfaces their role cannot open', () => {
+      const visible = hrefs('EMPLOYEE');
+      expect(visible).toContain('/pharmacy/counter');
+      for (const hidden of [
+        '/pharmacy/counter/close',
+        '/pharmacy/reports',
+        '/pharmacy/prescriptions',
+        '/pharmacy/pharmacist-queue',
+        '/pharmacy/substitution',
+        '/pharmacy/purchasing',
+        '/team',
+      ]) {
+        expect(visible).not.toContain(hidden);
+      }
+    });
+
+    it.each(capabilityGated)('shows %s once the user holds %s', (route, capability) => {
+      expect(hrefs('EMPLOYEE')).not.toContain(route);
+      expect(hrefs('EMPLOYEE', [capability])).toContain(route);
+    });
+
+    it.each(capabilityGated)('keeps %s from an administrator the engine refuses', (route) => {
+      expect(hrefs('ADMIN')).not.toContain(route);
+    });
+
+    it('keeps the administrator-only day close for administrators', () => {
+      expect(hrefs('ADMIN')).toContain('/pharmacy/counter/close');
+    });
+
+    it('shows Team to administrators, and to members only with the HR directory', () => {
+      expect(hrefs('ADMIN')).toContain('/team');
+      expect(hrefs('EMPLOYEE')).not.toContain('/team');
+      expect(hrefs('EMPLOYEE', [], withHr)).toContain('/team');
+    });
   });
 
   it('shows pharmacy routes to a Pharmacy admin with core and counter modules', () => {

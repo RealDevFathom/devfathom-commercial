@@ -10,6 +10,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { hasModule } from '@/lib/entitlements';
+import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import type { PurchaseReturnDetail, PurchasingWorkspace } from '@/lib/pharmacy/purchasing-console';
 import {
   BranchPicker,
@@ -90,6 +91,11 @@ export default async function PharmacyReturnsPage({
     return (
       <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled={moduleEnabled} />
     );
+  }
+  // #979: supplier returns, debit notes and credits are procurement work, closed
+  // to a counter-only role exactly as Goods-in is.
+  if (!(await actorCanProcure(ctx.db, ctx.session.user.id))) {
+    return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
   }
   const caller = await purchasingCaller();
   if (!caller) {

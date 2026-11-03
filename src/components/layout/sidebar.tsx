@@ -89,6 +89,11 @@ interface NavItem {
   hotelCapabilities?: readonly HotelCapability[];
   /** Shown only when the signed-in user holds one of these capabilities. */
   pharmacyCapabilities?: readonly string[];
+  /**
+   * Shown to non-administrators only while this module is granted. Without it
+   * the page has nothing for them, so the entry would be a dead end (#979).
+   */
+  memberModule?: string;
 }
 
 // Grouped to match the Studio WORKSPACE / RESTAURANT / FIRM rail. Order defines the
@@ -138,7 +143,8 @@ export const navigation: NavItem[] = [
     adminOnly: true,
     group: 'Firm',
   },
-  { label: 'Team', href: '/team', icon: Users, group: 'Firm' },
+  // #979: inviting is administration; the member directory is licensed by HR.
+  { label: 'Team', href: '/team', icon: Users, group: 'Firm', memberModule: 'hr' },
   { label: 'Point of sale', href: '/pos', icon: Monitor, group: 'Restaurant' },
   { label: 'Kitchen display', href: '/kds', icon: CookingPot, group: 'Restaurant' },
   { label: 'Floor', href: '/restaurant/floor', icon: LayoutGrid, group: 'Restaurant' },
@@ -310,10 +316,13 @@ export const navigation: NavItem[] = [
   },
   // PH-POS / POS-01: the counter is the pharmacy's primary operating surface, so
   // it is a first-class rail entry gated by its explicit module ownership.
+  // #979: the day-close console only opens for a pharmacy administrator, so a
+  // cashier is not offered an entry that ends in "Day close unavailable".
   {
     label: 'Day close',
     href: '/pharmacy/counter/close',
     icon: Monitor,
+    adminOnly: true,
     group: 'Pharmacy',
     module: 'pharmacy-counter',
   },
@@ -335,6 +344,7 @@ export const navigation: NavItem[] = [
     href: '/pharmacy/purchasing',
     icon: ShoppingCart,
     group: 'Pharmacy',
+    pharmacyCapabilities: ['pharmacy:procurement'],
   },
   {
     label: 'Finance',
@@ -348,6 +358,7 @@ export const navigation: NavItem[] = [
     href: '/pharmacy/reports',
     icon: BarChart3,
     group: 'Pharmacy',
+    pharmacyCapabilities: ['reports:operational'],
   },
   {
     label: 'Cameras',
@@ -379,6 +390,7 @@ export const navigation: NavItem[] = [
     icon: FileText,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
+    pharmacyCapabilities: ['pharmacy:prescriptions'],
   },
   {
     label: 'Pharmacist queue',
@@ -386,6 +398,7 @@ export const navigation: NavItem[] = [
     icon: ClipboardCheck,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
+    pharmacyCapabilities: ['pharmacy:dispense'],
   },
   {
     label: 'Substitution',
@@ -393,6 +406,7 @@ export const navigation: NavItem[] = [
     icon: Replace,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
+    pharmacyCapabilities: ['pharmacy:dispense'],
   },
   {
     label: 'Controlled register',
@@ -561,6 +575,8 @@ export function visibleNavigation(
         return false;
       if (item.hrAccess) return isAdmin || isHr;
       if (item.adminOnly) return isAdmin;
+      if (item.memberModule && !isAdmin)
+        return isModuleGranted(item.memberModule, entitlements.enabledModules);
       return true;
     })
     .sort((left, right) => GROUP_ORDER.indexOf(left.group) - GROUP_ORDER.indexOf(right.group));
@@ -614,7 +630,28 @@ function useVisibleNavigation() {
     retry: false,
     staleTime: 30_000,
   });
-  const pharmacyCapabilities = safetyAccess.data?.allowed ? ['pharmacy:safety'] : [];
+  // #979: the rest of the pharmacy rail, resolved by the same ABAC engine the
+  // pages use. Pharmacy Core is mandatory, so every pharmacy workspace asks.
+  const pharmacyRail =
+    entitlements.vertical === 'PHARMACY' &&
+    Boolean(session?.user.id) &&
+    isModuleGranted('pharmacy-core', entitlements.enabledModules);
+  const railAccess = trpc.pharmacyAccess.navigation.useQuery(undefined, {
+    enabled: pharmacyRail,
+    // A transient failure must not leave the rail without entries the member
+    // holds; only an authorization refusal is final.
+    retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
+    staleTime: 30_000,
+  });
+  // A cached answer for another signed-in identity cannot expose an entry.
+  const railCapabilities =
+    pharmacyRail && railAccess.data && railAccess.data.userId === session?.user.id
+      ? railAccess.data.capabilities
+      : [];
+  const pharmacyCapabilities = [
+    ...(safetyAccess.data?.allowed ? ['pharmacy:safety'] : []),
+    ...railCapabilities,
+  ];
   const filteredNav = visibleNavigation(
     entitlements,
     session?.user?.role,
