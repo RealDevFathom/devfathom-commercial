@@ -320,7 +320,8 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
   });
 }
 
-// Canonical names (#163) beside the legacy dotted ones, which still cover un-migrated grants.
+// DEV-295: accept canonical colon-delimited grants beside legacy dotted grants so migrated
+// Cashier roles and un-migrated roles pass the same counter/receipt gate.
 const RECEIPT_READ_CAPABILITIES = [
   'pharmacy:dispense',
   'pharmacy.dispense',
