@@ -691,7 +691,7 @@ export async function freshPharmacyFirstSale(
     ).toBeVisible();
 
     await follow(page, 'Readiness and parallel run', 'Open pharmacy counter');
-    await click(page.getByRole('button', { name: 'Open drawer', exact: true }));
+    await click(page.getByRole('button', { name: 'Open cash drawer', exact: true }));
     await page.getByLabel('Scan or search', { exact: true }).fill(barcode);
     await page.getByLabel('Scan or search', { exact: true }).press('Enter');
     await click(

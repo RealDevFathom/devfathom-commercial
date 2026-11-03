@@ -9,6 +9,11 @@ export type CounterCartPanelProps = {
   state: 'idle' | 'loading' | 'ready' | 'error';
   error?: string | null;
   onRetry: () => void;
+  /**
+   * Show each line's FEFO batch map (batch, expiry, units, location). Off for a
+   * cashier, who still sees a batch override or a near-expiry warning.
+   */
+  showAllocation?: boolean;
   /** The instant near-expiry is measured from; injectable for tests. */
   now?: Date;
 };
@@ -22,6 +27,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export function nearExpiryDays(expiresAt: string, now: Date): number | null {
   const days = Math.floor((new Date(expiresAt).getTime() - now.getTime()) / DAY_MS);
   return days >= 0 && days < NEAR_EXPIRY_DAYS ? days : null;
+}
+
+/** True when any batch on a line is an override or near expiry: a cashier must see it. */
+function allocationWarned(
+  allocations: CounterCart['lines'][number]['allocations'],
+  now: Date
+): boolean {
+  return allocations.some(
+    (allocation) => allocation.overridden || nearExpiryDays(allocation.expiresAt, now) !== null
+  );
 }
 
 function NearExpiryPill({ expiresAt, now }: { expiresAt: string; now: Date }) {
@@ -44,6 +59,7 @@ export function CounterCartPanel({
   state,
   error,
   onRetry,
+  showAllocation = true,
   now = new Date(),
 }: CounterCartPanelProps) {
   if (state === 'idle' || (state === 'ready' && cart === null)) {
@@ -167,29 +183,46 @@ export function CounterCartPanel({
               </div>
             ) : null}
 
-            <ul className="mt-1" aria-label={`FEFO allocation for ${line.medicineName}`}>
-              {line.allocations.map((allocation) => (
-                <li
-                  key={allocation.inventoryLotId}
-                  className="flex flex-wrap items-center gap-x-2 text-xs text-text-muted"
-                >
-                  <span className="font-mono tabular-nums">Batch {allocation.batchNumber}</span>
-                  <span className="font-mono tabular-nums">
-                    Exp {formatReceiptDate(allocation.expiresAt)}
+            {showAllocation ? (
+              <ul className="mt-1" aria-label={`FEFO allocation for ${line.medicineName}`}>
+                {line.allocations.map((allocation) => (
+                  <li
+                    key={allocation.inventoryLotId}
+                    className="flex flex-wrap items-center gap-x-2 text-xs text-text-muted"
+                  >
+                    <span className="font-mono tabular-nums">Batch {allocation.batchNumber}</span>
+                    <span className="font-mono tabular-nums">
+                      Exp {formatReceiptDate(allocation.expiresAt)}
+                    </span>
+                    <span className="font-mono tabular-nums">
+                      {allocation.canonicalUnits} units
+                    </span>
+                    {allocation.stockLocationCode ? (
+                      <span className="font-mono tabular-nums">{allocation.stockLocationCode}</span>
+                    ) : null}
+                    {allocation.overridden ? (
+                      <StatusPill status="override" tone="warning" label="Batch override" />
+                    ) : (
+                      <StatusPill status="fefo" tone="neutral" label="FEFO" />
+                    )}
+                    <NearExpiryPill expiresAt={allocation.expiresAt} now={now} />
+                  </li>
+                ))}
+              </ul>
+            ) : allocationWarned(line.allocations, now) ? (
+              // Warnings outlive the map: a cashier must still see an override or a
+              // batch close to expiry before handing the medicine over.
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                {line.allocations.map((allocation) => (
+                  <span key={allocation.inventoryLotId} className="contents">
+                    {allocation.overridden ? (
+                      <StatusPill status="override" tone="warning" label="Batch override" />
+                    ) : null}
+                    <NearExpiryPill expiresAt={allocation.expiresAt} now={now} />
                   </span>
-                  <span className="font-mono tabular-nums">{allocation.canonicalUnits} units</span>
-                  {allocation.stockLocationCode ? (
-                    <span className="font-mono tabular-nums">{allocation.stockLocationCode}</span>
-                  ) : null}
-                  {allocation.overridden ? (
-                    <StatusPill status="override" tone="warning" label="Batch override" />
-                  ) : (
-                    <StatusPill status="fefo" tone="neutral" label="FEFO" />
-                  )}
-                  <NearExpiryPill expiresAt={allocation.expiresAt} now={now} />
-                </li>
-              ))}
-            </ul>
+                ))}
+              </div>
+            ) : null}
           </li>
         ))}
       </ul>

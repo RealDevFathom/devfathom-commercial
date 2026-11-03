@@ -1708,7 +1708,7 @@ export const pharmacySalesRouter = router({
   counterBranches: protectedProcedure.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    const [branches, organization] = await Promise.all([
+    const [branches, organization, counterManager] = await Promise.all([
       ctx.db.pharmacyBranch.findMany({
         where: { organizationId, active: true },
         select: { id: true, code: true, name: true, city: true },
@@ -1718,6 +1718,14 @@ export const pharmacySalesRouter = router({
         where: { id: organizationId },
         select: { currency: true, timezone: true },
       }),
+      // Display only: managers and owners see the counter's internal codes, batch
+      // map and keymap presets. Every write keeps its own server-side check.
+      ctx.session.user.role === 'ADMIN'
+        ? true
+        : can(subjectFromSession(ctx.session.user), 'pharmacy:manage', undefined, {
+            db: ctx.db,
+            source: 'TRPC',
+          }),
     ]);
     return {
       branches,
@@ -1726,6 +1734,7 @@ export const pharmacySalesRouter = router({
       // close has been read. A stored value Intl refuses is handed over as UTC.
       timezone: workspaceTimezone(organization?.timezone),
       paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
+      counterManager,
     };
   }),
 
