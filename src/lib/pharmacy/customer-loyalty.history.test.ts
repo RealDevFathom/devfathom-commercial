@@ -14,6 +14,7 @@ function fixture() {
       findMany: vi.fn().mockResolvedValue([]),
     },
     pharmacyLoyaltyPointsEntry: {
+      groupBy: vi.fn().mockResolvedValue([]),
       aggregate: vi.fn().mockResolvedValue({ _sum: { points: 14 } }),
       count: vi.fn().mockResolvedValue(26),
       findMany: vi.fn().mockResolvedValue([]),
@@ -30,7 +31,11 @@ describe('ordinary loyalty history reads', () => {
       where: { id: 'branch-a', organizationId: 'org-a', active: true },
       select: { id: true },
     });
-    for (const method of Object.values(db.pharmacyLoyaltyPointsEntry)) {
+    for (const method of [
+      db.pharmacyLoyaltyPointsEntry.aggregate,
+      db.pharmacyLoyaltyPointsEntry.count,
+      db.pharmacyLoyaltyPointsEntry.findMany,
+    ]) {
       expect(method).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { organizationId: 'org-a', branchId: 'branch-a', customerId: 'customer-a' },
@@ -125,7 +130,11 @@ describe('ordinary loyalty history reads', () => {
   it('keeps a sibling branch selection explicit in all ledger predicates', async () => {
     const db = fixture();
     await readLoyaltyHistory(db as never, { ...scope, branchId: 'branch-b' }, 'customer-a');
-    for (const method of Object.values(db.pharmacyLoyaltyPointsEntry))
+    for (const method of [
+      db.pharmacyLoyaltyPointsEntry.aggregate,
+      db.pharmacyLoyaltyPointsEntry.count,
+      db.pharmacyLoyaltyPointsEntry.findMany,
+    ])
       expect(method).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { organizationId: 'org-a', branchId: 'branch-b', customerId: 'customer-a' },
@@ -152,12 +161,111 @@ describe('ordinary loyalty history reads', () => {
       where: {
         organizationId: 'org-a',
         active: true,
-        displayName: { contains: 'Ali', mode: 'insensitive' },
+        OR: [
+          { displayName: { contains: 'Ali', mode: 'insensitive' } },
+          { id: { contains: 'Ali', mode: 'insensitive' } },
+          { phoneLast4: { contains: 'Ali', mode: 'insensitive' } },
+        ],
       },
       select: { id: true, displayName: true, phoneLast4: true },
       orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
       take: 51,
     });
+  });
+  it.each(['Ahmed', 'ahM', '030012', 'account-ABC'])(
+    'searches partial name/phone/account ID %s without exposing patient fields',
+    async (query) => {
+      const db = fixture();
+      db.pharmacyCustomer.findMany.mockResolvedValue([
+        { id: 'account-ABC', displayName: 'Muhammad Ahmed', phoneLast4: '4567' },
+      ]);
+      db.pharmacyLoyaltyPointsEntry.groupBy.mockResolvedValue([
+        { customerId: 'account-ABC', _sum: { points: 17 } },
+      ]);
+      const result = await listLoyaltyCustomers(db as never, scope, `  ${query}  `, true);
+      expect(db.pharmacyCustomer.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            organizationId: 'org-a',
+            active: true,
+            OR: [
+              { displayName: { contains: query, mode: 'insensitive' } },
+              { id: { contains: query, mode: 'insensitive' } },
+              { phoneLast4: { contains: query, mode: 'insensitive' } },
+              {
+                patient: {
+                  organizationId: 'org-a',
+                  phone: { contains: query, mode: 'insensitive' },
+                },
+              },
+            ],
+          },
+          select: { id: true, displayName: true, phoneLast4: true },
+        })
+      );
+      expect(result.customers).toEqual([
+        { id: 'account-ABC', displayName: 'Muhammad Ahmed', phoneLast4: '4567', pointsBalance: 17 },
+      ]);
+      expect(db.pharmacyLoyaltyPointsEntry.groupBy).toHaveBeenCalledWith({
+        by: ['customerId'],
+        where: {
+          organizationId: 'org-a',
+          branchId: 'branch-a',
+          customerId: { in: ['account-ABC'] },
+        },
+        _sum: { points: true },
+      });
+    }
+  );
+  it('defaults to retail-only search without a patient relation predicate', async () => {
+    const db = fixture();
+    db.pharmacyCustomer.findMany.mockResolvedValue([
+      { id: 'a', displayName: 'Ahmed', phoneLast4: null },
+    ]);
+    const result = await listLoyaltyCustomers(db as never, scope, 'Ahmed');
+    expect(result.customers[0]?.displayName).toBe('Ahmed');
+    expect(JSON.stringify(db.pharmacyCustomer.findMany.mock.calls)).not.toContain('patient');
+  });
+  it('shows bounded recent activity in ledger order with branch balances including zero/negative balances', async () => {
+    const db = fixture();
+    db.pharmacyLoyaltyPointsEntry.groupBy.mockResolvedValue([
+      { customerId: 'b', _sum: { points: 0 } },
+      { customerId: 'a', _sum: { points: -2 } },
+    ]);
+    db.pharmacyCustomer.findMany.mockResolvedValue([
+      { id: 'a', displayName: 'Ahmed', phoneLast4: '1234' },
+      { id: 'b', displayName: 'Zain', phoneLast4: null },
+    ]);
+    const result = await listLoyaltyCustomers(db as never, scope);
+    expect(result.customers.map(({ id, pointsBalance }) => [id, pointsBalance])).toEqual([
+      ['b', 0],
+      ['a', -2],
+    ]);
+    expect(db.pharmacyLoyaltyPointsEntry.groupBy).toHaveBeenCalledExactlyOnceWith({
+      by: ['customerId'],
+      where: {
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        customer: { organizationId: 'org-a', active: true },
+      },
+      _sum: { points: true },
+      _max: { occurredAt: true },
+      orderBy: [{ _max: { occurredAt: 'desc' } }, { customerId: 'asc' }],
+      take: 51,
+    });
+    expect(db.pharmacyCustomer.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org-a', active: true, id: { in: ['b', 'a'] } },
+      })
+    );
+  });
+  it('does not run broad directory queries for one character', async () => {
+    const db = fixture();
+    expect(await listLoyaltyCustomers(db as never, scope, ' A ')).toEqual({
+      customers: [],
+      hasMore: false,
+    });
+    expect(db.pharmacyCustomer.findMany).not.toHaveBeenCalled();
   });
   it('rejects oversized search before database reads', async () => {
     const db = fixture();

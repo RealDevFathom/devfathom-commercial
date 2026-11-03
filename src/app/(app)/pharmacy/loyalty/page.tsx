@@ -4,7 +4,7 @@ import { unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
-import { Input } from '@/components/ui/input';
+import { CustomerSearch } from './customer-search';
 import { Button } from '@/components/ui/button';
 import { Stat } from '@/components/ui/stat';
 import { createTRPCContext } from '@/server/trpc';
@@ -29,7 +29,8 @@ async function loadLoyalty(text: (key: string) => string) {
     if (!branches.some((branch) => branch.id === branchId))
       throw new TRPCError({ code: 'NOT_FOUND' });
     const query = text('query');
-    const { customers, hasMore } = await caller.customers({ branchId, query });
+    const recent = await caller.customers({ branchId });
+    const initial = query.trim().length >= 2 ? await caller.customers({ branchId, query }) : recent;
     const customerId = text('customerId');
     const history = customerId
       ? await caller.history({ branchId, customerId, page: Number(text('page') || 1) })
@@ -39,8 +40,8 @@ async function loadLoyalty(text: (key: string) => string) {
       branches,
       branchId,
       query,
-      customers,
-      hasMore,
+      initial,
+      recent,
       customerId,
       history,
     };
@@ -74,13 +75,13 @@ export default async function LoyaltyPage({
       <main className="min-w-0 space-y-6">
         {header}
         <SectionCard
-          title={denied ? 'Loyalty access required' : 'Ledger unavailable'}
+          title={denied ? 'Loyalty access required' : 'Points history unavailable'}
           titleLevel={2}
         >
           <p role="alert">
             {denied
-              ? 'An authorized owner and Pharmacy CRM package are required.'
-              : 'The ledger could not be loaded. Check the branch, customer and page selection, then retry.'}
+              ? 'Ask your pharmacy owner to check your access to customer loyalty.'
+              : 'Points history could not be loaded. Check the branch, customer and page selection, then retry.'}
           </p>
           <Link className={linkClass} href="/pharmacy/loyalty">
             Reset selection and retry
@@ -94,14 +95,19 @@ export default async function LoyaltyPage({
       <main className="min-w-0 space-y-6">
         {header}
         <SectionCard title="No active branch" titleLevel={2}>
-          <p>An owner must activate a pharmacy branch before its loyalty ledger can be viewed.</p>
+          <p>Ask your pharmacy owner to activate a branch to view loyalty points.</p>
         </SectionCard>
       </main>
     );
-  const { branches, branchId, query, customers, hasMore, customerId, history } = data;
+  const { branches, branchId, query, initial, recent, customerId, history } = data;
   const href = (id: string, page = 1) =>
-    `/pharmacy/loyalty?${new URLSearchParams({ branchId, customerId: id, query, page: String(page) })}`;
+    `/pharmacy/loyalty?${new URLSearchParams({ branchId, customerId: id, page: String(page) })}`;
   const branchName = branches.find((branch) => branch.id === branchId)!.name;
+  async function searchCustomers(branchId: string, query: string) {
+    'use server';
+    const caller = pharmacyLoyaltyRouter.createCaller(await createTRPCContext());
+    return caller.customers({ branchId, query });
+  }
   async function saveReminderLanguage(formData: FormData) {
     'use server';
     const caller = pharmacyLoyaltyRouter.createCaller(await createTRPCContext());
@@ -131,43 +137,20 @@ export default async function LoyaltyPage({
               ))}
             </select>
           </label>
-          <label className="grid w-full gap-2 text-sm sm:w-auto">
-            Customer name
-            <Input name="query" defaultValue={query} maxLength={100} className="min-h-11" />
-          </label>
           <Button type="submit" className="min-h-11">
-            Search
+            View branch
           </Button>
         </form>
-        <p className="mt-3 text-sm text-text-muted">
-          Retail customers across this workspace. Points shown only for {branchName}. Clinical
-          records are excluded.
-        </p>
-        <ul className="mt-3 divide-y divide-border-subtle">
-          {customers.map((c) => (
-            <li key={c.id}>
-              <Link
-                aria-current={c.id === customerId ? 'true' : undefined}
-                className={`${linkClass} max-w-full break-words aria-[current=true]:font-semibold`}
-                href={href(c.id)}
-              >
-                {c.displayName}
-                {c.phoneLast4 ? ` · ending ${c.phoneLast4}` : ''}
-                {c.id === customerId ? ' · Selected' : ''}
-              </Link>
-            </li>
-          ))}
-        </ul>
-        {hasMore && (
-          <p role="status" className="mt-3 text-sm">
-            Showing the first 50 matches. Refine the customer name to find another account.
-          </p>
-        )}
-        {!customers.length && (
-          <p role="status" className="mt-3 text-sm">
-            No matching customers. Try another name, or link a consenting customer at the counter.
-          </p>
-        )}
+        <p className="mt-3 text-sm text-text-muted">Points shown for {branchName}.</p>
+        <CustomerSearch
+          key={`${branchId}:${query}:${customerId}:${history?.pointsBalance ?? ''}`}
+          branchId={branchId}
+          customerId={customerId}
+          query={query}
+          initial={initial}
+          recent={recent}
+          searchAction={searchCustomers}
+        />
       </SectionCard>
       {history ? (
         <SectionCard title={history.customer.displayName} titleLevel={2}>
@@ -190,13 +173,13 @@ export default async function LoyaltyPage({
             </Button>
           </form>
           <p className="mb-5 text-sm text-text-muted">
-            Used for approved WhatsApp Khata reminder templates. A reminder is not sent when its
-            language template is not configured.
+            Choose the language for WhatsApp payment reminders. Reminders can only be sent when a
+            message in that language is available.
           </p>
           <Stat label="Points available" value={`${history.pointsBalance} points available`} />
           <p className="mt-2 text-sm text-text-muted">
-            {branchName} · {history.total} ledger entries. All-time branch balance; newest entries
-            first. Refunds and reversals remain visible.
+            {branchName} · {history.total} points changes, newest first. The balance includes all
+            points earned, used, returned and removed at this branch.
           </p>
           {history.entries.length ? (
             <div
@@ -300,15 +283,11 @@ export default async function LoyaltyPage({
           </nav>
           {history.historyLimitReached && (
             <p role="status" className="mt-3 text-sm">
-              This view has reached its 10,000-page limit. Older entries remain in the ledger.
+              This view shows up to 10,000 pages. Older points changes are still saved.
             </p>
           )}
         </SectionCard>
-      ) : (
-        <SectionCard title="Choose an account" titleLevel={2}>
-          <p>Select a customer above to view their branch balance and points history.</p>
-        </SectionCard>
-      )}
+      ) : null}
       <Link className={linkClass} href="/pharmacy/counter">
         Open counter
       </Link>

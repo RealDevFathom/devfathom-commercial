@@ -9,8 +9,8 @@ export default function LoyaltyLoading() {
         heading="Loyalty points"
         description="Review points balances and the receipts behind each change."
       />
-      <SectionCard title="Loading loyalty accounts" titleLevel={2}>
-        <p role="status">Loading customer selection and branch ledger. Please wait.</p>
+      <SectionCard title="Loading loyalty points" titleLevel={2}>
+        <p role="status">Loading customers and points history. Please wait.</p>
       </SectionCard>
     </main>
   );

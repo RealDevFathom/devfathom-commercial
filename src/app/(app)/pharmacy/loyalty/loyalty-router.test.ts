@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   updateCustomers: vi.fn(),
   findCustomer: vi.fn(),
   annotateAudit: vi.fn(),
+  findCustomers: vi.fn(),
+  groupPoints: vi.fn(),
+  recordTrpcAudit: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -22,8 +25,8 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(),
-  isAuditExcludedPath: () => true,
-  recordTrpcAudit: vi.fn(),
+  isAuditExcludedPath: () => false,
+  recordTrpcAudit: mocks.recordTrpcAudit,
   annotateAudit: mocks.annotateAudit,
 }));
 vi.mock('@/lib/pharmacy/customer-loyalty', async () => ({
@@ -44,7 +47,12 @@ function caller({
   return pharmacyLoyaltyRouter.createCaller({
     db: {
       pharmacyBranch: { findMany: mocks.branches, findFirst: mocks.branch },
-      pharmacyCustomer: { updateMany: mocks.updateCustomers, findFirst: mocks.findCustomer },
+      pharmacyCustomer: {
+        updateMany: mocks.updateCustomers,
+        findFirst: mocks.findCustomer,
+        findMany: mocks.findCustomers,
+      },
+      pharmacyLoyaltyPointsEntry: { groupBy: mocks.groupPoints },
     },
     session: session
       ? { expires: 'later', user: { id: 'owner-a', organizationId, role: 'ADMIN', status } }
@@ -62,6 +70,10 @@ beforeEach(() => {
   mocks.licensed.mockReturnValue(true);
   mocks.branches.mockResolvedValue([]);
   mocks.customers.mockResolvedValue({ customers: [], hasMore: false });
+  mocks.findCustomers.mockResolvedValue([
+    { id: 'customer-a', displayName: 'Ahmed', phoneLast4: '1234' },
+  ]);
+  mocks.groupPoints.mockResolvedValue([]);
   mocks.history.mockResolvedValue({ entries: [] });
   mocks.branch.mockResolvedValue({ id: 'branch-a' });
   mocks.updateCustomers.mockResolvedValue({ count: 1 });
@@ -120,6 +132,61 @@ describe('ordinary loyalty router visibility', () => {
       } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.history).not.toHaveBeenCalled();
+  });
+  it('keeps retail search working when both patient-phone permissions are denied', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'admin:access');
+    const { listLoyaltyCustomers } = await vi.importActual<
+      typeof import('@/lib/pharmacy/customer-loyalty')
+    >('@/lib/pharmacy/customer-loyalty');
+    mocks.customers.mockImplementationOnce(listLoyaltyCustomers);
+    const result = await caller().customers({ branchId: 'branch-a', query: 'Ahmed' });
+    expect(result.customers[0]?.displayName).toBe('Ahmed');
+    expect(mocks.customers).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ organizationId: 'org-a' }),
+      'Ahmed',
+      false
+    );
+    const where = mocks.findCustomers.mock.calls[0]![0].where;
+    expect(where).toMatchObject({ organizationId: 'org-a', active: true });
+    expect(where.OR).toEqual([
+      { displayName: { contains: 'Ahmed', mode: 'insensitive' } },
+      { id: { contains: 'Ahmed', mode: 'insensitive' } },
+      { phoneLast4: { contains: 'Ahmed', mode: 'insensitive' } },
+    ]);
+  });
+  it.each(['pharmacy:counter', 'pharmacy:dispense'])(
+    'permits protected phone matching with %s and suppresses sensitive input in audits',
+    async (permission) => {
+      mocks.can.mockImplementation(
+        async (_subject, action) => action === 'admin:access' || action === permission
+      );
+      await caller().customers({ branchId: 'branch-a', query: '03001234567' });
+      expect(mocks.customers).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ organizationId: 'org-a' }),
+        '03001234567',
+        true
+      );
+      expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ctx: expect.objectContaining({ audit: { detail: { skipInput: true } } }),
+        })
+      );
+      expect(JSON.stringify(mocks.annotateAudit.mock.calls)).not.toContain('03001234567');
+    }
+  );
+  it('suppresses sensitive input even when validation or admin access fails', async () => {
+    await expect(
+      caller().customers({ branchId: 'branch-a', query: '0'.repeat(101) })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    mocks.can.mockResolvedValue(false);
+    await expect(
+      caller().customers({ branchId: 'branch-a', query: '03001234567' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    for (const [args] of mocks.recordTrpcAudit.mock.calls)
+      expect(args.ctx.audit.detail.skipInput).toBe(true);
+    expect(mocks.customers).not.toHaveBeenCalled();
   });
   it('persists only a validated language for an active customer in the authorized tenant', async () => {
     await expect(

@@ -7,6 +7,10 @@ const mocks = vi.hoisted(() => ({
   history: vi.fn(),
   setReminderLanguage: vi.fn(),
 }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  unstable_rethrow: vi.fn(),
+}));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn().mockResolvedValue({}) }));
 vi.mock('./loyalty-router', () => ({ pharmacyLoyaltyRouter: { createCaller: () => mocks } }));
 import LoyaltyPage from './page';
@@ -15,7 +19,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.branches.mockResolvedValue([{ id: 'branch-a', name: 'Main' }]);
   mocks.customers.mockResolvedValue({
-    customers: [{ id: 'customer-a', displayName: 'Retail customer', phoneLast4: '1234' }],
+    customers: [
+      { id: 'customer-a', displayName: 'Retail customer', phoneLast4: '1234', pointsBalance: 14 },
+    ],
     hasMore: false,
   });
   mocks.history.mockResolvedValue({
@@ -46,16 +52,13 @@ async function show(params: Record<string, string> = {}) {
   render(await LoyaltyPage({ searchParams: Promise.resolve(params) }));
 }
 describe('ordinary loyalty history page', () => {
-  it('offers labelled search and explicit account selection', async () => {
+  it('shows recent balances and inline selection without an empty account card', async () => {
     await show();
     expect(screen.getByLabelText('Branch')).toBeInTheDocument();
-    expect(screen.getByLabelText('Customer name')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute('type', 'submit');
-    expect(screen.getByRole('link', { name: /Retail customer/ })).toHaveAttribute(
-      'href',
-      expect.stringContaining('customerId=customer-a')
-    );
-    expect(screen.getByText('Choose an account')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Name, phone or account ID' })).toBeInTheDocument();
+    expect(screen.getByText('14 points')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Retail customer/ })).toBeInTheDocument();
+    expect(screen.queryByText('Choose an account')).not.toBeInTheDocument();
     expect(mocks.history).not.toHaveBeenCalled();
   });
   it('renders signed events, reversal sources and selection-preserving pagination', async () => {
@@ -76,12 +79,20 @@ describe('ordinary loyalty history page', () => {
     expect(screen.getAllByText('Sale: sale-a')).toHaveLength(4);
     expect(screen.getByRole('link', { name: 'Next' })).toHaveAttribute(
       'href',
-      '/pharmacy/loyalty?branchId=branch-a&customerId=customer-a&query=Retail&page=2'
+      '/pharmacy/loyalty?branchId=branch-a&customerId=customer-a&page=2'
     );
     expect(screen.getByText('Previous')).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByRole('link', { name: /Selected/ })).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByRole('option', { name: /Selected/ })).toBeInTheDocument();
     expect(screen.getByLabelText('Reminder language')).toHaveValue('ur');
     expect(screen.getByRole('button', { name: 'Save reminder language' })).toBeInTheDocument();
+  });
+  it('accepts legacy phone queries without copying them into pagination URLs', async () => {
+    await show({ customerId: 'customer-a', query: '03001234567' });
+    expect(mocks.customers).toHaveBeenCalledWith({ branchId: 'branch-a', query: '03001234567' });
+    expect(screen.getByRole('link', { name: 'Next' }).getAttribute('href')).not.toContain(
+      '03001234567'
+    );
+    expect(screen.getByRole('link', { name: 'Next' }).getAttribute('href')).not.toContain('query=');
   });
   it('shows empty branch history without inventing points', async () => {
     mocks.history.mockResolvedValue({
@@ -95,15 +106,20 @@ describe('ordinary loyalty history page', () => {
     });
     await show({ customerId: 'customer-a' });
     expect(screen.getByText('0 points available')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('No points entries');
+    expect(screen.getByText(/No points entries/)).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Next' })).not.toBeInTheDocument();
   });
   it('provides refinement for truncated search and an explanation for no matches', async () => {
     mocks.customers.mockResolvedValue({ customers: [], hasMore: false });
     await show();
-    expect(screen.getByRole('status')).toHaveTextContent('No matching customers');
+    expect(screen.getByRole('status')).toHaveTextContent('No loyalty activity');
     cleanup();
-    mocks.customers.mockResolvedValue({ customers: [], hasMore: true });
+    mocks.customers.mockResolvedValue({
+      customers: [
+        { id: 'customer-a', displayName: 'Retail customer', phoneLast4: null, pointsBalance: 14 },
+      ],
+      hasMore: true,
+    });
     await show();
     expect(screen.getByText(/Showing the first 50/)).toBeInTheDocument();
   });
@@ -121,7 +137,7 @@ describe('ordinary loyalty history page', () => {
   it('explains permission denial and exposes no accounts', async () => {
     mocks.branches.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
     await show();
-    expect(screen.getByRole('alert')).toHaveTextContent('authorized owner');
+    expect(screen.getByRole('alert')).toHaveTextContent('pharmacy owner');
     expect(screen.queryByText('Retail customer')).not.toBeInTheDocument();
   });
   it('provides retry when a ledger read fails', async () => {
@@ -136,6 +152,6 @@ describe('ordinary loyalty history page', () => {
   it('has a textual loading state without motion', () => {
     render(<LoyaltyLoading />);
     expect(screen.getByRole('main')).toHaveAttribute('aria-busy', 'true');
-    expect(screen.getByRole('status')).toHaveTextContent('Loading customer selection');
+    expect(screen.getByRole('status')).toHaveTextContent('Loading customers');
   });
 });

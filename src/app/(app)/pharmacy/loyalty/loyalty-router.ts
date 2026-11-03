@@ -1,6 +1,7 @@
 import 'server-only';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import {
   listLoyaltyCustomers,
@@ -9,7 +10,7 @@ import {
   PharmacyLoyaltyError,
 } from '@/lib/pharmacy/customer-loyalty';
 import { annotateAudit } from '@/server/audit';
-import { adminProcedure, router, type TRPCContext } from '@/server/trpc';
+import { adminProcedure, publicProcedure, router, type TRPCContext } from '@/server/trpc';
 
 function scopeFor(ctx: TRPCContext, branchId = '') {
   const organizationId = ctx.session?.user.organizationId;
@@ -48,11 +49,35 @@ export const pharmacyLoyaltyRouter = router({
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
     });
   }),
-  customers: adminProcedure
+  customers: publicProcedure
+    .use(({ ctx, next }) => {
+      // Search text can contain a patient's phone, including on denied/invalid requests.
+      ctx.audit.detail.skipInput = true;
+      return next();
+    })
+    .concat(adminProcedure)
     .input(branchInput.extend({ query: z.string().trim().max(100).default('') }).strict())
-    .query(({ ctx, input }) =>
-      historyRead(() => listLoyaltyCustomers(ctx.db, scopeFor(ctx, input.branchId), input.query))
-    ),
+    .query(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      let allowPatientPhoneSearch = false;
+      if (input.query.length >= 2) {
+        // Same patient-search boundary as pharmacyPrescriptions.counterPatients (DEV-624).
+        const subject = subjectFromSession(ctx.session.user);
+        const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+        allowPatientPhoneSearch =
+          (await can(subject, 'pharmacy:counter', undefined, options)) ||
+          (await can(subject, 'pharmacy:dispense', undefined, options));
+      }
+      annotateAudit(ctx, {
+        category: 'PHARMACY_PATIENT',
+        operation: 'READ',
+        action: 'pharmacy.loyalty.customers',
+        metadata: { protected: true, purpose: 'LOYALTY', branchId: input.branchId },
+      });
+      return historyRead(() =>
+        listLoyaltyCustomers(ctx.db, scope, input.query, allowPatientPhoneSearch)
+      );
+    }),
   history: adminProcedure
     .input(
       branchInput

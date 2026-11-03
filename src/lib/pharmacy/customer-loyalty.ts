@@ -413,21 +413,81 @@ async function assertLoyaltyHistoryBranch(db: ScopedDb, scope: LedgerScope) {
   if (!branch) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
 }
 
-export async function listLoyaltyCustomers(db: ScopedDb, scope: LedgerScope, query = '') {
-  if (query.trim().length > 100) throw new RangeError('INVALID_CUSTOMER_QUERY');
+export async function listLoyaltyCustomers(
+  db: ScopedDb,
+  scope: LedgerScope,
+  query = '',
+  allowPatientPhoneSearch = false
+) {
+  const text = query.trim();
+  if (text.length > 100) throw new RangeError('INVALID_CUSTOMER_QUERY');
   await assertLoyaltyHistoryBranch(db, scope);
+  if (text.length === 1) return { customers: [], hasMore: false };
+  const ledgerWhere = { organizationId: scope.organizationId, branchId: scope.branchId };
+  const recent = text
+    ? null
+    : await db.pharmacyLoyaltyPointsEntry.groupBy({
+        by: ['customerId'],
+        where: {
+          ...ledgerWhere,
+          customer: { organizationId: scope.organizationId, active: true },
+        },
+        _sum: { points: true },
+        _max: { occurredAt: true },
+        orderBy: [{ _max: { occurredAt: 'desc' } }, { customerId: 'asc' }],
+        take: 51,
+      });
   // Retail identities are tenant-wide; balances and entries below are branch-specific.
   const customers = await db.pharmacyCustomer.findMany({
     where: {
       organizationId: scope.organizationId,
       active: true,
-      displayName: { contains: query.trim(), mode: 'insensitive' },
+      ...(recent
+        ? { id: { in: recent.map((entry) => entry.customerId) } }
+        : {
+            OR: [
+              { displayName: { contains: text, mode: 'insensitive' as const } },
+              { id: { contains: text, mode: 'insensitive' as const } },
+              { phoneLast4: { contains: text, mode: 'insensitive' as const } },
+              ...(allowPatientPhoneSearch
+                ? [
+                    {
+                      patient: {
+                        organizationId: scope.organizationId,
+                        phone: { contains: text, mode: 'insensitive' as const },
+                      },
+                    },
+                  ]
+                : []),
+            ],
+          }),
     },
     select: { id: true, displayName: true, phoneLast4: true },
     orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
     take: 51,
   });
-  return { customers: customers.slice(0, 50), hasMore: customers.length > 50 };
+  const balances =
+    recent ??
+    (await db.pharmacyLoyaltyPointsEntry.groupBy({
+      by: ['customerId'],
+      where: { ...ledgerWhere, customerId: { in: customers.map((customer) => customer.id) } },
+      _sum: { points: true },
+    }));
+  const balanceById = new Map(balances.map((entry) => [entry.customerId, entry._sum.points ?? 0]));
+  const customerById = new Map(customers.map((customer) => [customer.id, customer]));
+  const ordered = recent
+    ? recent.flatMap((entry) => {
+        const customer = customerById.get(entry.customerId);
+        return customer ? [customer] : [];
+      })
+    : customers;
+  return {
+    customers: ordered.slice(0, 50).map((customer) => ({
+      ...customer,
+      pointsBalance: balanceById.get(customer.id) ?? 0,
+    })),
+    hasMore: ordered.length > 50,
+  };
 }
 
 export async function readLoyaltyHistory(
