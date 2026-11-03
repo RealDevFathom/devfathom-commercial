@@ -5,6 +5,7 @@ import { forwardRef, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { CounterChangeDue } from './counter-change-due';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { TenderDraft } from './tender-attempt-storage';
@@ -44,6 +45,8 @@ export type KhataAccount = {
   balanceMinor: number;
 };
 export type CounterTenderPanelProps = {
+  /** Fresh receipt total, when the parent has verified this bill's settlement. */
+  confirmedChangeMinor?: number;
   manualSettings?: ManualPaymentSettings;
   manualSettingsLoading?: boolean;
   manualSettingsError?: boolean;
@@ -108,6 +111,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
   function CounterTenderPanel(
     {
       balanceMinor,
+      confirmedChangeMinor,
       state,
       blocked,
       pending = false,
@@ -147,6 +151,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [cashReceived, setCashReceived] = useState(initialDraft?.cashReceived ?? '');
     const [submitting, setSubmitting] = useState(false);
     const [outcome, setOutcome] = useState<CounterTenderResult | null>(null);
+    // An accepted callback may acknowledge a replay. Never sum acknowledgements;
+    // the verified receipt supplies the authoritative total across split tenders.
+    const [recordedChangeMinor, setRecordedChangeMinor] = useState<number | null>(null);
     const submissionRef = useRef(false);
     const checkRef = useRef(false);
     const statusRef = useRef<HTMLParagraphElement>(null);
@@ -272,6 +279,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         );
         setOutcome(result);
         if (result.status === 'accepted') {
+          if (changeMinor !== null && changeMinor > 0) setRecordedChangeMinor(changeMinor);
           setAmount('');
           setCashReceived('');
           setProviderRef('');
@@ -305,6 +313,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         const result = await onCheckOutcome();
         setOutcome(result);
         if (result.status === 'accepted') {
+          if (changeMinor !== null && changeMinor > 0) setRecordedChangeMinor(changeMinor);
           setAmount('');
           setCashReceived('');
           statusRef.current?.focus();
@@ -340,6 +349,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             ) : null}
           </div>
         </div>
+
+        <CounterChangeDue minor={confirmedChangeMinor ?? recordedChangeMinor} />
 
         <p
           ref={statusRef}

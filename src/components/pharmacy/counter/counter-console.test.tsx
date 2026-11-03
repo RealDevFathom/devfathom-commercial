@@ -2109,3 +2109,49 @@ it('keeps F10 printing available inside the receipt drawer', async () => {
   expect(mocks.printReceipt).toHaveBeenCalledExactlyOnceWith(receipt, 'en', 'THERMAL', false);
   expect(mocks.mutations.tender).not.toHaveBeenCalled();
 });
+
+it('keeps verified change visible in the settled workspace and receipt drawer until the next bill', async () => {
+  mocks.queries.counterCart!.data = cart({
+    status: 'COMPLETED',
+    receiptNumber: 42,
+    totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+  });
+  mocks.queries.counterReceipt!.data = {
+    saleId: 'sale-a',
+    receiptNumber: 42,
+    totals: { changeMinor: 5000 },
+  };
+  render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  expect(screen.getByRole('region', { name: 'Change due' })).toHaveTextContent('50.00');
+  fireEvent.click(screen.getByRole('button', { name: 'Preview receipt' }));
+  expect(
+    within(screen.getByRole('dialog', { name: 'Receipt preview' })).getByRole('region', {
+      name: 'Change due',
+    })
+  ).toHaveTextContent('50.00');
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog', { name: 'Receipt preview' })).not.toBeInTheDocument()
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Start next bill' }));
+  expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
+});
+it.each(['foreign sale', 'wrong receipt', 'fetching', 'failed'])(
+  'withholds a change banner from a %s receipt',
+  (state) => {
+    mocks.queries.counterCart!.data = cart({
+      status: 'COMPLETED',
+      receiptNumber: 42,
+      totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+    });
+    mocks.queries.counterReceipt!.data = {
+      saleId: state === 'foreign sale' ? 'foreign' : 'sale-a',
+      receiptNumber: state === 'wrong receipt' ? 43 : 42,
+      totals: { changeMinor: 5000 },
+    };
+    if (state === 'fetching') mocks.queries.counterReceipt!.isFetching = true;
+    if (state === 'failed') mocks.queries.counterReceipt!.isError = true;
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
+  }
+);

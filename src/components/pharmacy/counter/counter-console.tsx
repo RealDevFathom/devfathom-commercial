@@ -37,6 +37,7 @@ import {
   CounterLotOverride,
   type CounterLotOverrideValue,
 } from './counter-cart';
+import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import {
   CounterReceiptView,
@@ -740,6 +741,14 @@ function ScopedPharmacyCounterConsole({
     attempt !== null ||
     checkingOutcome;
   const lineCount = cart?.lines.length ?? 0;
+  const settledReceipt =
+    billState === 'settled' &&
+    !receiptQuery.isError &&
+    !receiptQuery.isFetching &&
+    receiptQuery.data?.saleId === saleId &&
+    receiptQuery.data.receiptNumber === cart?.receiptNumber
+      ? receiptQuery.data
+      : null;
 
   const refreshTenderBill = useCallback(
     async (resolution = tenderOutcome?.status) => {
@@ -2325,6 +2334,7 @@ function ScopedPharmacyCounterConsole({
             </div>
             {billState === 'settled' ? (
               <div className="space-y-2">
+                <CounterChangeDue minor={settledReceipt?.totals?.changeMinor} />
                 <Button
                   className="h-14 w-full"
                   onClick={() => {
@@ -2482,6 +2492,7 @@ function ScopedPharmacyCounterConsole({
         <CounterTenderPanel
           key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
           ref={tenderRef}
+          confirmedChangeMinor={settledReceipt?.totals?.changeMinor}
           manualSettings={manualSettings.data?.settings}
           manualSettingsLoading={manualSettings.isLoading}
           manualSettingsError={manualSettings.isError}
@@ -2748,19 +2759,12 @@ function ScopedPharmacyCounterConsole({
             printReceipt();
           }
         }}
+        summary={<CounterChangeDue minor={settledReceipt?.totals?.changeMinor} />}
         drawer
       >
         <CounterReceiptView
           branchId={branchId}
-          receipt={
-            billState === 'settled' &&
-            !receiptQuery.isError &&
-            !receiptQuery.isFetching &&
-            receiptQuery.data?.saleId === saleId &&
-            receiptQuery.data.receiptNumber === cart?.receiptNumber
-              ? receiptQuery.data
-              : null
-          }
+          receipt={settledReceipt}
           state={
             billState !== 'settled'
               ? 'idle'
@@ -2802,6 +2806,7 @@ function CounterOverlay({
   initialFocus,
   finalFocus,
   onKeyDown,
+  summary,
   drawer = false,
   children,
 }: {
@@ -2811,6 +2816,7 @@ function CounterOverlay({
   initialFocus?: RefObject<HTMLDivElement | null>;
   finalFocus: RefObject<HTMLInputElement | null>;
   onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
+  summary?: ReactNode;
   drawer?: boolean;
   children: ReactNode;
 }) {
@@ -2829,6 +2835,7 @@ function CounterOverlay({
             <DialogTitle className="text-lg font-semibold">{title}</DialogTitle>
             <DialogClose render={<Button variant="outline" className="h-11" />}>Close</DialogClose>
           </div>
+          {summary ? <div className="shrink-0 px-5 pt-5 empty:hidden">{summary}</div> : null}
           <DialogDescription className="sr-only">
             {title} for the current counter bill.
           </DialogDescription>

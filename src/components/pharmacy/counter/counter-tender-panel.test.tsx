@@ -189,6 +189,22 @@ describe('CounterTenderPanel acknowledgement', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Payment recorded.');
   });
 
+  it('keeps cash change prominent after acceptance until the next bill mounts', async () => {
+    const { rerender, props } = setup({ balanceMinor: 5000 });
+    fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '100.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+
+    await screen.findByText('Payment recorded.');
+    rerender(<CounterTenderPanel {...props} balanceMinor={0} state="settled" />);
+
+    expect(screen.getByText('Change due').parentElement).toHaveTextContent('50.00');
+    expect(screen.getByText('Change due').parentElement?.parentElement).toHaveTextContent('PKR');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('');
+
+    rerender(<CounterTenderPanel key="next-bill" {...props} />);
+    expect(screen.queryByText('Change due')).not.toBeInTheDocument();
+  });
+
   it('treats a thrown callback as unknown and prevents replay', async () => {
     const onTender = vi.fn().mockRejectedValue(new Error('Disconnected'));
     setup({ onTender });
@@ -408,3 +424,56 @@ describe('family Khata tender', () => {
     );
   });
 });
+
+it.each(['rejected', 'unknown'] as const)(
+  'does not claim change for a %s payment',
+  async (status) => {
+    setup({
+      balanceMinor: 5000,
+      onTender: vi.fn().mockResolvedValue({ status, message: 'Not confirmed.' }),
+    });
+    fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '100.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText('Not confirmed.');
+    expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
+  }
+);
+it('uses the receipt total for split payments without adding repeated acknowledgements', async () => {
+  const { props, rerender } = setup({ balanceMinor: 5000 });
+  fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '25.00' } });
+  fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '50.00' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+  await screen.findByText('Payment recorded.');
+  expect(screen.getByRole('region', { name: 'Change due' })).toHaveTextContent('25.00');
+  rerender(<CounterTenderPanel {...props} balanceMinor={2500} />);
+  fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '50.00' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+  await waitFor(() => expect(props.onTender).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole('region', { name: 'Change due' })).toHaveTextContent('25.00');
+  rerender(
+    <CounterTenderPanel {...props} balanceMinor={0} state="settled" confirmedChangeMinor={5000} />
+  );
+  expect(screen.getByRole('region', { name: 'Change due' })).toHaveTextContent('50.00');
+  rerender(
+    <CounterTenderPanel {...props} balanceMinor={0} state="settled" confirmedChangeMinor={0} />
+  );
+  expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
+});
+it('retains change after recovering an accepted cash payment without replaying it', async () => {
+  const { props } = setup({
+    state: 'stale',
+    initialDraft: { type: 'CASH', amount: '50.00', cashReceived: '100.00' },
+    onCheckOutcome: vi.fn().mockResolvedValue({ status: 'accepted', message: 'Recovered.' }),
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Check payment outcome' }));
+  await screen.findByText('Recovered.');
+  expect(screen.getByRole('region', { name: 'Change due' })).toHaveTextContent('50.00');
+  expect(props.onTender).not.toHaveBeenCalled();
+});
+it.each([0, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+  'withholds an invalid or zero confirmed change of %s',
+  (confirmedChangeMinor) => {
+    setup({ confirmedChangeMinor });
+    expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
+  }
+);
