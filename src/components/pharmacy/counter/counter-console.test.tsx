@@ -91,7 +91,6 @@ vi.mock('@/lib/trpc', () => {
         setData: mocks.searchSetData,
         invalidate: vi.fn(),
         fetch: (...args: unknown[]) => mocks.searchFetch(...args),
-        invalidate: vi.fn(),
       },
       counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
       counterReceipt: { invalidate: mocks.receiptInvalidate },

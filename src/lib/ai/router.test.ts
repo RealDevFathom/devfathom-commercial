@@ -2,8 +2,16 @@ import { beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ generate: vi.fn(), model: vi.fn(), record: vi.fn() }));
 vi.mock('ai', () => ({ generateText: mocks.generate }));
-vi.mock('./provider', () => ({ createAIModel: mocks.model }));
-vi.mock('./spend', () => ({ recordAIUsage: mocks.record }));
+vi.mock('./provider', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./provider')>()),
+  createAIModel: mocks.model,
+}));
+vi.mock('./spend', () => ({
+  recordAIUsage: mocks.record,
+  readStoredAISettings: vi.fn(),
+  readProviderSpend: vi.fn(),
+  recordProviderUsage: vi.fn(),
+}));
 
 import { routeAI } from './router';
 

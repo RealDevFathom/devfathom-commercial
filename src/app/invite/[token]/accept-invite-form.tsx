@@ -9,9 +9,14 @@ import { Loader2, Check, X } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
 import { cn } from '@/lib/utils';
+import { inviteCopyForVertical } from '@/lib/team/invite-copy';
 
 const inputClass =
   'flex h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-card px-4 text-sm text-text-strong placeholder:text-text-faint transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30';
+
+// The invitation payload carries no vertical, so the anonymous accept page uses
+// the neutral workspace copy.
+const inviteCopy = inviteCopyForVertical(null);
 
 function titleCase(value: string): string {
   return value.charAt(0) + value.slice(1).toLowerCase();
@@ -267,7 +272,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
             type="tel"
             inputMode="tel"
             required
-            placeholder="+1 (786) 555-0100"
+            placeholder={inviteCopy.phonePlaceholder}
             autoComplete="tel"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
