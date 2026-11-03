@@ -1125,7 +1125,7 @@ async function bootstrapOrganization(
   // gate working, and pre-seeding a profile here would be exactly the "seed data
   // fakes readiness" move PLAT-03 exists to refuse.
   if (input.vertical === 'PHARMACY') {
-    await db.pharmacyBranch.create({
+    const defaultBranch = await db.pharmacyBranch.create({
       data: {
         organizationId: organization.id,
         // The same stable code the restaurant path uses; the operator-facing
@@ -1135,6 +1135,14 @@ async function bootstrapOrganization(
         addressLine: input.firstBranchAddress!,
         city: input.firstBranchCity!,
         provinceCode: input.firstBranchProvinceCode!,
+      },
+    });
+    await db.pharmacyBranchAssignment.create({
+      data: {
+        organizationId: organization.id,
+        branchId: defaultBranch.id,
+        userId: admin.id,
+        active: true,
       },
     });
   }

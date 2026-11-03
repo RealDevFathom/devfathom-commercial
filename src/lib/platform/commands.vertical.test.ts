@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   // WHA-1206 — the pharmacy branch aggregate, a different table from the
   // restaurant branch above, so a test can tell which one provisioning wrote.
   pharmacyBranchCreate: vi.fn(),
+  pharmacyAssignmentCreate: vi.fn(),
   acknowledgementFindMany: vi.fn(),
   // WHA-1181 — restaurant onboarding and activation now also link each
   // organization administrator to a staff profile. Default implementations
@@ -154,6 +155,7 @@ const platformDb = {
     count: mocks.branchCount,
   },
   pharmacyBranch: { create: mocks.pharmacyBranchCreate },
+  pharmacyBranchAssignment: { create: mocks.pharmacyAssignmentCreate },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
   restaurantStaffProfile: {
     findFirst: mocks.staffFindFirst,
@@ -276,6 +278,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.orgCreate.mockResolvedValue({ id: 'org_new', slug: 'acme' });
     mocks.roleCreate.mockResolvedValue({ id: 'role_x' });
     mocks.branchCreate.mockResolvedValue({ id: 'branch_1' });
+    mocks.pharmacyBranchCreate.mockResolvedValue({ id: 'pharmacy_branch_1' });
     mocks.assignmentCreate.mockResolvedValue({ id: 'assign_1' });
     mocks.departmentCreateMany.mockResolvedValue({ count: 0 });
   });
@@ -298,6 +301,7 @@ describe('organization.create vertical + package compatibility', () => {
     expect(mocks.roleCreate).toHaveBeenCalledTimes(1);
     expect(mocks.branchCreate).not.toHaveBeenCalled();
     expect(mocks.assignmentCreate).not.toHaveBeenCalled();
+    expect(mocks.pharmacyAssignmentCreate).not.toHaveBeenCalled();
   });
 
   it('provisions a RESTAURANT organization: default branch, admin assignment, role templates', async () => {
@@ -415,7 +419,7 @@ describe('organization.create vertical + package compatibility', () => {
   // role and no branch — a tenant whose OWNER_AND_ROLE_TEMPLATES and
   // PREMISES_AND_LICENCES gates could never pass without a manual database write.
   // -------------------------------------------------------------------------
-  it('provisions a PHARMACY organization: its own branch aggregate and role templates', async () => {
+  it('provisions a PHARMACY organization: its own branch, admin assignment and role templates', async () => {
     mocks.roleCreate.mockImplementation(async ({ data }: { data: { key: string } }) => ({
       id: `role_${data.key}`,
     }));
@@ -447,6 +451,17 @@ describe('organization.create vertical + package compatibility', () => {
     });
     expect(mocks.branchCreate).not.toHaveBeenCalled();
     expect(mocks.assignmentCreate).not.toHaveBeenCalled();
+    expect(mocks.pharmacyAssignmentCreate).toHaveBeenCalledExactlyOnceWith({
+      data: {
+        organizationId: 'org_new',
+        branchId: 'pharmacy_branch_1',
+        userId: 'user_admin',
+        active: true,
+      },
+    });
+    expect(mocks.pharmacyBranchCreate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.pharmacyAssignmentCreate.mock.invocationCallOrder[0]!
+    );
     // Bootstrap admin role + every pharmacy template, including the optional one.
     const createdRoleKeys = mocks.roleCreate.mock.calls.map(
       (call) => (call[0] as { data: { key: string } }).data.key
@@ -461,6 +476,15 @@ describe('organization.create vertical + package compatibility', () => {
       data: expect.objectContaining({
         role: 'ADMIN',
         organizationRoleId: 'role_admin',
+      }),
+    });
+    // Branch assignment does not opt the bootstrap administrator into sensitive pharmacy actions.
+    expect(mocks.roleCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        key: 'admin',
+        permissions: {
+          create: [{ organizationId: 'org_new', capability: '*', effect: 'ALLOW' }],
+        },
       }),
     });
     expect(mocks.roleCreate).toHaveBeenCalledWith({

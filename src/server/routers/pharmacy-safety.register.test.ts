@@ -104,6 +104,16 @@ describe('pharmacy safety register procedures', () => {
     expect(db.pharmacyControlledRegisterEntry.findMany).not.toHaveBeenCalled();
   });
 
+  it('keeps an assigned bootstrap ADMIN with only a wildcard outside the safety boundary', async () => {
+    const { db, caller } = fixture('*', 'ADMIN');
+    await expect(caller.branches()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller.controlledRegister({ branchId: 'branch-a' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacyControlledRegisterEntry.findMany).not.toHaveBeenCalled();
+  });
+
   it('refuses an unassigned sibling branch before reading entries or correcting', async () => {
     const { db, caller } = fixture();
     await expect(caller.controlledRegister({ branchId: 'branch-b' })).rejects.toMatchObject({
