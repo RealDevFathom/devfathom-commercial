@@ -15,6 +15,7 @@ export type CounterKeymapLegendProps = {
   keymap: ResolvedCounterKeymap;
   saving?: boolean;
   disabled?: boolean;
+  error?: string | null;
   onPresetChange: (preset: CounterKeymapPresetKey) => void;
 };
 
@@ -30,6 +31,7 @@ export function CounterKeymapLegend({
   keymap,
   saving = false,
   disabled = false,
+  error = null,
   onPresetChange,
 }: CounterKeymapLegendProps) {
   const overridden = new Set(keymap.overriddenActions);
@@ -40,7 +42,8 @@ export function CounterKeymapLegend({
         <select
           id="counter-keymap-preset"
           value={keymap.preset.key}
-          disabled={disabled || saving}
+          disabled={disabled}
+          title={disabled ? 'Finish the payment first' : undefined}
           onChange={(event) => onPresetChange(event.target.value as CounterKeymapPresetKey)}
           className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
         >
@@ -64,6 +67,11 @@ export function CounterKeymapLegend({
         {saving ? (
           <p className="text-sm text-text-muted" role="status">
             Saving keymap…
+          </p>
+        ) : null}
+        {error ? (
+          <p className="text-sm text-warning" role="alert">
+            {error}
           </p>
         ) : null}
       </div>

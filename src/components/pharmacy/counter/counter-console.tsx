@@ -357,6 +357,18 @@ function ScopedPharmacyCounterConsole({
   const receiptIntent = useRef<ReceiptIntent | null>(null);
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [keymapSaveError, setKeymapSaveError] = useState<string | null>(null);
+  const [keymapPresetDraft, setKeymapPresetDraft] = useState<CounterKeymapPresetKey | null>(null);
+  const queuedKeymapPreset = useRef<CounterKeymapPresetKey | null>(null);
+  const keymapSaveRunning = useRef(false);
+  const keymapMounted = useRef(true);
+  useEffect(() => {
+    keymapMounted.current = true;
+    return () => {
+      keymapMounted.current = false;
+      queuedKeymapPreset.current = null;
+    };
+  }, []);
   const [pending, setPending] = useState<string | null>(null);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
@@ -477,14 +489,42 @@ function ScopedPharmacyCounterConsole({
   }, [branchAuthorized, branchId, branches, initialBranchId, recoveryScope, selectedBranchId]);
 
   const keymapQuery = trpc.pharmacySales.counterKeymap.useQuery(undefined, { staleTime: 300_000 });
-  const keymap = keymapQuery.data ?? resolveCounterKeymap({ preset: 'devfathom' });
+  const keymap = keymapPresetDraft
+    ? resolveCounterKeymap({ preset: keymapPresetDraft })
+    : (keymapQuery.data ?? resolveCounterKeymap({ preset: 'devfathom' }));
   const saveKeymap = trpc.pharmacySales.counterSaveKeymap.useMutation({
-    onSuccess: () => {
+    onSuccess: (saved) => {
+      if (!keymapMounted.current) return;
+      setKeymapSaveError(null);
+      utils.pharmacySales.counterKeymap.setData(undefined, saved);
       void utils.pharmacySales.counterKeymap.invalidate();
       setNotice({ tone: 'success', message: 'Keymap saved for this operator.' });
     },
-    onError: (error) => setNotice({ tone: 'danger', message: messageFrom(error) }),
+    onError: (error) => {
+      if (!keymapMounted.current) return;
+      const message = messageFrom(error);
+      setKeymapSaveError(message);
+      setNotice({ tone: 'warning', message });
+    },
   });
+  async function saveQueuedKeymap() {
+    if (keymapSaveRunning.current) return;
+    keymapSaveRunning.current = true;
+    try {
+      while (keymapMounted.current && queuedKeymapPreset.current !== null) {
+        const preset = queuedKeymapPreset.current;
+        queuedKeymapPreset.current = null;
+        try {
+          await saveKeymap.mutateAsync({ preset, overrides: {} });
+        } catch {
+          // The mutation's onError reports failure; a later choice may still be saved.
+        }
+      }
+    } finally {
+      keymapSaveRunning.current = false;
+      if (keymapMounted.current) setKeymapPresetDraft(null);
+    }
+  }
 
   const trimmedQuery = query.trim();
   const scannerQuery = trimmedQuery.startsWith(']d2') || trimmedQuery.startsWith('(01)');
@@ -2728,10 +2768,14 @@ function ScopedPharmacyCounterConsole({
         <CounterKeymapLegend
           keymap={keymap}
           saving={saveKeymap.isPending}
-          disabled={busy}
-          onPresetChange={(preset: CounterKeymapPresetKey) =>
-            saveKeymap.mutate({ preset, overrides: {} })
-          }
+          disabled={pending === 'tender'}
+          error={keymapSaveError}
+          onPresetChange={(preset: CounterKeymapPresetKey) => {
+            setKeymapSaveError(null);
+            setKeymapPresetDraft(preset);
+            queuedKeymapPreset.current = preset;
+            void saveQueuedKeymap();
+          }}
         />
       </CounterOverlay>
       <CounterOverlay

@@ -40,10 +40,17 @@ const mocks = vi.hoisted(() => ({
   signIn: vi.fn(),
   receiptRefetch: vi.fn(),
   drawerStatusInvalidate: vi.fn(),
+  keymapSetData: vi.fn(),
   session: {
     status: 'authenticated',
     data: {
-      user: { id: 'account-a', organizationId: 'org-a', status: 'ACTIVE', sessionRevoked: false },
+      user: {
+        id: 'account-a',
+        organizationId: 'org-a',
+        status: 'ACTIVE',
+        sessionRevoked: false,
+        role: 'EMPLOYEE',
+      },
     },
   },
   entitlements: {
@@ -97,6 +104,7 @@ vi.mock('@/lib/trpc', () => {
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
       drawerStatus: { invalidate: mocks.drawerStatusInvalidate },
+      counterKeymap: { setData: mocks.keymapSetData, invalidate: vi.fn() },
     },
     pharmacyPrescriptions: { counterPatientPanel: { invalidate: vi.fn() } },
     pharmacySafety: { controlledRegister: { invalidate: vi.fn() } },
@@ -166,6 +174,7 @@ vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: (
 vi.mock('./counter-upsell-suggestions', () => ({ CounterUpsellSuggestions: () => null }));
 
 import { PharmacyCounterConsole } from './counter-console';
+import { resolveCounterKeymap } from '@/lib/pharmacy/counter-keymap';
 import {
   persistTenderAttempt,
   readTenderAttempt,
@@ -300,10 +309,17 @@ function enterPayment(type = 'CASH') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.keymapSetData.mockReset();
   mocks.session = {
     status: 'authenticated',
     data: {
-      user: { id: 'account-a', organizationId: 'org-a', status: 'ACTIVE', sessionRevoked: false },
+      user: {
+        id: 'account-a',
+        organizationId: 'org-a',
+        status: 'ACTIVE',
+        sessionRevoked: false,
+        role: 'EMPLOYEE',
+      },
     },
   };
   mocks.entitlements = {
@@ -2012,7 +2028,107 @@ describe('DEV-618 counter composition', () => {
     );
   });
 
+  it('coalesces queued preset changes and restores the last saved map after a failed save', async () => {
+    let finishFirst!: () => void;
+    let failLast!: (error: Error) => void;
+    mocks.mutations
+      .counterSaveKeymap!.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishFirst = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            failLast = reject;
+          })
+      );
+    mocks.keymapSetData.mockImplementation((_input, saved) => {
+      mocks.queries.counterKeymap = query(saved);
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Shortcuts' }));
+    const select = screen.getByLabelText('Keymap');
+    const options = mocks.mutationOptions.mock.calls.find(
+      ([name]) => name === 'counterSaveKeymap'
+    )?.[1] as {
+      onSuccess: (saved: ReturnType<typeof resolveCounterKeymap> & { stored: boolean }) => void;
+      onError: (error: Error) => void;
+    };
+    for (const preset of ['legacySpeed', 'devfathom', 'legacySpeed', 'devfathom'])
+      fireEvent.change(select, { target: { value: preset } });
+    expect(mocks.mutations.counterSaveKeymap).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      options.onSuccess({ ...resolveCounterKeymap({ preset: 'legacySpeed' }), stored: true });
+      finishFirst();
+    });
+    await waitFor(() => expect(mocks.mutations.counterSaveKeymap).toHaveBeenCalledTimes(2));
+    expect(mocks.mutations.counterSaveKeymap).toHaveBeenLastCalledWith({
+      preset: 'devfathom',
+      overrides: {},
+    });
+    expect(select).toHaveValue('devfathom');
+    await act(async () => {
+      const error = new Error('Could not save shortcuts.');
+      options.onError(error);
+      failLast(error);
+    });
+    await waitFor(() => expect(select).toHaveValue('legacySpeed'));
+    expect(select).toBeEnabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not save shortcuts.');
+  });
+
+  it('drops queued changes and stale preference responses when the operator unmounts', async () => {
+    let finish!: () => void;
+    mocks.mutations.counterSaveKeymap!.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Shortcuts' }));
+    const select = screen.getByLabelText('Keymap');
+    const options = mocks.mutationOptions.mock.calls.find(
+      ([name]) => name === 'counterSaveKeymap'
+    )?.[1] as {
+      onSuccess: (saved: ReturnType<typeof resolveCounterKeymap> & { stored: boolean }) => void;
+    };
+    fireEvent.change(select, { target: { value: 'legacySpeed' } });
+    fireEvent.change(select, { target: { value: 'devfathom' } });
+    view.unmount();
+    await act(async () => {
+      options.onSuccess({ ...resolveCounterKeymap({ preset: 'legacySpeed' }), stored: true });
+      finish();
+    });
+    expect(mocks.mutations.counterSaveKeymap).toHaveBeenCalledTimes(1);
+    expect(mocks.keymapSetData).not.toHaveBeenCalled();
+  });
+
+  it('locks the preset only while the payment request is in flight', async () => {
+    let finish!: (value: ReturnType<typeof accepted>) => void;
+    mocks.mutations.tender!.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    enterPayment();
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Shortcuts', hidden: true }));
+    const select = screen.getByLabelText('Keymap');
+    expect(select).toBeDisabled();
+    expect(select).toHaveAttribute('title', 'Finish the payment first');
+    await act(async () => finish(accepted()));
+    await waitFor(() => expect(select).toBeEnabled());
+  });
+
   it('moves branch/status beside Counter, opens shortcuts from Actions, and changes the branch', async () => {
+    mocks.session.data.user.role = 'ADMIN';
     mocks.queries.counterBranches = query({
       branches: [
         { id: 'branch-a', name: 'Model Town', code: 'MT1' },
@@ -2042,11 +2158,20 @@ describe('DEV-618 counter composition', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Shortcuts' }));
     const dialog = screen.getByRole('dialog', { name: 'Shortcuts' });
-    fireEvent.change(within(dialog).getByLabelText('Keymap'), { target: { value: 'legacySpeed' } });
+    const keymapSelect = within(dialog).getByLabelText('Keymap');
+    expect(keymapSelect).toBeEnabled();
+    expect(keymapSelect).toHaveValue('devfathom');
+    fireEvent.change(keymapSelect, { target: { value: 'legacySpeed' } });
     expect(mocks.mutations.counterSaveKeymap).toHaveBeenCalledWith({
       preset: 'legacySpeed',
       overrides: {},
     });
+    const saveOptions = mocks.mutationOptions.mock.calls.find(
+      ([name]) => name === 'counterSaveKeymap'
+    )?.[1] as { onError: (error: Error) => void };
+    act(() => saveOptions.onError(new Error('Preference could not be saved.')));
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Preference could not be saved.');
+    expect(keymapSelect).toBeEnabled();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     fireEvent.change(branch, { target: { value: 'branch-b' } });
