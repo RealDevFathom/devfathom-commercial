@@ -17,6 +17,7 @@ const lineSchema = z
     medicineId: id,
     presentationId: id,
     medicineName: id,
+    brandName: z.string().trim().min(1).optional(),
     strength: id.nullable(),
     presentation: id,
     allocations: z.array(allocationSchema).min(1),

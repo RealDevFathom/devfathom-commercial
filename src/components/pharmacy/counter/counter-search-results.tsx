@@ -3,6 +3,10 @@
 import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterSearchRow } from '@/lib/pharmacy/counter';
+import {
+  counterMedicineDisplayName,
+  counterMedicineGenericName,
+} from '@/lib/pharmacy/counter-display-name';
 import { formatMinor, formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
 
 export type CounterSearchResultsProps = {
@@ -181,10 +185,15 @@ export function CounterSearchResults({
                 dir="auto"
                 className="min-w-0 break-words text-sm font-semibold text-text-strong"
               >
-                {row.displayName}
+                {counterMedicineDisplayName(row)}
                 {row.strength ? (
                   <span className="ms-1 font-normal text-text-body">
                     <bdi dir="auto">{row.strength}</bdi>
+                  </span>
+                ) : null}
+                {counterMedicineGenericName(row) ? (
+                  <span dir="auto" className="block text-xs font-normal text-text-muted">
+                    {counterMedicineGenericName(row)}
                   </span>
                 ) : null}
               </span>

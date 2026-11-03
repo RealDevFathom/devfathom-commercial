@@ -303,3 +303,22 @@ describe('bilingual string table', () => {
     }
   });
 });
+
+it('prints issued brand before generic in browser, raw and shared receipt paths', () => {
+  const branded = receiptLine({
+    identityStatus: 'ISSUED',
+    medicineName: 'Paracetamol',
+    brandName: 'Panadol',
+  });
+  const value = receipt({ lines: [branded] });
+  expect(receiptLineLabel(branded, 'en')).toMatch(/^Panadol 500 mg\nParacetamol/);
+  const browser = buildCounterReceiptPreview(value, 'en', 80);
+  expect(browser.indexOf('Panadol')).toBeLessThan(browser.indexOf('Paracetamol'));
+  const raw = buildPharmacyReceiptPrintDocument(value, 'en', {
+    layout: DEFAULT_RECEIPT_LAYOUT,
+    taxIdentity: { ntn: null, strn: null },
+    reprint: false,
+  });
+  expect(JSON.stringify(raw)).toContain('Panadol');
+  expect(JSON.stringify(raw)).toContain('Paracetamol');
+});

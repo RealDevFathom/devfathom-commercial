@@ -99,7 +99,9 @@ export function counterLinePresentation(line: CounterReceiptLine, locale: Counte
   const issued = line.identityStatus === 'ISSUED';
   return {
     identity: issued
-      ? [line.medicineName, line.strength, line.presentation].filter(Boolean).join(' · ')
+      ? line.brandName?.trim() && line.brandName.trim().toLocaleLowerCase() !== line.medicineName.trim().toLocaleLowerCase()
+        ? `${[line.brandName.trim(), line.strength].filter(Boolean).join(' · ')}\n${[line.medicineName, line.presentation].filter(Boolean).join(' · ')}`
+        : [line.medicineName, line.strength, line.presentation].filter(Boolean).join(' · ')
       : text.unavailable,
     allocations: (line.allocations ?? []).map((allocation) => {
       const batch = issued ? allocation.batchNumber : null;
@@ -224,8 +226,14 @@ export function buildCounterZReportPreview(
     `#${report.sequence} · ${report.id}`,
     report.currency,
     ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount)}`),
-    ...(report.tenderTotals == null ? [] : tenderTotalsSchema.parse(report.tenderTotals).map((row) =>
-      `${row.type}: ${formatMinor(row.amountMinor)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor)}`)),
+    ...(report.tenderTotals == null
+      ? []
+      : tenderTotalsSchema
+          .parse(report.tenderTotals)
+          .map(
+            (row) =>
+              `${row.type}: ${formatMinor(row.amountMinor)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor)}`
+          )),
     `${labels[8]}: ${report.reason ?? '—'}`,
     report.isFinal ? 'Final' : 'Provisional — migration reconciliation pending',
   ].join('\n');

@@ -490,6 +490,7 @@ export type CounterCartLine = {
   saleLineId: string;
   medicineId: string;
   medicineName: string;
+  brandName?: string | null;
   strength: string | null;
   presentation: string;
   saleUnit: SaleUnitKind;
@@ -597,6 +598,7 @@ export async function readCounterCart(
       saleLineId: line.id,
       medicineId: line.medicineId,
       medicineName: line.medicine.productName,
+      ...(line.medicine.brandName?.trim() ? { brandName: line.medicine.brandName.trim() } : {}),
       strength: renderStrength(line.medicine.strengths),
       presentation: line.presentation.presentation,
       saleUnit: line.saleUnit as SaleUnitKind,
@@ -690,6 +692,7 @@ export async function readCounterReceipt(
       saleLineId: line.id,
       identityStatus: identity ? ('ISSUED' as const) : ('UNAVAILABLE' as const),
       medicineName: identity?.medicineName ?? 'Historical identity unavailable',
+      ...(identity?.brandName ? { brandName: identity.brandName } : {}),
       strength: identity?.strength ?? null,
       presentation: identity?.presentation ?? 'Historical identity unavailable',
       allocations,

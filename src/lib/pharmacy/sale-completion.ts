@@ -112,6 +112,7 @@ export async function completePaidPharmacySale(
         medicineId: line.medicineId,
         presentationId: line.presentationId,
         medicineName: line.medicine.productName,
+        ...(line.medicine.brandName?.trim() ? { brandName: line.medicine.brandName.trim() } : {}),
         strength: line.medicine.strengths.length
           ? line.medicine.strengths
               .map((component) => {

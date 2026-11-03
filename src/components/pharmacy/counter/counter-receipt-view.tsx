@@ -538,7 +538,7 @@ export function CounterReceiptView({
             return (
               <li key={line.saleLineId} className="space-y-0.5 py-2">
                 <div className="flex justify-between gap-3">
-                  <span className="min-w-0 break-words text-text-strong">
+                  <span className="min-w-0 whitespace-pre-line break-words text-text-strong">
                     {counterLinePresentation(line, locale).identity}
                   </span>
                   <span className="shrink-0 tabular-nums text-text-strong">

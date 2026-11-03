@@ -316,3 +316,19 @@ describe('CounterLotOverride', () => {
     expect(props.onRetry).toHaveBeenCalledOnce();
   });
 });
+
+it('shows cart brand above the generic and strength without changing money', () => {
+  const value = cart([inDays(400)]);
+  value.lines[0] = {
+    ...value.lines[0]!,
+    brandName: 'Panadol',
+    medicineName: 'Paracetamol',
+    strength: '500 mg',
+  };
+  render(<CounterCartPanel cart={value} state="ready" onRetry={vi.fn()} now={NOW} />);
+  expect(screen.getByText('Paracetamol')).toHaveClass('block');
+  expect(screen.getByRole('rowheader', { name: /Panadol/ })).toHaveTextContent(
+    'Paracetamol'
+  );
+  expect(screen.getAllByText('25.00').length).toBeGreaterThan(0);
+});

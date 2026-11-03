@@ -39,6 +39,8 @@ export type CounterReceiptLine = {
     grossMinor?: number | null;
   }[];
   medicineName: string;
+  /** Optional for receipts issued before brand identity was captured. */
+  brandName?: string | null;
   /** Rendered strength, for example `500 mg`. Null for an unstrengthed item. */
   strength: string | null;
   presentation: string;
@@ -204,7 +206,12 @@ export function receiptTitle(receipt: CounterReceipt, locale: CounterReceiptLoca
  */
 export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceiptLocale): string {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
-  const identity = [line.medicineName, line.strength].filter(Boolean).join(' ');
+  const name = line.brandName?.trim() || line.medicineName;
+  const primary = [name, line.strength].filter(Boolean).join(' ');
+  const identity =
+    line.brandName?.trim() && line.brandName.trim().toLocaleLowerCase() !== line.medicineName.trim().toLocaleLowerCase()
+      ? `${primary}\n${line.medicineName}`
+      : primary;
   const tail = [
     `${strings.batch} ${line.batchNumber}`,
     `${strings.expiry} ${formatReceiptDate(line.expiresAt)}`,
@@ -309,7 +316,9 @@ export function counterReceiptTotals(input: {
   const tenderedMinor = input.tenders.reduce(
     (total, tender) =>
       total +
-      (tender.type === 'CASH' ? (tender.cashReceivedMinor ?? tender.amountMinor) : tender.amountMinor),
+      (tender.type === 'CASH'
+        ? (tender.cashReceivedMinor ?? tender.amountMinor)
+        : tender.amountMinor),
     0
   );
   const changeMinor = input.tenders.reduce(

@@ -167,3 +167,12 @@ describe('issued receipt identity correspondence', () => {
     ).toThrow('INVALID_RECEIPT_IDENTITY');
   });
 });
+
+it('accepts optional issued brand identity while retaining historical snapshot compatibility', () => {
+  const branded = {
+    ...snapshot,
+    lines: snapshot.lines.map((line) => ({ ...line, brandName: 'Panadol' })),
+  };
+  expect(validateReceiptIdentity(branded, sale).lines[0]!.brandName).toBe('Panadol');
+  expect(validateReceiptIdentity(snapshot, sale).lines[0]!.brandName).toBeUndefined();
+});

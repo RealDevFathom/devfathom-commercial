@@ -55,6 +55,38 @@ describe('CounterSearchResults safety flags', () => {
     expect(screen.getByText('پیراسٹامول')).toHaveAttribute('dir', 'auto');
   });
 
+  it('shows the brand with the generic name and ignores blank brand values', () => {
+    const { rerender } = render(
+      <CounterSearchResults
+        rows={[{ ...row, brandName: 'Panadol' }]}
+        state="ready"
+        query="panadol"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Panadol')).toBeVisible();
+    expect(screen.getByText('Paracetamol')).toHaveClass('block');
+    expect(screen.getByText('500 mg')).toBeVisible();
+
+    rerender(
+      <CounterSearchResults
+        rows={[{ ...row, brandName: '   ' }]}
+        state="ready"
+        query="para"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Paracetamol')).toBeVisible();
+  });
+
   it.each(['ltr', 'rtl'])('isolates the strength from an Urdu name in a %s workspace', (dir) => {
     render(
       <div dir={dir}>

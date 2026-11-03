@@ -1,4 +1,8 @@
 'use client';
+import {
+  counterMedicineDisplayName,
+  counterMedicineGenericName,
+} from '@/lib/pharmacy/counter-display-name';
 
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterCart } from '@/lib/pharmacy/counter';
@@ -135,9 +139,20 @@ export function CounterCartPanel({
                   className="min-w-0 text-left font-normal lg:w-2/5 lg:py-3 lg:pr-4"
                 >
                   <p className="text-sm font-semibold text-text-strong">
-                    {line.medicineName}
+                    {counterMedicineDisplayName({
+                      brandName: line.brandName,
+                      displayName: line.medicineName,
+                    })}
                     {line.strength ? (
                       <span className="ml-1 font-normal text-text-body">{line.strength}</span>
+                    ) : null}
+                    {counterMedicineGenericName({
+                      brandName: line.brandName,
+                      displayName: line.medicineName,
+                    }) ? (
+                      <span dir="auto" className="block text-xs font-normal text-text-muted">
+                        {line.medicineName}
+                      </span>
                     ) : null}
                   </p>
                   <p className="mt-1 text-xs text-text-muted">

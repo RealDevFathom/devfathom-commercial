@@ -66,7 +66,9 @@ function clamp(value: string, max: number): string {
 
 function lineIdentity(line: CounterReceipt['lines'][number]): string {
   return line.identityStatus === 'ISSUED'
-    ? [line.medicineName, line.strength, line.presentation].filter(Boolean).join(' - ')
+    ? line.brandName?.trim() && line.brandName.trim().toLocaleLowerCase() !== line.medicineName.trim().toLocaleLowerCase()
+      ? `${[line.brandName.trim(), line.strength].filter(Boolean).join(' - ')}\n${[line.medicineName, line.presentation].filter(Boolean).join(' - ')}`
+      : [line.medicineName, line.strength, line.presentation].filter(Boolean).join(' - ')
     : 'Historical identity unavailable';
 }
 

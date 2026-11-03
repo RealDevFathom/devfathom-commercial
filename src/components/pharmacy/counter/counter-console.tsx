@@ -71,6 +71,10 @@ import {
 } from '@/components/ui/dialog';
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
 import {
+  counterMedicineDisplayName,
+  counterMedicineGenericName,
+} from '@/lib/pharmacy/counter-display-name';
+import {
   counterAlertsFor,
   hasBlockingAlert,
   type CounterAlertLine,
@@ -2124,8 +2128,13 @@ function ScopedPharmacyCounterConsole({
                       Next line
                     </h2>
                     <p className="mt-1 text-sm font-semibold text-text-strong">
-                      {activeRow.displayName}
+                      {counterMedicineDisplayName(activeRow)}
                       {activeRow.strength ? ` ${activeRow.strength}` : ''}
+                      {counterMedicineGenericName(activeRow) ? (
+                        <span dir="auto" className="block text-xs font-normal text-text-muted">
+                          {counterMedicineGenericName(activeRow)}
+                        </span>
+                      ) : null}
                     </p>
                     <p className="mt-1 text-xs leading-relaxed text-text-muted">
                       {[

@@ -77,6 +77,7 @@ function line(id: string, medicineId: string, allocations: ReturnType<typeof all
     medicine: {
       organizationId: 'org_a',
       productName: `Product ${medicineId}`,
+      brandName: 'Issued brand',
       strengths: [{ value: '500.00', unit: 'mg' }],
     },
     presentation: { organizationId: 'org_a', medicineId, presentation: 'Tablet' },
@@ -160,6 +161,7 @@ describe('R1 receipt identity carries every batch fact', () => {
     });
     expect(snapshot.lines.map((l) => l.saleLineId)).toEqual(['line_1', 'line_2']);
     expect(snapshot.lines[0]!.strength).toBe('500 mg');
+    expect(mocks.validate.mock.calls[0]![0]).toMatchObject({lines:[{brandName:'Issued brand'},{brandName:'Issued brand'}]});
     expect(snapshot.lines.flatMap((l) => l.allocations)).toEqual([
       {
         allocationId: 'al_1',

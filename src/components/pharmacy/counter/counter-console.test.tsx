@@ -1882,6 +1882,7 @@ describe('DEV-618 counter composition', () => {
 
   it('stages real metadata and quantity, switches units with F3/F4/F5, and submits the chosen batch with F6', async () => {
     const row = barcodeRow({
+      brandName: 'Panadol',
       unitsPerPack: 10,
       onHandUnits: 100,
       saleUnits: [
@@ -1915,7 +1916,8 @@ describe('DEV-618 counter composition', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(row));
     const next = screen.getByRole('region', { name: 'Next line' });
-    expect(next).toHaveTextContent('Paracetamol 500 mg');
+    expect(next).toHaveTextContent('Panadol 500 mg');
+    expect(within(next).getByText('Paracetamol')).toHaveClass('block');
     expect(next).toHaveTextContent('Batch B-1');
     expect(next).toHaveTextContent('Store A');
     expect(next).toHaveTextContent('FEFO batch B-1 is used');
