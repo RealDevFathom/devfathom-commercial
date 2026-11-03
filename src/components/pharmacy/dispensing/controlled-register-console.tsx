@@ -7,7 +7,7 @@ import { registerPrintTotals } from '@/lib/pharmacy/register-print';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
-import { WorkspaceState } from './field';
+import { fieldClass, WorkspaceState } from './field';
 
 const cell = 'break-words px-2 py-1.5 align-top text-xs text-text-body';
 const head =
@@ -24,12 +24,18 @@ export function ControlledRegisterConsole() {
   const [pin, setPin] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const branches = trpc.pharmacySafety.branches.useQuery();
-  const selected = branchId || branches.data?.[0]?.id || '';
+  const accessibleBranches = branches.isSuccess ? branches.data : [];
+  const selected = accessibleBranches.some((branch) => branch.id === branchId)
+    ? branchId
+    : accessibleBranches.length === 1
+      ? accessibleBranches[0].id
+      : '';
   const register = trpc.pharmacySafety.controlledRegister.useQuery(
     { branchId: selected },
     { enabled: Boolean(selected) }
   );
   const pharmacists = trpc.pharmacySafety.controlledPharmacists.useQuery();
+  const shownRegister = selected && !register.error ? register.data : undefined;
   const correct = trpc.pharmacySafety.recordCorrection.useMutation({
     onSuccess: async (result) => {
       if (result && 'blocked' in result) {
@@ -61,7 +67,7 @@ export function ControlledRegisterConsole() {
     stamp.textContent = `Printed ${formatKarachiDateTime(new Date())} · ${branchName}`;
     const style = popup.document.createElement('style');
     style.textContent =
-      '@page { size: landscape; margin: 12mm; } body { font: 11px sans-serif; color: #222; } table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #222; padding: 4px; text-align: left; vertical-align: top; } thead { display: table-header-group; } tr { break-inside: avoid; }';
+      '@page { size: landscape; margin: 12mm; } body { font: 11px sans-serif; color: #222; } table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #222; padding: 4px; text-align: left; vertical-align: top; } td > span { display: block; margin-top: 2px; } thead { display: table-header-group; } tr { break-inside: avoid; }';
     popup.document.head.append(style);
     popup.document.body.append(heading, stamp, page.current.cloneNode(true));
     popup.focus();
@@ -77,7 +83,7 @@ export function ControlledRegisterConsole() {
             type="button"
             variant="outline"
             className="h-9"
-            disabled={!register.data?.entries.length}
+            disabled={!shownRegister?.entries.length || register.isFetching}
             onClick={printRegister}
           >
             Print register
@@ -96,40 +102,84 @@ export function ControlledRegisterConsole() {
         Branch
         <select
           id="register-branch"
-          className="mt-1 h-9 w-full max-w-sm rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
+          className={`${fieldClass} mt-1 max-w-sm`}
           value={selected}
-          onChange={(event) => setBranchId(event.target.value)}
+          disabled={!accessibleBranches.length}
+          onChange={(event) => {
+            setBranchId(event.target.value);
+            setCorrectsEntryId('');
+            setPin('');
+            setFormError(null);
+            setPrintError(false);
+          }}
         >
-          {branches.data?.length ? null : <option value="">No branch</option>}
-          {branches.data?.map((branch) => (
+          {!selected ? (
+            <option value="">
+              {branches.isPending
+                ? 'Loading branches…'
+                : branches.error
+                  ? 'Branches unavailable'
+                  : accessibleBranches.length
+                    ? 'Select a branch'
+                    : 'No accessible branches'}
+            </option>
+          ) : null}
+          {accessibleBranches.map((branch) => (
             <option key={branch.id} value={branch.id}>
               {branch.name}
             </option>
           ))}
         </select>
       </label>
+      {branches.isPending ? (
+        <WorkspaceState title="Loading branches">Reading your accessible branches.</WorkspaceState>
+      ) : null}
       {branches.error ? (
-        <p className="text-xs text-destructive" role="alert">
-          {branches.error.message}
-        </p>
-      ) : null}
-      {register.isLoading ? (
-        <WorkspaceState title="Loading controlled register">Reading this branch.</WorkspaceState>
-      ) : null}
-      {register.error ? (
-        <WorkspaceState title="Controlled register could not be loaded" tone="danger">
-          {register.error.message}
+        <WorkspaceState title="Branches could not be loaded" tone="danger">
+          <p>{branches.error.message}</p>
+          <Button
+            type="button"
+            variant="outline"
+            className="mt-3"
+            disabled={branches.isFetching}
+            onClick={() => void branches.refetch()}
+          >
+            Retry branches
+          </Button>
+        </WorkspaceState>
+      ) : branches.isSuccess && !accessibleBranches.length ? (
+        <WorkspaceState title="No accessible branches">
+          Ask your administrator to assign you to an active pharmacy branch, then refresh this page.
+        </WorkspaceState>
+      ) : accessibleBranches.length > 1 && !selected ? (
+        <WorkspaceState title="Select a branch">
+          Choose a branch to view its controlled register.
         </WorkspaceState>
       ) : null}
-      {register.data ? (
+      {selected && register.isLoading ? (
+        <WorkspaceState title="Loading controlled register">Reading this branch.</WorkspaceState>
+      ) : null}
+      {selected && register.error ? (
+        <WorkspaceState title="Controlled register could not be loaded" tone="danger">
+          <p>{register.error.message}</p>
+          <Button
+            type="button"
+            variant="outline"
+            className="mt-3"
+            disabled={register.isFetching}
+            onClick={() => void register.refetch()}
+          >
+            Retry register
+          </Button>
+        </WorkspaceState>
+      ) : null}
+      {shownRegister ? (
         <SectionCard title="Register" titleLevel={2}>
-          {register.data.entries.length === 0 ? (
-            <p className="text-xs text-text-muted">
-              No rows yet. A sale or purchase of a controlled medicine adds the first one.
-            </p>
+          {shownRegister.entries.length === 0 ? (
+            <p className="text-xs text-text-muted">No register entries for this branch yet.</p>
           ) : (
             <>
-              <RegisterCards entries={register.data.entries} />
+              <RegisterCards entries={shownRegister.entries} />
               <div
                 ref={page}
                 role="region"
@@ -159,7 +209,7 @@ export function ControlledRegisterConsole() {
                     </tr>
                   </thead>
                   <tbody>
-                    {register.data.entries.map((entry) => {
+                    {shownRegister.entries.map((entry) => {
                       const drug =
                         entry.medicine?.productName ?? entry.line?.medicine.productName ?? '—';
                       const prescriber = entry.prescriber?.name ?? entry.prescriberName ?? '—';
@@ -246,12 +296,12 @@ export function ControlledRegisterConsole() {
                       );
                     })}
                   </tbody>
-                  <RegisterTotals entries={register.data.entries} />
+                  <RegisterTotals entries={shownRegister.entries} />
                 </table>
               </div>
             </>
           )}
-          {register.data.entries.length > 0 ? (
+          {shownRegister.entries.length > 0 ? (
             <form
               className="mt-4 grid max-w-3xl gap-2 border-t border-border-subtle pt-3"
               onSubmit={(event) => {
@@ -288,11 +338,11 @@ export function ControlledRegisterConsole() {
                     required
                   >
                     <option value="">Select serial</option>
-                    {register.data.entries
+                    {shownRegister.entries
                       .filter(
                         (entry) =>
                           entry.entryKind !== 'CORRECTION' &&
-                          !register.data.entries.some((other) => other.correctsEntryId === entry.id)
+                          !shownRegister.entries.some((other) => other.correctsEntryId === entry.id)
                       )
                       .map((entry) => (
                         <option key={entry.id} value={entry.id}>
