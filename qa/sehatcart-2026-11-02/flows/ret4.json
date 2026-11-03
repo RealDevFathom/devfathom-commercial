@@ -1,0 +1,44 @@
+[
+  { "goto": "/pharmacy/counter" },
+  { "wait": 1200 },
+  { "click": { "role": "button", "name": "Returns & refunds" } },
+  { "wait": 800 },
+  { "fill": { "label": "Receipt number" }, "value": "2" },
+  { "click": { "role": "button", "name": "Find receipt" } },
+  { "wait": 2000 },
+  { "click": { "role": "button", "name": "Receipt 2 ·" } },
+  { "wait": 2000 },
+  { "select": { "sel": "[role=dialog] select" }, "nth": 0, "index": 1 },
+  {
+    "wait": 1200,
+    "eval": "[...document.querySelectorAll('[role=dialog] select')].map(s=>[...s.options].map(o=>o.text).join('/')).join(' || ')",
+    "max": 1500
+  },
+  { "fill": { "label": "Return quantity (base units)" }, "value": "10" },
+  { "select": { "sel": "[role=dialog] select" }, "nth": 2, "value": "Damaged" },
+  { "select": { "sel": "[role=dialog] select" }, "nth": 3, "value": "Quarantine for review" },
+  { "select": { "sel": "[role=dialog] select" }, "nth": 4, "value": "Quarantine Shelf" },
+  {
+    "fill": { "label": "Inspection and integrity decision" },
+    "value": "Strip crushed, quarantine"
+  },
+  { "check": { "label": "I confirm the quantity" } },
+  { "click": { "role": "button", "name": "Record return" } },
+  {
+    "wait": 2500,
+    "text": "[role=dialog]",
+    "max": 2500,
+    "shot": "cash-return-recorded",
+    "log": "after record return"
+  },
+  { "select": { "sel": "[role=dialog] select" }, "nth": 5, "index": 1 },
+  { "fill": { "label": "Refund amount (PKR)" }, "value": "28.00" },
+  { "click": { "role": "button", "name": "Confirm refund" } },
+  {
+    "wait": 2500,
+    "text": "[role=dialog]",
+    "max": 2500,
+    "shot": "cash-refund-done",
+    "log": "after refund"
+  }
+]
