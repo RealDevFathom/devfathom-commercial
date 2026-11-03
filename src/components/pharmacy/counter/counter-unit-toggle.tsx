@@ -182,7 +182,7 @@ export function CounterUnitToggle({
               }
             }}
             onChange={(event) => onQuantityChange(event.target.value)}
-            className="h-11 w-16 text-center tabular-nums"
+            className="h-11 w-16 text-center tabular-nums aria-invalid:border-warning aria-invalid:ring-warning/20 dark:aria-invalid:border-warning dark:aria-invalid:ring-warning/20"
           />
           <button
             type="button"
