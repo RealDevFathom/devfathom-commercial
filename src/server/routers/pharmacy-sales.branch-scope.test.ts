@@ -6,9 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // `assertInOrganization` lookup); the counter's cash tender reaches it through
 // `branchScopeOrForbidden`, which words that refusal as a scope denial. Every one
 // of these nine procedures must refuse such a branch before the settlement
-// library takes a lock, reads a drawer or writes anything. The close procedures
-// keep their day-close capability gate in front of that check; no capability is
-// added for the counter.
+// library takes a lock, reads a drawer or writes anything. The close and drawer
+// procedures keep their manager-or-owner (or day-close) gate in front of that
+// check; no capability is added for the counter's tender.
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -134,6 +134,14 @@ const procedures: Array<[string, (caller: Caller) => Promise<unknown>, Refusal]>
 const closeProcedures = procedures.filter(([name]) =>
   ['dailyClose', 'closePreview', 'closeDay'].includes(name)
 );
+const managerGated = new Set([
+  'openDrawer',
+  'drawerMovement',
+  'closeDrawer',
+  'dailyClose',
+  'closePreview',
+  'closeDay',
+]);
 
 let db: {
   $transaction: ReturnType<typeof vi.fn>;
@@ -191,7 +199,9 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
   });
   it.each(procedures)(
     '%s refuses a branch that is not an active branch of the organization, touching nothing',
-    async (_name, run, refusal) => {
+    async (name, run, refusal) => {
+      // The session ADMIN is a solo owner: a real member row with no role.
+      if (managerGated.has(name)) db.user.findUnique.mockResolvedValue(memberWithoutCustomRules);
       await expect(run(caller())).rejects.toMatchObject(refusal);
       expect(db.pharmacyBranch.findMany).toHaveBeenCalledExactlyOnceWith({
         where: { id: { in: [BRANCH] }, organizationId: 'org-1', active: true },
@@ -236,6 +246,10 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
 
   it('opens a drawer on an active branch of the organization, scoped to that branch', async () => {
     db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: { permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    });
     await expect(
       caller('EMPLOYEE').openDrawer({
         branchId: BRANCH,

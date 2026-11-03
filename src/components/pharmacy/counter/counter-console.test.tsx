@@ -1137,6 +1137,13 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(screen.getByText('Drawer open')).toBeInTheDocument();
   });
 
+  it('does not offer "Open drawer" to a user the server would refuse', () => {
+    mocks.queries.drawerStatus = query({ openDrawer: null, canOpenDrawer: false });
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(screen.queryByRole('button', { name: 'Open drawer' })).not.toBeInTheDocument();
+    expect(screen.getByText('No drawer open · ask a manager')).toBeInTheDocument();
+  });
+
   it('withholds the button until the drawer status is known', () => {
     mocks.queries.drawerStatus = { ...query(), isSuccess: false, isLoading: true };
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);

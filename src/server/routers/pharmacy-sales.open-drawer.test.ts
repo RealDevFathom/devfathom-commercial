@@ -49,6 +49,13 @@ function fixture(
             .mockResolvedValue({ id: 'drawer-new', status: 'OPEN', deviceId: 'counter-device' }),
     },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
+    // Opening a drawer is a manager-or-owner action: the actor holds the Manager template.
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        organizationRole: { permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }] },
+        permissionOverrides: [],
+      }),
+    },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
       callback(db)
     ),
@@ -138,6 +145,7 @@ describe('pharmacySales.drawerStatus', () => {
         openedAt: new Date('2026-10-20T04:05:00.000Z'),
         openingFloatMinor: 500,
       },
+      canOpenDrawer: true,
     });
     expect(f.db.pharmacyDrawerSession.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -155,6 +163,22 @@ describe('pharmacySales.drawerStatus', () => {
     const f = fixture();
     await expect(
       f.caller.drawerStatus({ branchId: 'branch-1', deviceId: 'counter-device' })
-    ).resolves.toEqual({ openDrawer: null });
+    ).resolves.toEqual({ openDrawer: null, canOpenDrawer: true });
+  });
+
+  it('tells the counter a cashier cannot open a drawer', async () => {
+    const f = fixture();
+    f.db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [
+          { capability: 'pharmacy:counter', effect: 'ALLOW' },
+          { capability: 'pharmacy:orders', effect: 'ALLOW' },
+        ],
+      },
+      permissionOverrides: [],
+    });
+    await expect(
+      f.caller.drawerStatus({ branchId: 'branch-1', deviceId: 'counter-device' })
+    ).resolves.toEqual({ openDrawer: null, canOpenDrawer: false });
   });
 });

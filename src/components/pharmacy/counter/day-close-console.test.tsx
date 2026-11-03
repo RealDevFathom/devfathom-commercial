@@ -208,6 +208,15 @@ describe('day-close console', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Network unavailable');
     expect(screen.getByRole('button', { name: 'Retry preview' })).toBeInTheDocument();
   });
+  it('gives a refused cashier the reason without a retry', () => {
+    mocks.error = Object.assign(
+      new Error('Day-close permission is required to reconcile and close a day.'),
+      { data: { code: 'FORBIDDEN' } }
+    );
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Day-close permission is required');
+    expect(screen.queryByRole('button', { name: 'Retry preview' })).not.toBeInTheDocument();
+  });
   it('labels a re-close reason as the reopen reason, and a first close reason as the variance note', () => {
     const recorded = { cashExpectedMinor: 12500, cashCountedMinor: 12400, isFinal: true };
     mocks.close = { ...recorded, id: 'c1', sequence: 1, supersedesCloseId: null, reason: 'Short' };

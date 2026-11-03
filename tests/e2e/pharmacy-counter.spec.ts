@@ -806,13 +806,20 @@ test('sell → return → refund → reprint from the counter', async ({ page })
 
 test('cashier — the seeded cashier sells from the counter and gets the receipt', async ({
   page,
+  context,
 }) => {
   // The seeded cashier holds the canonical pharmacy:counter that #163 leaves real cashiers with,
   // so this bill fails if the counter's receipt guard stops recognising it. It runs before the
   // day close, which refuses tenders for the rest of the business date.
   const otc = PHARMACY_E2E.medicines.otc;
-  await openCounter(page, PHARMACY_E2E.cashierEmail);
+  // A cashier cannot open their own drawer (manager-or-owner only). The owner opens this
+  // counter device's drawer; the device id lives in localStorage, so it survives the
+  // cashier signing in on the same device.
+  await openCounter(page);
   await openDrawer(page);
+  await context.clearCookies();
+  await openCounter(page, PHARMACY_E2E.cashierEmail);
+  await expect(page.getByText('Drawer open', { exact: true })).toBeVisible();
   await search(page, otc.brandName);
   await stageFirstResult(page, otc.name);
   await page.keyboard.press('F4');

@@ -89,7 +89,7 @@ beforeEach(() => {
     organizationId: 'org-a',
     enabledModules: ['pharmacy-crm'],
   });
-  mocks.actor.mockResolvedValue({ id: 'owner-a' });
+  mocks.actor.mockResolvedValue({ id: 'owner-a', role: 'ADMIN' });
   mocks.permissions.mockResolvedValue({
     organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
     permissionOverrides: [],
@@ -134,14 +134,21 @@ describe('marketing workflow authorization', () => {
       expect.objectContaining({ timezone: 'UTC' })
     );
   });
-  it.each(['STAFF', 'MANAGER', 'PHARMACIST'])(
-    'denies nonowner %s before reading data',
-    async (role) => {
-      await expect(caller(role).history(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
-      expect(mocks.organization).not.toHaveBeenCalled();
-      expect(mocks.history).not.toHaveBeenCalled();
-    }
-  );
+  it.each([
+    ['an EMPLOYEE cashier', 'EMPLOYEE', ['pharmacy:counter', 'pharmacy:orders']],
+    ['an EMPLOYEE pharmacist', 'EMPLOYEE', ['pharmacy:dispense', 'pharmacy:close']],
+    ['an ADMIN assigned the cashier role', 'ADMIN', ['pharmacy:counter', 'pharmacy:orders']],
+  ] as const)('denies %s before reading data', async (_label, role, capabilities) => {
+    mocks.permissions.mockResolvedValue({
+      organizationRole: {
+        permissions: capabilities.map((capability) => ({ capability, effect: 'ALLOW' })),
+      },
+      permissionOverrides: [],
+    });
+    await expect(caller(role).history(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.organization).not.toHaveBeenCalled();
+    expect(mocks.history).not.toHaveBeenCalled();
+  });
   it('denies the wrong package before reading data', async () => {
     mocks.licensed.mockReturnValue(false);
     await expect(caller().history(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -257,10 +264,11 @@ describe('growth current authorization', () => {
     expect(transactionDb).not.toHaveProperty('$transaction');
     expect(mocks.growthHistory.mock.calls[0][0]).toBe(transactionDb);
     expect(transactionDb.user.findUnique).toBe(mocks.permissions);
-    expect(mocks.permissions).toHaveBeenCalledTimes(2);
+    // Manager-or-owner gate at scope and again in the transaction, then both report gates.
+    expect(mocks.permissions).toHaveBeenCalledTimes(4);
     expect(mocks.actor).toHaveBeenCalledWith({
-      where: { id: 'owner-a', organizationId: 'org-a', role: 'ADMIN', status: 'ACTIVE' },
-      select: { id: true },
+      where: { id: 'owner-a', organizationId: 'org-a', status: 'ACTIVE' },
+      select: { id: true, role: true },
     });
     expect(mocks.entitlements).toHaveBeenCalledWith(
       'org-a',

@@ -493,6 +493,9 @@ function ScopedPharmacyCounterConsole({
     { enabled: Boolean(branchAuthorized && branchId && deviceId), staleTime: 30_000 }
   );
   const openDrawerSession = drawerQuery.data?.openDrawer ?? null;
+  // Opening a drawer is manager-or-owner (or a pharmacist); the server says when
+  // this user would be refused, so a cashier is not offered a button that fails.
+  const canOpenDrawer = drawerQuery.data?.canOpenDrawer !== false;
   const drawerStatusKnown = drawerQuery.isSuccess || drawerQuery.isError;
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
@@ -1808,6 +1811,12 @@ function ScopedPharmacyCounterConsole({
           {blocked ? <StatusPill status="blocked" tone="danger" label="Safety block" /> : null}
           {openDrawerSession ? (
             <StatusPill status="drawer-open" tone="success" label="Drawer open" />
+          ) : !canOpenDrawer ? (
+            <StatusPill
+              status="drawer-closed"
+              tone="neutral"
+              label="No drawer open · ask a manager"
+            />
           ) : (
             <Button
               type="button"

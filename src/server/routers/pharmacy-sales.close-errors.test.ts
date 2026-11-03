@@ -75,7 +75,11 @@ function fixture() {
     pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
     // The close read and cut total the day's tenders by type (Z-report split).
     pharmacyTender: { findMany: vi.fn().mockResolvedValue([]) },
-    user: { findMany: vi.fn().mockResolvedValue([{ id: 'actor-1', name: 'Ayesha Karim' }]) },
+    user: {
+      findMany: vi.fn().mockResolvedValue([{ id: 'actor-1', name: 'Ayesha Karim' }]),
+      // The manager-or-owner gate: a solo owner (tenant ADMIN with no organization role).
+      findUnique: vi.fn().mockResolvedValue({ organizationRole: null, permissionOverrides: [] }),
+    },
   };
   const caller = app.createCaller({
     db,

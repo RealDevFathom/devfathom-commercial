@@ -163,9 +163,12 @@ function DayCloseForm({
     return (
       <SectionCard>
         <p role="alert">{preview.error?.message || 'Could not load this day.'}</p>
-        <Button variant="outline" onClick={() => void preview.refetch()}>
-          Retry preview
-        </Button>
+        {/* Day close is manager-or-owner: a refused user gets the reason, not a retry. */}
+        {preview.error?.data?.code === 'FORBIDDEN' ? null : (
+          <Button variant="outline" onClick={() => void preview.refetch()}>
+            Retry preview
+          </Button>
+        )}
       </SectionCard>
     );
   const data = preview.data;
