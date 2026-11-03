@@ -1735,6 +1735,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
       mocks.searchQuery.mockResolvedValue({ rows: [controlledRow], truncated: false });
       if (entry === 'manual') {
         act(() => mocks.searchProps.mock.lastCall![0].onSelect(controlledRow));
+        fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '1' } });
         fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
       } else scan(entry === 'GS1' ? gs1 : '654321');
       await screen.findByText(/Controlled medicine needs the patient address/);
@@ -1880,6 +1881,52 @@ describe('DEV-618 counter composition', () => {
     expect(mocks.mutations.tender).not.toHaveBeenCalled();
   });
 
+  it.each(['', '0', '1.5', '8.0', '1e2', '9007199254740992'])(
+    'refuses invalid tablet quantity %j on Enter',
+    (value) => {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow()));
+      const input = screen.getByLabelText('Quantity');
+      fireEvent.change(input, { target: { value } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      expect(input).toHaveAccessibleDescription(
+        value === '' || value === '0' ? /Enter a quantity/ : /Enter a whole number/
+      );
+    }
+  );
+
+  it('keeps Backspace empty, accepts a replacement quantity, and adds once on Enter', async () => {
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'line-8' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow({ onHandUnits: 100 })));
+    const input = screen.getByLabelText('Quantity') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '1' } });
+    input.blur();
+    input.focus();
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(1);
+    fireEvent.change(input, { target: { value: '' } });
+    expect(input).toHaveValue('');
+    fireEvent.change(input, { target: { value: '8' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledWith(expect.objectContaining({ quantity: 8 }))
+    );
+    expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the stock limit in the selected sale unit and refuses an overstock line', () => {
+    const row = barcodeRow({ onHandUnits: 5 });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(row));
+    const input = screen.getByLabelText('Quantity');
+    fireEvent.change(input, { target: { value: '8' } });
+    expect(input).toHaveAccessibleDescription(/Only 5 in stock/);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
   it('stages real metadata and quantity, switches units with F3/F4/F5, and submits the chosen batch with F6', async () => {
     const row = barcodeRow({
       unitsPerPack: 10,
@@ -1919,6 +1966,13 @@ describe('DEV-618 counter composition', () => {
     expect(next).toHaveTextContent('Batch B-1');
     expect(next).toHaveTextContent('Store A');
     expect(next).toHaveTextContent('FEFO batch B-1 is used');
+    const quantity = within(next).getByLabelText('Quantity');
+    expect(quantity).toHaveValue('');
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F6' });
+    expect(within(next).getByText('Enter a quantity')).toBeVisible();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    fireEvent.change(quantity, { target: { value: '8' } });
+    expect(quantity).toHaveValue('8');
     expect(within(next).getByText('Covered · 100 units on hand')).toBeInTheDocument();
     for (const [key, name] of [
       ['F5', /^Unit/],
@@ -1928,10 +1982,8 @@ describe('DEV-618 counter composition', () => {
       fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key });
       expect(within(next).getByRole('radio', { name })).toHaveAttribute('aria-checked', 'true');
     }
-    fireEvent.click(within(next).getByRole('button', { name: 'Increase quantity' }));
-    expect(within(next).getByLabelText('Quantity')).toHaveValue(2);
-    expect(within(next).getByText('Units').nextElementSibling).toHaveTextContent('20');
-    expect(within(next).getByText('Line total').nextElementSibling).toHaveTextContent('200.00');
+    expect(within(next).getByText('Units').nextElementSibling).toHaveTextContent('80');
+    expect(within(next).getByText('Line total').nextElementSibling).toHaveTextContent('800.00');
     fireEvent.click(within(next).getByRole('button', { name: 'Sell a different batch' }));
     fireEvent.click(within(next).getByRole('radio', { name: /Batch B-2/ }));
     fireEvent.change(within(next).getByLabelText('Override reason'), {
@@ -1941,7 +1993,7 @@ describe('DEV-618 counter composition', () => {
     await waitFor(() =>
       expect(mocks.mutations.addLine).toHaveBeenCalledWith(
         expect.objectContaining({
-          quantity: 2,
+          quantity: 8,
           saleUnit: 'PACK',
           canonicalUnitsPerSaleUnit: 10,
           override: {
@@ -1952,7 +2004,7 @@ describe('DEV-618 counter composition', () => {
         })
       )
     );
-    const added = await screen.findByText('2 × Paracetamol added with a recorded batch override.');
+    const added = await screen.findByText('8 × Paracetamol added with a recorded batch override.');
     expect(added.closest('[role="status"]')).toBeInTheDocument();
     expect(
       added.compareDocumentPosition(screen.getByLabelText('Scan or search')) &

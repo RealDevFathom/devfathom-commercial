@@ -254,6 +254,12 @@ function counterSelectionPreview(
   }
 }
 
+function positiveInteger(value: string): number | null {
+  if (!/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 export function PharmacyCounterConsole(props: ConsoleProps = {}) {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
@@ -326,7 +332,7 @@ function ScopedPharmacyCounterConsole({
   const scannerInFlight = useRef<{ text: string; branchId: string; revision: number } | null>(null);
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
-  const [quantity, setQuantity] = useState(1);
+  const [quantity, setQuantity] = useState('');
   const [lotOverride, setLotOverride] = useState<CounterLotOverrideValue | null>(null);
   const [saleId, setSaleId] = useState<string | null>(initialSaleId);
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
@@ -613,17 +619,19 @@ function ScopedPharmacyCounterConsole({
     () => activeRow?.saleUnits.find((option) => option.kind === saleUnit) ?? null,
     [activeRow, saleUnit]
   );
+  const parsedQuantity = positiveInteger(quantity);
 
   const preview = useMemo(
-    () => counterSelectionPreview(activeRow, selectedOption, quantity),
-    [activeRow, quantity, selectedOption]
+    () => counterSelectionPreview(activeRow, selectedOption, parsedQuantity ?? 0),
+    [activeRow, parsedQuantity, selectedOption]
   );
 
-  const requestedCanonicalUnits = selectedOption
-    ? selectedOption.canonicalUnitsPerSaleUnit * quantity
-    : activeRow?.saleUnits.length === 0
-      ? quantity
-      : null;
+  const requestedCanonicalUnits =
+    selectedOption && parsedQuantity !== null
+      ? selectedOption.canonicalUnitsPerSaleUnit * parsedQuantity
+      : activeRow?.saleUnits.length === 0
+        ? parsedQuantity
+        : null;
   const shortfallUnits =
     activeRow &&
     requestedCanonicalUnits !== null &&
@@ -922,7 +930,7 @@ function ScopedPharmacyCounterConsole({
 
   const stageRow = useCallback((row: CounterSearchRow) => {
     setActiveRow(row);
-    setQuantity(1);
+    setQuantity('');
     setSaleUnit(row.saleUnits[0]?.kind ?? null);
     setLotOverride(null);
   }, []);
@@ -941,7 +949,15 @@ function ScopedPharmacyCounterConsole({
       if (!scanIsCurrent()) return;
       const row = scannedRow ?? activeRow;
       const option = scannedRow ? (scannedRow.saleUnits[0] ?? null) : selectedOption;
-      const units = scannedRow ? 1 : quantity;
+      const units = scannedRow ? 1 : positiveInteger(quantity);
+      if (units === null) {
+        setNotice({
+          tone: 'warning',
+          message:
+            !quantity || Number(quantity) === 0 ? 'Enter a quantity' : 'Enter a whole number',
+        });
+        return;
+      }
       const selectionPreview = scannedRow ? counterSelectionPreview(row, option, units) : preview;
       const batchOverride = scannedRow ? null : lotOverride;
       if (!row || !option || !selectionPreview || busy) return;
@@ -1481,8 +1497,8 @@ function ScopedPharmacyCounterConsole({
       setNotice({ tone: 'warning', message: 'Search for the medicine first, then capture it.' });
       return;
     }
-    const capturedUnits = activeRow ? shortfallUnits : quantity;
-    if (!Number.isSafeInteger(capturedUnits) || capturedUnits <= 0) {
+    const capturedUnits = activeRow ? shortfallUnits : positiveInteger(quantity);
+    if (capturedUnits === null || !Number.isSafeInteger(capturedUnits) || capturedUnits <= 0) {
       setNotice({ tone: 'warning', message: 'There is no stock shortfall to capture.' });
       return;
     }
@@ -1499,10 +1515,10 @@ function ScopedPharmacyCounterConsole({
         reason: activeRow ? 'STOCKOUT' : 'NOT_CARRIED',
         inventoryRuleSnapshot: {
           query: query.trim(),
-          requestedQuantity: quantity,
+          requestedQuantity: positiveInteger(quantity) ?? 0,
           requestedSaleUnit: saleUnit ?? 'UNIT',
           canonicalUnitsPerSaleUnit: selectedOption?.canonicalUnitsPerSaleUnit ?? 1,
-          requestedCanonicalUnits: requestedCanonicalUnits ?? quantity,
+          requestedCanonicalUnits: requestedCanonicalUnits ?? positiveInteger(quantity) ?? 0,
           shortfallCanonicalUnits: capturedUnits,
           onHandUnits: activeRow?.onHandUnits ?? 0,
           blocked: activeRow?.blocked ?? [],
@@ -1548,7 +1564,7 @@ function ScopedPharmacyCounterConsole({
         form: activeRow.dosageForm ?? undefined,
         presentation: activeRow.presentation,
         saleUnit: saleUnit ?? 'UNIT',
-        quantity,
+        quantity: positiveInteger(quantity) ?? 1,
         inventoryRuleSnapshot: {
           proposalCount: substitutesQuery.data?.length ?? 0,
           capturedAt: new Date().toISOString(),
@@ -2056,7 +2072,7 @@ function ScopedPharmacyCounterConsole({
                         setQuery(event.target.value);
                         setActiveRow(null);
                         setSaleUnit(null);
-                        setQuantity(1);
+                        setQuantity('');
                       }}
                       onKeyDown={(event) => {
                         if (event.key !== 'Enter') return;
@@ -2151,6 +2167,7 @@ function ScopedPharmacyCounterConsole({
                       disabled={busy}
                       onSelect={setSaleUnit}
                       onQuantityChange={setQuantity}
+                      onQuantityCommit={() => void addToCart()}
                       chordFor={chordFor}
                     />
                     {activeRow.saleUnits.length === 0 ? (
@@ -2165,8 +2182,7 @@ function ScopedPharmacyCounterConsole({
                           value={quantity}
                           disabled={busy}
                           onChange={(event) => {
-                            const next = Number(event.target.value);
-                            setQuantity(Number.isSafeInteger(next) && next > 0 ? next : 1);
+                            setQuantity(event.target.value);
                           }}
                         />
                       </div>

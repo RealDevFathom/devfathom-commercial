@@ -35,7 +35,7 @@ function renderToggle(overrides: Partial<React.ComponentProps<typeof CounterUnit
   const props = {
     options: OPTIONS,
     selected: 'STRIP' as SaleUnitKind | null,
-    quantity: 2,
+    quantity: '2',
     preview: previewFor('STRIP', 2),
     onSelect: vi.fn(),
     onQuantityChange: vi.fn(),
@@ -104,21 +104,21 @@ describe('CounterUnitToggle (POS-03)', () => {
   });
 
   it('previews the exact quantity and price for the staged line', () => {
-    renderToggle({ selected: 'STRIP', quantity: 3, preview: previewFor('STRIP', 3) });
+    renderToggle({ selected: 'STRIP', quantity: '3', preview: previewFor('STRIP', 3) });
     // 3 strips × 10 = 30 canonical units at 25.00 per strip = 75.00.
     expect(screen.getByText('30')).toBeTruthy();
     expect(screen.getByText('75.00')).toBeTruthy();
   });
 
   it('shows the pro-rata ceiling beside the derived unit price', () => {
-    renderToggle({ selected: 'UNIT', quantity: 1, preview: previewFor('UNIT', 1) });
+    renderToggle({ selected: 'UNIT', quantity: '1', preview: previewFor('UNIT', 1) });
     const preview = previewFor('UNIT', 1);
     expect(preview.unitPriceMinor).toBeLessThanOrEqual(preview.proRataCeilingMinor);
     expect(screen.getByText('Pro-rata ceiling')).toBeTruthy();
   });
 
   it('reports a shortfall instead of quietly allowing an unfillable line', () => {
-    renderToggle({ selected: 'PACK', quantity: 2, preview: previewFor('PACK', 2, 150) });
+    renderToggle({ selected: 'PACK', quantity: '2', preview: previewFor('PACK', 2, 150) });
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toContain('Short by 50 units');
     expect(alert.textContent).toContain('150 safe units');
@@ -126,21 +126,21 @@ describe('CounterUnitToggle (POS-03)', () => {
   });
 
   it('confirms coverage when the branch can fill the line', () => {
-    renderToggle({ selected: 'STRIP', quantity: 2, preview: previewFor('STRIP', 2, 500) });
+    renderToggle({ selected: 'STRIP', quantity: '2', preview: previewFor('STRIP', 2, 500) });
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByText(/Covered · 500 units on hand/)).toBeTruthy();
   });
 
-  it('coerces a cleared or invalid quantity to one rather than to zero', () => {
+  it('keeps the typed quantity text so the field can be cleared before replacement', () => {
     const props = renderToggle();
     fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '' } });
-    expect(props.onQuantityChange).toHaveBeenLastCalledWith(1);
+    expect(props.onQuantityChange).toHaveBeenLastCalledWith('');
 
     fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '0' } });
-    expect(props.onQuantityChange).toHaveBeenLastCalledWith(1);
+    expect(props.onQuantityChange).toHaveBeenLastCalledWith('0');
 
     fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '7' } });
-    expect(props.onQuantityChange).toHaveBeenLastCalledWith(7);
+    expect(props.onQuantityChange).toHaveBeenLastCalledWith('7');
   });
 
   it('provides 44px touch targets for every quantity stepper control', () => {
