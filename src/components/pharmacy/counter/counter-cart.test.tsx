@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
+import { renderWithIntl as render } from '@/test/intl';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { CounterCart } from '@/lib/pharmacy/counter';

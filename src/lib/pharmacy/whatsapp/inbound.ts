@@ -1,3 +1,4 @@
+import { isAppLocale, type AppLocale } from '@/i18n/config';
 import 'server-only';
 import { lockCustomerConsent, writePatientConsent } from '../consent-writer';
 
@@ -20,7 +21,7 @@ import {
   normalizeWhatsAppNumber,
   parseOrderMessage,
   phoneLast4,
-  WHATSAPP_REPLIES,
+  localizedWhatsAppReplies,
   type ParsedOrderMessage,
 } from './messages';
 import type { WhatsAppInboundMessage, WhatsAppProvider } from './provider';
@@ -41,6 +42,7 @@ export type InboundOutcome =
   | 'PHARMACIST_CALLBACK';
 
 type KnownCustomer = {
+  preferredLanguage: AppLocale;
   id: string;
   userId: string | null;
   patientId: string;
@@ -67,6 +69,7 @@ export async function findCustomerByWhatsApp(
       patientId: true,
       active: true,
       whatsappOptIn: true,
+      preferredLanguage: true,
       patient: { select: { phone: true } },
     },
     take: 50,
@@ -77,6 +80,7 @@ export async function findCustomerByWhatsApp(
   if (matches.length !== 1) return null;
   const match = matches[0]!;
   return {
+    preferredLanguage: isAppLocale(match.preferredLanguage) ? match.preferredLanguage : 'en',
     id: match.id,
     userId: match.userId,
     patientId: match.patientId,
@@ -289,12 +293,12 @@ export async function handleInboundWhatsAppMessage(
       () => provider.sendText({ to: message.from, body })
     );
 
+  const replies = localizedWhatsAppReplies(customer.preferredLanguage);
   if (keyword) {
     const optIn = keyword === 'START';
     // The acknowledgement answers the customer's own consent request; it is the
     // only message sent regardless of the stored flag.
-    if (inReplyWindow)
-      await reply('CONSENT_ACK', optIn ? WHATSAPP_REPLIES.optedIn : WHATSAPP_REPLIES.optedOut);
+    if (inReplyWindow) await reply('CONSENT_ACK', optIn ? replies.optedIn : replies.optedOut);
     return optIn ? 'OPTED_IN' : 'OPTED_OUT';
   }
 
@@ -330,12 +334,12 @@ export async function handleInboundWhatsAppMessage(
       const inboundId = await claimInbound();
       if (!inboundId) return 'DUPLICATE';
     }
-    await reply('ORDER_FALLBACK', WHATSAPP_REPLIES.fallback);
+    await reply('ORDER_FALLBACK', replies.fallback);
     return 'PHARMACIST_CALLBACK';
   }
   await reply(
     'ORDER_CONFIRMATION',
-    WHATSAPP_REPLIES.confirmation({
+    replies.confirmation({
       reference: placed.orderId.slice(-6).toUpperCase(),
       quantity: parsed.quantity,
       branch: placed.branch.name,

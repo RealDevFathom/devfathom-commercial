@@ -1,5 +1,7 @@
 'use client';
+import enMessages from '@/messages/en.json';
 
+import { useTranslations } from 'next-intl';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterCart } from '@/lib/pharmacy/counter';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
@@ -27,9 +29,14 @@ export function nearExpiryDays(expiresAt: string, now: Date): number | null {
 }
 
 function NearExpiryPill({ expiresAt, now }: { expiresAt: string; now: Date }) {
+  const ct = useTranslations('CounterText');
   const days = nearExpiryDays(expiresAt, now);
   return days === null ? null : (
-    <StatusPill status="near-expiry" tone="warning" label={`Near expiry · ${days} d`} />
+    <StatusPill
+      status="near-expiry"
+      tone="warning"
+      label={ct('nearExpiryValue0D', { value0: days })}
+    />
   );
 }
 
@@ -49,18 +56,15 @@ export function CounterCartPanel({
   alerts = [],
   now = new Date(),
 }: CounterCartPanelProps) {
+  const ct = useTranslations('CounterText');
   if (state === 'idle' || (state === 'ready' && cart === null)) {
-    return (
-      <p className="p-4 text-sm text-text-muted">
-        No bill is open. Search for a medicine and add a line to start one.
-      </p>
-    );
+    return <p className="p-4 text-sm text-text-muted">{ct('noBillIsOpenSearchForAMedicineAnd')}</p>;
   }
 
   if (state === 'loading') {
     return (
       <p className="p-4 text-sm text-text-muted" role="status">
-        Loading the bill…
+        {ct('loadingTheBill')}
       </p>
     );
   }
@@ -68,13 +72,13 @@ export function CounterCartPanel({
   if (state === 'error' || cart === null) {
     return (
       <div className="space-y-2 p-4" role="alert">
-        <p className="text-sm text-destructive">{error ?? 'The bill could not be loaded.'}</p>
+        <p className="text-sm text-destructive">{error ?? ct('theBillCouldNotBeLoaded')}</p>
         <button
           type="button"
           onClick={onRetry}
           className="inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         >
-          Retry
+          {ct('retry')}
         </button>
       </div>
     );
@@ -83,32 +87,29 @@ export function CounterCartPanel({
   if (cart.lines.length === 0) {
     // UX rules 1 and 9: name no identifier the operator cannot act on, and say
     // how to populate the empty state rather than only that it is empty.
-    return (
-      <p className="p-4 text-sm text-text-muted">
-        This bill is open with no lines yet. Scan or search a medicine, choose its sale unit, then
-        add it to the cart.
-      </p>
-    );
+    return <p className="p-4 text-sm text-text-muted">{ct('thisBillIsOpenWithNoLinesYetScan')}</p>;
   }
 
   return (
     <div className="min-w-0 overflow-x-auto">
-      <table role="table" className="block w-full lg:table" aria-label="Cart lines">
+      <table role="table" className="block w-full lg:table" aria-label={ct('cartLines')}>
         <thead className="sr-only bg-surface-sunken lg:not-sr-only lg:table-header-group">
           <tr
             role="row"
             className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase"
           >
-            {['#', 'Medicine', 'Unit × qty', 'Batch · Expiry', 'Amount'].map((heading) => (
-              <th
-                key={heading}
-                scope="col"
-                role="columnheader"
-                className="py-2 pr-4 text-left font-medium first:pl-4 last:text-right"
-              >
-                {heading}
-              </th>
-            ))}
+            {['#', ct('medicine'), ct('unitQty'), ct('batchExpiry'), ct('amount')].map(
+              (heading) => (
+                <th
+                  key={heading}
+                  scope="col"
+                  role="columnheader"
+                  className="py-2 pe-4 text-start font-medium first:ps-4 last:text-end"
+                >
+                  {heading}
+                </th>
+              )
+            )}
           </tr>
         </thead>
         {cart.lines.map((line, index) => {
@@ -132,50 +133,58 @@ export function CounterCartPanel({
                 <th
                   scope="row"
                   role="rowheader"
-                  className="min-w-0 text-left font-normal lg:w-2/5 lg:py-3 lg:pr-4"
+                  className="min-w-0 text-start font-normal lg:w-2/5 lg:py-3 lg:pe-4"
                 >
                   <p className="text-sm font-semibold text-text-strong">
                     {line.medicineName}
                     {line.strength ? (
-                      <span className="ml-1 font-normal text-text-body">{line.strength}</span>
+                      <span className="ms-1 font-normal text-text-body">{line.strength}</span>
                     ) : null}
                   </p>
                   <p className="mt-1 text-xs text-text-muted">
-                    {line.presentation} · {line.saleUnit.toLowerCase()} · {line.canonicalUnits}{' '}
+                    {line.presentation} · {ct(`saleUnits.${line.saleUnit}`)} · {line.canonicalUnits}{' '}
                     units @ {formatMinor(line.unitPriceMinor)}
-                    {line.discountMinor > 0 ? ` · less ${formatMinor(line.discountMinor)}` : ''}
+                    {line.discountMinor > 0
+                      ? ct('lessValue0', { value0: formatMinor(line.discountMinor) })
+                      : ''}
                   </p>
                   <div className="mt-1 flex flex-wrap gap-1">
                     {line.controlled ? (
-                      <StatusPill status="controlled" tone="danger" label="Controlled" />
+                      <StatusPill status="controlled" tone="danger" label={ct('controlled')} />
                     ) : null}
                     {line.rx ? (
-                      <StatusPill status="prescription" tone="warning" label="Prescription only" />
+                      <StatusPill
+                        status="prescription"
+                        tone="warning"
+                        label={ct('prescriptionOnly')}
+                      />
                     ) : null}
                     {line.restricted ? (
-                      <StatusPill status="restricted" tone="warning" label="Restricted" />
+                      <StatusPill status="restricted" tone="warning" label={ct('restricted')} />
                     ) : null}
                     {line.highAlert ? (
-                      <StatusPill status="high-alert" tone="danger" label="High alert" />
+                      <StatusPill status="high-alert" tone="danger" label={ct('highAlert')} />
                     ) : null}
                     {line.lasa ? (
-                      <StatusPill status="look-alike" tone="warning" label="Look-alike" />
+                      <StatusPill status="look-alike" tone="warning" label={ct('lookAlike')} />
                     ) : null}
                     {line.coldChain ? (
-                      <StatusPill status="cold-chain" tone="info" label="Cold chain" />
+                      <StatusPill status="cold-chain" tone="info" label={ct('coldChain')} />
                     ) : null}
                   </div>
                 </th>
-                <td role="cell" className="col-span-2 col-start-2 row-start-2 lg:py-3 lg:pr-4">
+                <td role="cell" className="col-span-2 col-start-2 row-start-2 lg:py-3 lg:pe-4">
                   <p className="font-mono text-sm font-semibold tabular-nums text-text-strong">
-                    {line.quantity} × {line.saleUnit.toLowerCase()}
+                    {line.quantity} × {ct(`saleUnits.${line.saleUnit}`)}
                   </p>
-                  <p className="text-xs text-text-muted">{line.canonicalUnits} units</p>
+                  <p className="text-xs text-text-muted">
+                    {line.canonicalUnits} {ct('units')}
+                  </p>
                 </td>
-                <td role="cell" className="col-span-2 col-start-2 row-start-3 lg:py-3 lg:pr-4">
+                <td role="cell" className="col-span-2 col-start-2 row-start-3 lg:py-3 lg:pe-4">
                   <ul
                     className="space-y-2"
-                    aria-label={`Batch allocation for ${line.medicineName}`}
+                    aria-label={ct('batchAllocationForValue0', { value0: line.medicineName })}
                   >
                     {line.allocations.map((allocation) => (
                       <li
@@ -184,19 +193,30 @@ export function CounterCartPanel({
                       >
                         <div className="flex flex-wrap gap-x-2 font-mono tabular-nums">
                           <span className="font-semibold text-text-strong">
-                            Batch {allocation.batchNumber}
+                            {ct('batch')}
+                            {allocation.batchNumber}
                           </span>
-                          <span>Exp {formatReceiptDate(allocation.expiresAt)}</span>
+                          <span>
+                            {ct('exp')}
+                            {formatReceiptDate(allocation.expiresAt)}
+                          </span>
                         </div>
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                           {allocation.stockLocationCode ? (
-                            <span className="font-mono">Rack {allocation.stockLocationCode}</span>
+                            <span className="font-mono">
+                              {ct('rack')}
+                              {allocation.stockLocationCode}
+                            </span>
                           ) : null}
                           <span className="font-mono tabular-nums">
-                            {allocation.canonicalUnits} units
+                            {allocation.canonicalUnits} {ct('units')}
                           </span>
                           {allocation.overridden ? (
-                            <StatusPill status="override" tone="warning" label="Batch override" />
+                            <StatusPill
+                              status="override"
+                              tone="warning"
+                              label={ct('batchOverride')}
+                            />
                           ) : allocation.overridden === false ? (
                             <StatusPill status="fefo" tone="neutral" label="FEFO" />
                           ) : null}
@@ -208,7 +228,7 @@ export function CounterCartPanel({
                 </td>
                 <td
                   role="cell"
-                  className="col-start-3 row-start-1 text-right font-mono text-sm font-semibold tabular-nums text-text-strong lg:py-3 lg:pr-4"
+                  className="col-start-3 row-start-1 text-end font-mono text-sm font-semibold tabular-nums text-text-strong lg:py-3 lg:pe-4"
                 >
                   {formatMinor(line.lineTotalMinor)}
                 </td>
@@ -216,7 +236,7 @@ export function CounterCartPanel({
               {lineAlerts.length > 0 ? (
                 <tr role="row" className="block lg:table-row">
                   <td role="cell" className="hidden lg:table-cell" />
-                  <td role="cell" colSpan={4} className="block px-4 pb-3 lg:table-cell lg:pl-0">
+                  <td role="cell" colSpan={4} className="block px-4 pb-3 lg:table-cell lg:ps-0">
                     <div className="space-y-2">
                       {lineAlerts.map((alert) => (
                         <div
@@ -240,10 +260,10 @@ export function CounterCartPanel({
                               }
                               label={
                                 alert.severity === 'SAFETY_BLOCK'
-                                  ? 'Safety block'
+                                  ? ct('safetyBlock')
                                   : alert.severity === 'CLINICAL_ADVICE'
-                                    ? 'Clinical advice'
-                                    : 'Commercial'
+                                    ? ct('clinicalAdvice')
+                                    : ct('commercial')
                               }
                             />
                             <span>{alert.message}</span>
@@ -281,17 +301,7 @@ export type CounterLotOverrideValue = { inventoryLotId: string | null; reason: s
 /** The policy a counter override is recorded under: the pharmacist on duty decides. */
 export const COUNTER_OVERRIDE_APPROVAL_POLICY = 'PHARMACIST_ON_DUTY';
 
-const BLOCK_LABEL: Record<string, string> = {
-  EXPIRED: 'Expired',
-  RECALLED: 'Recalled',
-  QUARANTINED: 'Quarantined',
-  DAMAGED: 'Damaged',
-  DESTROYED: 'Destroyed',
-  IN_TRANSIT: 'In transit',
-  RETURNED_TO_SUPPLIER: 'Returned to supplier',
-  UNRECEIVED: 'Not yet received',
-  EMPTY: 'No stock',
-};
+const BLOCK_LABEL = enMessages.CounterText.blockLabels;
 
 export type CounterLotOverrideProps = {
   value: CounterLotOverrideValue | null;
@@ -322,6 +332,7 @@ export function CounterLotOverride({
   onChange,
   onRetry,
 }: CounterLotOverrideProps) {
+  const ct = useTranslations('CounterText');
   const buttonClass =
     'inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50';
 
@@ -334,7 +345,7 @@ export function CounterLotOverride({
         disabled={disabled}
         onClick={() => onChange({ inventoryLotId: null, reason: '' })}
       >
-        Sell a different batch
+        {ct('sellADifferentBatch')}
       </button>
     );
   }
@@ -348,20 +359,20 @@ export function CounterLotOverride({
     <div className="space-y-3">
       {state === 'loading' ? (
         <p className="text-sm text-text-muted" role="status">
-          Loading batches…
+          {ct('loadingBatches')}
         </p>
       ) : state === 'error' ? (
         <div className="space-y-2" role="alert">
-          <p className="text-sm text-destructive">{error ?? 'Batches could not be loaded.'}</p>
+          <p className="text-sm text-destructive">{error ?? ct('batchesCouldNotBeLoaded')}</p>
           <button type="button" className={buttonClass} onClick={onRetry}>
-            Retry
+            {ct('retry')}
           </button>
         </div>
       ) : lots.length === 0 ? (
-        <p className="text-sm text-text-muted">No batch of this medicine is on hand here.</p>
+        <p className="text-sm text-text-muted">{ct('noBatchOfThisMedicineIsOnHandHere')}</p>
       ) : (
         <fieldset disabled={disabled} className="space-y-1">
-          <legend className="text-sm font-semibold text-text-strong">Batch to sell</legend>
+          <legend className="text-sm font-semibold text-text-strong">{ct('batchToSell')}</legend>
           {lots.map((lot) => {
             const fefo = lot.inventoryLotId === fefoLotId;
             const checked = fefo
@@ -383,15 +394,27 @@ export function CounterLotOverride({
                     onChange({ ...value, inventoryLotId: fefo ? null : lot.inventoryLotId })
                   }
                 />
-                <span>Batch {lot.batchNumber}</span>
-                <span>Exp {formatReceiptDate(lot.expiresAt)}</span>
-                <span>{lot.sellableUnits} units</span>
+                <span>
+                  {ct('batch')}
+                  {lot.batchNumber}
+                </span>
+                <span>
+                  {ct('exp')}
+                  {formatReceiptDate(lot.expiresAt)}
+                </span>
+                <span>
+                  {lot.sellableUnits} {ct('units')}
+                </span>
                 {fefo ? <StatusPill status="fefo" tone="neutral" label="FEFO" /> : null}
                 {blocked ? (
                   <StatusPill
                     status="blocked"
                     tone="danger"
-                    label={BLOCK_LABEL[lot.blockedBy ?? 'EMPTY'] ?? 'Not sellable'}
+                    label={
+                      Object.hasOwn(BLOCK_LABEL, lot.blockedBy ?? 'EMPTY')
+                        ? ct(`blockLabels.${lot.blockedBy ?? 'EMPTY'}`)
+                        : ct('notSellable')
+                    }
                   />
                 ) : (
                   <NearExpiryPill expiresAt={lot.expiresAt} now={now} />
@@ -408,7 +431,7 @@ export function CounterLotOverride({
             htmlFor="counter-lot-override-reason"
             className="block text-sm font-semibold text-text-strong"
           >
-            Override reason
+            {ct('overrideReason')}
           </label>
           <textarea
             id="counter-lot-override-reason"
@@ -423,7 +446,7 @@ export function CounterLotOverride({
             className="w-full rounded-md border border-border-subtle bg-surface-card px-3 py-2 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           />
           <p id="counter-lot-override-hint" className="text-xs text-text-muted">
-            Required. Recorded with your name against this bill.
+            {ct('requiredRecordedWithYourNameAgainstThisBill')}
           </p>
         </div>
       ) : null}
@@ -435,7 +458,7 @@ export function CounterLotOverride({
         disabled={disabled}
         onClick={() => onChange(null)}
       >
-        Keep FEFO batch
+        {ct('keepFEFOBatch')}
       </button>
     </div>
   );

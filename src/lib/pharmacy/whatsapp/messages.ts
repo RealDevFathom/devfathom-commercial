@@ -1,3 +1,9 @@
+import { createTranslator } from 'next-intl';
+import type { AppLocale } from '@/i18n/config';
+import enMessages from '@/messages/en.json';
+import urMessages from '@/messages/ur.json';
+import { localizeReceiptDigits } from '../counter-receipt';
+
 /**
  * PH-B3 — pure WhatsApp message rules: phone normalization, the consent gate,
  * STOP/START keywords and a deliberately small English / Roman-Urdu / Urdu
@@ -242,22 +248,33 @@ export function parseOrderMessage(text: string): ParsedOrderMessage | null {
   return { medicine, quantity };
 }
 
+type ConfirmationInput = { reference: string; quantity: number; branch: string };
+
+/** Replies follow the customer's preference, independently of the operator's UI locale. */
+export function localizedWhatsAppReplies(locale: AppLocale) {
+  const messages = locale === 'ur' ? urMessages.CustomerMessages : enMessages.CustomerMessages;
+  const t = createTranslator({ locale, messages });
+  return {
+    fallback: messages.fallback,
+    optedOut: messages.optedOut,
+    optedIn: messages.optedIn,
+    confirmation(input: ConfirmationInput) {
+      return t('confirmation', {
+        ...input,
+        quantity: localizeReceiptDigits(input.quantity, locale),
+      });
+    },
+  };
+}
+
+// Retain the established bilingual contract for callers without a customer preference.
 export const WHATSAPP_REPLIES = {
-  fallback:
-    'Thank you for your message. A pharmacist will call you shortly to help with your order.\n' +
-    'آپ کے پیغام کا شکریہ۔ فارماسسٹ جلد آپ کو کال کریں گے۔',
-  optedOut:
-    'You will no longer receive WhatsApp messages from this pharmacy. Reply START to opt back in.\n' +
-    'آپ کو اب اس فارمیسی سے واٹس ایپ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔',
-  optedIn:
-    'You are now subscribed to WhatsApp messages from this pharmacy. Reply STOP at any time to opt out.\n' +
-    'آپ نے واٹس ایپ پیغامات کی اجازت دے دی ہے۔ بند کرنے کے لیے STOP لکھیں۔',
-  confirmation(input: { reference: string; quantity: number; branch: string }) {
+  fallback: enMessages.CustomerMessages.fallback + '\n' + urMessages.CustomerMessages.fallback,
+  optedOut: enMessages.CustomerMessages.optedOut + '\n' + urMessages.CustomerMessages.optedOut,
+  optedIn: enMessages.CustomerMessages.optedIn + '\n' + urMessages.CustomerMessages.optedIn,
+  confirmation(input: ConfirmationInput) {
     return (
-      `Order ${input.reference} received: ${input.quantity} item(s) for collection at ${input.branch}. ` +
-      'We will confirm when it is ready.\n' +
-      `آپ کا آرڈر ${input.reference} موصول ہو گیا ہے: ${input.quantity} آئٹم، ${input.branch} سے وصول کرنے کے لیے۔ ` +
-      'تیار ہونے پر ہم آپ کو اطلاع دیں گے۔'
+      createTranslator({locale:'en', messages:enMessages.CustomerMessages})('confirmation', {...input, quantity:String(input.quantity)}) + '\n' + createTranslator({locale:'ur', messages:urMessages.CustomerMessages})('confirmation', {...input, quantity:String(input.quantity)})
     );
   },
 } as const;

@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
+import { renderWithIntl as render } from '@/test/intl';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { CounterSearchRow } from '@/lib/pharmacy/counter';
@@ -251,4 +252,23 @@ describe('CounterSearchResults safety flags', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Capture as unfulfilled demand' }));
     expect(onCaptureDemand).toHaveBeenCalledTimes(2);
   });
+});
+
+it('renders the Urdu alias as inert RTL text alongside the primary medicine identity', () => {
+  render(
+    <CounterSearchResults
+      rows={[{ ...row, urduName: 'پیراسٹامول <script>unsafe()</script>' }]}
+      state="ready"
+      query="پیرا"
+      activeMedicineId={null}
+      onSelect={vi.fn()}
+      onCaptureDemand={vi.fn()}
+      onRetry={vi.fn()}
+    />,
+    { locale: 'ur' }
+  );
+  expect(screen.getByRole('list', { name: 'تلاش کے نتائج' })).toBeInTheDocument();
+  expect(screen.getByText('پیراسٹامول <script>unsafe()</script>')).toHaveAttribute('dir', 'rtl');
+  expect(screen.getByText('Paracetamol')).toBeInTheDocument();
+  expect(document.querySelector('script')).toBeNull();
 });

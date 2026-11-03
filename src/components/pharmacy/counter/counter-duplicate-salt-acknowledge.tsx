@@ -1,5 +1,6 @@
 'use client';
 
+import { useTranslations } from 'next-intl';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -25,7 +26,12 @@ function identityFor({
   ingredientKey,
   medicines,
 }: Omit<CounterDuplicateSaltAcknowledgeProps, 'disabled'>): string {
-  return JSON.stringify([branchId, saleId, ingredientKey, duplicateSaltGroupFingerprint(medicines)]);
+  return JSON.stringify([
+    branchId,
+    saleId,
+    ingredientKey,
+    duplicateSaltGroupFingerprint(medicines),
+  ]);
 }
 
 /**
@@ -43,6 +49,7 @@ export function CounterDuplicateSaltAcknowledge({
   medicines,
   disabled = false,
 }: CounterDuplicateSaltAcknowledgeProps) {
+  const ct = useTranslations('CounterText');
   const acknowledge = trpc.pharmacySales.acknowledgeDuplicateSalt.useMutation();
   const [acknowledgedFor, setAcknowledgedFor] = useState<string | null>(null);
   const identity = identityFor({ branchId, saleId, ingredientKey, medicines });
@@ -50,7 +57,7 @@ export function CounterDuplicateSaltAcknowledge({
   if (acknowledgedFor === identity) {
     return (
       <span className="mt-2 flex items-center gap-2" role="status">
-        <StatusPill status="acknowledged" tone="success" label="Acknowledged" />
+        <StatusPill status="acknowledged" tone="success" label={ct('acknowledged')} />
       </span>
     );
   }
@@ -69,7 +76,7 @@ export function CounterDuplicateSaltAcknowledge({
           )
         }
       >
-        {acknowledge.isPending ? 'Recording…' : 'Acknowledge'}
+        {acknowledge.isPending ? ct('recording') : ct('acknowledge')}
       </Button>
       {acknowledge.error ? (
         <span role="alert" className="text-xs text-destructive">

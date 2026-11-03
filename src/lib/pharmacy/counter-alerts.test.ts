@@ -274,7 +274,8 @@ describe('counterAlertsFor duplicate active salt (#724)', () => {
         key: 'duplicate-salt:paracetamol',
         severity: 'CLINICAL_ADVICE',
         code: 'DUPLICATE_ACTIVE_INGREDIENT',
-        message: 'Panadol, Calpol both contain Paracetamol. Check the patient is not double-dosing.',
+        message:
+          'Panadol, Calpol both contain Paracetamol. Check the patient is not double-dosing.',
         saleLineRef: 'line-1',
         remedy: 'Confirm each is intended, then acknowledge. The sale is not blocked.',
         acknowledgement: {
@@ -331,4 +332,20 @@ describe('counterAlertsFor duplicate active salt (#724)', () => {
       )
     ).toEqual([]);
   });
+});
+
+it('localizes the safety copy without changing the blocking decision or machine code', async () => {
+  const { createTranslator } = await import('next-intl');
+  const messages = (await import('@/messages/ur.json')).default.CounterAlerts;
+  const t = createTranslator({ locale: 'ur', messages });
+  const items = [line({ medicine: medicine({ rx: true }) })];
+  const english = counterAlertsFor(items, { at: AT });
+  const urdu = counterAlertsFor(items, {
+    at: AT,
+    translate: (key, values) => t(key as Parameters<typeof t>[0], values),
+  });
+  expect(urdu[0]!.code).toBe(english[0]!.code);
+  expect(hasBlockingAlert(urdu)).toBe(true);
+  expect(urdu[0]!.message).toContain('نسخہ ضروری ہے');
+  expect(urdu[0]!.remedy).toContain('فارماسسٹ');
 });

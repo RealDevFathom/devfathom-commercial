@@ -39,6 +39,10 @@ function makeDb() {
     },
     ingredient: model(),
     medicine: model(),
+    medicineAlias: {
+      createMany: vi.fn().mockResolvedValue({ count: 1 }),
+      findFirstOrThrow: vi.fn().mockResolvedValue({ id: 'alias-a', value: 'پیراسٹامول' }),
+    },
     presentation: model(),
     packLevel: model(),
     medicinePackMrp: model(),
@@ -338,5 +342,66 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
 
   it('maps the public router prefix to the pharmacy-core entitlement', () => {
     expect(moduleForProcedure('pharmacyMedicine.createIngredient')).toBe('pharmacy-core');
+  });
+});
+
+describe('Urdu catalogue aliases', () => {
+  const input = { medicineId: 'medicine-a', value: '  پیراسٹامول  ' };
+  function grantCatalogueReview() {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    } as never);
+  }
+  it('requires an explicit catalogue grant before touching a medicine', async () => {
+    await expect(caller().addUrduAlias(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    expect(db.medicineAlias.createMany).not.toHaveBeenCalled();
+  });
+  it('refuses a foreign or missing medicine even with the catalogue grant', async () => {
+    grantCatalogueReview();
+    await expect(caller().addUrduAlias(input)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(db.medicine.findFirst).toHaveBeenCalledWith({
+      where: { id: 'medicine-a', organizationId: 'org_a' },
+      select: { id: true },
+    });
+    expect(db.medicineAlias.createMany).not.toHaveBeenCalled();
+  });
+  it.each(['Aspirin', '۱۲۳۴', 'ـــ', 'پ'.repeat(301)])(
+    'rejects a non-name or oversized alias %s',
+    async (value) => {
+      grantCatalogueReview();
+      await expect(caller().addUrduAlias({ ...input, value })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    }
+  );
+  it('stores the trimmed Urdu alias using the existing tenant-scoped searchable alias model', async () => {
+    grantCatalogueReview();
+    db.medicine.findFirst.mockResolvedValue({ id: 'medicine-a' });
+    await expect(caller().addUrduAlias(input)).resolves.toMatchObject({ id: 'alias-a' });
+    expect(db.medicineAlias.createMany).toHaveBeenCalledWith({
+      data: [
+        {
+          organizationId: 'org_a',
+          medicineId: 'medicine-a',
+          type: 'URDU',
+          value: 'پیراسٹامول',
+          normalizedValue: 'پیراسٹامول',
+        },
+      ],
+      skipDuplicates: true,
+    });
+    expect(db.medicineAlias.findFirstOrThrow).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        medicineId: 'medicine-a',
+        type: 'URDU',
+        normalizedValue: 'پیراسٹامول',
+      },
+    });
   });
 });

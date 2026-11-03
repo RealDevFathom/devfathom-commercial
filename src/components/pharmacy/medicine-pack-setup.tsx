@@ -9,6 +9,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { packConversions, describePackConversion } from '@/lib/pharmacy/pack-conversion';
 import { trpc } from '@/lib/trpc';
+import { MedicineUrduAlias } from './medicine-urdu-alias';
 
 const control =
   'min-h-11 w-full min-w-0 rounded-sm border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
@@ -300,6 +301,9 @@ export function MedicinePackSetup() {
       >
         Return to Pharmacy setup
       </Link>
+      {medicineId && medicine.data ? (
+        <MedicineUrduAlias key={medicineId} medicineId={medicineId} />
+      ) : null}
     </SectionCard>
   );
 }

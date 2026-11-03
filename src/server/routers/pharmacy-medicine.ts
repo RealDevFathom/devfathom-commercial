@@ -6,6 +6,7 @@ import {
 } from '@/lib/pharmacy/pricing';
 import { FileDrapNoticeSource, ingestDrapSource } from '@/lib/pharmacy/drap-monitoring';
 import { TRPCError } from '@trpc/server';
+import { isUrduMedicineName } from '@/lib/pharmacy/medicine-alias';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import {
@@ -789,6 +790,44 @@ export const pharmacyMedicineRouter = router({
     .mutation(async ({ ctx, input }) =>
       ctx.db.medicineBarcode.create({
         data: { ...input, normalizedCode: normalizeMedicineText(input.code) },
+      })
+    ),
+
+  addUrduAlias: capabilityProcedure('pharmacy:catalogue-review')
+    .input(
+      z
+        .object({
+          medicineId: boundedId,
+          value: z
+            .string()
+            .trim()
+            .min(1)
+            .max(300)
+            .refine(isUrduMedicineName, 'Enter an Urdu medicine name.'),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.$transaction(async (db) => {
+        const organizationId = ctx.entitlements.organizationId;
+        const medicine = await db.medicine.findFirst({
+          where: { id: input.medicineId, organizationId },
+          select: { id: true },
+        });
+        if (!medicine) throw new TRPCError({ code: 'NOT_FOUND', message: 'Medicine not found.' });
+        const normalizedValue = normalizeMedicineText(input.value);
+        const where = {
+          organizationId,
+          medicineId: medicine.id,
+          type: 'URDU' as const,
+          normalizedValue,
+        };
+        // ON CONFLICT does not update append-only aliases and is safe under concurrent saves.
+        await db.medicineAlias.createMany({
+          data: [{ ...where, value: input.value }],
+          skipDuplicates: true,
+        });
+        return db.medicineAlias.findFirstOrThrow({ where });
       })
     ),
 

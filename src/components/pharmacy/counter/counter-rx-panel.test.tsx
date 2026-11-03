@@ -1,5 +1,6 @@
 import { createRef } from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
+import { renderWithIntl as render } from '@/test/intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';

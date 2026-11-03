@@ -277,8 +277,16 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     const at = new Date('2026-10-06T09:00:00Z');
     const sms = { ...recordedConsent('MARKETING', true, at), id: 'sms', channel: 'SMS' };
     const email = { ...recordedConsent('MARKETING', true, at), id: 'email', channel: 'EMAIL' };
-    const loyalty = { ...recordedConsent('MARKETING', true, at), id: 'loyalty', purpose: 'LOYALTY' };
-    const reminders = { ...recordedConsent('REMINDERS', true, at), id: 'reminders', channel: 'SMS' };
+    const loyalty = {
+      ...recordedConsent('MARKETING', true, at),
+      id: 'loyalty',
+      purpose: 'LOYALTY',
+    };
+    const reminders = {
+      ...recordedConsent('REMINDERS', true, at),
+      id: 'reminders',
+      channel: 'SMS',
+    };
     store.consents = [sms, email, loyalty, reminders];
     await expect(handleInboundWhatsAppMessage('org_a', provider, message('STOP'))).resolves.toBe(
       'OPTED_OUT'
@@ -562,4 +570,19 @@ it('never echoes a medicine name in outbound WhatsApp confirmation text', async 
   });
   expect(body).not.toMatch(/panadol|medicine|drug|tablet|salt/i);
   expect(body).toContain('ABC123');
+});
+
+it('uses the matched customer language for consent replies without changing the consent effect', async () => {
+  knownCustomer(true);
+  store.customers[0]!.preferredLanguage = 'ur';
+  await expect(handleInboundWhatsAppMessage('org_a', provider, message('STOP'))).resolves.toBe(
+    'OPTED_OUT'
+  );
+  expect(store.customers[0]!.whatsappOptIn).toBe(false);
+  expect(provider.calls).toHaveLength(1);
+  const reply = provider.calls[0]!;
+  expect(reply.kind).toBe('text');
+  if (reply.kind !== 'text') throw new Error('Expected a text reply');
+  expect(reply.body).toContain('آپ کو اب اس فارمیسی');
+  expect(reply.body).not.toContain('You will no longer');
 });

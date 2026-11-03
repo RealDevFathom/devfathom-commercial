@@ -1,5 +1,6 @@
 'use client';
 
+import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterSearchRow } from '@/lib/pharmacy/counter';
@@ -27,14 +28,6 @@ const LOCATION_LABEL: Record<string, string> = {
   RETURNS: 'Returns',
 };
 
-const MATCH_LABEL: Record<CounterSearchRow['matchedOn'], string> = {
-  BARCODE: 'Barcode',
-  ALIAS: 'Alias',
-  NAME: 'Name',
-  INGREDIENT: 'Ingredient',
-  PRESENTATION: 'Form',
-};
-
 /**
  * POS-02 result rows.
  *
@@ -58,19 +51,17 @@ export function CounterSearchResults({
   onCaptureDemand,
   onRetry,
 }: CounterSearchResultsProps) {
+  const ct = useTranslations('CounterText');
   if (state === 'idle') {
     return (
-      <p className="text-sm text-text-muted">
-        Scan a barcode, or type at least two characters of a brand, generic, ingredient, strength,
-        form, alias or legacy code.
-      </p>
+      <p className="text-sm text-text-muted">{ct('scanABarcodeOrTypeAtLeastTwoCharacters')}</p>
     );
   }
 
   if (state === 'loading') {
     return (
       <p className="text-sm text-text-muted" role="status">
-        Searching the catalog…
+        {ct('searchingTheCatalog')}
       </p>
     );
   }
@@ -78,7 +69,7 @@ export function CounterSearchResults({
   if (state === 'error') {
     return (
       <div className="space-y-3" role="alert">
-        <p className="text-sm text-destructive">{error ?? 'Search failed.'}</p>
+        <p className="text-sm text-destructive">{error ?? ct('searchFailed')}</p>
         <div className="flex flex-wrap gap-2">
           <Button
             type="button"
@@ -87,7 +78,7 @@ export function CounterSearchResults({
             disabled={disabled}
             onClick={onRetry}
           >
-            Retry search
+            {ct('retrySearch')}
           </Button>
           <Button
             type="button"
@@ -97,7 +88,7 @@ export function CounterSearchResults({
             onClick={onCaptureDemand}
             className="h-auto min-h-11 whitespace-normal"
           >
-            Capture as unfulfilled demand
+            {ct('captureAsUnfulfilledDemand')}
           </Button>
         </div>
       </div>
@@ -107,7 +98,10 @@ export function CounterSearchResults({
   if (rows.length === 0) {
     return (
       <div className="space-y-3">
-        <p className="text-sm text-text-muted">Nothing in this catalog matches “{query}”.</p>
+        <p className="text-sm text-text-muted">
+          {ct('nothingInThisCatalogMatches')}
+          {query}”.
+        </p>
         <Button
           type="button"
           size="touch"
@@ -115,7 +109,7 @@ export function CounterSearchResults({
           onClick={onCaptureDemand}
           className="h-auto min-h-11 whitespace-normal"
         >
-          Capture as unfulfilled demand
+          {ct('captureAsUnfulfilledDemand')}
         </Button>
       </div>
     );
@@ -124,37 +118,40 @@ export function CounterSearchResults({
   return (
     <ul
       className="min-w-0 divide-y divide-border-subtle rounded-xl border border-border-subtle bg-surface-card"
-      aria-label="Search results"
+      aria-label={ct('searchResults')}
     >
       {rows.map((row) => {
         const sellable = row.onHandUnits > 0 && row.saleableUnits.length > 0;
         const active = row.medicineId === activeMedicineId;
         const location = row.storage.locationKind
-          ? `${LOCATION_LABEL[row.storage.locationKind] ?? row.storage.locationKind}${
-              row.storage.locationCode ? ` ${row.storage.locationCode}` : ''
-            }`
+          ? ct('value0Value1', {
+              value0: LOCATION_LABEL[row.storage.locationKind]
+                ? ct(`locations.${row.storage.locationKind}`)
+                : row.storage.locationKind,
+              value1: row.storage.locationCode ? ` ${row.storage.locationCode}` : '',
+            })
           : (row.storage.locationName ?? row.storage.locationCode);
         const safety = [
           !sellable
-            ? { status: 'not-sellable', tone: 'warning' as const, label: 'Not sellable' }
+            ? { status: 'not-sellable', tone: 'warning' as const, label: ct('notSellable') }
             : null,
           row.restriction.controlled
-            ? { status: 'controlled', tone: 'danger' as const, label: 'Controlled' }
+            ? { status: 'controlled', tone: 'danger' as const, label: ct('controlled') }
             : null,
           row.restriction.rx
-            ? { status: 'prescription', tone: 'warning' as const, label: 'Prescription only' }
+            ? { status: 'prescription', tone: 'warning' as const, label: ct('prescriptionOnly') }
             : null,
           row.restriction.restricted
-            ? { status: 'restricted', tone: 'warning' as const, label: 'Restricted' }
+            ? { status: 'restricted', tone: 'warning' as const, label: ct('restricted') }
             : null,
           row.restriction.highAlert
-            ? { status: 'high-alert', tone: 'danger' as const, label: 'High alert' }
+            ? { status: 'high-alert', tone: 'danger' as const, label: ct('highAlert') }
             : null,
           row.restriction.lasa
-            ? { status: 'look-alike', tone: 'warning' as const, label: 'Look-alike' }
+            ? { status: 'look-alike', tone: 'warning' as const, label: ct('lookAlike') }
             : null,
           row.storage.coldChain
-            ? { status: 'cold-chain', tone: 'info' as const, label: 'Cold chain' }
+            ? { status: 'cold-chain', tone: 'info' as const, label: ct('coldChain') }
             : null,
         ].filter((flag) => flag !== null);
         const notes = [
@@ -162,9 +159,9 @@ export function CounterSearchResults({
           !row.restriction.rx &&
           !row.restriction.restricted &&
           !row.restriction.controlled
-            ? 'Over the counter'
+            ? ct('overTheCounter')
             : null,
-          location ?? 'Location unavailable',
+          location ?? ct('locationUnavailable'),
         ].filter(Boolean);
         return (
           <li key={row.medicineId}>
@@ -182,6 +179,11 @@ export function CounterSearchResults({
                 className="min-w-0 break-words text-sm font-semibold text-text-strong"
               >
                 {row.displayName}
+                {row.urduName ? (
+                  <bdi lang="ur" dir="rtl" className="ms-2 inline-block font-normal">
+                    {row.urduName}
+                  </bdi>
+                ) : null}
                 {row.strength ? (
                   <span className="ms-1 font-normal text-text-body">
                     <bdi dir="auto">{row.strength}</bdi>
@@ -189,17 +191,19 @@ export function CounterSearchResults({
                 ) : null}
               </span>
               <span className="w-full text-end font-mono text-sm tabular-nums text-text-strong">
-                <span className="sr-only">Pack MRP </span>
+                <span className="sr-only">{ct('packMRP')}</span>
                 {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
               </span>
               <span className="col-span-2 min-w-0 break-words text-xs leading-relaxed text-text-muted">
                 {row.presentation}
-                {row.dosageForm ? ` · ${row.dosageForm}` : ''}
-                {` · Batch ${row.batchNumber ?? '—'}`}
-                {` · Exp ${row.nearestSafeExpiry ? formatReceiptDate(row.nearestSafeExpiry) : '—'}`}
-                {` · ${row.onHandUnits} units`}
+                {row.dosageForm ? ct('value02', { value0: row.dosageForm }) : ''}
+                {ct('batchValue0', { value0: row.batchNumber ?? '—' })}
+                {ct('expValue0', {
+                  value0: row.nearestSafeExpiry ? formatReceiptDate(row.nearestSafeExpiry) : '—',
+                })}
+                {ct('value0Units', { value0: row.onHandUnits })}
                 {notes.length ? ` · ${notes.join(' · ')}` : ''}
-                {` · ${MATCH_LABEL[row.matchedOn]}`}
+                {ct('value02', { value0: ct(`matches.${row.matchedOn}`) })}
               </span>
               {safety.length > 0 ? (
                 <span className="col-span-2 flex flex-wrap gap-1">
@@ -216,7 +220,8 @@ export function CounterSearchResults({
               ) : null}
               {row.blocked.length > 0 ? (
                 <span className="col-span-2 text-xs text-warning">
-                  Blocked stock present: {row.blocked.join(', ').toLowerCase()}.
+                  {ct('blockedStockPresent')}
+                  {row.blocked.join(', ').toLowerCase()}.
                 </span>
               ) : null}
             </button>

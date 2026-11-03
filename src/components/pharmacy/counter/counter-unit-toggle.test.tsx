@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
+import { renderWithIntl as render } from '@/test/intl';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CounterUnitToggle } from './counter-unit-toggle';
@@ -163,4 +164,22 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(screen.queryAllByRole('radio')).toHaveLength(0);
     expect(screen.getByRole('status').textContent).toContain('No sale unit is available');
   });
+});
+
+it('uses Urdu catalogue labels while preserving the selected unit and quantity event', () => {
+  const changed = vi.fn();
+  render(
+    <CounterUnitToggle
+      options={OPTIONS}
+      selected="STRIP"
+      quantity={2}
+      preview={previewFor('STRIP', 2)}
+      onSelect={vi.fn()}
+      onQuantityChange={changed}
+    />,
+    { locale: 'ur' }
+  );
+  expect(screen.getByRole('radio', { name: /پٹی/ })).toHaveAttribute('aria-checked', 'true');
+  fireEvent.click(screen.getByRole('button', { name: 'مقدار بڑھائیں' }));
+  expect(changed).toHaveBeenCalledExactlyOnceWith(3);
 });

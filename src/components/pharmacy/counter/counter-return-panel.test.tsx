@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { renderWithIntl as render } from '@/test/intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReturnForm } from './counter-return-panel';
 const mocks = vi.hoisted(() => ({
@@ -327,4 +328,13 @@ describe('controlled medicine returns', () => {
     expect(JSON.parse(localStorage.getItem(key)!)).toEqual(saved);
     expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
   });
+});
+
+it('localizes refund tender choices without changing their identifiers', () => {
+  render(<ReturnForm {...props} />, { locale: 'ur' });
+  fireEvent.click(screen.getByRole('button', { name: /رسید.*12/ }));
+  const cash = screen.getByRole('option', { name: /نقد.*۹.۰۰/ });
+  expect(cash).toHaveAttribute('value', 'cash');
+  expect(screen.getByRole('option', { name: /کارڈ.*۱۰.۰۰/ })).toHaveAttribute('value', 'card');
+  expect(mocks.refund).not.toHaveBeenCalled();
 });

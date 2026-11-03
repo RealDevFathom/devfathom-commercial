@@ -63,6 +63,7 @@ describe('formatMinor', () => {
     expect(formatMinor(2_500)).toBe('25.00');
     expect(formatMinor(123_456)).toBe('1234.56');
     expect(formatMinor(-250)).toBe('-2.50');
+    expect(formatMinor(123_456, 'ur')).toBe('۱۲۳۴.۵۶');
   });
 
   it('does not accumulate drift over a long ledger', () => {
@@ -302,4 +303,12 @@ describe('bilingual string table', () => {
       expect(COUNTER_RECEIPT_STRINGS.ur[key], key).not.toBe(COUNTER_RECEIPT_STRINGS.en[key]);
     }
   });
+});
+
+// Pakistan midnight crosses the UTC date; Urdu affects presentation only.
+it('formats operator timestamps in PKT with localized digits', async () => {
+  const { formatCounterTime } = await import('./counter-receipt');
+  expect(formatCounterTime('2026-09-05T20:10:00Z')).toBe('2026-09-06 01:10 PKT');
+  expect(formatCounterTime('2026-09-05T20:10:00Z', 'ur')).toBe('۲۰۲۶-۰۹-۰۶ ۰۱:۱۰ PKT');
+  expect(formatCounterTime('invalid')).toBe('—');
 });

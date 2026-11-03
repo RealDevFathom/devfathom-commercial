@@ -7,6 +7,30 @@ import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
 import type { CounterRxPanel } from './counter-rx-panel';
 import type { CounterSearchResults } from './counter-search-results';
 
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+
+vi.mock('next-intl', async () => {
+  const { createTranslator } = await vi.importActual<typeof import('next-intl')>('next-intl');
+  const messages = (await import('@/messages/en.json')).default;
+  const cache = new Map<string, unknown>();
+  return {
+    createTranslator,
+    useLocale: () => 'en',
+    useTranslations: (namespace: string) => {
+      if (!cache.has(namespace))
+        cache.set(
+          namespace,
+          createTranslator({
+            locale: 'en',
+            messages,
+            namespace: namespace as keyof typeof messages,
+          })
+        );
+      return cache.get(namespace)!;
+    },
+  };
+});
+
 type Query = {
   data?: unknown;
   isSuccess: boolean;
@@ -1121,7 +1145,12 @@ describe('PharmacyCounterConsole Khata wiring', () => {
     const print = vi.fn();
     vi.spyOn(window, 'open').mockReturnValue({
       opener: window,
-      document: { title: '', createElement: document.createElement.bind(document), body },
+      document: {
+        title: '',
+        documentElement: { lang: 'en', dir: 'ltr' },
+        createElement: document.createElement.bind(document),
+        body,
+      },
       focus: vi.fn(),
       print,
       close: vi.fn(),

@@ -1,5 +1,6 @@
 'use client';
 
+import { useTranslations } from 'next-intl';
 import { forwardRef, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -16,15 +17,15 @@ import {
 
 /** The tenders POS-05 recognises. Card and wallet need a certified adapter. */
 const TENDER_TYPES = [
-  { value: 'CASH', label: 'Cash', requiresAdapter: false },
-  { value: 'CARD', label: 'Card', requiresAdapter: true },
-  { value: 'BANK_TRANSFER', label: 'Bank transfer', requiresAdapter: false },
-  { value: 'WALLET', label: 'Wallet', requiresAdapter: true },
-  { value: 'KHATA', label: 'Khata / credit', requiresAdapter: false },
-  { value: 'CREDIT', label: 'Credit (legacy)', requiresAdapter: false },
-  { value: 'RAAST', label: 'Raast / Wallet — Raast', requiresAdapter: false },
-  { value: 'JAZZCASH', label: 'Raast / Wallet — JazzCash', requiresAdapter: false },
-  { value: 'EASYPAISA', label: 'Raast / Wallet — Easypaisa', requiresAdapter: false },
+  { value: 'CASH', requiresAdapter: false },
+  { value: 'CARD', requiresAdapter: true },
+  { value: 'BANK_TRANSFER', requiresAdapter: false },
+  { value: 'WALLET', requiresAdapter: true },
+  { value: 'KHATA', requiresAdapter: false },
+  { value: 'CREDIT', requiresAdapter: false },
+  { value: 'RAAST', requiresAdapter: false },
+  { value: 'JAZZCASH', requiresAdapter: false },
+  { value: 'EASYPAISA', requiresAdapter: false },
 ] as const;
 
 export type CounterTenderType = (typeof TENDER_TYPES)[number]['value'];
@@ -129,6 +130,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     },
     ref
   ) {
+    const ct = useTranslations('CounterText');
     const [accounts, setAccounts] = useState<KhataAccount[]>([]);
     const [accountId, setAccountId] = useState('');
     const [khataLoading, setKhataLoading] = useState(false);
@@ -204,8 +206,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           setAccountId(rows.length === 1 ? rows[0]!.id : '');
         })
         .catch(() => {
-          if (live)
-            setKhataError('Khata accounts could not be loaded. Refresh the bill and retry.');
+          if (live) setKhataError(ct('khataAccountsCouldNotBeLoadedRefreshTheBill'));
         })
         .finally(() => {
           if (live) setKhataLoading(false);
@@ -213,7 +214,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       return () => {
         live = false;
       };
-    }, [isKhata, loadKhataAccounts]);
+    }, [isKhata, loadKhataAccounts, ct]);
     const submittable =
       editable &&
       !blocked &&
@@ -243,7 +244,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           } catch {
             setOutcome({
               status: 'rejected',
-              message: 'Owner re-authentication failed. Check password and authentication code.',
+              message: ct('ownerReAuthenticationFailedCheckPasswordAndAuthenticationCode'),
             });
             return;
           } finally {
@@ -282,15 +283,14 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               setAccounts(await loadKhataAccounts());
             } catch {
               setAccounts([]);
-              setKhataError('Payment recorded. Refresh the bill to reload the Khata ledger.');
+              setKhataError(ct('paymentRecordedRefreshTheBillToReloadTheKhata'));
             }
           }
         }
       } catch {
         setOutcome({
           status: 'unknown',
-          message:
-            'Payment outcome is unknown. Keep this bill open and ask a supervisor to check the payment before taking more money.',
+          message: ct('paymentOutcomeIsUnknownKeepThisBillOpenAnd'),
         });
       } finally {
         submissionRef.current = false;
@@ -312,8 +312,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       } catch {
         setOutcome({
           status: 'unknown',
-          message:
-            'Payment outcome could not be checked. Keep this bill open and check again before taking more money.',
+          message: ct('paymentOutcomeCouldNotBeCheckedKeepThisBill'),
         });
       } finally {
         checkRef.current = false;
@@ -325,18 +324,18 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
           <p className="space-y-2">
             <span className="block font-mono text-xs tracking-wide text-text-muted uppercase">
-              Balance due
+              {ct('balanceDue')}
             </span>
             <span className="block text-3xl font-semibold tracking-tight tabular-nums text-text-strong">
               {balanceKnown && (state === 'ready' || state === 'settled') && !unknown
                 ? formatMinor(balanceMinor)
-                : 'Unavailable'}
+                : ct('unavailable')}
             </span>
           </p>
           <div className="flex flex-col items-end gap-2">
             <span className="font-mono text-xs text-text-muted">PKR</span>
             {state === 'settled' && balanceMinor === 0 && !unknown && !takingPayment ? (
-              <StatusPill status="settled" tone="success" label="Settled" />
+              <StatusPill status="settled" tone="success" label={ct('settled')} />
             ) : null}
           </div>
         </div>
@@ -350,20 +349,20 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           className="text-sm leading-relaxed text-text-body focus-visible:outline-ring"
         >
           {takingPayment
-            ? 'Taking payment… Keep this bill open.'
+            ? ct('takingPaymentKeepThisBillOpen')
             : checkingOutcome
-              ? 'Checking payment outcome… No payment is being sent.'
+              ? ct('checkingPaymentOutcomeNoPaymentIsBeingSent')
               : (displayedOutcome?.message ??
                 (state === 'idle'
-                  ? 'Open a bill before taking payment.'
+                  ? ct('openABillBeforeTakingPayment')
                   : state === 'loading'
-                    ? 'Checking the bill balance…'
+                    ? ct('checkingTheBillBalance')
                     : state === 'stale'
-                      ? 'Refresh this bill to verify the balance before taking payment.'
+                      ? ct('refreshThisBillToVerifyTheBalanceBeforeTaking')
                       : state === 'error'
-                        ? 'The bill balance could not be verified. Retry the bill read before taking payment.'
+                        ? ct('theBillBalanceCouldNotBeVerifiedRetryThe')
                         : state === 'unavailable'
-                          ? 'This bill is not available for payment.'
+                          ? ct('thisBillIsNotAvailableForPayment')
                           : ''))}
         </p>
         {onCheckOutcome ? (
@@ -375,12 +374,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             aria-describedby="tender-status tender-error"
             onClick={() => void checkOutcome()}
           >
-            {checkingOutcome ? 'Checking payment outcome…' : 'Check payment outcome'}
+            {checkingOutcome ? ct('checkingPaymentOutcome') : ct('checkPaymentOutcome')}
           </Button>
         ) : null}
         {!takingPayment && ['error', 'stale', 'unavailable'].includes(state) ? (
           <Button type="button" variant="outline" className="min-h-11 rounded-sm" onClick={onRetry}>
-            Refresh bill
+            {ct('refreshBill')}
           </Button>
         ) : null}
 
@@ -390,16 +389,13 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             role="alert"
             className="space-y-2 rounded-md border border-destructive/20 bg-destructive/10 p-4 text-sm text-text-body"
           >
-            <StatusPill status="blocked" tone="danger" label="Payment locked" />
-            <p>
-              This bill carries an unresolved safety block. Resolve it in the prescription panel
-              before taking payment.
-            </p>
+            <StatusPill status="blocked" tone="danger" label={ct('paymentLocked')} />
+            <p>{ct('thisBillCarriesAnUnresolvedSafetyBlockResolveIt2')}</p>
           </div>
         ) : null}
 
         <div className="space-y-1.5">
-          <Label htmlFor="tender-type">Tender</Label>
+          <Label htmlFor="tender-type">{ct('tender')}</Label>
           <select
             id="tender-type"
             value={type}
@@ -414,20 +410,19 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           >
             {TENDER_TYPES.map((entry) => (
               <option key={entry.value} value={entry.value}>
-                {entry.label}
+                {ct(`tenderTypes.${entry.value}`)}
               </option>
             ))}
           </select>
           {selected.requiresAdapter ? (
             <p className="text-sm text-text-muted">
-              Requires a certified payment provider. Without one configured, the server refuses this
-              tender rather than simulating an approval.
+              {ct('requiresACertifiedPaymentProviderWithoutOneConfiguredThe')}
             </p>
           ) : null}
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="tender-amount">Amount</Label>
+          <Label htmlFor="tender-amount">{ct('amount')}</Label>
           <Input
             id="tender-amount"
             inputMode="decimal"
@@ -441,24 +436,26 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             className="h-11 rounded-sm font-mono tabular-nums"
           />
           <p id="tender-amount-help" className="text-sm text-text-muted">
-            Leave blank to pay the balance due. Enter a smaller amount to split payment across
-            tenders.
+            {ct('leaveBlankToPayTheBalanceDueEnterA')}
           </p>
           {state === 'ready' && amount.trim() !== '' && !amountValid ? (
             <p id="tender-amount-error" className="text-sm text-destructive" role="alert">
-              Enter an amount between 0.01 and the balance due.
+              {ct('enterAnAmountBetween001AndTheBalance')}
             </p>
           ) : null}
         </div>
 
         {manual ? (
           <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
-            {manualSettingsLoading ? <p role="status">Loading merchant details…</p> : null}
-            {manualSettingsError ? <p role="alert">Merchant details could not be loaded.</p> : null}
+            {manualSettingsLoading ? <p role="status">{ct('loadingMerchantDetails')}</p> : null}
+            {manualSettingsError ? (
+              <p role="alert">{ct('merchantDetailsCouldNotBeLoaded')}</p>
+            ) : null}
             {!manualSettingsLoading && !manualSettingsError && !merchant ? (
               <p role="alert">
-                This branch has no merchant details for {type}. Ask an administrator to configure
-                them in Finance.
+                {ct('thisBranchHasNoMerchantDetailsFor')}
+                {type}
+                {ct('askAnAdministratorToConfigureThemInFinance')}
               </p>
             ) : null}
             {onReloadManualSettings ? (
@@ -468,13 +465,15 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 disabled={takingPayment || manualSettingsLoading}
                 onClick={onReloadManualSettings}
               >
-                Reload merchant details
+                {ct('reloadMerchantDetails')}
               </Button>
             ) : null}
             {merchant ? (
               <>
                 <p className="font-mono text-lg tabular-nums">
-                  {amountMinor === null ? 'Enter amount' : `PKR ${formatMinor(amountMinor)}`}
+                  {amountMinor === null
+                    ? ct('enterAmount')
+                    : ct('pkrValue0', { value0: formatMinor(amountMinor) })}
                 </p>
                 {merchant.destination ? (
                   <p className="break-all text-sm text-text-strong">{merchant.destination}</p>
@@ -491,10 +490,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   </>
                 ) : null}
                 <p className="text-sm text-text-muted">
-                  Confirm receipt in the merchant bank or wallet account before taking payment. This
-                  QR is static; the payer enters the amount shown.
+                  {ct('confirmReceiptInTheMerchantBankOrWalletAccount')}
                 </p>
-                <Label htmlFor="manual-payer-name">Payer’s name</Label>
+                <Label htmlFor="manual-payer-name">{ct('payerSName')}</Label>
                 <Input
                   id="manual-payer-name"
                   className="min-h-11"
@@ -503,7 +501,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   disabled={!editable}
                   onChange={(event) => setPayerName(event.target.value)}
                 />
-                <Label htmlFor="manual-provider-reference">Transaction ID (last 4–6 digits)</Label>
+                <Label htmlFor="manual-provider-reference">{ct('transactionIDLast46Digits')}</Label>
                 <Input
                   id="manual-provider-reference"
                   className="min-h-11"
@@ -519,8 +517,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 />
                 <p id="manual-reference-help" className="text-sm text-text-muted">
                   {referenceSkipped
-                    ? 'Reference explicitly skipped under branch policy.'
-                    : 'Enter 4–6 digits from the payer’s transaction ID.'}
+                    ? ct('referenceExplicitlySkippedUnderBranchPolicy')
+                    : ct('enter46DigitsFromThePayerSTransaction')}
                 </p>
                 {merchant.allowReferenceSkip ? (
                   <Label className="flex min-h-11 items-center gap-2">
@@ -533,7 +531,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         setProviderRef('');
                       }}
                     />{' '}
-                    Skip reference under branch policy
+                    {ct('skipReferenceUnderBranchPolicy')}
                   </Label>
                 ) : null}
               </>
@@ -543,7 +541,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
         {isKhata ? (
           <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
-            <Label htmlFor="khata-account">Family Khata account</Label>
+            <Label htmlFor="khata-account">{ct('familyKhataAccount')}</Label>
             <select
               id="khata-account"
               className="h-11 w-full rounded-sm border border-border-default bg-surface-card px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
@@ -554,29 +552,30 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 setOwnerOverride(false);
               }}
             >
-              <option value="">Choose family account</option>
+              <option value="">{ct('chooseFamilyAccount')}</option>
               {accounts.map((row) => (
                 <option key={row.id} value={row.id}>
                   {row.displayName}
                 </option>
               ))}
             </select>
-            {khataLoading ? <p role="status">Loading Khata ledger…</p> : null}
+            {khataLoading ? <p role="status">{ct('loadingKhataLedger')}</p> : null}
             {khataError ? <p role="alert">{khataError}</p> : null}
             {!khataLoading && !khataError && !accounts.length ? (
-              <p>Link a customer with an active family account before using Khata.</p>
+              <p>{ct('linkACustomerWithAnActiveFamilyAccountBefore')}</p>
             ) : null}
             {account ? (
               <p className="text-sm text-text-body">
-                Due on this bill’s business date. Ledger balance {formatMinor(account.balanceMinor)}{' '}
-                · Limit {formatMinor(account.creditLimitMinor)}
+                {ct('dueOnThisBillSBusinessDateLedgerBalance')}
+                {formatMinor(account.balanceMinor)} {ct('limit')}
+                {formatMinor(account.creditLimitMinor)}
               </p>
             ) : null}
             {overLimit ? (
               <>
                 <p role="alert" className="text-sm text-destructive">
-                  This charge exceeds the family credit limit. An owner must re-enter their password
-                  to raise the limit to {formatMinor(account!.balanceMinor + amountMinor!)}.
+                  {ct('thisChargeExceedsTheFamilyCreditLimitAnOwner')}
+                  {formatMinor(account!.balanceMinor + amountMinor!)}.
                 </p>
                 <Label className="flex min-h-11 items-center gap-2">
                   <input
@@ -585,11 +584,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     disabled={!editable}
                     onChange={(event) => setOwnerOverride(event.target.checked)}
                   />
-                  Owner: authorize limit increase
+                  {ct('ownerAuthorizeLimitIncrease')}
                 </Label>
                 {ownerOverride ? (
                   <>
-                    <Label htmlFor="khata-password">Owner password (current account)</Label>
+                    <Label htmlFor="khata-password">{ct('ownerPasswordCurrentAccount')}</Label>
                     <Input
                       id="khata-password"
                       type="password"
@@ -599,7 +598,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       onChange={(event) => setPassword(event.target.value)}
                       className="h-11 rounded-sm"
                     />
-                    <Label htmlFor="khata-totp">Authentication or recovery code (if enabled)</Label>
+                    <Label htmlFor="khata-totp">
+                      {ct('authenticationOrRecoveryCodeIfEnabled')}
+                    </Label>
                     <Input
                       id="khata-totp"
                       autoComplete="one-time-code"
@@ -626,22 +627,20 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   await printKhataStatement(account.id);
                   setKhataError('');
                 } catch {
-                  setKhataError(
-                    'Statement unavailable. Allow pop-ups and retry after refreshing the bill.'
-                  );
+                  setKhataError(ct('statementUnavailableAllowPopUpsAndRetryAfterRefreshing'));
                 } finally {
                   setStatementPending(false);
                 }
               }}
             >
-              {statementPending ? 'Loading statement…' : 'Print Khata statement'}
+              {statementPending ? ct('loadingStatement') : ct('printKhataStatement')}
             </Button>
           </div>
         ) : null}
 
         {type === 'CASH' ? (
           <div className="space-y-1.5">
-            <Label htmlFor="tender-cash-received">Cash received</Label>
+            <Label htmlFor="tender-cash-received">{ct('cashReceived')}</Label>
             <Input
               id="tender-cash-received"
               inputMode="decimal"
@@ -655,18 +654,18 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             />
             {cashInvalid ? (
               <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
-                Enter a valid cash amount with at most two decimal places.
+                {ct('enterAValidCashAmountWithAtMostTwo')}
               </p>
             ) : cashShort ? (
               <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
-                Cash received is less than the amount tendered.
+                {ct('cashReceivedIsLessThanTheAmountTendered')}
               </p>
             ) : changeMinor !== null ? (
               <p
                 className="flex flex-wrap items-center justify-between gap-2 rounded-sm bg-surface-sunken px-4 py-3 text-sm text-text-body"
                 aria-live="polite"
               >
-                <span>Change</span>
+                <span>{ct('change')}</span>
                 <span className="font-mono text-lg tabular-nums text-text-strong">
                   {formatMinor(changeMinor)}
                 </span>
@@ -692,7 +691,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           }
           onClick={() => void submitTender()}
         >
-          {takingPayment ? 'Taking payment…' : 'Take payment'}
+          {takingPayment ? ct('takingPayment') : ct('takePayment')}
         </Button>
       </div>
     );

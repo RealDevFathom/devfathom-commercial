@@ -1,3 +1,6 @@
+import enMessages from '@/messages/en.json';
+import urMessages from '@/messages/ur.json';
+
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 import { tenderTotalsSchema } from './manual-payments';
 import { buildReceiptPreview } from '@/lib/receipts/preview';
@@ -5,6 +8,7 @@ import { buildReceiptPreview } from '@/lib/receipts/preview';
 import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
+  localizeReceiptDigits,
   formatReceiptDate,
   receiptTitle,
   type CounterReceipt,
@@ -12,22 +16,13 @@ import {
   type CounterReceiptLocale,
 } from './counter-receipt';
 
-const labels = {
-  en: {
-    unavailable: 'Historical identity unavailable',
-    unknown: 'Unavailable',
-    units: 'Canonical units',
-    tax: 'Tax breakdown unavailable in receipt source',
-    payments: 'Payment details unavailable',
-  },
-  ur: {
-    unavailable: 'تاریخی شناخت دستیاب نہیں',
-    unknown: 'دستیاب نہیں',
-    units: 'بنیادی اکائیاں',
-    tax: 'رسید کے ماخذ میں ٹیکس کی تفصیل دستیاب نہیں',
-    payments: 'ادائیگی کی تفصیل دستیاب نہیں',
-  },
-} as const;
+const labels = { en: enMessages.ReceiptPresentation, ur: urMessages.ReceiptPresentation };
+
+function receiptTenderLabel(type: string, locale: CounterReceiptLocale): string {
+  const names: Record<string, string> = (locale === 'ur' ? urMessages : enMessages).CounterText
+    .tenderCodes;
+  return Object.hasOwn(names, type) ? names[type]! : COUNTER_RECEIPT_STRINGS[locale].tenders;
+}
 
 /**
  * Show integer-minor-unit arithmetic that exactly reconciles to the stored
@@ -37,17 +32,18 @@ const labels = {
 export function exactReceiptPriceBreakdown(
   quantity: number,
   grossMinor: number,
-  multiplicationSign = '×'
+  multiplicationSign = '×',
+  locale: CounterReceiptLocale = 'en'
 ): string {
   if (!Number.isSafeInteger(quantity) || quantity <= 0 || !Number.isSafeInteger(grossMinor)) {
     throw new Error('Receipt line pricing is invalid.');
   }
   if (grossMinor % quantity === 0) {
-    return `${quantity} ${multiplicationSign} ${formatMinor(grossMinor / quantity)}`;
+    return `${localizeReceiptDigits(quantity, locale)} ${multiplicationSign} ${formatMinor(grossMinor / quantity, locale)}`;
   }
   // State quantity and gross directly when one integer unit price cannot
   // represent the charge. Never invent synthetic lot prices from an average.
-  return `${quantity}${multiplicationSign === 'x' ? ' - ' : ' · '}${formatMinor(grossMinor)}`;
+  return `${localizeReceiptDigits(quantity, locale)}${multiplicationSign === 'x' ? ' - ' : ' · '}${formatMinor(grossMinor, locale)}`;
 }
 
 export function counterLinePricing(
@@ -75,7 +71,8 @@ export function counterLinePricing(
           exactReceiptPriceBreakdown(
             row.canonicalUnits / scale,
             row.grossMinor!,
-            multiplicationSign
+            multiplicationSign,
+            locale
           )
         )
         .join(' + ')}`;
@@ -83,13 +80,13 @@ export function counterLinePricing(
     return priced
       .map(
         (row) =>
-          `${labels[locale].units}: ${row.canonicalUnits}${separator}${strings.gross}: ${formatMinor(row.grossMinor!)}`
+          `${labels[locale].units}: ${localizeReceiptDigits(row.canonicalUnits, locale)}${separator}${strings.gross}: ${formatMinor(row.grossMinor!, locale)}`
       )
       .join(' + ');
   }
   return gross === line.quantity * line.unitPriceMinor
-    ? `${strings.saleUnit[line.saleUnit]}: ${exactReceiptPriceBreakdown(line.quantity, gross, multiplicationSign)}`
-    : `${strings.quantity}: ${line.quantity} ${strings.saleUnit[line.saleUnit]}${separator}${strings.gross}: ${formatMinor(gross)}`;
+    ? `${strings.saleUnit[line.saleUnit]}: ${exactReceiptPriceBreakdown(line.quantity, gross, multiplicationSign, locale)}`
+    : `${strings.quantity}: ${localizeReceiptDigits(line.quantity, locale)} ${strings.saleUnit[line.saleUnit]}${separator}${strings.gross}: ${formatMinor(gross, locale)}`;
 }
 
 /** Missing status on legacy callers is not evidence of issued identity. */
@@ -104,7 +101,7 @@ export function counterLinePresentation(line: CounterReceiptLine, locale: Counte
     allocations: (line.allocations ?? []).map((allocation) => {
       const batch = issued ? allocation.batchNumber : null;
       const expiry = issued ? allocation.expiresAt : null;
-      return `${strings.batch}: ${batch ?? text.unknown} · ${strings.expiry}: ${expiry ? formatReceiptDate(expiry) : text.unknown} · ${text.units}: ${allocation.canonicalUnits}`;
+      return `${strings.batch}: ${batch ?? text.unknown} · ${strings.expiry}: ${expiry ? formatReceiptDate(expiry, locale) : text.unknown} · ${text.units}: ${localizeReceiptDigits(allocation.canonicalUnits, locale)}`;
     }),
   };
 }
@@ -130,14 +127,14 @@ export function buildCounterReceiptPreview(
     {
       businessName: receipt.branchName,
       invoiceNumber: receiptTitle(receipt, locale),
-      issuedAt: `${strings.date}: ${receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}`,
+      issuedAt: `${strings.date}: ${localizeReceiptDigits(receipt.businessDate ?? formatReceiptDate(receipt.completedAt, locale), locale)}`,
       lines: receipt.lines.map((line) => {
         const presentation = counterLinePresentation(line, locale);
         return [
           presentation.identity,
           counterLinePricing(line, locale),
           ...presentation.allocations,
-          `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
+          `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor, locale)}`,
         ].join('\n');
       }),
       // Identity is historical receipt data; the model supplies no tax breakdown.
@@ -148,14 +145,17 @@ export function buildCounterReceiptPreview(
       ],
       totals: [
         receipt.currency,
-        `${strings.gross}: ${formatMinor(receipt.totals.grossMinor)}`,
-        `${strings.discount}: ${formatMinor(receipt.totals.discountMinor)}`,
-        `${strings.net}: ${formatMinor(receipt.totals.netMinor)}`,
-        `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor)}`,
-        `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
+        `${strings.gross}: ${formatMinor(receipt.totals.grossMinor, locale)}`,
+        `${strings.discount}: ${formatMinor(receipt.totals.discountMinor, locale)}`,
+        `${strings.net}: ${formatMinor(receipt.totals.netMinor, locale)}`,
+        `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
+        `${strings.change}: ${formatMinor(receipt.totals.changeMinor, locale)}`,
       ],
       payments: receipt.tenders.length
-        ? receipt.tenders.map((tender) => `${tender.type}: ${formatMinor(tender.amountMinor)}`)
+        ? receipt.tenders.map(
+            (tender) =>
+              `${receiptTenderLabel(tender.type, locale)}: ${formatMinor(tender.amountMinor, locale)}`
+          )
         : [labels[locale].payments],
     }
   );
@@ -193,40 +193,36 @@ export function buildCounterZReportPreview(
   ];
   if (!report.id || !amounts.every(Number.isSafeInteger))
     throw new Error('Load a recorded day close before printing.');
-  const labels =
-    locale === 'ur'
-      ? [
-          'روزانہ اختتامی رپورٹ',
-          'تاریخ',
-          'فروخت',
-          'واپسی',
-          'خالص فروخت',
-          'متوقع نقد',
-          'گنتی شدہ نقد',
-          'فرق',
-          'فرق کی وجہ',
-        ]
-      : [
-          'Z-report',
-          'Business date',
-          'Gross sales',
-          'Refunds',
-          'Net sales',
-          'Expected cash',
-          'Counted cash',
-          'Variance',
-          'Variance note',
-        ];
+  const reportText = locale === 'ur' ? urMessages.ZReport : enMessages.ZReport;
+  const labels = [
+    reportText.title,
+    reportText.businessDate,
+    reportText.grossSales,
+    reportText.refundsLabel,
+    reportText.netSales,
+    reportText.expectedCash,
+    reportText.countedCash,
+    reportText.variance,
+    reportText.varianceNote,
+  ];
   return [
     labels[0],
     report.branchName,
-    `${labels[1]}: ${report.businessDate}`,
-    `#${report.sequence} · ${report.id}`,
+    `${labels[1]}: ${localizeReceiptDigits(report.businessDate, locale)}`,
+    `#${localizeReceiptDigits(report.sequence, locale)} · ${report.id}`,
     report.currency,
-    ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount)}`),
-    ...(report.tenderTotals == null ? [] : tenderTotalsSchema.parse(report.tenderTotals).map((row) =>
-      `${row.type}: ${formatMinor(row.amountMinor)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor)}`)),
+    ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount, locale)}`),
+    ...(report.tenderTotals == null
+      ? []
+      : tenderTotalsSchema
+          .parse(report.tenderTotals)
+          .map(
+            (row) =>
+              `${row.type}: ${formatMinor(row.amountMinor, locale)} · ${(locale === 'ur' ? urMessages.ZReport : enMessages.ZReport).refunds}: ${formatMinor(row.refundMinor, locale)} · ${(locale === 'ur' ? urMessages.ZReport : enMessages.ZReport).net}: ${formatMinor(row.netMinor, locale)}`
+          )),
     `${labels[8]}: ${report.reason ?? '—'}`,
-    report.isFinal ? 'Final' : 'Provisional — migration reconciliation pending',
+    report.isFinal
+      ? (locale === 'ur' ? urMessages.ZReport : enMessages.ZReport).final
+      : (locale === 'ur' ? urMessages.ZReport : enMessages.ZReport).provisional,
   ].join('\n');
 }
