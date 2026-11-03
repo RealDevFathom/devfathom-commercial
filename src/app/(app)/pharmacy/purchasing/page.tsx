@@ -7,6 +7,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { hasModule } from '@/lib/entitlements';
+import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import { resolveBranch } from './_components/branch-scope';
 import {
   AccessState,
@@ -102,6 +103,13 @@ export default async function PharmacyPurchasingPage({
     return (
       <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled={moduleEnabled} />
     );
+  }
+  // Suppliers, requisitions, orders and returns, with their actions ('Add a
+  // supplier', 'Draft a requisition'), are shown only to members holding the
+  // procurement capability, the same rule as the goods-in bench. A cashier or a
+  // pharmacist gets the closed state instead of the screens.
+  if (!(await actorCanProcure(ctx.db, ctx.session.user.id))) {
+    return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
   }
   const caller = await purchasingCaller();
   if (!caller) {

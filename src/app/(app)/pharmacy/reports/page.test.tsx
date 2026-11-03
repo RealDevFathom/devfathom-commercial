@@ -1,8 +1,13 @@
 import { render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const actor = vi.hoisted(() => ({ role: 'ADMIN' }));
 const signalStaff = vi.hoisted(() => ({ userId: 'cashier_1' as string | undefined }));
+// A case sets these to make the owner cards' reads fail with a given error.
+const cardFailures = vi.hoisted(() => ({
+  expiry: null as unknown,
+  anomaly: null as unknown,
+}));
 
 const commandCentre = vi.fn(async () => ({
   freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
@@ -23,6 +28,17 @@ vi.mock('@/server/trpc', () => ({
     organization: { id: 'org-a', currency: 'PKR' },
     entitlements: { organizationId: 'org-a' },
     session: { user: actor },
+  })),
+}));
+// The page's up-front reports gate; a case sets `reportsAccess.allowed` to deny.
+const reportsAccess = vi.hoisted(() => ({ allowed: true }));
+vi.mock('@/lib/pharmacy/staff-access', () => ({
+  readPharmacyStaffAccess: vi.fn(async () => ({
+    commandCentre: reportsAccess.allowed,
+    dayClose: reportsAccess.allowed,
+    reports: reportsAccess.allowed,
+    inventoryControl: reportsAccess.allowed,
+    inventoryImport: reportsAccess.allowed,
   })),
 }));
 vi.mock('@/server/routers/pharmacy-sales', () => ({
@@ -49,53 +65,59 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
     createCaller: () => ({
       branches: async () => ({ branches: [{ id: 'b1', name: 'Main' }] }),
       commandCentre,
-      anomalySignals: async () => [
-        {
-          id: 'anomaly_1',
-          branchId: 'b1',
-          kind: 'CASH_VARIANCE',
-          status: 'OPEN',
-          severity: 'REVIEW',
-          scope: { branchId: 'b1', userId: signalStaff.userId },
-          exactNumbers: { expectedMinor: 10_000, countedMinor: 8_000, varianceMinor: -2_000 },
-          explanation:
-            'The close count differs from expected cash. Review the close evidence; no posting is created by this signal.',
-          dataWindowStart: new Date('2026-09-01T00:00:00Z'),
-          dataWindowEnd: new Date('2026-09-05T00:00:00Z'),
-          sourceObservedAt: new Date('2026-09-04T10:00:00Z'),
-          policyVersion: 'AI04-2026-09-04',
-          estimateMethod: null,
-          estimateWindow: null,
-          estimateExclusions: null,
-          estimateConfidence: null,
-        },
-      ],
-      expiryAdvice: async () => [
-        {
-          lotId: 'lot-1',
-          branchId: 'b1',
-          medicineName: 'High-value medicine',
-          batchNumber: 'B-1',
-          supplierId: 'supplier-1',
-          supplierName: 'Supplier',
-          stockLocationId: 'location-1',
-          onHandUnits: 90,
-          unitCostMinor: 500,
-          expiresAt: new Date('2026-10-05T00:00:00Z'),
-          soldUnits: 10,
-          historyDays: 30,
-          returnWindowDays: 45,
-          coldChain: false,
-          classification: 'RETURNABLE',
-          observedUnitsPerDay: 0.33,
-          projectedClearAt: new Date('2027-06-01T00:00:00Z'),
-          returnWindowStartsAt: new Date('2026-08-21T00:00:00Z'),
-          valueAtRiskMinor: 40_000,
-          projectedUnsoldUnits: 80,
-          proposalAllowed: true,
-          explanation: 'Observed 10 units over 30 days; projected clear after expiry.',
-        },
-      ],
+      anomalySignals: async () => {
+        if (cardFailures.anomaly) throw cardFailures.anomaly;
+        return [
+          {
+            id: 'anomaly_1',
+            branchId: 'b1',
+            kind: 'CASH_VARIANCE',
+            status: 'OPEN',
+            severity: 'REVIEW',
+            scope: { branchId: 'b1', userId: signalStaff.userId },
+            exactNumbers: { expectedMinor: 10_000, countedMinor: 8_000, varianceMinor: -2_000 },
+            explanation:
+              'The close count differs from expected cash. Review the close evidence; no posting is created by this signal.',
+            dataWindowStart: new Date('2026-09-01T00:00:00Z'),
+            dataWindowEnd: new Date('2026-09-05T00:00:00Z'),
+            sourceObservedAt: new Date('2026-09-04T10:00:00Z'),
+            policyVersion: 'AI04-2026-09-04',
+            estimateMethod: null,
+            estimateWindow: null,
+            estimateExclusions: null,
+            estimateConfidence: null,
+          },
+        ];
+      },
+      expiryAdvice: async () => {
+        if (cardFailures.expiry) throw cardFailures.expiry;
+        return [
+          {
+            lotId: 'lot-1',
+            branchId: 'b1',
+            medicineName: 'High-value medicine',
+            batchNumber: 'B-1',
+            supplierId: 'supplier-1',
+            supplierName: 'Supplier',
+            stockLocationId: 'location-1',
+            onHandUnits: 90,
+            unitCostMinor: 500,
+            expiresAt: new Date('2026-10-05T00:00:00Z'),
+            soldUnits: 10,
+            historyDays: 30,
+            returnWindowDays: 45,
+            coldChain: false,
+            classification: 'RETURNABLE',
+            observedUnitsPerDay: 0.33,
+            projectedClearAt: new Date('2027-06-01T00:00:00Z'),
+            returnWindowStartsAt: new Date('2026-08-21T00:00:00Z'),
+            valueAtRiskMinor: 40_000,
+            projectedUnsoldUnits: 80,
+            proposalAllowed: true,
+            explanation: 'Observed 10 units over 30 days; projected clear after expiry.',
+          },
+        ];
+      },
       proposeExpiryReturn: async () => ({}),
       refreshAnomalies: async () => ({ evaluated: 1, signals: [] }),
       acknowledgeAnomaly: async () => ({}),
@@ -135,11 +157,32 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
   },
 }));
 
+import { TRPCError } from '@trpc/server';
 import PharmacyReportsPage from './page';
+
+describe('pharmacy reports access gate', () => {
+  beforeEach(() => {
+    commandCentre.mockClear();
+  });
+
+  it('shows a cashier the locked state at once, without reading any report', async () => {
+    actor.role = 'EMPLOYEE';
+    reportsAccess.allowed = false;
+    try {
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+      expect(screen.getByText('Reports unavailable')).toBeInTheDocument();
+      expect(commandCentre).not.toHaveBeenCalled();
+    } finally {
+      reportsAccess.allowed = true;
+      actor.role = 'ADMIN';
+    }
+  });
+});
 
 describe('pharmacy report catalog filters', () => {
   beforeEach(() => {
     actor.role = 'ADMIN';
+    reportsAccess.allowed = true;
     signalStaff.userId = 'cashier_1';
   });
 
@@ -226,5 +269,61 @@ describe('pharmacy report catalog filters', () => {
       expect(link.className).toContain('border');
       expect(link.className).not.toMatch(/(^|\s)underline(\s|$)/);
     }
+  });
+});
+
+describe('owner report cards name the real failure', () => {
+  beforeEach(() => {
+    actor.role = 'ADMIN';
+    reportsAccess.allowed = true;
+  });
+  afterEach(() => {
+    cardFailures.expiry = null;
+    cardFailures.anomaly = null;
+  });
+
+  const permission = /permissions are required/;
+
+  it('shows the permission message only when the read is refused', async () => {
+    cardFailures.expiry = new TRPCError({ code: 'FORBIDDEN' });
+    cardFailures.anomaly = new TRPCError({ code: 'FORBIDDEN' });
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(
+      screen.getByText(
+        'Financial report and owner permissions are required to view value-at-risk advice.'
+      )
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        'Financial report and owner permissions are required to view anomaly evidence.'
+      )
+    ).toBeVisible();
+  });
+
+  it('says a server or network problem is not a permission issue', async () => {
+    cardFailures.expiry = new Error('connect ECONNREFUSED');
+    cardFailures.anomaly = new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(
+      screen.getByText(
+        'Value-at-risk advice could not be loaded because of a server or network problem. This is not a permission issue; reload the page to try again.'
+      )
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        'Anomaly evidence could not be loaded because of a server or network problem. This is not a permission issue; reload the page to try again.'
+      )
+    ).toBeVisible();
+    expect(screen.queryByText(permission)).toBeNull();
+    expect(screen.queryByText(/ECONNREFUSED/)).toBeNull();
+  });
+
+  it('says a missing branch or record is not found', async () => {
+    cardFailures.expiry = new TRPCError({ code: 'NOT_FOUND' });
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(
+      screen.getByText(/could not be found, so value-at-risk advice is not shown/)
+    ).toBeVisible();
+    expect(screen.queryByText(permission)).toBeNull();
   });
 });

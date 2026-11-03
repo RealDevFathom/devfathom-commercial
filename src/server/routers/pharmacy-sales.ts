@@ -115,6 +115,7 @@ import {
 } from '@/lib/pharmacy/settlement';
 
 import { assertInOrganization } from '../org-refs';
+import { requirePharmacyBranchWithinLimit } from '../pharmacy-branch-limit';
 import {
   adminProcedure,
   auditedProtectedProcedure,
@@ -490,7 +491,7 @@ const closeDate = z
       date.getUTCMilliseconds() === 0,
     'Choose a date without a time.'
   );
-async function requireCloseAccess(ctx: TRPCContext) {
+async function requireCloseAccess(ctx: TRPCContext, branchId: string) {
   const user = ctx.session?.user;
   if (
     !user ||
@@ -504,6 +505,10 @@ async function requireCloseAccess(ctx: TRPCContext) {
       code: 'FORBIDDEN',
       message: 'Day-close permission is required to reconcile and close a day.',
     });
+  // A branch-scoped member (the Manager template) closes only their own branch.
+  const organizationId = ctx.entitlements?.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  await requirePharmacyBranchWithinLimit(ctx, organizationId, branchId);
 }
 
 export const pharmacySalesRouter = router({
@@ -600,7 +605,7 @@ export const pharmacySalesRouter = router({
   closePreview: protectedProcedure
     .input(z.object({ branchId, businessDate: closeDate }).strict())
     .query(async ({ ctx, input }) => {
-      await requireCloseAccess(ctx);
+      await requireCloseAccess(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) =>
           readPharmacyClose(txDb(tx), await scopeFor(ctx, input.branchId), input.businessDate)
@@ -631,7 +636,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      await requireCloseAccess(ctx);
+      await requireCloseAccess(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) =>
           closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
@@ -796,7 +801,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      await requireCloseAccess(ctx);
+      await requireCloseAccess(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) =>
           cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)

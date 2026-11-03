@@ -118,7 +118,7 @@ export const pharmacyPrescriptionsRouter = router({
       const branches = await ctx.db.pharmacyBranch.findMany({
         where: { active: true },
         orderBy: { name: 'asc' },
-        select: { id: true, name: true },
+        select: { id: true, name: true, city: true },
       });
       const selectedBranch = input?.branchId
         ? branches.find((branch) => branch.id === input.branchId)

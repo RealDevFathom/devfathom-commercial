@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 
 const mocks = vi.hoisted(() => ({
@@ -6,8 +6,10 @@ const mocks = vi.hoisted(() => ({
   repeatRead: vi.fn().mockResolvedValue({ horizons: [] }),
   can: vi.fn<typeof import('@/lib/abac').can>(async () => false),
   branchFindMany: vi.fn(),
+  assignmentFindMany: vi.fn(),
   settingUpsert: vi.fn(),
   userFindUnique: vi.fn(),
+  userFindFirst: vi.fn(),
   branchFindFirst: vi.fn(),
   reportFindFirst: vi.fn(),
   reportFindMany: vi.fn(),
@@ -78,12 +80,13 @@ import { hasModule } from '@/lib/entitlements';
 import type { TRPCContext } from '../trpc';
 import { pharmacyReportsRouter } from './pharmacy-reports';
 
-function context(role = 'ADMIN') {
+function context(role = 'ADMIN', organizationId = 'org_1') {
   return {
     db: {
       $queryRaw: mocks.raw,
       $transaction: mocks.transaction,
       pharmacyBranch: { findMany: mocks.branchFindMany, findFirst: mocks.branchFindFirst },
+      pharmacyBranchAssignment: { findMany: mocks.assignmentFindMany },
       pharmacyPharmacovigilanceReport: {
         findFirst: mocks.reportFindFirst,
         findMany: mocks.reportFindMany,
@@ -91,7 +94,7 @@ function context(role = 'ADMIN') {
         updateManyAndReturn: mocks.reportUpdateManyAndReturn,
       },
       pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
-      user: { findUnique: mocks.userFindUnique },
+      user: { findUnique: mocks.userFindUnique, findFirst: mocks.userFindFirst },
     },
     entitlements: {
       organizationId: 'org_1',
@@ -100,17 +103,17 @@ function context(role = 'ADMIN') {
     },
     session: {
       expires: 'later',
-      user: { id: 'user_admin', role, status: 'ACTIVE', organizationId: 'org_1' },
+      user: { id: 'user_admin', role, status: 'ACTIVE', organizationId },
     },
-    organization: { id: 'org_1' },
+    organization: { id: 'org_1', vertical: 'PHARMACY' },
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
 }
 
-function caller(role = 'ADMIN') {
-  return pharmacyReportsRouter.createCaller(context(role));
+function caller(role = 'ADMIN', organizationId = 'org_1') {
+  return pharmacyReportsRouter.createCaller(context(role, organizationId));
 }
 
 function pvCaller() {
@@ -228,6 +231,8 @@ describe('normal Reports daily work pack', () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.transaction.mockImplementation((run) => run(mocks.comparisonTx));
+  // A member without a branch-scoped role template reads organization-wide.
+  mocks.userFindFirst.mockResolvedValue({ organizationRole: null });
 });
 
 describe('pharmacy administrator report bootstrap (#434)', () => {
@@ -256,6 +261,192 @@ describe('pharmacy administrator report bootstrap (#434)', () => {
   });
 });
 
+describe('pharmacy branch list scope by role (QA: cashier dashboard)', () => {
+  const allBranches = [
+    { id: 'branch_1', name: 'Main' },
+    { id: 'branch_2', name: 'Second' },
+  ];
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue(allBranches);
+    mocks.assignmentFindMany.mockResolvedValue([{ branch: { id: 'branch_2', name: 'Second' } }]);
+  });
+  afterEach(() => {
+    mocks.can.mockImplementation(async () => false);
+  });
+
+  it('gives an owner (ADMIN with reports grants) every active branch', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(caller('ADMIN').branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: allBranches,
+      scope: 'organization',
+    });
+    expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+  });
+
+  it('gives an organization admin without a reports grant every active branch', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller('ADMIN').branches()).resolves.toMatchObject({
+      branches: allBranches,
+      scope: 'organization',
+    });
+  });
+
+  it('gives a manager without a reports grant only their assigned branches', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:manage');
+    await expect(caller('EMPLOYEE').branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: [{ id: 'branch_2', name: 'Second' }],
+      scope: 'assigned',
+    });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+
+  it('never errors for a cashier: assigned branches, scoped to the tenant and the user', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:counter');
+    await expect(caller('EMPLOYEE').branches()).resolves.toMatchObject({
+      branches: [{ id: 'branch_2', name: 'Second' }],
+      scope: 'assigned',
+    });
+    expect(mocks.assignmentFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_1',
+          userId: 'user_admin',
+          active: true,
+          branch: { organizationId: 'org_1', active: true },
+        },
+      })
+    );
+  });
+
+  it('reads name and city for every branch, so pickers label branches like the counter', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main', city: 'Lahore' }]);
+    await expect(caller().branches()).resolves.toMatchObject({
+      branches: [{ id: 'branch_1', name: 'Main', city: 'Lahore' }],
+    });
+    expect(mocks.branchFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { id: true, name: true, city: true } })
+    );
+
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:counter');
+    await caller('EMPLOYEE').branches();
+    expect(mocks.assignmentFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: { branch: { select: { id: true, name: true, city: true } } },
+      })
+    );
+  });
+
+  it('returns an empty list, not an error, for a cashier with no assignment', async () => {
+    mocks.can.mockResolvedValue(false);
+    mocks.assignmentFindMany.mockResolvedValue([]);
+    await expect(caller('EMPLOYEE').branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: [],
+      scope: 'assigned',
+    });
+  });
+
+  it('still refuses a cashier the report reads themselves', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller('EMPLOYEE').catalog()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('gives nothing back to a user from another organization, before any query', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(caller('ADMIN', 'org_2').branches()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller('EMPLOYEE', 'org_2').branches()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.can).not.toHaveBeenCalled();
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+    expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+    expect(mocks.userFindFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('pharmacy manager report scope (own branch only)', () => {
+  const allBranches = [
+    { id: 'branch_1', name: 'Main' },
+    { id: 'branch_2', name: 'Second' },
+  ];
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    // The Manager template: operational reports and day close, no financial grant.
+    mocks.can.mockImplementation(async (_subject, action) =>
+      [
+        'pharmacy:manage',
+        'pharmacy:orders',
+        'pharmacy:procurement',
+        'pharmacy:close',
+        'reports:operational',
+      ].includes(action)
+    );
+    mocks.userFindFirst.mockResolvedValue({ organizationRole: { key: 'manager' } });
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_2' }]);
+    // The mocked query honours the branch filter the router passes.
+    mocks.branchFindMany.mockImplementation(
+      async ({ where }: { where: { id?: { in: string[] } } }) =>
+        where.id ? allBranches.filter((branch) => where.id!.in.includes(branch.id)) : allBranches
+    );
+  });
+  afterEach(() => {
+    // Leave the shared mocks as the previous block left them.
+    mocks.can.mockImplementation(async () => false);
+    mocks.branchFindMany.mockResolvedValue(allBranches);
+    mocks.assignmentFindMany.mockResolvedValue([{ branch: { id: 'branch_2', name: 'Second' } }]);
+  });
+
+  it("lists only the manager's assigned branch", async () => {
+    await expect(caller('EMPLOYEE').branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: [{ id: 'branch_2', name: 'Second' }],
+      scope: 'assigned',
+    });
+    expect(mocks.userFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'user_admin', organizationId: 'org_1' } })
+    );
+    expect(mocks.branchFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org_1', active: true, id: { in: ['branch_2'] } },
+      })
+    );
+  });
+
+  it('refuses a report read for a sibling branch and allows the own branch', async () => {
+    const input = { from: '2026-09-01', to: '2026-09-10', asOf: '2026-09-11T00:00:00Z' };
+    mocks.stockDashboard.mockResolvedValue([]);
+    mocks.stockDigest.mockResolvedValue({
+      branchId: 'branch_2',
+      overdue: [],
+      dueSoon: [],
+      stale: [],
+      resuming: [],
+    });
+    await expect(
+      caller('EMPLOYEE').dailyWorkPack({ ...input, branchId: 'branch_1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.stockDashboard).not.toHaveBeenCalled();
+    await expect(
+      caller('EMPLOYEE').dailyWorkPack({ ...input, branchId: 'branch_2' })
+    ).resolves.toBeDefined();
+  });
+
+  it('keeps an auditor (not branch-scoped) organization-wide', async () => {
+    mocks.userFindFirst.mockResolvedValue({ organizationRole: { key: 'auditor' } });
+    await expect(caller('EMPLOYEE').branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: allBranches,
+      scope: 'organization',
+    });
+  });
+});
+
 describe('pharmacy owner digest capability boundary', () => {
   it('allows an owner with reports:financial and passes only active tenant branches', async () => {
     mocks.can.mockResolvedValue(true);
@@ -278,7 +469,7 @@ describe('pharmacy owner digest capability boundary', () => {
     expect(mocks.branchFindMany).toHaveBeenCalledWith({
       where: { organizationId: 'org_1', active: true },
       orderBy: { name: 'asc' },
-      select: { id: true, name: true },
+      select: { id: true, name: true, city: true },
     });
     expect(mocks.comparisonRead).toHaveBeenCalledWith(
       mocks.comparisonTx,
@@ -762,7 +953,12 @@ describe('repeat purchasing authorization', () => {
     await expect(caller().repeatPurchasing(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.repeatRead).not.toHaveBeenCalled();
   });
-  it('denies non-admin role despite capabilities', async () => {
+  it('admits an owner whose account role is not ADMIN through reports:financial', async () => {
+    await caller('EMPLOYEE').repeatPurchasing(input);
+    expect(mocks.repeatRead).toHaveBeenCalledTimes(1);
+  });
+  it('denies a non-ADMIN member without reports:financial', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'reports:financial');
     await expect(caller('EMPLOYEE').repeatPurchasing(input)).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
@@ -839,4 +1035,62 @@ describe('category growth report input boundaries', () => {
       ]);
     }
   );
+});
+
+describe('owner report gate (ownerFilters) is capability-based, not the account role', () => {
+  const input = { from: '2026-09-01', to: '2026-09-04' };
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.expiryRead.mockResolvedValue([{ lotId: 'lot_1' }]);
+    mocks.anomalyRead.mockResolvedValue([]);
+    mocks.createDraft.mockResolvedValue({ id: 'claim_1' });
+  });
+
+  it('admits an owner whose account role is not ADMIN via reports:financial', async () => {
+    mocks.can.mockResolvedValue(true);
+    const api = caller('EMPLOYEE');
+    await expect(api.expiryAdvice(input)).resolves.toEqual([{ lotId: 'lot_1' }]);
+    expect(mocks.expiryRead).toHaveBeenCalledWith(expect.anything(), ['branch_1']);
+    await expect(api.anomalySignals(input)).resolves.toEqual([]);
+    await expect(
+      api.proposeExpiryReturn({ branchId: 'branch_1', lotId: 'lot_1' })
+    ).resolves.toEqual({ id: 'claim_1' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'EMPLOYEE' }),
+      'reports:financial',
+      undefined,
+      expect.anything()
+    );
+  });
+
+  it('refuses a non-owner, non-ADMIN member before any branch read', async () => {
+    // Holds the operational grant (an auditor or manager) but not reports:financial.
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'reports:financial');
+    const api = caller('EMPLOYEE');
+    await expect(api.expiryAdvice(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      api.proposeExpiryReturn({ branchId: 'branch_1', lotId: 'lot_1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+    expect(mocks.expiryRead).not.toHaveBeenCalled();
+    expect(mocks.createDraft).not.toHaveBeenCalled();
+  });
+
+  it('still admits an ADMIN owner holding reports:financial', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(caller('ADMIN').expiryAdvice(input)).resolves.toEqual([{ lotId: 'lot_1' }]);
+  });
+
+  it('gives nothing back to an owner from another organization, before any query', async () => {
+    mocks.can.mockResolvedValue(true);
+    const api = caller('ADMIN', 'org_other');
+    await expect(api.expiryAdvice(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      api.proposeExpiryReturn({ branchId: 'branch_1', lotId: 'lot_1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+    expect(mocks.expiryRead).not.toHaveBeenCalled();
+    expect(mocks.createDraft).not.toHaveBeenCalled();
+  });
 });

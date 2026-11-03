@@ -5,7 +5,9 @@ import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { annotateAudit } from '@/server/audit';
 
-import { adminProcedure, router, type TRPCContext } from '../trpc';
+import { readPharmacyStaffAccess } from '@/lib/pharmacy/staff-access';
+
+import { adminProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
 
 const PHARMACY_ASSIGNABLE_ROLE_KEYS = new Set(PHARMACY_ROLE_TEMPLATES.map((role) => role.key));
 
@@ -70,6 +72,15 @@ async function assignableMember(ctx: TRPCContext, organizationId: string, userId
 }
 
 export const pharmacyBranchAssignmentsRouter = router({
+  /**
+   * The signed-in member's own pharmacy access flags (command centre, day close,
+   * reports, inventory control, import). The rail and the cashier home read it so
+   * they never offer a surface its server procedures would refuse.
+   */
+  myAccess: protectedProcedure.query(async ({ ctx }) => {
+    pharmacyOrganizationId(ctx);
+    return readPharmacyStaffAccess(ctx.session!.user, ctx.db);
+  }),
   list: adminProcedure.query(async ({ ctx }) => {
     const organizationId = pharmacyOrganizationId(ctx);
     const [branches, people, rows] = await Promise.all([

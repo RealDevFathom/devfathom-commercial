@@ -153,7 +153,9 @@ export default async function LoginPage(props: LoginPageProps) {
           {copy.setup} →
         </a>
       </div>
-      <p className="mt-6 text-xs leading-6 text-muted-foreground">
+      {/* WCAG AA: body ink, not the muted tone, so this small print clears 4.5:1
+          on the page surface in light and dark themes. */}
+      <p className="mt-6 text-xs leading-6 text-text-body">
         {vertical === 'pharmacy'
           ? 'Pharmacist or counter staff? Your account comes by invite. Need access? Contact your workspace admin.'
           : vertical === 'restaurant'

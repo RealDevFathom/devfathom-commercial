@@ -28,7 +28,7 @@ export function AuthShell({
         <div className={`w-full ${registration ? 'max-w-[34rem]' : 'max-w-[25rem]'}`}>
           <div className="mb-8 flex items-center gap-3 lg:hidden">
             <Logo variant="auto" size="md" textClassName="text-foreground" />
-            <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
+            <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-text-body">
               {context ?? verticalCopy[vertical].tag}
             </span>
           </div>

@@ -195,8 +195,18 @@ describe('day-close console', () => {
   it('shows permission denial for a non-administrator', () => {
     mocks.role = 'MEMBER';
     render(<PharmacyDayCloseConsole />);
-    expect(screen.getByText(/Sign in as a pharmacy administrator/)).toBeInTheDocument();
+    expect(
+      screen.getByText('Only a manager or owner can close the day.')
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+  });
+  it('opens for a non-administrator the page verified as holding pharmacy:close', () => {
+    mocks.role = 'MEMBER';
+    render(<PharmacyDayCloseConsole closeGranted />);
+    expect(
+      screen.queryByText('Only a manager or owner can close the day.')
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
   });
   it('shows loading and retryable errors', () => {
     mocks.loading = true;

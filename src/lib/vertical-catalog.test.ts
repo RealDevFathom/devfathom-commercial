@@ -10,6 +10,7 @@ import {
   PHARMACY_LIMIT_KEYS,
   PHARMACY_MODULES,
   PHARMACY_PACKAGES,
+  PHARMACY_BRANCH_SCOPED_ROLE_KEYS,
   PHARMACY_ROLE_TEMPLATES,
   RESTAURANT_DEPARTMENTS,
   RESTAURANT_CAPABILITIES,
@@ -522,7 +523,13 @@ describe('optional pharmacy Owner / Operator', () => {
       },
       {
         key: 'manager',
-        capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+        capabilities: [
+          'pharmacy:manage',
+          'pharmacy:orders',
+          'pharmacy:procurement',
+          'pharmacy:close',
+          'reports:operational',
+        ],
       },
       { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders'] },
       { key: 'procurement', capabilities: ['pharmacy:procurement'] },
@@ -530,6 +537,17 @@ describe('optional pharmacy Owner / Operator', () => {
       { key: 'finance', capabilities: ['reports:financial'] },
       { key: 'auditor', capabilities: ['reports:operational'] },
     ]);
+  });
+});
+
+describe('pharmacy manager branch scope', () => {
+  it('scopes the Manager template, and only it, to assigned branches', () => {
+    expect([...PHARMACY_BRANCH_SCOPED_ROLE_KEYS]).toEqual(['manager']);
+    const manager = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'manager')!;
+    expect(manager.capabilities).toEqual(
+      expect.arrayContaining(['pharmacy:close', 'reports:operational'])
+    );
+    expect(manager.capabilities).not.toContain('reports:financial');
   });
 });
 

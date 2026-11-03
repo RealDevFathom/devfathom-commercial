@@ -155,11 +155,14 @@ describe('login credential error accessibility', () => {
       mocks.signIn.mockResolvedValue({ error: 'CredentialsSignin', code });
       render(<LoginForm connections={[]} ssoEnforced={false} callbackUrl="/dashboard" />);
 
+      const email = screen.getByLabelText('Email');
+      const password = screen.getByLabelText('Password');
+      // A 2FA user has always typed credentials; empty fields are stopped inline first.
+      fireEvent.change(email, { target: { value: 'owner@example.invalid' } });
+      fireEvent.change(password, { target: { value: 'correct-password' } });
       fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
 
       const alert = await screen.findByRole('alert');
-      const email = screen.getByLabelText('Email');
-      const password = screen.getByLabelText('Password');
       const authenticationCode = screen.getByLabelText('Authentication code');
       expect(alert.id).not.toBe('');
       expect(authenticationCode).toHaveAttribute('aria-invalid', 'true');

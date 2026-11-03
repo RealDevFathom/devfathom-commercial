@@ -9,7 +9,14 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
+import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import {
+  reportFailureKind,
+  reportFailureMessage,
+  type ReportFailureKind,
+} from '@/lib/pharmacy/report-failure';
+import { readPharmacyStaffAccess } from '@/lib/pharmacy/staff-access';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
@@ -60,6 +67,21 @@ function ReportNotice({ title, detail }: { title: string; detail: string }) {
     </SectionCard>
   );
 }
+function ReportsUnavailable() {
+  return (
+    <main className="min-w-0 space-y-6">
+      <PageHeader
+        eyebrow="Pharmacy operations"
+        heading="Reports"
+        description="Bounded, permission-scoped command centre and report catalog."
+      />
+      <ReportNotice
+        title="Reports unavailable"
+        detail="Your pharmacy reports permission or license is not available. Contact your workspace administrator."
+      />
+    </main>
+  );
+}
 
 export default async function PharmacyReportsPage({
   searchParams,
@@ -68,25 +90,19 @@ export default async function PharmacyReportsPage({
 }) {
   const query = await searchParams;
   const ctx = await createTRPCContext();
+  // Answer a member without the reports grant (e.g. a cashier) at once, before
+  // any report read, so the locked state never waits behind the report loader.
+  // The report procedures repeat the same `reports:operational` check.
+  if (!(await readPharmacyStaffAccess(ctx.session?.user, ctx.db)).reports) {
+    return <ReportsUnavailable />;
+  }
   const caller = pharmacyReportsRouter.createCaller(ctx);
   let branchResult: Awaited<ReturnType<typeof caller.branches>>;
   let catalog: Awaited<ReturnType<typeof caller.catalog>>;
   try {
     [branchResult, catalog] = await Promise.all([caller.branches(), caller.catalog()]);
   } catch {
-    return (
-      <main className="min-w-0 space-y-6">
-        <PageHeader
-          eyebrow="Pharmacy operations"
-          heading="Reports"
-          description="Bounded, permission-scoped command centre and report catalog."
-        />
-        <ReportNotice
-          title="Reports unavailable"
-          detail="Your pharmacy reports permission or license is not available. Contact your workspace administrator."
-        />
-      </main>
-    );
+    return <ReportsUnavailable />;
   }
   // Reuse the authenticated tenant context; report rows do not prove historical currency.
   const organizationCurrency =
@@ -113,6 +129,16 @@ export default async function PharmacyReportsPage({
   let anomalies: Awaited<ReturnType<typeof caller.anomalySignals>> | null = null;
   let expiryAdvice: Awaited<ReturnType<typeof caller.expiryAdvice>> | null = null;
   let authenticationFlags: Awaited<ReturnType<typeof caller.packAuthenticationFlags>> | null = null;
+  // Why an owner card is empty: a refusal, a missing branch, bad filters or an
+  // outage each get their own sentence instead of a blanket permission message.
+  // Without a valid range or a reportable branch neither card is requested.
+  const notRequested: ReportFailureKind = invalidRange
+    ? 'invalid'
+    : branchResult.branches.length === 0
+      ? 'not-found'
+      : 'unavailable';
+  let expiryFailure: ReportFailureKind = notRequested;
+  let anomalyFailure: ReportFailureKind = notRequested;
   let reportError = false;
   let marketing: Awaited<ReturnType<typeof caller.marketing>> | null = null;
   let demand: Awaited<
@@ -150,7 +176,9 @@ export default async function PharmacyReportsPage({
     else reportError = true;
     if (digestResult.status === 'fulfilled') digest = digestResult.value;
     if (anomalyResult.status === 'fulfilled') anomalies = anomalyResult.value;
+    else anomalyFailure = reportFailureKind(anomalyResult.reason);
     if (expiryResult.status === 'fulfilled') expiryAdvice = expiryResult.value;
+    else expiryFailure = reportFailureKind(expiryResult.reason);
     if (authenticationResult.status === 'fulfilled')
       authenticationFlags = authenticationResult.value;
   }
@@ -344,7 +372,7 @@ export default async function PharmacyReportsPage({
               <option value="">All available</option>
               {branchResult.branches.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.name}
+                  {pharmacyBranchLabel(item)}
                 </option>
               ))}
             </select>
@@ -583,7 +611,7 @@ export default async function PharmacyReportsPage({
               titleLevel={2}
             >
               <p className="text-sm text-text-muted">
-                Financial report and owner permissions are required to view value-at-risk advice.
+                {reportFailureMessage(expiryFailure, 'value-at-risk advice')}
               </p>
             </SectionCard>
           )}
@@ -786,7 +814,7 @@ export default async function PharmacyReportsPage({
               titleLevel={2}
             >
               <p className="text-sm text-text-muted">
-                Financial report and owner permissions are required to view anomaly evidence.
+                {reportFailureMessage(anomalyFailure, 'anomaly evidence')}
               </p>
             </SectionCard>
           )}

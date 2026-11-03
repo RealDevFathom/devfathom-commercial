@@ -6,6 +6,7 @@ import {
   readPharmacyDailyWorkPack,
   validateDailyWorkPackInput,
 } from '@/lib/pharmacy/daily-work-pack';
+import { pharmacyBranchLimit } from '@/lib/pharmacy/branch-limit';
 import { listPurchaseReturns, listSupplierCredits } from '@/lib/pharmacy/purchasing-console';
 import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
 import { PHARMACY_METRIC_CONTRACT, readPharmacyOwnerCommandCentre } from '@/lib/pharmacy/reports';
@@ -71,6 +72,25 @@ const financeInsightInput = z.discriminatedUnion('report', [
 
 function utcDate() {
   return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Active tenant branches this member may read operational reports for: every
+ * branch, except that a branch-scoped manager sees only their assigned ones
+ * (the same limit the report routers apply).
+ */
+async function reportBranches(h: AssistantHelpers) {
+  const organizationId = h.ctx.organizationId;
+  const limit = await pharmacyBranchLimit(
+    h.db,
+    { id: h.ctx.userId, role: h.ctx.role },
+    organizationId
+  );
+  return h.db.pharmacyBranch.findMany({
+    where: { organizationId, active: true, ...(limit ? { id: { in: limit } } : {}) },
+    orderBy: { name: 'asc' },
+    select: { id: true, name: true },
+  });
 }
 
 function drillThrough(path: string, filters: { branchIds: string[]; from: string; to: string }) {
@@ -506,11 +526,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
         }
 
         try {
-          const branches = await h.db.pharmacyBranch.findMany({
-            where: { organizationId: h.ctx.organizationId, active: true },
-            orderBy: { name: 'asc' },
-            select: { id: true, name: true },
-          });
+          const branches = await reportBranches(h);
           const selected = branch
             ? branches.filter(
                 (candidate) =>
@@ -625,11 +641,7 @@ function pharmacyWorkPackTool(h: AssistantHelpers) {
             message: 'Use a bounded inclusive UTC report period and a valid nonfuture asOf.',
           };
         }
-        const branches = await h.db.pharmacyBranch.findMany({
-          where: { organizationId: h.ctx.organizationId, active: true },
-          orderBy: { name: 'asc' },
-          select: { id: true, name: true },
-        });
+        const branches = await reportBranches(h);
         const selected = branches.filter(
           (row) => row.id === branch || row.name.toLowerCase() === branch.toLowerCase()
         );

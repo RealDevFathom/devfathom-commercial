@@ -43,6 +43,7 @@ import {
 } from '@/lib/pharmacy/pack-authentication-operations';
 import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { pharmacyBranchLimit } from '../pharmacy-branch-limit';
 import {
   PHARMACY_GROWTH_CATEGORIES,
   readPharmacyCategoryGrowthReport,
@@ -128,16 +129,44 @@ const anomalySnooze = anomalyDecision
   .extend({ snoozedUntil: z.iso.datetime({ offset: true }) })
   .strict();
 
-async function scope(ctx: TRPCContext) {
+async function limitedScope(ctx: TRPCContext) {
   if (!hasModule(ctx.entitlements, 'pharmacy-reports'))
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy reports are not licensed.' });
   const organizationId = ctx.entitlements.organizationId;
+  // A branch-scoped member (the Manager template) reads reports only for their
+  // own assigned branches; everyone else keeps the organization-wide list.
+  const limit = await pharmacyBranchLimit(ctx, organizationId);
   const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId, active: true },
+    where: { organizationId, active: true, ...(limit ? { id: { in: limit } } : {}) },
     orderBy: { name: 'asc' },
-    select: { id: true, name: true },
+    // Name and city, so every branch picker labels a branch the same way.
+    select: { id: true, name: true, city: true },
   });
+  return { branches, organizationId, limited: limit !== null };
+}
+
+async function scope(ctx: TRPCContext) {
+  const { branches, organizationId } = await limitedScope(ctx);
   return { branches, organizationId };
+}
+
+/**
+ * The tenant boundary for the branch list, checked the way
+ * `pharmacyOrganizationId()` does before any query: the session, the resolved
+ * organization and the entitlements must all name the same Pharmacy tenant.
+ */
+function reportOrganizationId(ctx: TRPCContext): string {
+  const organizationId = ctx.entitlements?.organizationId;
+  const user = ctx.session?.user;
+  if (!organizationId || !user?.id) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  if (
+    ctx.organization?.vertical !== 'PHARMACY' ||
+    ctx.organization.id !== organizationId ||
+    user.organizationId !== organizationId
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  return organizationId;
 }
 
 async function requireFinancialReports(ctx: TRPCContext) {
@@ -153,11 +182,29 @@ async function requireFinancialReports(ctx: TRPCContext) {
     });
 }
 
-async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
+/**
+ * Owner report surfaces (expiry and supplier-return advice, anomaly review, pack
+ * authentication, repeat purchasing, marketing and category growth) are decided
+ * by capability, not by the account role: the Owner and Owner / Operator
+ * templates carry `reports:financial`, and nobody without it passes. An owner
+ * whose account role is not ADMIN is therefore admitted, and a session from
+ * another organization is refused before any query.
+ */
+async function requireOwnerReports(ctx: TRPCContext) {
+  const organizationId = ctx.entitlements?.organizationId;
+  const user = ctx.session?.user;
+  if (!organizationId || !user?.id) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  if (
+    user.organizationId !== organizationId ||
+    (ctx.organization && ctx.organization.id !== organizationId)
+  )
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
   await requireFinancialReports(ctx);
+}
+
+async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
+  await requireOwnerReports(ctx);
   const available = await scope(ctx);
-  if (ctx.session!.user.role !== 'ADMIN')
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
   const branchIds = input.branchId
     ? [input.branchId]
     : available.branches.map((branch) => branch.id);
@@ -170,9 +217,8 @@ async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
 }
 
 async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
+  await requireOwnerReports(ctx);
   const available = await scope(ctx);
-  if (ctx.session!.user.role !== 'ADMIN')
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
   if (!available.branches.some((branch) => branch.id === branchId))
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
 }
@@ -417,7 +463,47 @@ export const pharmacyReportsRouter = router({
         })),
       };
     }),
-  branches: reports.query(({ ctx }) => scope(ctx)),
+  // The branch list never errors for a signed-in member of this Pharmacy tenant:
+  // report holders and organization administrators see every active branch,
+  // except a branch-scoped manager, who sees only their assigned branches;
+  // everyone else (for example a cashier) sees only the active branches assigned
+  // to them, which may be none. A session from another organization is refused
+  // before any query. Report reads stay behind `reports:operational` below.
+  branches: auditedProtectedProcedure.query(async ({ ctx }) => {
+    const organizationId = reportOrganizationId(ctx);
+    const user = ctx.session!.user;
+    // The shared operational grant is always evaluated (and so recorded) before
+    // the ADMIN fallback; an admin is organization-wide without it.
+    const operational = await can(subjectFromSession(user), 'reports:operational', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    });
+    const organizationWide = user.role === 'ADMIN' || operational;
+    if (organizationWide && hasModule(ctx.entitlements, 'pharmacy-reports')) {
+      const { branches, limited } = await limitedScope(ctx);
+      return {
+        branches,
+        organizationId,
+        scope: limited ? ('assigned' as const) : ('organization' as const),
+      };
+    }
+    const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
+      where: {
+        organizationId,
+        userId: user.id,
+        active: true,
+        branch: { organizationId, active: true },
+      },
+      orderBy: { branch: { name: 'asc' } },
+      select: { branch: { select: { id: true, name: true, city: true } } },
+    });
+    return {
+      branches: assignments.map((row) => row.branch),
+      organizationId,
+      scope: 'assigned' as const,
+    };
+  }),
   replenishment: reports.input(pharmacyReplenishmentReportInput).query(async ({ ctx, input }) => {
     // Existing capability middleware denies before report reads; scope enforces licensing.
     const available = await scope(ctx);
@@ -622,7 +708,6 @@ export const pharmacyReportsRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      await requireFinancialReports(ctx);
       await requireOwnerBranch(ctx, input.branchId);
       return proposeExpiryReturn(
         ctx.db,
@@ -641,7 +726,6 @@ export const pharmacyReportsRouter = router({
   acknowledgePackAuthenticationFlag: reports
     .input(anomalyDecision)
     .mutation(async ({ ctx, input }) => {
-      await requireFinancialReports(ctx);
       await requireOwnerBranch(ctx, input.branchId);
       await acknowledgePackAuthenticationFlag(ctx.db, {
         organizationId: ctx.entitlements.organizationId,
@@ -657,7 +741,6 @@ export const pharmacyReportsRouter = router({
     return refreshPharmacyAnomalySignals(ctx.db, bounded, ctx.session!.user.id);
   }),
   acknowledgeAnomaly: reports.input(anomalyDecision).mutation(async ({ ctx, input }) => {
-    await requireFinancialReports(ctx);
     await requireOwnerBranch(ctx, input.branchId);
     return acknowledgePharmacyAnomalySignal(ctx.db, {
       ...input,
@@ -665,7 +748,6 @@ export const pharmacyReportsRouter = router({
     });
   }),
   snoozeAnomaly: reports.input(anomalySnooze).mutation(async ({ ctx, input }) => {
-    await requireFinancialReports(ctx);
     await requireOwnerBranch(ctx, input.branchId);
     return snoozePharmacyAnomalySignal(ctx.db, {
       ...input,

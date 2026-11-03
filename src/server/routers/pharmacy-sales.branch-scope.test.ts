@@ -144,7 +144,8 @@ let db: {
   pharmacyDrawerSession: { findFirst: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
   pharmacyDrawerMovement: { create: ReturnType<typeof vi.fn> };
   pharmacyTender: { findFirst: ReturnType<typeof vi.fn> };
-  user: { findUnique: ReturnType<typeof vi.fn> };
+  pharmacyBranchAssignment: { findMany: ReturnType<typeof vi.fn> };
+  user: { findUnique: ReturnType<typeof vi.fn>; findFirst: ReturnType<typeof vi.fn> };
 };
 
 function caller(role = 'ADMIN'): Caller {
@@ -176,7 +177,12 @@ beforeEach(() => {
     },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue(null) },
-    user: { findUnique: vi.fn().mockResolvedValue(null) },
+    pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([]) },
+    // The member's organization role key; not branch-scoped unless a case says so.
+    user: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      findFirst: vi.fn().mockResolvedValue({ organizationRole: null }),
+    },
   };
 });
 
@@ -231,6 +237,64 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
       });
       await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(refusal);
       expect(db.pharmacyBranch.findMany).toHaveBeenCalledOnce();
+    }
+  );
+
+  const closingManager = () => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [
+          { capability: 'pharmacy:manage', effect: 'ALLOW' },
+          { capability: 'pharmacy:close', effect: 'ALLOW' },
+          { capability: 'reports:operational', effect: 'ALLOW' },
+        ],
+      },
+      permissionOverrides: [],
+    });
+    db.user.findFirst.mockResolvedValue({ organizationRole: { key: 'manager' } });
+  };
+
+  it.each(closeProcedures)(
+    '%s refuses a manager a branch other than their own, before any branch or day read',
+    async (_name, run) => {
+      closingManager();
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch-own' }]);
+      await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(OUTSIDE);
+      expect(db.user.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'actor-1', organizationId: 'org-1' } })
+      );
+      expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            organizationId: 'org-1',
+            userId: 'actor-1',
+            active: true,
+            branch: { organizationId: 'org-1', active: true },
+          },
+        })
+      );
+      expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(closeProcedures)(
+    '%s lets a manager close their own assigned branch (normal scope check follows)',
+    async (_name, run, refusal) => {
+      closingManager();
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: BRANCH }]);
+      await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(refusal);
+      expect(db.pharmacyBranch.findMany).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(closeProcedures)(
+    '%s never narrows a session admin to assignments',
+    async (_name, run, refusal) => {
+      db.user.findFirst.mockResolvedValue({ organizationRole: { key: 'manager' } });
+      await expect(run(caller('ADMIN'))).rejects.toMatchObject(refusal);
+      expect(db.user.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
     }
   );
 

@@ -123,6 +123,68 @@ describe('Ask Fathom pharmacy reports', () => {
     expect(queryRaw).not.toHaveBeenCalled();
   });
 
+  it("limits a manager's report questions to their own assigned branch", async () => {
+    const branches = [
+      { id: 'branch_1', name: 'Main Pharmacy' },
+      { id: 'branch_2', name: 'Second Pharmacy' },
+    ];
+    branchFindMany.mockImplementation(async ({ where }: { where: { id?: { in: string[] } } }) =>
+      where.id ? branches.filter((row) => where.id!.in.includes(row.id)) : branches
+    );
+    const userFindFirst = vi.fn().mockResolvedValue({ organizationRole: { key: 'manager' } });
+    const assignmentFindMany = vi.fn().mockResolvedValue([{ branchId: 'branch_2' }]);
+    const db = {
+      pharmacyBranch: { findMany: branchFindMany },
+      user: { findFirst: userFindFirst },
+      pharmacyBranchAssignment: { findMany: assignmentFindMany },
+      $queryRaw: queryRaw,
+      pharmacyRecallNotice: { count },
+      pharmacySupplierClaim: { count },
+      pharmacyReceivingException: { count },
+      branchRegulatoryProfile: { count },
+    } as never;
+    const execute = buildPharmacyReportTools(
+      createAssistantHelpers(
+        {
+          organizationId: 'org_1',
+          userId: 'manager_1',
+          role: 'EMPLOYEE',
+          enabledModules: ['pharmacy-reports'],
+        },
+        db
+      )
+    ).askPharmacyReports.execute! as (input: {
+      metricKeys: string[];
+      branch?: string | null;
+      from?: string | null;
+      to?: string | null;
+    }) => Promise<Record<string, unknown>>;
+    abacCan.mockImplementation(
+      async (_subject: unknown, action: string) => action === 'reports:operational'
+    );
+
+    await expect(
+      execute({
+        metricKeys: ['openStockSignals'],
+        branch: 'Main Pharmacy',
+        from: '2026-09-05',
+        to: '2026-09-05',
+      })
+    ).resolves.toMatchObject({ kind: 'refusal' });
+    expect(queryRaw).not.toHaveBeenCalled();
+    expect(userFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'manager_1', organizationId: 'org_1' } })
+    );
+
+    const own = await execute({
+      metricKeys: ['openStockSignals'],
+      branch: 'Second Pharmacy',
+      from: '2026-09-05',
+      to: '2026-09-05',
+    });
+    expect(own).toMatchObject({ kind: 'answer', branches: [{ id: 'branch_2' }] });
+  });
+
   it('maps every numeric claim to a complete metric contract citation', async () => {
     const result = await toolExecute()({
       metricKeys: ['salesMinor', 'openStockSignals'],

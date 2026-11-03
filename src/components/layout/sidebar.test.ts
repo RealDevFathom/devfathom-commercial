@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { navigation, visibleNavigation } from './sidebar';
+import {
+  NO_PHARMACY_STAFF_ACCESS,
+  type PharmacyStaffAccess,
+} from '@/lib/pharmacy/staff-access-flags';
 
 const restaurantRoutes = [
   '/pos',
@@ -214,6 +218,145 @@ describe('pharmacy navigation', () => {
         (item) => item.href === '/pharmacy/controlled-register'
       )
     ).toBe(true);
+  });
+
+  it('hides Prescriptions, Pharmacist queue and Substitution without a dispense or safety capability', () => {
+    const entitled = {
+      vertical: 'PHARMACY' as const,
+      enabledModules: ['pharmacy-core', 'pharmacy-dispensing'],
+    };
+    const clinical = [
+      '/pharmacy/prescriptions',
+      '/pharmacy/pharmacist-queue',
+      '/pharmacy/substitution',
+    ];
+    const hrefs = (capabilities: string[]) =>
+      visibleNavigation(entitled, 'EMPLOYEE', [], capabilities).map((item) => item.href);
+
+    // Module alone (e.g. a cashier or manager) is not enough.
+    for (const route of clinical) expect(hrefs([])).not.toContain(route);
+    const cashier = hrefs(['pharmacy:counter', 'pharmacy:orders']);
+    for (const route of clinical) expect(cashier).not.toContain(route);
+    // A pharmacist (dispense) or a safety holder sees all three.
+    expect(hrefs(['pharmacy:dispense'])).toEqual(expect.arrayContaining(clinical));
+    expect(hrefs(['pharmacy:safety'])).toEqual(expect.arrayContaining(clinical));
+    // Prescription-records access alone opens only the prescription workspace.
+    const records = hrefs(['pharmacy:prescriptions']);
+    expect(records).toContain('/pharmacy/prescriptions');
+    expect(records).not.toContain('/pharmacy/pharmacist-queue');
+    expect(records).not.toContain('/pharmacy/substitution');
+  });
+
+  describe('menu by role: only what each role can use', () => {
+    const entitled = {
+      vertical: 'PHARMACY' as const,
+      enabledModules: [
+        'pharmacy-core',
+        'pharmacy-counter',
+        'pharmacy-inventory',
+        'pharmacy-procurement',
+        'pharmacy-reports',
+        'pharmacy-dispensing',
+      ],
+    };
+    const gated = [
+      '/pharmacy/counter/close',
+      '/pharmacy/reports',
+      '/pharmacy/purchasing',
+      '/pharmacy/prescriptions',
+      '/pharmacy/pharmacist-queue',
+      '/pharmacy/substitution',
+      '/team',
+      '/settings',
+    ];
+    const roles: Array<[string, string, Partial<PharmacyStaffAccess>, string[], string[]]> = [
+      [
+        'owner',
+        'ADMIN',
+        {
+          commandCentre: true,
+          dayClose: true,
+          reports: true,
+          purchasing: true,
+          administration: true,
+          prescriptions: true,
+        },
+        ['pharmacy:prescriptions'],
+        [
+          '/pharmacy/counter/close',
+          '/pharmacy/reports',
+          '/pharmacy/purchasing',
+          '/pharmacy/prescriptions',
+          '/team',
+          '/settings',
+        ],
+      ],
+      [
+        'manager',
+        'EMPLOYEE',
+        {
+          commandCentre: true,
+          dayClose: true,
+          reports: true,
+          purchasing: true,
+          administration: true,
+        },
+        [],
+        [
+          '/pharmacy/counter/close',
+          '/pharmacy/reports',
+          '/pharmacy/purchasing',
+          '/team',
+          '/settings',
+        ],
+      ],
+      [
+        'manager without close or report grants',
+        'EMPLOYEE',
+        { commandCentre: true, purchasing: true, administration: true },
+        [],
+        ['/pharmacy/purchasing', '/team', '/settings'],
+      ],
+      [
+        'pharmacist',
+        'EMPLOYEE',
+        { dayClose: true, dispense: true, prescriptions: true },
+        ['pharmacy:dispense', 'pharmacy:prescriptions'],
+        [
+          '/pharmacy/counter/close',
+          '/pharmacy/prescriptions',
+          '/pharmacy/pharmacist-queue',
+          '/pharmacy/substitution',
+        ],
+      ],
+      ['cashier', 'EMPLOYEE', {}, [], []],
+    ];
+
+    it.each(roles)(
+      'offers the %s (%s) exactly the gated entries it can use',
+      (_persona, role, access, capabilities, expected) => {
+        const visible = visibleNavigation(entitled, role, [], capabilities, {
+          ...NO_PHARMACY_STAFF_ACCESS,
+          ...access,
+        }).map((item) => item.href);
+        expect(gated.filter((href) => visible.includes(href)).sort()).toEqual([...expected].sort());
+        // Counter and Inventory stay for every role (the pharmacist's counter is unchanged).
+        expect(visible).toEqual(
+          expect.arrayContaining(['/pharmacy/counter', '/pharmacy/inventory'])
+        );
+      }
+    );
+
+    it('leaves Team and Settings alone outside a Pharmacy workspace', () => {
+      const visible = visibleNavigation(
+        { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
+        'EMPLOYEE',
+        [],
+        [],
+        NO_PHARMACY_STAFF_ACCESS
+      ).map((item) => item.href);
+      expect(visible).toEqual(expect.arrayContaining(['/team', '/settings']));
+    });
   });
 
   it('shows pharmacy routes to a Pharmacy admin with core and counter modules', () => {

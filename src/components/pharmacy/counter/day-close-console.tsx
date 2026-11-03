@@ -17,6 +17,7 @@ import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-r
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
 
 /**
  * "Opened 09:12 by Ayesha Karim", or just the time when the opener is no longer a
@@ -42,14 +43,24 @@ export function cashMinor(value: string): number | null {
   return Number.isSafeInteger(amount) && amount <= 2147483647 ? amount : null;
 }
 
-export function PharmacyDayCloseConsole() {
+/** What anyone without day-close access sees, on the page and in the console. */
+export const PHARMACY_DAY_CLOSE_DENIED = 'Only a manager or owner can close the day.';
+
+/**
+ * `closeGranted` is the server page's verdict from `readPharmacyStaffAccess`
+ * (ADMIN or `pharmacy:close`, the same rule as `requireCloseAccess`), so a
+ * non-admin holder of `pharmacy:close` is not refused here after the page let
+ * them in. Every day-close procedure still enforces the rule itself.
+ */
+export function PharmacyDayCloseConsole({ closeGranted = false }: { closeGranted?: boolean } = {}) {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
   const user = session?.user;
   if (
     status !== 'authenticated' ||
+    !user ||
     !evaluateSessionUser(user).ok ||
-    user?.role !== 'ADMIN' ||
+    (user.role !== 'ADMIN' && !closeGranted) ||
     user.organizationId !== entitlements.organizationId ||
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
   ) {
@@ -58,7 +69,7 @@ export function PharmacyDayCloseConsole() {
         <p role="status">
           {status === 'loading'
             ? 'Checking day-close access…'
-            : 'Sign in as a pharmacy administrator to reconcile and close a day.'}
+            : PHARMACY_DAY_CLOSE_DENIED}
         </p>
       </SectionCard>
     );
@@ -96,7 +107,7 @@ function DayCloseBranches() {
             >
               {branches.data?.branches.map((b) => (
                 <option key={b.id} value={b.id}>
-                  {b.name}
+                  {pharmacyBranchLabel(b)}
                 </option>
               ))}
             </select>

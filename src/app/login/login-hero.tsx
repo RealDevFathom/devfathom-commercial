@@ -23,7 +23,9 @@ export function LoginHero({
     <aside className="fieldbook-login-hero studio-auth-hero">
       <div className="flex items-center justify-between gap-5">
         <Logo variant="white" size="lg" />
-        <span className="font-mono text-[10px] uppercase tracking-[0.16em]">{copy.tag}</span>
+        <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-text-on-accent">
+          {copy.tag}
+        </span>
       </div>
       <div className={registration ? 'mt-16' : 'my-20 xl:my-24'}>
         <p

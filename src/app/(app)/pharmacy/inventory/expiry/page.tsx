@@ -11,6 +11,7 @@ import { hasModule } from '@/lib/entitlements';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { EXPIRY_BOARD_WINDOWS, pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
+import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
 
 export const metadata: Metadata = { title: 'Pharmacy expiry board' };
 
@@ -209,7 +210,7 @@ export default async function PharmacyExpiryBoardPage({
             <select className={inputClass} defaultValue={branch.id} name="branch">
               {branches.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.name} · {item.city}
+                  {pharmacyBranchLabel(item)}
                 </option>
               ))}
             </select>

@@ -78,6 +78,7 @@ import {
 } from '@/lib/pharmacy/counter-browser-print';
 import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
+import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
 
 type Notice = {
   tone: 'success' | 'warning' | 'danger' | 'neutral';
@@ -1950,7 +1951,7 @@ function ScopedPharmacyCounterConsole({
                   >
                     {branches.map((branch) => (
                       <option key={branch.id} value={branch.id}>
-                        {branch.name} · {branch.code}
+                        {pharmacyBranchLabel(branch)}
                       </option>
                     ))}
                   </select>

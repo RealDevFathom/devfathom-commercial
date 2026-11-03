@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useRef, useState } from 'react';
+import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
 import Link from 'next/link';
 import { ArrowDown, ArrowUp, Eye, EyeOff, Pencil, RotateCcw, Save } from 'lucide-react';
 
@@ -260,7 +261,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
             <option value="">All available</option>
             {branches.data?.branches.map((branch) => (
               <option key={branch.id} value={branch.id}>
-                {branch.name}
+                {pharmacyBranchLabel(branch)}
               </option>
             ))}
           </select>
