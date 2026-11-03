@@ -6,8 +6,15 @@ import {
   resolvePrescriptionReference,
 } from '@/lib/pharmacy/rx-prescription-reference';
 import { hasModule } from '@/lib/entitlements';
-import { manualPaymentSettingsSchema, isManualTender, manualMerchantPolicies } from '@/lib/pharmacy/manual-payments';
-import { readManualPaymentSettings, saveManualPaymentSettings } from '@/lib/pharmacy/manual-payment-settings';
+import {
+  manualPaymentSettingsSchema,
+  isManualTender,
+  manualMerchantPolicies,
+} from '@/lib/pharmacy/manual-payments';
+import {
+  readManualPaymentSettings,
+  saveManualPaymentSettings,
+} from '@/lib/pharmacy/manual-payment-settings';
 import {
   executeSandboxPayment,
   sandboxPaymentInput,
@@ -40,9 +47,11 @@ import { Prisma } from '@/generated/prisma/client';
 import {
   authorizeKhataCharge,
   FamilyKhataError,
+  readKhataRepaymentAccounts,
   readSaleKhataAccounts,
   readSaleKhataStatement,
 } from '@/lib/pharmacy/family-khata';
+import { recordKhataRepayment } from '@/lib/pharmacy/khata-repayment';
 
 import {
   PharmacyCounterError,
@@ -132,13 +141,26 @@ const tenderInput = z
     saleId: z.string().min(1),
     deviceId: z.string().min(1),
     businessDate: z.date(),
-    type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT', 'KHATA', 'RAAST', 'JAZZCASH', 'EASYPAISA']),
+    type: z.enum([
+      'CASH',
+      'CARD',
+      'BANK_TRANSFER',
+      'WALLET',
+      'CREDIT',
+      'KHATA',
+      'RAAST',
+      'JAZZCASH',
+      'EASYPAISA',
+    ]),
     amountMinor: z.number().int().positive(),
     cashReceivedMinor: z.number().int().nonnegative().optional(),
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
-    providerRef: z.string().regex(/^\d{4,6}$/).optional(),
+    providerRef: z
+      .string()
+      .regex(/^\d{4,6}$/)
+      .optional(),
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
   })
@@ -507,21 +529,39 @@ async function requireCloseAccess(ctx: TRPCContext) {
 }
 
 export const pharmacySalesRouter = router({
-  manualPaymentSettings: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
-    const scope = ctx.session!.user.role === 'ADMIN'
-      ? await branchScopeOrForbidden(ctx, input.branchId)
-      : await requireCounterReceiptAccess(ctx, input.branchId, true);
-    return readManualPaymentSettings(ctx.db, scope);
-  }),
-  saveManualPaymentSettings: adminProcedure.input(z.object({
-    branchId, revision: z.number().int().nonnegative(), settings: manualPaymentSettingsSchema,
-  }).strict()).mutation(async ({ ctx, input }) => {
-    // QR and payer destinations must not be copied into request audit payloads.
-    annotateAudit(ctx, { skipInput: true, targetType: 'PharmacyBranch', targetId: input.branchId,
-      metadata: { revision: input.revision, manualMerchantPolicies: manualMerchantPolicies(input.settings) } });
-    const scope = await branchScopeOrForbidden(ctx, input.branchId);
-    return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
-  }),
+  manualPaymentSettings: protectedProcedure
+    .input(z.object({ branchId }))
+    .query(async ({ ctx, input }) => {
+      const scope =
+        ctx.session!.user.role === 'ADMIN'
+          ? await branchScopeOrForbidden(ctx, input.branchId)
+          : await requireCounterReceiptAccess(ctx, input.branchId, true);
+      return readManualPaymentSettings(ctx.db, scope);
+    }),
+  saveManualPaymentSettings: adminProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          settings: manualPaymentSettingsSchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // QR and payer destinations must not be copied into request audit payloads.
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacyBranch',
+        targetId: input.branchId,
+        metadata: {
+          revision: input.revision,
+          manualMerchantPolicies: manualMerchantPolicies(input.settings),
+        },
+      });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
+    }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {
@@ -577,6 +617,56 @@ export const pharmacySalesRouter = router({
         await bindKhataBranch(db, scope);
         return readSaleKhataAccounts(db, scope, input.saleId);
       });
+    }),
+  khataRepaymentAccounts: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await khataScope(ctx, input.branchId, 'read');
+      return ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        await bindKhataBranch(db, scope);
+        return readKhataRepaymentAccounts(db, scope);
+      });
+    }),
+  recordKhataRepayment: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          familyAccountId: z.string().trim().min(1).max(128),
+          amountMinor: z.number().int().positive().max(2147483647),
+          tender: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET']),
+          drawerSessionId: z.string().min(1).optional(),
+          occurredAt: z.date(),
+          idempotencyKey: z.string().trim().min(1).max(160),
+        })
+        .strict()
+        .superRefine((value, ctx) => {
+          if (value.tender === 'CASH' && !value.drawerSessionId)
+            ctx.addIssue({
+              code: 'custom',
+              path: ['drawerSessionId'],
+              message: 'Open a cash drawer first.',
+            });
+          if (value.tender !== 'CASH' && value.drawerSessionId)
+            ctx.addIssue({
+              code: 'custom',
+              path: ['drawerSessionId'],
+              message: 'Only cash uses a drawer.',
+            });
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await khataScope(ctx, input.branchId, 'write');
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await bindKhataBranch(db, scope);
+          return recordKhataRepayment(db, scope, input);
+        });
+      } catch (error) {
+        fail(error);
+      }
     }),
   khataStatement: protectedProcedure
     .input(

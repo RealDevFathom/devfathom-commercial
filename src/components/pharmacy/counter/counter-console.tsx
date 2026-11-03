@@ -44,6 +44,7 @@ import {
   type CounterReceiptSettlement,
 } from './counter-receipt-view';
 import { CounterReturnPanel } from './counter-return-panel';
+import { CounterKhataPayment } from './counter-khata-payment';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
@@ -1937,6 +1938,14 @@ function ScopedPharmacyCounterConsole({
               accountId={accountId}
               deviceId={counterDeviceId}
               businessDate={todayBusinessDate}
+            />
+            <CounterKhataPayment
+              key={`${organizationId}:${accountId}:${branchId}`}
+              storageScope={`${organizationId}:${accountId}:${branchId}`}
+              branchId={branchId}
+              branchName={branches.find((branch) => branch.id === branchId)?.name ?? branchId}
+              drawerSessionId={openDrawerSession?.id}
+              onRecorded={() => void utils.pharmacySales.drawerStatus.invalidate()}
             />
             <Link
               className={buttonVariants({

@@ -116,6 +116,8 @@ vi.mock('@/lib/trpc', () => {
         'counterEvidence',
         'customerSnapshot',
         'drawerStatus',
+        'khataRepaymentAccounts',
+        'recordKhataRepayment',
         'create',
         'addLine',
         'transition',

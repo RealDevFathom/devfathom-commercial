@@ -152,7 +152,7 @@ export async function readFamilyMemberDispensing(
 export async function settleFamilyKhata(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { familyAccountId: string; amountMinor: number; occurredAt: Date }
+  input: { familyAccountId: string; amountMinor: number; occurredAt: Date; note?: string }
 ) {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -200,6 +200,7 @@ export async function settleFamilyKhata(
           occurredAt: input.occurredAt,
           settlesChargeId: item.charge.id,
           actorId: scope.actorId,
+          note: input.note?.trim() || undefined,
         },
       })
     );
@@ -287,6 +288,21 @@ export async function readKhataBalance(
   return totals.reduce(
     (sum, row) => sum + (row.kind === 'PAYMENT' ? -1 : 1) * (row._sum.amountMinor ?? 0),
     0
+  );
+}
+
+/** Active branch accounts for the counter repayment picker; no sale/customer context is required. */
+export async function readKhataRepaymentAccounts(db: ScopedDb, scope: FamilyKhataScope) {
+  const accounts = await db.pharmacyFamilyAccount.findMany({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, active: true },
+    select: { id: true, displayName: true },
+    orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+  });
+  return Promise.all(
+    accounts.map(async (account) => ({
+      ...account,
+      balanceMinor: await readKhataBalance(db, scope, account.id),
+    }))
   );
 }
 
