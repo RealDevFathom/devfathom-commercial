@@ -9,7 +9,7 @@ import {
   TypeValidationError,
 } from 'ai';
 import { z } from 'zod';
-import { createAIModel, readAIConfig, readAIAvailability } from './provider';
+import { createAIModel, readAIAvailability } from './provider';
 
 export const GROWTH_SCHEMA_VERSION = 1 as const;
 export const GROWTH_MIN_COHORT = 10;
@@ -20,10 +20,12 @@ export const GROWTH_METRICS = {
   receipt_count:
     'Distinct completed numbered customer-linked receipts through cutoff; anonymous receipts excluded.',
   consent_eligible_retail_count:
-    'Currently consented nonsensitive audience among customer-linked receipts in the period; not historical consent. Recheck before capture.',
-  repeat_visit_count: 'Aggregate repeat retail visits; no item or clinical history.',
-  meta_delivered_count: 'Bound live Meta delivery evidence; excludes sandbox and contradictions.',
-  meta_attributed_sales_minor: 'Observed receipt revenue linked to live Meta; not causal lift.',
+    'Customers linked to receipts in this period who allow general retail messages now. Permission is checked again before saving recipients.',
+  repeat_visit_count: 'Total repeat retail visits; no purchased items or medical history.',
+  meta_delivered_count:
+    'Verified live Meta deliveries; excludes test runs and conflicting records.',
+  meta_attributed_sales_minor:
+    'Receipt revenue linked to live Meta; does not prove the campaign caused sales.',
   refunds_minor: 'Posted refunds through cutoff.',
   comps_minor: 'Settled receipt complimentary amounts.',
   discounts_minor: 'Settled receipt discounts.',
@@ -32,7 +34,8 @@ export const GROWTH_METRICS = {
   recipe_cost_coverage_count: 'Receipts with known recipe cost coverage.',
   wastage_minor: 'Recorded inventory wastage cost.',
   inventory_value_minor: 'Recorded inventory value at cutoff.',
-  loyalty_eligible_count: 'Suppressed aggregate eligible loyalty cohort; no identities.',
+  loyalty_eligible_count:
+    'Eligible loyalty customers counted together; small groups and identities are hidden.',
   catering_quote_count: 'Catering quotes; never settled revenue.',
   catering_confirmed_count: 'Confirmed catering bookings; never settled revenue.',
   catering_fulfilled_count: 'Fulfilled catering bookings.',
@@ -55,9 +58,9 @@ export const GROWTH_HYPOTHESES = {
   REVIEW_CATERING: 'Catering demand and capacity may merit human review.',
 } as const;
 export const GROWTH_LIMITATIONS = {
-  OBSERVATIONAL: 'Observed association only; no causal uplift or ROI is established.',
+  OBSERVATIONAL: 'These records do not prove that a campaign increased sales or profit.',
   COST_UNKNOWN: 'Message cost is unavailable; net campaign profit is unknown.',
-  INCOMPLETE: 'Evidence coverage is incomplete.',
+  INCOMPLETE: 'Some evidence is missing.',
   ESTIMATED: 'Some facts are estimates, not posted financial outcomes.',
 } as const;
 /** Pharmacy has no catering surface; recipe cost is a restaurant concept. */
@@ -76,7 +79,7 @@ export const PHARMACY_GROWTH_ACTION_EVIDENCE: Partial<
 /** Pharmacy wording for shared action tokens; restaurant presentation is unchanged. */
 export const PHARMACY_GROWTH_ACTIONS: Partial<Record<keyof typeof GROWTH_ACTIONS, string>> = {
   LOYALTY_REVIEW:
-    'Open a loyalty programme review; consent and eligibility remain server-owned. No recipient selection, points or message changes.',
+    'Open a loyalty programme review; the system checks permission and eligibility. No recipient selection, points or message changes.',
   INVENTORY_COST_REVIEW:
     'Open inventory write-off and valuation review; no automatic stock or price changes.',
 };
@@ -263,10 +266,11 @@ export async function generateGrowthRecommendations(raw: GrowthInput): Promise<G
   if (!readAIAvailability().available)
     return { ...result, status: 'UNAVAILABLE', failureCode: 'CONFIGURATION' };
   if (!input.facts.length || !input.actions.length) return result;
+  let selected: ReturnType<typeof createAIModel>;
   try {
-    const config = readAIConfig();
-    result.provider = config.provider;
-    result.model = config.model;
+    selected = createAIModel(process.env, { feature: 'growth-recommendations' });
+    result.provider = selected.provider;
+    result.model = selected.modelId;
   } catch {
     return { ...result, status: 'UNAVAILABLE', failureCode: 'CONFIGURATION' };
   }
@@ -290,7 +294,6 @@ export async function generateGrowthRecommendations(raw: GrowthInput): Promise<G
   };
   try {
     checkDeadline();
-    const selected = createAIModel(process.env, { feature: 'growth-recommendations' });
     for (let attempt = 0; attempt < 2; attempt++) {
       checkDeadline();
       let rawOutput: unknown;

@@ -19,7 +19,8 @@ const scalar = (value: string | string[] | undefined) =>
   typeof value === 'string' ? value : undefined;
 
 async function loadWorkspace(params: Record<string, string | string[] | undefined>) {
-  const caller = pharmacyMarketingRouter.createCaller(await createTRPCContext());
+  const context = await createTRPCContext();
+  const caller = pharmacyMarketingRouter.createCaller(context);
   const branches = await caller.branches();
   const branchId = scalar(params.branch) ?? branches[0]?.id;
   if (!branchId) return null;
@@ -42,6 +43,7 @@ async function loadWorkspace(params: Record<string, string | string[] | undefine
     basketsUnavailable = true;
   }
   return {
+    timeZone: context.organization?.timezone,
     branches,
     branchId,
     history,
@@ -174,6 +176,7 @@ export default async function PharmacyMarketingPage({
       </SectionCard>
       <GrowthPanel
         branchId={branchId}
+        timeZone={workspace.timeZone}
         history={growth}
         unavailable={growthUnavailable}
         templates={history.templates}

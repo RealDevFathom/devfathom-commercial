@@ -23,6 +23,7 @@ export async function marketingAction(
     const branchId = text('branchId');
     const target = { branchId, campaignId: text('campaignId') };
     let message: string;
+    let actionError = false;
     let savedCampaignId: string | undefined;
     switch (text('operation')) {
       case 'basket-generate': {
@@ -64,16 +65,35 @@ export async function marketingAction(
           : 'Bundle rejected. No campaign created.';
         break;
       }
+      case 'growth-retry':
       case 'growth-generate': {
+        let period = { from: text('from'), cutoff: text('cutoff') };
+        if (text('operation') === 'growth-retry') {
+          const history = await caller.growthHistory({ branchId });
+          const insight = history.insights.find((item) => item.id === text('insightId'));
+          if (
+            !insight ||
+            insight.status !== 'UNAVAILABLE' ||
+            !['CONFIGURATION', 'PROVIDER', 'TIMEOUT'].includes(insight.failureCode ?? '')
+          )
+            return {
+              error: true,
+              message: 'This saved result cannot be retried. Reload suggestions to continue.',
+            };
+          period = insight.snapshot.current;
+        }
         const result = await caller.generateGrowth({
           branchId,
-          from: new Date(text('from')),
-          cutoff: new Date(text('cutoff')),
+          from: new Date(period.from),
+          cutoff: new Date(period.cutoff),
         });
+        actionError = result.status === 'UNAVAILABLE' || result.status === 'INVALID';
         message =
           result.status === 'READY'
             ? 'Insights saved. Review evidence before creating a draft.'
-            : `Insight status: ${result.status}. ${result.failureCode ?? ''}. Manual campaigns remain available.`;
+            : result.status === 'INSUFFICIENT_DATA'
+              ? 'There is not enough evidence for AI suggestions. You can still write a draft below.'
+              : 'AI suggestions are not available right now. You can still write a draft below.';
         break;
       }
       case 'growth-review': {
@@ -201,7 +221,7 @@ export async function marketingAction(
         return { error: true, message: 'Unknown campaign action.' };
     }
     revalidatePath('/pharmacy/marketing');
-    return { error: false, message, campaignId: savedCampaignId };
+    return { error: actionError, message, campaignId: savedCampaignId };
   } catch (error) {
     return {
       error: true,

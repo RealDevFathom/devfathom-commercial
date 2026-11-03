@@ -1,9 +1,8 @@
 import { NoObjectGeneratedError, JSONParseError, TypeValidationError } from 'ai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ config: vi.fn(), model: vi.fn(), generate: vi.fn() }));
+const mocks = vi.hoisted(() => ({ model: vi.fn(), generate: vi.fn() }));
 vi.mock('./provider', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./provider')>()),
-  readAIConfig: mocks.config,
   createAIModel: mocks.model,
 }));
 vi.mock('ai', async () => ({
@@ -49,7 +48,6 @@ const output = {
 beforeEach(() => {
   vi.stubEnv('AI_PROVIDER', 'google');
   vi.resetAllMocks();
-  mocks.config.mockReturnValue({ provider: 'google', model: 'test-model' });
   mocks.model.mockReturnValue({ provider: 'google', modelId: 'test-model', model: {} });
   mocks.generate.mockResolvedValue({ finishReason: 'stop', output });
 });
@@ -70,7 +68,7 @@ describe('shared grounded growth generator', () => {
     });
     const card = presentGrowthRecommendation(r.input, r.output!.recommendations[0]);
     expect(card.facts[0].value).toBe('20');
-    expect(card.limitations.join(' ')).toContain('no causal uplift');
+    expect(card.limitations.join(' ')).toContain('do not prove that a campaign increased sales');
     expect(card.limitations.join(' ')).toContain('cost is unavailable');
   });
   it('suppresses sparse cohorts without invoking the model', async () => {
@@ -131,13 +129,13 @@ describe('shared grounded growth generator', () => {
     expect(mocks.generate).toHaveBeenCalledTimes(1);
   });
   it('fails safely for missing configuration without disclosing error', async () => {
-    mocks.config.mockImplementation(() => {
+    mocks.model.mockImplementation(() => {
       throw Error('credential secret');
     });
     const r = await generateGrowthRecommendations(facts);
     expect(r).toMatchObject({ status: 'UNAVAILABLE', failureCode: 'CONFIGURATION' });
     expect(JSON.stringify(r)).not.toContain('secret');
-    expect(mocks.model).not.toHaveBeenCalled();
+    expect(mocks.model).toHaveBeenCalledTimes(1);
     expect(mocks.generate).not.toHaveBeenCalled();
   });
   it('redacts provider errors', async () => {
@@ -275,7 +273,9 @@ describe('pharmacy loyalty and inventory-cost review contract', () => {
     expect(r.status).toBe('READY');
     const prompt = JSON.parse(mocks.generate.mock.calls[0][0].prompt);
     expect(prompt.constraints.INVENTORY_COST_REVIEW).not.toContain('recipe');
-    expect(prompt.constraints.LOYALTY_REVIEW).toContain('server-owned');
+    expect(prompt.constraints.LOYALTY_REVIEW).toContain(
+      'the system checks permission and eligibility'
+    );
   });
 });
 
@@ -387,7 +387,11 @@ it('does not retry model construction errors', async () => {
     throw Error('private model setup');
   });
   const result = await generateGrowthRecommendations(facts);
-  expect(result).toMatchObject({ status: 'UNAVAILABLE', failureCode: 'PROVIDER', output: null });
+  expect(result).toMatchObject({
+    status: 'UNAVAILABLE',
+    failureCode: 'CONFIGURATION',
+    output: null,
+  });
   expect(JSON.stringify(result)).not.toContain('private');
   expect(mocks.model).toHaveBeenCalledTimes(1);
   expect(mocks.generate).not.toHaveBeenCalled();
@@ -547,6 +551,29 @@ it('does not repair missing inventory evidence', async () => {
 });
 
 describe('global gate before injected model', () => {
+  it.each(['auto', 'anthropic', 'openai', 'bedrock'])(
+    'uses the shared routed selection for %s and records the selected model',
+    async (provider) => {
+      vi.stubEnv('AI_PROVIDER', provider);
+      vi.stubEnv('ANTHROPIC_API_KEY_SECRET_ID', 'synthetic-secret-reference');
+      vi.stubEnv('OPENAI_API_KEY_SECRET_ID', 'synthetic-secret-reference');
+      vi.stubEnv('BEDROCK_REGION', 'us-east-1');
+      mocks.model.mockReturnValue({
+        provider: 'auto',
+        modelId: 'auto:standard',
+        model: {},
+      });
+      expect(await generateGrowthRecommendations(facts)).toMatchObject({
+        status: 'READY',
+        provider: 'auto',
+        model: 'auto:standard',
+      });
+      expect(mocks.model).toHaveBeenCalledExactlyOnceWith(process.env, {
+        feature: 'growth-recommendations',
+      });
+      expect(mocks.generate).toHaveBeenCalledTimes(1);
+    }
+  );
   it.each([undefined, '', '  ', 'disabled', 'typo'])(
     'blocks %s including sparse input',
     async (provider) => {
@@ -560,7 +587,6 @@ describe('global gate before injected model', () => {
           output: null,
         });
       }
-      expect(mocks.config).not.toHaveBeenCalled();
       expect(mocks.model).not.toHaveBeenCalled();
       expect(mocks.generate).not.toHaveBeenCalled();
     }

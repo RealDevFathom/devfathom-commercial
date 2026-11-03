@@ -1,9 +1,12 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import { TRPCError } from '@trpc/server';
 const mocks = vi.hoisted(() => ({
   context: vi.fn(),
   revalidate: vi.fn(),
   createDraft: vi.fn(),
   reviewGrowth: vi.fn(),
+  generateGrowth: vi.fn(),
+  growthHistory: vi.fn(),
   generateBaskets: vi.fn(),
   reviewBasket: vi.fn(),
   approve: vi.fn(),
@@ -26,6 +29,83 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.context.mockResolvedValue({});
 });
+it.each(['CONFIGURATION', 'PROVIDER', 'TIMEOUT'])(
+  'retries %s through generation using the saved period, not client evidence',
+  async (failureCode) => {
+    mocks.growthHistory.mockResolvedValue({
+      insights: [
+        {
+          id: 'saved-failure',
+          status: 'UNAVAILABLE',
+          failureCode,
+          snapshot: { current: { from: '2026-10-01T19:00:00Z', cutoff: '2026-10-08T19:00:00Z' } },
+        },
+      ],
+    });
+    mocks.generateGrowth.mockResolvedValue({ status: 'READY', failureCode: null });
+    expect(
+      await marketingAction(
+        form({
+          operation: 'growth-retry',
+          insightId: 'saved-failure',
+          from: 'forged',
+          cutoff: 'forged',
+          facts: 'forged',
+          requestId: 'forged',
+        })
+      )
+    ).toMatchObject({ error: false });
+    expect(mocks.context).toHaveBeenCalledTimes(1);
+    expect(mocks.growthHistory).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch-a' });
+    expect(mocks.generateGrowth).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-a',
+      from: new Date('2026-10-01T19:00:00Z'),
+      cutoff: new Date('2026-10-08T19:00:00Z'),
+    });
+    expect(mocks.revalidate).toHaveBeenCalledExactlyOnceWith('/pharmacy/marketing');
+  }
+);
+it.each(['READY', 'INSUFFICIENT_DATA', 'INVALID', 'missing'])(
+  'does not retry a %s result',
+  async (status) => {
+    mocks.growthHistory.mockResolvedValue({
+      insights: status === 'missing' ? [] : [{ id: 'saved', status, failureCode: 'OUTPUT' }],
+    });
+    expect(
+      await marketingAction(form({ operation: 'growth-retry', insightId: 'saved' }))
+    ).toMatchObject({ error: true });
+    expect(mocks.generateGrowth).not.toHaveBeenCalled();
+  }
+);
+it('keeps retry behind current growth-history permission checks', async () => {
+  mocks.growthHistory.mockRejectedValue(
+    new TRPCError({ code: 'FORBIDDEN', message: 'Financial report permission is required.' })
+  );
+  expect(
+    await marketingAction(form({ operation: 'growth-retry', insightId: 'saved' }))
+  ).toMatchObject({ error: true, message: 'Financial report permission is required.' });
+  expect(mocks.generateGrowth).not.toHaveBeenCalled();
+});
+it.each(['CONFIGURATION', 'PROVIDER', 'TIMEOUT', 'OUTPUT'])(
+  'shows a plain growth failure while preserving saved %s diagnostics',
+  async (failureCode) => {
+    mocks.generateGrowth.mockResolvedValue({ status: 'UNAVAILABLE', failureCode });
+    expect(
+      await marketingAction(
+        form({ operation: 'growth-generate', from: '2026-10-01', cutoff: '2026-10-08' })
+      )
+    ).toMatchObject({
+      error: true,
+      message: 'AI suggestions are not available right now. You can still write a draft below.',
+    });
+    expect(mocks.generateGrowth).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-a',
+      from: new Date('2026-10-01'),
+      cutoff: new Date('2026-10-08'),
+    });
+    expect(mocks.revalidate).toHaveBeenCalledWith('/pharmacy/marketing');
+  }
+);
 it('passes configurable basket thresholds without accepting client evidence', async () => {
   mocks.generateBaskets.mockResolvedValue({ id: 'analysis-a', count: 1 });
   expect(

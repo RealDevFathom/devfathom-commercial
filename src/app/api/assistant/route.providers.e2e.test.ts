@@ -54,7 +54,9 @@ const FAKE_KEYS = {
 } as const;
 
 const ENV = {
+  AUTH_SECRET: 'inert-offline-assistant-test-secret',
   AI_PROVIDER: 'auto',
+  AI_PROVIDER_ORDER: 'anthropic,openai,bedrock',
   ANTHROPIC_API_KEY_SECRET_ID: 'devfathom/staging/anthropic-api-key',
   OPENAI_API_KEY_SECRET_ID: 'devfathom/staging/openai-api-key',
   AI_SECRETS_REGION: 'ap-southeast-1',
@@ -329,6 +331,59 @@ describe('Ask Fathom through the routed providers (offline end to end)', () => {
         feature: 'ask-fathom',
       }),
     ]);
+  });
+
+  it.each([
+    ['auto', 'openai', 'Hello from OpenAI'],
+    ['openai', 'openai', 'Hello from OpenAI'],
+    ['auto', 'bedrock', 'Hello from Bedrock'],
+    ['bedrock', 'bedrock', 'Hello from Bedrock'],
+  ] as const)(
+    'answers with AI_PROVIDER=%s and only %s configured, without an Anthropic key',
+    async (selector, provider, answer) => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('AI_PROVIDER', selector);
+      vi.stubEnv('AI_MODEL', undefined);
+      vi.stubEnv('ANTHROPIC_API_KEY_SECRET_ID', undefined);
+      vi.stubEnv('ANTHROPIC_API_KEY', undefined);
+      vi.stubEnv('OPENAI_API_KEY', undefined);
+      vi.stubEnv(
+        'OPENAI_API_KEY_SECRET_ID',
+        provider === 'openai' ? ENV.OPENAI_API_KEY_SECRET_ID : undefined
+      );
+      vi.stubEnv('BEDROCK_REGION', provider === 'bedrock' ? ENV.BEDROCK_REGION : undefined);
+      vi.stubEnv('AI_BEDROCK_REGION', undefined);
+
+      const response = await ask();
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain(answer);
+      expect(calls).toHaveLength(1);
+      expect(recorded).toEqual([expect.objectContaining({ provider, feature: 'ask-fathom' })]);
+    }
+  );
+
+  it('rechecks missing, restored and disabled configuration on consecutive requests', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    for (const name of [
+      'ANTHROPIC_API_KEY_SECRET_ID',
+      'OPENAI_API_KEY_SECRET_ID',
+      'BEDROCK_REGION',
+      'AI_BEDROCK_REGION',
+    ])
+      vi.stubEnv(name, undefined);
+
+    expect((await ask()).status).toBe(503);
+    expect(calls).toEqual([]);
+
+    vi.stubEnv('OPENAI_API_KEY_SECRET_ID', ENV.OPENAI_API_KEY_SECRET_ID);
+    const restored = await ask();
+    expect(restored.status).toBe(200);
+    expect(await restored.text()).toContain('Hello from OpenAI');
+    expect(calls).toHaveLength(1);
+
+    vi.stubEnv('AI_PROVIDER', 'disabled');
+    expect((await ask()).status).toBe(503);
+    expect(calls).toHaveLength(1);
   });
 
   it('retries Anthropic once, then falls back to OpenAI without retention', async () => {

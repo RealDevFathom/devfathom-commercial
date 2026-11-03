@@ -4,6 +4,7 @@ import { render, screen } from '@testing-library/react';
 import { TRPCError } from '@trpc/server';
 import { beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
+  context: vi.fn(),
   branches: vi.fn(),
   growthHistory: vi.fn(),
   basketHistory: vi.fn(),
@@ -11,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   review: vi.fn(),
   deliveryHistory: vi.fn(),
 }));
-vi.mock('@/server/trpc', () => ({ createTRPCContext: async () => ({}) }));
+vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/server/routers/pharmacy-marketing', () => ({
   pharmacyMarketingRouter: { createCaller: () => mocks },
 }));
@@ -28,6 +29,7 @@ const campaign = {
 };
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.context.mockResolvedValue({ organization: { timezone: 'Asia/Karachi' } });
   mocks.growthHistory.mockResolvedValue({ insights: [], reviews: [] });
   mocks.basketHistory.mockResolvedValue({ insights: [], reviews: [] });
   mocks.deliveryHistory.mockResolvedValue({
@@ -139,10 +141,11 @@ it('offers persisted sandbox outcomes and confirmed-rejection retry with visible
 it('keeps manual drafts available when growth history fails', async () => {
   mocks.growthHistory.mockRejectedValue(new Error('synthetic failure'));
   render(await Page({ searchParams: Promise.resolve({}) }));
-  expect(screen.getByRole('alert')).toHaveTextContent('Insight history is unavailable');
+  expect(screen.getByRole('alert')).toHaveTextContent('Saved suggestions could not be loaded');
   expect(screen.getByRole('button', { name: 'Save draft' })).toBeInTheDocument();
 });
 it('shows explicit unavailable model status without inventing recommendations', async () => {
+  mocks.context.mockResolvedValue({ organization: { timezone: 'America/New_York' } });
   mocks.growthHistory.mockResolvedValue({
     insights: [
       {
@@ -174,12 +177,17 @@ it('shows explicit unavailable model status without inventing recommendations', 
     reviews: [],
   });
   render(await Page({ searchParams: Promise.resolve({}) }));
-  expect(screen.getByText(/AI insight unavailable \(CONFIGURATION\)/)).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      'AI suggestions are not available right now. You can still write a draft below.'
+    )
+  ).toBeInTheDocument();
   expect(screen.getByText('e1: 25')).toBeInTheDocument();
-  expect(screen.getByText(/Coverage: partial; cohort: 12/)).toHaveTextContent(
+  expect(screen.getByText(/Data is incomplete; group size: 12/)).toHaveTextContent(
     'anonymous receipts excluded'
   );
-  expect(screen.getByText(/Comparison:/)).toHaveTextContent('2026-08-02');
+  expect(screen.getByText(/Comparison:/)).toHaveTextContent('1 Aug');
+  expect(screen.getByText(/Saved 6 Oct 2026, 20:00/)).toHaveTextContent('America/New_York');
   expect(screen.queryByRole('button', { name: 'Save review decision' })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Save draft' })).toBeInTheDocument();
 });
@@ -203,7 +211,7 @@ it('shows suppressed evidence without zero counts or invented recommendations', 
     reviews: [],
   });
   render(await Page({ searchParams: Promise.resolve({}) }));
-  expect(screen.getByText(/No publishable facts/)).toBeInTheDocument();
+  expect(screen.getByText(/No evidence can be shown/)).toBeInTheDocument();
   expect(screen.getByText(/Comparison:/)).toHaveTextContent('unknown, not zero');
   expect(screen.queryByRole('button', { name: 'Save review decision' })).not.toBeInTheDocument();
 });

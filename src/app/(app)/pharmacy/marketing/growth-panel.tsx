@@ -4,6 +4,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { Input } from '@/components/ui/input';
 import { GROWTH_METRICS, presentGrowthRecommendation } from '@/lib/ai/growth-recommendations';
 import type { listGrowthInsights } from '@/lib/pharmacy/growth-insights';
+import { isIanaTimezone } from '@/lib/timezone';
 import { MarketingActionForm } from './action-form';
 
 type History = Awaited<ReturnType<typeof listGrowthInsights>>;
@@ -24,30 +25,58 @@ const REVIEW_WORKSPACES: Partial<
 };
 const control =
   'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-2 focus-visible:outline-ring';
+const coverageLabels = {
+  COMPLETE: 'Data is complete',
+  PARTIAL: 'Data is incomplete',
+  ESTIMATED: 'Estimated figures',
+};
+const moneyUnits = {
+  PKR: 'paisa',
+  USD: 'cents',
+  GBP: 'pence',
+  EUR: 'cents',
+  AED: 'fils',
+  SAR: 'halalas',
+};
 export function GrowthPanel({
   branchId,
   history,
   templates,
   unavailable = false,
+  timeZone,
 }: {
   branchId: string;
   history: History | null;
   templates: Array<{ id: string; name: string }>;
   unavailable?: boolean;
+  timeZone?: string | null;
 }) {
+  const zone = timeZone && isIanaTimezone(timeZone) ? timeZone : 'Asia/Karachi';
+  const date = new Intl.DateTimeFormat('en-GB', {
+    timeZone: zone,
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+  const dateTime = new Intl.DateTimeFormat('en-GB', {
+    timeZone: zone,
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+  const dateRange = ({ from, cutoff }: { from: string; cutoff: string }) =>
+    date.formatRange(new Date(from), new Date(new Date(cutoff).getTime() - 1));
   return (
     <SectionCard title="AI growth insights" titleLevel={2}>
       <div className="space-y-6">
         <p className="text-sm text-text-body">
-          Review hypotheses grounded in aggregate receipt counts, consented loyalty cohorts, posted
-          Finance amounts and estimated stock valuation. Small cohorts are withheld. Evidence is
-          observational; message cost and causal uplift are unknown. Live Meta outcomes exclude
-          sandbox.
+          Review suggestions based on receipt totals, eligible loyalty customers, recorded finances
+          and estimated stock value. Small groups are hidden to protect privacy. These figures show
+          what happened, but cannot prove what caused it.
         </p>
         {unavailable && (
           <p role="alert" className="text-sm text-text-body">
-            Insight history is unavailable. Manual campaign drafting remains available below. Reload
-            before retrying a review.
+            Saved suggestions could not be loaded. You can still write a draft below. Reload before
+            trying a review again.
           </p>
         )}
         <MarketingActionForm
@@ -61,41 +90,71 @@ export function GrowthPanel({
               <Input name="from" type="date" required className="mt-1 min-h-11" />
             </label>
             <label className="text-sm">
-              Exclusive cutoff (UTC)
+              First day after period (UTC)
               <Input name="cutoff" type="date" required className="mt-1 min-h-11" />
             </label>
           </div>
           <p className="text-sm text-text-muted">
-            One to ninety completed days, compared with the preceding equal period. Requires enabled
-            AI settings and a configured provider.
+            Choose 1–90 completed days. We compare the same number of days before this period. AI
+            must be enabled and connected.
           </p>
         </MarketingActionForm>
         {history && !history.insights.length && (
           <p className="text-sm text-text-body">
-            No saved insights. Generate a completed period to inspect available evidence.
+            No saved suggestions. Choose a completed period to review its evidence.
           </p>
         )}
         {history?.insights.map((insight) => (
           <article key={insight.id} className="space-y-4 border-t border-border-subtle pt-4">
-            <StatusPill status={insight.status} label={insight.status.replaceAll('_', ' ')} />
+            <StatusPill
+              status={insight.status}
+              label={
+                insight.status === 'READY'
+                  ? 'Ready'
+                  : insight.status === 'INSUFFICIENT_DATA'
+                    ? 'More evidence needed'
+                    : 'Suggestions unavailable'
+              }
+            />
             <p className="break-words text-sm text-text-muted">
-              {insight.snapshot.current.from} to {insight.snapshot.current.cutoff} (exclusive).
-              Saved {insight.createdAt.toISOString()}.{' '}
-              {insight.provider && insight.model
-                ? `${insight.provider} / ${insight.model}`
-                : 'No model output.'}
+              {dateRange(insight.snapshot.current)}. Saved {dateTime.format(insight.createdAt)} (
+              {zone}).
             </p>
+            {insight.status !== 'READY' && (
+              <p className="text-sm text-text-body">
+                {insight.status === 'INSUFFICIENT_DATA'
+                  ? 'There is not enough evidence to suggest an action after protecting small groups. No suggestion was created.'
+                  : 'AI suggestions are not available right now. You can still write a draft below.'}
+              </p>
+            )}
+            {insight.status === 'UNAVAILABLE' &&
+              ['CONFIGURATION', 'PROVIDER', 'TIMEOUT'].includes(insight.failureCode ?? '') && (
+                <MarketingActionForm branchId={branchId} operation="growth-retry" label="Try again">
+                  <input type="hidden" name="insightId" value={insight.id} />
+                </MarketingActionForm>
+              )}
+            {(insight.failureCode || insight.provider || insight.model) && (
+              <details className="break-words text-sm text-text-muted">
+                <summary className="cursor-pointer focus-visible:outline-2 focus-visible:outline-ring">
+                  Technical details
+                </summary>
+                {insight.failureCode && <p>Reason: {insight.failureCode}</p>}
+                {insight.provider && <p>Provider: {insight.provider}</p>}
+                {insight.model && <p>Model: {insight.model}</p>}
+              </details>
+            )}
             <section className="space-y-3" aria-label="Saved aggregate evidence">
               <h3 className="font-medium">Saved evidence</h3>
               <p className="break-words text-sm text-text-muted">
-                Comparison: {insight.snapshot.comparison.from} to{' '}
-                {insight.snapshot.comparison.cutoff} (exclusive). Currency:{' '}
-                {insight.snapshot.currency}. Missing or suppressed facts are unknown, not zero.
+                Comparison: {dateRange(insight.snapshot.comparison)}. Currency:{' '}
+                {insight.snapshot.currency}. Facts that are missing or hidden for privacy are
+                unknown, not zero.
               </p>
               {!insight.snapshot.facts.length ? (
                 <p className="text-sm">
-                  No publishable facts in this snapshot. Small cohorts are withheld; unavailable
-                  evidence cannot support a recommendation. Use a manual generic draft below.
+                  No evidence can be shown from this saved period. Small groups are hidden to
+                  protect privacy. We cannot suggest an action without evidence. You can write a
+                  draft below.
                 </p>
               ) : (
                 <ul className="space-y-3 text-sm">
@@ -105,26 +164,23 @@ export function GrowthPanel({
                         {fact.ref}: {fact.value}
                       </strong>{' '}
                       {fact.metric.endsWith('_minor')
-                        ? `${insight.snapshot.currency} minor units`
+                        ? `${moneyUnits[insight.snapshot.currency]} (${insight.snapshot.currency})`
                         : 'count'}{' '}
-                      · {fact.period.toLowerCase()} · {GROWTH_METRICS[fact.metric]} Coverage:{' '}
-                      {fact.coverage.toLowerCase()}; cohort: {fact.cohortSize}; fresh at{' '}
-                      {fact.freshAt}.
+                      · {fact.period === 'CURRENT' ? 'Selected period' : 'Comparison period'} ·{' '}
+                      {GROWTH_METRICS[fact.metric]} {coverageLabels[fact.coverage]}; group size:{' '}
+                      {fact.cohortSize}; updated {dateTime.format(new Date(fact.freshAt))} ({zone}).
                     </li>
                   ))}
                 </ul>
               )}
               <p className="text-sm text-text-muted">
-                Observational evidence only. Message cost and causal uplift are unknown. Sandbox
-                outcomes never establish live Meta delivery or attributed sales.
+                These figures cannot prove what caused a change. Messaging costs and extra sales
+                caused by a campaign are unknown. Sandbox results are tests. They do not prove that
+                Meta delivered live messages or that a campaign led to sales.
               </p>
             </section>
-            {insight.status !== 'READY' && (
-              <p className="text-sm text-text-body">
-                {insight.status === 'INSUFFICIENT_DATA'
-                  ? 'Insufficient aggregate evidence after privacy suppression. No recommendation generated.'
-                  : `AI insight unavailable (${insight.failureCode ?? 'OUTPUT'}). No substitute recommendation generated. Manual drafts remain available.`}
-              </p>
+            {(insight.status === 'UNAVAILABLE' || insight.status === 'INVALID') && (
+              <p className="text-sm text-text-body">No replacement suggestion was created.</p>
             )}
             {insight.status === 'READY' &&
               insight.output?.recommendations.map((rec, index) => {
@@ -148,10 +204,11 @@ export function GrowthPanel({
                             {f.ref}: {f.value}
                           </strong>{' '}
                           {f.metric.endsWith('_minor')
-                            ? `${insight.snapshot.currency} minor units`
+                            ? `${moneyUnits[insight.snapshot.currency]} (${insight.snapshot.currency})`
                             : 'count'}{' '}
-                          · {f.period.toLowerCase()} · {f.definition} Coverage:{' '}
-                          {f.coverage.toLowerCase()}; fresh at {f.freshAt}.
+                          · {f.period === 'CURRENT' ? 'Selected period' : 'Comparison period'} ·{' '}
+                          {f.definition} {coverageLabels[f.coverage]}; updated{' '}
+                          {dateTime.format(new Date(f.freshAt))} ({zone}).
                         </li>
                       ))}
                     </ul>
@@ -168,8 +225,8 @@ export function GrowthPanel({
                         >
                           {workspace.label}
                         </Link>{' '}
-                        Review-only: no campaign, recipients, points, stock or price changes are
-                        created from this insight.
+                        This suggestion is for review. It does not create a campaign, select
+                        recipients, or change points, stock or prices.
                       </p>
                     )}
                     {final ? (
@@ -257,9 +314,10 @@ export function GrowthPanel({
                             </label>
                           </div>
                           <p className="text-sm text-text-muted">
-                            Draft uses completed receipt count ≥ 1, a weekly cap of one, and quiet
-                            hours 22:00–08:00. Current consent, STOP and eligibility are rechecked
-                            during capture and dispatch. This decision never approves sending.
+                            The draft requires at least one completed receipt and allows one message
+                            per week, outside 22:00–08:00 quiet hours. Consent, STOP requests and
+                            eligibility are checked again when preparing and sending messages.
+                            Approving this draft does not approve sending.
                           </p>
                           {!templates.length && (
                             <p className="text-sm">
