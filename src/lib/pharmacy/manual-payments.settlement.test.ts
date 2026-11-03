@@ -4,7 +4,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 vi.mock('server-only', () => ({}));
 vi.mock('./finance-postings', async () => ({
   ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
-  postTenderEntry: vi.fn(), postTenderRefundEntry: vi.fn(),
+  postTenderEntry: vi.fn(),
+  postTenderRefundEntry: vi.fn(),
 }));
 vi.mock('./sale-batch-safety', async () => ({
   ...(await vi.importActual<typeof import('./sale-batch-safety')>('./sale-batch-safety')),
@@ -15,43 +16,115 @@ vi.mock('./rx-sale-gate', async () => ({
   assertRxSaleAllowed: vi.fn(),
 }));
 vi.mock('./counter-evidence', () => ({ requestCounterEvidence: vi.fn() }));
-vi.mock('./sale-completion', () => ({ completionSaleInclude: {}, completePaidPharmacySale: vi.fn(async () => 41) }));
+vi.mock('./sale-completion', () => ({
+  completionSaleInclude: {},
+  completePaidPharmacySale: vi.fn(async () => 41),
+}));
 import { applyPharmacyTender } from './settlement';
 import { completePaidPharmacySale } from './sale-completion';
-import { MANUAL_TENDER_TYPES } from './manual-payments';
+import { CONFIGURED_MANUAL_TENDER_TYPES } from './manual-payments';
 
 const scope = { organizationId: 'org', branchId: 'branch', actorId: 'cashier' };
 beforeEach(() => vi.clearAllMocks());
 function fixture(input: Parameters<typeof applyPharmacyTender>[2], allowReferenceSkip = false) {
   const db = {
-    $queryRaw: vi.fn().mockResolvedValue([]), $executeRaw: vi.fn().mockResolvedValue(1),
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    $executeRaw: vi.fn().mockResolvedValue(1),
     pharmacyMoneyIdempotencyKey: {
-      findUnique: vi.fn().mockResolvedValue({ id: 'key', commandType: 'tender', payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'), resultPayload: null }),
+      findUnique: vi.fn().mockResolvedValue({
+        id: 'key',
+        commandType: 'tender',
+        payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
+        resultPayload: null,
+      }),
       update: vi.fn(),
     },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
-    pharmacySale: { findFirst: vi.fn().mockResolvedValue({ id: 'sale', status: 'OPEN', tenders: [], lines: [{ quantity: 1, unitPriceMinor: 1000, discountMinor: 0, medicine: {} }] }) },
-    pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ manualPaymentSettings: { [input.type]: { destination: 'Shop till', allowReferenceSkip } }, manualPaymentRevision: 1 }) },
+    pharmacySale: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'sale',
+        status: 'OPEN',
+        tenders: [],
+        lines: [{ quantity: 1, unitPriceMinor: 1000, discountMinor: 0, medicine: {} }],
+      }),
+    },
+    pharmacyBranch: {
+      findFirst: vi.fn().mockResolvedValue({
+        manualPaymentSettings:
+          input.type === 'CARD'
+            ? {}
+            : { [input.type]: { destination: 'Shop till', allowReferenceSkip } },
+        manualPaymentRevision: 1,
+      }),
+    },
     pharmacyTender: { create: vi.fn().mockResolvedValue({ id: 'tender', createdAt: new Date() }) },
     pharmacyDrawerMovement: { create: vi.fn() },
   };
   return { db, scoped: db as unknown as ScopedDb };
 }
-const base = { saleId: 'sale', deviceId: 'counter', businessDate: new Date('2026-10-31'), amountMinor: 1000, idempotencyKey: 'attempt', payerName: 'Ayesha' };
+const base = {
+  saleId: 'sale',
+  deviceId: 'counter',
+  businessDate: new Date('2026-10-31'),
+  amountMinor: 1000,
+  idempotencyKey: 'attempt',
+  payerName: 'Ayesha',
+};
 describe('#710 manual tender settlement', () => {
-  it.each(MANUAL_TENDER_TYPES)('settles %s without a provider API or cash drawer', async (type) => {
-    const input = { ...base, type, providerRef: '001234' };
+  it.each(CONFIGURED_MANUAL_TENDER_TYPES)(
+    'settles %s without a provider API or cash drawer',
+    async (type) => {
+      const input = { ...base, type, providerRef: '001234' };
+      const { db, scoped } = fixture(input);
+      expect(await applyPharmacyTender(scoped, scope, input)).toMatchObject({
+        settled: true,
+        receiptNumber: 41,
+        remainingMinor: 0,
+      });
+      expect(db.pharmacyTender.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          type,
+          provider: 'MANUAL_MERCHANT',
+          providerRef: '001234',
+          payerName: 'Ayesha',
+          amountMinor: 1000,
+        }),
+      });
+      expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+      expect(completePaidPharmacySale).toHaveBeenCalledOnce();
+      expect(db.pharmacyBranch.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { organizationId: 'org', id: 'branch', active: true } })
+      );
+    }
+  );
+  it('records a standalone card terminal approval without calling a provider adapter', async () => {
+    const input = {
+      ...base,
+      type: 'CARD' as const,
+      payerName: undefined,
+      providerRef: '4242',
+      approvalCode: 'APP-7',
+    };
     const { db, scoped } = fixture(input);
-    expect(await applyPharmacyTender(scoped, scope, input)).toMatchObject({ settled: true, receiptNumber: 41, remainingMinor: 0 });
-    expect(db.pharmacyTender.create).toHaveBeenCalledWith({ data: expect.objectContaining({ type, provider: 'MANUAL_MERCHANT', providerRef: '001234', payerName: 'Ayesha', amountMinor: 1000 }) });
-    expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
-    expect(completePaidPharmacySale).toHaveBeenCalledOnce();
-    expect(db.pharmacyBranch.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { organizationId: 'org', id: 'branch', active: true } }));
+    await expect(applyPharmacyTender(scoped, scope, input)).resolves.toMatchObject({
+      settled: true,
+    });
+    expect(db.pharmacyTender.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        type: 'CARD',
+        provider: 'MANUAL_TERMINAL',
+        providerRef: '4242',
+        approvalCode: 'APP-7',
+        actorId: 'cashier',
+      }),
+    });
   });
   it('refuses absent reference before tender creation or completion', async () => {
     const input = { ...base, type: 'RAAST' as const };
     const { db, scoped } = fixture(input);
-    await expect(applyPharmacyTender(scoped, scope, input)).rejects.toMatchObject({ reason: 'INVALID_MANUAL_CAPTURE' });
+    await expect(applyPharmacyTender(scoped, scope, input)).rejects.toMatchObject({
+      reason: 'INVALID_MANUAL_CAPTURE',
+    });
     expect(db.pharmacyTender.create).not.toHaveBeenCalled();
     expect(completePaidPharmacySale).not.toHaveBeenCalled();
   });
@@ -61,7 +134,9 @@ describe('#710 manual tender settlement', () => {
     const result = applyPharmacyTender(scoped, scope, input);
     if (allowSkip) {
       await expect(result).resolves.toMatchObject({ settled: true });
-      expect(db.pharmacyTender.create).toHaveBeenCalledWith({ data: expect.objectContaining({ referenceSkipped: true, providerRef: undefined }) });
+      expect(db.pharmacyTender.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ referenceSkipped: true, providerRef: undefined }),
+      });
     } else await expect(result).rejects.toMatchObject({ reason: 'INVALID_MANUAL_CAPTURE' });
   });
 });

@@ -40,11 +40,16 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
       where: { id: scope.organizationId },
       select: { timezone: true },
     }),
-    db.pharmacyTender.findMany({ where, select: { id: true, type: true, amountMinor: true } }),
+    db.pharmacyTender.findMany({
+      where,
+      select: { id: true, type: true, amountMinor: true, actorId: true },
+    }),
   ]);
   // Who opened each drawer, so the close screen can name the drawer by its
   // opener and time rather than by the counter's device identifier.
-  const openerIds = [...new Set(drawers.map((d) => d.openedByActorId))];
+  const openerIds = [
+    ...new Set([...drawers.map((d) => d.openedByActorId), ...tenders.map((t) => t.actorId)]),
+  ];
   const openers = openerIds.length
     ? await db.user.findMany({
         where: { organizationId: scope.organizationId, id: { in: openerIds } },
@@ -78,7 +83,13 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     businessDate,
     drawers: rows,
     totals,
-    tenderTotals: aggregateTenderTotals(tenders, refunds),
+    tenderTotals: aggregateTenderTotals(
+      tenders.map((tender) => ({
+        ...tender,
+        confirmedBy: openerNames.get(tender.actorId) ?? tender.actorId,
+      })),
+      refunds
+    ),
     close,
     timezone: workspaceTimezone(organization?.timezone),
   };

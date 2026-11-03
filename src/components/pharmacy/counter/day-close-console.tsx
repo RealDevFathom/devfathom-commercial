@@ -1,6 +1,6 @@
 'use client';
 
-import { tenderTotalsSchema } from '@/lib/pharmacy/manual-payments';
+import { tenderLabel, tenderTotalsSchema } from '@/lib/pharmacy/manual-payments';
 
 import { useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
@@ -170,7 +170,9 @@ function DayCloseForm({
     );
   const data = preview.data;
   const report = close.data ?? data.close;
-  const tenderTotals = tenderTotalsSchema.parse((report ? report.tenderTotals : data.tenderTotals) ?? []);
+  const tenderTotals = tenderTotalsSchema.parse(
+    (report ? report.tenderTotals : data.tenderTotals) ?? []
+  );
   const expected = report?.cashExpectedMinor ?? data.totals.cashExpectedMinor;
   const open = data.drawers.filter((d) => d.status === 'OPEN');
   const valid = open.every((d) => cashMinor(counts[d.id] ?? '') !== null);
@@ -218,8 +220,10 @@ function DayCloseForm({
         <div className="mt-4 space-y-2" aria-label="Tender totals">
           {tenderTotals.map((row) => (
             <p key={row.type} className="text-sm text-text-body">
-              <span className="font-medium">{row.type}</span> · Received {formatMinor(row.amountMinor)}
-              {' '}· Refunds {formatMinor(row.refundMinor)} · Net {formatMinor(row.netMinor)} PKR
+              <span className="font-medium">{tenderLabel(row.type)}</span> · Received{' '}
+              {formatMinor(row.amountMinor)} · Refunds {formatMinor(row.refundMinor)} · Net{' '}
+              {formatMinor(row.netMinor)} PKR
+              {row.confirmedBy?.length ? ` · Confirmed by ${row.confirmedBy.join(', ')}` : ''}
             </p>
           ))}
         </div>

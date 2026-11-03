@@ -44,7 +44,11 @@ import {
   PharmacySaleError,
 } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
-import { manualTenderCaptureSchema, validateManualTenderPolicy, manualMerchantPolicies } from '@/lib/pharmacy/manual-payments';
+import {
+  manualTenderCaptureSchema,
+  validateManualTenderPolicy,
+  manualMerchantPolicies,
+} from '@/lib/pharmacy/manual-payments';
 import { readManualPaymentSettings } from '@/lib/pharmacy/manual-payment-settings';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { adminProcedure, router } from '../trpc';
@@ -198,10 +202,14 @@ export const counterReplaySchema = z
     cashReceivedMinor: z.number().int().positive().safe().optional(),
     manualCapture: manualTenderCaptureSchema.optional(),
   })
-  .strict().refine((value) => value.action === 'MANUAL_OTC_SALE'
-    ? value.manualCapture !== undefined && value.cashReceivedMinor === undefined
-    : value.manualCapture === undefined && value.cashReceivedMinor !== undefined,
-  'Manual sales require merchant capture; cash sales require cash received.');
+  .strict()
+  .refine(
+    (value) =>
+      value.action === 'MANUAL_OTC_SALE'
+        ? value.manualCapture !== undefined && value.cashReceivedMinor === undefined
+        : value.manualCapture === undefined && value.cashReceivedMinor !== undefined,
+    'Manual sales require merchant capture; cash sales require cash received.'
+  );
 export type CounterReplay = z.infer<typeof counterReplaySchema>;
 export type PharmacyCounterContext = {
   db: ScopedDb;
@@ -295,10 +303,15 @@ export async function replayCounterCommand(
     throw new CounterTransportError('command_rejected', 409);
   if (command.action === 'MANUAL_OTC_SALE') {
     const rules = command.snapshots.find((snapshot) => snapshot.envelope.kind === 'RULES')?.payload;
-    const settings = rules && typeof rules === 'object' && !Array.isArray(rules)
-      ? rules.manualMerchantPolicies : undefined;
-    try { validateManualTenderPolicy(settings, command.manualCapture); }
-    catch { throw new CounterTransportError('invalid_manual_capture', 409); }
+    const settings =
+      rules && typeof rules === 'object' && !Array.isArray(rules)
+        ? rules.manualMerchantPolicies
+        : undefined;
+    try {
+      validateManualTenderPolicy(settings, command.manualCapture);
+    } catch {
+      throw new CounterTransportError('invalid_manual_capture', 409);
+    }
     // applyPharmacyTender additionally checks current branch policy under lock.
   }
   const earlier = await db.pharmacyOfflineCommand.findFirst({
@@ -372,10 +385,14 @@ export async function replayCounterCommand(
       type: command.manualCapture?.type ?? 'CASH',
       amountMinor: command.amountMinor,
       cashReceivedMinor: command.cashReceivedMinor,
-      ...(command.manualCapture ? {
-        providerRef: command.manualCapture.providerRef, payerName: command.manualCapture.payerName,
-        referenceSkipped: command.manualCapture.referenceSkipped,
-      } : {}),
+      ...(command.manualCapture
+        ? {
+            providerRef: command.manualCapture.providerRef,
+            approvalCode: command.manualCapture.approvalCode,
+            payerName: command.manualCapture.payerName,
+            referenceSkipped: command.manualCapture.referenceSkipped,
+          }
+        : {}),
       idempotencyKey: command.idempotencyKey,
       leasedReceipt: command.leasedReceipt,
     },
@@ -602,8 +619,12 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             CATALOG: catalog,
             PRICES: lots,
             TAX: taxes,
-            RULES: { controlledMedicinesPermittedOffline: false, rxPermittedOffline: false,
-              manualMerchantPolicies: manualMerchantPolicies(merchant.settings), manualMerchantRevision: merchant.revision },
+            RULES: {
+              controlledMedicinesPermittedOffline: false,
+              rxPermittedOffline: false,
+              manualMerchantPolicies: manualMerchantPolicies(merchant.settings),
+              manualMerchantRevision: merchant.revision,
+            },
             LOT_BALANCES: quotas,
           };
           const snapshots = [];

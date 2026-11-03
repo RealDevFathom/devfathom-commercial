@@ -1,5 +1,5 @@
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
-import { tenderTotalsSchema } from './manual-payments';
+import { tenderLabel, tenderTotalsSchema } from './manual-payments';
 import { buildReceiptPreview } from '@/lib/receipts/preview';
 
 import {
@@ -224,8 +224,14 @@ export function buildCounterZReportPreview(
     `#${report.sequence} · ${report.id}`,
     report.currency,
     ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount)}`),
-    ...(report.tenderTotals == null ? [] : tenderTotalsSchema.parse(report.tenderTotals).map((row) =>
-      `${row.type}: ${formatMinor(row.amountMinor)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor)}`)),
+    ...(report.tenderTotals == null
+      ? []
+      : tenderTotalsSchema
+          .parse(report.tenderTotals)
+          .map(
+            (row) =>
+              `${tenderLabel(row.type)}: ${formatMinor(row.amountMinor)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor)}${row.confirmedBy?.length ? ` · Confirmed by: ${row.confirmedBy.join(', ')}` : ''}`
+          )),
     `${labels[8]}: ${report.reason ?? '—'}`,
     report.isFinal ? 'Final' : 'Provisional — migration reconciliation pending',
   ].join('\n');

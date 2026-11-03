@@ -46,6 +46,7 @@ function fixture(camera: { id: string } | null) {
         id: 'cash-tender',
         saleId: 'sale-1',
         type: 'CASH',
+        provider: null as string | null,
         amountMinor: 1000,
         refunds: [],
         sale: { customerId: null },
@@ -88,6 +89,28 @@ const run = (db: ReturnType<typeof fixture>) =>
   refundPharmacyTender(db as unknown as ScopedDb, scope, input);
 
 describe('REFUND counter evidence wiring (service-level, integrated tip)', () => {
+  it('returns a manual terminal sale to its original tender without a drawer or provider API', async () => {
+    const db = fixture(null);
+    const tender = await db.pharmacyTender.findFirst();
+    db.pharmacyTender.findFirst.mockResolvedValue({
+      ...tender,
+      type: 'CARD',
+      provider: 'MANUAL_TERMINAL',
+    });
+    await expect(run(db)).resolves.toMatchObject({
+      refundId: 'refund-1',
+      manualReversalRequired: false,
+    });
+    expect(db.pharmacyDrawerSession.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyRefund.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        originalTenderId: 'cash-tender',
+        drawerSessionId: undefined,
+        actorId: scope.actorId,
+      }),
+    });
+  });
   it('writes the evidence outbox row on the refund client, after the refund row', async () => {
     const db = fixture({ id: 'camera-1' });
     await expect(run(db)).resolves.toMatchObject({ refundId: 'refund-1', replayed: false });

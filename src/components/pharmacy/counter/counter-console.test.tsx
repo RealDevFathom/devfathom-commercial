@@ -295,6 +295,12 @@ function enterPayment(type = 'CASH') {
   fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
   if (type === 'CASH')
     fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '200.00' } });
+  if (type === 'CARD') {
+    fireEvent.change(screen.getByLabelText('Terminal reference or card last 4 digits'), {
+      target: { value: '4242' },
+    });
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'APP-7' } });
+  }
   fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
 }
 
@@ -472,7 +478,7 @@ describe('PharmacyCounterConsole tender recovery', () => {
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
     fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
-    fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), {
+    fireEvent.change(screen.getByLabelText('Transaction ID'), {
       target: { value: '001234' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
@@ -513,7 +519,10 @@ describe('PharmacyCounterConsole tender recovery', () => {
         saleId: 'sale-a',
         amountMinor: 12550,
         type,
-        idempotencyKey: `counter-tender:sale-a:${type}:12550`,
+        idempotencyKey:
+          type === 'CARD'
+            ? expect.stringMatching(/^counter-tender:sale-a:CARD:/)
+            : `counter-tender:sale-a:${type}:12550`,
       })
     );
     expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();

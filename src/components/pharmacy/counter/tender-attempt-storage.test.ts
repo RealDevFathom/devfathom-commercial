@@ -40,6 +40,16 @@ beforeEach(() => window.localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 
 describe('original tender attempt storage', () => {
+  it('retains a manual card approval across reload', () => {
+    const attempt = original();
+    attempt.input.type = 'CARD';
+    delete attempt.input.cashReceivedMinor;
+    attempt.input.providerRef = '4242';
+    attempt.input.approvalCode = 'APP-7';
+    attempt.draft.cashReceived = '';
+    persistTenderAttempt(attempt);
+    expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
+  });
   it('retains exact manual evidence for outcome recovery after reload', () => {
     const attempt = original();
     attempt.input.type = 'RAAST';
