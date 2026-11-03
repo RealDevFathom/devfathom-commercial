@@ -800,7 +800,14 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
+    // Pharmacists must be able to settle the prescriptions they dispense. Tendering
+    // is guarded by the canonical counter grant in addition to the dispense gate.
+    capabilities: [
+      'pharmacy:dispense',
+      'pharmacy:catalogue-review',
+      'pharmacy:counter',
+      'pharmacy:close',
+    ],
   },
   {
     key: 'manager',
