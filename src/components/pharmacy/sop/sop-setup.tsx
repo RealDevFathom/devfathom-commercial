@@ -15,7 +15,6 @@ import { trpc } from '@/lib/trpc';
 import {
   errorMessage,
   isValidationError,
-  minutesToTime,
   RECORD_LABEL,
   recurrenceLabel,
   ROLE_KEYS,
@@ -514,13 +513,16 @@ const PLAIN_FIELD_ERROR: Record<ScheduleFieldKey, string> = {
   interval: 'Enter how often it repeats as a whole number.',
   daysOfWeek: 'Choose at least one day of the week.',
   monthDay: 'Choose a day of the month from 1 to 31.',
-  dueTime: 'Enter a time, for example 08:30.',
-  endTime: 'Enter an end time later than the first one.',
+  dueTime: 'Choose the time it is due.',
+  endTime: 'Choose a last time later than the first one.',
   windowMinutes: `Enter whole minutes from 0 to ${MAX_WINDOW} (one day).`,
   graceMinutes: `Enter whole minutes from 0 to ${MAX_GRACE} (one day).`,
   startDate: 'Choose a start date.',
   endDate: 'The end date must be on or after the start date.',
 };
+
+const MISSING_FIRST_TIME = 'Choose the time the first one is due.';
+const MISSING_LAST_TIME = 'Choose the time the last one is due.';
 
 /** Server input paths → the form field that owns them. */
 const SERVER_FIELD: Record<string, ScheduleFieldKey> = {
@@ -625,14 +627,12 @@ function ScheduleForm({
   const [interval, setRepeat] = useState(String(suggestion.interval));
   const [days, setDays] = useState<number[]>(suggestion.daysOfWeek);
   const [monthDay, setMonthDay] = useState(String(suggestion.monthDay ?? 1));
-  const [dueTime, setDueTime] = useState(minutesToTime(suggestion.dueTimeMinutes));
-  const [endTime, setEndTime] = useState(
-    suggestion.intervalEndTimeMinutes != null
-      ? minutesToTime(suggestion.intervalEndTimeMinutes)
-      : ''
-  );
-  // A suggestion is clamped into the bounds the server accepts, so the
-  // prefilled form always saves as offered.
+  // Times always start empty: there is no assumed opening, closing or other
+  // time of day. The manager chooses when the procedure is due at this branch.
+  const [dueTime, setDueTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+  // The suggested window and grace are clamped into the bounds the server
+  // accepts, so they always save as offered once the times are chosen.
   const [windowMinutes, setWindowMinutes] = useState(
     String(Math.min(suggestion.windowMinutes, MAX_WINDOW))
   );
@@ -682,7 +682,9 @@ function ScheduleForm({
   function validate(): ScheduleErrors {
     const errors: ScheduleErrors = {};
     const due = timeToMinutes(dueTime);
-    if (due === null) errors.dueTime = PLAIN_FIELD_ERROR.dueTime;
+    if (due === null) {
+      errors.dueTime = frequency === 'INTERVAL' ? MISSING_FIRST_TIME : PLAIN_FIELD_ERROR.dueTime;
+    }
     if (targetType === 'PERSON' && !userId) errors.userId = 'Choose the person who will do it.';
     if (frequency !== 'ONCE') {
       const every = /^\d+$/.test(interval.trim()) ? Number(interval.trim()) : NaN;
@@ -700,7 +702,8 @@ function ScheduleForm({
     }
     if (frequency === 'INTERVAL') {
       const end = timeToMinutes(endTime);
-      if (end === null || (due !== null && end <= due)) errors.endTime = PLAIN_FIELD_ERROR.endTime;
+      if (end === null) errors.endTime = MISSING_LAST_TIME;
+      else if (due !== null && end <= due) errors.endTime = PLAIN_FIELD_ERROR.endTime;
     }
     if (frequency === 'MONTHLY') {
       const day = Number(monthDay);
@@ -741,7 +744,8 @@ function ScheduleForm({
           interval: frequency === 'ONCE' ? 1 : Number(interval),
           daysOfWeek: frequency === 'WEEKLY' || frequency === 'INTERVAL' ? days : [],
           monthDay: frequency === 'MONTHLY' ? Number(monthDay) : null,
-          dueTimeMinutes: timeToMinutes(dueTime) ?? 0,
+          // Validated above; never defaulted to a time the manager did not choose.
+          dueTimeMinutes: timeToMinutes(dueTime),
           intervalEndTimeMinutes: frequency === 'INTERVAL' ? timeToMinutes(endTime) : null,
           windowMinutes: wholeMinutes(windowMinutes, MAX_WINDOW) ?? 0,
           graceMinutes: wholeMinutes(graceMinutes, MAX_GRACE) ?? 0,
@@ -912,12 +916,14 @@ function ScheduleForm({
       <ScheduleField
         id={fieldId('dueTime')}
         label={frequency === 'INTERVAL' ? 'First one at' : 'Due at'}
+        hint="Required. Choose the time that suits this branch."
         error={fieldErrors.dueTime}
       >
         {(control) => (
           <input
             {...control}
             type="time"
+            required
             className={INPUT}
             value={dueTime}
             onChange={(event) => setDueTime(event.target.value)}
@@ -925,11 +931,17 @@ function ScheduleForm({
         )}
       </ScheduleField>
       {frequency === 'INTERVAL' ? (
-        <ScheduleField id={fieldId('endTime')} label="Last one by" error={fieldErrors.endTime}>
+        <ScheduleField
+          id={fieldId('endTime')}
+          label="Last one by"
+          hint="Required."
+          error={fieldErrors.endTime}
+        >
           {(control) => (
             <input
               {...control}
               type="time"
+              required
               className={INPUT}
               value={endTime}
               onChange={(event) => setEndTime(event.target.value)}
@@ -1041,6 +1053,7 @@ function Schedules({ pharmacyBranchId, onNotice }: { pharmacyBranchId: string; o
         ) : null
       }
     >
+      <AutoScheduling pharmacyBranchId={pharmacyBranchId} onNotice={onNotice} />
       {error ? (
         <p className="mb-3 text-sm text-destructive" role="alert">
           {error}
@@ -1101,5 +1114,85 @@ function Schedules({ pharmacyBranchId, onNotice }: { pharmacyBranchId: string; o
         </ul>
       )}
     </SectionCard>
+  );
+}
+
+/** What the automatic-scheduling switch does, said in plain words beside it. */
+export const AUTO_SCHEDULE_COPY =
+  "When on, today's procedures are created automatically from these schedules. When off, use 'Create today's work now'. Procedures never block pharmacy work.";
+
+/**
+ * Per-branch automatic scheduling. OFF until a manager turns it on; a missing
+ * or unreadable setting is shown as off and the switch stays disabled.
+ */
+function AutoScheduling({
+  pharmacyBranchId,
+  onNotice,
+}: {
+  pharmacyBranchId: string;
+  onNotice: Notify;
+}) {
+  const labelId = useId();
+  const copyId = useId();
+  const utils = trpc.useUtils();
+  const settings = trpc.pharmacySop.siteSettings.useQuery({ pharmacyBranchId }, { retry: false });
+  const [error, setError] = useState<string | null>(null);
+  const setAuto = trpc.pharmacySop.setAutoSchedule.useMutation({
+    onSuccess: async (result: { autoScheduleEnabled: boolean }) => {
+      setError(null);
+      onNotice({
+        tone: 'success',
+        text: result.autoScheduleEnabled
+          ? 'Automatic scheduling is on for this branch.'
+          : "Automatic scheduling is off. Use 'Create today's work now' when you are ready.",
+      });
+      await utils.pharmacySop.siteSettings.invalidate({ pharmacyBranchId });
+    },
+    onError: (cause) =>
+      setError(errorMessage(cause, 'Automatic scheduling could not be changed. Retry.')),
+  });
+  const enabled = settings.data?.autoScheduleEnabled ?? false;
+
+  return (
+    <div className="mb-4 grid gap-2 rounded-md border border-border-subtle bg-surface-sunken p-4">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+        <p id={labelId} className="text-sm font-medium text-text-strong">
+          Automatic scheduling
+        </p>
+        <label className="inline-flex min-h-11 items-center gap-2 justify-self-end text-sm text-text-body">
+          <Switch
+            checked={enabled}
+            disabled={settings.isLoading || !settings.data || setAuto.isPending}
+            aria-labelledby={labelId}
+            aria-describedby={copyId}
+            onCheckedChange={(checked) => setAuto.mutate({ pharmacyBranchId, enabled: checked })}
+          />
+          {settings.isLoading ? 'Loading…' : enabled ? 'On' : 'Off'}
+        </label>
+      </div>
+      <p id={copyId} className="max-w-2xl text-xs text-text-muted">
+        {AUTO_SCHEDULE_COPY}
+      </p>
+      {settings.error ? (
+        <div className="flex flex-wrap items-center gap-3" role="alert">
+          <p className="text-sm text-destructive">
+            {errorMessage(settings.error, 'Automatic scheduling could not be loaded.')}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="touch"
+            onClick={() => void settings.refetch()}
+          >
+            Retry
+          </Button>
+        </div>
+      ) : null}
+      {error ? (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }

@@ -5,9 +5,14 @@ import { TRPCError } from '@trpc/server';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 import { publicRequestOrigin } from '@/lib/http-origin';
-import { pharmacySopEvidenceFilename } from '@/lib/pharmacy/sop-evidence';
+import {
+  pharmacySopEvidenceFilename,
+  resolvePharmacySopProvenance,
+  writePharmacySopUploadReceipt,
+} from '@/lib/pharmacy/sop-evidence';
 import { SopExecutionError, attachEvidence } from '@/lib/restaurant/sop-execution';
 import { deleteUpload, putUpload, StorageUnavailableError } from '@/lib/storage';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { appRouter } from '@/server/routers/_app';
 import { createTRPCContext } from '@/server/trpc';
@@ -29,10 +34,21 @@ import { createTRPCContext } from '@/server/trpc';
  * the redundant blob is removed. Any failure after storage removes the blob,
  * so a refused or interrupted upload leaves no evidence row and no orphan file.
  *
- * Blobs are named by `pharmacySopEvidenceFilename` (`pharmacy-sop-<uuid>-<mac>`),
- * which binds the stored ref to this exact evidence row. The pharmacy router
- * trusts only proof named that way, so evidence attached to a pharmacy
- * occurrence through any other route never counts as pharmacy proof.
+ * Provenance is a server-issued capture receipt (`pharmacy_sop_evidence_captures`)
+ * written in the same transaction as the engine's evidence row, from the
+ * evidence id the engine returned and the session actor — never from the form.
+ * If the receipt cannot be written the attach rolls back with it and the
+ * response is retryable; nothing is ever deleted from the append-only tables.
+ * A retry that resolves to an existing row heals a missing receipt (idempotent,
+ * never a duplicate) — but only for a row that is already provably pharmacy
+ * proof: one with a receipt, or whose legacy name verifies under the current
+ * secret. Identical bytes that were attached through a restaurant surface
+ * never gain a receipt this way; the retry is refused instead.
+ *
+ * Blobs are still named by `pharmacySopEvidenceFilename` (`pharmacy-sop-<uuid>-<mac>`)
+ * so proof written before receipts existed stays recognisable until the legacy
+ * receipt backfill has run. Evidence attached to a pharmacy occurrence through
+ * any other route has no receipt and never counts as pharmacy proof.
  */
 
 export const runtime = 'nodejs';
@@ -45,12 +61,20 @@ const EVIDENCE_TYPES = {
 
 const NO_STORE = { 'Cache-Control': 'private, no-store' } as const;
 
-type Stage = 'file_validation' | 'authorization' | 'storage' | 'attach' | 'cleanup';
+type Stage = 'file_validation' | 'authorization' | 'storage' | 'attach' | 'receipt' | 'cleanup';
 
 class EvidenceInputError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'EvidenceInputError';
+  }
+}
+
+/** A retry resolved to an existing row that is not provably pharmacy proof. */
+class UnreceiptableEvidenceError extends Error {
+  constructor() {
+    super('Identical proof is already on this step but was not captured here.');
+    this.name = 'UnreceiptableEvidenceError';
   }
 }
 
@@ -67,6 +91,11 @@ function warn(stage: Stage, error: unknown) {
   } catch {
     // Telemetry must never change the public failure response.
   }
+}
+
+/** One transaction for `work`; a request-level transaction is reused (scoped-db). */
+function inTransaction<T>(db: ScopedDb, work: (tx: ScopedDb) => Promise<T>): Promise<T> {
+  return (db.$transaction as unknown as (fn: (tx: ScopedDb) => Promise<T>) => Promise<T>)(work);
 }
 
 function json(status: number, body: Record<string, unknown>) {
@@ -186,14 +215,53 @@ export async function POST(request: Request) {
     await putUpload(organizationId, storedFilename, bytes, baseType);
 
     stage = 'attach';
-    const evidence = await attachEvidence(ctx.db, {
-      occurrenceId: target.occurrenceId,
-      occurrenceStepId: target.occurrenceStepId,
-      contentHashHex: hash,
-      mimeType,
-      sizeBytes: bytes.length,
-      storageRef: `/api/files/${storedFilename}`,
-      uploaderStaffProfileId: target.uploaderStaffProfileId,
+    const capturedByUserId = actor.session.user.id;
+    const tenantId = organizationId;
+    // One transaction: the engine row and its receipt commit together or not
+    // at all (a request-level transaction is reused by the engine helper).
+    const evidence = await inTransaction(ctx.db, async (tx) => {
+      const attached = await attachEvidence(tx, {
+        occurrenceId: target.occurrenceId,
+        occurrenceStepId: target.occurrenceStepId,
+        contentHashHex: hash,
+        mimeType,
+        sizeBytes: bytes.length,
+        storageRef: `/api/files/${storedFilename}`,
+        uploaderStaffProfileId: target.uploaderStaffProfileId,
+      });
+      stage = 'receipt';
+      if (!attached.created) {
+        // A retry: the row predates this request. Heal its receipt only when
+        // the row is already provably pharmacy proof.
+        const existing = await tx.restaurantSopEvidence.findFirst({
+          where: { id: attached.evidenceId, occurrenceId: target.occurrenceId },
+          select: {
+            id: true,
+            occurrenceId: true,
+            occurrenceStepId: true,
+            contentHash: true,
+            mimeType: true,
+            uploaderStaffProfileId: true,
+            storageRef: true,
+          },
+        });
+        const [provenance] = existing
+          ? await resolvePharmacySopProvenance(tx, tenantId, [existing])
+          : [];
+        if (provenance !== 'RECEIPT' && provenance !== 'LEGACY_HMAC') {
+          throw new UnreceiptableEvidenceError();
+        }
+      }
+      await writePharmacySopUploadReceipt(tx, {
+        organizationId: tenantId,
+        pharmacyBranchId: target.pharmacyBranchId,
+        occurrenceId: target.occurrenceId,
+        evidenceId: attached.evidenceId,
+        contentHash: attached.contentHash,
+        capturedByStaffProfileId: target.uploaderStaffProfileId,
+        capturedByUserId,
+      });
+      return attached;
     });
     if (!evidence.created) {
       // An identical retry: the first upload already holds the row and blob.
@@ -228,6 +296,17 @@ export async function POST(request: Request) {
     const passwordChange = responseForPasswordChange(error);
     if (passwordChange) return passwordChange;
     if (error instanceof EvidenceInputError) return json(400, { error: error.message });
+    if (error instanceof UnreceiptableEvidenceError) {
+      return json(409, {
+        error:
+          'This exact image is already on the step but was not captured in the pharmacy workspace. Take a new photo, or ask a manager to review it.',
+      });
+    }
+    if (stage === 'receipt') {
+      // Nothing was kept: the attach rolled back with the receipt. A retry
+      // re-attaches idempotently and writes the receipt again.
+      return json(503, { error: 'Proof was not saved. Retry in a moment.', retryable: true });
+    }
     if (error instanceof TRPCError) {
       const status = TRPC_STATUS[error.code];
       if (status) return json(status, { error: error.message });

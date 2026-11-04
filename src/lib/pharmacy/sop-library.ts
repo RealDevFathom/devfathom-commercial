@@ -37,17 +37,22 @@ import type { PharmacySopRoleKey } from './sop-adapter';
  *
  * Install creates templates only. It never creates an assignment, a schedule or
  * a role holding; a manager does that per branch after enabling SOPs there.
+ *
+ * Suggestions never assume a time of day. A pack suggests how often (frequency,
+ * weekdays, repeat interval) and how long (window, grace); the manager chooses
+ * every due, first-check and last-check time for their branch. There is no
+ * assumed opening or closing time anywhere in the library.
  */
 
 /** What starts a pack: a shift boundary, a repeating interval, an event, or a named person. */
 export type PharmacySopTrigger = 'SHIFT' | 'INTERVAL' | 'EVENT' | 'ASSIGNED';
 
 /**
- * Suggested schedule in the engine's assignment shape. INTERVAL packs repeat
- * every `interval` minutes from `dueTimeMinutes` to `intervalEndTimeMinutes` on
- * `daysOfWeek`. ONCE packs (events and named-person work) run once, on demand.
+ * A complete schedule in the engine's assignment shape, with the times a
+ * manager chose. INTERVAL schedules repeat every `interval` minutes from
+ * `dueTimeMinutes` to `intervalEndTimeMinutes` on `daysOfWeek`.
  */
-export type PharmacySopRecurrence = {
+export type PharmacySopScheduleRule = {
   frequency: 'ONCE' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'INTERVAL';
   interval: number;
   daysOfWeek: number[];
@@ -58,6 +63,20 @@ export type PharmacySopRecurrence = {
   intervalEndTimeMinutes: number | null;
   windowMinutes: number;
   graceMinutes: number;
+};
+
+/**
+ * A pack's suggested schedule: how often and for how long, never when. The
+ * time fields are always null, so the schedule form starts them empty and the
+ * manager must choose. ONCE packs (events and named-person work) run once, on
+ * demand.
+ */
+export type PharmacySopRecurrence = Omit<
+  PharmacySopScheduleRule,
+  'dueTimeMinutes' | 'intervalEndTimeMinutes'
+> & {
+  dueTimeMinutes: null;
+  intervalEndTimeMinutes: null;
 };
 
 export type PharmacySopPackMeta = {
@@ -76,63 +95,78 @@ export type PharmacySopPackStep = SopPackStep & {
   requiredRecordType?: PharmacySopRecordType;
 };
 
-/** A shared `SopPack` (assignable to it) whose steps carry pharmacy record requirements. */
-export type PharmacySopPack = Omit<SopPack, 'steps'> & {
+/**
+ * A shared pack (installable by the shared installer) whose steps carry pharmacy
+ * record requirements. It has no engine-shape `suggestedRecurrence`: that shape
+ * requires a time of day, and pharmacy suggestions never assume one.
+ */
+export type PharmacySopPack = Omit<SopPack, 'steps' | 'suggestedRecurrence'> & {
   steps: PharmacySopPackStep[];
   pharmacy: PharmacySopPackMeta;
 };
 
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
-const OPENING_MINUTES = 8 * 60;
-const CLOSING_MINUTES = 20 * 60;
 /** Verifiers allowed for most packs. Controlled counts narrow this to the qualified person. */
 const STANDARD_VERIFIERS: readonly PharmacySopRoleKey[] = [
   'pharmacy-qualified-person',
   'pharmacy-manager',
 ];
 
-const daily = (dueTimeMinutes: number, windowMinutes: number, graceMinutes: number) => ({
-  frequency: 'DAILY' as const,
+/** No suggested time of day: the manager chooses every time. */
+const NO_TIMES = { dueTimeMinutes: null, intervalEndTimeMinutes: null } as const;
+
+const daily = (windowMinutes: number, graceMinutes: number): PharmacySopRecurrence => ({
+  frequency: 'DAILY',
   interval: 1,
-  daysOfWeek: [] as number[],
+  daysOfWeek: [],
   monthDay: null,
-  dueTimeMinutes,
+  ...NO_TIMES,
   windowMinutes,
   graceMinutes,
 });
 
 const weekly = (
   daysOfWeek: number[],
-  dueTimeMinutes: number,
   windowMinutes: number,
   graceMinutes: number
-) => ({
-  frequency: 'WEEKLY' as const,
+): PharmacySopRecurrence => ({
+  frequency: 'WEEKLY',
   interval: 1,
   daysOfWeek,
   monthDay: null,
-  dueTimeMinutes,
+  ...NO_TIMES,
   windowMinutes,
   graceMinutes,
 });
 
 /** On-demand work: one occurrence, created when the event happens or the person is named. */
-const once = (dueTimeMinutes: number, windowMinutes: number) => ({
-  frequency: 'ONCE' as const,
+const once = (windowMinutes: number, graceMinutes = 0): PharmacySopRecurrence => ({
+  frequency: 'ONCE',
   interval: 1,
-  daysOfWeek: [] as number[],
+  daysOfWeek: [],
   monthDay: null,
-  dueTimeMinutes,
+  ...NO_TIMES,
   windowMinutes,
-  graceMinutes: 0,
+  graceMinutes,
 });
 
-/** Training attestation: due at 15:00, a day to do it, a day's grace before it is missed. */
-const attestation = { ...once(15 * 60, 24 * 60), graceMinutes: 24 * 60 };
+/** Training attestation: a day to do it, a day's grace before it is missed. */
+const attestation = once(24 * 60, 24 * 60);
 
-const withoutInterval = <T extends Omit<PharmacySopRecurrence, 'intervalEndTimeMinutes'>>(
-  rule: T
-): PharmacySopRecurrence => ({ ...rule, intervalEndTimeMinutes: null });
+/**
+ * The temperature round suggestion: a reading every four hours, every day,
+ * each reading getting the whole interval as its window so rounds never
+ * overlap. The first and last reading times are the manager's choice.
+ */
+const temperatureRound: PharmacySopRecurrence = {
+  frequency: 'INTERVAL',
+  interval: 4 * 60,
+  daysOfWeek: [...ALL_DAYS],
+  monthDay: null,
+  ...NO_TIMES,
+  windowMinutes: 4 * 60,
+  graceMinutes: 30,
+};
 
 export class PharmacySopRecurrenceError extends Error {
   constructor(message: string) {
@@ -142,29 +176,31 @@ export class PharmacySopRecurrenceError extends Error {
 }
 
 /**
- * The temperature round: a reading every `everyMinutes` between opening and
- * closing on the given days. Defaults to every four hours, 08:00–20:00, daily.
- * Each reading gets the whole interval as its window so rounds never overlap.
+ * A temperature round the manager has timed: a reading every `everyMinutes`
+ * (default four hours) from `firstReadingMinutes` to `lastReadingMinutes` on
+ * the given days (default every day). Both times are required: there is no
+ * assumed opening or closing time. Each reading gets the whole interval as its
+ * window so rounds never overlap.
  */
-export function temperatureLogRecurrence(
-  options: {
-    openingMinutes?: number;
-    closingMinutes?: number;
-    everyMinutes?: number;
-    daysOfWeek?: readonly number[];
-  } = {}
-): PharmacySopRecurrence {
-  const opening = options.openingMinutes ?? OPENING_MINUTES;
-  const closing = options.closingMinutes ?? CLOSING_MINUTES;
-  const every = options.everyMinutes ?? 4 * 60;
+export function temperatureLogRecurrence(options: {
+  firstReadingMinutes: number;
+  lastReadingMinutes: number;
+  everyMinutes?: number;
+  daysOfWeek?: readonly number[];
+}): PharmacySopScheduleRule {
+  const opening = options.firstReadingMinutes;
+  const closing = options.lastReadingMinutes;
+  const every = options.everyMinutes ?? temperatureRound.interval;
   const days = [...new Set(options.daysOfWeek ?? ALL_DAYS)].sort((a, b) => a - b);
   const minuteOfDay = (value: number) => Number.isInteger(value) && value >= 0 && value <= 1439;
   if (!minuteOfDay(opening) || !minuteOfDay(closing) || closing <= opening) {
-    throw new PharmacySopRecurrenceError('Closing time must be later than opening time.');
+    throw new PharmacySopRecurrenceError(
+      'Choose a last reading time later than the first reading time.'
+    );
   }
   if (!Number.isInteger(every) || every < 15 || every > closing - opening) {
     throw new PharmacySopRecurrenceError(
-      'The reading interval must be at least 15 minutes and fit between opening and closing.'
+      'The reading interval must be at least 15 minutes and fit between the first and last readings.'
     );
   }
   if (days.length === 0 || days.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) {
@@ -178,25 +214,15 @@ export function temperatureLogRecurrence(
     dueTimeMinutes: opening,
     intervalEndTimeMinutes: closing,
     windowMinutes: every,
-    graceMinutes: Math.min(30, every),
+    graceMinutes: Math.min(temperatureRound.graceMinutes, every),
   };
 }
 
-type PackDefinition = Omit<PharmacySopPack, 'defaultJobRoleKey' | 'suggestedRecurrence'> & {
-  /** The engine-facing recurrence; INTERVAL packs fall back to their opening time here. */
-  engineRecurrence: SopPack['suggestedRecurrence'];
-};
+type PackDefinition = Omit<PharmacySopPack, 'defaultJobRoleKey'>;
 
 function pack(definition: PackDefinition): PharmacySopPack {
-  const { engineRecurrence, ...rest } = definition;
-  return {
-    ...rest,
-    defaultJobRoleKey: definition.pharmacy.roleKey,
-    suggestedRecurrence: engineRecurrence,
-  };
+  return { ...definition, defaultJobRoleKey: definition.pharmacy.roleKey };
 }
-
-const temperatureRound = temperatureLogRecurrence();
 
 /** The nine pharmacy packs. Names are the install identity and must stay stable. */
 export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
@@ -206,13 +232,12 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     category: 'Opening',
     description:
       'After the branch opens: confirm who is in charge and send proof that storage was checked.',
-    engineRecurrence: daily(OPENING_MINUTES, 2 * 60, 30),
     pharmacy: {
       roleKey: 'pharmacy-qualified-person',
       assigneeTarget: 'ROLE',
       verifierRoleKeys: STANDARD_VERIFIERS,
       trigger: 'SHIFT',
-      suggestedRecurrence: withoutInterval(daily(OPENING_MINUTES, 2 * 60, 30)),
+      suggestedRecurrence: daily(2 * 60, 30),
     },
     steps: [
       {
@@ -235,13 +260,12 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     category: 'Closing',
     description:
       'After the day close: send proof that records were checked and stock was put away securely.',
-    engineRecurrence: daily(CLOSING_MINUTES, 2 * 60, 30),
     pharmacy: {
       roleKey: 'pharmacy-qualified-person',
       assigneeTarget: 'ROLE',
       verifierRoleKeys: STANDARD_VERIFIERS,
       trigger: 'SHIFT',
-      suggestedRecurrence: withoutInterval(daily(CLOSING_MINUTES, 2 * 60, 30)),
+      suggestedRecurrence: daily(2 * 60, 30),
     },
     steps: [
       {
@@ -265,7 +289,6 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     name: 'Pharmacy — temperature log',
     category: 'Storage',
     description: 'Regular storage temperature readings through the opening hours.',
-    engineRecurrence: daily(OPENING_MINUTES, temperatureRound.windowMinutes, 30),
     pharmacy: {
       roleKey: 'pharmacy-assistant',
       assigneeTarget: 'ROLE',
@@ -298,13 +321,12 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     category: 'Controlled medicines',
     description:
       'Weekly count of controlled medicines, with the result noted against the register.',
-    engineRecurrence: weekly([1], 10 * 60, 8 * 60, 60),
     pharmacy: {
       roleKey: 'pharmacy-qualified-person',
       assigneeTarget: 'ROLE',
       verifierRoleKeys: ['pharmacy-qualified-person'],
       trigger: 'SHIFT',
-      suggestedRecurrence: withoutInterval(weekly([1], 10 * 60, 8 * 60, 60)),
+      suggestedRecurrence: weekly([1], 8 * 60, 60),
     },
     steps: [
       { title: 'Count the controlled medicines on hand and note the totals', requiresNote: true },
@@ -323,13 +345,12 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     name: 'Pharmacy — expiry pull',
     category: 'Inventory',
     description: 'Weekly check for expired or damaged stock, with a note of what was set aside.',
-    engineRecurrence: weekly([1], 11 * 60, 8 * 60, 60),
     pharmacy: {
       roleKey: 'pharmacy-assistant',
       assigneeTarget: 'ROLE',
       verifierRoleKeys: STANDARD_VERIFIERS,
       trigger: 'SHIFT',
-      suggestedRecurrence: withoutInterval(weekly([1], 11 * 60, 8 * 60, 60)),
+      suggestedRecurrence: weekly([1], 8 * 60, 60),
     },
     steps: [
       { title: 'Look over stock nearing expiry' },
@@ -347,13 +368,12 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     name: 'Pharmacy — receiving',
     category: 'Receiving',
     description: 'After a delivery is received, confirm it matched its goods receipt.',
-    engineRecurrence: once(12 * 60, 24 * 60),
     pharmacy: {
       roleKey: 'pharmacy-assistant',
       assigneeTarget: 'ROLE',
       verifierRoleKeys: STANDARD_VERIFIERS,
       trigger: 'EVENT',
-      suggestedRecurrence: withoutInterval(once(12 * 60, 24 * 60)),
+      suggestedRecurrence: once(24 * 60),
     },
     steps: [
       {
@@ -370,13 +390,12 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     name: 'Pharmacy — hygiene',
     category: 'Hygiene',
     description: 'Daily cleanliness check of the counter and dispensing area.',
-    engineRecurrence: daily(8 * 60 + 30, 3 * 60, 30),
     pharmacy: {
       roleKey: 'pharmacy-assistant',
       assigneeTarget: 'ROLE',
       verifierRoleKeys: STANDARD_VERIFIERS,
       trigger: 'SHIFT',
-      suggestedRecurrence: withoutInterval(daily(8 * 60 + 30, 3 * 60, 30)),
+      suggestedRecurrence: daily(3 * 60, 30),
     },
     steps: [
       { title: 'Inspect counter and dispensing area cleanliness' },
@@ -389,13 +408,12 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     name: 'Pharmacy — incident and CAPA',
     category: 'Quality',
     description: 'Record an incident, its cause and the corrective and preventive actions.',
-    engineRecurrence: once(14 * 60, 7 * 24 * 60),
     pharmacy: {
       roleKey: 'pharmacy-manager',
       assigneeTarget: 'ROLE',
       verifierRoleKeys: STANDARD_VERIFIERS,
       trigger: 'EVENT',
-      suggestedRecurrence: withoutInterval(once(14 * 60, 7 * 24 * 60)),
+      suggestedRecurrence: once(7 * 24 * 60),
     },
     steps: [
       { title: 'Describe the incident and immediate containment', requiresNote: true },
@@ -412,13 +430,12 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     // A manager schedules this one through the schedule form, so it must fit
     // the router's bounds (window and grace each at most a day): a day to do
     // it on time, and a further day before it counts as missed.
-    engineRecurrence: attestation,
     pharmacy: {
       roleKey: 'pharmacy-assistant',
       assigneeTarget: 'PERSON',
       verifierRoleKeys: STANDARD_VERIFIERS,
       trigger: 'ASSIGNED',
-      suggestedRecurrence: withoutInterval(attestation),
+      suggestedRecurrence: attestation,
     },
     steps: [
       { title: 'Read the assigned policy or procedure' },

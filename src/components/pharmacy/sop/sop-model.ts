@@ -115,27 +115,32 @@ export function timeToMinutes(value: string): number | null {
   return minutes >= 0 && minutes < 1440 ? minutes : null;
 }
 
+/**
+ * A schedule in words. A pack suggestion has no time of day (`dueTimeMinutes`
+ * null): the manager chooses it, so only the frequency is described.
+ */
 export function recurrenceLabel(value: {
   frequency: SopFrequency;
   interval: number;
   daysOfWeek: number[];
-  dueTimeMinutes: number;
+  dueTimeMinutes: number | null;
 }) {
-  const at = minutesToTime(value.dueTimeMinutes);
+  const at = value.dueTimeMinutes == null ? '' : ` at ${minutesToTime(value.dueTimeMinutes)}`;
+  const from = value.dueTimeMinutes == null ? '' : ` from ${minutesToTime(value.dueTimeMinutes)}`;
   const days = value.daysOfWeek.length
     ? ` on ${value.daysOfWeek.map((day) => WEEKDAYS[day] ?? '').join(', ')}`
     : '';
   switch (value.frequency) {
     case 'ONCE':
-      return `Once at ${at}`;
+      return `Once${at}`;
     case 'DAILY':
-      return value.interval > 1 ? `Every ${value.interval} days at ${at}` : `Every day at ${at}`;
+      return value.interval > 1 ? `Every ${value.interval} days${at}` : `Every day${at}`;
     case 'WEEKLY':
-      return `Weekly${days} at ${at}`;
+      return `Weekly${days}${at}`;
     case 'MONTHLY':
-      return `Monthly at ${at}`;
+      return `Monthly${at}`;
     case 'INTERVAL':
-      return `Every ${value.interval} minutes from ${at}${days}`;
+      return `Every ${value.interval} minutes${from}${days}`;
   }
 }
 

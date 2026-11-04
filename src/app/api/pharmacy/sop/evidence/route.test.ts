@@ -73,17 +73,50 @@ const TARGET = {
   uploaderStaffProfileId: 'staff_me',
 };
 
+/** The request's tenant db: one transaction, the receipt table and the engine evidence read. */
+function makeDb() {
+  const db = {
+    $transaction: vi.fn(),
+    pharmacySopEvidenceCapture: {
+      createMany: vi.fn().mockResolvedValue({ count: 1 }),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    restaurantSopEvidence: { findFirst: vi.fn().mockResolvedValue(null) },
+  };
+  db.$transaction.mockImplementation(async (work: (tx: unknown) => Promise<unknown>) => work(db));
+  return db;
+}
+
+let db: ReturnType<typeof makeDb>;
+
+/** A retry resolves to an engine row that already holds its capture receipt. */
+function existingReceiptedRow() {
+  db.restaurantSopEvidence.findFirst.mockResolvedValue({
+    id: 'ev_1',
+    occurrenceId: 'occ_1',
+    occurrenceStepId: 'ostep_1',
+    contentHash: 'abc',
+    mimeType: 'image/jpeg; evidence=photo',
+    uploaderStaffProfileId: 'staff_me',
+    storageRef: '/api/files/pharmacy-sop-first-attempt.jpg',
+  });
+  db.pharmacySopEvidenceCapture.findMany.mockResolvedValue([
+    { evidenceId: 'ev_1', occurrenceId: 'occ_1', contentHash: 'abc' },
+  ]);
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  db = makeDb();
   const session = { user: { id: 'user_1', organizationId: 'org_1' } };
   mocks.resolveTenantActor.mockResolvedValue({
     session,
     organization: { id: 'org_1' },
     support: null,
   });
-  mocks.createTRPCContext.mockResolvedValue({ db: {}, organization: { id: 'org_1' }, session });
+  mocks.createTRPCContext.mockResolvedValue({ db, organization: { id: 'org_1' }, session });
   mocks.evidenceTarget.mockResolvedValue(TARGET);
   mocks.createCaller.mockImplementation(() => ({
     pharmacySop: { evidenceTarget: mocks.evidenceTarget },
@@ -120,7 +153,7 @@ describe('POST pharmacy SOP evidence', () => {
       'image/jpeg'
     );
     expect(mocks.attachEvidence).toHaveBeenCalledWith(
-      {},
+      db,
       expect.objectContaining({
         occurrenceId: 'occ_1',
         occurrenceStepId: 'ostep_1',
@@ -166,7 +199,7 @@ describe('POST pharmacy SOP evidence', () => {
   it('records signature proof with the signature purpose', async () => {
     await POST(request({ fields: { evidencePurpose: 'signature' } }));
     expect(mocks.attachEvidence).toHaveBeenCalledWith(
-      {},
+      db,
       expect.objectContaining({ mimeType: 'image/jpeg; evidence=signature' })
     );
   });
@@ -178,6 +211,7 @@ describe('POST pharmacy SOP evidence', () => {
       createdAt: new Date(),
       created: false,
     });
+    existingReceiptedRow();
     const response = await POST(request());
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ evidenceId: 'ev_1', created: false });
@@ -291,9 +325,166 @@ describe('POST pharmacy SOP evidence', () => {
       createdAt: new Date(),
       created: false,
     });
+    existingReceiptedRow();
     mocks.deleteUpload.mockRejectedValueOnce(new Error('storage down'));
     const response = await POST(request());
     expect(response.status).toBe(500);
     expect(mocks.deleteUpload).toHaveBeenCalledOnce();
+  });
+});
+
+describe('POST pharmacy SOP evidence capture receipts', () => {
+  const UPLOAD_RECEIPT = {
+    organizationId: 'org_1',
+    pharmacyBranchId: 'pbranch_1',
+    occurrenceId: 'occ_1',
+    evidenceId: 'ev_1',
+    contentHash: 'abc',
+    capturedByStaffProfileId: 'staff_me',
+    capturedByUserId: 'user_1',
+    source: 'UPLOAD',
+  };
+
+  it('writes the receipt in the attach transaction, from the engine id and the session actor', async () => {
+    const response = await POST(request());
+    expect(response.status).toBe(201);
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(mocks.attachEvidence).toHaveBeenCalledWith(db, expect.anything());
+    expect(db.pharmacySopEvidenceCapture.createMany).toHaveBeenCalledWith({
+      data: [UPLOAD_RECEIPT],
+      skipDuplicates: true,
+    });
+    // A brand-new row is this request's own: no provenance lookup is needed.
+    expect(db.restaurantSopEvidence.findFirst).not.toHaveBeenCalled();
+    // Receipt after attach, inside the same transaction.
+    expect(mocks.attachEvidence.mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacySopEvidenceCapture.createMany.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('never reads receipt, evidence, capture or actor identity from the form', async () => {
+    const response = await POST(
+      request({
+        fields: {
+          evidenceId: 'ev_forged',
+          receiptId: 'rcpt_forged',
+          captureId: 'cap_forged',
+          contentHash: 'f'.repeat(64),
+          source: 'LEGACY_HMAC_BACKFILL',
+          capturedByStaffProfileId: 'staff_victim',
+          capturedByUserId: 'user_victim',
+          uploaderStaffProfileId: 'staff_victim',
+          organizationId: 'org_2',
+        },
+      })
+    );
+    expect(response.status).toBe(201);
+    expect(db.pharmacySopEvidenceCapture.createMany).toHaveBeenCalledWith({
+      data: [UPLOAD_RECEIPT],
+      skipDuplicates: true,
+    });
+    const written = JSON.stringify(db.pharmacySopEvidenceCapture.createMany.mock.calls);
+    for (const forged of ['forged', 'victim', 'org_2', 'LEGACY_HMAC_BACKFILL', 'f'.repeat(64)]) {
+      expect(written).not.toContain(forged);
+    }
+  });
+
+  it('a retry of a receipted row stays one receipt (skipDuplicates) and answers 200', async () => {
+    mocks.attachEvidence.mockResolvedValueOnce({
+      evidenceId: 'ev_1',
+      contentHash: 'abc',
+      createdAt: new Date(),
+      created: false,
+    });
+    existingReceiptedRow();
+    const response = await POST(request());
+    expect(response.status).toBe(200);
+    expect(db.restaurantSopEvidence.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'ev_1', occurrenceId: 'occ_1' } })
+    );
+    expect(db.pharmacySopEvidenceCapture.createMany).toHaveBeenCalledWith({
+      data: [UPLOAD_RECEIPT],
+      skipDuplicates: true,
+    });
+  });
+
+  it('a retry heals a missing receipt for proof whose legacy name still verifies', async () => {
+    // First attempt (before receipts existed): the engine row holds the minted ref.
+    await POST(request());
+    const first = mocks.attachEvidence.mock.calls[0]![1] as {
+      storageRef: string;
+      contentHashHex: string;
+      mimeType: string;
+    };
+    db.restaurantSopEvidence.findFirst.mockResolvedValue({
+      id: 'ev_1',
+      occurrenceId: 'occ_1',
+      occurrenceStepId: 'ostep_1',
+      contentHash: first.contentHashHex,
+      mimeType: first.mimeType,
+      uploaderStaffProfileId: 'staff_me',
+      storageRef: first.storageRef,
+    });
+    db.pharmacySopEvidenceCapture.createMany.mockClear();
+    mocks.attachEvidence.mockResolvedValueOnce({
+      evidenceId: 'ev_1',
+      contentHash: first.contentHashHex,
+      createdAt: new Date(),
+      created: false,
+    });
+
+    const response = await POST(request());
+    expect(response.status).toBe(200);
+    expect(db.pharmacySopEvidenceCapture.createMany).toHaveBeenCalledOnce();
+    expect(db.pharmacySopEvidenceCapture.createMany).toHaveBeenCalledWith({
+      data: [{ ...UPLOAD_RECEIPT, contentHash: first.contentHashHex }],
+      skipDuplicates: true,
+    });
+    // The redundant second blob is removed; the original row and blob stay.
+    expect(mocks.deleteUpload).toHaveBeenLastCalledWith('org_1', mocks.putUpload.mock.calls[1]![1]);
+  });
+
+  it('never gives a receipt to identical bytes attached outside the pharmacy workspace', async () => {
+    mocks.attachEvidence.mockResolvedValueOnce({
+      evidenceId: 'ev_foreign',
+      contentHash: 'abc',
+      createdAt: new Date(),
+      created: false,
+    });
+    db.restaurantSopEvidence.findFirst.mockResolvedValue({
+      id: 'ev_foreign',
+      occurrenceId: 'occ_1',
+      occurrenceStepId: 'ostep_1',
+      contentHash: 'abc',
+      mimeType: 'image/jpeg; evidence=photo',
+      uploaderStaffProfileId: 'staff_me',
+      storageRef: '/api/files/sop-11111111-2222-4333-8444-555555555555.jpg',
+    });
+    const response = await POST(request());
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain('not captured in the pharmacy workspace');
+    expect(db.pharmacySopEvidenceCapture.createMany).not.toHaveBeenCalled();
+    expect(mocks.deleteUpload).toHaveBeenCalledWith('org_1', mocks.putUpload.mock.calls[0]![1]);
+  });
+
+  it('answers a failed receipt write with a retryable error and removes only the new blob', async () => {
+    db.pharmacySopEvidenceCapture.createMany.mockRejectedValueOnce(
+      new Error('pharmacy_sop_evidence_captures insert failed')
+    );
+    const response = await POST(request());
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body).toEqual({ error: 'Proof was not saved. Retry in a moment.', retryable: true });
+    expect(JSON.stringify(body)).not.toContain('pharmacy_sop_evidence_captures');
+    // The transaction carried the error, so the engine row rolled back with it;
+    // nothing is ever deleted from the append-only tables.
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(mocks.deleteUpload).toHaveBeenCalledOnce();
+    expect(mocks.deleteUpload).toHaveBeenCalledWith('org_1', mocks.putUpload.mock.calls[0]![1]);
+
+    // The UI retries: the engine attaches idempotently and the receipt is written.
+    const retry = await POST(request());
+    expect(retry.status).toBe(201);
+    expect(db.pharmacySopEvidenceCapture.createMany).toHaveBeenCalledTimes(2);
   });
 });

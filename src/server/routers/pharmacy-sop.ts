@@ -23,7 +23,11 @@ import {
   type PharmacySopRoleKey,
   type PharmacySopSiteRef,
 } from '@/lib/pharmacy/sop-adapter';
-import { isPharmacySopCapturedEvidence } from '@/lib/pharmacy/sop-evidence';
+import {
+  isPharmacySopProof,
+  resolvePharmacySopProvenance,
+  type PharmacySopProvenance,
+} from '@/lib/pharmacy/sop-evidence';
 import {
   PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE,
   PHARMACY_SOP_SCHEDULE_LIMITS,
@@ -36,6 +40,11 @@ import {
   type PharmacySopPack,
   type PharmacySopPackStep,
 } from '@/lib/pharmacy/sop-library';
+import {
+  PHARMACY_SOP_SETTING_REASON_MAX_LENGTH,
+  pharmacySopAutoSchedule,
+  setPharmacySopAutoSchedule,
+} from '@/lib/pharmacy/sop-settings';
 import { businessDateToUtcDate, resolveBusinessDate } from '@/lib/restaurant/business-date';
 import {
   AssigneeTargetError,
@@ -486,8 +495,9 @@ async function assertStepOnOccurrence(
 
 // ── Proof provenance ──────────────────────────────────────────────────────────
 
-/** The evidence columns the pharmacy provenance MAC covers. */
+/** The evidence columns provenance needs: the receipt key and the legacy MAC fields. */
 const EVIDENCE_PROVENANCE_SELECT = {
+  id: true,
   occurrenceStepId: true,
   contentHash: true,
   mimeType: true,
@@ -496,6 +506,7 @@ const EVIDENCE_PROVENANCE_SELECT = {
 } as const;
 
 type EvidenceProvenanceRow = {
+  id?: string | null;
   occurrenceStepId: string | null;
   contentHash: string;
   mimeType: string;
@@ -504,26 +515,30 @@ type EvidenceProvenanceRow = {
 };
 
 /**
- * Whether one evidence row was captured through the pharmacy evidence route.
- * Rows attached through the restaurant SOP surfaces (which accept a
- * caller-supplied uploader or storage ref) never qualify; see
- * `src/lib/pharmacy/sop-evidence.ts`.
+ * Where each evidence row on one occurrence came from, in input order: a
+ * server-issued capture receipt (RECEIPT), a legacy name that verifies under
+ * the current secret (LEGACY_HMAC), a pharmacy-style name that no longer
+ * verifies (UNCONFIRMED — proof exists, capture unconfirmed), or anything else
+ * (FOREIGN, e.g. attached through a restaurant SOP surface, which accepts a
+ * caller-supplied uploader or storage ref). See `src/lib/pharmacy/sop-evidence.ts`.
  */
-function capturedInPharmacy(
+function provenanceOf(
   ctx: TRPCContext,
   occurrenceId: string,
-  row: EvidenceProvenanceRow
-): boolean {
-  return isPharmacySopCapturedEvidence(
-    {
+  rows: readonly EvidenceProvenanceRow[]
+): Promise<PharmacySopProvenance[]> {
+  return resolvePharmacySopProvenance(
+    ctx.db,
+    sessionScope(ctx).organizationId,
+    rows.map((row) => ({
+      id: row.id ?? null,
       occurrenceId,
       occurrenceStepId: row.occurrenceStepId,
       contentHash: row.contentHash,
       mimeType: row.mimeType,
       uploaderStaffProfileId: row.uploaderStaffProfileId,
       storageRef: row.storageRef,
-    },
-    sessionScope(ctx).organizationId
+    }))
   );
 }
 
@@ -544,6 +559,10 @@ function isSignatureProof(mimeType: string): boolean {
 
 const FOREIGN_PROOF_MESSAGE =
   'Proof on this procedure was not captured through the pharmacy workspace. Ask a manager to review it.';
+
+/** Proof that exists but whose pharmacy capture cannot be confirmed (never "missing"). */
+const UNCONFIRMED_PROOF_MESSAGE =
+  'Proof is attached to this procedure, but its pharmacy capture can’t be confirmed. Ask a manager to run the legacy receipt backfill, or send it back so it can be captured again.';
 
 /** The record types a pack's steps link (a pack's link vocabulary). */
 function packRecordTypes(pack: PharmacySopPack | undefined): Set<PharmacySopRecordType> {
@@ -638,19 +657,37 @@ async function assertPharmacySubmissionRequirements(
   // The engine accepts any evidence row as photo/signature proof. Count only
   // proof captured in the pharmacy workspace, so a row attached through a
   // restaurant surface can never satisfy a pharmacy step's requirement.
-  for (const step of occ.steps) {
-    const proof = (step.evidence ?? []).filter((row) => capturedInPharmacy(ctx, occurrenceId, row));
+  // Receipt-backed proof always counts; legacy proof counts while its name
+  // still verifies. Proof that exists but cannot be confirmed is reported as
+  // such, never as missing.
+  const stepEvidence = occ.steps.map((step) => step.evidence ?? []);
+  const provenance = await provenanceOf(ctx, occurrenceId, stepEvidence.flat());
+  let offset = 0;
+  for (const [index, step] of occ.steps.entries()) {
+    const rows = stepEvidence[index]!.map((row, at) => ({
+      row,
+      provenance: provenance[offset + at]!,
+    }));
+    offset += rows.length;
+    const proof = rows.filter((entry) => isPharmacySopProof(entry.provenance));
+    const isKind = (kind: 'photo' | 'signature', mimeType: string) =>
+      kind === 'photo' ? isPhotoProof(mimeType) : isSignatureProof(mimeType);
     const missing =
-      step.templateStep.requiresPhoto && !proof.some((row) => isPhotoProof(row.mimeType))
+      step.templateStep.requiresPhoto && !proof.some((entry) => isKind('photo', entry.row.mimeType))
         ? 'photo'
         : step.templateStep.requiresSignature &&
-            !proof.some((row) => isSignatureProof(row.mimeType))
+            !proof.some((entry) => isKind('signature', entry.row.mimeType))
           ? 'signature'
           : null;
     if (missing) {
+      const unconfirmed = rows.some(
+        (entry) => entry.provenance === 'UNCONFIRMED' && isKind(missing, entry.row.mimeType)
+      );
       throw new TRPCError({
         code: 'PRECONDITION_FAILED',
-        message: `Capture the ${missing} proof for “${step.templateStep.title}” in the pharmacy workspace before submitting.`,
+        message: unconfirmed
+          ? `The ${missing} proof for “${step.templateStep.title}” is attached, but its pharmacy capture can’t be confirmed. Ask a manager to run the legacy receipt backfill, or capture it again in the pharmacy workspace.`
+          : `Capture the ${missing} proof for “${step.templateStep.title}” in the pharmacy workspace before submitting.`,
       });
     }
   }
@@ -737,6 +774,18 @@ const ASSIGNMENT_TARGET = z.discriminatedUnion('type', [
   z.object({ type: z.literal('PERSON'), userId: ID }).strict(),
 ]);
 
+const SCHEDULE_TIME_MESSAGES = {
+  dueTime: 'Choose the time this procedure is due.',
+  intervalStart: 'Choose the time the first check is due.',
+  intervalEnd: 'Choose the time the last check is due.',
+} as const;
+
+/** The schema refuses a missing time; this narrows it without ever defaulting one. */
+function requiredScheduleTime(value: number | null | undefined, message: string): number {
+  if (value == null) throw new TRPCError({ code: 'BAD_REQUEST', message });
+  return value;
+}
+
 const CreateAssignmentInput = z
   .object({
     ...BRANCH,
@@ -746,8 +795,10 @@ const CreateAssignmentInput = z
     interval: z.number().int().min(1).max(1440).default(1),
     daysOfWeek: z.array(z.number().int().min(0).max(6)).max(7).default([]),
     monthDay: z.number().int().min(1).max(31).nullable().default(null),
-    dueTimeMinutes: MINUTES_OF_DAY.default(0),
-    intervalEndTimeMinutes: MINUTES_OF_DAY.nullable().default(null),
+    // No time-of-day default: the manager chooses when each procedure is due.
+    // Missing values are refused below with a plain message (never defaulted).
+    dueTimeMinutes: MINUTES_OF_DAY.nullable().optional(),
+    intervalEndTimeMinutes: MINUTES_OF_DAY.nullable().optional(),
     windowMinutes: z
       .number()
       .int()
@@ -760,7 +811,24 @@ const CreateAssignmentInput = z
   })
   .strict()
   .superRefine((value, refinement) => {
+    if (value.dueTimeMinutes == null) {
+      refinement.addIssue({
+        code: 'custom',
+        path: ['dueTimeMinutes'],
+        message:
+          value.frequency === 'INTERVAL'
+            ? SCHEDULE_TIME_MESSAGES.intervalStart
+            : SCHEDULE_TIME_MESSAGES.dueTime,
+      });
+    }
     if (value.frequency !== 'INTERVAL') return;
+    if (value.intervalEndTimeMinutes == null) {
+      refinement.addIssue({
+        code: 'custom',
+        path: ['intervalEndTimeMinutes'],
+        message: SCHEDULE_TIME_MESSAGES.intervalEnd,
+      });
+    }
     if (value.interval < 15) {
       refinement.addIssue({
         code: 'custom',
@@ -1161,11 +1229,22 @@ export const pharmacySopRouter = router({
         monthDay: input.monthDay,
         startDate: input.startDate,
         endDate: input.endDate,
-        dueTimeMinutes: input.dueTimeMinutes,
-        intervalEndTimeMinutes: input.intervalEndTimeMinutes,
+        dueTimeMinutes: requiredScheduleTime(
+          input.dueTimeMinutes,
+          input.frequency === 'INTERVAL'
+            ? SCHEDULE_TIME_MESSAGES.intervalStart
+            : SCHEDULE_TIME_MESSAGES.dueTime
+        ),
+        // Only a repeating-check schedule has an end time; nothing is assumed.
+        intervalEndTimeMinutes:
+          input.frequency === 'INTERVAL'
+            ? requiredScheduleTime(input.intervalEndTimeMinutes, SCHEDULE_TIME_MESSAGES.intervalEnd)
+            : null,
         windowMinutes: input.windowMinutes,
         graceMinutes: input.graceMinutes,
       });
+      // A schedule is instructions + proof only: no escalation policy, reminder
+      // chain or workflow gate is created alongside it.
       audit(ctx, site, {
         action: 'pharmacy.sop.createAssignment',
         targetType: 'RestaurantSopAssignment',
@@ -1342,14 +1421,16 @@ export const pharmacySopRouter = router({
     }),
 
   /**
-   * Materialise due occurrences. The engine generator is tenant-wide and
-   * idempotent (`unique(assignmentId, dueAt)`), so this also catches up any
-   * other enabled site in the organization — exactly what the scheduler does.
+   * "Create today's work now": materialise due occurrences for THIS branch
+   * only (the engine is restricted to the site's engine branch, so no other
+   * site, pharmacy or restaurant, is touched). Idempotent through
+   * `unique(assignmentId, dueAt)`. An explicit manager action, so it stays
+   * available whether automatic scheduling is on or off.
    */
   generate: manageProcedure.input(z.object(BRANCH).strict()).mutation(({ ctx, input }) =>
     guarded(async () => {
       const site = await siteFor(ctx, input.pharmacyBranchId);
-      const result = await generateDueSopOccurrences(ctx.db);
+      const result = await generateDueSopOccurrences(ctx.db, { branchIds: [site.sopBranchId] });
       audit(ctx, site, {
         action: 'pharmacy.sop.generate',
         targetType: 'PharmacySopSite',
@@ -1360,6 +1441,69 @@ export const pharmacySopRouter = router({
       return result;
     })
   ),
+
+  /** The branch's automatic-scheduling setting. OFF unless a manager turned it on. */
+  siteSettings: manageProcedure.input(z.object(BRANCH).strict()).query(({ ctx, input }) =>
+    guarded(async () => {
+      const site = await siteFor(ctx, input.pharmacyBranchId);
+      const setting = await pharmacySopAutoSchedule(ctx.db, {
+        pharmacyBranchId: site.pharmacyBranchId,
+      });
+      return {
+        pharmacyBranchId: site.pharmacyBranchId,
+        autoScheduleEnabled: setting.autoScheduleEnabled,
+        changedAt: setting.changedAt,
+        reason: setting.reason,
+      };
+    })
+  ),
+
+  /**
+   * Turn automatic scheduling on or off for one branch (append-only, audited).
+   * Changes only whether today's procedures are created automatically; it never
+   * blocks or changes any pharmacy workflow.
+   */
+  setAutoSchedule: manageProcedure
+    .input(
+      z
+        .object({
+          ...BRANCH,
+          enabled: z.boolean(),
+          reason: z.string().trim().max(PHARMACY_SOP_SETTING_REASON_MAX_LENGTH).optional(),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      guarded(async () => {
+        const site = await siteFor(ctx, input.pharmacyBranchId);
+        const result = await setPharmacySopAutoSchedule(ctx.db, {
+          site,
+          enabled: input.enabled,
+          userId: sessionScope(ctx).userId,
+          reason: input.reason,
+        });
+        audit(ctx, site, {
+          action: 'pharmacy.sop.setAutoSchedule',
+          targetType: 'PharmacySopSite',
+          targetId: site.pharmacyBranchId,
+          description: input.enabled
+            ? 'Turned on automatic SOP scheduling'
+            : 'Turned off automatic SOP scheduling',
+          metadata: {
+            enabled: input.enabled,
+            changed: result.changed,
+            ...(input.reason ? { reason: input.reason } : {}),
+          },
+        });
+        return {
+          pharmacyBranchId: site.pharmacyBranchId,
+          autoScheduleEnabled: result.setting.autoScheduleEnabled,
+          changedAt: result.setting.changedAt,
+          reason: result.setting.reason,
+          changed: result.changed,
+        };
+      })
+    ),
 
   // ── Doing the work (sop:complete) ─────────────────────────────────────────
 
@@ -1436,7 +1580,8 @@ export const pharmacySopRouter = router({
             windowMinutes: pack.pharmacy.suggestedRecurrence.windowMinutes,
             graceMinutes: pack.pharmacy.suggestedRecurrence.graceMinutes,
           });
-          await generateDueSopOccurrences(tx, { now });
+          // Branch-scoped: only this site's assignments are swept.
+          await generateDueSopOccurrences(tx, { now, branchIds: [site.sopBranchId] });
           const occurrence = await tx.restaurantSopOccurrence.findFirst({
             where: { assignmentId: assignment.id },
             select: { id: true },
@@ -1665,6 +1810,7 @@ export const pharmacySopRouter = router({
           pharmacyJobRoleIds(ctx),
         ]);
         if (!detail) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+        const evidenceProvenance = await provenanceOf(ctx, detail.id, detail.evidence);
         const pack = pharmacySopPackForTemplateName(detail.assignment.template.name);
         const isOwner =
           (detail.assignedStaffProfileId ?? detail.claimedByStaffProfileId) ===
@@ -1723,16 +1869,21 @@ export const pharmacySopRouter = router({
               completedByName: step.completedBy?.displayName ?? null,
               note: step.note,
             })),
-          evidence: detail.evidence.map((row) => ({
-            id: row.id,
-            occurrenceStepId: row.occurrenceStepId,
-            mimeType: row.mimeType,
-            sizeBytes: row.sizeBytes,
-            storageRef: row.storageRef,
-            capturedAt: row.capturedAt,
-            uploaderName: row.uploader?.displayName ?? null,
-            capturedInPharmacy: capturedInPharmacy(ctx, detail.id, row),
-          })),
+          evidence: detail.evidence.map((row, index) => {
+            const provenance = evidenceProvenance[index]!;
+            return {
+              id: row.id,
+              occurrenceStepId: row.occurrenceStepId,
+              mimeType: row.mimeType,
+              sizeBytes: row.sizeBytes,
+              storageRef: row.storageRef,
+              capturedAt: row.capturedAt,
+              uploaderName: row.uploader?.displayName ?? null,
+              provenance,
+              // Kept for older readers: true for RECEIPT and LEGACY_HMAC.
+              capturedInPharmacy: isPharmacySopProof(provenance),
+            };
+          }),
           recordLinks: links,
           verifications: detail.verifications.map((row) => ({
             id: row.id,
@@ -2127,8 +2278,12 @@ export const pharmacySopRouter = router({
           where: { occurrenceId: occurrence.id },
           select: EVIDENCE_PROVENANCE_SELECT,
         });
-        if (evidence.some((row) => !capturedInPharmacy(ctx, occurrence.id, row))) {
+        const provenance = await provenanceOf(ctx, occurrence.id, evidence);
+        if (provenance.includes('FOREIGN')) {
           throw new TRPCError({ code: 'PRECONDITION_FAILED', message: FOREIGN_PROOF_MESSAGE });
+        }
+        if (provenance.includes('UNCONFIRMED')) {
+          throw new TRPCError({ code: 'PRECONDITION_FAILED', message: UNCONFIRMED_PROOF_MESSAGE });
         }
         const result = await verifyOccurrence(ctx.db, {
           occurrenceId: occurrence.id,

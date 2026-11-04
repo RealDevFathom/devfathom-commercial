@@ -18,6 +18,9 @@ import { describe, expect, it } from 'vitest';
  * 2. SOP code never writes a pharmacy operation table. It may only append its
  *    own site and record-link rows; record links point at existing records.
  * 3. SOP code reaches pharmacy operation code only through a read helper.
+ * 4. SOP code never enqueues a scheduler/restaurant job, and the per-branch
+ *    automatic-scheduling setting is read by no pharmacy operation code. The
+ *    automatic generator has no trigger wired: nothing calls it yet.
  */
 
 const ROOT = join(__dirname, '..');
@@ -28,6 +31,7 @@ const SOP_FILES = new Set([
   'src/lib/pharmacy/sop-library.ts',
   'src/lib/pharmacy/sop-evidence.ts',
   'src/lib/pharmacy/sop-shared.ts',
+  'src/lib/pharmacy/sop-settings.ts',
   'src/server/routers/pharmacy-sop.ts',
   'src/app/api/pharmacy/sop/evidence/route.ts',
 ]);
@@ -111,7 +115,9 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
         ),
       ].map((match) => match[1]);
       // Only its own append-only rows.
-      expect(writes.filter((model) => !/^pharmacySop(Site|RecordLink)$/.test(model!))).toEqual([]);
+      expect(
+        writes.filter((model) => !/^pharmacySop(Site|SiteSetting|RecordLink)$/.test(model!))
+      ).toEqual([]);
       // No raw SQL write against a pharmacy table.
       expect(source).not.toMatch(/\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+"?pharmacy_/i);
     }
@@ -126,7 +132,7 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
         ),
       ];
       for (const [, names, module] of imports) {
-        if (/^sop-(adapter|library|evidence|shared)$/.test(module!)) continue;
+        if (/^sop-(adapter|library|evidence|shared|settings)$/.test(module!)) continue;
         expect(module).toBe('controlled-register');
         expect(
           names!
@@ -136,6 +142,40 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
         ).toEqual(['assignedRegisterBranchIds']);
       }
     }
+  });
+
+  it('SOP code never enqueues a scheduler, engine or restaurant job', () => {
+    const sopSources = [
+      ...SOP_FILES,
+      ...SOP_DIRS.flatMap((dir) => walk(dir.replace(/\/$/, ''))),
+    ];
+    expect(sopSources).toContain('src/lib/pharmacy/sop-settings.ts');
+    expect(sopSources).toContain('src/components/pharmacy/sop/sop-setup.tsx');
+    const ENQUEUE =
+      /restaurantJob\b|restaurant_jobs\b|@\/lib\/restaurant\/(scheduler|job-handlers)|\benqueue[A-Z]?\w*\s*\(|SOP_GENERATE_OCCURRENCES_JOB|SOP_ESCALATION_JOB|'sop\.(generateOccurrences|runEscalation)'/;
+    const offenders = sopSources.filter((file) =>
+      ENQUEUE.test(readFileSync(join(ROOT, file), 'utf8'))
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('the automatic-scheduling setting never appears in pharmacy operation code', () => {
+    const SETTING = /autoSchedule|pharmacySopSiteSetting|pharmacy_sop_site_settings|sop-settings/i;
+    // Including the two read-only exceptions: neither may consult the setting.
+    const offenders = operationFiles.filter((file) =>
+      SETTING.test(readFileSync(join(ROOT, file), 'utf8'))
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('the automatic generator has no trigger wired (no route, job or scheduler calls it)', () => {
+    const callers = walk('src').filter(
+      (file) =>
+        file !== 'src/lib/pharmacy/sop-settings.ts' &&
+        /generateAutoPharmacySopOccurrences/.test(readFileSync(join(ROOT, file), 'utf8'))
+    );
+    // Wiring a recurring trigger is an ops decision; update this pin with it.
+    expect(callers).toEqual([]);
   });
 
   it('SOP grants never come from, or depend on, a pharmacy operation capability', async () => {

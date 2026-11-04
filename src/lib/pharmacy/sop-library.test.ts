@@ -73,8 +73,9 @@ describe('DEV-751 pharmacy SOP pack metadata', () => {
     expect(meta('temperature-log').suggestedRecurrence).toMatchObject({
       frequency: 'INTERVAL',
       interval: 240,
-      dueTimeMinutes: meta('opening').suggestedRecurrence.dueTimeMinutes,
-      intervalEndTimeMinutes: meta('closing').suggestedRecurrence.dueTimeMinutes,
+      daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+      dueTimeMinutes: null,
+      intervalEndTimeMinutes: null,
     });
     expect(meta('controlled-counts').suggestedRecurrence.frequency).toBe('WEEKLY');
     expect(meta('expiry-pull').suggestedRecurrence.frequency).toBe('WEEKLY');
@@ -85,21 +86,26 @@ describe('DEV-751 pharmacy SOP pack metadata', () => {
     expect(meta('training-attestation').suggestedRecurrence.frequency).toBe('ONCE');
   });
 
-  it('keeps every suggested recurrence valid for the shared recurrence engine', () => {
+  it('never assumes a time of day: every suggested due and end time is null', () => {
     for (const pack of PHARMACY_SOP_PACKS) {
-      for (const rule of [pack.pharmacy.suggestedRecurrence, pack.suggestedRecurrence]) {
-        expect(() =>
-          assertValidRule({
-            ...rule,
-            intervalEndTimeMinutes:
-              'intervalEndTimeMinutes' in rule ? rule.intervalEndTimeMinutes : null,
-            startDate: '2026-11-02',
-            endDate: null,
-          })
-        ).not.toThrow();
-      }
-      // The shared SopPack shape has no INTERVAL; the engine-facing fallback stays valid.
-      expect(pack.suggestedRecurrence.frequency).not.toBe('INTERVAL');
+      expect(pack.pharmacy.suggestedRecurrence.dueTimeMinutes, pack.key).toBeNull();
+      expect(pack.pharmacy.suggestedRecurrence.intervalEndTimeMinutes, pack.key).toBeNull();
+      // No engine-shape fallback that would carry a time (e.g. an opening time).
+      expect('suggestedRecurrence' in pack, pack.key).toBe(false);
+    }
+  });
+
+  it('keeps every suggestion valid for the shared recurrence engine once the manager picks times', () => {
+    for (const pack of PHARMACY_SOP_PACKS) {
+      const rule = pack.pharmacy.suggestedRecurrence;
+      // Arbitrary manager-chosen times: the suggestion itself supplies none.
+      const chosen = {
+        dueTimeMinutes: 9 * 60,
+        intervalEndTimeMinutes: rule.frequency === 'INTERVAL' ? 17 * 60 : null,
+      };
+      expect(() =>
+        assertValidRule({ ...rule, ...chosen, startDate: '2026-11-02', endDate: null })
+      ).not.toThrow();
     }
   });
 
@@ -117,7 +123,7 @@ describe('DEV-751 pharmacy SOP pack metadata', () => {
     }
     expect(meta('training-attestation').suggestedRecurrence).toMatchObject({
       frequency: 'ONCE',
-      dueTimeMinutes: 15 * 60,
+      dueTimeMinutes: null,
       windowMinutes: 1440,
       graceMinutes: 1440,
     });
@@ -181,11 +187,16 @@ describe('DEV-751 pharmacy SOP pack metadata', () => {
 });
 
 describe('temperatureLogRecurrence', () => {
-  it('builds a configurable interval round between opening and closing', () => {
+  it('has no assumed opening or closing time: both reading times are required', () => {
+    // @ts-expect-error — the first and last reading times have no default.
+    expect(() => temperatureLogRecurrence({})).toThrow(PharmacySopRecurrenceError);
+  });
+
+  it('builds an interval round between the times the manager chose', () => {
     expect(
       temperatureLogRecurrence({
-        openingMinutes: 9 * 60,
-        closingMinutes: 21 * 60,
+        firstReadingMinutes: 9 * 60,
+        lastReadingMinutes: 21 * 60,
         everyMinutes: 120,
         daysOfWeek: [6, 1, 1],
       })
@@ -202,13 +213,16 @@ describe('temperatureLogRecurrence', () => {
   });
 
   it('refuses a round that cannot run', () => {
-    expect(() => temperatureLogRecurrence({ everyMinutes: 10 })).toThrow(
+    const times = { firstReadingMinutes: 9 * 60, lastReadingMinutes: 17 * 60 };
+    expect(() => temperatureLogRecurrence({ ...times, everyMinutes: 10 })).toThrow(
       PharmacySopRecurrenceError
     );
-    expect(() => temperatureLogRecurrence({ openingMinutes: 600, closingMinutes: 600 })).toThrow(
+    expect(() =>
+      temperatureLogRecurrence({ firstReadingMinutes: 600, lastReadingMinutes: 600 })
+    ).toThrow(PharmacySopRecurrenceError);
+    expect(() => temperatureLogRecurrence({ ...times, daysOfWeek: [] })).toThrow(
       PharmacySopRecurrenceError
     );
-    expect(() => temperatureLogRecurrence({ daysOfWeek: [] })).toThrow(PharmacySopRecurrenceError);
   });
 });
 

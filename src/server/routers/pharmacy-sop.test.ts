@@ -202,6 +202,7 @@ function makeDb() {
     pharmacyTemperatureLog: model(),
     pharmacyGoodsReceipt: model(),
     restaurantSopEvidence: model(),
+    pharmacySopEvidenceCapture: model(),
     organization: model(),
   };
   const typed = db as Record<keyof typeof db, Delegate> & {
@@ -354,6 +355,7 @@ describe('capability gates', () => {
           templateId: 'tpl_1',
           target: { type: 'ROLE', roleKey: 'pharmacy-assistant' },
           frequency: 'DAILY',
+          dueTimeMinutes: 9 * 60,
           startDate: '2026-11-04',
         }),
     ],
@@ -609,6 +611,7 @@ describe('createAssignment', () => {
     templateId: 'tpl_open',
     target: { type: 'PERSON' as const, userId: 'user_2' },
     frequency: 'DAILY' as const,
+    dueTimeMinutes: 9 * 60,
     startDate: '2026-11-04',
   };
 
@@ -1375,6 +1378,7 @@ describe('engine refusals never echo internal ids', () => {
         templateId: 'tpl_open',
         target: { type: 'ROLE', roleKey: 'pharmacy-assistant' },
         frequency: 'DAILY',
+        dueTimeMinutes: 9 * 60,
         startDate: '2026-11-04',
       })
       .catch((err: unknown) => err as Error);
@@ -1554,6 +1558,7 @@ describe('Setup schedules hide on-demand runs', () => {
         templateId: 'tpl_recv',
         target: { type: 'ROLE', roleKey: 'pharmacy-assistant' },
         frequency: 'DAILY',
+        dueTimeMinutes: 9 * 60,
         startDate: '2026-11-04',
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });

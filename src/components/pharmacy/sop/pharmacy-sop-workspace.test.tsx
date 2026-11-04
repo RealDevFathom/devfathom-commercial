@@ -574,7 +574,7 @@ describe('pharmacy procedures workspace', () => {
           interval: 1,
           daysOfWeek: [],
           monthDay: null,
-          dueTimeMinutes: 900,
+          dueTimeMinutes: null,
           intervalEndTimeMinutes: null,
           windowMinutes: 1440,
           graceMinutes: 1440,
@@ -592,7 +592,10 @@ describe('pharmacy procedures workspace', () => {
       fireEvent.click(
         screen.getByRole('button', { name: 'Create schedule for Pharmacy — training attestation' })
       );
-      return screen.getByRole('form', { name: 'Schedule for Pharmacy — training attestation' });
+      const form = screen.getByRole('form', { name: 'Schedule for Pharmacy — training attestation' });
+      // No time is prefilled; the manager always chooses one.
+      fireEvent.change(within(form).getByLabelText('Due at'), { target: { value: '15:00' } });
+      return form;
     }
 
     it('saves the suggested schedule as offered', () => {

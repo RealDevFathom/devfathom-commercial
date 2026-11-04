@@ -95,8 +95,14 @@ function context(enabledModules: string[]) {
       status: 'ACTIVE',
     },
   };
+  // The tenant db the route's attach transaction uses: the receipt write is
+  // the only db call the route itself makes on a brand-new upload.
+  const db: Record<string, unknown> = {
+    pharmacySopEvidenceCapture: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
+  };
+  db.$transaction = vi.fn(async (work: (tx: unknown) => Promise<unknown>) => work(db));
   return {
-    db: {},
+    db,
     entitlements: {
       organizationId: 'org_1',
       enabledModules,
@@ -172,7 +178,7 @@ describe('pharmacy SOP evidence route module gate', () => {
     expect(response.status).toBe(201);
     expect(mocks.adapter.resolvePharmacySopSite).toHaveBeenCalledOnce();
     expect(mocks.attachEvidence).toHaveBeenCalledWith(
-      {},
+      expect.objectContaining({ pharmacySopEvidenceCapture: expect.anything() }),
       expect.objectContaining({
         occurrenceId: 'occ_1',
         uploaderStaffProfileId: 'staff_me',
