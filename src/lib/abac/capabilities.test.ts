@@ -4,7 +4,16 @@ import { EXACT_GRANT_ONLY_ACTIONS, capabilityMatches } from './capabilities';
 import { ALL_ACTIONS } from './policies';
 
 export const intendedPharmacyGrants = {
-  owner: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+  // DEV-751: the generic SOP actions are explicit, because `pharmacy:*` never
+  // matches another namespace.
+  owner: [
+    'pharmacy:*',
+    'reports:operational',
+    'reports:financial',
+    'sop:manage',
+    'sop:complete',
+    'sop:verify',
+  ],
   'owner-operator': [
     'reports:operational',
     'reports:financial',
@@ -17,12 +26,28 @@ export const intendedPharmacyGrants = {
     'pharmacy:counter',
     'pharmacy:close',
     'pharmacy:manage',
+    'sop:manage',
+    'sop:complete',
+    'sop:verify',
   ],
-  pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
-  manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
-  cashier: ['pharmacy:counter', 'pharmacy:orders'],
-  procurement: ['pharmacy:procurement'],
-  inventory: ['pharmacy:inventory'],
+  pharmacist: [
+    'pharmacy:dispense',
+    'pharmacy:catalogue-review',
+    'pharmacy:close',
+    'sop:complete',
+    'sop:verify',
+  ],
+  manager: [
+    'pharmacy:manage',
+    'pharmacy:orders',
+    'pharmacy:procurement',
+    'sop:manage',
+    'sop:complete',
+    'sop:verify',
+  ],
+  cashier: ['pharmacy:counter', 'pharmacy:orders', 'sop:complete'],
+  procurement: ['pharmacy:procurement', 'sop:complete'],
+  inventory: ['pharmacy:inventory', 'sop:complete'],
   finance: ['reports:financial'],
   auditor: ['reports:operational'],
 };

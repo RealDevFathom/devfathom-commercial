@@ -745,6 +745,12 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'reports:operational',
   'reports:financial',
   'pharmacy:safety',
+  // DEV-751: pharmacy procedures run on the shared SOP engine and are gated on
+  // the generic SOP actions. `pharmacy:*` does not match these (other
+  // namespace), so they are listed for the role editor to grant explicitly.
+  'sop:manage',
+  'sop:complete',
+  'sop:verify',
 ];
 
 /** Canonical actions checked by pharmacy workflows, including shared report gates. */
@@ -768,7 +774,18 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+    // DEV-751: `pharmacy:*` never matches the generic `sop:*` actions, so the
+    // pharmacy SOP grants are explicit. Role templates are materialised only
+    // when an organization is created (platform createOrganization); existing
+    // tenants' roles are not changed by editing these lists.
+    capabilities: [
+      'pharmacy:*',
+      'reports:operational',
+      'reports:financial',
+      'sop:manage',
+      'sop:complete',
+      'sop:verify',
+    ],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
@@ -794,13 +811,22 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'pharmacy:counter',
       'pharmacy:close',
       'pharmacy:manage',
+      'sop:manage',
+      'sop:complete',
+      'sop:verify',
     ],
   },
   {
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
+    capabilities: [
+      'pharmacy:dispense',
+      'pharmacy:catalogue-review',
+      'pharmacy:close',
+      'sop:complete',
+      'sop:verify',
+    ],
   },
   {
     key: 'manager',
@@ -808,21 +834,33 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     isSystem: true,
     // Managers retain the purchasing and Goods-in access that predates the
     // explicit pharmacy capability model (#375).
-    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+    capabilities: [
+      'pharmacy:manage',
+      'pharmacy:orders',
+      'pharmacy:procurement',
+      'sop:manage',
+      'sop:complete',
+      'sop:verify',
+    ],
   },
   {
     key: 'cashier',
     name: 'Cashier',
     isSystem: true,
-    capabilities: ['pharmacy:counter', 'pharmacy:orders'],
+    capabilities: ['pharmacy:counter', 'pharmacy:orders', 'sop:complete'],
   },
   {
     key: 'procurement',
     name: 'Procurement',
     isSystem: true,
-    capabilities: ['pharmacy:procurement'],
+    capabilities: ['pharmacy:procurement', 'sop:complete'],
   },
-  { key: 'inventory', name: 'Inventory', isSystem: true, capabilities: ['pharmacy:inventory'] },
+  {
+    key: 'inventory',
+    name: 'Inventory',
+    isSystem: true,
+    capabilities: ['pharmacy:inventory', 'sop:complete'],
+  },
   { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['reports:financial'] },
   { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['reports:operational'] },
 ];

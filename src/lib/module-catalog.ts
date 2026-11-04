@@ -233,6 +233,10 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacyPrescriptions: 'pharmacy-dispensing',
   pharmacyDispensing: 'pharmacy-dispensing',
   pharmacySafety: 'pharmacy-safety',
+  // DEV-751: pharmacy procedures run on the shared SOP engine but are licensed
+  // as Pharmacy Safety. Never `restaurant-sop`: a restaurant licence must not
+  // open the pharmacy SOP surface, and a pharmacy package does not sell it.
+  pharmacySop: 'pharmacy-safety',
   pharmacySales: 'pharmacy-counter',
   pharmacyBranchAssignments: 'pharmacy-core',
   pharmacyCameras: 'pharmacy-core',
@@ -392,6 +396,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/marketing', 'pharmacy-crm'],
   ['/pharmacy/loyalty', 'pharmacy-crm'],
   ['/pharmacy/cameras', 'pharmacy-core'],
+  ['/pharmacy/sop', 'pharmacy-safety'],
   ['/pharmacy/orders', 'pharmacy-counter'],
   ['/restaurant/staff/roster', 'restaurant-core'],
   ['/restaurant/staff', 'restaurant-core'],
