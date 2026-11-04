@@ -248,8 +248,18 @@ async function recordAdminBranchException(
     supportSessionId?: string;
     platformUserId?: string;
   };
+  // The same flag recordAudit puts on every tenant row while the placeholder
+  // regulatory rule set is active.
+  const placeholder = ctx.db.branchRegulatoryProfile
+    ? await ctx.db.branchRegulatoryProfile.findFirst({
+        where: { organizationId: scope.organizationId, isPlaceholder: true, effectiveTo: null },
+        select: { id: true },
+      })
+    : null;
   const data = {
     id: randomUUID(),
+    // Stamped at the access, so a row restored after a rollback keeps its real time.
+    createdAt: new Date(),
     organizationId: scope.organizationId,
     actorType: 'USER' as const,
     actorId: scope.actorId,
@@ -273,6 +283,7 @@ async function recordAdminBranchException(
             actingAsTenantUserId: scope.actorId,
           }
         : {}),
+      ...(placeholder ? { placeholder: true } : {}),
     },
     ip: ctx.requestMeta?.ip ?? null,
     userAgent: ctx.requestMeta?.userAgent ?? null,
