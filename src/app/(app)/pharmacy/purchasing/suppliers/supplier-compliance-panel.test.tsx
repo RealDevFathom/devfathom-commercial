@@ -190,7 +190,9 @@ describe('DEV-753 owner panel', () => {
     panel({ read: read({ checksEnabled: false, canManage: false }) });
     expect(screen.getByText('Checks disabled')).toBeInTheDocument();
     expect(
-      screen.getByText('Only the pharmacy owner can change this setting.')
+      screen.getByText(
+        'Only the pharmacy owner or an administrator with pharmacy settings access can change this setting.'
+      )
     ).toBeInTheDocument();
     expect(screen.queryByRole('button')).toBeNull();
   });

@@ -60,7 +60,7 @@ export function SupplierCompliancePanel({
 }) {
   if (!read) {
     return (
-      <SectionCard eyebrow="Owner policy" title="Supplier compliance checks" titleLevel={2}>
+      <SectionCard eyebrow="Pharmacy policy" title="Supplier compliance checks" titleLevel={2}>
         <p className="text-sm text-text-body">
           The supplier compliance setting could not be shown here. Orders and receipts follow the
           setting stored on the server, and if the server cannot read it the supplier checks stay
@@ -76,7 +76,7 @@ export function SupplierCompliancePanel({
 
   return (
     <SectionCard
-      eyebrow="Owner policy"
+      eyebrow="Pharmacy policy"
       title="Supplier compliance checks"
       titleLevel={2}
       actions={
@@ -111,7 +111,10 @@ export function SupplierCompliancePanel({
             legal sourcing obligations.
           </p>
           {!read.canManage ? (
-            <p className="text-text-muted">Only the pharmacy owner can change this setting.</p>
+            <p className="text-text-muted">
+              Only the pharmacy owner or an administrator with pharmacy settings access can change
+              this setting.
+            </p>
           ) : null}
         </div>
       )}

@@ -69,7 +69,8 @@ let warningVersion = '';
 const ack = () => ({ accepted: true, warningVersion });
 const OWNER_ONLY = {
   code: 'FORBIDDEN',
-  message: 'Only the pharmacy owner can change supplier compliance checks.',
+  message:
+    'Only the pharmacy owner or an administrator with pharmacy settings access can change supplier compliance checks.',
 };
 const NO_PERMISSION = { code: 'FORBIDDEN', message: 'You do not have permission for this action.' };
 const SUPPLIER_SETTING = 'supplierComplianceChecksEnabled';
@@ -138,6 +139,15 @@ const ROLES = {
   procurement: { key: 'procurement', isSystem: true, grants: [['pharmacy:procurement', 'ALLOW']] },
   /** A tenant-made role holding everything. Not the system owner role. */
   superAdmin: { key: 'super-admin', isSystem: false, grants: [['*', 'ALLOW']] },
+  /** Everything, except the pharmacy settings capability, which the role itself DENYs. */
+  adminNoSettings: {
+    key: 'admin-no-settings',
+    isSystem: false,
+    grants: [
+      ['*', 'ALLOW'],
+      ['pharmacy:manage', 'DENY'],
+    ],
+  },
 } satisfies Record<string, RoleSeed>;
 
 const DAY = 86_400_000;
@@ -159,6 +169,10 @@ const A = {
   procurementDeniedOwner: `u753a_procurement_denied_owner_${suffix}`,
   pharmacyDeniedOwner: `u753a_pharmacy_denied_owner_${suffix}`,
   expiredDenyOwner: `u753a_expired_deny_owner_${suffix}`,
+  adminManageDenied: `u753a_admin_manage_denied_${suffix}`,
+  adminRoleDenied: `u753a_admin_role_denied_${suffix}`,
+  demotedAdmin: `u753a_demoted_admin_${suffix}`,
+  inactiveAdmin: `u753a_inactive_admin_${suffix}`,
   supplierAuthorized: `s753a_auth_${suffix}`,
   supplierUnauthorized: `s753a_unauth_${suffix}`,
 };
@@ -181,6 +195,14 @@ const D = {
 const G = { org: `org_dev753_g_${suffix}`, owner: `u753g_owner_${suffix}` };
 /** Org F: a verified owner and no policy row yet, for the insert guard. */
 const F = { org: `org_dev753_f_${suffix}`, owner: `u753f_owner_${suffix}` };
+/** Org H: no owner-role holder at all, as provisioned tenants are; its ADMINs manage the switch. */
+const H = {
+  org: `org_dev753_h_${suffix}`,
+  admin: `u753h_admin_${suffix}`,
+  ownerOperatorAdmin: `u753h_owner_operator_admin_${suffix}`,
+  adminNoRole: `u753h_admin_norole_${suffix}`,
+  manager: `u753h_manager_${suffix}`,
+};
 /** Org E: enforcement through the real purchasing router. */
 const E = {
   org: `org_dev753_e_${suffix}`,
@@ -1034,6 +1056,7 @@ beforeAll(async () => {
       ROLES.cashier,
       ROLES.procurement,
       ROLES.superAdmin,
+      ROLES.adminNoSettings,
     ],
     [
       { id: A.owner, name: A.ownerName, role: 'owner', tenantRole: 'ADMIN' },
@@ -1073,6 +1096,28 @@ beforeAll(async () => {
         name: 'Reinstated Owner',
         role: 'owner',
         deny: { capability: '*', expiresAt: new Date(Date.now() - DAY) },
+      },
+      {
+        id: A.adminManageDenied,
+        name: 'Admin Denied Settings',
+        role: 'super-admin',
+        tenantRole: 'ADMIN',
+        deny: { capability: 'pharmacy:manage', expiresAt: null },
+      },
+      {
+        id: A.adminRoleDenied,
+        name: 'Admin Role Without Settings',
+        role: 'admin-no-settings',
+        tenantRole: 'ADMIN',
+      },
+      // Demoted in the database; a stale session below still claims ADMIN.
+      { id: A.demotedAdmin, name: 'Demoted Admin', role: 'super-admin', tenantRole: 'EMPLOYEE' },
+      {
+        id: A.inactiveAdmin,
+        name: 'Departed Admin',
+        role: 'super-admin',
+        tenantRole: 'ADMIN',
+        status: 'INACTIVE',
       },
     ],
     async (tx) => {
@@ -1127,7 +1172,8 @@ beforeAll(async () => {
   await seedOrganization(
     C.org,
     [{ key: 'owner', isSystem: false, grants: [['*', 'ALLOW']] }],
-    [{ id: C.fakeOwner, name: 'Self-styled Owner', role: 'owner', tenantRole: 'ADMIN' }]
+    // Not an ADMIN either: a custom role keyed 'owner' alone confers nothing.
+    [{ id: C.fakeOwner, name: 'Self-styled Owner', role: 'owner' }]
   );
   await seedOrganization(
     D.org,
@@ -1148,6 +1194,21 @@ beforeAll(async () => {
     [ROLES.owner],
     [{ id: F.owner, name: `Faiza Owner ${suffix}`, role: 'owner', tenantRole: 'ADMIN' }]
   );
+  await seedOrganization(
+    H.org,
+    [ROLES.superAdmin, ROLES.ownerOperator, ROLES.manager],
+    [
+      { id: H.admin, name: `Hira Admin ${suffix}`, role: 'super-admin', tenantRole: 'ADMIN' },
+      {
+        id: H.ownerOperatorAdmin,
+        name: `Hamza Operator ${suffix}`,
+        role: 'owner-operator',
+        tenantRole: 'ADMIN',
+      },
+      { id: H.adminNoRole, name: 'Legacy Admin H', tenantRole: 'ADMIN' },
+      { id: H.manager, name: 'Store Manager H', role: 'manager' },
+    ]
+  );
   await seedEnforcementOrganization();
   // The version the UI reads and sends back with the owner's acknowledgement.
   warningVersion = (await asPolicy(a(A.owner), (api) => api.policy())).warningVersion;
@@ -1166,14 +1227,43 @@ describeIfDatabase(
   'DEV-753 pharmacySupplierCompliance router (persisted roles, RLS on)',
   { timeout: 60_000 },
   () => {
-    /** Everyone who is not the verified tenant owner, and the owner through a support session. */
+    /**
+     * Everyone without the bounded authority (verified owner, or verified ACTIVE ADMIN of this
+     * tenant with the pharmacy settings grant, DENY winning), and either through a support session.
+     */
     const NOT_THE_OWNER: ReadonlyArray<[string, Actor]> = [
-      ["a tenant ADMIN whose custom role holds '*'", a(A.adminWildcard, { tenantRole: 'ADMIN' })],
-      ['a tenant ADMIN with no organization role', a(A.adminNoRole, { tenantRole: 'ADMIN' })],
+      [
+        'a tenant ADMIN with no organization role (no settings grant)',
+        a(A.adminNoRole, { tenantRole: 'ADMIN' }),
+      ],
+      [
+        "a tenant ADMIN with a live 'pharmacy:manage' DENY override",
+        a(A.adminManageDenied, { tenantRole: 'ADMIN' }),
+      ],
+      [
+        "a tenant ADMIN whose own role DENYs 'pharmacy:manage'",
+        a(A.adminRoleDenied, { tenantRole: 'ADMIN' }),
+      ],
+      [
+        'a demoted ADMIN whose stale session still claims ADMIN',
+        a(A.demotedAdmin, { tenantRole: 'ADMIN' }),
+      ],
+      ['an INACTIVE ADMIN with a still-live session', a(A.inactiveAdmin, { tenantRole: 'ADMIN' })],
+      [
+        "another tenant's ADMIN owner acting in this tenant",
+        { organizationId: A.org, userId: B.owner, tenantRole: 'ADMIN' },
+      ],
       ['the system manager role', a(A.manager)],
+      [
+        "a manager (holds 'pharmacy:manage') whose session claims ADMIN",
+        a(A.manager, { tenantRole: 'ADMIN' }),
+      ],
       ['a cashier', a(A.cashier)],
       ['a procurement-only user', a(A.procurement)],
-      ['the system owner-operator role', a(A.ownerOperator, { tenantRole: 'ADMIN' })],
+      [
+        'the ADMIN wildcard user through a support session',
+        a(A.adminWildcard, { tenantRole: 'ADMIN', support: true }),
+      ],
       ['an INACTIVE owner with a still-live session', a(A.inactiveOwner)],
       ["an owner with a live, non-expiring '*' DENY override", a(A.deniedOwner)],
       ["an owner with a live '*' DENY override that expires later", a(A.deniedUntilOwner)],
@@ -1205,9 +1295,11 @@ describeIfDatabase(
         a(A.procurement),
         a(A.manager),
         a(A.cashier),
-        a(A.adminWildcard, { tenantRole: 'ADMIN' }),
         a(A.adminNoRole, { tenantRole: 'ADMIN' }),
-        a(A.ownerOperator, { tenantRole: 'ADMIN' }),
+        a(A.adminManageDenied, { tenantRole: 'ADMIN' }),
+        a(A.adminRoleDenied, { tenantRole: 'ADMIN' }),
+        a(A.demotedAdmin, { tenantRole: 'ADMIN' }),
+        a(A.manager, { tenantRole: 'ADMIN' }),
         a(A.inactiveOwner),
         a(A.deniedOwner),
         a(A.procurementDeniedOwner),
@@ -1218,6 +1310,16 @@ describeIfDatabase(
         await expect(asPolicy(reader, (api) => api.policy())).resolves.toMatchObject({
           policy: { checksEnabled: true, version: 0, source: 'DEFAULT' },
           canManage: false,
+        });
+      }
+      // A verified ACTIVE tenant ADMIN with the settings grant may manage this one setting:
+      // through a '*' role, or through the owner-operator role held as ADMIN.
+      for (const admin of [
+        a(A.adminWildcard, { tenantRole: 'ADMIN' }),
+        a(A.ownerOperator, { tenantRole: 'ADMIN' }),
+      ]) {
+        await expect(asPolicy(admin, (api) => api.policy())).resolves.toMatchObject({
+          canManage: true,
         });
       }
     });
@@ -1239,12 +1341,20 @@ describeIfDatabase(
       await expect(asPolicy(a(A.owner), (api) => api.history())).resolves.toEqual([]);
       // An expired DENY override is not live: that owner is still the verified owner.
       await expect(asPolicy(a(A.expiredDenyOwner), (api) => api.history())).resolves.toEqual([]);
+      // So does a verified ADMIN with the settings grant.
+      await expect(
+        asPolicy(a(A.adminWildcard, { tenantRole: 'ADMIN' }), (api) => api.history())
+      ).resolves.toEqual([]);
       for (const actor of [
         a(A.procurement),
         a(A.manager),
+        a(A.manager, { tenantRole: 'ADMIN' }),
         a(A.cashier),
-        a(A.adminWildcard, { tenantRole: 'ADMIN' }),
-        a(A.ownerOperator, { tenantRole: 'ADMIN' }),
+        a(A.adminNoRole, { tenantRole: 'ADMIN' }),
+        a(A.adminManageDenied, { tenantRole: 'ADMIN' }),
+        a(A.adminRoleDenied, { tenantRole: 'ADMIN' }),
+        a(A.demotedAdmin, { tenantRole: 'ADMIN' }),
+        a(A.inactiveAdmin, { tenantRole: 'ADMIN' }),
         a(A.inactiveOwner),
         a(A.deniedOwner),
         a(A.procurementDeniedOwner),
@@ -1339,7 +1449,7 @@ describeIfDatabase(
       expect(row!.supplierComplianceAcknowledgement).toMatch(/^supplier-compliance-off@\d+: /);
       expect(row!.supplierComplianceAcknowledgement?.startsWith(`${warningVersion}: `)).toBe(true);
       expect(row!.supplierComplianceAcknowledgement).toContain(
-        'I remain responsible for sourcing and compliance'
+        'the pharmacy remains responsible for sourcing and compliance'
       );
 
       const audit = await auditRows(A.org, SUPPLIER_SETTING);
@@ -1825,7 +1935,7 @@ describeIfDatabase(
       // tenant's owner (not a user of this organization at all).
       for (const userId of [D.cashier, D.inactiveOwner, B.owner]) {
         const refusal = await sqlRefusal(D.org, turnOffNaming, [D.org, userId], userId);
-        expect(refusal, userId).toContain('SUPPLIER_COMPLIANCE_POLICY_OWNER_REQUIRED');
+        expect(refusal, userId).toContain('SUPPLIER_COMPLIANCE_POLICY_AUTHORITY_REQUIRED');
         expect(refusal, userId).toContain('42501');
       }
       // Naming someone other than the session's own user: the cashier claiming to be the
@@ -1863,7 +1973,7 @@ describeIfDatabase(
           [C.org, C.fakeOwner],
           C.fakeOwner
         )
-      ).toContain('SUPPLIER_COMPLIANCE_POLICY_OWNER_REQUIRED');
+      ).toContain('SUPPLIER_COMPLIANCE_POLICY_AUTHORITY_REQUIRED');
       expect(await policyRow(C.org)).toEqual([]);
     });
 
@@ -2964,6 +3074,109 @@ describeIfDatabase(
           ).toMatchObject({ comparable: true, supplierChecked: false });
         });
       });
+    });
+  }
+);
+
+// ===========================================================================
+// 4. A tenant ADMIN may manage this one setting (org H has no owner-role holder)
+// ===========================================================================
+
+describeIfDatabase(
+  'DEV-753 a verified tenant ADMIN with the settings grant manages the switch (bounded)',
+  { timeout: 60_000 },
+  () => {
+    const h = (userId: string, extra: Partial<Actor> = {}): Actor => ({
+      organizationId: H.org,
+      userId,
+      ...extra,
+    });
+
+    it('refuses an ADMIN without the settings grant and a manager, even with an ADMIN session', async () => {
+      for (const actor of [
+        h(H.adminNoRole, { tenantRole: 'ADMIN' }),
+        h(H.manager),
+        h(H.manager, { tenantRole: 'ADMIN' }),
+      ]) {
+        await expect(
+          asPolicy(actor, (api) =>
+            api.setPolicy({ checksEnabled: false, expectedVersion: 0, acknowledgement: ack() })
+          )
+        ).rejects.toMatchObject(OWNER_ONLY);
+      }
+      expect(await policyRow(H.org)).toEqual([]);
+    });
+
+    it('lets the ADMIN turn the checks off and an owner-operator ADMIN turn them back on, audited as ADMIN', async () => {
+      const off = await asPolicy(h(H.admin, { tenantRole: 'ADMIN' }), async (api, ctx) => ({
+        result: await api.setPolicy({
+          checksEnabled: false,
+          expectedVersion: 0,
+          acknowledgement: ack(),
+        }),
+        audit: ctx.audit.detail,
+      }));
+      expect(off.result).toMatchObject({
+        changed: true,
+        policy: { checksEnabled: false, version: 1 },
+      });
+      expect(off.audit).toMatchObject({ metadata: { authority: 'ADMIN', warningVersion } });
+      const offAudit = await auditRows(H.org, 'supplierComplianceChecksEnabled');
+      expect(offAudit).toEqual([
+        expect.objectContaining({
+          oldValue: true,
+          newValue: false,
+          actorUserId: H.admin,
+          policyVersion: 1,
+          acknowledgement: expect.stringMatching(/^supplier-compliance-off@\d+: /),
+        }),
+      ]);
+
+      const on = await asPolicy(h(H.ownerOperatorAdmin, { tenantRole: 'ADMIN' }), (api) =>
+        api.setPolicy({ checksEnabled: true, expectedVersion: 1 })
+      );
+      expect(on).toMatchObject({ changed: true, policy: { checksEnabled: true, version: 2 } });
+      const all = await auditRows(H.org, 'supplierComplianceChecksEnabled');
+      expect(all).toHaveLength(2);
+      expect(all).toContainEqual(
+        expect.objectContaining({
+          newValue: true,
+          actorUserId: H.ownerOperatorAdmin,
+          policyVersion: 2,
+        })
+      );
+      // The first audit row is untouched by the later change.
+      expect(all).toContainEqual(offAudit[0]);
+    });
+
+    it('applies the same bounded authority in the database: the ADMIN writes, an ADMIN without the grant cannot', async () => {
+      const turnOff = `UPDATE pharmacy_owner_policies
+            SET "supplierComplianceChecksEnabled" = false,
+                "supplierComplianceAcknowledgement" = 'acknowledged',
+                "updatedByUserId" = $2
+          WHERE "organizationId" = $1`;
+      const refusal = await sqlRefusal(H.org, turnOff, [H.org, H.adminNoRole], H.adminNoRole);
+      expect(refusal).toContain('SUPPLIER_COMPLIANCE_POLICY_AUTHORITY_REQUIRED');
+      expect(await sqlRefusal(H.org, turnOff, [H.org, H.manager], H.manager)).toContain(
+        'SUPPLIER_COMPLIANCE_POLICY_AUTHORITY_REQUIRED'
+      );
+      expect(await policyRow(H.org)).toEqual([
+        expect.objectContaining({
+          supplierComplianceChecksEnabled: true,
+          supplierCompliancePolicyVersion: 2,
+        }),
+      ]);
+      // The verified ADMIN, writing as themselves, is accepted by the same trigger.
+      await withTenantDb(H.org, (db) => db.$executeRawUnsafe(turnOff, H.org, H.admin), {
+        userId: H.admin,
+      });
+      expect(await policyRow(H.org)).toEqual([
+        expect.objectContaining({
+          supplierComplianceChecksEnabled: false,
+          supplierCompliancePolicyVersion: 3,
+          updatedByUserId: H.admin,
+        }),
+      ]);
     });
   }
 );

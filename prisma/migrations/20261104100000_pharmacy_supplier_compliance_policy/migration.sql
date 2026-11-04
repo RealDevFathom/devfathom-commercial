@@ -25,8 +25,11 @@ ALTER TABLE "pharmacy_owner_policy_audit"
 -- each effective change bumps the version by one, and turning the checks off needs the
 -- recorded warning acknowledgement. A write that does not change the value cannot
 -- rewrite either column. An effective change must name the session's own user
--- (app.current_user_id) as the actor, and that user must hold this organization's
--- system `owner` role and be ACTIVE: the application checks this first, and the
+-- (app.current_user_id) as the actor. That user must be ACTIVE in this organization,
+-- be its genuine owner (system `owner` role) or a tenant ADMIN by stored user role,
+-- hold the pharmacy settings capability (`*`, `pharmacy:*` or `pharmacy:manage` ALLOW,
+-- from the role or a live override), and carry no matching DENY from either: an
+-- explicit DENY wins. The application decides this first through central ABAC; the
 -- database refuses any other writer too. Versions continue from the audit trail, so
 -- recreating the row never reuses a version that evidence already cites.
 CREATE FUNCTION pharmacy_owner_policy_supplier_compliance_guard() RETURNS trigger
@@ -73,15 +76,38 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1
       FROM "users" u
-      JOIN "organization_roles" r ON r."id" = u."organizationRoleId"
+      LEFT JOIN "organization_roles" r
+        ON r."id" = u."organizationRoleId" AND r."organizationId" = u."organizationId"
      WHERE u."id" = actor
        AND u."organizationId" = NEW."organizationId"
        AND u."status" = 'ACTIVE'
-       AND r."organizationId" = NEW."organizationId"
-       AND r."isSystem"
-       AND r."key" = 'owner'
+       AND ((r."isSystem" AND r."key" = 'owner') OR u."role" = 'ADMIN')
+       AND (
+         EXISTS (
+           SELECT 1 FROM "organization_role_permissions" p
+            WHERE p."organizationRoleId" = u."organizationRoleId" AND p."effect" = 'ALLOW'
+              AND p."capability" IN ('*', 'pharmacy:*', 'pharmacy:manage')
+         )
+         OR EXISTS (
+           SELECT 1 FROM "user_permission_overrides" o
+            WHERE o."userId" = u."id" AND o."effect" = 'ALLOW'
+              AND o."capability" IN ('*', 'pharmacy:*', 'pharmacy:manage')
+              AND (o."expiresAt" IS NULL OR o."expiresAt" > CURRENT_TIMESTAMP)
+         )
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM "organization_role_permissions" p
+          WHERE p."organizationRoleId" = u."organizationRoleId" AND p."effect" = 'DENY'
+            AND p."capability" IN ('*', 'pharmacy:*', 'pharmacy:manage')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM "user_permission_overrides" o
+          WHERE o."userId" = u."id" AND o."effect" = 'DENY'
+            AND o."capability" IN ('*', 'pharmacy:*', 'pharmacy:manage', 'pharmacy:procurement')
+            AND (o."expiresAt" IS NULL OR o."expiresAt" > CURRENT_TIMESTAMP)
+       )
   ) THEN
-    RAISE EXCEPTION 'SUPPLIER_COMPLIANCE_POLICY_OWNER_REQUIRED' USING ERRCODE = '42501';
+    RAISE EXCEPTION 'SUPPLIER_COMPLIANCE_POLICY_AUTHORITY_REQUIRED' USING ERRCODE = '42501';
   END IF;
 
   IF NEW."supplierComplianceChecksEnabled" = false THEN

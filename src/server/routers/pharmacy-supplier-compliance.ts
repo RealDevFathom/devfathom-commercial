@@ -6,7 +6,8 @@ import {
   type SupplierCompliancePolicyView,
 } from '@/lib/pharmacy/supplier-compliance';
 import {
-  actorIsVerifiedTenantOwner,
+  supplierPolicyAuthority,
+  type SupplierPolicyAuthority,
   readSupplierCompliancePolicy,
   readSupplierCompliancePolicyHistory,
   readSupplierCompliancePolicyLastChange,
@@ -27,12 +28,15 @@ import {
 /**
  * DEV-753 — the owner switch for supplier compliance checks.
  *
- * Reading the policy is open to the people who work the purchasing lane (they must
- * see when supplier checks are off). Changing it is for the verified tenant owner
- * only: the live database must show the system `owner` role, so a tenant ADMIN, a
- * custom wildcard role, a procurement grant or a support session cannot change it.
- * Nothing here grants or widens anyone's permissions; supplier trade authorization
- * is a fact about a supplier, not user access.
+ * Reading the policy is open to anyone who can read the supplier register, because the
+ * register shows its effect. Changing it is bounded to this one setting: the verified
+ * tenant owner, or a verified ACTIVE tenant ADMIN of this organization, where central
+ * ABAC must also grant the pharmacy settings capability with an explicit DENY winning
+ * (see `supplierPolicyAuthority`). A session that only claims ADMIN, a demoted or
+ * inactive user, another tenant's user, staff holding `pharmacy:manage` without being
+ * ADMIN or owner, and support sessions cannot change it. Nothing here grants or widens
+ * anyone's permissions; supplier trade authorization is a fact about a supplier, not
+ * user access.
  */
 
 const id = z.string().trim().min(1).max(128);
@@ -46,27 +50,34 @@ function actor(ctx: TRPCContext): { organizationId: string; actorId: string } {
   return { organizationId, actorId };
 }
 
-async function isOwner(
+/** Never through a platform support or impersonation session. */
+function supportSession(ctx: TRPCContext): boolean {
+  return Boolean(ctx.support || ctx.session?.user?.isSupportSession);
+}
+
+/** The verified owner, or a verified tenant ADMIN with the pharmacy settings grant. */
+async function authority(
   ctx: TRPCContext,
   db: ScopedDb = ctx.db,
   options: { lock?: boolean } = {}
-): Promise<boolean> {
+): Promise<SupplierPolicyAuthority> {
   const { organizationId, actorId } = actor(ctx);
-  return actorIsVerifiedTenantOwner(db, organizationId, actorId, options);
+  return supplierPolicyAuthority(db, organizationId, actorId, options);
 }
 
-/** Owner, or someone who already works the purchasing lane. Nothing wider. */
-async function assertCanReadEvidence(ctx: TRPCContext): Promise<{ owner: boolean }> {
+/** Those who may manage the policy, or who already work the purchasing lane. Nothing wider. */
+async function assertCanReadEvidence(ctx: TRPCContext): Promise<void> {
   const { actorId } = actor(ctx);
-  if (await isOwner(ctx)) return { owner: true };
-  if (await actorCanProcure(ctx.db, actorId)) return { owner: false };
+  if ((await authority(ctx)).allowed) return;
+  if (await actorCanProcure(ctx.db, actorId)) return;
   throw new TRPCError({
     code: 'FORBIDDEN',
     message: 'You do not have permission for this action.',
   });
 }
 
-const OWNER_ONLY = 'Only the pharmacy owner can change supplier compliance checks.';
+const OWNER_ONLY =
+  'Only the pharmacy owner or an administrator with pharmacy settings access can change supplier compliance checks.';
 
 function policyError(error: unknown): never {
   if (error instanceof SupplierCompliancePolicyError) {
@@ -131,12 +142,12 @@ export const pharmacySupplierComplianceRouter = router({
    * effect; the change history and the skip evidence stay narrower.
    */
   policy: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
-    const owner = await isOwner(ctx);
+    const manager = await authority(ctx);
     const { organizationId } = actor(ctx);
     const policy = await readSupplierCompliancePolicy(ctx.db, organizationId);
     return {
       policy: await view(ctx.db, organizationId, policy),
-      canManage: owner && !ctx.support && !ctx.session?.user?.isSupportSession,
+      canManage: manager.allowed && !supportSession(ctx),
       warningVersion: SUPPLIER_COMPLIANCE_WARNING.version,
     };
   }),
@@ -146,7 +157,7 @@ export const pharmacySupplierComplianceRouter = router({
     .input(z.strictObject({ limit: z.number().int().min(1).max(200).default(50) }).optional())
     .query(async ({ ctx, input }) => {
       // Owner only, and never through a support or impersonation session.
-      if (ctx.support || ctx.session?.user?.isSupportSession || !(await isOwner(ctx))) {
+      if (supportSession(ctx) || !(await authority(ctx)).allowed) {
         throw new TRPCError({ code: 'FORBIDDEN', message: OWNER_ONLY });
       }
       const { organizationId } = actor(ctx);
@@ -225,16 +236,16 @@ export const pharmacySupplierComplianceRouter = router({
     .mutation(async ({ ctx, input }) => {
       const scope = actor(ctx);
       try {
-        if (ctx.support || ctx.session?.user?.isSupportSession) {
-          throw new SupplierCompliancePolicyError('SUPPORT_SESSION');
-        }
+        if (supportSession(ctx)) throw new SupplierCompliancePolicyError('SUPPORT_SESSION');
         const result = await ctx.db.$transaction(async (tx) => {
           const db = tx as unknown as ScopedDb;
           // Re-verified inside the write transaction, against the live database.
-          if (!(await isOwner(ctx, db, { lock: true }))) {
-            throw new SupplierCompliancePolicyError('NOT_OWNER');
-          }
-          return writeSupplierCompliancePolicy(db, scope, input);
+          const verified = await authority(ctx, db, { lock: true });
+          if (!verified.allowed) throw new SupplierCompliancePolicyError('NOT_OWNER');
+          return {
+            ...(await writeSupplierCompliancePolicy(db, scope, input)),
+            basis: verified.basis,
+          };
         });
         if (result.changed) {
           annotateAudit(ctx, {
@@ -252,6 +263,8 @@ export const pharmacySupplierComplianceRouter = router({
               version: { before: result.previous.version, after: result.policy.version },
             },
             metadata: {
+              // Which verified authority made the change: the owner, or a tenant ADMIN.
+              authority: result.basis,
               warningVersion: result.policy.checksEnabled
                 ? null
                 : SUPPLIER_COMPLIANCE_WARNING.version,

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
+import { can } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   assertSupplierEligible,
@@ -114,25 +115,50 @@ export async function readSupplierCompliancePolicy(
   }
 }
 
-/** A live DENY on any of these takes the owner's procurement-policy authority away. */
-const OWNER_POLICY_DENIALS = ['*', 'pharmacy:*', 'pharmacy:procurement'] as const;
+/**
+ * The settings capability that governs this policy. Central ABAC decides it from the
+ * persisted role grants and live user overrides, and an explicit DENY always wins.
+ */
+export const SUPPLIER_POLICY_CAPABILITY = 'pharmacy:manage' as const;
+
+/** A live user-level DENY on any of these also takes the authority away. */
+const SUPPLIER_POLICY_DENIALS = [
+  '*',
+  'pharmacy:*',
+  'pharmacy:manage',
+  'pharmacy:procurement',
+] as const;
+
+export type SupplierPolicyAuthority =
+  { allowed: true; basis: 'OWNER' | 'ADMIN' } | { allowed: false; basis: null };
+
+const NO_AUTHORITY: SupplierPolicyAuthority = Object.freeze({ allowed: false, basis: null });
 
 /**
- * The durable tenant owner, verified from the live database rather than the session:
- * an ACTIVE user of this organization holding this organization's system `owner` role,
- * without a live DENY on `*`, `pharmacy:*` or `pharmacy:procurement`. A tenant ADMIN, a
- * wildcard grant on a custom role, or the `owner-operator` template is not the owner.
+ * Who may change the supplier-compliance policy, verified from the live database and
+ * never from the session. The user must be ACTIVE in this organization and be either
+ * the genuine tenant owner (this organization's system `owner` role) or a tenant
+ * ADMIN by their stored user role. On top of that, central ABAC must grant the
+ * pharmacy settings capability (`pharmacy:manage`, where an explicit DENY wins), and
+ * the user must hold no live DENY on `*`, `pharmacy:*`, `pharmacy:manage` or
+ * `pharmacy:procurement`.
+ *
+ * This is bounded to this one setting. It does not make an ADMIN the owner anywhere
+ * else and grants nothing. A session that merely claims ADMIN, a demoted or inactive
+ * user, another tenant's user, an ADMIN with no settings grant, and staff holding
+ * `pharmacy:manage` without being ADMIN or owner (manager, owner-operator employee) are
+ * all refused.
  *
  * With `lock`, the user row is share-locked for the rest of the transaction, so a
  * concurrent demotion or deactivation waits for the write this check guards.
  */
-export async function actorIsVerifiedTenantOwner(
+export async function supplierPolicyAuthority(
   db: ScopedDb,
   organizationId: string,
   userId: string,
   options: { now?: Date; lock?: boolean } = {}
-): Promise<boolean> {
-  if (!organizationId || !userId) return false;
+): Promise<SupplierPolicyAuthority> {
+  if (!organizationId || !userId) return NO_AUTHORITY;
   const now = options.now ?? new Date();
   if (options.lock) {
     await db.$queryRaw(Prisma.sql`
@@ -146,10 +172,12 @@ export async function actorIsVerifiedTenantOwner(
       id: true,
       organizationId: true,
       status: true,
+      role: true,
+      department: true,
       organizationRole: { select: { key: true, isSystem: true, organizationId: true } },
       permissionOverrides: {
         where: {
-          capability: { in: [...OWNER_POLICY_DENIALS] },
+          capability: { in: [...SUPPLIER_POLICY_DENIALS] },
           effect: 'DENY',
           OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
         },
@@ -157,16 +185,29 @@ export async function actorIsVerifiedTenantOwner(
       },
     },
   });
-  return Boolean(
-    user &&
-    user.id === userId &&
-    user.organizationId === organizationId &&
-    user.status === 'ACTIVE' &&
+  if (
+    !user ||
+    user.id !== userId ||
+    user.organizationId !== organizationId ||
+    user.status !== 'ACTIVE' ||
+    user.permissionOverrides.length > 0
+  ) {
+    return NO_AUTHORITY;
+  }
+  const owner =
     user.organizationRole?.isSystem === true &&
     user.organizationRole.key === 'owner' &&
-    user.organizationRole.organizationId === organizationId &&
-    user.permissionOverrides.length === 0
+    user.organizationRole.organizationId === organizationId;
+  const admin = user.role === 'ADMIN';
+  if (!owner && !admin) return NO_AUTHORITY;
+  const granted = await can(
+    { id: user.id, role: user.role, department: user.department, status: user.status },
+    SUPPLIER_POLICY_CAPABILITY,
+    undefined,
+    { db, now }
   );
+  if (!granted) return NO_AUTHORITY;
+  return { allowed: true, basis: owner ? 'OWNER' : 'ADMIN' };
 }
 
 /**

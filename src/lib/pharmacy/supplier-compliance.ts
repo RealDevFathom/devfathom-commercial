@@ -18,12 +18,12 @@ export const SUPPLIER_COMPLIANCE_WARNING = Object.freeze({
   title: 'Turn off supplier licence and authorization checks?',
   paragraphs: Object.freeze([
     'This only stops the app from asking for supplier licence evidence and supplier trade authorization, and from refusing purchase orders and goods receipts when they are missing.',
-    'It does not remove any legal obligation to buy medicines only from licensed suppliers. As the pharmacy owner, you remain responsible for where your stock comes from and for your pharmacy’s compliance.',
+    'It does not remove any legal obligation to buy medicines only from licensed suppliers. The pharmacy, and its owner, remain responsible for where its stock comes from and for its compliance.',
     'This covers every medicine, controlled medicines included: their supplier’s licence and authorization are not checked either. The controlled-drug safeguards themselves do not change: the pharmacist witness PIN at goods-in, the controlled register and the counter’s controlled-medicine checks still apply.',
     'Everything else is still checked: approvals and PINs, batch, expiry and stock checks, invoice and accounting records, branch access, and the controlled-drug witness PIN and register. Licences already on file stay on file and are not changed.',
   ]),
   acknowledgement:
-    'I understand that turning off these checks does not remove supplier-licensing obligations, and that I remain responsible for sourcing and compliance.',
+    'I understand that turning off these checks does not remove supplier-licensing obligations, and that the pharmacy remains responsible for sourcing and compliance.',
 });
 
 /** What is stored as the acknowledgement: the warning version and the exact sentence agreed to. */
