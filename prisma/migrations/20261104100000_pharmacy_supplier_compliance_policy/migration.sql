@@ -249,3 +249,92 @@ CREATE POLICY tenant_isolation ON "pharmacy_supplier_compliance_skips"
     OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))
   WITH CHECK (current_setting('app.is_platform_admin', true) = 'true'
     OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''));
+
+-- PUR-01's database backstops (20260902131500 purchase orders, 20260902150000 goods
+-- receipts) enforced supplier authorization and licence on every write and never read
+-- the owner policy, so the switch could not take effect. They now consult it:
+-- a stored OFF lets the write through on those two facts; anything else (no row, ON,
+-- unreadable) enforces, and enforces strictly: the licence must also be unsuperseded
+-- (DEV-466), matching the application gate. A supplier from another tenant is refused
+-- either way. The controlled-medicine exception (a pending product decision) lives in
+-- the application gate only; these backstops stay a plain reading of the owner policy.
+CREATE FUNCTION pharmacy_supplier_checks_enforced(p_organization_id text) RETURNS boolean
+LANGUAGE plpgsql STABLE AS $$
+DECLARE enabled boolean;
+BEGIN
+  SELECT "supplierComplianceChecksEnabled" INTO enabled
+    FROM "pharmacy_owner_policies"
+   WHERE "organizationId" = p_organization_id;
+  RETURN enabled IS DISTINCT FROM false;
+END $$;
+
+CREATE FUNCTION pharmacy_supplier_has_current_licence(p_organization_id text, p_supplier_id text)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM "pharmacy_supplier_licences" l
+     WHERE l."organizationId" = p_organization_id AND l."supplierId" = p_supplier_id
+       AND l."verifiedAt" IS NOT NULL AND l."expiresAt" >= CURRENT_TIMESTAMP
+       AND NOT EXISTS (
+         SELECT 1 FROM "pharmacy_supplier_licences" s
+          WHERE s."organizationId" = l."organizationId" AND s."supersedesId" = l."id"
+       )
+  )
+$$;
+
+CREATE OR REPLACE FUNCTION pharmacy_assert_supplier_orderable() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE supplier_authorized boolean;
+BEGIN
+  IF NEW."status" = 'CANCELLED' THEN RETURN NEW; END IF;
+  -- Scoped by tenant, so a supplier id borrowed from another tenant reads as
+  -- absent here and is refused before the composite foreign key is even checked.
+  SELECT "authorized" INTO supplier_authorized
+  FROM "pharmacy_suppliers"
+  WHERE "organizationId" = NEW."organizationId" AND "id" = NEW."supplierId";
+  IF supplier_authorized IS NULL THEN
+    RAISE EXCEPTION 'supplier does not belong to this pharmacy' USING ERRCODE = '23514';
+  END IF;
+  IF NOT pharmacy_supplier_checks_enforced(NEW."organizationId") THEN RETURN NEW; END IF;
+  IF supplier_authorized IS NOT TRUE THEN
+    RAISE EXCEPTION 'supplier is not authorized to supply this pharmacy' USING ERRCODE = '23514';
+  END IF;
+  IF NOT pharmacy_supplier_has_current_licence(NEW."organizationId", NEW."supplierId") THEN
+    RAISE EXCEPTION 'supplier has no unexpired verified licence on file' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $$;
+
+CREATE OR REPLACE FUNCTION pharmacy_assert_goods_receipt_postable() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE supplier_authorized boolean; order_status "PharmacyPurchaseOrderStatus"; line_count integer;
+BEGIN
+  IF NEW."status" <> 'POSTED' THEN RETURN NEW; END IF;
+
+  SELECT "authorized" INTO supplier_authorized FROM "pharmacy_suppliers"
+   WHERE "organizationId" = NEW."organizationId" AND "id" = NEW."supplierId";
+  IF supplier_authorized IS NULL THEN
+    RAISE EXCEPTION 'supplier does not belong to this pharmacy' USING ERRCODE = '23514';
+  END IF;
+  IF pharmacy_supplier_checks_enforced(NEW."organizationId") THEN
+    IF supplier_authorized IS NOT TRUE THEN
+      RAISE EXCEPTION 'supplier is not authorized to supply this pharmacy' USING ERRCODE = '23514';
+    END IF;
+    IF NOT pharmacy_supplier_has_current_licence(NEW."organizationId", NEW."supplierId") THEN
+      RAISE EXCEPTION 'supplier has no unexpired verified licence on file' USING ERRCODE = '23514';
+    END IF;
+  END IF;
+
+  SELECT count(*)::int INTO line_count FROM "pharmacy_goods_receipt_lines"
+   WHERE "organizationId" = NEW."organizationId" AND "goodsReceiptId" = NEW."id";
+  IF line_count = 0 THEN
+    RAISE EXCEPTION 'a goods receipt cannot be posted with no lines' USING ERRCODE = '23514';
+  END IF;
+
+  -- Goods can only be received against an order that has actually been sent.
+  IF NEW."purchaseOrderId" IS NOT NULL THEN
+    SELECT "status" INTO order_status FROM "pharmacy_purchase_orders"
+     WHERE "organizationId" = NEW."organizationId" AND "id" = NEW."purchaseOrderId";
+    IF order_status NOT IN ('SENT','RECEIVING') THEN
+      RAISE EXCEPTION 'a goods receipt can only be posted against a sent purchase order' USING ERRCODE = '23514';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;

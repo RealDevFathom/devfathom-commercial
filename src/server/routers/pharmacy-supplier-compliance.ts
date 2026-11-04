@@ -145,7 +145,10 @@ export const pharmacySupplierComplianceRouter = router({
   history: auditedProtectedProcedure
     .input(z.strictObject({ limit: z.number().int().min(1).max(200).default(50) }).optional())
     .query(async ({ ctx, input }) => {
-      if (!(await isOwner(ctx))) throw new TRPCError({ code: 'FORBIDDEN', message: OWNER_ONLY });
+      // Owner only, and never through a support or impersonation session.
+      if (ctx.support || ctx.session?.user?.isSupportSession || !(await isOwner(ctx))) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: OWNER_ONLY });
+      }
       const { organizationId } = actor(ctx);
       const changes = await readSupplierCompliancePolicyHistory(
         ctx.db,
