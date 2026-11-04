@@ -19,8 +19,12 @@ const sales = vi.hoisted(() => ({
   branchScopeOrForbidden: vi.fn(),
 }));
 vi.mock('./pharmacy-sales', () => sales);
+// DEV-742: the output guard reads the branch's saved receipt format.
+const format = vi.hoisted(() => ({ readPharmacyReceiptFormat: vi.fn() }));
+vi.mock('@/lib/pharmacy/receipt-print', () => format);
 const queue = vi.hoisted(() => ({
   enqueuePharmacyReceiptPrint: vi.fn(),
+  enqueuePharmacyTestPagePrint: vi.fn(),
   retryPharmacyPrintJob: vi.fn(),
   enrollPharmacyPrintBridge: vi.fn(),
 }));
@@ -86,6 +90,7 @@ const ready = {
 
 const jobRow = {
   id: 'job-1',
+  kind: 'RECEIPT',
   saleId: 'sale-a',
   receiptNumber: 41,
   reprint: false,
@@ -103,10 +108,21 @@ beforeEach(() => {
   vi.clearAllMocks();
   sales.requireCounterReceiptAccess.mockResolvedValue(scope);
   sales.branchScopeOrForbidden.mockResolvedValue(scope);
+  format.readPharmacyReceiptFormat.mockResolvedValue({
+    layout: { paperWidth: 58 },
+    output: 'THERMAL',
+    revision: 1,
+  });
 });
 
 describe('pharmacyPrinting.enqueueReceipt', () => {
-  const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' as const, reprint: false };
+  const input = {
+    branchId: 'branch-a',
+    saleId: 'sale-a',
+    locale: 'en' as const,
+    reprint: false,
+    paper: 'THERMAL_58' as const,
+  };
 
   it('accepts no printable content from the caller (DEV-168 provenance)', async () => {
     await expect(
@@ -179,6 +195,150 @@ describe('pharmacyPrinting.enqueueReceipt', () => {
       new PharmacyPrintQueueError('BRIDGE_REQUIRED')
     );
     await expect(caller().enqueueReceipt(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+});
+
+describe('DEV-742 output guard on pharmacyPrinting.enqueueReceipt', () => {
+  const input = {
+    branchId: 'branch-a',
+    saleId: 'sale-a',
+    locale: 'en' as const,
+    reprint: false,
+    paper: 'THERMAL_58' as const,
+  };
+
+  it('cannot express A4: paper must be a thermal roll', async () => {
+    await expect(caller().enqueueReceipt({ ...input, paper: 'A4' as never })).rejects.toMatchObject(
+      { code: 'BAD_REQUEST' }
+    );
+    const { paper: _omitted, ...withoutPaper } = input;
+    void _omitted;
+    await expect(caller().enqueueReceipt(withoutPaper as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(sales.buildSettledCounterReceiptPrintJob).not.toHaveBeenCalled();
+  });
+
+  it('never queues for a branch whose saved paper is A4', async () => {
+    format.readPharmacyReceiptFormat.mockResolvedValue({
+      layout: { paperWidth: 58 },
+      output: 'A4',
+      revision: 2,
+    });
+    await expect(caller().enqueueReceipt(input)).resolves.toMatchObject({
+      status: 'FALLBACK',
+      code: 'A4_OUTPUT',
+      fallback: 'BROWSER_OS',
+    });
+    expect(sales.buildSettledCounterReceiptPrintJob).not.toHaveBeenCalled();
+    expect(queue.enqueuePharmacyReceiptPrint).not.toHaveBeenCalled();
+  });
+
+  it('refuses a paper that differs from the saved roll width (stale or loading default)', async () => {
+    await expect(caller().enqueueReceipt({ ...input, paper: 'THERMAL_80' })).resolves.toMatchObject(
+      { status: 'FALLBACK', code: 'PAPER_MISMATCH' }
+    );
+    expect(sales.buildSettledCounterReceiptPrintJob).not.toHaveBeenCalled();
+    expect(queue.enqueuePharmacyReceiptPrint).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the saved width changed between the guard and the build', async () => {
+    sales.buildSettledCounterReceiptPrintJob.mockResolvedValue({
+      ...ready,
+      job: { ...ready.job, paperWidth: 80 },
+    });
+    await expect(caller().enqueueReceipt(input)).resolves.toMatchObject({
+      status: 'FALLBACK',
+      code: 'PAPER_MISMATCH',
+    });
+    expect(queue.enqueuePharmacyReceiptPrint).not.toHaveBeenCalled();
+  });
+
+  it('checks receipt access before reading any settings', async () => {
+    sales.requireCounterReceiptAccess.mockRejectedValueOnce(
+      Object.assign(new Error('Branch is outside your scope.'), { code: 'FORBIDDEN' })
+    );
+    await expect(caller().enqueueReceipt(input)).rejects.toThrow();
+    expect(format.readPharmacyReceiptFormat).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-742 pharmacyPrinting.enqueueTestPage', () => {
+  const input = { branchId: 'branch-a', paper: 'THERMAL_58' as const, requestKey: 'test-click-01' };
+  const testRow = {
+    ...jobRow,
+    id: 'job-test',
+    kind: 'TEST_PAGE',
+    saleId: null,
+    receiptNumber: null,
+  };
+
+  it('accepts no printable content and requires a per-click key', async () => {
+    await expect(
+      caller().enqueueTestPage({ ...input, lines: ['Free text'] } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().enqueueTestPage({ branchId: 'branch-a', paper: 'THERMAL_58' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().enqueueTestPage({ ...input, requestKey: 'bad key!' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(queue.enqueuePharmacyTestPagePrint).not.toHaveBeenCalled();
+  });
+
+  it('queues the server-built test page for the saved roll width', async () => {
+    queue.enqueuePharmacyTestPagePrint.mockResolvedValue({ job: testRow, replayed: false });
+    const result = await caller().enqueueTestPage(input);
+    expect(sales.requireCounterReceiptAccess).toHaveBeenCalledWith(expect.anything(), 'branch-a');
+    expect(queue.enqueuePharmacyTestPagePrint).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        actorId: 'user-a',
+        requestKey: 'test-click-01',
+        paperWidth: 58,
+        document: expect.objectContaining({
+          title: 'PRINTER TEST PAGE',
+          reference: 'NOT A RECEIPT - NO SALE',
+        }),
+      })
+    );
+    expect(result).toMatchObject({
+      status: 'QUEUED',
+      job: { kind: 'TEST_PAGE', saleId: null, receiptNumber: null, paperConfirmed: false },
+    });
+  });
+
+  it('applies the same A4 and width guard', async () => {
+    await expect(
+      caller().enqueueTestPage({ ...input, paper: 'THERMAL_80' })
+    ).resolves.toMatchObject({ status: 'FALLBACK', code: 'PAPER_MISMATCH' });
+    format.readPharmacyReceiptFormat.mockResolvedValue({
+      layout: { paperWidth: 58 },
+      output: 'A4',
+      revision: 2,
+    });
+    await expect(caller().enqueueTestPage(input)).resolves.toMatchObject({
+      status: 'FALLBACK',
+      code: 'A4_OUTPUT',
+    });
+    expect(queue.enqueuePharmacyTestPagePrint).not.toHaveBeenCalled();
+  });
+
+  it('turns a missing or offline bridge into a browser fallback', async () => {
+    for (const reason of ['NO_BRIDGE', 'BRIDGE_OFFLINE'] as const) {
+      queue.enqueuePharmacyTestPagePrint.mockRejectedValueOnce(new PharmacyPrintQueueError(reason));
+      await expect(caller().enqueueTestPage(input)).resolves.toMatchObject({
+        status: 'FALLBACK',
+        code: reason,
+        fallback: 'BROWSER_OS',
+      });
+    }
+    queue.enqueuePharmacyTestPagePrint.mockRejectedValueOnce(
+      new PharmacyPrintQueueError('BRIDGE_REQUIRED')
+    );
+    await expect(caller().enqueueTestPage(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 });
 

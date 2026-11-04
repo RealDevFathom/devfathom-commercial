@@ -2,8 +2,16 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import {
+  PRINT_FALLBACK_TEXT,
+  thermalPaperForWidth,
+  type PrintFallbackCode,
+} from '@/lib/pharmacy/print-job-ui';
+import { buildPrinterTestPrintJob } from '@/lib/pharmacy/printer-test-escpos';
+import { readPharmacyReceiptFormat } from '@/lib/pharmacy/receipt-print';
+import {
   bridgeView,
   enqueuePharmacyReceiptPrint,
+  enqueuePharmacyTestPagePrint,
   enrollPharmacyPrintBridge,
   listPharmacyPrintBridges,
   PharmacyPrintQueueError,
@@ -77,6 +85,40 @@ const QUEUE_ERRORS: Record<
     message: 'Use tcp://host:9100, queue:///encoded-name, or a /dev/ path.',
   },
 };
+
+/**
+ * DEV-742 thermal paper. Only roll widths are expressible: an A4 intent cannot
+ * be sent to the bridge at all.
+ */
+const thermalPaper = z.enum(['THERMAL_58', 'THERMAL_80']);
+
+function outputFallback(code: PrintFallbackCode) {
+  return {
+    status: 'FALLBACK' as const,
+    code,
+    fallback: 'BROWSER_OS' as const,
+    message: PRINT_FALLBACK_TEXT[code],
+  };
+}
+
+/**
+ * DEV-742 output guard, evaluated on the server before anything is queued: a
+ * branch whose saved paper is A4 never uses the thermal bridge, and the
+ * caller's paper must equal the saved roll width, so a stale or still-loading
+ * client default cannot misroute a job.
+ */
+async function thermalOutputRefusal(
+  db: Parameters<typeof readPharmacyReceiptFormat>[0],
+  scope: { organizationId: string; branchId: string },
+  paper: z.infer<typeof thermalPaper>
+) {
+  const format = await readPharmacyReceiptFormat(db, scope);
+  if (format.output === 'A4') return outputFallback('A4_OUTPUT');
+  if (thermalPaperForWidth(format.layout.paperWidth) !== paper) {
+    return outputFallback('PAPER_MISMATCH');
+  }
+  return null;
+}
 
 function queueError(error: unknown): never {
   if (error instanceof PharmacyPrintQueueError) {
@@ -170,6 +212,7 @@ export const pharmacyPrintingRouter = router({
           saleId: id,
           locale: z.enum(['en', 'ur']),
           reprint: z.boolean(),
+          paper: thermalPaper,
           requestKey: requestKey.optional(),
           bridgeId: id.optional(),
         })
@@ -180,8 +223,16 @@ export const pharmacyPrintingRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const refusal = await thermalOutputRefusal(ctx.db, scope, input.paper);
+      if (refusal) return refusal;
       const built = await buildSettledCounterReceiptPrintJob(ctx, input);
       if (built.status !== 'READY') return built;
+      // The format may have changed between the guard and the build; never queue a width
+      // the caller did not ask for.
+      if (thermalPaperForWidth(built.job.paperWidth) !== input.paper) {
+        return outputFallback('PAPER_MISMATCH');
+      }
       const now = new Date();
       try {
         const { job, replayed } = await ctx.db.$transaction((tx) =>
@@ -209,6 +260,55 @@ export const pharmacyPrintingRouter = router({
             fallback: 'BROWSER_OS' as const,
             message: BROWSER_FALLBACK[error.reason]!,
           };
+        }
+        queueError(error);
+      }
+    }),
+
+  /**
+   * DEV-742 — queue the fixed thermal TEST PAGE (server-built ASCII, no sale,
+   * no receipt number) for this branch's bridge. Same receipt access, output
+   * guard, bridge selection and offline fallback as receipts. One job per click
+   * key; a replay of the same key never prints twice.
+   */
+  enqueueTestPage: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId: id,
+          paper: thermalPaper,
+          requestKey,
+          bridgeId: id.optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const refusal = await thermalOutputRefusal(ctx.db, scope, input.paper);
+      if (refusal) return refusal;
+      const now = new Date();
+      const built = buildPrinterTestPrintJob({
+        paperWidth: input.paper === 'THERMAL_58' ? 58 : 80,
+        now,
+      });
+      try {
+        const { job, replayed } = await ctx.db.$transaction((tx) =>
+          enqueuePharmacyTestPagePrint(tx as ScopedDb, {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            actorId: scope.actorId,
+            requestKey: input.requestKey,
+            bridgeId: input.bridgeId,
+            document: built.document,
+            byteCount: built.byteCount,
+            paperWidth: built.paperWidth,
+            now,
+          })
+        );
+        return { status: 'QUEUED' as const, replayed, job: printJobView(job, now) };
+      } catch (error) {
+        if (error instanceof PharmacyPrintQueueError && BROWSER_FALLBACK[error.reason]) {
+          return outputFallback(error.reason as PrintFallbackCode);
         }
         queueError(error);
       }

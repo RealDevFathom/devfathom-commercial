@@ -13788,6 +13788,13 @@ model PharmacyPrintBridge {
   @@map("pharmacy_print_bridges")
 }
 
+/// DEV-742 — RECEIPT jobs come from a settled sale; TEST_PAGE jobs carry no sale,
+/// receipt number or reprint flag (CHECK-enforced) and exist only to test a bridge.
+enum PharmacyPrintJobKind {
+  RECEIPT
+  TEST_PAGE
+}
+
 enum PharmacyPrintJobStatus {
   PENDING
   FAILED
@@ -13805,8 +13812,9 @@ model PharmacyPrintJob {
   branchId           String
   bridgeId           String
   printerId          String
-  saleId             String
-  receiptNumber      Int
+  kind               PharmacyPrintJobKind   @default(RECEIPT)
+  saleId             String?
+  receiptNumber      Int?
   reprint            Boolean
   idempotencyKey     String
   document           Json
@@ -13824,7 +13832,7 @@ model PharmacyPrintJob {
   updatedAt          DateTime               @updatedAt
 
   bridge PharmacyPrintBridge @relation(fields: [organizationId, branchId, bridgeId], references: [organizationId, branchId, id], onDelete: Restrict)
-  sale   PharmacySale        @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  sale   PharmacySale?       @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
   branch PharmacyBranch      @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id], map: "pharmacy_print_jobs_org_id_key")

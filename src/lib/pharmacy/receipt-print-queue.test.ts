@@ -5,12 +5,14 @@ import type { PrintDocument } from '@/lib/restaurant/printing/contract';
 import { renderEscPos } from '@/lib/restaurant/printing/esc-pos';
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { buildPrinterTestPrintJob } from './printer-test-escpos';
 
 import {
   acknowledgePharmacyPrintJob,
   claimNextPharmacyPrintJob,
   derivePrintJobState,
   enqueuePharmacyReceiptPrint,
+  enqueuePharmacyTestPagePrint,
   enrollPharmacyPrintBridge,
   formatPharmacyPrintBridgeCredential,
   isValidPrinterTarget,
@@ -106,7 +108,9 @@ function fakeDb() {
   const pharmacyPrintJob = table(
     (row) => [
       `key:${row.organizationId}:${row.branchId}:${row.idempotencyKey}`,
-      ...(row.reprint === false
+      // Mirrors the partial unique index: PostgreSQL never matches NULL sale ids, so
+      // sale-less TEST_PAGE jobs (DEV-742) never collide on it.
+      ...(row.reprint === false && row.saleId != null
         ? [`original:${row.organizationId}:${row.branchId}:${row.saleId}`]
         : []),
     ],
@@ -474,5 +478,79 @@ describe('operator retry', () => {
     await expect(
       retryPharmacyPrintJob(db, scope, { jobId: job.id, paperChecked: false, now: later })
     ).rejects.toBeInstanceOf(PharmacyPrintQueueError);
+  });
+});
+
+describe('DEV-742 thermal test-page jobs', () => {
+  const testJob = buildPrinterTestPrintJob({ paperWidth: 58, now: T0 });
+  function enqueueTest(db: ReturnType<typeof fakeDb>, overrides: Record<string, unknown> = {}) {
+    return enqueuePharmacyTestPagePrint(db, {
+      organizationId: ORG,
+      branchId: BRANCH,
+      actorId: ACTOR,
+      requestKey: 'test-click-0001',
+      document: testJob.document,
+      byteCount: testJob.byteCount,
+      paperWidth: 58,
+      now: T0,
+      ...overrides,
+    });
+  }
+
+  it('queues a sale-less, never-reprint TEST_PAGE job and replays the same click', async () => {
+    const db = fakeDb();
+    await onlineBridge(db);
+    const first = await enqueueTest(db);
+    const replay = await enqueueTest(db);
+    const second = await enqueueTest(db, { requestKey: 'test-click-0002' });
+    expect(first.job).toMatchObject({
+      kind: 'TEST_PAGE',
+      saleId: null,
+      receiptNumber: null,
+      reprint: false,
+      idempotencyKey: 'test:test-click-0001',
+      paperWidth: 58,
+    });
+    expect(replay).toMatchObject({ replayed: true, job: { id: first.job.id } });
+    expect(second.job.id).not.toBe(first.job.id);
+    expect(printJobView(first.job as never, T0)).toMatchObject({
+      kind: 'TEST_PAGE',
+      saleId: null,
+      receiptNumber: null,
+      state: 'QUEUED',
+      paperConfirmed: false,
+    });
+  });
+
+  it('never lets a test page and a receipt share a key or block the original receipt', async () => {
+    const db = fakeDb();
+    await onlineBridge(db);
+    await enqueueTest(db);
+    const receipt = await enqueue(db);
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.job).toMatchObject({ kind: 'RECEIPT', saleId: 'sale_41' });
+    expect(db.pharmacyPrintJob.rows.map((row) => row.kind)).toEqual(['TEST_PAGE', 'RECEIPT']);
+  });
+
+  it('refuses a missing or offline bridge and an invalid click key, queueing nothing', async () => {
+    const db = fakeDb();
+    await expect(enqueueTest(db)).rejects.toMatchObject({ reason: 'NO_BRIDGE' });
+    const { bridge } = await onlineBridge(db);
+    (bridge as { lastSeenAt: Date | null }).lastSeenAt = at(-PRINT_BRIDGE_ONLINE_MS);
+    await expect(enqueueTest(db)).rejects.toMatchObject({ reason: 'BRIDGE_OFFLINE' });
+    await expect(enqueueTest(db, { requestKey: 'bad key!' })).rejects.toBeInstanceOf(
+      PharmacyPrintQueueError
+    );
+    expect(db.pharmacyPrintJob.rows).toHaveLength(0);
+  });
+
+  it('is claimed once through the normal bridge path with the stored bytes', async () => {
+    const db = fakeDb();
+    const { bridge } = await onlineBridge(db);
+    await enqueueTest(db);
+    const claimed = await claimNextPharmacyPrintJob(db, bridge, at(1_000));
+    expect(claimed).toMatchObject({ documentType: 'RECEIPT', attempt: 1, paperWidth: 58 });
+    expect(Buffer.from(claimed!.bytes, 'base64')).toHaveLength(testJob.byteCount);
+    await expect(claimNextPharmacyPrintJob(db, bridge, at(2_000))).resolves.toBeNull();
   });
 });

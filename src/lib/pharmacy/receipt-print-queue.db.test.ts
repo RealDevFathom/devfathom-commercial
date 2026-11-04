@@ -191,6 +191,90 @@ describeIfDatabase('DEV-741 pharmacy receipt print queue (PostgreSQL)', () => {
     });
   });
 
+  it('DEV-742: keeps TEST_PAGE jobs sale-less, never reprints, immutable and apart from originals', async () => {
+    const a = await saleWithBridge(ORG_A, BRANCH_A);
+    const { buildPrinterTestPrintJob } = await import('./printer-test-escpos');
+    const test = buildPrinterTestPrintJob({ paperWidth: 80, now: new Date() });
+    const enqueueTest = (requestKey: string) =>
+      inOrg(ORG_A, (db) =>
+        deps.queue.enqueuePharmacyTestPagePrint(db, {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          actorId: ACTOR,
+          requestKey,
+          bridgeId: a.bridge.id,
+          document: test.document,
+          byteCount: test.byteCount,
+          paperWidth: 80,
+          now: new Date(),
+        })
+      );
+    const first = await enqueueTest(`test-${suffix}-1`);
+    const second = await enqueueTest(`test-${suffix}-2`);
+    const replay = await enqueueTest(`test-${suffix}-1`);
+    expect(first.job).toMatchObject({
+      kind: 'TEST_PAGE',
+      saleId: null,
+      receiptNumber: null,
+      reprint: false,
+    });
+    expect(second.job.id).not.toBe(first.job.id);
+    expect(replay).toMatchObject({ replayed: true, job: { id: first.job.id } });
+    // Sale-less test pages never occupy the one-original-per-sale slot.
+    await expect(
+      inOrg(ORG_A, (db) => enqueue(db, ORG_A, BRANCH_A, a.saleId, { bridgeId: a.bridge.id }))
+    ).resolves.toMatchObject({ replayed: false, job: { kind: 'RECEIPT' } });
+
+    const row = (overrides: Record<string, unknown>) => ({
+      organizationId: ORG_A,
+      branchId: BRANCH_A,
+      bridgeId: a.bridge.id,
+      printerId: a.bridge.printerId,
+      document,
+      byteCount: 10,
+      paperWidth: 80,
+      requestedByActorId: ACTOR,
+      reprint: false,
+      ...overrides,
+    });
+    const kindCheck = /pharmacy_print_jobs_kind_check|check constraint/i;
+    // A RECEIPT job must name its sale and receipt number.
+    expect(
+      await refusal(ORG_A, (db) =>
+        db.pharmacyPrintJob.create({
+          data: row({ kind: 'RECEIPT', idempotencyKey: `sale:none-${suffix}:original` }),
+        } as never)
+      )
+    ).toMatch(kindCheck);
+    // A TEST_PAGE job may not carry a sale, a receipt number, a reprint flag or a receipt key.
+    for (const [label, overrides] of [
+      ['sale', { saleId: a.saleId, idempotencyKey: `test:sale-${suffix}` }],
+      ['receipt number', { receiptNumber: 9, idempotencyKey: `test:number-${suffix}` }],
+      ['reprint', { reprint: true, idempotencyKey: `test:reprint-${suffix}` }],
+      ['receipt key', { idempotencyKey: `sale:${a.saleId}:reprint:x-${suffix}` }],
+    ] as const) {
+      expect(
+        await refusal(ORG_A, (db) =>
+          db.pharmacyPrintJob.create({ data: row({ kind: 'TEST_PAGE', ...overrides }) } as never)
+        ),
+        label
+      ).toMatch(kindCheck);
+    }
+    // Kind is part of the immutable identity.
+    expect(
+      await refusal(ORG_A, (db) =>
+        db.pharmacyPrintJob.update({
+          where: { organizationId_id: { organizationId: ORG_A, id: first.job.id } },
+          data: { kind: 'RECEIPT' },
+        })
+      )
+    ).toMatch(/PRINT_JOB_IMMUTABLE|check constraint/i);
+    // Another tenant cannot see the test page.
+    expect(
+      await inOrg(ORG_B, (db) => db.pharmacyPrintJob.count({ where: { id: first.job.id } }))
+    ).toBe(0);
+  });
+
   it('refuses payload edits, attempt rewinds, re-opening accepted work, and deletes', async () => {
     const a = await saleWithBridge(ORG_A, BRANCH_A);
     const { job } = await inOrg(ORG_A, (db) =>

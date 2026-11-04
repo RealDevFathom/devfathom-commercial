@@ -249,8 +249,10 @@ const PAPER_CHECK: ReadonlySet<PrintJobState> = new Set(['FAILED', 'UNCONFIRMED'
 
 export type PrintJobView = {
   id: string;
-  saleId: string;
-  receiptNumber: number;
+  /** DEV-742: TEST_PAGE jobs have no sale or receipt number. */
+  kind: 'RECEIPT' | 'TEST_PAGE';
+  saleId: string | null;
+  receiptNumber: number | null;
   reprint: boolean;
   bridgeId: string;
   paperWidth: number;
@@ -270,6 +272,7 @@ export function printJobView(job: PharmacyPrintJob, now: Date): PrintJobView {
   const state = derivePrintJobState(job, now);
   return {
     id: job.id,
+    kind: job.kind,
     saleId: job.saleId,
     receiptNumber: job.receiptNumber,
     reprint: job.reprint,
@@ -356,7 +359,11 @@ export async function enqueuePharmacyReceiptPrint(
     },
   });
   if (prior) {
-    if (prior.saleId !== input.saleId || prior.reprint !== input.reprint) {
+    if (
+      prior.kind !== 'RECEIPT' ||
+      prior.saleId !== input.saleId ||
+      prior.reprint !== input.reprint
+    ) {
       throw new PharmacyPrintQueueError('CHANGED');
     }
     return { job: prior, replayed: true };
@@ -368,9 +375,76 @@ export async function enqueuePharmacyReceiptPrint(
       branchId: input.branchId,
       bridgeId: bridge.id,
       printerId: bridge.printerId,
+      kind: 'RECEIPT',
       saleId: input.saleId,
       receiptNumber: input.receiptNumber,
       reprint: input.reprint,
+      idempotencyKey,
+      document: input.document,
+      byteCount: input.byteCount,
+      paperWidth: input.paperWidth,
+      queuedAt: input.now,
+      requestedByActorId: input.actorId,
+    },
+  });
+  return { job, replayed: false };
+}
+
+/** DEV-742: one key per operator click; the `test:` prefix keeps it apart from receipt keys. */
+export function testPagePrintIdempotencyKey(requestKey: string) {
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(requestKey)) {
+    throw new PharmacyPrintQueueError('REPRINT_KEY_REQUIRED');
+  }
+  return `test:${requestKey}`;
+}
+
+/**
+ * DEV-742 — queue the server-built thermal TEST PAGE (no sale, no receipt
+ * number, never a reprint). Same bridge selection, offline refusal, claim,
+ * acknowledgement, expiry and retry rules as receipts. A replay of the same
+ * click returns the existing job.
+ */
+export async function enqueuePharmacyTestPagePrint(
+  db: QueueDb,
+  input: Scope & {
+    actorId: string;
+    requestKey: string;
+    bridgeId?: string;
+    document: PrintDocument;
+    byteCount: number;
+    paperWidth: 58 | 80;
+    now: Date;
+  }
+): Promise<{ job: PharmacyPrintJob; replayed: boolean }> {
+  const idempotencyKey = testPagePrintIdempotencyKey(input.requestKey);
+  await db.$executeRawUnsafe(
+    'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+    `pharmacy-print:${input.organizationId}:${input.branchId}:${idempotencyKey}`
+  );
+  const prior = await db.pharmacyPrintJob.findUnique({
+    where: {
+      organizationId_branchId_idempotencyKey: {
+        organizationId: input.organizationId,
+        branchId: input.branchId,
+        idempotencyKey,
+      },
+    },
+  });
+  if (prior) {
+    if (prior.kind !== 'TEST_PAGE') throw new PharmacyPrintQueueError('CHANGED');
+    return { job: prior, replayed: true };
+  }
+  const bridge = await selectBridge(db, input, input.bridgeId, input.now);
+  const job = await db.pharmacyPrintJob.create({
+    data: {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      bridgeId: bridge.id,
+      printerId: bridge.printerId,
+      kind: 'TEST_PAGE',
+      saleId: null,
+      receiptNumber: null,
+      reprint: false,
       idempotencyKey,
       document: input.document,
       byteCount: input.byteCount,
