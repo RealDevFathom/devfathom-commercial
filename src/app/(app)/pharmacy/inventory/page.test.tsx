@@ -316,6 +316,27 @@ describe('DEV-660 — only assigned branches are offered', () => {
     expect(nearExpiry).not.toHaveBeenCalled();
   });
 
+  it('offers to receive a transfer only at its destination branch', async () => {
+    ctx.db.pharmacyBranch.findMany.mockResolvedValue([branch, other]);
+    const lines = [{ id: 'line-1', quantityUnits: 5, receivedUnits: 0 }];
+    ctx.db.pharmacyInterbranchTransfer.findMany.mockResolvedValue([
+      {
+        id: 'outbound',
+        fromBranchId: branch.id,
+        toBranchId: other.id,
+        status: 'DISPATCHED',
+        lines,
+      },
+      { id: 'inbound', fromBranchId: other.id, toBranchId: branch.id, status: 'DISPATCHED', lines },
+    ]);
+    await show();
+    const receive = screen.getAllByRole('button', { name: 'Receive remaining' });
+    expect(receive).toHaveLength(1);
+    const form = receive[0]!.closest('form')!;
+    expect(form.querySelector('input[name="transferId"]')).toHaveValue('inbound');
+    expect(form.querySelector('input[name="branchId"]')).toHaveValue(branch.id);
+  });
+
   it('opens an assigned branch instead of an unassigned one named in the URL', async () => {
     ctx.db.pharmacyBranch.findMany.mockResolvedValue([branch, other]);
     render(await PharmacyInventoryPage({ searchParams: Promise.resolve({ branch: other.id }) }));

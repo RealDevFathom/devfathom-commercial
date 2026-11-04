@@ -1054,6 +1054,65 @@ describe('DEV-211 — inventory needs an active assignment to the branch', () =>
   });
 });
 
+/**
+ * DEV-660 residual: branch-scoped procedures still on the tenant-only branch
+ * check. Each is a known gap tracked on DEV-660; moving one to assignedScopeFor
+ * moves it from here into ASSIGNMENT_GATED. A new procedure that takes a
+ * branchId must be placed in one of the two lists, so none skips the decision.
+ */
+const TENANT_ONLY_BRANCH_PROCEDURES = [
+  'recordTemperature',
+  'importTemperatureCsv',
+  'configureTemperatureMonitoring',
+  'breakPack',
+  'approveCount',
+  'quarantinePart',
+  'releaseQuarantinedPart',
+  'acknowledgeRecall',
+  'reserveSupplierClaim',
+  'approveSafetyStock',
+  'refreshStockSignals',
+  'markStaleSignals',
+  'acknowledgeSignal',
+  'snoozeSignal',
+  'dismissSignal',
+  'createDraftAction',
+  'draftExpiryMarkdown',
+  'draftExpiryReturn',
+  'quarantineExpiring',
+];
+
+function takesBranchId(schema: unknown): boolean {
+  const zod = schema as {
+    shape?: Record<string, unknown>;
+    def?: { type?: string; options?: unknown[] };
+  };
+  if (zod?.shape) return 'branchId' in zod.shape;
+  if (zod?.def?.type === 'union') return (zod.def.options ?? []).some(takesBranchId);
+  return false;
+}
+
+describe('DEV-660 — every branch-scoped procedure is classified', () => {
+  it('places each procedure that takes a branchId in exactly one list', () => {
+    const procedures = pharmacyInventoryRouter._def.procedures as unknown as Record<
+      string,
+      { _def: { inputs: unknown[] } }
+    >;
+    const branchScoped = Object.entries(procedures)
+      .filter(([, procedure]) => procedure._def.inputs.some(takesBranchId))
+      .map(([name]) => name)
+      .sort();
+    const classified = [
+      ...ASSIGNMENT_GATED.map((gated) => gated.name),
+      ...TENANT_ONLY_BRANCH_PROCEDURES,
+    ].sort();
+
+    expect(new Set(classified).size).toBe(classified.length);
+    expect(branchScoped).toEqual(classified);
+    expect(ASSIGNMENT_GATED).toHaveLength(18);
+  });
+});
+
 const LOCATION_ROW = {
   id: 'location_1',
   coldChain: false,

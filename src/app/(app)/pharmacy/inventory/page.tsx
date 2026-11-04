@@ -979,11 +979,14 @@ export default async function PharmacyInventoryPage({
                     <Submit>Dispatch</Submit>
                   </form>
                 ) : null}
+                {/* DEV-660: stock is received at the destination, by someone assigned there,
+                    so the action is offered only while that branch is the working branch. */}
                 {['DISPATCHED', 'PARTIALLY_RECEIVED'].includes(transfer.status) &&
+                transfer.toBranchId === branch.id &&
                 transfer.lines[0] ? (
                   <form action={perform}>
                     <input name="action" type="hidden" value="receive-transfer" />
-                    <input name="branchId" type="hidden" value={transfer.toBranchId} />
+                    <input name="branchId" type="hidden" value={branch.id} />
                     <input name="transferId" type="hidden" value={transfer.id} />
                     <input name="lineId" type="hidden" value={transfer.lines[0].id} />
                     <input
