@@ -14,6 +14,20 @@ const mocks = vi.hoisted(() => ({
   configure: vi.fn(),
   capture: vi.fn(),
   retention: vi.fn(),
+  enroll: vi.fn(),
+  liveGrant: vi.fn(),
+  diagnose: vi.fn(),
+}));
+vi.mock('hls.js', () => ({
+  default: class {
+    static isSupported = () => true;
+    static Events = { ERROR: 'error', MANIFEST_PARSED: 'parsed' };
+    static ErrorTypes = { MEDIA_ERROR: 'mediaError' };
+    on() {}
+    destroy() {}
+    loadSource() {}
+    attachMedia() {}
+  },
 }));
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -35,7 +49,7 @@ vi.mock('@/lib/trpc', () => {
       pharmacyCameras: {
         workspace: { useQuery: (...args: unknown[]) => mocks.workspace(...args) },
         evidence: { useQuery: (...args: unknown[]) => mocks.evidence(...args) },
-        enrollGateway: mutation(vi.fn()),
+        enrollGateway: mutation(mocks.enroll),
         testConnection: mutation(mocks.test),
         register: mutation(mocks.register),
         configure: mutation(mocks.configure),
@@ -43,6 +57,15 @@ vi.mock('@/lib/trpc', () => {
         issueViewerGrant: mutation(mocks.grant),
         revokeViewerGrant: mutation(mocks.revoke),
         capturePending: mutation(mocks.capture),
+        issueLiveViewGrant: mutation(mocks.liveGrant),
+        configuredConnectionDiagnostics: {
+          useMutation: () => ({
+            mutate: mocks.diagnose,
+            isPending: false,
+            isError: false,
+            data: mocks.diagnose.mock.results.at(-1)?.value,
+          }),
+        },
       },
     },
   };
@@ -334,4 +357,127 @@ it('submits retention through the visible save button with the exact branch and 
   fireEvent.change(within(form).getByLabelText('Retention days'), { target: { value: '1' } });
   fireEvent.click(within(form).getByRole('button', { name: 'Save retention' }));
   expect(mocks.retention).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch_a', days: 1 });
+});
+
+describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
+  const configured = (cameraOverrides: Record<string, unknown> = {}) =>
+    workspaceData({
+      availability: { available: true, mode: 'mediamtx' },
+      cameras: [
+        {
+          id: 'cam_1',
+          name: 'Counter camera',
+          branchId: 'branch_a',
+          gatewayId: 'gw_1',
+          sourceRef: 'counter-1',
+          enabled: true,
+          preset: 'COUNTER',
+          temperatureZoneId: null,
+          counterEvidence: true,
+          ...cameraOverrides,
+        },
+      ],
+    });
+
+  beforeEach(() => {
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('probably');
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+    mocks.liveGrant.mockResolvedValue({
+      grantId: 'live_1',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+  });
+
+  it('offers configured setup without simulator sources or credential fields', () => {
+    mocks.workspace.mockReturnValue(ready(configured()));
+    render(<PharmacyCamerasConsole />);
+    expect(screen.getByRole('form', { name: 'Register a configured gateway' })).toBeVisible();
+    const cameraForm = screen.getByRole('form', { name: 'Register a configured camera' });
+    expect(within(cameraForm).getByLabelText('Gateway stream path')).toBeVisible();
+    expect(within(cameraForm).queryByLabelText('Password')).not.toBeInTheDocument();
+    expect(within(cameraForm).queryByLabelText('Username')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Simulator source/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Live video unavailable. Recordings unavailable.')
+    ).not.toBeInTheDocument();
+  });
+
+  it('registers a configured gateway with its exact URL', async () => {
+    mocks.workspace.mockReturnValue(ready(configured()));
+    mocks.enroll.mockResolvedValue({ id: 'gw_2' });
+    render(<PharmacyCamerasConsole />);
+    const form = screen.getByRole('form', { name: 'Register a configured gateway' });
+    fireEvent.change(within(form).getByLabelText('Gateway name'), { target: { value: 'Main' } });
+    fireEvent.change(within(form).getByLabelText(/Gateway URL/), {
+      target: { value: 'https://camera-gateway.example.internal/' },
+    });
+    await act(async () => {
+      fireEvent.submit(form);
+    });
+    expect(mocks.enroll).toHaveBeenCalledWith({
+      branchId: 'branch_a',
+      name: 'Main',
+      baseUrl: 'https://camera-gateway.example.internal/',
+      retentionDays: 7,
+    });
+  });
+
+  it('registers a configured camera without credentials', async () => {
+    mocks.workspace.mockReturnValue(ready(configured()));
+    mocks.register.mockResolvedValue({ id: 'cam_2' });
+    render(<PharmacyCamerasConsole />);
+    const form = screen.getByRole('form', { name: 'Register a configured camera' });
+    fireEvent.change(within(form).getByLabelText('Camera name'), { target: { value: 'Fridge' } });
+    fireEvent.change(within(form).getByLabelText('Camera gateway'), { target: { value: 'gw_1' } });
+    fireEvent.change(within(form).getByLabelText('Gateway stream path'), {
+      target: { value: 'fridge-1' },
+    });
+    await act(async () => {
+      fireEvent.submit(form);
+    });
+    expect(mocks.register).toHaveBeenCalledWith({
+      branchId: 'branch_a',
+      gatewayId: 'gw_1',
+      name: 'Fridge',
+      sourceRef: 'fridge-1',
+      registerAnyway: false,
+    });
+    expect(within(form).getByRole('status')).toHaveTextContent('registered disabled');
+  });
+
+  it('shows binding IDs, runs the configured check and states snapshot capture is unsupported', () => {
+    mocks.workspace.mockReturnValue(ready(configured()));
+    mocks.diagnose.mockReturnValue({ outcome: 'ok' });
+    render(<PharmacyCamerasConsole />);
+    expect(screen.getByText('cam_1')).toBeVisible();
+    expect(screen.getByText('gw_1')).toBeVisible();
+    expect(screen.getByRole('note')).toHaveTextContent('not supported by this live gateway');
+    fireEvent.click(screen.getByRole('button', { name: 'Check configured connection' }));
+    expect(mocks.diagnose).toHaveBeenCalledWith({ cameraId: 'cam_1' });
+  });
+
+  it('opens live view on the pharmacy endpoint and releases the grant on close', async () => {
+    mocks.workspace.mockReturnValue(ready(configured()));
+    render(<PharmacyCamerasConsole />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open live view' }));
+    });
+    expect(mocks.liveGrant).toHaveBeenCalledWith({ cameraId: 'cam_1', previousGrantId: undefined });
+    const video = screen.getByLabelText('Counter camera playback panel');
+    expect(video).toHaveAttribute('src', '/api/pharmacy/cameras/cam_1/stream?grant=live_1');
+    expect(video.getAttribute('src')).not.toMatch(/https?:|rtsp:|@/);
+    fireEvent.click(screen.getByRole('button', { name: 'Close live view' }));
+    expect(mocks.revoke).toHaveBeenCalledWith({ cameraId: 'cam_1', grantId: 'live_1' });
+    expect(screen.queryByLabelText('Counter camera playback panel')).not.toBeInTheDocument();
+  });
+
+  it('keeps a disabled camera out of live view', () => {
+    mocks.workspace.mockReturnValue(ready(configured({ enabled: false })));
+    render(<PharmacyCamerasConsole />);
+    expect(screen.getByRole('button', { name: 'Open live view' })).toBeDisabled();
+    expect(screen.getByText(/Enable after the configured connection check passes/)).toBeVisible();
+    expect(mocks.liveGrant).not.toHaveBeenCalled();
+  });
 });
