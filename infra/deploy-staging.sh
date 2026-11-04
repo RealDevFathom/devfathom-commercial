@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# DEV-341: fail closed before any Azure command unless an authorized operator has reviewed the
+# current staging what-if and recorded an approval bound to these exact infrastructure files.
+# shellcheck source=infra/staging-review-guard.sh
+source "$(dirname "${BASH_SOURCE[0]}")/staging-review-guard.sh"
+staging_review_require_approval
+
 location=uaenorth
 shared_group=rg-devfathom-shared-uaenorth
 staging_group=rg-devfathom-staging-uaenorth

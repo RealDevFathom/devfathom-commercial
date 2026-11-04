@@ -22,11 +22,17 @@ Live resource inventory (names intentionally omitted from this documentation):
 
 `shared.bicep` creates the registry. `environment.bicep` creates one isolated environment. Operational secure parameters enter only through process environment variables and become Key Vault secrets; values are never committed. Key Vault is also the canonical source for the seed, tenant administrator, and platform administrator passwords. Only the migration job receives versionless Key Vault references for those initialization credentials; the web app never receives them.
 
+> **Staging full deployment is review-gated (DEV-341).** Staging has known, unreviewed IaC drift. A full
+> `az deployment group create` would apply every outstanding what-if change at once. `infra/deploy-staging.sh`
+> now refuses, before any Azure command, unless an authorized operator has reviewed the current what-if and
+> recorded an approval bound to the exact infrastructure files. That review is still outstanding. Follow
+> [`docs/operations/staging-iac-drift-review.md`](operations/staging-iac-drift-review.md). Do not bypass it.
+
 ```bash
-./infra/deploy-staging.sh
 ./infra/configure-github-oidc.sh
 ```
 
+After the review procedure, an authorized operator runs `./infra/deploy-staging.sh` from the repository root.
 The staging script creates only the two `rg-devfathom-*` groups above, builds one `linux/amd64` image, pushes it to ACR, provisions staging, sets the generated Container Apps hostname as a recognized default tenant host, and starts the migration/seed job. It discovers the environment Key Vault independently of deployment history, generates only confirmed-missing initialization credentials, and explicitly authorizes those writes. Existing Key Vault values always win. A lookup error or ambiguous vault match aborts without deployment. Use this guarded script for bootstrap; use the GitHub workflow for normal releases.
 
 ## Production deployment status — DARK / NOT PUBLICLY CUT OVER

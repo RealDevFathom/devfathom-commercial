@@ -70,3 +70,8 @@ docker/livekit/livekit.dev.keys.yaml
 
 # codex cloud CLI log (may contain account metadata)
 /error.log
+
+# DEV-341: staging what-if output holds subscription-scoped resource IDs; review approvals are
+# per-operator. Both stay local and are never committed.
+/whatif-staging*.json
+/.staging-review/
