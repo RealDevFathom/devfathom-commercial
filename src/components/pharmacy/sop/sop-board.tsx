@@ -107,7 +107,7 @@ export function SopBoardView({
         <SectionCard title="No work right now">
           <p className="text-sm text-text-muted" role="status">
             {access.canManage
-              ? "Nothing is due at this branch. In Setup, use 'Create today's work now' or turn on automatic scheduling to add work from your schedules; on-demand procedures can be started below."
+              ? "Nothing is due at this branch. In Setup, use 'Create today's work now' to add work from your schedules; on-demand procedures can be started below."
               : 'Nothing is due for you at this branch. New work appears here when it is scheduled or given to your role.'}
           </p>
           {access.canManage ? (

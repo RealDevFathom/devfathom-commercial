@@ -147,7 +147,7 @@ describe('Automatic scheduling switch', () => {
     expect(toggle).toBeEnabled();
     expect(toggle).toHaveAccessibleDescription(AUTO_SCHEDULE_COPY);
     expect(AUTO_SCHEDULE_COPY).toBe(
-      "When on, today's procedures are created automatically from these schedules. When off, use 'Create today's work now'. Procedures never block pharmacy work."
+      "Opt this branch in to automatic scheduling. Automatic creation of today's procedures is not running yet, so use 'Create today's work now' until it is. Procedures never block pharmacy work."
     );
     expect(screen.getByText('Off')).toBeVisible();
   });
@@ -159,7 +159,7 @@ describe('Automatic scheduling switch', () => {
     expect(h.calls.setAutoSchedule).toEqual([{ pharmacyBranchId: 'pb_1', enabled: true }]);
     expect(onNotice).toHaveBeenCalledWith({
       tone: 'success',
-      text: 'Automatic scheduling is on for this branch.',
+      text: "This branch is opted in. Until automatic creation is running, use 'Create today's work now'.",
     });
   });
 
