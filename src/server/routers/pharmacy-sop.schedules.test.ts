@@ -73,7 +73,10 @@ import { router } from '../trpc';
 import { pharmacySopRouter } from './pharmacy-sop';
 import { PharmacySopAccessError } from '@/lib/pharmacy/sop-adapter';
 import { findPharmacySopPack } from '@/lib/pharmacy/sop-library';
-import { generateAutoPharmacySopOccurrences } from '@/lib/pharmacy/sop-settings';
+import {
+  generateAutoPharmacySopBranchOccurrences,
+  pharmacySopAutoScheduledBranchIds,
+} from '@/lib/pharmacy/sop-settings';
 
 process.env.AUTH_SECRET = 'pharmacy-sop-schedules-test-secret';
 
@@ -411,13 +414,25 @@ describe('setAutoSchedule', () => {
 
 // ── Automatic generation ─────────────────────────────────────────────────────
 
-describe('generateAutoPharmacySopOccurrences', () => {
-  it('reaches the engine only for sites whose latest setting is ON', async () => {
-    db.pharmacySopSite.findMany.mockResolvedValue([
+describe('automatic generation after setAutoSchedule', () => {
+  it('reaches the engine only for a branch whose latest setting is ON', async () => {
+    const sites = [
       { pharmacyBranchId: 'pbranch_1', sopBranchId: 'sopbranch_1' },
       { pharmacyBranchId: 'pbranch_2', sopBranchId: 'sopbranch_2' },
-    ]);
-    await generateAutoPharmacySopOccurrences(db as never);
+    ];
+    db.pharmacySopSite.findMany.mockResolvedValue(sites);
+    db.pharmacySopSite.findFirst.mockImplementation(
+      async ({ where }: { where: { pharmacyBranchId: string } }) =>
+        sites.find((site) => site.pharmacyBranchId === where.pharmacyBranchId) ?? null
+    );
+    const now = new Date('2026-11-04T06:00:00Z');
+    expect(await pharmacySopAutoScheduledBranchIds(db as never)).toEqual([]);
+    expect(
+      await generateAutoPharmacySopBranchOccurrences(db as never, {
+        pharmacyBranchId: 'pbranch_2',
+        now,
+      })
+    ).toBeNull();
     expect(mocks.engine.generateDueSopOccurrences).not.toHaveBeenCalled();
 
     mocks.adapter.resolvePharmacySopSite.mockResolvedValueOnce({
@@ -430,9 +445,12 @@ describe('generateAutoPharmacySopOccurrences', () => {
     // (pharmacy-sop.auto-schedule.test.ts); only the automatic pass is pinned here.
     mocks.engine.generateDueSopOccurrences.mockClear();
     db.restaurantJob.create.mockClear();
-    const now = new Date('2026-11-04T06:00:00Z');
-    await generateAutoPharmacySopOccurrences(db as never, { now });
-    expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledWith(db, {
+    expect(await pharmacySopAutoScheduledBranchIds(db as never)).toEqual(['pbranch_2']);
+    await generateAutoPharmacySopBranchOccurrences(db as never, {
+      pharmacyBranchId: 'pbranch_2',
+      now,
+    });
+    expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledExactlyOnceWith(db, {
       now,
       branchIds: ['sopbranch_2'],
       lookbackDays: 0,

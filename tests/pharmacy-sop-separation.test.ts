@@ -191,7 +191,7 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
     }
   });
 
-  it('SOP code enqueues only its own automatic-scheduling job, from one module', () => {
+  it('SOP code enqueues only its own two automatic-scheduling jobs, from one module', () => {
     const sopSources = [...SOP_FILES, ...SOP_DIRS.flatMap((dir) => walk(dir.replace(/\/$/, '')))];
     expect(sopSources).toContain('src/lib/pharmacy/sop-settings.ts');
     expect(sopSources).toContain('src/components/pharmacy/sop/sop-setup.tsx');
@@ -203,26 +203,57 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
     );
     expect(offenders).toEqual([]);
 
-    // The job module: one enqueue call, of its own type, and no other job.
+    // The job module: exactly two enqueue calls, of its own two types, and no
+    // other job: the hourly parent (next slot) and the per-branch child.
     const job = readFileSync(join(ROOT, AUTO_SCHEDULE_JOB_MODULE), 'utf8');
     expect(job).toContain(
       "export const PHARMACY_SOP_AUTO_GENERATE_JOB = 'pharmacy.sop.autoGenerate';"
     );
-    expect(job.match(/\benqueue[A-Z]?\w*\s*\(/g)).toEqual(['enqueue(']);
-    expect(job).toMatch(/type: PHARMACY_SOP_AUTO_GENERATE_JOB,/);
+    expect(job).toContain(
+      "export const PHARMACY_SOP_AUTO_GENERATE_BRANCH_JOB = 'pharmacy.sop.autoGenerateBranch';"
+    );
+    expect(job.match(/\benqueue[A-Z]?\w*\s*\(/g)).toEqual(['enqueue(', 'enqueue(']);
+    expect(job.match(/\btype: [A-Z_]+,/g)).toEqual([
+      'type: PHARMACY_SOP_AUTO_GENERATE_JOB,',
+      'type: PHARMACY_SOP_AUTO_GENERATE_BRANCH_JOB,',
+    ]);
     expect(job).not.toMatch(
       /SOP_(GENERATE_OCCURRENCES|ESCALATION|LATE_MISSED)_JOB|'sop\.\w+'|sop-escalation|sop-late-missed|@\/lib\/restaurant\/job-handlers'/
     );
-    // Its type is registered once (job-handlers.ts) and referenced nowhere else.
+    // Its types are registered once (job-handlers.ts) and referenced nowhere else.
     const references = [...walk('src'), ...walk('scripts')]
       .filter((file) => !file.startsWith('src/generated/'))
       .filter((file) =>
-        /PHARMACY_SOP_AUTO_GENERATE_JOB|pharmacy\.sop\.autoGenerate/.test(
+        /PHARMACY_SOP_AUTO_GENERATE(_BRANCH)?_JOB|pharmacy\.sop\.autoGenerate/.test(
           readFileSync(join(ROOT, file), 'utf8')
         )
       )
       .sort();
     expect(references).toEqual([AUTO_SCHEDULE_JOB_MODULE, 'src/lib/restaurant/job-handlers.ts']);
+  });
+
+  it('the automatic-scheduling code never opens a client or transaction of its own', () => {
+    // The worker hands each handler ONE tenant transaction; the request path
+    // hands its own. Opening another client would compete with it for a pool
+    // connection (the platform rule in scoped-db.ts).
+    for (const file of [AUTO_SCHEDULE_JOB_MODULE, 'src/lib/pharmacy/sop-settings.ts']) {
+      // Code only: the modules' comments explain the rule by naming these.
+      const source = readFileSync(join(ROOT, file), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      expect(source, file).not.toMatch(
+        /\b(createTenantDb|withTenantDb|withPlatformDb|withOrganizationDefaults)\b/
+      );
+      expect(source, file).not.toMatch(
+        /@\/lib\/db'|from '\.\.?\/[\w/-]*\bdb'|new PrismaClient|\bpg\b'/
+      );
+      // Only types come from scoped-db.
+      for (const line of source.split('\n').filter((l) => l.includes('@/lib/tenancy/scoped-db'))) {
+        expect(line, file).toMatch(
+          /^import type \{ ScopedDb \} from '@\/lib\/tenancy\/scoped-db';$/
+        );
+      }
+    }
   });
 
   it('the automatic-scheduling setting never appears in pharmacy operation code', () => {
@@ -234,11 +265,14 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('only the automatic-scheduling job calls the automatic generator (no route)', () => {
+  it('only the automatic-scheduling jobs call the automatic generator (no route)', () => {
     const callers = walk('src').filter(
       (file) =>
         file !== 'src/lib/pharmacy/sop-settings.ts' &&
-        /generateAutoPharmacySopOccurrences/.test(readFileSync(join(ROOT, file), 'utf8'))
+        !/\.test\.tsx?$/.test(file) &&
+        /generateAutoPharmacySopBranchOccurrences|pharmacySopAutoScheduledBranchIds/.test(
+          readFileSync(join(ROOT, file), 'utf8')
+        )
     );
     expect(callers).toEqual([AUTO_SCHEDULE_JOB_MODULE]);
   });

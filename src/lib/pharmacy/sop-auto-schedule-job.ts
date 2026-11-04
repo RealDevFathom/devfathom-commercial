@@ -14,37 +14,54 @@ import {
   runSchedulerTransaction,
   type EnqueueResult,
 } from '@/lib/restaurant/scheduler';
-import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   PHARMACY_SOP_AUTO_LOOKBACK_DAYS,
-  generateAutoPharmacySopOccurrences,
-  type AutoGenerationFailure,
+  generateAutoPharmacySopBranchOccurrences,
+  pharmacySopAutoScheduledBranchIds,
 } from '@/lib/pharmacy/sop-settings';
 
 /**
- * DEV-751 — the recurring trigger behind per-branch automatic scheduling.
+ * DEV-751 — the background jobs behind per-branch automatic scheduling.
  *
- * One job type on the existing restaurant job queue (`restaurant_jobs`, drained
- * by `bun run restaurant:jobs`). It never exists until a manager turns
+ * Two job types on the existing restaurant job queue (`restaurant_jobs`,
+ * drained by `bun run restaurant:jobs`). Neither exists until a manager turns
  * automatic scheduling on for a branch:
  *
  *  - Turning a branch ON appends the setting, ensures the organization's next
  *    hourly slot job, and creates the due procedures for THAT branch now.
- *  - Each slot job reads the settings first. While at least one branch is ON it
- *    ensures the next slot BEFORE generating, in its own committed transaction,
- *    then creates due procedures for each ON branch separately
- *    (`generateAutoPharmacySopOccurrences`). A failing branch fails the job
- *    (visible, retried) without stopping the other branches or the chain. When
- *    none is ON it enqueues nothing, so the chain stops and the organization
- *    carries no recurring job.
+ *  - Each hourly slot job (`pharmacy.sop.autoGenerate`, the parent) reads the
+ *    settings. When no branch is ON it does nothing, so the chain stops and the
+ *    organization carries no recurring job. Otherwise it ensures the next slot
+ *    and enqueues one per-branch job (`pharmacy.sop.autoGenerateBranch`, the
+ *    child) for each ON branch, then commits. It never generates anything.
+ *  - Each child re-reads its branch's site and setting (now OFF or gone → it
+ *    does nothing) and creates that branch's due procedures.
  *  - Turning a branch OFF only appends the setting; the next slot sees it.
  *
- * Slots are deterministic (`pharmacy.sop.autoGenerate:<slot ISO>`, floored to
- * the hour) and deduplicated per organization by the scheduler's idempotency
- * key, so toggling repeatedly, two concurrent enables or a retried job never
- * create a second job for the same slot. Generation itself is idempotent
- * (deterministic occurrence ids + unique(assignmentId, dueAt)), so a slot that
- * runs twice creates nothing the second time.
+ * ONE CONNECTION PER HANDLER. The worker runs every handler inside one tenant
+ * transaction (`withTenantDb`, 30 s) and passes it as `db`. Both handlers use
+ * that `db` and nothing else: no second client, no `createTenantDb`, no other
+ * pooled connection while the worker's transaction is open (the platform rule
+ * in `scoped-db.ts`: never compete with an owning transaction for a pool
+ * connection or its locks). The parent commits quickly (a settings read and a
+ * few queue inserts), so the next slot and the children are durable together.
+ *
+ * FAILURE IS PER BRANCH. A child that throws (a broken assignment, a database
+ * error, its own 30 s timeout) rolls back only its own branch's work and is
+ * retried by the scheduler with backoff, ending DEAD after `maxAttempts`, for
+ * that branch only. The other branches are separate jobs, and the next slot was
+ * already committed by the parent, so the chain continues and the next slot
+ * enqueues a fresh child for the failed branch.
+ *
+ * Keys are deterministic and deduplicated per organization by the scheduler's
+ * unique (organizationId, idempotencyKey): the parent's is
+ * `pharmacy.sop.autoGenerate:<slot ISO>` (floored to the hour), a child's
+ * `pharmacy.sop.autoGenerateBranch:<pharmacyBranchId>:<slot ISO>`. Toggling
+ * repeatedly, two concurrent enables or a retried parent never create a second
+ * job. Generation itself is idempotent (deterministic occurrence ids +
+ * unique(assignmentId, dueAt)), so a child that runs twice creates nothing the
+ * second time.
  *
  * Hourly is enough: the engine materialises each assignment's configured times
  * over the branch's current business date and the next one, in the branch
@@ -54,13 +71,16 @@ import {
  * time; an hourly run picks up a new schedule, a newly published version or a
  * business-day change within the hour and tolerates many missed runs.
  *
- * This job only creates procedures. It never escalates, sweeps late or missed
- * work, enqueues any other job type, or touches a pharmacy operation table.
+ * These jobs only create procedures. They never escalate, sweep late or missed
+ * work, enqueue any other job type, or touch a pharmacy operation table.
  * Procedures never block pharmacy work.
  */
 
-/** The `RestaurantJob.type` this handler is registered under (job-handlers.ts). */
+/** The parent (hourly slot) job type, registered in job-handlers.ts. */
 export const PHARMACY_SOP_AUTO_GENERATE_JOB = 'pharmacy.sop.autoGenerate';
+
+/** The per-branch child job type, registered in job-handlers.ts. */
+export const PHARMACY_SOP_AUTO_GENERATE_BRANCH_JOB = 'pharmacy.sop.autoGenerateBranch';
 
 /** One run per organization per hour while any branch is ON. */
 export const PHARMACY_SOP_AUTO_GENERATE_CADENCE_MS = 60 * 60_000;
@@ -90,7 +110,22 @@ export function pharmacySopAutoGenerateJobKey(slot: Date): string {
   return `${PHARMACY_SOP_AUTO_GENERATE_JOB}:${pharmacySopAutoGenerateSlot(slot).toISOString()}`;
 }
 
+/** The organization id shape `scoped-db.ts` accepts. */
 const ORGANIZATION_ID = /^[a-zA-Z0-9_-]{3,128}$/;
+
+/** A pharmacy branch id as stored: non-empty, no whitespace, no key separator. */
+const PHARMACY_BRANCH_ID = /^[^\s:]{1,191}$/;
+
+/**
+ * Deterministic idempotency key for one branch's child job of one slot (per
+ * organization, like the slot key). A missing or malformed branch fails closed.
+ */
+export function pharmacySopAutoGenerateBranchJobKey(pharmacyBranchId: string, slot: Date): string {
+  if (typeof pharmacyBranchId !== 'string' || !PHARMACY_BRANCH_ID.test(pharmacyBranchId)) {
+    throw new TypeError('A pharmacy branch is required to schedule automatic SOP generation.');
+  }
+  return `${PHARMACY_SOP_AUTO_GENERATE_BRANCH_JOB}:${pharmacyBranchId}:${pharmacySopAutoGenerateSlot(slot).toISOString()}`;
+}
 
 /**
  * The advisory lock serializing ensures of one slot in ONE organization. Unlike
@@ -109,25 +144,25 @@ export function pharmacySopAutoGenerateLockKey(organizationId: string, slot: Dat
 export type EnsureAutoScheduleJobResult = EnqueueResult & { slot: Date };
 
 /**
- * Ensure the organization's job for the next slot after `now` exists (the `db`
- * is already org-scoped to `organizationId`). Concurrent ensures of the same
- * slot in the same organization are serialized on a transaction-scoped
- * advisory lock (`pharmacySopAutoGenerateLockKey`), so the loser reads the winner's row
- * instead of hitting the unique index inside a request or job transaction; a
- * DUPLICATE_ENQUEUE that still slips through is retried once, as
- * `enqueueInsightRollup` does.
+ * Ensure the organization's job for the next slot after `now` exists, on the
+ * caller's `db` only (already org-scoped to `organizationId`). Concurrent
+ * ensures of the same slot in the same organization (a manager turning a
+ * branch ON while the worker runs the current slot) are serialized on a
+ * transaction-scoped advisory lock (`pharmacySopAutoGenerateLockKey`), so the
+ * loser waits for the winner to commit and then reads its row instead of
+ * hitting the unique index, which would abort the loser's whole transaction.
+ * The lock is held until the caller's transaction ends.
  */
 export async function ensurePharmacySopAutoScheduleJob(
   db: ScopedDb,
   input: { organizationId: string; now: Date }
 ): Promise<EnsureAutoScheduleJobResult> {
   const slot = nextPharmacySopAutoGenerateSlot(input.now);
-  const key = pharmacySopAutoGenerateJobKey(slot);
   const lockKey = pharmacySopAutoGenerateLockKey(input.organizationId, slot);
   const job = {
     type: PHARMACY_SOP_AUTO_GENERATE_JOB,
     payload: { slot: slot.toISOString() },
-    idempotencyKey: key,
+    idempotencyKey: pharmacySopAutoGenerateJobKey(slot),
     scheduledAt: slot,
   } as const;
   const attempt = () =>
@@ -138,6 +173,11 @@ export async function ensurePharmacySopAutoScheduleJob(
   try {
     return { ...(await attempt()), slot };
   } catch (error) {
+    // A lost unique-index race is retried once to observe the winner, as
+    // `enqueueInsightRollup` does. That only helps on a client whose operations
+    // commit separately; inside one interactive transaction (a worker handler
+    // or a request) the violation has already aborted it, the retry fails too
+    // and the owner retries the whole unit. The lock makes the race rare.
     if (error instanceof SchedulerError && error.reason === 'DUPLICATE_ENQUEUE') {
       return { ...(await attempt()), slot };
     }
@@ -152,9 +192,12 @@ export type StartAutoScheduleResult = {
 
 /**
  * What turning a branch ON does once its setting row is appended: ensure the
- * recurring job first (so a failure creating today's work still leaves the
- * hourly run to retry it), then create the due procedures for THIS branch only,
- * from its current business date (never back-dated to days it was OFF).
+ * recurring job, then create the due procedures for THIS branch only, from its
+ * current business date (never back-dated to days it was OFF). Everything runs
+ * on the caller's `db` and nothing else. The tRPC route passes its own request
+ * transaction, so the setting, the next slot and today's work commit (or roll
+ * back) together; a caller with a per-operation client commits each step on
+ * its own, the next slot first.
  */
 export async function startPharmacySopAutoSchedule(
   db: ScopedDb,
@@ -172,20 +215,25 @@ export async function startPharmacySopAutoSchedule(
   return { job, generated };
 }
 
-/** Strict payload: the slot this job was enqueued for, aligned to the cadence. */
-const AUTO_GENERATE_PAYLOAD = z
-  .object({
-    slot: z
-      .string()
-      .datetime()
-      .refine(
-        (value) => Date.parse(value) % PHARMACY_SOP_AUTO_GENERATE_CADENCE_MS === 0,
-        'The slot must be aligned to the hourly cadence.'
-      ),
-  })
+/** An ISO instant aligned to the hourly cadence. */
+const SLOT = z
+  .string()
+  .datetime()
+  .refine(
+    (value) => Date.parse(value) % PHARMACY_SOP_AUTO_GENERATE_CADENCE_MS === 0,
+    'The slot must be aligned to the hourly cadence.'
+  );
+
+/** Strict parent payload: the slot this job was enqueued for. */
+const AUTO_GENERATE_PAYLOAD = z.object({ slot: SLOT }).strict();
+
+/** Strict child payload: the parent's slot and ONE pharmacy branch. */
+const AUTO_GENERATE_BRANCH_PAYLOAD = z
+  .object({ slot: SLOT, pharmacyBranchId: z.string().regex(PHARMACY_BRANCH_ID) })
   .strict();
 
 export type PharmacySopAutoGeneratePayload = z.infer<typeof AUTO_GENERATE_PAYLOAD>;
+export type PharmacySopAutoGenerateBranchPayload = z.infer<typeof AUTO_GENERATE_BRANCH_PAYLOAD>;
 
 export function parsePharmacySopAutoGeneratePayload(
   payload: unknown
@@ -193,80 +241,59 @@ export function parsePharmacySopAutoGeneratePayload(
   return AUTO_GENERATE_PAYLOAD.parse(payload);
 }
 
-/** A slot run in which at least one ON branch failed; the next slot already exists. */
-export class PharmacySopAutoGenerateError extends Error {
-  readonly failures: readonly AutoGenerationFailure[];
-
-  constructor(failures: readonly AutoGenerationFailure[]) {
-    const detail = failures
-      .map(({ pharmacyBranchId, error }) => {
-        const reason =
-          error instanceof Error ? `${error.name}: ${error.message.slice(0, 200)}` : 'error';
-        return `${pharmacyBranchId} (${reason})`;
-      })
-      .join(', ');
-    super(`Automatic SOP scheduling failed for ${failures.length} branch(es): ${detail}.`, {
-      cause: failures[0]?.error,
-    });
-    this.name = 'PharmacySopAutoGenerateError';
-    this.failures = failures;
-  }
+export function parsePharmacySopAutoGenerateBranchPayload(
+  payload: unknown
+): PharmacySopAutoGenerateBranchPayload {
+  return AUTO_GENERATE_BRANCH_PAYLOAD.parse(payload);
 }
 
-export type PharmacySopAutoGenerateHandlerDeps = {
-  /**
-   * An org-scoped client whose every operation commits in its own tenant
-   * transaction (`createTenantDb`), independent of the worker's handler
-   * transaction.
-   */
-  independentTenantDb: (organizationId: string) => ScopedDb;
+/**
+ * The parent (hourly slot) handler. Runs in the job's own organization on the
+ * worker's handler transaction `db` and nothing else. The instant is the claim
+ * instant (`job.startedAt`, the worker tick's clock), so a late worker
+ * schedules the slot after the present rather than replaying every missed hour.
+ *
+ * Settings first (no branch ON → nothing, so the chain stops, e.g. in a
+ * restaurant organization with no pharmacy SOP site); then the next slot; then
+ * one child per ON branch, due now and keyed by this job's slot. All of it is
+ * a handful of queue writes that commit together with the job: a throw rolls
+ * all of them back and the scheduler retries the parent.
+ */
+export const pharmacySopAutoGenerateHandler: RestaurantJobHandler = async ({ db, job }) => {
+  const { slot } = parsePharmacySopAutoGeneratePayload(job.payload);
+  const now = job.startedAt;
+  const pharmacyBranchIds = await pharmacySopAutoScheduledBranchIds(db);
+  if (pharmacyBranchIds.length === 0) return;
+
+  // The ensure's slot lock is held until this transaction ends, so a duplicate
+  // run of this parent (same next slot) waits here and then deduplicates every
+  // child below instead of racing it. A race that still loses the unique index
+  // throws DUPLICATE_ENQUEUE, which fails this attempt; its retry deduplicates.
+  await ensurePharmacySopAutoScheduleJob(db, { organizationId: job.organizationId, now });
+  for (const pharmacyBranchId of pharmacyBranchIds) {
+    await enqueue(
+      db,
+      {
+        type: PHARMACY_SOP_AUTO_GENERATE_BRANCH_JOB,
+        payload: { slot, pharmacyBranchId },
+        idempotencyKey: pharmacySopAutoGenerateBranchJobKey(pharmacyBranchId, new Date(slot)),
+        scheduledAt: now,
+      },
+      now
+    );
+  }
 };
 
 /**
- * The handler, with its independent-client seam. Runs in the job's own
- * organization (the worker opens the tenant RLS context and passes `db`, one
- * interactive transaction bounded by `withTenantDb`'s 30 s timeout). The
- * generation instant is the claim instant (`job.startedAt`, the worker tick's
- * clock), so a late worker generates for the present and schedules the next
- * slot after it rather than replaying every missed hour.
- *
- * Order matters: settings first (on `db`; no branch ON → no job and no
- * generation, so the chain stops, e.g. in a restaurant organization with no
- * pharmacy SOP site); then the next slot; then generation per ON branch. The
- * next slot and the generation run on an INDEPENDENT tenant client, so:
- *
- *  - the next slot is committed before any generation starts: a throw, a
- *    retry that ends DEAD, or the handler transaction timing out can no longer
- *    roll it back and silently stop the chain while the setting says ON;
- *  - every engine write commits on its own, so a large run is not capped or
- *    rolled back by the handler transaction's 30 s timeout (a run that outlives
- *    it fails the job only after its work is committed; the retry finds
- *    nothing left to create), and one branch's database error cannot abort the
- *    others' work as it would inside one Postgres transaction.
- *
- * When any branch failed the job still throws (after the other branches ran),
- * so the failure is recorded on the job and retried; retries are idempotent
- * (deduplicated slot, deterministic occurrence ids).
+ * The per-branch child handler. Runs in the job's own organization on the
+ * worker's handler transaction `db` and nothing else, as of the claim instant.
+ * Re-reads the branch's site and latest setting: a branch turned OFF since the
+ * parent ran, or a site that is gone (or belongs to another organization, which
+ * RLS hides), succeeds without doing anything. Otherwise it creates the
+ * branch's due procedures; a failure throws, so the scheduler retries this
+ * branch alone and records it DEAD after `maxAttempts`.
  */
-export function createPharmacySopAutoGenerateHandler(
-  deps: PharmacySopAutoGenerateHandlerDeps
-): RestaurantJobHandler {
-  return async ({ db, job }) => {
-    parsePharmacySopAutoGeneratePayload(job.payload);
-    const { organizationId } = job;
-    const now = job.startedAt;
-    // A lazy proxy: no connection is used unless a branch is ON.
-    const independent = deps.independentTenantDb(organizationId);
-    const result = await generateAutoPharmacySopOccurrences(db, {
-      now,
-      generationDb: independent,
-      beforeGenerate: () => ensurePharmacySopAutoScheduleJob(independent, { organizationId, now }),
-    });
-    if (result.failures.length > 0) throw new PharmacySopAutoGenerateError(result.failures);
-  };
-}
-
-/** The registered handler (job-handlers.ts). */
-export const pharmacySopAutoGenerateHandler = createPharmacySopAutoGenerateHandler({
-  independentTenantDb: (organizationId) => createTenantDb(organizationId),
-});
+export const pharmacySopAutoGenerateBranchHandler: RestaurantJobHandler = async ({ db, job }) => {
+  const { pharmacyBranchId } = parsePharmacySopAutoGenerateBranchPayload(job.payload);
+  await generateAutoPharmacySopBranchOccurrences(db, { pharmacyBranchId, now: job.startedAt });
+};

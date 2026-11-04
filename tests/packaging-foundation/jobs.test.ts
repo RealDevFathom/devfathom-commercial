@@ -86,7 +86,12 @@ it('preserves legacy reset registration and explicitly composed handler behavior
   const context = { job: { type: 'demo-reset' }, db: {} } as RestaurantJobContext;
   expect(resolveRestaurantJobHandler('demo-reset')).toBe(mock.reset);
   expect(Object.keys(restaurantJobHandlers).sort()).toEqual(
-    [...Object.keys(coreRestaurantJobHandlers), 'demo-reset', 'pharmacy.sop.autoGenerate'].sort()
+    [
+      ...Object.keys(coreRestaurantJobHandlers),
+      'demo-reset',
+      'pharmacy.sop.autoGenerate',
+      'pharmacy.sop.autoGenerateBranch',
+    ].sort()
   );
   await runRestaurantJob(context);
   expect(mock.reset).toHaveBeenCalledExactlyOnceWith(context);

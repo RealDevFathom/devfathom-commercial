@@ -21,9 +21,11 @@ import type { PharmacySopSiteRef } from '@/lib/pharmacy/sop-adapter';
  * means OFF. With it off, a manager still creates the day's work explicitly
  * ("Create today's work now"), which is never affected by this setting.
  *
- * `generateAutoPharmacySopOccurrences` is called only by the hourly background
- * job in `sop-auto-schedule-job.ts`, which exists only while at least one
- * branch is ON (see that module). It is not exposed on a route.
+ * `pharmacySopAutoScheduledBranchIds` and `generateAutoPharmacySopBranchOccurrences`
+ * are called only by the background jobs in `sop-auto-schedule-job.ts`, which
+ * exist only while at least one branch is ON (see that module). Neither is
+ * exposed on a route. Both run on the caller's `db` alone: they never open a
+ * client or connection of their own.
  */
 
 /** No row for a branch reads as this value. */
@@ -154,53 +156,18 @@ export async function setPharmacySopAutoSchedule(
  */
 export const PHARMACY_SOP_AUTO_LOOKBACK_DAYS = 0;
 
-export type AutoGenerationFailure = {
-  pharmacyBranchId: string;
-  error: unknown;
-};
-
-export type AutoGenerationResult = GenerateResult & {
-  /** Pharmacy branches whose latest setting is ON (each was attempted). */
-  pharmacyBranchIds: string[];
-  /** ON branches whose generation threw; the other branches still ran. */
-  failures: AutoGenerationFailure[];
-};
-
 /**
- * Generate due occurrences only at SOP sites whose latest setting is ON, via
- * the engine restricted to ONE site's engine branch per call. With no site ON
- * the engine is not called at all and `beforeGenerate` does not run. The `db`
- * is already org-scoped and is used to read the settings.
- *
- * Each ON branch is generated separately and its error is captured rather than
- * thrown, so one bad branch (a broken assignment, a timeout) cannot stop the
- * others; the caller decides whether failures fail the run. The isolation holds
- * for database errors only when `generationDb` commits each operation on its
- * own (a per-operation tenant client): inside one interactive transaction a
- * failed statement aborts the whole transaction.
+ * The pharmacy branches whose latest setting is ON (active SOP sites only), in
+ * the `db`'s organization. Reads only. The hourly job enqueues one per-branch
+ * job for each of them; an empty list stops the chain.
  */
-export async function generateAutoPharmacySopOccurrences(
-  db: ScopedDb,
-  input: {
-    now?: Date;
-    /** The client generation runs on; defaults to `db`. */
-    generationDb?: ScopedDb;
-    /** Runs once, only when at least one branch is ON, before any generation. */
-    beforeGenerate?: () => Promise<unknown>;
-  } = {}
-): Promise<AutoGenerationResult> {
-  const empty: AutoGenerationResult = {
-    assignmentsProcessed: 0,
-    created: 0,
-    skipped: 0,
-    pharmacyBranchIds: [],
-    failures: [],
-  };
+export async function pharmacySopAutoScheduledBranchIds(db: ScopedDb): Promise<string[]> {
   const sites = await db.pharmacySopSite.findMany({
     where: { pharmacyBranch: { active: true } },
-    select: { pharmacyBranchId: true, sopBranchId: true },
+    select: { pharmacyBranchId: true },
+    orderBy: { pharmacyBranchId: 'asc' },
   });
-  if (sites.length === 0) return empty;
+  if (sites.length === 0) return [];
 
   const rows = await db.pharmacySopSiteSetting.findMany({
     where: { pharmacyBranchId: { in: sites.map((site) => site.pharmacyBranchId) } },
@@ -213,36 +180,36 @@ export async function generateAutoPharmacySopOccurrences(
       latest.set(row.pharmacyBranchId, row.autoScheduleEnabled);
     }
   }
-  const on = sites.filter(
-    (site) => latest.get(site.pharmacyBranchId) ?? PHARMACY_SOP_AUTO_SCHEDULE_DEFAULT
-  );
-  if (on.length === 0) return empty;
+  return sites
+    .map((site) => site.pharmacyBranchId)
+    .filter((id) => latest.get(id) ?? PHARMACY_SOP_AUTO_SCHEDULE_DEFAULT);
+}
 
-  await input.beforeGenerate?.();
-
-  // One instant for every branch in this run.
-  const now = input.now ?? new Date();
-  const target = input.generationDb ?? db;
-  const result: AutoGenerationResult = {
-    ...empty,
-    pharmacyBranchIds: on.map((site) => site.pharmacyBranchId),
-    failures: [],
-  };
-  for (const site of on) {
-    try {
-      const generated = await generateDueSopOccurrences(target, {
-        now,
-        branchIds: [site.sopBranchId],
-        lookbackDays: PHARMACY_SOP_AUTO_LOOKBACK_DAYS,
-      });
-      result.assignmentsProcessed += generated.assignmentsProcessed;
-      result.created += generated.created;
-      result.skipped += generated.skipped;
-    } catch (error) {
-      result.failures.push({ pharmacyBranchId: site.pharmacyBranchId, error });
-    }
-  }
-  return result;
+/**
+ * Generate the due occurrences of ONE pharmacy branch for automatic
+ * scheduling, on the caller's `db` only (the per-branch job's own transaction).
+ * Re-reads the branch's SOP site and latest setting first: when the site is
+ * missing (or its pharmacy branch inactive, or it belongs to another
+ * organization, which RLS hides) or the setting is now OFF, nothing is
+ * generated and `null` is returned. Otherwise the engine runs restricted to the
+ * site's engine branch, never back-dated. Errors propagate to the caller.
+ */
+export async function generateAutoPharmacySopBranchOccurrences(
+  db: ScopedDb,
+  input: { pharmacyBranchId: string; now: Date }
+): Promise<GenerateResult | null> {
+  const site = await db.pharmacySopSite.findFirst({
+    where: { pharmacyBranchId: input.pharmacyBranchId, pharmacyBranch: { active: true } },
+    select: { pharmacyBranchId: true, sopBranchId: true },
+  });
+  if (!site) return null;
+  const setting = await pharmacySopAutoSchedule(db, { pharmacyBranchId: site.pharmacyBranchId });
+  if (!setting.autoScheduleEnabled) return null;
+  return generateDueSopOccurrences(db, {
+    now: input.now,
+    branchIds: [site.sopBranchId],
+    lookbackDays: PHARMACY_SOP_AUTO_LOOKBACK_DAYS,
+  });
 }
 
 function runInTransaction<T>(db: ScopedDb, work: (tx: ScopedDb) => Promise<T>): Promise<T> {

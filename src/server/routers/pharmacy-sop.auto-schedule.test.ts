@@ -281,7 +281,9 @@ describe('setAutoSchedule ON', () => {
     }
   });
 
-  it('keeps the job when creating today’s work fails', async () => {
+  // This context db commits each operation on its own. Over HTTP the route's
+  // single request transaction rolls the setting and the job back with it.
+  it('on a per-operation context db, keeps the job when creating today’s work fails', async () => {
     mocks.engine.generateDueSopOccurrences.mockRejectedValueOnce(new Error('engine down'));
     await expect(caller().setAutoSchedule({ ...BRANCH_INPUT, enabled: true })).rejects.toThrow();
     expect(settingRows).toHaveLength(1);
@@ -367,8 +369,9 @@ describe('no escalation in the automatic-scheduling path', () => {
     expect(source).not.toMatch(/createEscalationPolicy|sop-escalation|sop-late-missed/);
     expect(source).not.toMatch(/restaurantSopEscalation(Policy|Step)\s*\.\s*(create|upsert)/);
     expect(source).not.toMatch(/SOP_(GENERATE_OCCURRENCES|ESCALATION|LATE_MISSED)_JOB/);
-    // One enqueue call, of its own type.
-    expect(source.match(/\benqueue\s*\(/g)).toHaveLength(1);
+    // Two enqueue calls: the next slot and the per-branch child, of its own types.
+    expect(source.match(/\benqueue\s*\(/g)).toHaveLength(2);
     expect(source).toMatch(/type: PHARMACY_SOP_AUTO_GENERATE_JOB,/);
+    expect(source).toMatch(/type: PHARMACY_SOP_AUTO_GENERATE_BRANCH_JOB,/);
   });
 });

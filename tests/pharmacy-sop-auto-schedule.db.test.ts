@@ -3,7 +3,9 @@
  * DEV-751 — opt-in pharmacy SOP automatic scheduling, end to end on PostgreSQL.
  *
  * Drives the REAL worker path: `runRestaurantWorkerTick` → the composed job
- * registry → `pharmacySopAutoGenerateHandler`, with claims, handlers and
+ * registry → the hourly parent `pharmacySopAutoGenerateHandler`, which enqueues
+ * one `pharmacySopAutoGenerateBranchHandler` child per ON branch (drained in
+ * the same tick), with claims, handlers and
  * settlement in each organization's own RLS context (`withTenantDb`) as the
  * restricted runtime role, and an injected tick clock. Fixtures: two pharmacy
  * organizations and one restaurant organization.
@@ -439,7 +441,7 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     expect(await discover()).toEqual([A]);
   });
 
-  it('two concurrent ticks run the slot once; the chain re-enqueues one next-slot job', async () => {
+  it('two concurrent ticks run the slot once; the chain re-enqueues one next-slot job and one child', async () => {
     // A stray pharmacy job in the restaurant org (no product path enqueues one)
     // must be a no-op there.
     const stray = await deps.scoped.withTenantDb(R, (db) =>
@@ -450,8 +452,9 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
 
     contexts.length = 0;
     const [left, right] = await Promise.all([tick(T1, 'worker-left'), tick(T1, 'worker-right')]);
-    expect(left.jobs.claimed + right.jobs.claimed).toBe(2);
-    expect(left.jobs.succeeded + right.jobs.succeeded).toBe(2);
+    // A's parent, A branch 1's child (due at once, same tick) and R's stray.
+    expect(left.jobs.claimed + right.jobs.claimed).toBe(3);
+    expect(left.jobs.succeeded + right.jobs.succeeded).toBe(3);
     expect(left.jobs.retried + right.jobs.retried + left.jobs.dead + right.jobs.dead).toBe(0);
 
     // No duplicates: the slot ran once and created nothing new.
@@ -463,8 +466,14 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     const aJobs = await jobs(A);
     expect(aJobs.map((job) => [job.idempotencyKey, job.status])).toEqual([
       ['pharmacy.sop.autoGenerate:2026-11-04T07:00:00.000Z', 'SUCCEEDED'],
+      [`pharmacy.sop.autoGenerateBranch:${A}_pb1:2026-11-04T07:00:00.000Z`, 'SUCCEEDED'],
       ['pharmacy.sop.autoGenerate:2026-11-04T08:00:00.000Z', 'QUEUED'],
     ]);
+    // Only the ON branch got a child; branch 2 (latest OFF) none.
+    expect(aJobs[1]!.payload).toEqual({
+      slot: '2026-11-04T07:00:00.000Z',
+      pharmacyBranchId: `${A}_pb1`,
+    });
     expect(aJobs.every((job) => job.organizationId === A)).toBe(true);
     // The restaurant org's stray job did nothing and enqueued nothing.
     expect((await jobs(R)).map((job) => job.status)).toEqual(['SUCCEEDED']);
@@ -488,7 +497,7 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     // A repeat tick at the same instant finds nothing due and changes nothing.
     const repeat = await tick(T1, 'worker-repeat');
     expect(repeat.jobs.claimed).toBe(0);
-    expect(await jobs(A)).toHaveLength(2);
+    expect(await jobs(A)).toHaveLength(3);
     expect(await occurrences(A, '1')).toHaveLength(8);
   });
 
@@ -504,7 +513,8 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
 
     contexts.length = 0;
     const result = await tick(T2, 'worker-late');
-    expect(result.jobs).toMatchObject({ claimed: 2, succeeded: 2, retried: 0, dead: 0, failed: 0 });
+    // A's parent, its child for branch 1, and R's own engine job.
+    expect(result.jobs).toMatchObject({ claimed: 3, succeeded: 3, retried: 0, dead: 0, failed: 0 });
 
     // Window moved to 5–6 Nov: only 6 Nov is new for org A branch 1 (4 rows).
     const a1 = iso(await occurrences(A, '1'));
@@ -533,9 +543,12 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     ]);
 
     // The late worker scheduled the slot after now, not every missed hour.
+    // The child keeps its parent's slot; it ran as of the late claim instant.
     expect((await jobs(A)).map((job) => [job.idempotencyKey, job.status])).toEqual([
       ['pharmacy.sop.autoGenerate:2026-11-04T07:00:00.000Z', 'SUCCEEDED'],
+      [`pharmacy.sop.autoGenerateBranch:${A}_pb1:2026-11-04T07:00:00.000Z`, 'SUCCEEDED'],
       ['pharmacy.sop.autoGenerate:2026-11-04T08:00:00.000Z', 'SUCCEEDED'],
+      [`pharmacy.sop.autoGenerateBranch:${A}_pb1:2026-11-04T08:00:00.000Z`, 'SUCCEEDED'],
       ['pharmacy.sop.autoGenerate:2026-11-05T06:00:00.000Z', 'QUEUED'],
     ]);
     for (const context of contexts) expect(context.guc).toBe(context.organizationId);
@@ -553,11 +566,12 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     expect((await jobs(A)).filter((job) => job.status === 'QUEUED')).toHaveLength(1);
 
     const result = await tick(T3, 'worker-off');
+    // The parent only: no branch is ON, so no child and no next slot.
     expect(result.jobs).toMatchObject({ claimed: 1, succeeded: 1 });
     expect(await occurrences(A, '1')).toHaveLength(12);
     expect(await occurrences(A, '2')).toEqual([]);
     const aJobs = await jobs(A);
-    expect(aJobs).toHaveLength(3);
+    expect(aJobs).toHaveLength(5);
     expect(aJobs.every((job) => job.status === 'SUCCEEDED')).toBe(true);
     for (const row of await executions(A))
       expect(row).toMatchObject({ outcome: 'SUCCEEDED', n: '1' });
@@ -663,9 +677,13 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     );
     expect(policies!.n).toBe('0');
     const types = await sql<{ type: string }>(
-      `SELECT DISTINCT "type" FROM "restaurant_jobs" WHERE "organizationId" = ANY($1::text[])`,
+      `SELECT DISTINCT "type" FROM "restaurant_jobs" WHERE "organizationId" = ANY($1::text[])
+        ORDER BY "type"`,
       [[A, B]]
     );
-    expect(types.map((row) => row.type)).toEqual(['pharmacy.sop.autoGenerate']);
+    expect(types.map((row) => row.type)).toEqual([
+      'pharmacy.sop.autoGenerate',
+      'pharmacy.sop.autoGenerateBranch',
+    ]);
   });
 });

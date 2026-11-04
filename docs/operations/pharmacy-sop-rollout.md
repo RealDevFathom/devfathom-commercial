@@ -128,8 +128,9 @@ Do this on every replica after the new revision serves. No data changes.
    or evidence are refused.
 3. **Module gate.** In an organization without the `pharmacy-safety` module licensed,
    `/pharmacy/sop` and every `pharmacySop.*` procedure are refused, even for `admin`.
-4. Automatic scheduling reads OFF for every branch, and no `pharmacy.sop.autoGenerate` job
-   exists (check 1 in "Automatic scheduling" below returns no rows).
+4. Automatic scheduling reads OFF for every branch, and no `pharmacy.sop.autoGenerate` or
+   `pharmacy.sop.autoGenerateBranch` job exists (checks 1 and 3 in "Automatic scheduling"
+   below return no rows).
 
 Stop if any check fails. Phase 3 must not run before phase 1 passes, because the grants
 would then reach code that does not enforce branch scope.
@@ -293,11 +294,37 @@ After rollback:
 Turning automatic scheduling on for a branch does two things. It creates that branch's due
 procedures straight away, and it queues one `pharmacy.sop.autoGenerate` job for the
 organization on the existing restaurant job queue (`restaurant_jobs`), due at the start of
-the next hour. Each run creates the due procedures for every branch that is on, from its
-schedules and in its timezone, then queues the next hour. When no branch in the organization
-is on, the run queues nothing and the hourly job stops. The job only creates procedures: it
-escalates nothing, sweeps nothing and never touches a pharmacy operation table
-(`src/lib/pharmacy/sop-auto-schedule-job.ts`).
+the next hour. Both happen in the same request transaction as the setting, so either all
+three are saved or none is. The jobs only create procedures: they escalate nothing, sweep
+nothing and never touch a pharmacy operation table (`src/lib/pharmacy/sop-auto-schedule-job.ts`).
+
+Each hour runs as a parent job and one child job per branch:
+
+- **Parent, `pharmacy.sop.autoGenerate`** (one per organization per hour). Reads which
+  branches are on. When none is, it queues nothing and the hourly job stops. Otherwise it
+  queues the next hour's parent and one child per branch that is on, and finishes. It
+  creates no procedures itself, so it takes a moment and rarely fails.
+- **Child, `pharmacy.sop.autoGenerateBranch`** (one per branch per hour; payload
+  `{ slot, pharmacyBranchId }`, key `pharmacy.sop.autoGenerateBranch:<pharmacyBranchId>:<slot>`).
+  Reads the branch again and, if it is still on, creates its due procedures from its
+  schedules, in its timezone. A branch turned off since the parent ran is skipped.
+
+How it uses the database: the worker runs each job inside one transaction in that
+organization's tenant context, on one pooled connection, and both job types do all their
+work in that transaction. Neither opens a second connection while the transaction is open.
+
+What happens when something fails:
+
+- **A failing branch fails alone.** The child for that branch is retried by the scheduler
+  (30 s, 1 min, 2 min, 4 min) and, after 5 attempts, is left `DEAD` with its last error.
+  Other branches have their own children and are not affected.
+- **The hourly job keeps going.** The next hour's parent was already saved by the parent
+  that queued the failing child. Next hour, a new child for the same branch runs. Once the
+  cause is fixed, the branch catches up on that run without duplicates, because procedures
+  are created idempotently.
+- **A failing parent** retries the same way. It fails only if the queue writes themselves
+  fail. If it ends `DEAD`, the hourly job for that organization has stopped. Fix the cause,
+  then turn any branch off and on again in Setup to restart it.
 
 - **The worker must be running.** The hourly runs happen only where the job worker
   (`bun run restaurant:jobs`, `scripts/run-restaurant-jobs.ts`) runs against the
@@ -310,28 +337,51 @@ escalates nothing, sweeps nothing and never touches a pharmacy operation table
 Verify (read-only, as a platform reader):
 
 ```sql
--- 1. Queued or running hourly jobs: one row per organization with a branch on.
+-- 1. Queued or running hourly parents: one row per organization with a branch on.
 SELECT "organizationId", "status", "scheduledAt", "idempotencyKey"
   FROM restaurant_jobs
  WHERE "type" = 'pharmacy.sop.autoGenerate' AND "status" IN ('QUEUED', 'RUNNING');
 
--- 2. Recent runs and their outcome (SUCCEEDED expected; DEAD means the hourly job stopped).
-SELECT j."organizationId", j."scheduledAt", j."status", e."outcome", e."error", e."finishedAt"
+-- 2. Branches whose procedures could not be created (one row per failed branch and hour).
+SELECT "organizationId", "payload"->>'pharmacyBranchId' AS "pharmacyBranchId",
+       "payload"->>'slot' AS "slot", "attempts", "lastError", "updatedAt"
+  FROM restaurant_jobs
+ WHERE "type" = 'pharmacy.sop.autoGenerateBranch' AND "status" = 'DEAD'
+ ORDER BY "updatedAt" DESC
+ LIMIT 50;
+
+-- 3. Recent runs of both job types and their outcome (SUCCEEDED expected).
+SELECT j."organizationId", j."type", j."payload", j."status", e."attempt", e."outcome",
+       e."error", e."finishedAt"
   FROM restaurant_jobs j
   LEFT JOIN restaurant_job_executions e ON e."jobId" = j."id"
- WHERE j."type" = 'pharmacy.sop.autoGenerate'
- ORDER BY j."scheduledAt" DESC
- LIMIT 20;
+ WHERE j."type" IN ('pharmacy.sop.autoGenerate', 'pharmacy.sop.autoGenerateBranch')
+ ORDER BY j."scheduledAt" DESC, e."attempt"
+ LIMIT 50;
 ```
 
 In the application, the branch's procedures board lists the work created from its
 schedules, due at the times set in Setup.
 
 Stop: turn automatic scheduling off for the branch in Setup. The setting is appended at
-once. The job already queued for the next hour still runs, finds the branch off, creates
-nothing for it, and (if no other branch in the organization is on) queues nothing more.
-Procedures already created stay as they are. If a run ends DEAD after its retries, the
-hourly job has stopped: fix the cause, then turn the branch off and on again to restart it.
+once. The parent already queued for the next hour still runs, finds the branch off, queues
+no child for it, and (if no other branch in the organization is on) queues nothing more. A
+child already queued for that branch finds it off and creates nothing. Procedures already
+created stay as they are.
+
+Limits:
+
+- A `DEAD` child is not retried again. The branch is covered by the next hour's child, and
+  each run creates the current business day and the next, so one lost hour is normally
+  invisible. A branch whose child fails every hour shows one `DEAD` row per hour (check 2)
+  until the cause is fixed. Nothing alerts on it.
+- Each child must finish within the worker's 30 s transaction limit. One branch with a very
+  large number of schedules could exceed it, and its child would then fail every hour.
+- Turning a branch on while its child is running can make one of them fail once on a
+  duplicate procedure. A child is retried 30 s later and finds nothing left to create; a
+  refused request is retried by the manager.
+- Turning a branch on creates its procedures inside the request. If that fails, the whole
+  change is refused and the setting stays off.
 
 ## Not covered here
 
