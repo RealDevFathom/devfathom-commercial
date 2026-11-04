@@ -116,13 +116,13 @@ describeIfDatabase('pharmacy regulatory persistence', () => {
     }
   });
 
-  it('seeds only provisional PK-PB and rejects regulated-record rewrites', async () => {
+  it('preserves provisional PK-PB and rejects regulated-record rewrites', async () => {
     const client = new Client({ connectionString: runtimeUrl });
     await client.connect();
     try {
       const rules = await client.query<{ code: string; provisional: boolean }>(
         `SELECT code, ("licenceCategories"->>'provisional')::boolean provisional
-           FROM pharmacy_jurisdiction_rule_sets`
+           FROM pharmacy_jurisdiction_rule_sets WHERE code = 'PK-PB'`
       );
       expect(rules.rows).toEqual([{ code: 'PK-PB', provisional: true }]);
       await expect(

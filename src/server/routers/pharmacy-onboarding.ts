@@ -40,7 +40,10 @@ import {
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
-import { evaluateBranchRegulatoryStatus } from '@/lib/pharmacy/regulatory';
+import {
+  evaluateBranchRegulatoryStatus,
+  resolveEffectiveJurisdictionRuleSet,
+} from '@/lib/pharmacy/regulatory';
 import {
   FBR_TIER1_CHECK_ACTION,
   FBR_TIER1_CHECK_TARGET_TYPE,
@@ -233,7 +236,7 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
       effectiveFrom: { lte: at },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
-    orderBy: [{ code: 'asc' }, { effectiveFrom: 'desc' }],
+    orderBy: [{ code: 'asc' }, { effectiveFrom: 'desc' }, { version: 'desc' }],
   });
   // One rule set per province — the first, because the ordering puts the most
   // recently effective version of each code first.
@@ -242,6 +245,20 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
   return [...byCode.values()].map((ruleSet) => {
     const categories = ruleSetOptions(ruleSet.licenceCategories);
     const schedules = ruleSetOptions(ruleSet.permittedSchedules);
+    const reviewFields = [
+      ruleSet.licenceCategories,
+      ruleSet.permittedSchedules,
+      ruleSet.pharmacistCoverageRule,
+    ];
+    const pendingLegalReview = reviewFields.some((field) => {
+      const value = field && typeof field === 'object' ? (field as Record<string, unknown>) : {};
+      // Match the operational guard: legacy Sindh rules without an explicit
+      // review decision remain pending rather than appearing legally confirmed.
+      return (
+        value.pendingLegalReview === true ||
+        (ruleSet.code === 'PK-SD' && value.pendingLegalReview !== false)
+      );
+    });
     return {
       id: ruleSet.id,
       provinceCode: ruleSet.code,
@@ -257,6 +274,7 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
         categories.provisional ||
         schedules.provisional ||
         ruleSetOptions(ruleSet.pharmacistCoverageRule).provisional,
+      pendingLegalReview,
     };
   });
 }
@@ -473,6 +491,7 @@ export const pharmacyOnboardingRouter = router({
               isPlaceholder: true,
               jurisdictionRuleSet: {
                 select: {
+                  code: true,
                   licenceCategories: true,
                   permittedSchedules: true,
                   pharmacistCoverageRule: true,
@@ -486,29 +505,35 @@ export const pharmacyOnboardingRouter = router({
         branches,
         jurisdictions,
         selectedBranchId: selected?.id ?? null,
-        versions: versions.map(({ jurisdictionRuleSet, ...version }) => {
-          const effective =
-            version.effectiveFrom <= now &&
-            (version.effectiveTo === null || version.effectiveTo > now);
-          const status = evaluateBranchRegulatoryStatus(
-            {
+        versions: await Promise.all(
+          versions.map(async ({ jurisdictionRuleSet, ...version }) => {
+            const effective =
+              version.effectiveFrom <= now &&
+              (version.effectiveTo === null || version.effectiveTo > now);
+            const status = evaluateBranchRegulatoryStatus(
+              {
+                ...version,
+                permittedSchedules: Array.isArray(version.permittedSchedules)
+                  ? version.permittedSchedules.filter(
+                      (schedule): schedule is string => typeof schedule === 'string'
+                    )
+                  : [],
+                ruleSet: await resolveEffectiveJurisdictionRuleSet(
+                  ctx.db,
+                  jurisdictionRuleSet,
+                  now
+                ),
+              },
+              effective,
+              now
+            );
+            return {
               ...version,
-              permittedSchedules: Array.isArray(version.permittedSchedules)
-                ? version.permittedSchedules.filter(
-                    (schedule): schedule is string => typeof schedule === 'string'
-                  )
-                : [],
-              ruleSet: jurisdictionRuleSet,
-            },
-            effective,
-            now
-          );
-          return {
-            ...version,
-            provinceName: provinceName(version.provinceCode),
-            ...status,
-          };
-        }),
+              provinceName: provinceName(version.provinceCode),
+              ...status,
+            };
+          })
+        ),
       };
     }),
 

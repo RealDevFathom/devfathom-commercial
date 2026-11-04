@@ -51,6 +51,18 @@ const dayFormat = new Intl.DateTimeFormat('en', { dateStyle: 'medium' });
 const day = (value: Date | string) => dayFormat.format(new Date(value));
 const isoDay = (value: Date | string) => new Date(value).toISOString().slice(0, 10);
 
+function provinceCodeForBranch(data: Regulatory, branchId: string) {
+  const branchCode = data.branches.find((branch) => branch.id === branchId)?.provinceCode;
+  if (!branchCode) return '';
+
+  return (
+    data.jurisdictions.find(
+      (jurisdiction) =>
+        jurisdiction.provinceCode === branchCode || jurisdiction.provinceCode === `PK-${branchCode}`
+    )?.provinceCode ?? ''
+  );
+}
+
 /** A labelled field that shows its own error, or its own hint when there is none. */
 function Field({
   children,
@@ -91,16 +103,27 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [evidenceRef, setEvidenceRef] = useState('');
   const [provinceCode, setProvinceCode] = useState<string>(
-    initial.jurisdictions[0]?.provinceCode ?? ''
+    provinceCodeForBranch(initial, initial.selectedBranchId ?? '')
   );
   const formRef = useRef<HTMLFormElement>(null);
+  const refreshRequest = useRef(0);
 
   const utils = trpc.useUtils();
   const refresh = (nextBranchId = branchId) => {
+    const request = ++refreshRequest.current;
     void utils.pharmacyOnboarding.regulatory
       .fetch({ branchId: nextBranchId || undefined })
-      .then(setData)
-      .catch(() => setErrors({ form: 'That branch could not be loaded. Try again.' }));
+      .then((next) => {
+        if (request !== refreshRequest.current) return;
+        // Province defaults are set when the branch changes. A refresh must
+        // preserve any province the operator has selected in the meantime.
+        setData(next);
+      })
+      .catch(() => {
+        if (request === refreshRequest.current) {
+          setErrors({ form: 'That branch could not be loaded. Try again.' });
+        }
+      });
   };
 
   const save = trpc.pharmacyOnboarding.saveRegulatoryProfile.useMutation({
@@ -141,6 +164,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
     setBranchId(nextBranchId);
     setErrors({});
     setSaved(null);
+    setProvinceCode(provinceCodeForBranch(data, nextBranchId));
     refresh(nextBranchId);
   };
 
@@ -341,7 +365,9 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               hint={
                 jurisdiction?.provisional
                   ? 'These rules are still provisional, so this branch cannot operate on them yet.'
-                  : 'Only provinces with published rules appear here.'
+                  : jurisdiction?.pendingLegalReview
+                    ? 'These rules are pending legal review. They are not legally confirmed, and this branch cannot operate on them in production.'
+                    : 'Only provinces with published rules appear here.'
               }
               label="Province"
             >
@@ -361,6 +387,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                   <option key={option.provinceCode} value={option.provinceCode}>
                     {option.provinceName}
                     {option.provisional ? ' (rules provisional)' : ''}
+                    {option.pendingLegalReview ? ' (pending legal review)' : ''}
                   </option>
                 ))}
               </select>

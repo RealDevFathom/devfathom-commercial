@@ -193,6 +193,11 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
         provinceName: 'Punjab',
         provisional: true,
       });
+      expect(result.jurisdictions.find((option) => option.provinceCode === 'PK-SD')).toMatchObject({
+        provinceName: 'Sindh',
+        provisional: false,
+        pendingLegalReview: true,
+      });
       for (const option of result.jurisdictions) {
         expect(option.provinceName).not.toBe(option.provinceCode);
       }
@@ -446,5 +451,104 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       expect(result.branches.map((branch) => branch.id)).toEqual([otherBranchId]);
       expect(result.versions).toEqual([]);
     });
+  });
+
+  it('keeps profile status and runtime enforcement on the same effective rule version', async () => {
+    const code = `PK-TEST-${suffix}`;
+    const ruleId = (version: number) => `ph1198_rules_${suffix}_${version}`;
+    const rollback = new Error('Roll back regulatory version fixtures');
+    const { assertStoredBranchMayOperate } = await import('@/lib/pharmacy/regulatory');
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('APP_ENV', undefined);
+    try {
+      await expect(
+        withTenantDb(organizationId, async (db) => {
+          async function publish(version: number, pendingLegalReview: boolean) {
+            const field = (values: string[] | Record<string, number>) => ({
+              values,
+              provisional: false,
+              pendingLegalReview,
+            });
+            // Publish fixtures as the platform, then restore tenant scope before
+            // exercising either consumer. Roll back the entire test so these
+            // immutable global rules cannot leak into another suite's picker.
+            await db.$queryRaw`SELECT set_config('app.is_platform_admin', 'true', true)`;
+            await db.jurisdictionRuleSet.create({
+              data: {
+                id: ruleId(version),
+                code,
+                version,
+                effectiveFrom: new Date('2026-01-01'),
+                licenceCategories: field(['RETAIL']),
+                permittedSchedules: field(['G', 'H']),
+                prescriptionOnlyClasses: {},
+                prescriptionRetentionDays: {},
+                controlledRegisterFlags: {},
+                pharmacistCoverageRule: field({}),
+                recordRetentionByClass: {},
+              },
+            });
+            await db.$queryRaw`SELECT set_config('app.is_platform_admin', 'false', true)`;
+          }
+
+          await publish(1, false);
+          await db.branchRegulatoryProfile.create({
+            data: {
+              id: `ph1198_profile_${suffix}`,
+              organizationId,
+              branchId: secondBranchId,
+              version: 1,
+              effectiveFrom: new Date('2026-01-01'),
+              provinceCode: code,
+              jurisdictionRuleSetId: ruleId(1),
+              premises: {},
+              licenceCategory: 'RETAIL',
+              licenceNumber: 'TEST-LICENCE',
+              licenceValidFrom: new Date('2026-01-01'),
+              licenceValidTo: new Date('2030-01-01'),
+              licenceEvidenceFileRef: 'test/licence',
+              permittedSchedules: ['G', 'H'],
+              qualifiedPersonRegistration: 'TEST-QP',
+              qualifiedPersonValidFrom: new Date('2026-01-01'),
+              qualifiedPersonValidTo: new Date('2030-01-01'),
+              qualifiedPersonCoverageRosterRef: 'test/roster',
+              fiscalStatus: 'UNCONFIRMED',
+              retentionPolicy: {},
+            },
+          });
+          await publish(2, true);
+          await expect(
+            assertStoredBranchMayOperate(db, organizationId, secondBranchId, { name: 'DISPENSE' })
+          ).rejects.toMatchObject({ reason: 'RULE_SET_PENDING_LEGAL_REVIEW' });
+          const pending = await caller(db).regulatory({ branchId: secondBranchId });
+          expect(pending.versions[0]).toMatchObject({ effective: true, inForce: false });
+          expect(
+            pending.jurisdictions.find((option) => option.provinceCode === code)?.version
+          ).toBe(2);
+
+          vi.stubEnv('APP_ENV', 'pilot');
+          await expect(
+            assertStoredBranchMayOperate(db, organizationId, secondBranchId, { name: 'DISPENSE' })
+          ).resolves.toBeUndefined();
+          expect(
+            (await caller(db).regulatory({ branchId: secondBranchId })).versions[0]?.inForce
+          ).toBe(true);
+
+          vi.stubEnv('APP_ENV', undefined);
+          await publish(3, false);
+          await expect(
+            assertStoredBranchMayOperate(db, organizationId, secondBranchId, { name: 'DISPENSE' })
+          ).resolves.toBeUndefined();
+          const confirmed = await caller(db).regulatory({ branchId: secondBranchId });
+          expect(confirmed.versions[0]).toMatchObject({ effective: true, inForce: true });
+          expect(
+            confirmed.jurisdictions.find((option) => option.provinceCode === code)?.version
+          ).toBe(3);
+          throw rollback;
+        })
+      ).rejects.toBe(rollback);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
