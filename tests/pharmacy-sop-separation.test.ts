@@ -235,10 +235,17 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
       "export const PHARMACY_SOP_AUTO_GENERATE_BRANCH_JOB = 'pharmacy.sop.autoGenerateBranch';"
     );
     expect(job.match(/\benqueue[A-Z]?\w*\s*\(/g)).toEqual(['enqueue(', 'enqueue(']);
+    // The two enqueued job literals, plus (between them in the source) the
+    // read-only next-run lookup `nextPharmacySopAutoScheduleRunAt`, a findFirst
+    // on its own slot type.
     expect(job.match(/\btype: [A-Z_]+,/g)).toEqual([
+      'type: PHARMACY_SOP_AUTO_GENERATE_JOB,',
       'type: PHARMACY_SOP_AUTO_GENERATE_JOB,',
       'type: PHARMACY_SOP_AUTO_GENERATE_BRANCH_JOB,',
     ]);
+    // Its only direct use of the job table is that one read: every write goes
+    // through the scheduler's `enqueue`.
+    expect(job.match(/\.restaurantJob\.\w+/g)).toEqual(['.restaurantJob.findFirst']);
     expect(job).not.toMatch(
       /SOP_(GENERATE_OCCURRENCES|ESCALATION|LATE_MISSED)_JOB|'sop\.\w+'|sop-escalation|sop-late-missed|@\/lib\/restaurant\/job-handlers'/
     );

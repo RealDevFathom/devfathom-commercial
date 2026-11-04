@@ -221,6 +221,28 @@ export async function startPharmacySopAutoSchedule(
   return { job, generated };
 }
 
+/**
+ * When the organization's next automatic run is due: the `scheduledAt` of its
+ * earliest QUEUED hourly slot job, or null when none is queued (the chain is
+ * stopped). Reads only, on the caller's tenant-scoped `db` (RLS and the
+ * explicit organization both scope it); never enqueues or repairs anything.
+ */
+export async function nextPharmacySopAutoScheduleRunAt(
+  db: ScopedDb,
+  input: { organizationId: string }
+): Promise<Date | null> {
+  const job = await db.restaurantJob.findFirst({
+    where: {
+      organizationId: input.organizationId,
+      type: PHARMACY_SOP_AUTO_GENERATE_JOB,
+      status: 'QUEUED',
+    },
+    orderBy: [{ scheduledAt: 'asc' }, { id: 'asc' }],
+    select: { scheduledAt: true },
+  });
+  return job?.scheduledAt ?? null;
+}
+
 /** An ISO instant aligned to the hourly cadence. */
 const SLOT = z
   .string()

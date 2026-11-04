@@ -522,11 +522,11 @@ describe('new proof and links after a send-back use the normal routes', () => {
 
 // ── Occurrence read ──────────────────────────────────────────────────────────
 
-function arrangeOccurrenceRead() {
+function arrangeOccurrenceRead(): Record<string, unknown> {
   db.restaurantSopTemplateVersion.findFirst.mockResolvedValue({
     template: { name: temperatureLog.name },
   });
-  db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+  const detail = {
     id: 'occ_1',
     status: 'IN_PROGRESS',
     businessDate: new Date(Date.UTC(2026, 10, 4)),
@@ -603,7 +603,8 @@ function arrangeOccurrenceRead() {
         actor: { displayName: 'Sana' },
       },
     ],
-  });
+  };
+  db.restaurantSopOccurrence.findUnique.mockResolvedValue(detail);
   db.pharmacySopRecordLink.findMany.mockResolvedValue([
     {
       id: 'link_old',
@@ -670,6 +671,7 @@ function arrangeOccurrenceRead() {
   db.restaurantStaffProfile.findMany.mockResolvedValue([
     { id: ACTOR.staffProfileId, displayName: 'Me' },
   ]);
+  return detail;
 }
 
 describe('occurrence read after a send-back', () => {
@@ -768,8 +770,7 @@ describe('occurrence read after a send-back', () => {
   });
 
   it('has an empty rework summary for a procedure never sent back', async () => {
-    arrangeOccurrenceRead();
-    const detail = await db.restaurantSopOccurrence.findUnique();
+    const detail = arrangeOccurrenceRead();
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ ...detail, verifications: [] });
     const read = await caller().occurrence(OCC_INPUT);
     expect(read.rework).toEqual({ latestRejection: null, notes: [] });

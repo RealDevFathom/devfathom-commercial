@@ -28,6 +28,7 @@ import {
   PHARMACY_SOP_AUTO_GENERATE_JOB,
   ensurePharmacySopAutoScheduleJob,
   nextPharmacySopAutoGenerateSlot,
+  nextPharmacySopAutoScheduleRunAt,
   parsePharmacySopAutoGenerateBranchPayload,
   parsePharmacySopAutoGeneratePayload,
   pharmacySopAutoGenerateBranchHandler,
@@ -302,6 +303,25 @@ describe('ensurePharmacySopAutoScheduleJob', () => {
     expect(result).toMatchObject({ deduplicated: true, job: { id: 'job_winner' } });
     expect(jobs).toHaveLength(1);
     expect(raw.restaurantJob.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('nextPharmacySopAutoScheduleRunAt', () => {
+  it('reads the earliest QUEUED slot job of this organization, and nothing else', async () => {
+    const findFirst = vi.fn(async () => ({ scheduledAt: at('2026-11-04T07:00:00Z') }));
+    const create = vi.fn();
+    const db = { restaurantJob: { findFirst, create } } as unknown as ScopedDb;
+    await expect(nextPharmacySopAutoScheduleRunAt(db, { organizationId: ORG })).resolves.toEqual(
+      at('2026-11-04T07:00:00Z')
+    );
+    expect(findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: { organizationId: ORG, type: PHARMACY_SOP_AUTO_GENERATE_JOB, status: 'QUEUED' },
+      orderBy: [{ scheduledAt: 'asc' }, { id: 'asc' }],
+      select: { scheduledAt: true },
+    });
+    findFirst.mockResolvedValueOnce(null as never);
+    await expect(nextPharmacySopAutoScheduleRunAt(db, { organizationId: ORG })).resolves.toBeNull();
+    expect(create).not.toHaveBeenCalled();
   });
 });
 

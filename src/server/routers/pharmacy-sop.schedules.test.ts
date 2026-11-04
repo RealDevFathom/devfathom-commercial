@@ -296,7 +296,37 @@ describe('siteSettings', () => {
       autoScheduleEnabled: false,
       changedAt: null,
       reason: null,
+      nextRunAt: null,
     });
+    // OFF: no next run is looked up (a still-queued run does nothing for it).
+    expect(db.restaurantJob.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('while ON, reports the organization’s next queued automatic run (tenant-scoped read)', async () => {
+    settingRows.push({
+      id: 'set_on',
+      pharmacyBranchId: SITE.pharmacyBranchId,
+      autoScheduleEnabled: true,
+      changedByUserId: 'user_1',
+      reason: null,
+      createdAt: new Date('2026-11-04T06:30:00Z'),
+    });
+    db.restaurantJob.findFirst.mockResolvedValueOnce({
+      scheduledAt: new Date('2026-11-04T07:00:00Z'),
+    });
+    await expect(caller().siteSettings(BRANCH_INPUT)).resolves.toMatchObject({
+      autoScheduleEnabled: true,
+      nextRunAt: new Date('2026-11-04T07:00:00Z'),
+    });
+    expect(db.restaurantJob.findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: { organizationId: 'org_1', type: 'pharmacy.sop.autoGenerate', status: 'QUEUED' },
+      orderBy: [{ scheduledAt: 'asc' }, { id: 'asc' }],
+      select: { scheduledAt: true },
+    });
+    // No queued run (the chain stopped): null, and nothing is enqueued to repair it.
+    db.restaurantJob.findFirst.mockResolvedValueOnce(null);
+    await expect(caller().siteSettings(BRANCH_INPUT)).resolves.toMatchObject({ nextRunAt: null });
+    expect(db.restaurantJob.create).not.toHaveBeenCalled();
   });
 
   it('needs sop:manage', async () => {

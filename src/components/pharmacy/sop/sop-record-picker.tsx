@@ -95,7 +95,9 @@ export function SopRecordPicker({
   const [error, setError] = useState<string | null>(null);
   const label = RECORD_LABEL[recordType];
   const records = trpc.pharmacySop.linkableRecords.useQuery(
-    { pharmacyBranchId, occurrenceId, recordType },
+    // The step lets the server offer only records that fit it (for example
+    // refrigerator readings for a refrigerator step).
+    { pharmacyBranchId, occurrenceId, recordType, occurrenceStepId },
     { retry: false }
   );
   const link = trpc.pharmacySop.linkRecord.useMutation({

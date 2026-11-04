@@ -51,7 +51,10 @@ import {
   pharmacySopAutoSchedule,
   setPharmacySopAutoSchedule,
 } from '@/lib/pharmacy/sop-settings';
-import { startPharmacySopAutoSchedule } from '@/lib/pharmacy/sop-auto-schedule-job';
+import {
+  nextPharmacySopAutoScheduleRunAt,
+  startPharmacySopAutoSchedule,
+} from '@/lib/pharmacy/sop-auto-schedule-job';
 import { businessDateToUtcDate, resolveBusinessDate } from '@/lib/restaurant/business-date';
 import {
   AssigneeTargetError,
@@ -1663,11 +1666,19 @@ export const pharmacySopRouter = router({
       const setting = await pharmacySopAutoSchedule(ctx.db, {
         pharmacyBranchId: site.pharmacyBranchId,
       });
+      // The organization's queued hourly run, shown only while this branch is
+      // ON (a run still queued after turning OFF does nothing for it).
+      const nextRunAt = setting.autoScheduleEnabled
+        ? await nextPharmacySopAutoScheduleRunAt(ctx.db, {
+            organizationId: sessionScope(ctx).organizationId,
+          })
+        : null;
       return {
         pharmacyBranchId: site.pharmacyBranchId,
         autoScheduleEnabled: setting.autoScheduleEnabled,
         changedAt: setting.changedAt,
         reason: setting.reason,
+        nextRunAt,
       };
     })
   ),

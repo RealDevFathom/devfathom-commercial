@@ -125,6 +125,11 @@ async function seed(runtime: Client) {
   );
   // The owner's account: the link re-reads the actor's ACTIVE profile by user.
   await q(
+    `INSERT INTO "organization_departments" ("id","organizationId","key","name","updatedAt")
+     VALUES ($1,$2,'OPERATIONS','Operations',now())`,
+    [k('dept'), ORG]
+  );
+  await q(
     `INSERT INTO "users" ("id","organizationId","name","email","department","title","updatedAt")
      VALUES ($1,$2,'Owner',$3,'OPERATIONS','Assistant',now())`,
     [USER, ORG, `${USER}@example.test`]
@@ -390,15 +395,22 @@ describeIfDatabase('DEV-751 rework after a send-back on the real database', () =
       ['RECEIPT', true],
     ]);
     expect(
-      Object.fromEntries(read.recordLinks.map((link) => [link.recordId, link.createdAfterLatestRejection]))
+      Object.fromEntries(
+        read.recordLinks.map((link) => [link.recordId, link.createdAfterLatestRejection])
+      )
     ).toEqual({
       [k('log_fridge_old')]: false,
       [k('log_shelf')]: false,
       [k('log_fridge_new')]: true,
     });
-    expect(read.recordLinks.find((link) => link.recordId === k('log_fridge_new'))!.detail).toMatchObject(
-      { kind: 'TEMPERATURE_LOG', location: 'QA Fridge', value: '5.0 °C', statusLabel: 'In range' }
-    );
+    expect(
+      read.recordLinks.find((link) => link.recordId === k('log_fridge_new'))!.detail
+    ).toMatchObject({
+      kind: 'TEMPERATURE_LOG',
+      location: 'QA Fridge',
+      value: '5.0 °C',
+      statusLabel: 'In range',
+    });
 
     await expect(caller().submit(OCC)).resolves.toMatchObject({ status: 'SUBMITTED' });
     // Submitted: no further note can be filed against this send-back.
