@@ -276,7 +276,13 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
   );
 
   const trigger = (
-    <Button type="button" size="touch" variant="outline" onClick={() => setOpen(true)}>
+    <Button
+      className="h-auto min-h-11 max-w-full py-2 text-left whitespace-normal"
+      onClick={() => setOpen(true)}
+      size="touch"
+      type="button"
+      variant="outline"
+    >
       <Camera aria-hidden="true" />
       Read batch and expiry from a pack photo
     </Button>

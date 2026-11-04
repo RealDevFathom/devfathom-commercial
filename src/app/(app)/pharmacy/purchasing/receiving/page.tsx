@@ -1150,7 +1150,7 @@ function CaptureFieldset({
   const quarantine = locations.filter((location) => location.kind === 'QUARANTINE');
   return (
     <fieldset
-      className={`rounded-[var(--radius-sm)] border p-4 ${
+      className={`min-w-0 rounded-[var(--radius-sm)] border p-4 ${
         highlighted ? 'border-primary bg-primary/5' : 'border-border-subtle'
       }`}
     >
