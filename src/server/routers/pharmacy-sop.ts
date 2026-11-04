@@ -1,12 +1,13 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
-import type { PharmacySopRecordType } from '@/generated/prisma/client';
+import { Prisma, type PharmacySopRecordType } from '@/generated/prisma/client';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import {
   PHARMACY_SOP_ROLE_KEYS,
   PHARMACY_SOP_VERIFIER_ROLE_KEYS,
   PharmacySopAccessError,
+  pharmacySopRecordTimeBounds,
   assertIndependentPharmacyVerifier,
   assertOccurrenceAtSite,
   enablePharmacySopSite,
@@ -21,8 +22,10 @@ import {
   type PharmacySopRoleKey,
   type PharmacySopSiteRef,
 } from '@/lib/pharmacy/sop-adapter';
+import { isPharmacySopCapturedEvidence } from '@/lib/pharmacy/sop-evidence';
 import {
   PHARMACY_SOP_PACKS,
+  PharmacySopLibraryScopeError,
   installPharmacySopLibrary,
   pharmacySopPackForTemplateName,
   type PharmacySopPack,
@@ -155,48 +158,70 @@ function mapAccessError(err: PharmacySopAccessError): never {
   throw new TRPCError({ code: 'FORBIDDEN' });
 }
 
-/** Engine refusals, mapped the way the restaurant SOP routers map them. */
+/**
+ * Engine refusals, mapped the way the restaurant SOP routers map them. A
+ * not-found refusal gets fixed wording: the engine's own message can embed an
+ * internal id ("Branch <id> was not found.") that a pharmacy caller must not see.
+ */
 function mapSopError(err: unknown): never {
   if (err instanceof TRPCError) throw err;
   if (err instanceof PharmacySopAccessError) mapAccessError(err);
   if (err instanceof SopExecutionError) {
+    if (err.reason === 'NOT_FOUND') {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+    }
+    if (err.reason === 'STEP_NOT_FOUND') {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Step not found on this occurrence.' });
+    }
     const code =
-      err.reason === 'NOT_FOUND'
-        ? 'NOT_FOUND'
-        : err.reason === 'NOT_OWNER'
-          ? 'FORBIDDEN'
-          : err.reason === 'INVALID_STATE' || err.reason === 'STEP_ALREADY_COMPLETED'
-            ? 'CONFLICT'
-            : 'BAD_REQUEST';
-    throw new TRPCError({ code, message: err.message });
-  }
-  if (err instanceof SopVerificationError) {
-    const code =
-      err.reason === 'NOT_FOUND'
-        ? 'NOT_FOUND'
-        : err.reason === 'INVALID_STATE'
-          ? 'CONFLICT'
-          : err.reason === 'CO_AUTH_REQUIRED'
-            ? 'FORBIDDEN'
-            : 'BAD_REQUEST';
-    throw new TRPCError({ code, message: err.message });
-  }
-  if (err instanceof SopTemplateError) {
-    const code =
-      err.reason === 'NOT_FOUND'
-        ? 'NOT_FOUND'
-        : err.reason === 'TEMPLATE_LIMIT_REACHED' ||
-            err.reason === 'DRAFT_EXISTS' ||
-            err.reason === 'VERSION_NOT_DRAFT' ||
-            err.reason === 'INVALID_STATE'
+      err.reason === 'NOT_OWNER'
+        ? 'FORBIDDEN'
+        : err.reason === 'INVALID_STATE' || err.reason === 'STEP_ALREADY_COMPLETED'
           ? 'CONFLICT'
           : 'BAD_REQUEST';
     throw new TRPCError({ code, message: err.message });
+  }
+  if (err instanceof SopVerificationError) {
+    if (err.reason === 'NOT_FOUND') {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+    }
+    const code =
+      err.reason === 'INVALID_STATE'
+        ? 'CONFLICT'
+        : err.reason === 'CO_AUTH_REQUIRED'
+          ? 'FORBIDDEN'
+          : 'BAD_REQUEST';
+    throw new TRPCError({ code, message: err.message });
+  }
+  if (err instanceof SopTemplateError) {
+    if (err.reason === 'NOT_FOUND') {
+      throw new TRPCError({
+        code: 'NOT_FOUND',
+        message: 'That SOP template, assignment or branch was not found.',
+      });
+    }
+    const code =
+      err.reason === 'TEMPLATE_LIMIT_REACHED' ||
+      err.reason === 'DRAFT_EXISTS' ||
+      err.reason === 'VERSION_NOT_DRAFT' ||
+      err.reason === 'INVALID_STATE'
+        ? 'CONFLICT'
+        : 'BAD_REQUEST';
+    throw new TRPCError({ code, message: err.message });
+  }
+  if (err instanceof PharmacySopLibraryScopeError) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: err.message });
   }
   if (err instanceof RecurrenceError) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
   }
   if (err instanceof AssigneeTargetError) {
+    if (err.reason === 'ROLE_NOT_FOUND' || err.reason === 'STAFF_NOT_FOUND') {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'That assignee was not found at this branch.',
+      });
+    }
     throw new TRPCError({
       code: err.reason === 'ROLE_INACTIVE' ? 'CONFLICT' : 'BAD_REQUEST',
       message: err.message,
@@ -212,6 +237,14 @@ async function guarded<T>(work: () => Promise<T>): Promise<T> {
   } catch (err) {
     mapSopError(err);
   }
+}
+
+/** One transaction for `work`; a request-level transaction is reused (scoped-db). */
+function runInTransaction<T>(db: TRPCContext['db'], work: (tx: TRPCContext['db']) => Promise<T>) {
+  const transaction = db.$transaction.bind(db) as unknown as (
+    fn: (tx: TRPCContext['db']) => Promise<T>
+  ) => Promise<T>;
+  return transaction(work);
 }
 
 // ── Scope helpers ─────────────────────────────────────────────────────────────
@@ -445,6 +478,119 @@ async function assertStepOnOccurrence(
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Step not found on this occurrence.' });
 }
 
+// ── Proof provenance ──────────────────────────────────────────────────────────
+
+/** The evidence columns the pharmacy provenance MAC covers. */
+const EVIDENCE_PROVENANCE_SELECT = {
+  occurrenceStepId: true,
+  contentHash: true,
+  mimeType: true,
+  uploaderStaffProfileId: true,
+  storageRef: true,
+} as const;
+
+type EvidenceProvenanceRow = {
+  occurrenceStepId: string | null;
+  contentHash: string;
+  mimeType: string;
+  uploaderStaffProfileId: string | null;
+  storageRef: string | null;
+};
+
+/**
+ * Whether one evidence row was captured through the pharmacy evidence route.
+ * Rows attached through the restaurant SOP surfaces (which accept a
+ * caller-supplied uploader or storage ref) never qualify; see
+ * `src/lib/pharmacy/sop-evidence.ts`.
+ */
+function capturedInPharmacy(
+  ctx: TRPCContext,
+  occurrenceId: string,
+  row: EvidenceProvenanceRow
+): boolean {
+  return isPharmacySopCapturedEvidence(
+    {
+      occurrenceId,
+      occurrenceStepId: row.occurrenceStepId,
+      contentHash: row.contentHash,
+      mimeType: row.mimeType,
+      uploaderStaffProfileId: row.uploaderStaffProfileId,
+      storageRef: row.storageRef,
+    },
+    sessionScope(ctx).organizationId
+  );
+}
+
+// The engine's own proof classification (sop-execution.ts submitOccurrence).
+function isPhotoProof(mimeType: string): boolean {
+  return (
+    mimeType.includes('evidence=photo') ||
+    (mimeType.startsWith('image/') && !mimeType.includes('evidence=signature'))
+  );
+}
+
+function isSignatureProof(mimeType: string): boolean {
+  return (
+    mimeType.includes('evidence=signature') ||
+    mimeType === 'application/vnd.devfathom.signature+json'
+  );
+}
+
+const FOREIGN_PROOF_MESSAGE =
+  'Proof on this procedure was not captured through the pharmacy workspace. Ask a manager to review it.';
+
+/** The record types a pack's steps link (a pack's link vocabulary). */
+function packRecordTypes(pack: PharmacySopPack | undefined): Set<PharmacySopRecordType> {
+  return new Set(
+    (pack?.steps ?? []).flatMap((step) =>
+      step.requiredRecordType ? [step.requiredRecordType] : []
+    )
+  );
+}
+
+function recordTypeLabel(recordType: PharmacySopRecordType): string {
+  return recordType.toLowerCase().replaceAll('_', ' ');
+}
+
+/**
+ * A record link must be one the procedure asks for: the type must be in the
+ * pack's link vocabulary and, when the link targets a step, must be exactly the
+ * type that step requires. A step that names no record type takes no link (no
+ * pack step reads one — the temperature excursion step is documented by its
+ * note). An occurrence-level link (no step) of a pack type stays allowed.
+ */
+async function assertLinkableRecordType(
+  ctx: TRPCContext,
+  pack: PharmacySopPack | undefined,
+  occurrenceId: string,
+  occurrenceStepId: string | null,
+  recordType: PharmacySopRecordType
+): Promise<void> {
+  if (!packRecordTypes(pack).has(recordType)) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: `This procedure does not link a ${recordTypeLabel(recordType)}.`,
+    });
+  }
+  if (!occurrenceStepId) return;
+  const step = await ctx.db.restaurantSopOccurrenceStep.findFirst({
+    where: { id: occurrenceStepId, occurrenceId },
+    select: { templateStep: { select: { title: true, stepOrder: true } } },
+  });
+  if (!step) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Step not found on this occurrence.' });
+  }
+  const required = requiredRecordTypeOf(packStepFor(pack, step.templateStep));
+  if (required !== recordType) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: required
+        ? `This step links a ${recordTypeLabel(required)}, not a ${recordTypeLabel(recordType)}.`
+        : 'This step does not take a linked record.',
+    });
+  }
+}
+
 /** Site + occurrence + session actor: the preamble of every occurrence command. */
 async function occurrenceContext(ctx: TRPCContext, pharmacyBranchId: string, occurrenceId: string) {
   const site = await siteFor(ctx, pharmacyBranchId);
@@ -472,13 +618,37 @@ async function assertPharmacySubmissionRequirements(
         select: {
           id: true,
           note: true,
-          templateStep: { select: { title: true, stepOrder: true } },
+          templateStep: {
+            select: { title: true, stepOrder: true, requiresPhoto: true, requiresSignature: true },
+          },
+          evidence: { select: EVIDENCE_PROVENANCE_SELECT },
         },
       },
     },
   });
   if (!occ) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
   const pack = pharmacySopPackForTemplateName(occ.assignment.template.name);
+
+  // The engine accepts any evidence row as photo/signature proof. Count only
+  // proof captured in the pharmacy workspace, so a row attached through a
+  // restaurant surface can never satisfy a pharmacy step's requirement.
+  for (const step of occ.steps) {
+    const proof = (step.evidence ?? []).filter((row) => capturedInPharmacy(ctx, occurrenceId, row));
+    const missing =
+      step.templateStep.requiresPhoto && !proof.some((row) => isPhotoProof(row.mimeType))
+        ? 'photo'
+        : step.templateStep.requiresSignature &&
+            !proof.some((row) => isSignatureProof(row.mimeType))
+          ? 'signature'
+          : null;
+    if (missing) {
+      throw new TRPCError({
+        code: 'PRECONDITION_FAILED',
+        message: `Capture the ${missing} proof for “${step.templateStep.title}” in the pharmacy workspace before submitting.`,
+      });
+    }
+  }
+
   const links = await ctx.db.pharmacySopRecordLink.findMany({
     where: { occurrenceId, pharmacyBranchId: site.pharmacyBranchId },
     select: { occurrenceStepId: true, recordType: true, recordId: true, note: true },
@@ -493,7 +663,7 @@ async function assertPharmacySubmissionRequirements(
     if (!linked) {
       throw new TRPCError({
         code: 'PRECONDITION_FAILED',
-        message: `Link the ${required.toLowerCase().replaceAll('_', ' ')} for “${step.templateStep.title}” before submitting.`,
+        message: `Link the ${recordTypeLabel(required)} for “${step.templateStep.title}” before submitting.`,
       });
     }
   }
@@ -711,7 +881,9 @@ export const pharmacySopRouter = router({
 
   installLibrary: manageProcedure.mutation(({ ctx }) =>
     guarded(async () => {
-      const results = await installPharmacySopLibrary(ctx.db);
+      const results = await installPharmacySopLibrary(ctx.db, {
+        organizationId: sessionScope(ctx).organizationId,
+      });
       const created = results.filter((result) => result.created);
       audit(ctx, null, {
         action: 'pharmacy.sop.installLibrary',
@@ -838,7 +1010,7 @@ export const pharmacySopRouter = router({
   createAssignment: manageProcedure.input(CreateAssignmentInput).mutation(({ ctx, input }) =>
     guarded(async () => {
       const site = await siteFor(ctx, input.pharmacyBranchId);
-      const { template } = await pharmacyTemplate(ctx, input.templateId);
+      const { template, pack } = await pharmacyTemplate(ctx, input.templateId);
       let assigneeTarget:
         { type: 'role'; jobRoleId: string } | { type: 'person'; staffProfileId: string };
       if (input.target.type === 'ROLE') {
@@ -864,6 +1036,22 @@ export const pharmacySopRouter = router({
           organizationId: sessionScope(ctx).organizationId,
           userId: assignment.userId,
         });
+        // A role-owned pack named to one person still needs that person to
+        // hold the pack's role here. A pack that is person-assigned by design
+        // (training attestation: anyone may be asked to attest) has no such rule.
+        if (pack.pharmacy.assigneeTarget !== 'PERSON') {
+          const heldRoles = await pharmacySopRolesAt(ctx.db, {
+            staffProfileId: person.staffProfileId,
+            sopBranchId: site.sopBranchId,
+          });
+          if (!heldRoles.includes(pack.pharmacy.roleKey)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message:
+                'That person does not hold the pharmacy SOP role this procedure needs at this branch.',
+            });
+          }
+        }
         assigneeTarget = { type: 'person', staffProfileId: person.staffProfileId };
       }
       const created = await createAssignment(ctx.db, {
@@ -984,6 +1172,18 @@ export const pharmacySopRouter = router({
           roleKey: input.roleKey,
           held: input.held,
           grantedByStaffProfileId: actor.staffProfileId,
+        }).catch((err: unknown) => {
+          // Here the adapter uses these reasons for grant rules ("you cannot
+          // grant yourself a verifier role", "the qualified-person role needs
+          // pharmacy:dispense"); its own wording names no other branch or
+          // record, and the verifier wording in mapAccessError would misread.
+          if (
+            err instanceof PharmacySopAccessError &&
+            (err.reason === 'NOT_INDEPENDENT' || err.reason === 'ROLE_REQUIRED')
+          ) {
+            throw new TRPCError({ code: 'FORBIDDEN', message: err.message });
+          }
+          throw err;
         });
         audit(ctx, site, {
           action: input.held ? 'pharmacy.sop.grantRole' : 'pharmacy.sop.revokeRole',
@@ -1048,61 +1248,72 @@ export const pharmacySopRouter = router({
           });
         }
 
-        const open = await ctx.db.restaurantSopOccurrence.findFirst({
-          where: {
-            branchId: site.sopBranchId,
-            assignedStaffProfileId: actor.staffProfileId,
-            status: { in: [...OPEN_STATUSES] },
-            assignment: {
-              templateId: template.id,
-              frequency: 'ONCE',
-              assigneeTargetType: 'PERSON',
+        // Serialize per (tenant, site, template, actor): two concurrent starts
+        // would otherwise both miss the open occurrence and each create a
+        // one-off assignment. The lock is transaction-scoped; the second caller
+        // waits, then finds the first caller's occurrence and returns it.
+        const { organizationId } = sessionScope(ctx);
+        const lockKey = `pharmacy-sop-on-demand:${organizationId}:${site.sopBranchId}:${template.id}:${actor.staffProfileId}`;
+        return runInTransaction(ctx.db, async (tx) => {
+          await tx.$queryRaw(
+            Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`
+          );
+          const open = await tx.restaurantSopOccurrence.findFirst({
+            where: {
+              branchId: site.sopBranchId,
+              assignedStaffProfileId: actor.staffProfileId,
+              status: { in: [...OPEN_STATUSES] },
+              assignment: {
+                templateId: template.id,
+                frequency: 'ONCE',
+                assigneeTargetType: 'PERSON',
+              },
             },
-          },
-          orderBy: { dueAt: 'desc' },
-          select: { id: true },
-        });
-        if (open) return { occurrenceId: open.id, created: false };
-
-        const now = new Date();
-        const local = localWallClock(now, site.timezone);
-        const assignment = await createAssignment(ctx.db, {
-          branchId: site.sopBranchId,
-          templateId: template.id,
-          assigneeTarget: { type: 'person', staffProfileId: actor.staffProfileId },
-          frequency: 'ONCE',
-          interval: 1,
-          daysOfWeek: [],
-          monthDay: null,
-          startDate: local.date,
-          endDate: local.date,
-          dueTimeMinutes: local.minutes,
-          intervalEndTimeMinutes: null,
-          windowMinutes: pack.pharmacy.suggestedRecurrence.windowMinutes,
-          graceMinutes: pack.pharmacy.suggestedRecurrence.graceMinutes,
-        });
-        await generateDueSopOccurrences(ctx.db, { now });
-        const occurrence = await ctx.db.restaurantSopOccurrence.findFirst({
-          where: { assignmentId: assignment.id },
-          select: { id: true },
-        });
-        // The one-off occurrence now exists on its own; pausing the assignment
-        // keeps it out of every later generator pass.
-        await setAssignmentActive(ctx.db, assignment.id, false);
-        if (!occurrence) {
-          throw new TRPCError({
-            code: 'PRECONDITION_FAILED',
-            message: 'This procedure has no published version to start.',
+            orderBy: { dueAt: 'desc' },
+            select: { id: true },
           });
-        }
-        audit(ctx, site, {
-          action: 'pharmacy.sop.startOnDemand',
-          targetType: 'RestaurantSopOccurrence',
-          targetId: occurrence.id,
-          description: `Started event procedure “${template.name}”`,
-          metadata: { templateId: template.id, assignmentId: assignment.id },
+          if (open) return { occurrenceId: open.id, created: false };
+
+          const now = new Date();
+          const local = localWallClock(now, site.timezone);
+          const assignment = await createAssignment(tx, {
+            branchId: site.sopBranchId,
+            templateId: template.id,
+            assigneeTarget: { type: 'person', staffProfileId: actor.staffProfileId },
+            frequency: 'ONCE',
+            interval: 1,
+            daysOfWeek: [],
+            monthDay: null,
+            startDate: local.date,
+            endDate: local.date,
+            dueTimeMinutes: local.minutes,
+            intervalEndTimeMinutes: null,
+            windowMinutes: pack.pharmacy.suggestedRecurrence.windowMinutes,
+            graceMinutes: pack.pharmacy.suggestedRecurrence.graceMinutes,
+          });
+          await generateDueSopOccurrences(tx, { now });
+          const occurrence = await tx.restaurantSopOccurrence.findFirst({
+            where: { assignmentId: assignment.id },
+            select: { id: true },
+          });
+          // The one-off occurrence now exists on its own; pausing the assignment
+          // keeps it out of every later generator pass.
+          await setAssignmentActive(tx, assignment.id, false);
+          if (!occurrence) {
+            throw new TRPCError({
+              code: 'PRECONDITION_FAILED',
+              message: 'This procedure has no published version to start.',
+            });
+          }
+          audit(ctx, site, {
+            action: 'pharmacy.sop.startOnDemand',
+            targetType: 'RestaurantSopOccurrence',
+            targetId: occurrence.id,
+            description: `Started event procedure “${template.name}”`,
+            metadata: { templateId: template.id, assignmentId: assignment.id },
+          });
+          return { occurrenceId: occurrence.id, created: true };
         });
-        return { occurrenceId: occurrence.id, created: true };
       })
     ),
 
@@ -1274,6 +1485,8 @@ export const pharmacySopRouter = router({
                   mimeType: true,
                   sizeBytes: true,
                   storageRef: true,
+                  contentHash: true,
+                  uploaderStaffProfileId: true,
                   capturedAt: true,
                   uploader: { select: { displayName: true } },
                 },
@@ -1364,6 +1577,7 @@ export const pharmacySopRouter = router({
             storageRef: row.storageRef,
             capturedAt: row.capturedAt,
             uploaderName: row.uploader?.displayName ?? null,
+            capturedInPharmacy: capturedInPharmacy(ctx, detail.id, row),
           })),
           recordLinks: links,
           verifications: detail.verifications.map((row) => ({
@@ -1523,6 +1737,13 @@ export const pharmacySopRouter = router({
             message: 'Start the occurrence before linking records to it.',
           });
         }
+        await assertLinkableRecordType(
+          ctx,
+          await packForVersion(ctx, occurrence.templateVersionId),
+          occurrence.id,
+          input.occurrenceStepId ?? null,
+          input.recordType
+        );
         const result = await linkPharmacySopRecord(ctx.db, {
           site,
           occurrenceId: occurrence.id,
@@ -1590,13 +1811,14 @@ export const pharmacySopRouter = router({
           input.pharmacyBranchId,
           input.occurrenceId
         );
-        await assertOccurrenceVisible(
-          ctx,
-          site,
-          actor,
-          occurrence,
-          await packForVersion(ctx, occurrence.templateVersionId)
-        );
+        const pack = await packForVersion(ctx, occurrence.templateVersionId);
+        await assertOccurrenceVisible(ctx, site, actor, occurrence, pack);
+        if (!packRecordTypes(pack).has(input.recordType)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `This procedure does not link a ${recordTypeLabel(input.recordType)}.`,
+          });
+        }
         const window = await ctx.db.restaurantSopOccurrence.findUnique({
           where: { id: occurrence.id },
           select: { dueAt: true, windowEndsAt: true },
@@ -1604,16 +1826,13 @@ export const pharmacySopRouter = router({
         if (!window) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
         const branchId = site.pharmacyBranchId;
         const take = 50;
+        // Offer only records the link will accept (the adapter enforces the
+        // same bounds); null means the type is not time-bounded.
+        const bounds = pharmacySopRecordTimeBounds(input.recordType, window);
         switch (input.recordType) {
           case 'TEMPERATURE_LOG': {
             const rows = await ctx.db.pharmacyTemperatureLog.findMany({
-              where: {
-                branchId,
-                recordedAt: {
-                  gte: new Date(window.dueAt.getTime() - DAY_MS),
-                  lte: window.windowEndsAt,
-                },
-              },
+              where: { branchId, ...(bounds ? { recordedAt: bounds } : {}) },
               orderBy: [{ recordedAt: 'desc' }, { id: 'asc' }],
               take,
               select: {
@@ -1656,7 +1875,7 @@ export const pharmacySopRouter = router({
           }
           case 'GOODS_RECEIPT': {
             const rows = await ctx.db.pharmacyGoodsReceipt.findMany({
-              where: { branchId },
+              where: { branchId, ...(bounds ? { receivedAt: bounds } : {}) },
               orderBy: [{ receivedAt: 'desc' }, { id: 'asc' }],
               take,
               select: { id: true, reference: true, status: true, receivedAt: true },
@@ -1748,6 +1967,15 @@ export const pharmacySopRouter = router({
           site,
           verifierStaffProfileId: actor.staffProfileId,
         });
+        // Rejecting stays open (it sends the work back); verifying would
+        // endorse proof the pharmacy workspace never captured.
+        const evidence = await ctx.db.restaurantSopEvidence.findMany({
+          where: { occurrenceId: occurrence.id },
+          select: EVIDENCE_PROVENANCE_SELECT,
+        });
+        if (evidence.some((row) => !capturedInPharmacy(ctx, occurrence.id, row))) {
+          throw new TRPCError({ code: 'PRECONDITION_FAILED', message: FOREIGN_PROOF_MESSAGE });
+        }
         const result = await verifyOccurrence(ctx.db, {
           occurrenceId: occurrence.id,
           actorStaffProfileId: actor.staffProfileId,
@@ -1792,7 +2020,9 @@ export const pharmacySopRouter = router({
       })
     ),
 
-  // ── Reporting (sop:complete or sop:verify) ────────────────────────────────
+  // ── Reporting (sop:manage or sop:verify) ──────────────────────────────────
+  // The report names every person's work at the branch, so it is a manager or
+  // reviewer read; completing procedures alone does not grant it.
 
   report: auditedProtectedProcedure
     .input(
@@ -1805,7 +2035,7 @@ export const pharmacySopRouter = router({
         })
     )
     .query(async ({ ctx, input }) => {
-      await requireAnyCapability(ctx, ['sop:complete', 'sop:verify']);
+      await requireAnyCapability(ctx, ['sop:manage', 'sop:verify']);
       return guarded(async () => {
         const site = await siteFor(ctx, input.pharmacyBranchId);
         const fromBusinessDate = businessDateToUtcDate(input.from);

@@ -400,6 +400,23 @@ describe('pharmacy procedures workspace', () => {
     expect(screen.getByRole('tab', { name: 'Review' })).toBeVisible();
   });
 
+  it('shows reports only to managers and reviewers, not to staff who only complete', () => {
+    setup({ access: { canComplete: true, canVerify: false, canManage: false } });
+    const first = render(<PharmacySopWorkspace />);
+    expect(screen.getByRole('tab', { name: "Today's work" })).toBeVisible();
+    expect(screen.queryByRole('tab', { name: 'Reports' })).not.toBeInTheDocument();
+    first.unmount();
+
+    setup({ access: { canComplete: false, canVerify: true, canManage: false } });
+    const second = render(<PharmacySopWorkspace />);
+    expect(screen.getByRole('tab', { name: 'Reports' })).toBeVisible();
+    second.unmount();
+
+    setup({ access: { canComplete: false, canVerify: false, canManage: true } });
+    render(<PharmacySopWorkspace />);
+    expect(screen.getByRole('tab', { name: 'Reports' })).toBeVisible();
+  });
+
   it('requires a reason before sending a procedure back', () => {
     setup({
       access: { canComplete: true, canVerify: true, canManage: false },

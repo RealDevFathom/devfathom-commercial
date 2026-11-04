@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   createTRPCContext: vi.fn(),
   deleteUpload: vi.fn(),
   evidenceTarget: vi.fn(),
+  createCaller: vi.fn(),
   putUpload: vi.fn(),
   resolveTenantActor: vi.fn(),
 }));
@@ -26,15 +27,18 @@ vi.mock('@/lib/storage', async (importOriginal) => ({
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
-vi.mock('@/server/routers/pharmacy-sop', () => ({
-  pharmacySopRouter: {
-    createCaller: vi.fn(() => ({ evidenceTarget: mocks.evidenceTarget })),
+vi.mock('@/server/routers/_app', () => ({
+  appRouter: {
+    createCaller: mocks.createCaller,
   },
 }));
 
 import { POST } from './route';
+import { isPharmacySopCapturedEvidence } from '@/lib/pharmacy/sop-evidence';
 import { SopExecutionError } from '@/lib/restaurant/sop-execution';
 import { StorageUnavailableError } from '@/lib/storage';
+
+process.env.AUTH_SECRET = 'pharmacy-sop-evidence-route-test-secret';
 
 function request(overrides?: {
   file?: unknown;
@@ -81,6 +85,9 @@ beforeEach(() => {
   });
   mocks.createTRPCContext.mockResolvedValue({ db: {}, organization: { id: 'org_1' }, session });
   mocks.evidenceTarget.mockResolvedValue(TARGET);
+  mocks.createCaller.mockImplementation(() => ({
+    pharmacySop: { evidenceTarget: mocks.evidenceTarget },
+  }));
   mocks.putUpload.mockResolvedValue(undefined);
   mocks.deleteUpload.mockResolvedValue(undefined);
   mocks.attachEvidence.mockResolvedValue({
@@ -102,9 +109,13 @@ describe('POST pharmacy SOP evidence', () => {
       occurrenceId: 'occ_1',
       occurrenceStepId: 'ostep_1',
     });
+    // The app router's caller, so the procedure path is `pharmacySop.evidenceTarget`.
+    expect(mocks.createCaller).toHaveBeenCalledWith(
+      expect.objectContaining({ organization: { id: 'org_1' } })
+    );
     expect(mocks.putUpload).toHaveBeenCalledWith(
       'org_1',
-      expect.stringMatching(/^sop-.+\.jpg$/),
+      expect.stringMatching(/^pharmacy-sop-[0-9a-f-]{36}-[0-9a-f]{32}\.jpg$/),
       Buffer.from('proof'),
       'image/jpeg'
     );
@@ -119,6 +130,37 @@ describe('POST pharmacy SOP evidence', () => {
       })
     );
     expect(JSON.stringify(mocks.attachEvidence.mock.calls)).not.toContain('staff_victim');
+  });
+
+  it('names the blob so the router recognises exactly this evidence row as pharmacy proof', async () => {
+    await POST(request());
+    const filename = mocks.putUpload.mock.calls[0]![1] as string;
+    const attached = mocks.attachEvidence.mock.calls[0]![1] as {
+      storageRef: string;
+      contentHashHex: string;
+      mimeType: string;
+    };
+    expect(attached.storageRef).toBe(`/api/files/${filename}`);
+    const row = {
+      occurrenceId: 'occ_1',
+      occurrenceStepId: 'ostep_1',
+      contentHash: attached.contentHashHex,
+      mimeType: attached.mimeType,
+      uploaderStaffProfileId: 'staff_me',
+      storageRef: attached.storageRef,
+    };
+    expect(isPharmacySopCapturedEvidence(row, 'org_1')).toBe(true);
+    // Copying the ref onto any other row, tenant or uploader does not carry it over.
+    expect(isPharmacySopCapturedEvidence(row, 'org_2')).toBe(false);
+    expect(
+      isPharmacySopCapturedEvidence({ ...row, uploaderStaffProfileId: 'staff_x' }, 'org_1')
+    ).toBe(false);
+    expect(isPharmacySopCapturedEvidence({ ...row, occurrenceStepId: 'ostep_2' }, 'org_1')).toBe(
+      false
+    );
+    expect(
+      isPharmacySopCapturedEvidence({ ...row, mimeType: 'image/jpeg; evidence=signature' }, 'org_1')
+    ).toBe(false);
   });
 
   it('records signature proof with the signature purpose', async () => {

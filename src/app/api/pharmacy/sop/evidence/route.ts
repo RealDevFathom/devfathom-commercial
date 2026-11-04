@@ -5,18 +5,20 @@ import { TRPCError } from '@trpc/server';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 import { publicRequestOrigin } from '@/lib/http-origin';
+import { pharmacySopEvidenceFilename } from '@/lib/pharmacy/sop-evidence';
 import { SopExecutionError, attachEvidence } from '@/lib/restaurant/sop-execution';
 import { deleteUpload, putUpload, StorageUnavailableError } from '@/lib/storage';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { pharmacySopRouter } from '@/server/routers/pharmacy-sop';
+import { appRouter } from '@/server/routers/_app';
 import { createTRPCContext } from '@/server/trpc';
 
 /**
  * DEV-751 — multipart proof capture for a pharmacy SOP occurrence.
  *
- * Authorization is the `pharmacySop.evidenceTarget` procedure, called through a
- * server-side caller so the upload passes the same gates as every pharmacy SOP
- * procedure: a usable session, the `pharmacy-safety` module, `sop:complete`,
+ * Authorization is the `pharmacySop.evidenceTarget` procedure, called through
+ * the app router's server-side caller — so its middleware path is the real
+ * `pharmacySop.evidenceTarget` and the upload passes the same gates and audit
+ * path as every pharmacy SOP procedure: a usable session, the `pharmacy-safety` module, `sop:complete`,
  * the caller's pharmacy branch assignment, the occurrence belonging to that
  * branch's SOP site, and the occurrence being the caller's own work in
  * progress. The uploader is always the session actor that procedure resolves;
@@ -26,6 +28,11 @@ import { createTRPCContext } from '@/server/trpc';
  * resolves to the same evidence row (the engine's retry-identity unique), and
  * the redundant blob is removed. Any failure after storage removes the blob,
  * so a refused or interrupted upload leaves no evidence row and no orphan file.
+ *
+ * Blobs are named by `pharmacySopEvidenceFilename` (`pharmacy-sop-<uuid>-<mac>`),
+ * which binds the stored ref to this exact evidence row. The pharmacy router
+ * trusts only proof named that way, so evidence attached to a pharmacy
+ * occurrence through any other route never counts as pharmacy proof.
  */
 
 export const runtime = 'nodejs';
@@ -156,7 +163,7 @@ export async function POST(request: Request) {
     });
     organizationId = ctx.organization?.id ?? ctx.session?.user?.organizationId ?? null;
     if (!organizationId) return json(404, { error: 'Workspace not found.' });
-    const target = await pharmacySopRouter.createCaller(ctx).evidenceTarget({
+    const target = await appRouter.createCaller(ctx).pharmacySop.evidenceTarget({
       pharmacyBranchId,
       occurrenceId,
       occurrenceStepId,
@@ -164,7 +171,18 @@ export async function POST(request: Request) {
 
     stage = 'storage';
     const hash = crypto.createHash('sha256').update(bytes).digest('hex');
-    storedFilename = `sop-${crypto.randomUUID()}.${extension}`;
+    const mimeType = `${baseType}; evidence=${purpose}`;
+    storedFilename = pharmacySopEvidenceFilename(
+      {
+        organizationId,
+        occurrenceId: target.occurrenceId,
+        occurrenceStepId: target.occurrenceStepId,
+        contentHash: hash,
+        mimeType,
+        uploaderStaffProfileId: target.uploaderStaffProfileId,
+      },
+      extension
+    );
     await putUpload(organizationId, storedFilename, bytes, baseType);
 
     stage = 'attach';
@@ -172,7 +190,7 @@ export async function POST(request: Request) {
       occurrenceId: target.occurrenceId,
       occurrenceStepId: target.occurrenceStepId,
       contentHashHex: hash,
-      mimeType: `${baseType}; evidence=${purpose}`,
+      mimeType,
       sizeBytes: bytes.length,
       storageRef: `/api/files/${storedFilename}`,
       uploaderStaffProfileId: target.uploaderStaffProfileId,

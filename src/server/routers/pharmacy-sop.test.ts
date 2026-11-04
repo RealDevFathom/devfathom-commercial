@@ -116,8 +116,13 @@ vi.mock('@/lib/restaurant/sop-score', () => ({
 import { router } from '../trpc';
 import { pharmacySopRouter } from './pharmacy-sop';
 import { PharmacySopAccessError } from '@/lib/pharmacy/sop-adapter';
+import { pharmacySopEvidenceFilename } from '@/lib/pharmacy/sop-evidence';
 import { findPharmacySopPack, type PharmacySopPackStep } from '@/lib/pharmacy/sop-library';
 import { SopExecutionError } from '@/lib/restaurant/sop-execution';
+import { SopTemplateError } from '@/lib/restaurant/sop-templates';
+import { SopVerificationError } from '@/lib/restaurant/sop-verification';
+
+process.env.AUTH_SECRET = 'pharmacy-sop-router-test-secret';
 
 const app = router({ pharmacySop: pharmacySopRouter });
 
@@ -134,6 +139,42 @@ const PHARMACY_MODULES = ['pharmacy-core', 'pharmacy-safety'];
 const temperatureLog = findPharmacySopPack('temperature-log')!;
 const receiving = findPharmacySopPack('receiving')!;
 const opening = findPharmacySopPack('opening')!;
+const training = findPharmacySopPack('training-attestation')!;
+const controlledCounts = findPharmacySopPack('controlled-counts')!;
+
+type EvidenceRow = {
+  occurrenceStepId: string | null;
+  contentHash: string;
+  mimeType: string;
+  uploaderStaffProfileId: string | null;
+  storageRef: string | null;
+};
+
+/** An evidence row as the pharmacy evidence route stores it (a minted, bound ref). */
+function pharmacyEvidence(stepId: string | null, purpose: 'photo' | 'signature'): EvidenceRow {
+  const row = {
+    occurrenceStepId: stepId,
+    contentHash: 'a'.repeat(64),
+    mimeType: `image/png; evidence=${purpose}`,
+    uploaderStaffProfileId: ACTOR.staffProfileId,
+  };
+  const name = pharmacySopEvidenceFilename(
+    { organizationId: 'org_1', occurrenceId: 'occ_1', ...row },
+    'png'
+  );
+  return { ...row, storageRef: `/api/files/${name}` };
+}
+
+/** The same proof attached through a restaurant surface (any other ref). */
+function foreignEvidence(stepId: string | null, purpose: 'photo' | 'signature'): EvidenceRow {
+  return {
+    occurrenceStepId: stepId,
+    contentHash: 'b'.repeat(64),
+    mimeType: `image/png; evidence=${purpose}`,
+    uploaderStaffProfileId: ACTOR.staffProfileId,
+    storageRef: '/api/files/sop-11111111-2222-4333-8444-555555555555.png',
+  };
+}
 
 type Delegate = Record<string, ReturnType<typeof vi.fn>>;
 
@@ -157,8 +198,15 @@ function makeDb() {
     pharmacyBranchAssignment: model(),
     pharmacySopRecordLink: model(),
     pharmacyTemperatureLog: model(),
+    restaurantSopEvidence: model(),
   };
-  return db as Record<keyof typeof db, Delegate>;
+  const typed = db as Record<keyof typeof db, Delegate> & {
+    $transaction: ReturnType<typeof vi.fn>;
+    $queryRaw: ReturnType<typeof vi.fn>;
+  };
+  typed.$transaction = vi.fn(async (work: (tx: unknown) => Promise<unknown>) => work(typed));
+  typed.$queryRaw = vi.fn().mockResolvedValue([]);
+  return typed;
 }
 
 let db: ReturnType<typeof makeDb>;
@@ -249,11 +297,19 @@ function arrangeSubmission(opts: {
   notes?: Record<number, string>;
   links?: Array<{ step: number | null; recordType: string; recordId: string; note?: string }>;
   outOfRange?: string[];
+  requires?: Record<number, { photo?: boolean; signature?: boolean }>;
+  evidence?: Record<number, EvidenceRow[]>;
 }) {
   const steps = opts.pack.steps.map((step, index) => ({
     id: `ostep_${index + 1}`,
     note: opts.notes?.[index + 1] ?? null,
-    templateStep: { title: step.title, stepOrder: index + 1 },
+    templateStep: {
+      title: step.title,
+      stepOrder: index + 1,
+      requiresPhoto: opts.requires?.[index + 1]?.photo ?? false,
+      requiresSignature: opts.requires?.[index + 1]?.signature ?? false,
+    },
+    evidence: opts.evidence?.[index + 1] ?? [],
   }));
   db.restaurantSopOccurrence.findUnique.mockResolvedValue({
     assignment: { template: { name: opts.pack.name } },
@@ -351,10 +407,11 @@ describe('capability gates', () => {
     expect(mocks.engine.installPharmacySopLibrary).not.toHaveBeenCalled();
   });
 
-  it('branches needs at least one SOP capability; report needs complete or verify', async () => {
+  it('branches needs at least one SOP capability; report needs manage or verify', async () => {
     mocks.granted = new Set();
     await expect(caller().branches()).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    mocks.granted = new Set(['sop:manage']);
+    // The report names every person's work at the branch: completing alone is not enough.
+    mocks.granted = new Set(['sop:complete']);
     await expect(
       caller().report({ ...BRANCH_INPUT, from: '2026-11-01', to: '2026-11-04' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -566,7 +623,12 @@ describe('createAssignment', () => {
       displayName: 'Two',
       userId: 'user_2',
     });
+    mocks.adapter.pharmacySopRolesAt.mockResolvedValue(['pharmacy-qualified-person']);
     await caller().createAssignment(personInput);
+    expect(mocks.adapter.pharmacySopRolesAt).toHaveBeenCalledWith(db, {
+      staffProfileId: 'staff_2',
+      sopBranchId: SITE.sopBranchId,
+    });
     expect(mocks.adapter.resolvePharmacySopActor).toHaveBeenCalledWith(db, {
       organizationId: 'org_1',
       userId: 'user_2',
@@ -578,6 +640,44 @@ describe('createAssignment', () => {
         templateId: 'tpl_open',
         assigneeTarget: { type: 'person', staffProfileId: 'staff_2' },
       })
+    );
+  });
+
+  it('refuses a PERSON who does not hold the role-owned pack’s role at the site', async () => {
+    expect(opening.pharmacy.assigneeTarget).toBe('ROLE');
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ userId: 'user_2' });
+    mocks.adapter.resolvePharmacySopActor.mockResolvedValueOnce({
+      staffProfileId: 'staff_2',
+      displayName: 'Two',
+      userId: 'user_2',
+    });
+    mocks.adapter.pharmacySopRolesAt.mockResolvedValue(['pharmacy-assistant']);
+    await expect(caller().createAssignment(personInput)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: expect.stringContaining('does not hold the pharmacy SOP role'),
+    });
+    expect(mocks.engine.createAssignment).not.toHaveBeenCalled();
+  });
+
+  it('names anyone at the branch for a pack that is person-assigned by design', async () => {
+    expect(training.pharmacy.assigneeTarget).toBe('PERSON');
+    db.restaurantSopTemplate.findUnique.mockResolvedValue({
+      id: 'tpl_train',
+      name: training.name,
+      isActive: true,
+    });
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ userId: 'user_2' });
+    mocks.adapter.resolvePharmacySopActor.mockResolvedValueOnce({
+      staffProfileId: 'staff_2',
+      displayName: 'Two',
+      userId: 'user_2',
+    });
+    mocks.adapter.pharmacySopRolesAt.mockResolvedValue([]);
+    await caller().createAssignment({ ...personInput, templateId: 'tpl_train' });
+    expect(mocks.adapter.pharmacySopRolesAt).not.toHaveBeenCalled();
+    expect(mocks.engine.createAssignment).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ assigneeTarget: { type: 'person', staffProfileId: 'staff_2' } })
     );
   });
 
@@ -954,5 +1054,334 @@ describe('board', () => {
     expect(board.canReview).toBe(false);
     expect(board.review).toEqual([]);
     expect(db.restaurantSopOccurrence.findMany).not.toHaveBeenCalled();
+  });
+});
+
+// ── Security review fixes ────────────────────────────────────────────────────
+
+describe('proof captured outside the pharmacy workspace', () => {
+  it('submit counts only pharmacy-captured proof for a required signature', async () => {
+    const signatureStep = { 3: { signature: true } };
+    arrangeSubmission({
+      pack: training,
+      notes: { 2: 'None' },
+      requires: signatureStep,
+      evidence: { 3: [foreignEvidence('ostep_3', 'signature')] },
+    });
+    await expect(caller().submit(OCC_INPUT)).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: expect.stringContaining('signature proof'),
+    });
+    expect(mocks.engine.submitOccurrence).not.toHaveBeenCalled();
+
+    arrangeSubmission({
+      pack: training,
+      notes: { 2: 'None' },
+      requires: signatureStep,
+      evidence: {
+        3: [foreignEvidence('ostep_3', 'signature'), pharmacyEvidence('ostep_3', 'signature')],
+      },
+    });
+    await expect(caller().submit(OCC_INPUT)).resolves.toMatchObject({ status: 'SUBMITTED' });
+  });
+
+  it('submit refuses a required photo backed only by foreign or tampered proof', async () => {
+    const tampered = { ...pharmacyEvidence('ostep_1', 'photo'), uploaderStaffProfileId: 'staff_x' };
+    const copied = { ...pharmacyEvidence('ostep_1', 'photo'), contentHash: 'c'.repeat(64) };
+    const wrongKind = pharmacyEvidence('ostep_1', 'signature');
+    for (const rows of [[foreignEvidence('ostep_1', 'photo')], [tampered], [copied], [wrongKind]]) {
+      arrangeSubmission({
+        pack: training,
+        notes: { 2: 'x' },
+        requires: { 1: { photo: true } },
+        evidence: { 1: rows },
+      });
+      await expect(caller().submit(OCC_INPUT)).rejects.toMatchObject({
+        code: 'PRECONDITION_FAILED',
+        message: expect.stringContaining('photo proof'),
+      });
+    }
+    expect(mocks.engine.submitOccurrence).not.toHaveBeenCalled();
+  });
+
+  describe('verify', () => {
+    beforeEach(() => {
+      occurrenceRow = { ...occurrenceRow, status: 'SUBMITTED', assignedStaffProfileId: 'staff_op' };
+    });
+
+    it('refuses while any proof on the occurrence was not captured in pharmacy', async () => {
+      db.restaurantSopEvidence.findMany.mockResolvedValue([
+        pharmacyEvidence('ostep_1', 'photo'),
+        foreignEvidence(null, 'photo'),
+      ]);
+      await expect(caller().verify(OCC_INPUT)).rejects.toMatchObject({
+        code: 'PRECONDITION_FAILED',
+        message:
+          'Proof on this procedure was not captured through the pharmacy workspace. Ask a manager to review it.',
+      });
+      expect(db.restaurantSopEvidence.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { occurrenceId: 'occ_1' } })
+      );
+      expect(mocks.engine.verifyOccurrence).not.toHaveBeenCalled();
+
+      // Sending it back stays possible.
+      await caller().reject({ ...OCC_INPUT, reason: 'Proof came from elsewhere' });
+      expect(mocks.engine.rejectOccurrence).toHaveBeenCalledOnce();
+    });
+
+    it('verifies when every proof row was captured in pharmacy', async () => {
+      db.restaurantSopEvidence.findMany.mockResolvedValue([pharmacyEvidence('ostep_1', 'photo')]);
+      await caller().verify(OCC_INPUT);
+      expect(mocks.engine.verifyOccurrence).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('occurrence flags each evidence row with capturedInPharmacy', async () => {
+    const genuine = pharmacyEvidence('ostep_1', 'photo');
+    const foreign = foreignEvidence('ostep_1', 'photo');
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: 'occ_1',
+      status: 'IN_PROGRESS',
+      businessDate: new Date(Date.UTC(2026, 10, 4)),
+      dueAt: new Date(),
+      windowEndsAt: new Date(Date.now() + 3_600_000),
+      startedAt: new Date(),
+      submittedAt: null,
+      resolvedAt: null,
+      assignedStaffProfileId: ACTOR.staffProfileId,
+      claimedByStaffProfileId: null,
+      poolJobRoleId: null,
+      assignment: {
+        graceMinutes: 0,
+        template: { id: 'tpl', name: training.name, category: 'Training' },
+      },
+      steps: [],
+      evidence: [genuine, foreign].map((row, index) => ({
+        id: `ev_${index}`,
+        sizeBytes: 3,
+        capturedAt: new Date(),
+        uploader: { displayName: 'Me' },
+        ...row,
+      })),
+      verifications: [],
+    });
+    const result = await caller().occurrence(OCC_INPUT);
+    expect(result.evidence.map((row) => [row.id, row.capturedInPharmacy])).toEqual([
+      ['ev_0', true],
+      ['ev_1', false],
+    ]);
+  });
+});
+
+describe('record links follow the pack', () => {
+  beforeEach(() => {
+    db.restaurantSopTemplateVersion.findFirst.mockResolvedValue({
+      template: { name: temperatureLog.name },
+    });
+    mocks.adapter.linkPharmacySopRecord.mockResolvedValue({ linkId: 'link_1', created: true });
+  });
+
+  it('linkableRecords refuses a record type the pack never links', async () => {
+    await expect(
+      caller().linkableRecords({ ...OCC_INPUT, recordType: 'CONTROLLED_REGISTER_ENTRY' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.restaurantSopOccurrence.findUnique).not.toHaveBeenCalled();
+
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      dueAt: new Date(),
+      windowEndsAt: new Date(),
+    });
+    await expect(
+      caller().linkableRecords({ ...OCC_INPUT, recordType: 'TEMPERATURE_LOG' })
+    ).resolves.toEqual([]);
+  });
+
+  it('linkRecord on a step needs exactly that step’s record type', async () => {
+    db.restaurantSopOccurrenceStep.findFirst.mockResolvedValue({
+      templateStep: { title: temperatureLog.steps[0]!.title, stepOrder: 1 },
+    });
+    await expect(
+      caller().linkRecord({
+        ...OCC_INPUT,
+        occurrenceStepId: 'ostep_1',
+        recordType: 'GOODS_RECEIPT',
+        recordId: 'gr_1',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    await caller().linkRecord({
+      ...OCC_INPUT,
+      occurrenceStepId: 'ostep_1',
+      recordType: 'TEMPERATURE_LOG',
+      recordId: 'log_1',
+    });
+    expect(db.restaurantSopOccurrenceStep.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'ostep_1', occurrenceId: 'occ_1' } })
+    );
+    expect(mocks.adapter.linkPharmacySopRecord).toHaveBeenCalledOnce();
+  });
+
+  it('linkRecord refuses a step that names no record type and a step from elsewhere', async () => {
+    db.restaurantSopOccurrenceStep.findFirst.mockResolvedValueOnce({
+      templateStep: { title: temperatureLog.steps[2]!.title, stepOrder: 3 },
+    });
+    await expect(
+      caller().linkRecord({
+        ...OCC_INPUT,
+        occurrenceStepId: 'ostep_3',
+        recordType: 'TEMPERATURE_LOG',
+        recordId: 'log_1',
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'This step does not take a linked record.',
+    });
+
+    db.restaurantSopOccurrenceStep.findFirst.mockResolvedValueOnce(null);
+    await expect(
+      caller().linkRecord({
+        ...OCC_INPUT,
+        occurrenceStepId: 'ostep_elsewhere',
+        recordType: 'TEMPERATURE_LOG',
+        recordId: 'log_1',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mocks.adapter.linkPharmacySopRecord).not.toHaveBeenCalled();
+  });
+
+  it('an occurrence-level link must still be a type the pack links', async () => {
+    db.restaurantSopTemplateVersion.findFirst.mockResolvedValue({
+      template: { name: controlledCounts.name },
+    });
+    await expect(
+      caller().linkRecord({ ...OCC_INPUT, recordType: 'TEMPERATURE_LOG', recordId: 'log_1' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await caller().linkRecord({
+      ...OCC_INPUT,
+      recordType: 'CONTROLLED_REGISTER_ENTRY',
+      recordId: 'cre_1',
+    });
+    expect(mocks.adapter.linkPharmacySopRecord).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ occurrenceStepId: null, recordType: 'CONTROLLED_REGISTER_ENTRY' })
+    );
+  });
+
+  it('linkRecord and evidenceTarget need the caller’s own work in progress', async () => {
+    const link = () =>
+      caller().linkRecord({ ...OCC_INPUT, recordType: 'TEMPERATURE_LOG', recordId: 'log_1' });
+    occurrenceRow.status = 'SUBMITTED';
+    await expect(link()).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(caller().evidenceTarget(OCC_INPUT)).rejects.toMatchObject({ code: 'CONFLICT' });
+    occurrenceRow.status = 'IN_PROGRESS';
+    occurrenceRow.assignedStaffProfileId = 'staff_other';
+    await expect(link()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().evidenceTarget(OCC_INPUT)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.adapter.linkPharmacySopRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe('report gate', () => {
+  it.each([['sop:verify'], ['sop:manage']])('admits %s', async (capability) => {
+    mocks.granted = new Set([capability]);
+    mocks.engine.buildScoreReport.mockResolvedValue({ rows: [] });
+    db.restaurantSopOccurrence.findMany.mockResolvedValue([]);
+    await expect(
+      caller().report({ ...BRANCH_INPUT, from: '2026-11-01', to: '2026-11-04' })
+    ).resolves.toMatchObject({ score: { rows: [] } });
+    expect(mocks.engine.buildScoreReport).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ branchId: SITE.sopBranchId })
+    );
+  });
+});
+
+describe('startOnDemand serialization', () => {
+  const input = { ...BRANCH_INPUT, templateId: 'tpl_recv' };
+  const lockKey = `pharmacy-sop-on-demand:org_1:${SITE.sopBranchId}:tpl_recv:${ACTOR.staffProfileId}`;
+
+  beforeEach(() => {
+    db.restaurantSopTemplate.findUnique.mockResolvedValue({
+      id: 'tpl_recv',
+      name: receiving.name,
+      isActive: true,
+    });
+  });
+
+  it('takes a per-tenant, site, template and actor lock before looking for open work', async () => {
+    db.restaurantSopOccurrence.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'occ_new' });
+    await expect(caller().startOnDemand(input)).resolves.toEqual({
+      occurrenceId: 'occ_new',
+      created: true,
+    });
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    const sql = db.$queryRaw.mock.calls[0]![0] as { sql: string; values: unknown[] };
+    expect(sql.sql).toContain('pg_advisory_xact_lock(hashtextextended(');
+    expect(sql.values).toEqual([lockKey]);
+    expect(db.$queryRaw.mock.invocationCallOrder[0]!).toBeLessThan(
+      db.restaurantSopOccurrence.findFirst.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('a caller that waited on the lock finds the open occurrence and creates nothing', async () => {
+    db.restaurantSopOccurrence.findFirst.mockResolvedValueOnce({ id: 'occ_first' });
+    await expect(caller().startOnDemand(input)).resolves.toEqual({
+      occurrenceId: 'occ_first',
+      created: false,
+    });
+    expect(db.$queryRaw.mock.calls[0]![0]).toMatchObject({ values: [lockKey] });
+    expect(mocks.engine.createAssignment).not.toHaveBeenCalled();
+    expect(mocks.engine.generateDueSopOccurrences).not.toHaveBeenCalled();
+  });
+});
+
+describe('engine refusals never echo internal ids', () => {
+  it('maps engine NOT_FOUND refusals to fixed wording', async () => {
+    db.restaurantSopTemplate.findUnique.mockResolvedValue({
+      id: 'tpl_open',
+      name: opening.name,
+      isActive: true,
+    });
+    mocks.engine.createAssignment.mockRejectedValueOnce(
+      new SopTemplateError('Branch sopbranch_secret_1 was not found.', 'NOT_FOUND')
+    );
+    const assignment = await caller()
+      .createAssignment({
+        ...BRANCH_INPUT,
+        templateId: 'tpl_open',
+        target: { type: 'ROLE', roleKey: 'pharmacy-assistant' },
+        frequency: 'DAILY',
+        startDate: '2026-11-04',
+      })
+      .catch((err: unknown) => err as Error);
+    expect(assignment).toMatchObject({ code: 'NOT_FOUND' });
+    expect(String((assignment as Error).message)).not.toContain('sopbranch_secret_1');
+
+    mocks.engine.startOccurrence.mockRejectedValueOnce(
+      new SopExecutionError('Occurrence occ_secret_1 not found.', 'NOT_FOUND')
+    );
+    await expect(caller().start(OCC_INPUT)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'Occurrence not found.',
+    });
+
+    mocks.engine.completeStep.mockRejectedValueOnce(
+      new SopExecutionError('Step tstep_secret_1 missing.', 'STEP_NOT_FOUND')
+    );
+    await expect(
+      caller().completeStep({ ...OCC_INPUT, templateStepId: 'tstep_1', note: 'ok' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Step not found on this occurrence.' });
+
+    occurrenceRow = { ...occurrenceRow, status: 'SUBMITTED', assignedStaffProfileId: 'staff_op' };
+    mocks.engine.verifyOccurrence.mockRejectedValueOnce(
+      new SopVerificationError('Occurrence occ_secret_1 not found.', 'NOT_FOUND')
+    );
+    await expect(caller().verify(OCC_INPUT)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'Occurrence not found.',
+    });
   });
 });

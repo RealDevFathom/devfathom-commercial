@@ -196,7 +196,7 @@ function Workspace({ access, branches }: { access: SopAccess; branches: SopBranc
     ...(access.canComplete ? (['board'] as const) : []),
     ...(reviewer && enabled ? (['review'] as const) : []),
     ...(access.canManage ? (['setup'] as const) : []),
-    ...((access.canComplete || access.canVerify) && enabled ? (['reports'] as const) : []),
+    ...((access.canManage || access.canVerify) && enabled ? (['reports'] as const) : []),
   ];
   const view: View | undefined = place.view && views.includes(place.view) ? place.view : views[0];
   const occurrence = enabled && (view === 'board' || view === 'review') ? place.occurrence : null;
