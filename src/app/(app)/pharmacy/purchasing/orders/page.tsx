@@ -63,6 +63,9 @@ const ROUTE = `${PURCHASING_ROUTE}/orders`;
 const HEADING = 'Requisitions & orders';
 const DESCRIPTION =
   'Demand becomes a requisition, quotes are compared and explained, and an approved order is sent to a supplier that is still licensed at the moment it leaves.';
+/** DEV-753: the same page while the owner has supplier checks off. */
+const DESCRIPTION_CHECKS_OFF =
+  'Demand becomes a requisition, quotes are compared and explained, and an approved order is sent to a supplier. Supplier checks are off, so suppliers are not checked.';
 
 /** Five slots is enough for a hand-written order and needs no client script. */
 const LINE_SLOTS = [0, 1, 2, 3, 4] as const;
@@ -454,10 +457,13 @@ export default async function PharmacyOrdersPage({
 
   const orderable = workspace.suppliers.filter((supplier) => supplier.eligibility.orderable);
   const medicinesWithPacks = workspace.medicines.filter((medicine) => medicine.packs.length > 0);
+  // DEV-753: the owner turned supplier checks off. A summary without `compliance` reads as checked.
+  const checksOff = workspace.suppliers.some((supplier) => supplier.compliance?.checked === false);
+  const description = checksOff ? DESCRIPTION_CHECKS_OFF : DESCRIPTION;
 
   return (
     <PurchasingOutcomeScope>
-      <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
+      <PurchasingHeader heading={HEADING} description={description} />
       <PurchasingTabs active={ROUTE} />
       <NoticeBanner notice={notice} />
       <PurchasingOutcomes />
@@ -476,7 +482,7 @@ export default async function PharmacyOrdersPage({
         <Stat
           label="Orderable suppliers"
           value={`${orderable.length} of ${workspace.suppliers.length}`}
-          sub="Authorized and licensed"
+          sub={checksOff ? 'Supplier checks off: not checked' : 'Authorized and licensed'}
         />
       </div>
 
@@ -626,6 +632,7 @@ export default async function PharmacyOrdersPage({
           {order ? (
             <OrderDetailPanel
               actorId={ctx.session.user.id}
+              checksOff={checksOff}
               comparisons={orderComparisons}
               landed={landed}
               notice={notice}
@@ -1043,6 +1050,7 @@ function OrderDetailPanel({
   order,
   landed,
   actorId,
+  checksOff,
   comparisons,
   notice,
   onAdvance,
@@ -1065,6 +1073,8 @@ function OrderDetailPanel({
     }[];
   } | null;
   actorId: string;
+  /** DEV-753: the owner turned supplier checks off. */
+  checksOff: boolean;
   comparisons: LineComparison[];
   notice: Notice | null;
   onAdvance: (form: FormData) => Promise<string>;
@@ -1274,8 +1284,9 @@ function OrderDetailPanel({
             <input name="action" type="hidden" value="send" />
             <SubmitButton>Send to supplier</SubmitButton>
             <p className="mt-2 text-sm text-text-muted">
-              The supplier&rsquo;s authorization and licence are checked again at this moment;
-              either can have lapsed since the order was drafted.
+              {checksOff
+                ? 'The owner turned supplier checks off, so this supplier is not checked when the order is sent.'
+                : 'The supplier’s authorization and licence are checked again at this moment; either can have lapsed since the order was drafted.'}
             </p>
           </PurchasingActionForm>
         ) : null}
