@@ -874,18 +874,32 @@ type ClaimedConversionOpportunity = {
 };
 
 /**
- * Reserve an eligible opportunity before provisioning starts. The conditional
- * update is the concurrency guard: after PostgreSQL waits on a competing
- * conversion, it rechecks this predicate and only one transaction can win.
- * Locking the account row applies the same guard across distinct opportunities
- * for one account, preventing either a replay or a race from creating two tenants.
- * Because the reservation and provisioning share the platform transaction, a
- * later provisioning failure restores both claims.
+ * Reserve an eligible opportunity before provisioning starts. The opportunity
+ * row lock is taken first and held through provisioning and commit: a
+ * competing conversion waits on it, then reads the committed
+ * `convertedOrganizationId` and is refused, so neither a replay nor a race can
+ * create another tenant or overwrite the original conversion. The conditional
+ * update keeps the eligibility predicate in the claim itself. Locking the
+ * account row applies the same guard across distinct opportunities for one
+ * account. Because the reservation and provisioning share the platform
+ * transaction, a later provisioning failure restores every claim.
  */
 async function claimOpportunityForConversion(
   db: PrismaClient,
   opportunityId: string
 ): Promise<ClaimedConversionOpportunity> {
+  const [lockedOpportunity] = await db.$queryRaw<
+    Array<{ id: string; convertedOrganizationId: string | null }>
+  >`SELECT id, "convertedOrganizationId"
+    FROM platform_opportunities
+    WHERE id = ${opportunityId}
+    FOR UPDATE`;
+  if (!lockedOpportunity) {
+    throw new PlatformSecurityError('Opportunity not found.', 400);
+  }
+  if (lockedOpportunity.convertedOrganizationId) {
+    throw new PlatformSecurityError('Opportunity has already been converted.', 409);
+  }
   const opportunity = await db.platformOpportunity.findUnique({
     where: { id: opportunityId },
     select: { id: true, accountId: true, stage: true, convertedOrganizationId: true },
@@ -929,26 +943,14 @@ async function bootstrapOrganization(
   db: PrismaClient,
   actor: PlatformIdentity | null,
   input: z.infer<typeof organizationInput>,
-  demo?: DemoOrganizationBootstrap,
-  conversionOpportunity?: ClaimedConversionOpportunity
+  demo?: DemoOrganizationBootstrap
 ) {
   // Both CRM conversion and organization onboarding can link an opportunity.
-  // Hold its row lock through provisioning and commit so retries cannot create
-  // another tenant or overwrite the original conversion and account links.
-  if (input.opportunityId) {
-    const [lockedOpportunity] = await db.$queryRaw<
-      Array<{ id: string; convertedOrganizationId: string | null }>
-    >`SELECT id, "convertedOrganizationId"
-      FROM platform_opportunities
-      WHERE id = ${input.opportunityId}
-      FOR UPDATE`;
-    if (!lockedOpportunity) {
-      throw new PlatformSecurityError('Opportunity not found.', 400);
-    }
-    if (lockedOpportunity.convertedOrganizationId) {
-      throw new PlatformSecurityError('Opportunity has already been converted.', 409);
-    }
-  }
+  // Claim it here, before any provisioning work, so no entry point can create a
+  // tenant for a missing, ineligible or already converted opportunity.
+  const conversionOpportunity = input.opportunityId
+    ? await claimOpportunityForConversion(db, input.opportunityId)
+    : undefined;
   if (input.deploymentMode === 'DEDICATED' && !isDedicatedProvisioningConfigured()) {
     throw new PlatformSecurityError(
       'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
@@ -1827,10 +1829,7 @@ async function runCommand(
     }
     case 'organization.create': {
       const input = organizationInput.parse(payload);
-      const opportunity = input.opportunityId
-        ? await claimOpportunityForConversion(db, input.opportunityId)
-        : undefined;
-      const organization = await bootstrapOrganization(db, actor, input, undefined, opportunity);
+      const organization = await bootstrapOrganization(db, actor, input);
       return {
         targetType: 'Organization',
         targetId: organization.id,
@@ -3154,8 +3153,7 @@ async function runCommand(
       if (!input.opportunityId) {
         throw new PlatformSecurityError('An opportunity is required for conversion.', 400);
       }
-      const opportunity = await claimOpportunityForConversion(db, input.opportunityId);
-      const organization = await bootstrapOrganization(db, actor, input, undefined, opportunity);
+      const organization = await bootstrapOrganization(db, actor, input);
       return {
         targetType: 'Organization',
         targetId: organization.id,
