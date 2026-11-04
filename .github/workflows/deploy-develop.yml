@@ -92,7 +92,7 @@ jobs:
           scripts/deploy/package-develop.sh . "$RUNNER_TEMP/$DEPLOY_SHA.tar.gz"
 
       - name: Authenticate with develop OIDC role
-        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
