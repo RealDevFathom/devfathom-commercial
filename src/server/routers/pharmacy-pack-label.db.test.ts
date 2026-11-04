@@ -368,6 +368,47 @@ describeIfDatabase('DEV-752 pack-photo receiving against PostgreSQL', () => {
       })
     );
     expect(movements).toBe(2);
+    // 6 + 4 lots meet the 10 ordered: no false shortage on the first lot.
+    expect(
+      await withTenantDb(ORG_A, (db) =>
+        db.pharmacyReceivingException.findMany({
+          where: { goodsReceiptId: drafted.id },
+          select: { kind: true },
+        })
+      )
+    ).toEqual([]);
+  });
+
+  it('raises one over-receipt for lots that together exceed the order line', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'overage');
+    const drafted = await withTenantDb(ORG_A, (db) =>
+      purchasingCaller(db, ORG_A).createGoodsReceipt(
+        receipt(f, 'overage', [
+          lot(f, `SYN-O1-${suffix}`, 10, '2028-06-30'),
+          lot(f, `SYN-O2-${suffix}`, 10, '2028-09-30'),
+        ])
+      )
+    );
+    await withTenantDb(ORG_A, (db) =>
+      purchasingCaller(db, ORG_A).postGoodsReceipt({
+        branchId: f.branchId,
+        goodsReceiptId: drafted.id,
+      })
+    );
+    const exceptions = await withTenantDb(ORG_A, (db) =>
+      db.pharmacyReceivingException.findMany({
+        where: { goodsReceiptId: drafted.id },
+        select: { kind: true, expectedUnits: true, observedUnits: true, goodsReceiptLineId: true },
+      })
+    );
+    expect(exceptions).toEqual([
+      {
+        kind: 'OVERAGE',
+        expectedUnits: 100,
+        observedUnits: 200,
+        goodsReceiptLineId: drafted.lines[1]!.id,
+      },
+    ]);
   });
 
   it('refuses a receiving shelf from another branch before writing anything', async () => {

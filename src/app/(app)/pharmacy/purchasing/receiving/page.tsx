@@ -751,7 +751,7 @@ export default async function PharmacyReceivingPage({
                       line.canonicalUnitsPerPack > 0
                         ? Math.floor(remaining / line.canonicalUnitsPerPack)
                         : null;
-                    const reader = (key: string, lotLabel: string, serialLocked = false) =>
+                    const reader = (key: string, lotLabel: string) =>
                       packPhotoEnabled ? (
                         <PackPhotoReader
                           branchId={branchId}
@@ -767,7 +767,9 @@ export default async function PharmacyReceivingPage({
                           packLevel={line.packLevel.level}
                           purchaseOrderId={selectedOrder.id}
                           purchaseOrderLineId={line.id}
-                          serialLocked={serialLocked}
+                          siblingFieldKeys={[1, ...EXTRA_LOT_SLOTS]
+                            .map((slot) => lotSlotKey(line.id, slot))
+                            .filter((sibling) => sibling !== key)}
                           unitsPerPack={line.canonicalUnitsPerPack}
                         />
                       ) : null;
@@ -776,7 +778,10 @@ export default async function PharmacyReceivingPage({
                       <div className="space-y-3" key={line.id}>
                         <CaptureFieldset
                           defaultLocationId={defaultLocationId}
-                          photoReader={reader(line.id, 'Lot 1', Boolean(prefill?.serialNumber))}
+                          photoReader={
+                            // A scanned 2D code is the evidence for lot 1; a photo cannot replace it.
+                            prefill?.payload ? undefined : reader(line.id, 'Lot 1')
+                          }
                           highlighted={
                             scan?.kind !== 'unresolved' &&
                             scan?.kind !== 'manual' &&
