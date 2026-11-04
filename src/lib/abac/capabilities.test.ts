@@ -18,8 +18,9 @@ export const intendedPharmacyGrants = {
     'pharmacy:close',
     'pharmacy:manage',
   ],
-  pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
-  manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+  // Day close: managers and owners only (DEV-32, DEV-739). Never the pharmacist.
+  pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
+  manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement', 'pharmacy:close'],
   cashier: ['pharmacy:counter', 'pharmacy:orders'],
   procurement: ['pharmacy:procurement'],
   inventory: ['pharmacy:inventory'],
@@ -80,7 +81,7 @@ describe('canonical capability contract (#130)', () => {
   });
 
   it.each([
-    ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close']],
+    ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review']],
     ['cashier', ['pharmacy:counter', 'pharmacy:orders']],
     ['finance', ['reports:financial']],
     ['auditor', ['reports:operational']],

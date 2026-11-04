@@ -23,6 +23,7 @@ vi.mock('@/server/audit', () => ({
   recordTrpcAudit: vi.fn(),
 }));
 
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
@@ -316,6 +317,113 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
         expect(error).not.toMatchObject(OUTSIDE)
       );
       expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+      expect(db.$transaction).toHaveBeenCalledOnce();
+    }
+  );
+
+  // Day close is for managers and owners only (Saad, DEV-32; reaffirmed on DEV-739).
+  // The role matrix runs the shipped templates through the real can() and guard.
+  const NO_CLOSE: Refusal = {
+    code: 'FORBIDDEN',
+    message: 'Day-close permission is required to reconcile and close a day.',
+  };
+  const member = (
+    rules: Array<{ capability: string; effect: string }>,
+    overrides: Array<{ capability: string; effect: string }> = []
+  ) => ({
+    status: 'ACTIVE',
+    organizationId: 'org-1',
+    organizationRole: { permissions: rules },
+    permissionOverrides: overrides,
+  });
+  const template = (key: string) =>
+    PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!.capabilities.map((capability) => ({
+      capability,
+      effect: 'ALLOW',
+    }));
+  const closeRoleMatrix = closeProcedures.flatMap(([name, run]) =>
+    (
+      [
+        ['pharmacist', false],
+        ['cashier', false],
+        ['manager', true],
+        ['owner', true],
+        ['owner-operator', true],
+      ] as const
+    ).map(([role, allowed]) => [name, role, allowed, run] as const)
+  );
+
+  it.each(closeRoleMatrix)(
+    '%s: the %s template, assigned to the branch, may close the day: %s',
+    async (_name, role, allowed, run) => {
+      db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+      db.user.findUnique.mockResolvedValue(member(template(role)));
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
+      if (allowed) {
+        await run(caller('EMPLOYEE')).catch((error: unknown) => {
+          expect(error).not.toMatchObject(NO_CLOSE);
+          expect(error).not.toMatchObject(OUTSIDE);
+        });
+        expect(db.$transaction).toHaveBeenCalledOnce();
+      } else {
+        await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(NO_CLOSE);
+        // Refused at the capability gate: no branch, assignment or close work.
+        expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+        expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+        expect(db.$transaction).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it.each(
+    closeProcedures.flatMap(([name, run]) =>
+      (
+        [
+          ['a user DENY over the manager role grant', template('manager'), 'pharmacy:close'],
+          ['a user pharmacy:* DENY over the manager role grant', template('manager'), 'pharmacy:*'],
+          ['a user * DENY over the owner role grant', template('owner'), '*'],
+        ] as const
+      ).map(([label, rules, deny]) => [name, label, rules, deny, run] as const)
+    )
+  )('%s refuses %s before the branch check', async (_name, _label, rules, deny, run) => {
+    db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+    db.user.findUnique.mockResolvedValue(
+      member([...rules], [{ capability: deny, effect: 'DENY' }])
+    );
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
+    await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(NO_CLOSE);
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    closeProcedures.flatMap(([name, run]) =>
+      (
+        [
+          ['an explicit role DENY', member([{ capability: 'pharmacy:close', effect: 'DENY' }])],
+          ['a user pharmacy:* DENY', member([], [{ capability: 'pharmacy:*', effect: 'DENY' }])],
+          ['a role * DENY', member([{ capability: '*', effect: 'DENY' }])],
+        ] as const
+      ).map(([label, rules]) => [name, label, rules, run] as const)
+    )
+  )('%s refuses a session ADMIN with %s', async (_name, _label, rules, run) => {
+    db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+    db.user.findUnique.mockResolvedValue(rules);
+    await expect(run(caller('ADMIN'))).rejects.toMatchObject(NO_CLOSE);
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(closeProcedures)(
+    '%s keeps a session ADMIN whose only DENY is on another action',
+    async (_name, run) => {
+      db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+      db.user.findUnique.mockResolvedValue(
+        member([], [{ capability: 'pharmacy:counter', effect: 'DENY' }])
+      );
+      await run(caller('ADMIN')).catch((error: unknown) =>
+        expect(error).not.toMatchObject(NO_CLOSE)
+      );
       expect(db.$transaction).toHaveBeenCalledOnce();
     }
   );

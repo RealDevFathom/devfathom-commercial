@@ -800,15 +800,17 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
+    // Day close is for managers and owners only (Saad, DEV-32 2026-11-01, reaffirmed
+    // on DEV-739): pharmacists sell, dispense and take payment but never close the day.
+    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
   },
   {
     key: 'manager',
     name: 'Manager',
     isSystem: true,
     // Managers retain the purchasing and Goods-in access that predates the
-    // explicit pharmacy capability model (#375).
-    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+    // explicit pharmacy capability model (#375), and close the day (DEV-32/DEV-739).
+    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement', 'pharmacy:close'],
   },
   {
     key: 'cashier',

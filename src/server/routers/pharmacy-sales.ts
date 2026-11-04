@@ -492,28 +492,58 @@ const closeDate = z
   );
 /**
  * The close family (preview, close, re-cut) counts drawers, posts variances and
- * cuts the branch's day. Order: the day-close capability, then the branch must be
- * an active branch of the organization, then a non-admin closer must be an
- * active member assigned to THAT branch (as the counter's receipt access
- * requires). `pharmacy:close` is an organization-role grant, not a branch grant:
- * without the assignment check a pharmacist assigned to branch A could count,
- * close or re-cut branch B (DEV-739). A session ADMIN keeps organization-wide
- * reach, as before.
+ * cuts the branch's day. Day close is for managers and owners only (Saad, DEV-32
+ * 2026-11-01, reaffirmed on DEV-739): the Manager, Owner and Owner / Operator
+ * templates carry `pharmacy:close`; the Pharmacist and Cashier templates do not.
+ *
+ * Order: the day-close capability (deny-wins, for a session ADMIN too), then the
+ * branch must be an active branch of the organization, then a non-admin closer
+ * must be an active member assigned to THAT branch (as the counter's receipt
+ * access requires). `pharmacy:close` is an organization-role grant, not a branch
+ * grant, so without the assignment check a manager assigned to branch A could
+ * count, close or re-cut branch B. A session ADMIN without an explicit DENY keeps
+ * organization-wide reach, as before.
  */
 async function requireCloseAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const user = ctx.session?.user;
-  if (
-    !user ||
-    (user.role !== 'ADMIN' &&
-      !(await can(subjectFromSession(user), 'pharmacy:close', undefined, {
-        db: ctx.db,
-        source: 'TRPC',
-      })))
-  )
-    throw new TRPCError({
+  const noCloseCapability = () =>
+    new TRPCError({
       code: 'FORBIDDEN',
       message: 'Day-close permission is required to reconcile and close a day.',
     });
+  if (!user) throw noCloseCapability();
+  if (user.role === 'ADMIN') {
+    // `can()` would answer ADMIN from the empty default policy, so apply only its
+    // deny-wins half here: an explicit DENY (exact, `pharmacy:*` or `*`) on the
+    // user or their role revokes day close for an administrator as well.
+    const rules = await ctx.db.user.findUnique({
+      where: { id: user.id },
+      select: {
+        organizationRole: {
+          select: { permissions: { select: { capability: true, effect: true } } },
+        },
+        permissionOverrides: {
+          where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+          select: { capability: true, effect: true },
+        },
+      },
+    });
+    const denied = [
+      ...(rules?.permissionOverrides ?? []),
+      ...(rules?.organizationRole?.permissions ?? []),
+    ].some(
+      (rule) =>
+        rule.effect === 'DENY' && capabilityMatches(rule.capability, 'pharmacy:close', 'DENY')
+    );
+    if (denied) throw noCloseCapability();
+  } else if (
+    !(await can(subjectFromSession(user), 'pharmacy:close', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  ) {
+    throw noCloseCapability();
+  }
   const scope = await scopeFor(ctx, branch);
   if (user.role === 'ADMIN') return scope;
   const outside = () =>
