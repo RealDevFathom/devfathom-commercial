@@ -1083,6 +1083,8 @@ describe('PUR-07 — the stock action centre transport', () => {
   });
 
   it('refuses a snooze or a dismissal with no reason (§8A invariant 29)', async () => {
+    // Exercise input validation after canonical capability authorization, rather
+    // than accidentally testing the no-grant refusal before the input parser.
     grant([allow('pharmacy:inventory')]);
     for (const call of [
       () =>
@@ -1095,6 +1097,22 @@ describe('PUR-07 — the stock action centre transport', () => {
       () => caller().dismissSignal({ branchId: 'branch_a', signalId: 'signal_1', reason: '' }),
     ]) {
       await expect(call()).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(db.pharmacyStockSignal.update).not.toHaveBeenCalled();
+  });
+
+  it('does not bypass the inventory capability for invalid snooze or dismissal input', async () => {
+    for (const call of [
+      () =>
+        caller().snoozeSignal({
+          branchId: 'branch_a',
+          signalId: 'signal_1',
+          until: new Date('2026-09-10T00:00:00.000Z'),
+          reason: '   ',
+        }),
+      () => caller().dismissSignal({ branchId: 'branch_a', signalId: 'signal_1', reason: '' }),
+    ]) {
+      await expect(call()).rejects.toMatchObject(CAPABILITY_REFUSAL);
     }
     expect(db.pharmacyStockSignal.update).not.toHaveBeenCalled();
   });

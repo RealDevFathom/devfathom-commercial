@@ -22,7 +22,7 @@ const input = {
 
 function database(witness: { id: string } | null) {
   return {
-    user: { findFirst: vi.fn().mockResolvedValue(witness) },
+    $queryRaw: vi.fn().mockResolvedValue(witness ? [witness] : []),
     pharmacyInventoryLot: {
       findFirst: vi.fn().mockResolvedValue({ id: input.inventoryLotId, unitsPerPack: 10 }),
     },
@@ -39,28 +39,26 @@ function database(witness: { id: string } | null) {
 }
 
 describe('writeOff witness validation', () => {
-  it('requires an active tenant witness with an active assignment to the current branch', async () => {
+  it('requires a locked active tenant witness with an active assignment to the current branch', async () => {
     const db = database(null);
 
     await expect(writeOff(db as unknown as ScopedDb, scope, input)).rejects.toMatchObject({
       reason: 'COAUTH_REQUIRED',
     });
 
-    expect(db.user.findFirst).toHaveBeenCalledWith({
-      where: {
-        id: input.witnessId,
-        organizationId: scope.organizationId,
-        status: 'ACTIVE',
-        pharmacyBranchAssignments: {
-          some: {
-            organizationId: scope.organizationId,
-            branchId: scope.branchId,
-            active: true,
-          },
-        },
-      },
-      select: { id: true },
-    });
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    const query = db.$queryRaw.mock.calls[0]![0];
+    const sql = query.strings.join('?');
+    expect(sql).toContain("u.status = 'ACTIVE'");
+    expect(sql).toContain('pharmacy_branch_assignments');
+    expect(sql).toContain('a.active = true');
+    expect(sql).toContain('FOR UPDATE');
+    expect(query.values).toEqual([
+      input.witnessId,
+      scope.organizationId,
+      scope.organizationId,
+      scope.branchId,
+    ]);
     expect(db.pharmacyInventoryLot.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
     expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
@@ -73,7 +71,7 @@ describe('writeOff witness validation', () => {
       writeOff(db as unknown as ScopedDb, scope, { ...input, witnessId: scope.actorId })
     ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
 
-    expect(db.user.findFirst).not.toHaveBeenCalled();
+    expect(db.$queryRaw).not.toHaveBeenCalled();
     expect(db.pharmacyInventoryLot.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
     expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
@@ -87,9 +85,12 @@ describe('writeOff witness validation', () => {
       custody: { id: 'custody_1' },
     });
 
+    expect(db.pharmacyStockMovement.create).toHaveBeenCalledOnce();
     expect(db.pharmacyCustodyRecord.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        actorId: scope.actorId,
         witnessId: input.witnessId,
       }),
     });

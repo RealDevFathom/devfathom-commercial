@@ -11,6 +11,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
+import { ACTIVE_STATUSES, can, subjectFromSession } from '@/lib/abac';
 import { arrangementFor, PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   confirmPriceChange,
@@ -164,6 +165,99 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
     active: true,
   });
   return { ...actor, branchId: branch };
+}
+
+/** SEC-374-01: capability is not branch assignment. Validate the payload's
+ * actual active tenant branch, never a selected-branch cookie or editable role
+ * name, before reading the witness or touching stock/custody. A privileged
+ * system role or a valid witness is not a substitute for that assignment;
+ * inventoryControl separately evaluates canonical grants and DENY via can(). */
+async function writeOffScopeFor(
+  ctx: TRPCContext,
+  db: ScopedDb,
+  requestedBranchId: string,
+  witnessId: string
+): Promise<LedgerScope> {
+  const actor = actorFor(ctx);
+  await assertInOrganization(db.pharmacyBranch, actor.organizationId, [requestedBranchId], {
+    active: true,
+  });
+  // Keep both authorization rows locked until the stock/custody transaction
+  // commits. A concurrent revocation therefore either commits first and is
+  // observed here, or waits until this already-authorized write-off commits.
+  const assignments = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT a.id
+    FROM pharmacy_branches b
+    JOIN pharmacy_branch_assignments a
+      ON a."organizationId" = b."organizationId" AND a."branchId" = b.id
+    WHERE b."organizationId" = ${actor.organizationId}
+      AND b.id = ${requestedBranchId}
+      AND b.active = true
+      AND a."userId" = ${actor.actorId}
+      AND a.active = true
+    FOR UPDATE OF b, a`);
+  if (!assignments[0]) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+
+  // The outer procedure gate is intentionally only an early refusal. Pin the
+  // rows which feed the canonical ABAC decision, then evaluate that decision
+  // again on this transaction handle. Locking both parents also serializes new
+  // role grants/denies and user overrides through their foreign keys; updates
+  // to existing rules serialize on the rule rows themselves.
+  // Lock both participants in one global order. Locking the actor here and
+  // the witness later deadlocks reciprocal write-offs in different branches.
+  // The service still validates the witness before any stock access.
+  const currentActors = await db.$queryRaw<
+    Array<{ id: string; role: string; department: string | null; status: string }>
+  >(Prisma.sql`
+    SELECT u.id, u.role, u.department, u.status FROM users u
+    WHERE u.id IN (${actor.actorId}, ${witnessId})
+      AND u."organizationId" = ${actor.organizationId}
+      AND u.status IN (${Prisma.join([...ACTIVE_STATUSES])})
+    ORDER BY u.id
+    FOR UPDATE`);
+  const currentActor = currentActors.find((user) => user.id === actor.actorId);
+  if (!currentActor) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+  await db.$queryRaw(Prisma.sql`
+    SELECT r.id FROM organization_roles r
+    JOIN users u ON u."organizationRoleId" = r.id
+    WHERE u.id = ${actor.actorId} AND u."organizationId" = ${actor.organizationId}
+      AND r."organizationId" = ${actor.organizationId}
+    FOR UPDATE OF r`);
+  await db.$queryRaw(Prisma.sql`
+    SELECT rp.id FROM organization_role_permissions rp
+    JOIN users u ON u."organizationRoleId" = rp."organizationRoleId"
+    WHERE u.id = ${actor.actorId} AND u."organizationId" = ${actor.organizationId}
+      AND rp."organizationId" = ${actor.organizationId}
+    FOR UPDATE OF rp`);
+  await db.$queryRaw(Prisma.sql`
+    SELECT up.id FROM user_permission_overrides up
+    WHERE up."userId" = ${actor.actorId} AND up."organizationId" = ${actor.organizationId}
+    FOR UPDATE OF up`);
+
+  const capabilityAllowed = await can(
+    subjectFromSession(currentActor),
+    'pharmacy:inventory',
+    undefined,
+    {
+      db: db as Prisma.TransactionClient,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }
+  );
+  if (!capabilityAllowed) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+  return { ...actor, branchId: requestedBranchId };
 }
 
 // ── PH-A5 — expiry board actions ────────────────────────────────────────────
@@ -1061,9 +1155,9 @@ export const pharmacyInventoryRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
-          const written = await writeOff(db, scope, input);
-          await postWriteOffEntry(db, scope, {
+          const writeScope = await writeOffScopeFor(ctx, db, input.branchId, input.witnessId);
+          const written = await writeOff(db, writeScope, input);
+          await postWriteOffEntry(db, writeScope, {
             stockMovementId: written.movement.id,
             at: written.movement.occurredAt,
           });

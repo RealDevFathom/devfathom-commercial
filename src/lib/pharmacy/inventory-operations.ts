@@ -329,22 +329,24 @@ export async function writeOff(
 ) {
   assertPositive(input.units);
   if (input.witnessId === scope.actorId) throw new PharmacyInventoryError('COAUTH_REQUIRED');
-  const witness = await db.user.findFirst({
-    where: {
-      id: input.witnessId,
-      organizationId: scope.organizationId,
-      status: 'ACTIVE',
-      pharmacyBranchAssignments: {
-        some: {
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-          active: true,
-        },
-      },
-    },
-    select: { id: true },
-  });
-  if (!witness) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  // The row lock makes ACTIVE stable through the custody write. Concurrent
+  // deactivation either wins before this statement (and is refused), or waits
+  // for this already-authorized transaction to commit. The witness must also
+  // hold an active assignment in the same-tenant branch of this write-off.
+  const witnesses = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT u.id FROM users u
+    WHERE u.id = ${input.witnessId}
+      AND u."organizationId" = ${scope.organizationId}
+      AND u.status = 'ACTIVE'
+      AND EXISTS (
+        SELECT 1 FROM "pharmacy_branch_assignments" a
+        WHERE a."organizationId" = ${scope.organizationId}
+          AND a."branchId" = ${scope.branchId}
+          AND a."userId" = u.id
+          AND a.active = true
+      )
+    FOR UPDATE OF u`);
+  if (!witnesses[0]) throw new PharmacyInventoryError('COAUTH_REQUIRED');
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,
