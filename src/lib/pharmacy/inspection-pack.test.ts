@@ -126,12 +126,28 @@ describe('DEV-751 SOP occurrences in the inspection pack', () => {
     expect(query).toContain('o."branchId" = site."sopBranchId"');
     expect(query).toContain('site."pharmacyBranchId" = $3');
     expect(query).toContain('o."dueAt" >= $1 AND o."dueAt" <= $2');
-    for (const field of ['contentHash', 'mimeType', 'sizeBytes', 'capturedAt', 'recordLinks']) {
+    for (const field of [
+      'contentHash',
+      'mimeType',
+      'sizeBytes',
+      'capturedAt',
+      'recordLinks',
+      'reworkNotes',
+    ]) {
       expect(query).toContain(`'${field}'`);
     }
     expect(query).not.toMatch(/storageRef/);
     // People are exported by display name; staff profile ids never appear as values.
     expect(query).not.toMatch(/'[a-zA-Z]*StaffProfileId',/);
     expect(query).toContain('"displayName"');
+  });
+
+  it('exports rework notes by author display name, scoped to the branch site', () => {
+    const query = SOP_OCCURRENCE_INSPECTION_QUERY;
+    expect(query).toContain('FROM "pharmacy_sop_rework_notes" rn');
+    expect(query).toContain(`'author', author."displayName"`);
+    expect(query).toContain('rn."pharmacyBranchId" = site."pharmacyBranchId"');
+    expect(query).toContain('rn."organizationId" = o."organizationId"');
+    expect(query).not.toMatch(/'authorStaffProfileId'|'authorUserId'/);
   });
 });

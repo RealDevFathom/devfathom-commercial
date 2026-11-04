@@ -228,11 +228,14 @@ describe('setAutoSchedule ON', () => {
       generated: 4,
       nextRunAt: new Date('2026-11-04T07:00:00.000Z'),
     });
-    // From the current business date only: never back-dated to days it was OFF.
+    // From the current business date only: never back-dated to days it was OFF,
+    // and nothing due before a schedule existed or before this switch ON.
     expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledExactlyOnceWith(db, {
       now: NOW,
       branchIds: [SITE.sopBranchId],
       lookbackDays: 0,
+      skipDueBeforeAssignmentCreated: true,
+      skipDueBefore: settingRows[0]!.createdAt,
     });
     // The slot lock names the session's organization explicitly.
     expect(
@@ -276,8 +279,20 @@ describe('setAutoSchedule ON', () => {
     ]);
     // Every ON call (four) re-ensured the job and created this branch's work.
     expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledTimes(4);
-    for (const [, options] of mocks.engine.generateDueSopOccurrences.mock.calls) {
-      expect(options).toEqual({ now: NOW, branchIds: [SITE.sopBranchId], lookbackDays: 0 });
+    // Each floored at the time of the ON row then in force (the latest switch ON).
+    const onRows = settingRows.filter((row) => row.autoScheduleEnabled);
+    const floors = [onRows[0], onRows[1], onRows[1], onRows[2]].map((row) => row!.createdAt);
+    for (const [
+      index,
+      [, options],
+    ] of mocks.engine.generateDueSopOccurrences.mock.calls.entries()) {
+      expect(options).toEqual({
+        now: NOW,
+        branchIds: [SITE.sopBranchId],
+        lookbackDays: 0,
+        skipDueBeforeAssignmentCreated: true,
+        skipDueBefore: floors[index],
+      });
     }
   });
 

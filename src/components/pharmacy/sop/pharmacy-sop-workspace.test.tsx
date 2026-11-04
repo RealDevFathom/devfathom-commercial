@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type QueryValue = { data?: unknown; error?: unknown; loading?: boolean };
@@ -363,7 +363,9 @@ describe('pharmacy procedures workspace', () => {
     fireEvent.change(screen.getByLabelText(/Note · required/), { target: { value: 'Half done' } });
 
     fireEvent.click(screen.getByRole('button', { name: "Back to today's work" }));
-    expect(window.location.search).not.toContain('occurrence');
+    // In-app Back steps back through history (no new entry), so the URL
+    // follows once the browser has moved.
+    await waitFor(() => expect(window.location.search).not.toContain('occurrence'));
     expect(screen.getByRole('list', { name: 'My work' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Open Pharmacy — opening' })).toHaveFocus();
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useMemo, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 
 import { Field, fieldClass, WorkspaceState } from '@/components/pharmacy/dispensing/field';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { Switch } from '@/components/ui/switch';
 import { PHARMACY_SOP_SCHEDULE_LIMITS } from '@/lib/pharmacy/sop-shared';
 import { ianaTimezoneOptions } from '@/lib/platform/timezones';
-import { isIanaTimezone, workspaceToday } from '@/lib/timezone';
+import { isIanaTimezone, workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
 
 import {
@@ -72,7 +72,11 @@ export function SopSetupView({ branch, defaultTimezone, onChanged, onNotice }: S
       </SectionCard>
       <RoleHoldings pharmacyBranchId={branch.pharmacyBranchId} />
       <Library branch={branch} onNotice={onNotice} />
-      <Schedules pharmacyBranchId={branch.pharmacyBranchId} onNotice={onNotice} />
+      <Schedules
+        pharmacyBranchId={branch.pharmacyBranchId}
+        timezone={branch.timezone}
+        onNotice={onNotice}
+      />
     </div>
   );
 }
@@ -1015,16 +1019,63 @@ function ScheduleForm({
   );
 }
 
-function Schedules({ pharmacyBranchId, onNotice }: { pharmacyBranchId: string; onNotice: Notify }) {
+/**
+ * Off-state contrast for the shared Switch, applied locally. The shared
+ * unchecked track (`bg-input`) and thumb (`bg-background`) sit at about 1.35:1
+ * and 1.08:1 against a white card, below the 3:1 a control boundary needs.
+ * Unchecked here: a sunken track with a `text-muted` border and a `text-muted`
+ * thumb (light 5.27:1 border on the card, 4.66:1 on sunken, thumb 4.66:1 on the
+ * track; dark 6.60:1 / 7.54:1, thumb 7.54:1). Remove once
+ * src/components/ui/switch.tsx gives its unchecked state a 3:1 boundary.
+ */
+export const SWITCH_CONTRAST =
+  'data-unchecked:border-text-muted data-unchecked:bg-surface-sunken dark:data-unchecked:bg-surface-sunken [&[data-unchecked]_[data-slot=switch-thumb]]:bg-text-muted dark:[&[data-unchecked]_[data-slot=switch-thumb]]:bg-text-muted';
+
+/** Who a schedule's work goes to, in words. */
+function scheduleTarget(row: SopAssignment) {
+  return row.target.type === 'ROLE'
+    ? row.target.roleKey
+      ? ROLE_LABEL[row.target.roleKey]
+      : 'a role'
+    : (row.target.displayName ?? 'a named person');
+}
+
+/** What pausing a schedule does, said once above the list. */
+export const PAUSE_COPY =
+  'Pausing a schedule stops new work being created from it. Work already created stays and can still be done.';
+
+function Schedules({
+  pharmacyBranchId,
+  timezone = null,
+  onNotice,
+}: {
+  pharmacyBranchId: string;
+  timezone?: string | null;
+  onNotice: Notify;
+}) {
   const utils = trpc.useUtils();
   const assignments = trpc.pharmacySop.assignments.useQuery({ pharmacyBranchId }, { retry: false });
   const [error, setError] = useState<string | null>(null);
+  const [changed, setChanged] = useState<string | null>(null);
+  /** The schedule being paused or resumed, named in the notice once it is saved. */
+  const toggling = useRef<{ name: string; target: string; active: boolean } | null>(null);
   const setActive = trpc.pharmacySop.setAssignmentActive.useMutation({
     onSuccess: async () => {
       setError(null);
+      const done = toggling.current;
+      if (done) {
+        setChanged(
+          done.active
+            ? `Resumed ${done.name} for ${done.target}. New work will be created from it again.`
+            : `Paused ${done.name} for ${done.target}. Work already created stays and can still be done.`
+        );
+      }
       await utils.pharmacySop.assignments.invalidate({ pharmacyBranchId });
     },
-    onError: (cause) => setError(errorMessage(cause, 'The schedule could not be changed. Retry.')),
+    onError: (cause) => {
+      setChanged(null);
+      setError(errorMessage(cause, 'The schedule could not be changed. Retry.'));
+    },
   });
   const generate = trpc.pharmacySop.generate.useMutation({
     onSuccess: async () => {
@@ -1053,7 +1104,7 @@ function Schedules({ pharmacyBranchId, onNotice }: { pharmacyBranchId: string; o
         ) : null
       }
     >
-      <AutoScheduling pharmacyBranchId={pharmacyBranchId} onNotice={onNotice} />
+      <AutoScheduling pharmacyBranchId={pharmacyBranchId} timezone={timezone} />
       {error ? (
         <p className="mb-3 text-sm text-destructive" role="alert">
           {error}
@@ -1079,39 +1130,55 @@ function Schedules({ pharmacyBranchId, onNotice }: { pharmacyBranchId: string; o
           No schedules yet. Choose Create schedule on a procedure above.
         </p>
       ) : (
-        <ul className="divide-y divide-border-subtle">
-          {list.map((row) => (
-            // One grid for every row, so the toggle sits at the same place on
-            // a phone whether or not the details wrap.
-            <li
-              key={row.id}
-              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-3 first:pt-0 last:pb-0"
-            >
-              <div className="min-w-0">
-                <p className="font-medium break-words text-text-strong">{row.templateName}</p>
-                <p className="mt-1 text-xs text-text-muted">
-                  {recurrenceLabel(row)} ·{' '}
-                  {row.target.type === 'ROLE'
-                    ? row.target.roleKey
-                      ? `Anyone holding ${ROLE_LABEL[row.target.roleKey]}`
-                      : 'A role'
-                    : (row.target.displayName ?? 'A named person')}
-                </p>
-              </div>
-              <label className="inline-flex min-h-11 items-center gap-2 justify-self-end text-sm text-text-body">
-                <Switch
-                  checked={row.active}
-                  disabled={setActive.isPending}
-                  aria-label={`${row.active ? 'Pause' : 'Resume'} ${row.templateName}`}
-                  onCheckedChange={(active) =>
-                    setActive.mutate({ pharmacyBranchId, assignmentId: row.id, active })
-                  }
-                />
-                {row.active ? 'Active' : 'Paused'}
-              </label>
-            </li>
-          ))}
-        </ul>
+        <div className="grid gap-3">
+          <p className="text-xs text-text-muted">{PAUSE_COPY}</p>
+          <p role="status" className="text-sm text-text-body empty:hidden">
+            {changed}
+          </p>
+          <ul className="divide-y divide-border-subtle">
+            {list.map((row) => (
+              // One grid for every row, so the toggle sits at the same place on
+              // a phone whether or not the details wrap.
+              <li
+                key={row.id}
+                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-3 first:pt-0 last:pb-0"
+              >
+                <div className="min-w-0">
+                  <p className="font-medium break-words text-text-strong">{row.templateName}</p>
+                  <p className="mt-1 text-xs text-text-muted">
+                    {recurrenceLabel(row)} ·{' '}
+                    {row.target.type === 'ROLE'
+                      ? row.target.roleKey
+                        ? `Anyone holding ${ROLE_LABEL[row.target.roleKey]}`
+                        : 'A role'
+                      : (row.target.displayName ?? 'A named person')}
+                  </p>
+                </div>
+                {/* Not a <label>: Base UI names a switch after its enclosing
+                    label, which would replace the specific name below with
+                    just "Active" or "Paused". */}
+                <div className="inline-flex min-h-11 items-center gap-2 justify-self-end text-sm text-text-body">
+                  <Switch
+                    className={SWITCH_CONTRAST}
+                    checked={row.active}
+                    disabled={setActive.isPending}
+                    aria-label={`${row.active ? 'Pause' : 'Resume'} ${row.templateName} for ${scheduleTarget(row)}`}
+                    onCheckedChange={(active) => {
+                      toggling.current = {
+                        name: row.templateName,
+                        target: scheduleTarget(row),
+                        active,
+                      };
+                      setChanged(null);
+                      setActive.mutate({ pharmacyBranchId, assignmentId: row.id, active });
+                    }}
+                  />
+                  {row.active ? 'Active' : 'Paused'}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </SectionCard>
   );
@@ -1119,43 +1186,88 @@ function Schedules({ pharmacyBranchId, onNotice }: { pharmacyBranchId: string; o
 
 /** What the automatic-scheduling switch does, said in plain words beside it. */
 export const AUTO_SCHEDULE_COPY =
-  "When on, this branch's procedures are created automatically from its schedules, due at the times you set. The background job worker does this every hour. When off, use 'Create today's work now'. Procedures never block pharmacy work.";
+  "When on, this branch's procedures are created automatically from its schedules, due at the times you set. It checks every hour. When off, use 'Create today's work now'. Procedures never block pharmacy work.";
 
-/** The notice after the switch changes. */
-export const AUTO_SCHEDULE_ON_NOTICE =
-  "Automatic scheduling is on. This branch's scheduled procedures are created now, then every hour by the background job worker.";
-export const AUTO_SCHEDULE_OFF_NOTICE =
-  "Automatic scheduling is off. Use 'Create today's work now' when you are ready.";
+/** A time of day at the branch, for the next automatic run ("12:00"). */
+function branchTime(value: Date | string, timezone: string | null) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+    timeZone: workspaceTimezone(timezone),
+  }).format(date);
+}
+
+/** The result of turning automatic scheduling on or off, said beside the switch. */
+export function autoScheduleNotice(
+  result: {
+    autoScheduleEnabled: boolean;
+    generated?: number | null;
+    nextRunAt?: Date | string | null;
+  },
+  timezone: string | null
+) {
+  if (!result.autoScheduleEnabled) {
+    return "Turned off. Use 'Create today's work now' when you are ready.";
+  }
+  const created =
+    result.generated == null
+      ? null
+      : result.generated === 0
+        ? 'No procedures were due to be created yet'
+        : `${result.generated} ${result.generated === 1 ? 'procedure was' : 'procedures were'} created for today`;
+  const at = result.nextRunAt ? branchTime(result.nextRunAt, timezone) : null;
+  const next = at ? `next automatic run at ${at}` : null;
+  if (created && next) return `Turned on. ${created}; ${next}.`;
+  if (created) return `Turned on. ${created}. It checks every hour.`;
+  if (next) return `Turned on. Next automatic run at ${at}.`;
+  return 'Turned on. It checks every hour.';
+}
+
+type AutoScheduleResult = Parameters<typeof autoScheduleNotice>[0];
+
+function branchTimeOrNull(value: Date | string | null, timezone: string | null) {
+  return value ? branchTime(value, timezone) : null;
+}
 
 /**
  * Per-branch automatic scheduling. OFF until a manager turns it on; a missing
- * or unreadable setting is shown as off and the switch stays disabled.
+ * or unreadable setting is shown as off and the switch stays disabled. What a
+ * change did is said beside the switch, not in a banner far from it.
  */
 function AutoScheduling({
   pharmacyBranchId,
-  onNotice,
+  timezone,
 }: {
   pharmacyBranchId: string;
-  onNotice: Notify;
+  timezone: string | null;
 }) {
   const labelId = useId();
   const copyId = useId();
   const utils = trpc.useUtils();
   const settings = trpc.pharmacySop.siteSettings.useQuery({ pharmacyBranchId }, { retry: false });
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [nextRunAt, setNextRunAt] = useState<Date | string | null>(null);
   const setAuto = trpc.pharmacySop.setAutoSchedule.useMutation({
-    onSuccess: async (result: { autoScheduleEnabled: boolean }) => {
+    onSuccess: async (result: AutoScheduleResult) => {
       setError(null);
-      onNotice({
-        tone: 'success',
-        text: result.autoScheduleEnabled ? AUTO_SCHEDULE_ON_NOTICE : AUTO_SCHEDULE_OFF_NOTICE,
-      });
+      setNotice(autoScheduleNotice(result, timezone));
+      setNextRunAt(result.autoScheduleEnabled ? (result.nextRunAt ?? null) : null);
       await utils.pharmacySop.siteSettings.invalidate({ pharmacyBranchId });
     },
-    onError: (cause) =>
-      setError(errorMessage(cause, 'Automatic scheduling could not be changed. Retry.')),
+    onError: (cause) => {
+      setNotice(null);
+      setError(errorMessage(cause, 'Automatic scheduling could not be changed. Retry.'));
+    },
   });
   const enabled = settings.data?.autoScheduleEnabled ?? false;
+  // The setting read may carry the next run once the server reports it.
+  const savedNextRun = (settings.data as { nextRunAt?: Date | string | null } | undefined)
+    ?.nextRunAt;
+  const nextAt = enabled ? branchTimeOrNull(nextRunAt ?? savedNextRun ?? null, timezone) : null;
 
   return (
     <div className="mb-4 grid gap-2 rounded-md border border-border-subtle bg-surface-sunken p-4">
@@ -1165,18 +1277,28 @@ function AutoScheduling({
         </p>
         <label className="inline-flex min-h-11 items-center gap-2 justify-self-end text-sm text-text-body">
           <Switch
+            className={SWITCH_CONTRAST}
             checked={enabled}
             disabled={settings.isLoading || !settings.data || setAuto.isPending}
             aria-labelledby={labelId}
             aria-describedby={copyId}
-            onCheckedChange={(checked) => setAuto.mutate({ pharmacyBranchId, enabled: checked })}
+            onCheckedChange={(checked) => {
+              setNotice(null);
+              setAuto.mutate({ pharmacyBranchId, enabled: checked });
+            }}
           />
           {settings.isLoading ? 'Loading…' : enabled ? 'On' : 'Off'}
         </label>
       </div>
+      <p role="status" className="text-sm text-text-body empty:hidden">
+        {notice}
+      </p>
       <p id={copyId} className="max-w-2xl text-xs text-text-muted">
         {AUTO_SCHEDULE_COPY}
       </p>
+      {nextAt && !notice ? (
+        <p className="text-xs text-text-muted">Next automatic run at {nextAt}.</p>
+      ) : null}
       {settings.error ? (
         <div className="flex flex-wrap items-center gap-3" role="alert">
           <p className="text-sm text-destructive">

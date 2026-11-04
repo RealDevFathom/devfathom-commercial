@@ -91,8 +91,9 @@ export const INSPECTION_PACK_SOP_SECTION = 'sop-occurrences';
 
 /**
  * One record per SOP occurrence due in range at this pharmacy branch's SOP site,
- * with its steps, evidence references, verification decisions and pharmacy
- * record links. People appear by display name, not id. Evidence carries its
+ * with its steps, evidence references, verification decisions, pharmacy
+ * record links and rework notes (what the worker said they changed after each
+ * send-back). People appear by display name, not id. Evidence carries its
  * content hash, type, size and capture time only — never the storage location.
  * A branch without an SOP site yields no rows. Nested arrays are ordered so the
  * section hash is reproducible.
@@ -169,6 +170,25 @@ export const SOP_OCCURRENCE_INSPECTION_QUERY = `SELECT jsonb_build_object(
       ON linker."id" = l."linkedByStaffProfileId" AND linker."organizationId" = l."organizationId"
     WHERE l."occurrenceId" = o."id" AND l."organizationId" = o."organizationId"
       AND l."pharmacyBranchId" = site."pharmacyBranchId"
+  ), '[]'::jsonb),
+  'reworkNotes', COALESCE((
+    SELECT jsonb_agg(jsonb_build_object(
+      'stepOrder', rts."stepOrder",
+      'note', rn."note",
+      'createdAt', rn."createdAt",
+      'sentBackAt', rv."createdAt",
+      'author', author."displayName"
+    ) ORDER BY rn."createdAt", rn."id")
+    FROM "pharmacy_sop_rework_notes" rn
+    LEFT JOIN "restaurant_sop_verifications" rv
+      ON rv."id" = rn."rejectionVerificationId" AND rv."organizationId" = rn."organizationId"
+    LEFT JOIN "restaurant_sop_occurrence_steps" rst
+      ON rst."id" = rn."occurrenceStepId" AND rst."organizationId" = rn."organizationId"
+    LEFT JOIN "restaurant_sop_template_steps" rts ON rts."id" = rst."templateStepId"
+    LEFT JOIN "restaurant_staff_profiles" author
+      ON author."id" = rn."authorStaffProfileId" AND author."organizationId" = rn."organizationId"
+    WHERE rn."occurrenceId" = o."id" AND rn."organizationId" = o."organizationId"
+      AND rn."pharmacyBranchId" = site."pharmacyBranchId"
   ), '[]'::jsonb)
 ) AS record
 FROM "pharmacy_sop_sites" site

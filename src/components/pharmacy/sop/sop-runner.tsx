@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, ImageOff } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 
 import { WorkspaceState } from '@/components/pharmacy/dispensing/field';
@@ -12,15 +12,20 @@ import { trpc } from '@/lib/trpc';
 
 import { SopEvidenceUpload } from './sop-evidence-upload';
 import {
+  CONFLICT_MESSAGE,
   EMPTY_DRAFT,
   errorCode,
   errorMessage,
   evidencePurposeOf,
+  excursionStep,
   formatWhen,
   isDenied,
+  isReworking,
+  latestRejection,
   PROVENANCE_LABEL,
   provenanceTone,
   RECORD_LABEL,
+  reworkNotes,
   statusCopy,
   stepBlockers,
   stepEvidence,
@@ -31,9 +36,12 @@ import {
   type SopEvidenceRow,
   type SopOccurrence,
   type SopOccurrenceStep,
+  type SopReworkNote,
+  type SopStatus,
   type StepDraft,
 } from './sop-model';
 import { SopRecordPicker } from './sop-record-picker';
+import { NewSinceSentBack, RecordLinkList, ReworkNoteList, SentBackNotice } from './sop-rework';
 import { SopReviewDecision } from './sop-review';
 
 type Notify = (notice: { tone: 'success' | 'danger'; text: string }) => void;
@@ -68,6 +76,20 @@ const HISTORY_LABEL: Record<string, string> = {
 
 const REVIEWABLE = new Set(['SUBMITTED', 'LATE']);
 const STARTABLE = new Set(['SCHEDULED', 'REJECTED']);
+const SENDABLE = new Set(['SCHEDULED', 'IN_PROGRESS', 'REJECTED']);
+
+/** Where the owner's own procedure stands once it is out of their hands. */
+const OWNER_STATE: Partial<Record<SopStatus, string>> = {
+  SUBMITTED: 'Sent for review. A reviewer will check it.',
+  LATE: 'Sent for review after its time. A reviewer will check it.',
+  VERIFIED: 'Checked by a reviewer. Nothing more to do.',
+  MISSED: 'This procedure was missed and is now closed.',
+  WAIVED: 'This procedure was excused and is now closed.',
+};
+
+/** What the person reworking a sent-back procedure does, said once by the reason. */
+export const REWORK_GUIDANCE =
+  'Steps stay done; add what you changed. On any step you can add a new photo or signature, link another record, or write a note. Then say what you changed below and send it for review again.';
 
 export function SopRunner({
   pharmacyBranchId,
@@ -83,6 +105,8 @@ export function SopRunner({
 }: SopRunnerProps) {
   const headingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Which rework note was just saved (its draft key), for a short confirmation. */
+  const [savedNote, setSavedNote] = useState<string | null>(null);
   const utils = trpc.useUtils();
   const query = trpc.pharmacySop.occurrence.useQuery(
     { pharmacyBranchId, occurrenceId },
@@ -103,16 +127,23 @@ export function SopRunner({
     ]);
   }
 
-  const fail = (fallback: string) => (cause: unknown) => setError(errorMessage(cause, fallback));
+  /**
+   * A refused change. When the procedure changed underneath this person
+   * (CONFLICT: already checked, sent back, claimed or submitted elsewhere) the
+   * server's plain words are shown and the procedure and board are re-read, so
+   * the screen shows where it stands now.
+   */
+  const fail = (fallback: string) => (cause: unknown) => {
+    const conflict = errorCode(cause) === 'CONFLICT';
+    setError(errorMessage(cause, conflict ? CONFLICT_MESSAGE : fallback));
+    if (conflict) void refresh();
+  };
   const claim = trpc.pharmacySop.claim.useMutation({
     onSuccess: async () => {
       setError(null);
       await refresh();
     },
-    onError: (cause) => {
-      fail('This procedure could not be claimed. Retry.')(cause);
-      if (errorCode(cause) === 'CONFLICT') void refresh();
-    },
+    onError: fail('This procedure could not be claimed. Retry.'),
   });
   const start = trpc.pharmacySop.start.useMutation({
     onSuccess: async () => {
@@ -132,6 +163,9 @@ export function SopRunner({
       onBack();
     },
     onError: fail('The procedure could not be sent for review. Retry.'),
+  });
+  const addReworkNote = trpc.pharmacySop.addReworkNote.useMutation({
+    onError: fail('Your note could not be saved. It is still here — retry.'),
   });
 
   const header = (
@@ -189,14 +223,50 @@ export function SopRunner({
   const editable = owner && access.canComplete && occurrence.status === 'IN_PROGRESS';
   const startable = owner && access.canComplete && STARTABLE.has(occurrence.status);
   const reviewing = occurrence.viewer.canVerify && REVIEWABLE.has(occurrence.status);
+  const rejection = latestRejection(occurrence);
+  const reworking = editable && isReworking(occurrence);
+  const notes = reworkNotes(occurrence);
   const blockers = submitBlockers(occurrence);
   const done = occurrence.steps.filter((step) => step.completed).length;
   const busy = claim.isPending || start.isPending || submit.isPending;
+  const excursion = excursionStep(occurrence);
+  const stepName = (occurrenceStepId: string | null) => {
+    const step = occurrence.steps.find((candidate) => candidate.id === occurrenceStepId);
+    return step ? `Step ${step.stepOrder} · ${step.title}` : null;
+  };
+  const overallKey = `${occurrence.id}:rework`;
 
   async function recount(step: SopOccurrenceStep, purpose: EvidencePurpose) {
     const result = await query.refetch();
     return result.data ? stepEvidence(result.data, step, purpose).length : 0;
   }
+
+  function saveReworkNote(draftKey: string, text: string, occurrenceStepId?: string) {
+    const note = text.trim();
+    if (!note) return;
+    setError(null);
+    setSavedNote(null);
+    addReworkNote.mutate(
+      {
+        pharmacyBranchId,
+        occurrenceId,
+        ...(occurrenceStepId ? { occurrenceStepId } : {}),
+        note,
+      },
+      {
+        onSuccess: async () => {
+          clearDraft(draftKey);
+          setSavedNote(draftKey);
+          await refresh();
+        },
+      }
+    );
+  }
+
+  /** Whether the rework note for this step (or, for null, the whole procedure) is being saved. */
+  const savingNote = (occurrenceStepId: string | null) =>
+    addReworkNote.isPending &&
+    (addReworkNote.variables?.occurrenceStepId ?? null) === occurrenceStepId;
 
   return (
     <div className="min-w-0">
@@ -256,8 +326,24 @@ export function SopRunner({
           </div>
         ) : null}
 
+        {occurrence.status === 'REJECTED' && rejection ? (
+          <div className="mt-5 border-t border-border-subtle pt-5">
+            <SentBackNotice rejection={rejection} timezone={timezone}>
+              {startable
+                ? 'Start again to fix it. Steps you already did stay done; after you start, add what you changed.'
+                : null}
+            </SentBackNotice>
+          </div>
+        ) : null}
+
         {startable ? (
-          <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-border-subtle pt-5">
+          <div
+            className={`flex flex-wrap items-center gap-3 ${
+              occurrence.status === 'REJECTED' && rejection
+                ? 'mt-3'
+                : 'mt-5 border-t border-border-subtle pt-5'
+            }`}
+          >
             <p className="min-w-0 text-sm text-text-body">
               {occurrence.status === 'REJECTED'
                 ? 'This was sent back. Start again to fix it.'
@@ -285,9 +371,17 @@ export function SopRunner({
               {done} of {occurrence.steps.length} done
             </span>
           </div>
+          {occurrence.status === 'IN_PROGRESS' && rejection ? (
+            <div className="mt-3">
+              <SentBackNotice rejection={rejection} timezone={timezone}>
+                {reworking ? REWORK_GUIDANCE : 'It is being fixed after this send-back.'}
+              </SentBackNotice>
+            </div>
+          ) : null}
           <ol className="mt-3 divide-y divide-border-subtle">
             {occurrence.steps.map((step) => {
               const key = `${occurrence.id}:${step.templateStepId}`;
+              const reworkKey = `${key}:rework`;
               return (
                 <StepItem
                   key={step.id}
@@ -296,8 +390,15 @@ export function SopRunner({
                   pharmacyBranchId={pharmacyBranchId}
                   timezone={timezone}
                   editable={editable}
+                  reworking={reworking}
+                  excursion={excursion}
                   draft={draftFor(key)}
                   onDraft={(patch) => setDraft(key, patch)}
+                  reworkDraft={draftFor(reworkKey)}
+                  onReworkDraft={(patch) => setDraft(reworkKey, patch)}
+                  savingReworkNote={savingNote(step.id)}
+                  reworkNoteSaved={savedNote === reworkKey}
+                  onSaveReworkNote={(text) => saveReworkNote(reworkKey, text, step.id)}
                   saving={
                     completeStep.isPending &&
                     completeStep.variables?.templateStepId === step.templateStepId
@@ -321,46 +422,70 @@ export function SopRunner({
                   }}
                   recount={(purpose) => recount(step, purpose)}
                   onChanged={() => void refresh()}
+                  onConflict={() => void refresh()}
                 />
               );
             })}
           </ol>
         </section>
 
+        {reworking ? (
+          <OverallReworkNote
+            notes={notes.filter((note) => note.occurrenceStepId === null)}
+            timezone={timezone}
+            draft={draftFor(overallKey).note}
+            onDraft={(note) => setDraft(overallKey, { note })}
+            saving={savingNote(null)}
+            saved={savedNote === overallKey}
+            onSave={(text) => saveReworkNote(overallKey, text)}
+          />
+        ) : null}
+
         {owner && access.canComplete ? (
-          <section
-            aria-label="Send for review"
-            className="mt-6 grid gap-3 border-t border-border-subtle pt-5"
-          >
-            <h3 className="font-semibold text-text-strong">Send for review</h3>
-            {blockers.length ? (
-              <div id={`blocked-${occurrence.id}`}>
-                <p className="text-sm text-text-body">You can send this for review once:</p>
-                <ul
-                  className="mt-2 grid list-disc gap-1 pl-5 text-sm text-text-muted"
-                  aria-label="What is still needed"
-                >
-                  {blockers.map((reason) => (
-                    <li key={reason}>{reason}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : (
-              <p className="text-sm text-text-body">
-                Every step is done. Someone who did not work on it will review it.
-              </p>
-            )}
-            <Button
-              type="button"
-              size="touch"
-              className="w-fit"
-              disabled={blockers.length > 0 || busy}
-              aria-describedby={blockers.length ? `blocked-${occurrence.id}` : undefined}
-              onClick={() => submit.mutate({ pharmacyBranchId, occurrenceId })}
+          SENDABLE.has(occurrence.status) ? (
+            <section
+              aria-label="Send for review"
+              className="mt-6 grid gap-3 border-t border-border-subtle pt-5"
             >
-              {submit.isPending ? 'Sending…' : 'Send for review'}
-            </Button>
-          </section>
+              <h3 className="font-semibold text-text-strong">Send for review</h3>
+              {blockers.length ? (
+                <div id={`blocked-${occurrence.id}`}>
+                  <p className="text-sm text-text-body">You can send this for review once:</p>
+                  <ul
+                    className="mt-2 grid list-disc gap-1 pl-5 text-sm text-text-muted"
+                    aria-label="What is still needed"
+                  >
+                    {blockers.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-sm text-text-body">
+                  Every step is done. Someone who did not work on it will review it.
+                </p>
+              )}
+              <Button
+                type="button"
+                size="touch"
+                className="w-fit"
+                disabled={blockers.length > 0 || busy}
+                aria-describedby={blockers.length ? `blocked-${occurrence.id}` : undefined}
+                onClick={() => submit.mutate({ pharmacyBranchId, occurrenceId })}
+              >
+                {submit.isPending ? 'Sending…' : 'Send for review'}
+              </Button>
+            </section>
+          ) : (
+            <section
+              aria-label="Review status"
+              className="mt-6 grid gap-2 border-t border-border-subtle pt-5"
+            >
+              <p className="text-sm text-text-body" role="status">
+                {OWNER_STATE[occurrence.status as SopStatus] ?? 'This procedure is closed.'}
+              </p>
+            </section>
+          )
         ) : null}
 
         {reviewing ? (
@@ -368,10 +493,19 @@ export function SopRunner({
             pharmacyBranchId={pharmacyBranchId}
             occurrenceId={occurrenceId}
             evidence={occurrence.evidence}
+            links={occurrence.recordLinks}
+            rejection={rejection}
+            reworkNotes={notes}
+            stepName={stepName}
+            timezone={timezone}
             onDone={(text) => {
               onNotice({ tone: 'success', text });
               void refresh();
               onBack();
+            }}
+            onConflict={(message) => {
+              setError(message);
+              void refresh();
             }}
           />
         ) : null}
@@ -382,36 +516,117 @@ export function SopRunner({
   );
 }
 
+function OverallReworkNote({
+  notes,
+  timezone,
+  draft,
+  onDraft,
+  saving,
+  saved,
+  onSave,
+}: {
+  notes: SopReworkNote[];
+  timezone: string | null;
+  draft: string;
+  onDraft: (note: string) => void;
+  saving: boolean;
+  saved: boolean;
+  onSave: (note: string) => void;
+}) {
+  const id = useId();
+  return (
+    <section
+      aria-labelledby={`${id}-title`}
+      className="mt-6 grid gap-3 border-t border-border-subtle pt-5"
+    >
+      <h3 id={`${id}-title`} className="font-semibold text-text-strong">
+        What did you change?
+      </h3>
+      <p id={`${id}-hint`} className="text-sm text-text-muted">
+        Tell the reviewer what you fixed after it was sent back. It is needed before you send it for
+        review again.
+      </p>
+      <ReworkNoteList notes={notes} timezone={timezone} label="What you changed" />
+      <label className="grid gap-1.5 text-sm font-medium text-text-strong" htmlFor={`${id}-note`}>
+        <span>Your note</span>
+        <Textarea
+          id={`${id}-note`}
+          className="min-h-20 bg-surface-raised"
+          maxLength={2000}
+          value={draft}
+          disabled={saving}
+          aria-describedby={`${id}-hint`}
+          onChange={(event) => onDraft(event.target.value)}
+        />
+      </label>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          size="touch"
+          variant="outline"
+          disabled={saving || !draft.trim()}
+          onClick={() => onSave(draft)}
+        >
+          {saving ? 'Saving…' : 'Save note'}
+        </Button>
+        <span aria-live="polite" className="text-sm text-success">
+          {saved ? 'Note saved.' : ''}
+        </span>
+      </div>
+    </section>
+  );
+}
+
 function StepItem({
   step,
   occurrence,
   pharmacyBranchId,
   timezone,
   editable,
+  reworking,
+  excursion,
   draft = EMPTY_DRAFT,
   onDraft,
+  reworkDraft = EMPTY_DRAFT,
+  onReworkDraft,
+  savingReworkNote,
+  reworkNoteSaved,
+  onSaveReworkNote,
   saving,
   onComplete,
   recount,
   onChanged,
+  onConflict,
 }: {
   step: SopOccurrenceStep;
   occurrence: SopOccurrence;
   pharmacyBranchId: string;
   timezone: string | null;
   editable: boolean;
+  /** Sent back and started again: done steps take new proof, links and notes. */
+  reworking: boolean;
+  excursion: SopOccurrenceStep | null;
   draft?: StepDraft;
   onDraft: (patch: Partial<StepDraft>) => void;
+  reworkDraft?: StepDraft;
+  onReworkDraft: (patch: Partial<StepDraft>) => void;
+  savingReworkNote: boolean;
+  reworkNoteSaved: boolean;
+  onSaveReworkNote: (note: string) => void;
   saving: boolean;
   onComplete: (draft: StepDraft) => void;
   recount: (purpose: EvidencePurpose) => Promise<number>;
   onChanged: () => void;
+  onConflict: () => void;
 }) {
   const id = useId();
+  const [changing, setChanging] = useState(false);
   const blockers = stepBlockers(occurrence, step, draft);
   const photos = stepEvidence(occurrence, step, 'photo');
   const signatures = stepEvidence(occurrence, step, 'signature');
   const links = stepLinks(occurrence, step);
+  const stepNotes = reworkNotes(occurrence).filter((note) => note.occurrenceStepId === step.id);
+  const newProof = [...photos, ...signatures].some((row) => row.createdAfterLatestRejection);
   // Proof that is on the step but does not count here yet. It exists, so it is
   // never described as missing; the pill says what is wrong with it.
   const unsettled = [...photos, ...signatures].filter(
@@ -423,6 +638,20 @@ function StepItem({
     step.requiresSignature ? 'signature' : null,
     step.requiresNote ? 'note' : null,
   ].filter((value): value is string => value !== null);
+  const proofLine = [
+    photos.length ? `${photos.length} ${photos.length === 1 ? 'photo' : 'photos'}` : null,
+    signatures.length
+      ? signatures.length === 1
+        ? 'Signature added'
+        : `${signatures.length} signatures added`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const excursionTarget = excursion
+    ? { stepOrder: excursion.stepOrder, title: excursion.title }
+    : null;
+  const canChange = reworking && step.completed;
 
   return (
     <li className="py-4 first:pt-0 last:pb-0">
@@ -461,7 +690,7 @@ function StepItem({
         <p className="mt-2 text-xs text-text-muted">Needs a {needs.join(', ')}</p>
       ) : null}
       {step.completed ? (
-        <div className="mt-2 grid gap-1 text-xs text-text-muted">
+        <div className="mt-2 grid gap-2 text-xs text-text-muted">
           <p>
             Done {formatWhen(step.completedAt, timezone)}
             {step.completedByName ? ` by ${step.completedByName}` : ''}
@@ -471,20 +700,117 @@ function StepItem({
               {step.note}
             </p>
           ) : null}
-          {photos.length || signatures.length || links.length ? (
-            <p>
-              {[
-                photos.length
-                  ? `${photos.length} ${photos.length === 1 ? 'photo' : 'photos'}`
-                  : null,
-                signatures.length ? 'signed' : null,
-                links.length
-                  ? `${links.length} linked ${links.length === 1 ? 'record' : 'records'}`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(' · ')}
+          {proofLine ? (
+            <p className="flex flex-wrap items-center gap-1.5">
+              <span>{proofLine}</span>
+              {newProof ? <NewSinceSentBack /> : null}
             </p>
+          ) : null}
+          <RecordLinkList
+            links={links}
+            timezone={timezone}
+            label={`Linked records for step ${step.stepOrder}`}
+          />
+          {links.some((link) => link.detail?.outOfRange) && excursionTarget ? (
+            <p className="text-sm text-warning">
+              {excursionTarget.title === step.title
+                ? 'A linked reading is out of range. This step’s note says what was done.'
+                : `A linked reading is out of range. Step ${excursionTarget.stepOrder}, “${excursionTarget.title}”, says what was done.`}
+            </p>
+          ) : null}
+          <ReworkNoteList
+            notes={stepNotes}
+            timezone={timezone}
+            label={`What changed on step ${step.stepOrder}`}
+          />
+          {canChange ? (
+            <Button
+              type="button"
+              size="touch"
+              variant="outline"
+              className="w-fit"
+              aria-expanded={changing}
+              aria-controls={`${id}-change`}
+              onClick={() => setChanging((open) => !open)}
+            >
+              {changing
+                ? `Close changes to step ${step.stepOrder}`
+                : `Add a change to step ${step.stepOrder}`}
+            </Button>
+          ) : null}
+          {canChange && changing ? (
+            <div id={`${id}-change`} className="grid gap-3">
+              <SopEvidenceUpload
+                pharmacyBranchId={pharmacyBranchId}
+                occurrenceId={occurrence.id}
+                occurrenceStepId={step.id}
+                stepTitle={step.title}
+                purpose="photo"
+                required={false}
+                evidenceCount={photos.length}
+                recount={() => recount('photo')}
+                onUploaded={onChanged}
+              />
+              {step.requiresSignature ? (
+                <SopEvidenceUpload
+                  pharmacyBranchId={pharmacyBranchId}
+                  occurrenceId={occurrence.id}
+                  occurrenceStepId={step.id}
+                  stepTitle={step.title}
+                  purpose="signature"
+                  required={false}
+                  evidenceCount={signatures.length}
+                  recount={() => recount('signature')}
+                  onUploaded={onChanged}
+                />
+              ) : null}
+              {step.requiredRecordType ? (
+                <SopRecordPicker
+                  pharmacyBranchId={pharmacyBranchId}
+                  occurrenceId={occurrence.id}
+                  occurrenceStepId={step.id}
+                  stepTitle={step.title}
+                  recordType={step.requiredRecordType}
+                  linked={links}
+                  value={reworkDraft.recordId}
+                  onChange={(recordId) => onReworkDraft({ recordId })}
+                  onLinked={onChanged}
+                  timezone={timezone}
+                  variant="another"
+                  excursionStep={excursionTarget}
+                  onConflict={onConflict}
+                />
+              ) : null}
+              <label
+                className="grid gap-1.5 text-sm font-medium text-text-strong"
+                htmlFor={`${id}-rework-note`}
+              >
+                <span>What you changed on this step</span>
+                <Textarea
+                  id={`${id}-rework-note`}
+                  className="min-h-20 bg-surface-raised"
+                  maxLength={2000}
+                  value={reworkDraft.note}
+                  disabled={savingReworkNote}
+                  onChange={(event) => onReworkDraft({ note: event.target.value })}
+                />
+              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  type="button"
+                  size="touch"
+                  variant="outline"
+                  disabled={savingReworkNote || !reworkDraft.note.trim()}
+                  aria-label={`Save note for step ${step.stepOrder}`}
+                  onClick={() => onSaveReworkNote(reworkDraft.note)}
+                >
+                  {savingReworkNote ? 'Saving…' : 'Save note'}
+                </Button>
+                <span aria-live="polite" className="text-sm text-success">
+                  {reworkNoteSaved ? 'Note saved.' : ''}
+                </span>
+              </div>
+            </div>
           ) : null}
         </div>
       ) : editable ? (
@@ -500,6 +826,9 @@ function StepItem({
               value={draft.recordId}
               onChange={(recordId) => onDraft({ recordId })}
               onLinked={onChanged}
+              timezone={timezone}
+              excursionStep={excursionTarget}
+              onConflict={onConflict}
             />
           ) : null}
           {step.requiresPhoto ? (
@@ -586,7 +915,8 @@ type HistoryEntry = {
 /**
  * One readable history: the engine trail (steps, proof, reminders, review
  * decisions), plus the claim, start and submit moments the trail does not
- * carry, taken from the occurrence's own timestamps.
+ * carry, taken from the occurrence's own timestamps, and the linked records
+ * and rework notes, which live beside the engine.
  */
 export function historyEntries(occurrence: SopOccurrence): HistoryEntry[] {
   const stepTitle = (stepId: string | null | undefined) => {
@@ -686,8 +1016,87 @@ export function historyEntries(occurrence: SopOccurrence): HistoryEntry[] {
       provenance: null,
     });
   }
-  return [...fromTrail, ...moments].sort(
+  const linked: HistoryEntry[] = (occurrence.recordLinks ?? []).map((link) => ({
+    id: `link:${link.id}`,
+    label: 'Record linked',
+    actor: null,
+    detail:
+      [stepTitle(link.occurrenceStepId), link.detail?.label].filter(Boolean).join(' · ') || null,
+    at: link.createdAt,
+    proof: null,
+    provenance: null,
+  }));
+  const noted: HistoryEntry[] = reworkNotes(occurrence).map((note) => {
+    const where = stepTitle(note.occurrenceStepId);
+    return {
+      id: `rework:${note.id}`,
+      label: 'Rework note added',
+      actor: note.authorName,
+      detail: where ? `${where}\n${note.note}` : note.note,
+      at: note.createdAt,
+      proof: null,
+      provenance: null,
+    };
+  });
+  return [...fromTrail, ...moments, ...linked, ...noted].sort(
     (left, right) => new Date(right.at).getTime() - new Date(left.at).getTime()
+  );
+}
+
+/**
+ * A proof link in History. An image that will not load (moved, expired or
+ * blocked) falls back to an icon and an "Open file" link instead of a box of
+ * clipped alt text.
+ */
+function ProofLink({ proof }: { proof: NonNullable<HistoryEntry['proof']> }) {
+  const [broken, setBroken] = useState(false);
+  const name = `${proof.alt.charAt(0).toLowerCase()}${proof.alt.slice(1)}`;
+  const linkClass =
+    'inline-flex min-h-11 w-fit items-center justify-center rounded-xs border border-border-subtle bg-surface-raised text-sm font-medium text-text-strong hover:bg-surface-sunken focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none';
+
+  if (proof.image && broken) {
+    return (
+      <div className="grid w-fit gap-1 rounded-xs border border-border-subtle bg-surface-sunken p-3">
+        <span className="inline-flex items-center gap-1.5 text-xs text-text-muted">
+          <ImageOff aria-hidden className="size-4 shrink-0" />
+          Preview unavailable
+        </span>
+        <a
+          href={proof.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`Open file: ${name}`}
+          className={`${linkClass} px-3`}
+        >
+          Open file
+        </a>
+      </div>
+    );
+  }
+  return (
+    <a
+      href={proof.href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`View ${name}`}
+      className={linkClass}
+    >
+      {proof.image ? (
+        // Proof is served by /api/files behind the pharmacy viewer check,
+        // so next/image's optimiser (which fetches without the session)
+        // cannot load it.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={proof.href}
+          alt={proof.alt}
+          loading="lazy"
+          onError={() => setBroken(true)}
+          className="size-16 rounded-xs object-cover"
+        />
+      ) : (
+        <span className="px-3">View</span>
+      )}
+    </a>
   );
 }
 
@@ -726,30 +1135,7 @@ function History({ occurrence, timezone }: { occurrence: SopOccurrence; timezone
                   </p>
                 ) : null}
               </div>
-              {entry.proof ? (
-                <a
-                  href={entry.proof.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={`View ${entry.proof.alt.charAt(0).toLowerCase()}${entry.proof.alt.slice(1)}`}
-                  className="inline-flex min-h-11 w-fit items-center justify-center rounded-xs border border-border-subtle bg-surface-raised text-sm font-medium text-text-strong hover:bg-surface-sunken focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-                >
-                  {entry.proof.image ? (
-                    // Proof is served by /api/files behind the pharmacy viewer check,
-                    // so next/image's optimiser (which fetches without the session)
-                    // cannot load it.
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={entry.proof.href}
-                      alt={entry.proof.alt}
-                      loading="lazy"
-                      className="size-16 rounded-xs object-cover"
-                    />
-                  ) : (
-                    <span className="px-3">View</span>
-                  )}
-                </a>
-              ) : null}
+              {entry.proof ? <ProofLink proof={entry.proof} /> : null}
             </li>
           ))}
         </ul>

@@ -32,6 +32,11 @@ export type SopEvidenceUploadProps = {
   recount: () => Promise<number>;
   /** Called once the proof is known to be stored. */
   onUploaded: () => void;
+  /**
+   * Whether the step needs this proof. False when adding new proof to a done
+   * step after a send-back, so the label never says "required".
+   */
+  required?: boolean;
 };
 
 function serverMessage(request: XMLHttpRequest) {
@@ -64,6 +69,7 @@ export function SopEvidenceUpload({
   evidenceCount,
   recount,
   onUploaded,
+  required = true,
 }: SopEvidenceUploadProps) {
   const id = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -185,7 +191,7 @@ export function SopEvidenceUpload({
       <div>
         <p className="text-sm font-medium text-text-strong">
           {purpose === 'photo' ? 'Photo' : 'Signature'}
-          {evidenceCount > 0 ? ' · added' : ' · required'}
+          {evidenceCount > 0 ? ' · added' : required ? ' · required' : ' · optional'}
         </p>
         <p className="mt-1 text-xs text-text-muted">
           {purpose === 'photo'

@@ -224,10 +224,13 @@ describe('automatic scheduling reads and per-branch generation', () => {
     await expect(
       generateAutoPharmacySopBranchOccurrences(db, { pharmacyBranchId: 'pb_on', now })
     ).resolves.toEqual({ assignmentsProcessed: 2, created: 3, skipped: 0 });
+    // Nothing due before a schedule existed, or before the branch turned ON.
     expect(engine.generateDueSopOccurrences).toHaveBeenCalledExactlyOnceWith(db, {
       now,
       branchIds: ['sop_on'],
       lookbackDays: 0,
+      skipDueBeforeAssignmentCreated: true,
+      skipDueBefore: new Date('2026-11-01T00:00:00.000Z'),
     });
     // The site is re-read on the active pharmacy branch.
     expect(raw.pharmacySopSite.findFirst).toHaveBeenCalledWith(

@@ -319,10 +319,30 @@ describe('startPharmacySopAutoSchedule', () => {
       now,
       branchIds: ['sop_1'],
       lookbackDays: 0,
+      skipDueBeforeAssignmentCreated: true,
     });
     expect(result.generated.created).toBe(4);
     expect(jobs).toHaveLength(1);
     expect(result.job.slot.toISOString()).toBe('2026-11-04T07:00:00.000Z');
+  });
+
+  it('with the time the branch turned ON, never creates work due before it', async () => {
+    const { db } = makeDb({ sites: SITES });
+    const now = at('2026-11-04T06:30:00Z');
+    const enabledAt = at('2026-11-04T06:29:10Z');
+    await startPharmacySopAutoSchedule(db, {
+      organizationId: ORG,
+      sopBranchId: 'sop_1',
+      now,
+      enabledAt,
+    });
+    expect(engine.generateDueSopOccurrences).toHaveBeenCalledExactlyOnceWith(db, {
+      now,
+      branchIds: ['sop_1'],
+      lookbackDays: 0,
+      skipDueBeforeAssignmentCreated: true,
+      skipDueBefore: enabledAt,
+    });
   });
 
   it('on a per-operation client, keeps the chain when creating today’s work fails', async () => {
@@ -592,10 +612,13 @@ describe('pharmacySopAutoGenerateBranchHandler (one branch)', () => {
     });
     const job = childJob('pb_2');
     await pharmacySopAutoGenerateBranchHandler({ db, job });
+    // Nothing due before a schedule existed, or before the branch turned ON.
     expect(engine.generateDueSopOccurrences).toHaveBeenCalledExactlyOnceWith(db, {
       now: job.startedAt,
       branchIds: ['sop_2'],
       lookbackDays: 0,
+      skipDueBeforeAssignmentCreated: true,
+      skipDueBefore: new Date('2026-11-01T00:00:00Z'),
     });
     // A child never enqueues anything.
     expect(jobs).toHaveLength(0);

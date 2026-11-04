@@ -104,6 +104,44 @@ export type PharmacySopSiteRef = {
 
 export type PharmacySopActor = { staffProfileId: string; displayName: string; userId: string };
 
+/**
+ * Which storage zone a temperature step reads. COLD_CHAIN is a stock location
+ * flagged `coldChain` (a validated refrigerator zone, the same flag the
+ * temperature log uses for its range check); AMBIENT is any other location.
+ */
+export type PharmacySopTemperatureZone = 'COLD_CHAIN' | 'AMBIENT';
+
+/**
+ * What a linked (or linkable) pharmacy record says, in plain operator-facing
+ * words: no raw status codes, ids or enum names. Built from tenant- and
+ * branch-scoped reads only.
+ */
+export type PharmacySopRecordDetail = {
+  kind: PharmacySopRecordType;
+  /** One line, e.g. "QA Fridge · 11.5 °C at 15:20". */
+  label: string;
+  /** The reading or figure the record carries, e.g. "11.5 °C", "Balance 40". */
+  value: string | null;
+  /** The storage location, for a temperature reading. */
+  location: string | null;
+  /** When the record was taken, received or entered. */
+  recordedAt: Date | null;
+  /** Temperature readings only: outside the location's validated range. */
+  outOfRange: boolean | null;
+  /** The record's state in plain words, e.g. "Draft", "Posted", "In range". */
+  statusLabel: string | null;
+};
+
+/** A record the picker may offer for one occurrence (and step). */
+export type PharmacySopLinkableRecord = {
+  id: string;
+  recordType: PharmacySopRecordType;
+  label: string;
+  occurredAt: Date;
+  outOfRange: boolean | null;
+  detail: PharmacySopRecordDetail;
+};
+
 /** Record types an SOP step may link. */
 export const PHARMACY_SOP_RECORD_TYPES: readonly PharmacySopRecordType[] = [
   'TEMPERATURE_LOG',
@@ -808,15 +846,21 @@ async function pharmacyRecordAtBranch(
     recordType: PharmacySopRecordType;
     recordId: string;
   }
-): Promise<{ outOfRange?: boolean; occurredAt?: Date } | null> {
+): Promise<{ outOfRange?: boolean; occurredAt?: Date; coldChain?: boolean } | null> {
   const { organizationId, pharmacyBranchId: branchId, recordId: id } = input;
   switch (input.recordType) {
     case 'TEMPERATURE_LOG': {
       const log = await db.pharmacyTemperatureLog.findFirst({
         where: { id, organizationId, branchId },
-        select: { outOfRange: true, recordedAt: true },
+        select: { outOfRange: true, recordedAt: true, location: { select: { coldChain: true } } },
       });
-      return log ? { outOfRange: log.outOfRange, occurredAt: log.recordedAt } : null;
+      return log
+        ? {
+            outOfRange: log.outOfRange,
+            occurredAt: log.recordedAt,
+            coldChain: log.location?.coldChain,
+          }
+        : null;
     }
     case 'CONTROLLED_REGISTER_ENTRY':
       return (await db.pharmacyControlledRegisterEntry.findFirst({
@@ -874,6 +918,11 @@ export async function linkPharmacySopRecord(
     recordId: string;
     note?: string | null;
     actor: PharmacySopActor;
+    /**
+     * A temperature step's storage zone (from the pack). When given, a
+     * TEMPERATURE_LOG must be a reading of a location in that zone.
+     */
+    temperatureZone?: PharmacySopTemperatureZone | null;
   }
 ): Promise<{ linkId: string; created: boolean; outOfRange?: boolean }> {
   const recordId = (input.recordId ?? '').trim();
@@ -966,6 +1015,11 @@ export async function linkPharmacySopRecord(
       recordId,
     });
     if (!record) refuse('RECORD_OUT_OF_SCOPE', 'That record was not found at this branch.');
+    if (input.recordType === 'TEMPERATURE_LOG' && input.temperatureZone) {
+      const zone = temperatureZoneOf(record.coldChain);
+      if (zone !== input.temperatureZone)
+        refuse('INVALID_INPUT', TEMPERATURE_ZONE_MESSAGE[input.temperatureZone]);
+    }
     const bounds = pharmacySopRecordTimeBounds(input.recordType, occurrence);
     if (
       bounds &&
@@ -1006,4 +1060,413 @@ export async function linkPharmacySopRecord(
       ...(record.outOfRange === undefined ? {} : { outOfRange: record.outOfRange }),
     };
   });
+}
+
+// ── Plain-language record details ────────────────────────────────────────────
+
+/** A location's zone; a missing flag (an unknown location) reads as ambient. */
+function temperatureZoneOf(coldChain: boolean | null | undefined): PharmacySopTemperatureZone {
+  return coldChain ? 'COLD_CHAIN' : 'AMBIENT';
+}
+
+const TEMPERATURE_ZONE_MESSAGE: Record<PharmacySopTemperatureZone, string> = {
+  COLD_CHAIN:
+    'This step needs a refrigerator reading. Choose a reading from a cold-chain location.',
+  AMBIENT: 'This step needs an ambient storage reading, not a refrigerator one.',
+};
+
+const REGISTER_KIND_WORDS: Record<string, string> = {
+  SALE: 'Sale',
+  PURCHASE: 'Purchase',
+  CORRECTION: 'Correction',
+};
+const RECEIPT_STATUS_WORDS: Record<string, string> = {
+  DRAFT: 'Draft',
+  POSTED: 'Posted',
+  REVERSED: 'Reversed',
+  CANCELLED: 'Cancelled',
+};
+const BATCH_STATE_WORDS: Record<string, string> = {
+  ACTIVE: 'Active',
+  RECALLED: 'Recalled',
+  QUARANTINED: 'Quarantined',
+};
+const RECALL_STATUS_WORDS: Record<string, string> = { OPEN: 'Open', CLOSED: 'Closed' };
+
+/** A status in words; an unknown code is never shown as-is. */
+function words(table: Record<string, string>, code: string | null | undefined): string | null {
+  return code ? (table[code] ?? null) : null;
+}
+
+/** Branch-local 24-hour clock time ("15:20"); UTC when the zone is unusable. */
+function localClock(date: Date, timeZone: string): string {
+  const format = (zone: string) =>
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: zone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).format(date);
+  try {
+    return format(timeZone);
+  } catch {
+    return format('UTC');
+  }
+}
+
+/** Branch-local calendar date ("2027-01-31"). */
+function localDate(date: Date, timeZone: string): string {
+  const format = (zone: string) =>
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date);
+  try {
+    return format(timeZone);
+  } catch {
+    return format('UTC');
+  }
+}
+
+const joinLabel = (...parts: Array<string | null | undefined>) =>
+  parts.filter((part): part is string => Boolean(part?.trim())).join(' · ');
+
+const TEMPERATURE_DETAIL_SELECT = {
+  id: true,
+  recordedAt: true,
+  temperatureC: true,
+  outOfRange: true,
+  location: { select: { name: true, coldChain: true } },
+} as const;
+const REGISTER_DETAIL_SELECT = {
+  id: true,
+  serial: true,
+  entryKind: true,
+  batchNumber: true,
+  runningBalance: true,
+  createdAt: true,
+  medicine: { select: { productName: true } },
+} as const;
+const RECEIPT_DETAIL_SELECT = {
+  id: true,
+  reference: true,
+  status: true,
+  receivedAt: true,
+  supplierInvoiceRef: true,
+  supplier: { select: { name: true } },
+} as const;
+const BATCH_DETAIL_SELECT = {
+  id: true,
+  batchNumber: true,
+  expiresAt: true,
+  state: true,
+  medicine: { select: { productName: true } },
+} as const;
+const RECALL_DETAIL_SELECT = {
+  id: true,
+  reference: true,
+  reason: true,
+  status: true,
+  createdAt: true,
+} as const;
+
+type TemperatureDetailRow = {
+  id: string;
+  recordedAt: Date;
+  temperatureC: number;
+  outOfRange: boolean;
+  location?: { name: string; coldChain?: boolean | null } | null;
+};
+type RegisterDetailRow = {
+  id: string;
+  serial: number;
+  entryKind: string;
+  batchNumber: string;
+  runningBalance: number;
+  createdAt: Date;
+  medicine?: { productName: string } | null;
+};
+type ReceiptDetailRow = {
+  id: string;
+  reference: string;
+  status: string;
+  receivedAt: Date;
+  supplierInvoiceRef?: string | null;
+  supplier?: { name: string } | null;
+};
+type BatchDetailRow = {
+  id: string;
+  batchNumber: string;
+  expiresAt: Date;
+  state: string;
+  medicine?: { productName: string } | null;
+};
+type RecallDetailRow = {
+  id: string;
+  reference: string;
+  reason: string;
+  status: string;
+  createdAt: Date;
+};
+
+function temperatureDetail(row: TemperatureDetailRow, timeZone: string): PharmacySopRecordDetail {
+  const value = `${row.temperatureC.toFixed(1)} °C`;
+  const location = row.location?.name ?? null;
+  return {
+    kind: 'TEMPERATURE_LOG',
+    label: `${joinLabel(location ?? 'Temperature reading', value)} at ${localClock(row.recordedAt, timeZone)}`,
+    value,
+    location,
+    recordedAt: row.recordedAt,
+    outOfRange: row.outOfRange,
+    statusLabel: row.outOfRange ? 'Out of range' : 'In range',
+  };
+}
+
+function registerDetail(row: RegisterDetailRow): PharmacySopRecordDetail {
+  const kind = words(REGISTER_KIND_WORDS, row.entryKind);
+  return {
+    kind: 'CONTROLLED_REGISTER_ENTRY',
+    label: joinLabel(
+      `Register entry ${row.serial}`,
+      kind,
+      row.medicine?.productName,
+      `batch ${row.batchNumber}`,
+      `balance ${row.runningBalance}`
+    ),
+    value: `Balance ${row.runningBalance}`,
+    location: null,
+    recordedAt: row.createdAt,
+    outOfRange: null,
+    statusLabel: kind,
+  };
+}
+
+function receiptDetail(row: ReceiptDetailRow): PharmacySopRecordDetail {
+  return {
+    kind: 'GOODS_RECEIPT',
+    label: joinLabel(`Receipt ${row.reference}`, row.supplier?.name),
+    value: row.supplierInvoiceRef ? `Invoice ${row.supplierInvoiceRef}` : null,
+    location: null,
+    recordedAt: row.receivedAt,
+    outOfRange: null,
+    statusLabel: words(RECEIPT_STATUS_WORDS, row.status),
+  };
+}
+
+function batchDetail(row: BatchDetailRow, timeZone: string): PharmacySopRecordDetail {
+  return {
+    kind: 'MANUFACTURING_BATCH',
+    label: joinLabel(`Batch ${row.batchNumber}`, row.medicine?.productName),
+    value: `Expires ${localDate(row.expiresAt, timeZone)}`,
+    location: null,
+    recordedAt: null,
+    outOfRange: null,
+    statusLabel: words(BATCH_STATE_WORDS, row.state),
+  };
+}
+
+function recallDetail(row: RecallDetailRow): PharmacySopRecordDetail {
+  return {
+    kind: 'RECALL_NOTICE',
+    label: joinLabel(`Recall ${row.reference}`, row.reason),
+    value: null,
+    location: null,
+    recordedAt: row.createdAt,
+    outOfRange: null,
+    statusLabel: words(RECALL_STATUS_WORDS, row.status),
+  };
+}
+
+/** Shown for a link whose record cannot be read at this branch any more. */
+export function unavailablePharmacySopRecordDetail(
+  recordType: PharmacySopRecordType
+): PharmacySopRecordDetail {
+  return {
+    kind: recordType,
+    label: 'This record is no longer available at this branch.',
+    value: null,
+    location: null,
+    recordedAt: null,
+    outOfRange: null,
+    statusLabel: null,
+  };
+}
+
+export const pharmacySopRecordDetailKey = (recordType: PharmacySopRecordType, recordId: string) =>
+  `${recordType}:${recordId}`;
+
+/**
+ * Plain-language details for linked records, keyed by
+ * {@link pharmacySopRecordDetailKey}. Every read is scoped to the tenant and,
+ * where the record carries a branch, to this pharmacy branch (a batch through
+ * a lot at the branch; a recall notice is organization-wide). A record outside
+ * that scope is simply absent from the map, never read from another branch.
+ */
+export async function describePharmacySopRecords(
+  db: ScopedDb,
+  input: {
+    organizationId: string;
+    pharmacyBranchId: string;
+    timezone: string;
+    records: ReadonlyArray<{ recordType: PharmacySopRecordType; recordId: string }>;
+  }
+): Promise<Map<string, PharmacySopRecordDetail>> {
+  const { organizationId, pharmacyBranchId: branchId, timezone } = input;
+  const idsOf = (type: PharmacySopRecordType) => [
+    ...new Set(input.records.filter((r) => r.recordType === type).map((r) => r.recordId)),
+  ];
+  const details = new Map<string, PharmacySopRecordDetail>();
+  const put = (type: PharmacySopRecordType, id: string, detail: PharmacySopRecordDetail) =>
+    details.set(pharmacySopRecordDetailKey(type, id), detail);
+
+  const temperatureIds = idsOf('TEMPERATURE_LOG');
+  const registerIds = idsOf('CONTROLLED_REGISTER_ENTRY');
+  const receiptIds = idsOf('GOODS_RECEIPT');
+  const batchIds = idsOf('MANUFACTURING_BATCH');
+  const recallIds = idsOf('RECALL_NOTICE');
+  const [temperatures, registers, receipts, batches, recalls] = await Promise.all([
+    temperatureIds.length
+      ? db.pharmacyTemperatureLog.findMany({
+          where: { id: { in: temperatureIds }, organizationId, branchId },
+          select: TEMPERATURE_DETAIL_SELECT,
+        })
+      : [],
+    registerIds.length
+      ? db.pharmacyControlledRegisterEntry.findMany({
+          where: { id: { in: registerIds }, organizationId, branchId },
+          select: REGISTER_DETAIL_SELECT,
+        })
+      : [],
+    receiptIds.length
+      ? db.pharmacyGoodsReceipt.findMany({
+          where: { id: { in: receiptIds }, organizationId, branchId },
+          select: RECEIPT_DETAIL_SELECT,
+        })
+      : [],
+    batchIds.length
+      ? db.pharmacyManufacturingBatch.findMany({
+          where: {
+            id: { in: batchIds },
+            organizationId,
+            lots: { some: { organizationId, branchId } },
+          },
+          select: BATCH_DETAIL_SELECT,
+        })
+      : [],
+    recallIds.length
+      ? db.pharmacyRecallNotice.findMany({
+          where: { id: { in: recallIds }, organizationId },
+          select: RECALL_DETAIL_SELECT,
+        })
+      : [],
+  ]);
+  for (const row of temperatures as TemperatureDetailRow[]) {
+    put('TEMPERATURE_LOG', row.id, temperatureDetail(row, timezone));
+  }
+  for (const row of registers as RegisterDetailRow[]) {
+    put('CONTROLLED_REGISTER_ENTRY', row.id, registerDetail(row));
+  }
+  for (const row of receipts as ReceiptDetailRow[]) {
+    put('GOODS_RECEIPT', row.id, receiptDetail(row));
+  }
+  for (const row of batches as BatchDetailRow[]) {
+    put('MANUFACTURING_BATCH', row.id, batchDetail(row, timezone));
+  }
+  for (const row of recalls as RecallDetailRow[]) {
+    put('RECALL_NOTICE', row.id, recallDetail(row));
+  }
+  return details;
+}
+
+/**
+ * Records the picker may offer for one occurrence: the newest `take` of one
+ * type at this branch (tenant- and branch-scoped like
+ * {@link describePharmacySopRecords}), inside `bounds` when the type is
+ * time-bounded and, for a temperature step with a zone, only readings of a
+ * location in that zone. Each carries its plain-language detail; the label is
+ * the detail's label, so no status code reaches the picker.
+ */
+export async function listPharmacySopLinkableRecords(
+  db: ScopedDb,
+  input: {
+    organizationId: string;
+    pharmacyBranchId: string;
+    timezone: string;
+    recordType: PharmacySopRecordType;
+    bounds: { gte: Date; lte: Date } | null;
+    temperatureZone?: PharmacySopTemperatureZone | null;
+    take: number;
+  }
+): Promise<PharmacySopLinkableRecord[]> {
+  const { organizationId, pharmacyBranchId: branchId, timezone, recordType, bounds, take } = input;
+  const candidate = (
+    id: string,
+    occurredAt: Date,
+    detail: PharmacySopRecordDetail
+  ): PharmacySopLinkableRecord => ({
+    id,
+    recordType,
+    label: detail.label,
+    occurredAt,
+    outOfRange: detail.outOfRange,
+    detail,
+  });
+  switch (recordType) {
+    case 'TEMPERATURE_LOG': {
+      const zone = input.temperatureZone ?? null;
+      const rows = (await db.pharmacyTemperatureLog.findMany({
+        where: {
+          organizationId,
+          branchId,
+          ...(bounds ? { recordedAt: bounds } : {}),
+          ...(zone ? { location: { coldChain: zone === 'COLD_CHAIN' } } : {}),
+        },
+        orderBy: [{ recordedAt: 'desc' }, { id: 'asc' }],
+        take,
+        select: TEMPERATURE_DETAIL_SELECT,
+      })) as TemperatureDetailRow[];
+      return rows.map((row) => candidate(row.id, row.recordedAt, temperatureDetail(row, timezone)));
+    }
+    case 'CONTROLLED_REGISTER_ENTRY': {
+      const rows = (await db.pharmacyControlledRegisterEntry.findMany({
+        where: { organizationId, branchId },
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        take,
+        select: REGISTER_DETAIL_SELECT,
+      })) as RegisterDetailRow[];
+      return rows.map((row) => candidate(row.id, row.createdAt, registerDetail(row)));
+    }
+    case 'GOODS_RECEIPT': {
+      const rows = (await db.pharmacyGoodsReceipt.findMany({
+        where: { organizationId, branchId, ...(bounds ? { receivedAt: bounds } : {}) },
+        orderBy: [{ receivedAt: 'desc' }, { id: 'asc' }],
+        take,
+        select: RECEIPT_DETAIL_SELECT,
+      })) as ReceiptDetailRow[];
+      return rows.map((row) => candidate(row.id, row.receivedAt, receiptDetail(row)));
+    }
+    case 'MANUFACTURING_BATCH': {
+      const rows = (await db.pharmacyManufacturingBatch.findMany({
+        where: { organizationId, lots: { some: { organizationId, branchId } } },
+        orderBy: [{ expiresAt: 'asc' }, { id: 'asc' }],
+        take,
+        select: BATCH_DETAIL_SELECT,
+      })) as BatchDetailRow[];
+      return rows.map((row) => candidate(row.id, row.expiresAt, batchDetail(row, timezone)));
+    }
+    case 'RECALL_NOTICE': {
+      const rows = (await db.pharmacyRecallNotice.findMany({
+        where: { organizationId, status: 'OPEN' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        take,
+        select: RECALL_DETAIL_SELECT,
+      })) as RecallDetailRow[];
+      return rows.map((row) => candidate(row.id, row.createdAt, recallDetail(row)));
+    }
+    default:
+      return [];
+  }
 }

@@ -192,7 +192,9 @@ export async function pharmacySopAutoScheduledBranchIds(db: ScopedDb): Promise<s
  * missing (or its pharmacy branch inactive, or it belongs to another
  * organization, which RLS hides) or the setting is now OFF, nothing is
  * generated and `null` is returned. Otherwise the engine runs restricted to the
- * site's engine branch, never back-dated. Errors propagate to the caller.
+ * site's engine branch, never back-dated, and never creating work due before
+ * its schedule was created or before the setting turned ON. Errors propagate
+ * to the caller.
  */
 export async function generateAutoPharmacySopBranchOccurrences(
   db: ScopedDb,
@@ -209,6 +211,11 @@ export async function generateAutoPharmacySopBranchOccurrences(
     now: input.now,
     branchIds: [site.sopBranchId],
     lookbackDays: PHARMACY_SOP_AUTO_LOOKBACK_DAYS,
+    // A new schedule, or a branch just switched ON, starts at its next due
+    // time: nothing due before the schedule existed or before the setting
+    // turned ON is created already overdue.
+    skipDueBeforeAssignmentCreated: true,
+    ...(setting.changedAt ? { skipDueBefore: setting.changedAt } : {}),
   });
 }
 

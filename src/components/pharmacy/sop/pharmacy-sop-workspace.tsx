@@ -59,11 +59,30 @@ function placeQuery(place: Place) {
   return query ? `?${query}` : '';
 }
 
+/** Marks a history entry the workspace pushed when it opened a procedure from its own lists. */
+const OPENED_HERE = 'pharmacySopOpenedHere';
+
+function openedHere() {
+  try {
+    const state: unknown = window.history.state;
+    return Boolean(
+      state && typeof state === 'object' && (state as Record<string, unknown>)[OPENED_HERE]
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Where the person is in the workspace — branch, tab and open procedure — kept
  * in the URL so the browser Back button walks back through it. Next.js folds
- * `history.pushState` into its router, and `popstate` brings the state back
- * when the person goes back or forward.
+ * `history.pushState` into its router (keeping the state object it is given),
+ * and `popstate` brings the state back when the person goes back or forward.
+ *
+ * Closing a procedure in the app goes back the way it came: when the workspace
+ * itself pushed the procedure's entry, "Back" is `history.back()`, so browser
+ * Back afterwards does not reopen it; a procedure opened from a link replaces
+ * its entry with the list instead.
  */
 function usePlace() {
   const searchParams = useSearchParams();
@@ -87,11 +106,28 @@ function usePlace() {
     current.current = next;
     setPlace(next);
     const url = `${window.location.pathname}${placeQuery(next)}`;
-    if (mode === 'push') window.history.pushState(null, '', url);
-    else window.history.replaceState(null, '', url);
+    if (mode === 'push') {
+      window.history.pushState(patch.occurrence ? { [OPENED_HERE]: true } : null, '', url);
+    } else {
+      window.history.replaceState(null, '', url);
+    }
   }, []);
 
-  return [place, go] as const;
+  const close = useCallback(() => {
+    if (!current.current.occurrence) return;
+    if (openedHere()) {
+      // Show the list now; popstate confirms the same place once the browser
+      // has stepped back to the entry the procedure was opened from.
+      const next = { ...current.current, occurrence: null };
+      current.current = next;
+      setPlace(next);
+      window.history.back();
+      return;
+    }
+    go({ occurrence: null }, 'replace');
+  }, [go]);
+
+  return [place, go, close] as const;
 }
 
 function Header({ actions, description }: { actions?: React.ReactNode; description?: string }) {
@@ -186,7 +222,7 @@ export function PharmacySopWorkspace() {
 function Workspace({ access, branches }: { access: SopAccess; branches: SopBranch[] }) {
   const pickerId = useId();
   const utils = trpc.useUtils();
-  const [place, go] = usePlace();
+  const [place, go, close] = usePlace();
   const [notice, setNotice] = useState<Notice | null>(null);
   const [drafts, setDrafts] = useState<Record<string, StepDraft>>({});
   const lastOpened = useRef<string | null>(null);
@@ -301,7 +337,7 @@ function Workspace({ access, branches }: { access: SopAccess; branches: SopBranc
     setNotice(null);
     go({ view, occurrence: occurrenceId });
   };
-  const back = () => go({ occurrence: null });
+  const back = close;
 
   const runner = occurrence ? (
     <SopRunner

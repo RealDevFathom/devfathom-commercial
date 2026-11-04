@@ -16,9 +16,10 @@ import { describe, expect, it } from 'vitest';
  *    router installs the template library on request, and the inspection pack
  *    exports SOP history for inspectors.
  * 2. SOP code never writes a pharmacy operation table. It may only append its
- *    own site, setting, record-link and capture-receipt rows; record links
- *    point at existing records. Only the pharmacy evidence route and the
- *    manual legacy backfill script write capture receipts.
+ *    own site, setting, record-link, capture-receipt and rework-note rows;
+ *    record links point at existing records. Only the pharmacy evidence route
+ *    and the manual legacy backfill script write capture receipts; only the
+ *    pharmacy SOP router writes rework notes.
  * 3. SOP code reaches pharmacy operation code only through a read helper.
  * 4. SOP code enqueues exactly one job type, its own hourly automatic-
  *    scheduling job, from exactly one module; it never enqueues an engine,
@@ -126,7 +127,8 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
       // Only its own append-only rows.
       expect(
         writes.filter(
-          (model) => !/^pharmacySop(Site|SiteSetting|RecordLink|EvidenceCapture)$/.test(model!)
+          (model) =>
+            !/^pharmacySop(Site|SiteSetting|RecordLink|EvidenceCapture|ReworkNote)$/.test(model!)
         )
       ).toEqual([]);
       // No raw SQL write against a pharmacy table.
@@ -161,6 +163,26 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
     )) {
       expect(readFileSync(join(ROOT, file), 'utf8')).not.toMatch(
         /pharmacySopEvidenceCapture\.(update|updateMany|delete|deleteMany)\b|(UPDATE|DELETE\s+FROM)\s+"?pharmacy_sop_evidence_captures/
+      );
+    }
+  });
+
+  it('only the pharmacy SOP router writes rework notes, and nothing updates or deletes one', () => {
+    const NOTE_WRITE =
+      /pharmacySopReworkNote\.(create|createMany|createManyAndReturn|upsert)\b|INSERT\s+INTO\s+"?pharmacy_sop_rework_notes/;
+    const writers = [...walk('src'), ...walk('scripts'), ...walk('prisma')]
+      .filter((file) => !file.startsWith('src/generated/'))
+      .filter((file) => NOTE_WRITE.test(readFileSync(join(ROOT, file), 'utf8')))
+      .sort();
+    expect(writers).toEqual(['src/server/routers/pharmacy-sop.ts']);
+    // Exactly one write site, in the rework-note mutation.
+    const router = readFileSync(join(ROOT, 'src/server/routers/pharmacy-sop.ts'), 'utf8');
+    expect(router.match(/pharmacySopReworkNote\.create\b/g)).toHaveLength(1);
+    for (const file of [...walk('src'), ...walk('scripts')].filter(
+      (path) => !path.startsWith('src/generated/')
+    )) {
+      expect(readFileSync(join(ROOT, file), 'utf8'), file).not.toMatch(
+        /pharmacySopReworkNote\.(update|updateMany|delete|deleteMany)\b|(UPDATE|DELETE\s+FROM)\s+"?pharmacy_sop_rework_notes/
       );
     }
   });

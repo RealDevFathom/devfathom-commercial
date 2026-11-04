@@ -8,7 +8,7 @@ import {
   type SopPack,
   type SopPackStep,
 } from '@/lib/restaurant/sop-template-packs';
-import type { PharmacySopRoleKey } from './sop-adapter';
+import type { PharmacySopRoleKey, PharmacySopTemperatureZone } from './sop-adapter';
 
 /**
  * DEV-751 — the pharmacy procedure library on the shared SOP engine.
@@ -93,6 +93,13 @@ export type PharmacySopPackMeta = {
 export type PharmacySopPackStep = SopPackStep & {
   /** The step is complete only when it links an existing record of this type. */
   requiredRecordType?: PharmacySopRecordType;
+  /**
+   * TEMPERATURE_LOG steps only: the storage zone the reading must come from.
+   * COLD_CHAIN is a location flagged cold-chain (a validated refrigerator
+   * zone); AMBIENT is any other location. Absent = any location (the opening
+   * check confirms that the opening readings were taken, wherever they were).
+   */
+  temperatureZone?: PharmacySopTemperatureZone;
 };
 
 /**
@@ -277,6 +284,7 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
         title: 'After closing, confirm the last refrigerator temperature was recorded',
         instructions: 'Link the reading already recorded in the temperature log for this branch.',
         requiredRecordType: 'TEMPERATURE_LOG',
+        temperatureZone: 'COLD_CHAIN',
       },
       {
         title: 'Once closed, send a photo of the locked premises',
@@ -301,11 +309,13 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
         title: 'Confirm the refrigerator temperature was recorded',
         instructions: 'Link the reading from the temperature log.',
         requiredRecordType: 'TEMPERATURE_LOG',
+        temperatureZone: 'COLD_CHAIN',
       },
       {
         title: 'Confirm the ambient storage temperature was recorded',
         instructions: 'Link the reading from the temperature log.',
         requiredRecordType: 'TEMPERATURE_LOG',
+        temperatureZone: 'AMBIENT',
       },
       {
         title: 'Record any excursion and the corrective action taken, or confirm none',

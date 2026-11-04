@@ -31,6 +31,7 @@ type AssignmentFixture = {
   intervalEndTimeMinutes: number | null;
   windowMinutes: number;
   active: boolean;
+  createdAt?: Date;
   branch: { id: string; timezone: string; businessDayCutoff: string };
 };
 
@@ -322,6 +323,78 @@ describe('generateDueSopOccurrences', () => {
         horizonDays: 0,
       })
     ).rejects.toThrow('connection reset');
+  });
+});
+
+describe('generateDueSopOccurrences creation floor (skipDueBeforeAssignmentCreated)', () => {
+  // DAILY 06:00 America/New_York = 10:00Z; window 06-14 .. 06-16 as of 06-15 12:00Z.
+  const now = at('2026-06-15T12:00:00.000Z');
+  const dueTimes = (store: OccurrenceRow[]) => store.map((row) => row.dueAt.toISOString());
+
+  it('absent: every due time in the window, including ones before the assignment existed', async () => {
+    const { db, store } = makeDb({
+      assignments: [assignment({ createdAt: at('2026-06-15T11:00:00.000Z') })],
+    });
+    await generateDueSopOccurrences(db, { now });
+    expect(dueTimes(store)).toEqual([
+      '2026-06-14T10:00:00.000Z',
+      '2026-06-15T10:00:00.000Z',
+      '2026-06-16T10:00:00.000Z',
+    ]);
+  });
+
+  it('a schedule created after today’s due time starts at its next due time', async () => {
+    const { db, store } = makeDb({
+      assignments: [assignment({ createdAt: at('2026-06-15T11:00:00.000Z') })],
+    });
+    const result = await generateDueSopOccurrences(db, {
+      now,
+      skipDueBeforeAssignmentCreated: true,
+    });
+    expect(result).toEqual({ assignmentsProcessed: 1, created: 1, skipped: 0 });
+    expect(dueTimes(store)).toEqual(['2026-06-16T10:00:00.000Z']);
+  });
+
+  it('keeps an occurrence due in the minute the assignment was created (a one-off due now)', async () => {
+    const { db, store } = makeDb({
+      assignments: [
+        assignment({
+          frequency: 'ONCE',
+          startDate: utcDate(2026, 6, 15),
+          endDate: utcDate(2026, 6, 15),
+          createdAt: at('2026-06-15T10:00:42.517Z'),
+        }),
+      ],
+    });
+    await generateDueSopOccurrences(db, { now, skipDueBeforeAssignmentCreated: true });
+    expect(dueTimes(store)).toEqual(['2026-06-15T10:00:00.000Z']);
+  });
+
+  it('leaves older assignments untouched', async () => {
+    const { db, store } = makeDb({
+      assignments: [assignment({ createdAt: at('2026-06-01T00:00:00.000Z') })],
+    });
+    await generateDueSopOccurrences(db, { now, skipDueBeforeAssignmentCreated: true });
+    expect(store).toHaveLength(3);
+  });
+
+  it('skipDueBefore floors every assignment at a caller-chosen instant (minute precision)', async () => {
+    const { db, store } = makeDb({
+      assignments: [assignment({ createdAt: at('2026-06-01T00:00:00.000Z') })],
+    });
+    await generateDueSopOccurrences(db, {
+      now,
+      skipDueBefore: at('2026-06-15T10:00:59.000Z'),
+      skipDueBeforeAssignmentCreated: true,
+    });
+    expect(dueTimes(store)).toEqual(['2026-06-15T10:00:00.000Z', '2026-06-16T10:00:00.000Z']);
+  });
+
+  it('refuses an invalid skipDueBefore', async () => {
+    const { db } = makeDb({ assignments: [assignment()] });
+    await expect(
+      generateDueSopOccurrences(db, { now, skipDueBefore: new Date(Number.NaN) })
+    ).rejects.toThrow(TypeError);
   });
 });
 

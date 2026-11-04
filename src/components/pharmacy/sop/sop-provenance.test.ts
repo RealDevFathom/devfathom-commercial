@@ -30,12 +30,13 @@ describe('pharmacy SOP proof provenance copy', () => {
       { provenance: 'RECEIPT' },
       { provenance: 'UNCONFIRMED' },
     ]);
-    expect(unconfirmed).toContain('One proof is present');
-    expect(unconfirmed).toContain('legacy receipt backfill');
-    expect(unconfirmed).not.toMatch(/missing/i);
+    expect(unconfirmed).toBe(
+      "This older proof can't be confirmed as captured here. Ask your manager to confirm it, or send it back so it can be captured again."
+    );
+    expect(unconfirmed).not.toMatch(/missing|backfill|legacy|receipt/i);
     expect(
       provenanceReviewNote([{ provenance: 'UNCONFIRMED' }, { provenance: 'UNCONFIRMED' }])
-    ).toContain('2 proofs are present');
+    ).toContain('These 2 older proofs');
     // Foreign proof takes precedence: it can never be confirmed by a backfill.
     expect(
       provenanceReviewNote([{ provenance: 'UNCONFIRMED' }, { provenance: 'FOREIGN' }])

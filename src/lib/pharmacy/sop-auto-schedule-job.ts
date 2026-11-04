@@ -193,15 +193,19 @@ export type StartAutoScheduleResult = {
 /**
  * What turning a branch ON does once its setting row is appended: ensure the
  * recurring job, then create the due procedures for THIS branch only, from its
- * current business date (never back-dated to days it was OFF). Everything runs
- * on the caller's `db` and nothing else. The tRPC route passes its own request
- * transaction, so the setting, the next slot and today's work commit (or roll
- * back) together; a caller with a per-operation client commits each step on
- * its own, the next slot first.
+ * current business date (never back-dated to days it was OFF). Like every
+ * pharmacy generation path, nothing due before its schedule was created is
+ * made, and with `enabledAt` (when the branch's setting turned ON) nothing due
+ * before that either: the branch starts at each schedule's next due time
+ * instead of with work that is already overdue — the same floor the hourly
+ * per-branch job applies. Everything runs on the caller's `db` and nothing
+ * else. The tRPC route passes its own request transaction, so the setting, the
+ * next slot and today's work commit (or roll back) together; a caller with a
+ * per-operation client commits each step on its own, the next slot first.
  */
 export async function startPharmacySopAutoSchedule(
   db: ScopedDb,
-  input: { organizationId: string; sopBranchId: string; now: Date }
+  input: { organizationId: string; sopBranchId: string; now: Date; enabledAt?: Date | null }
 ): Promise<StartAutoScheduleResult> {
   const job = await ensurePharmacySopAutoScheduleJob(db, {
     organizationId: input.organizationId,
@@ -211,6 +215,8 @@ export async function startPharmacySopAutoSchedule(
     now: input.now,
     branchIds: [input.sopBranchId],
     lookbackDays: PHARMACY_SOP_AUTO_LOOKBACK_DAYS,
+    skipDueBeforeAssignmentCreated: true,
+    ...(input.enabledAt ? { skipDueBefore: input.enabledAt } : {}),
   });
   return { job, generated };
 }

@@ -17,7 +17,10 @@
  *   org R         : restaurant, no pharmacy SOP site
  *
  * Turning a branch ON and every hourly run never back-date: they create the
- * branch's current business date and the next one only.
+ * branch's current business date and the next one only, and never work due
+ * before the branch was turned ON (or before its schedule was created), so a
+ * branch starts at each schedule's next due time. Schedules are created on
+ * 1 Nov (pinned, so no run depends on the wall clock).
  *
  * The on-demand start drives the REAL `pharmacySop.startOnDemand` router
  * procedure on the real database (engine assignment + generation + pause);
@@ -168,8 +171,8 @@ async function seed(runtime: Client) {
   };
   const daily = async (org: string, key: string, asg: string, dueTimeMinutes: number) =>
     q(
-      `INSERT INTO "restaurant_sop_assignments" ("id","organizationId","branchId","templateId","frequency","startDate","dueTimeMinutes","assigneeTargetType","assigneeStaffProfileId","updatedAt")
-       VALUES ($1,$2,$3,$4,'DAILY','2026-11-01',$5,'PERSON',$6,now())`,
+      `INSERT INTO "restaurant_sop_assignments" ("id","organizationId","branchId","templateId","frequency","startDate","dueTimeMinutes","assigneeTargetType","assigneeStaffProfileId","createdAt","updatedAt")
+       VALUES ($1,$2,$3,$4,'DAILY','2026-11-01',$5,'PERSON',$6,'2026-11-01 00:00',now())`,
       [`${org}_${asg}${key}`, org, `${org}_rb${key}`, `${org}_tpl`, dueTimeMinutes, `${org}_sp`]
     );
 
@@ -179,8 +182,8 @@ async function seed(runtime: Client) {
   await branch(R, '1', 'Asia/Dubai', false);
   await daily(A, '1', 'asg_daily', 9 * 60);
   await q(
-    `INSERT INTO "restaurant_sop_assignments" ("id","organizationId","branchId","templateId","frequency","interval","daysOfWeek","startDate","dueTimeMinutes","intervalEndTimeMinutes","windowMinutes","assigneeTargetType","assigneeStaffProfileId","updatedAt")
-     VALUES ($1,$2,$3,$4,'INTERVAL',240,'{0,1,2,3,4,5,6}','2026-11-01',540,1020,60,'PERSON',$5,now())`,
+    `INSERT INTO "restaurant_sop_assignments" ("id","organizationId","branchId","templateId","frequency","interval","daysOfWeek","startDate","dueTimeMinutes","intervalEndTimeMinutes","windowMinutes","assigneeTargetType","assigneeStaffProfileId","createdAt","updatedAt")
+     VALUES ($1,$2,$3,$4,'INTERVAL',240,'{0,1,2,3,4,5,6}','2026-11-01',540,1020,60,'PERSON',$5,'2026-11-01 00:00',now())`,
     [`${A}_asg_interval`, A, `${A}_rb1`, `${A}_tpl`, `${A}_sp`]
   );
   await daily(A, '2', 'asg_daily', 9 * 60);
@@ -211,6 +214,17 @@ async function seed(runtime: Client) {
      VALUES ($1,$3,$4,true,$5,'2026-11-01 00:00'), ($2,$3,$4,false,$5,'2026-11-02 00:00')`,
     [id('set_a2_on'), id('set_a2_off'), A, `${A}_pb2`, USER]
   );
+}
+
+/** The id of a branch's newest setting row (read through the cleanup superuser). */
+async function settingId(org: string, pharmacyBranchId: string): Promise<string> {
+  const [row] = await sql<{ id: string }>(
+    `SELECT "id" FROM "pharmacy_sop_site_settings"
+      WHERE "organizationId" = $1 AND "pharmacyBranchId" = $2
+      ORDER BY "createdAt" DESC, "id" DESC LIMIT 1`,
+    [org, pharmacyBranchId]
+  );
+  return row!.id;
 }
 
 async function cleanup() {
@@ -389,6 +403,12 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
       })
     );
     expect(changed).toMatchObject({ changed: true, setting: { autoScheduleEnabled: true } });
+    // The switch ON is pinned to T0 (the row was stamped by the wall clock) so
+    // the hourly runs below floor at the same instant as this start.
+    await su.query(`UPDATE "pharmacy_sop_site_settings" SET "createdAt" = $1 WHERE "id" = $2`, [
+      T0,
+      await settingId(A, `${A}_pb1`),
+    ]);
     // Exactly what the router does after appending the setting (ctx.db is a
     // per-operation tenant client); repeated toggles reuse the same slot job.
     const db = createTenantDb(A, USER);
@@ -396,13 +416,15 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
       organizationId: A,
       sopBranchId: `${A}_rb1`,
       now: T0,
+      enabledAt: T0,
     });
     const again = await deps.autoJob.startPharmacySopAutoSchedule(db, {
       organizationId: A,
       sopBranchId: `${A}_rb1`,
       now: new Date(T0.getTime() + 60_000),
+      enabledAt: T0,
     });
-    expect(first.generated).toEqual({ assignmentsProcessed: 2, created: 8, skipped: 0 });
+    expect(first.generated).toEqual({ assignmentsProcessed: 2, created: 6, skipped: 0 });
     expect(again.generated.created).toBe(0);
     expect(first.job.deduplicated).toBe(false);
     expect(again.job).toMatchObject({ deduplicated: true, job: { id: first.job.job.id } });
@@ -410,13 +432,23 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     // Configured times in Asia/Karachi (UTC+5) for business dates 4–5 Nov (the
     // current one and the next; never 3 Nov, when the branch was OFF):
     // daily 09:00 → 04:00Z; every 4h 09:00, 13:00, 17:00 → 04:00Z, 08:00Z, 12:00Z.
-    const expected = ['2026-11-04', '2026-11-05'].flatMap((day) => [
-      `${day}T04:00:00.000Z`,
-      `${day}T04:00:00.000Z`,
-      `${day}T08:00:00.000Z`,
-      `${day}T12:00:00.000Z`,
-    ]);
+    // Turned ON at 11:30 local (06:30Z): today's 09:00 checks were already
+    // overdue and are not created; the branch starts at the 13:00 check.
+    const expected = [
+      '2026-11-04T08:00:00.000Z',
+      '2026-11-04T12:00:00.000Z',
+      '2026-11-05T04:00:00.000Z',
+      '2026-11-05T04:00:00.000Z',
+      '2026-11-05T08:00:00.000Z',
+      '2026-11-05T12:00:00.000Z',
+    ];
     expect(iso(await occurrences(A, '1'))).toEqual(expected);
+    const [overdue] = await sql<{ n: string }>(
+      `SELECT count(*)::text AS n FROM "restaurant_sop_occurrences"
+        WHERE "organizationId" = $1 AND "dueAt" < $2`,
+      [A, T0]
+    );
+    expect(overdue!.n).toBe('0');
     // Nothing before the business date the branch was turned ON.
     const [backdated] = await sql<{ n: string }>(
       `SELECT count(*)::text AS n FROM "restaurant_sop_occurrences"
@@ -457,8 +489,9 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     expect(left.jobs.succeeded + right.jobs.succeeded).toBe(3);
     expect(left.jobs.retried + right.jobs.retried + left.jobs.dead + right.jobs.dead).toBe(0);
 
-    // No duplicates: the slot ran once and created nothing new.
-    expect(await occurrences(A, '1')).toHaveLength(8);
+    // No duplicates: the slot ran once and created nothing new (nor the 09:00
+    // checks skipped at the switch ON: the child floors at the same instant).
+    expect(await occurrences(A, '1')).toHaveLength(6);
     expect(await occurrences(A, '2')).toEqual([]);
     expect(await occurrences(B)).toEqual([]);
     expect(await occurrences(R)).toEqual([]);
@@ -498,7 +531,7 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     const repeat = await tick(T1, 'worker-repeat');
     expect(repeat.jobs.claimed).toBe(0);
     expect(await jobs(A)).toHaveLength(3);
-    expect(await occurrences(A, '1')).toHaveLength(8);
+    expect(await occurrences(A, '1')).toHaveLength(6);
   });
 
   it('a late worker creates the next day at the configured times; restaurant jobs are unaffected', async () => {
@@ -518,16 +551,17 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
 
     // Window moved to 5–6 Nov: only 6 Nov is new for org A branch 1 (4 rows).
     const a1 = iso(await occurrences(A, '1'));
-    expect(a1).toHaveLength(12);
-    expect(a1.slice(8)).toEqual([
+    expect(a1).toHaveLength(10);
+    expect(a1.slice(6)).toEqual([
       '2026-11-06T04:00:00.000Z',
       '2026-11-06T04:00:00.000Z',
       '2026-11-06T08:00:00.000Z',
       '2026-11-06T12:00:00.000Z',
     ]);
-    // 3 days × 3 distinct times; both assignments are due at 04:00Z, as distinct rows.
-    expect(new Set(a1).size).toBe(9);
-    expect(new Set((await occurrences(A, '1')).map((row) => row.id)).size).toBe(12);
+    // 8 distinct times (4 Nov from 08:00Z, then 3 a day); both assignments are
+    // due at 04:00Z, as distinct rows.
+    expect(new Set(a1).size).toBe(8);
+    expect(new Set((await occurrences(A, '1')).map((row) => row.id)).size).toBe(10);
     expect(await occurrences(A, '2')).toEqual([]);
     expect(await occurrences(B)).toEqual([]);
 
@@ -568,7 +602,7 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     const result = await tick(T3, 'worker-off');
     // The parent only: no branch is ON, so no child and no next slot.
     expect(result.jobs).toMatchObject({ claimed: 1, succeeded: 1 });
-    expect(await occurrences(A, '1')).toHaveLength(12);
+    expect(await occurrences(A, '1')).toHaveLength(10);
     expect(await occurrences(A, '2')).toEqual([]);
     const aJobs = await jobs(A);
     expect(aJobs).toHaveLength(5);

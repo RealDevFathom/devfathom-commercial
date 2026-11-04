@@ -204,6 +204,8 @@ function makeDb() {
     restaurantSopEvidence: model(),
     pharmacySopEvidenceCapture: model(),
     organization: model(),
+    restaurantSopVerification: model(),
+    pharmacySopReworkNote: model(),
   };
   const typed = db as Record<keyof typeof db, Delegate> & {
     $transaction: ReturnType<typeof vi.fn>;
@@ -962,6 +964,7 @@ describe('startOnDemand', () => {
         now: expect.any(Date),
         branchIds: [SITE.sopBranchId],
         assignmentIds: ['asg_new'],
+        skipDueBeforeAssignmentCreated: true,
       });
       expect(mocks.engine.setAssignmentActive).toHaveBeenCalledWith(db, 'asg_new', false);
     });
@@ -1468,6 +1471,7 @@ describe('coordinator follow-ups', () => {
       expect(db[delegate].findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: {
+            organizationId: 'org_1',
             branchId: SITE.pharmacyBranchId,
             [column]: { gte: new Date(dueAt.getTime() - 86_400_000), lte: windowEndsAt },
           },

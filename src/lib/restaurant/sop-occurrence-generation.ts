@@ -65,6 +65,20 @@ export type GenerateOptions = {
    * never widens to every assignment.
    */
   assignmentIds?: readonly string[];
+  /**
+   * When true, an assignment never materialises an occurrence due before the
+   * assignment itself was created, so a new schedule starts at its next due
+   * time instead of with work that is already overdue. Due times are
+   * minute-precise, so the comparison uses the creation minute: a schedule
+   * created during its own due minute (a one-off due "now") still gets that
+   * occurrence. Absent/false = unchanged (every due time in the window).
+   */
+  skipDueBeforeAssignmentCreated?: boolean;
+  /**
+   * Never materialise an occurrence due before this instant (compared at minute
+   * precision, like `skipDueBeforeAssignmentCreated`). Absent = no floor.
+   */
+  skipDueBefore?: Date;
 };
 
 export type GenerateResult = {
@@ -92,6 +106,11 @@ function addUtcDays(date: Date, days: number): Date {
   return new Date(date.getTime() + days * DAY_MS);
 }
 
+/** The start of the UTC minute `date` falls in (due times are minute-precise). */
+function floorToMinute(date: Date): number {
+  return Math.floor(date.getTime() / 60_000) * 60_000;
+}
+
 function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
@@ -112,6 +131,9 @@ export async function generateDueSopOccurrences(
   }
   if (!Number.isInteger(horizonDays) || horizonDays < 0) {
     throw new TypeError('horizonDays must be a non-negative integer.');
+  }
+  if (opts.skipDueBefore && !Number.isFinite(opts.skipDueBefore.getTime())) {
+    throw new TypeError('skipDueBefore must be a valid instant.');
   }
   const { branchIds, assignmentIds } = opts;
   if ((branchIds && branchIds.length === 0) || (assignmentIds && assignmentIds.length === 0)) {
@@ -166,7 +188,20 @@ export async function generateDueSopOccurrences(
     });
     const existingDueTimes = new Set(existing.map((row) => row.dueAt.getTime()));
 
-    const missing = occurrences.filter((occ) => !existingDueTimes.has(occ.dueAt.getTime()));
+    // Optional floors: nothing due before the assignment existed, or before a
+    // caller-chosen instant, is created (it would start overdue).
+    const floors = [
+      ...(opts.skipDueBeforeAssignmentCreated && assignment.createdAt
+        ? [floorToMinute(assignment.createdAt)]
+        : []),
+      ...(opts.skipDueBefore ? [floorToMinute(opts.skipDueBefore)] : []),
+    ];
+    const notDueBefore = floors.length ? Math.max(...floors) : null;
+    const missing = occurrences.filter(
+      (occ) =>
+        !existingDueTimes.has(occ.dueAt.getTime()) &&
+        (notDueBefore === null || occ.dueAt.getTime() >= notDueBefore)
+    );
     if (missing.length === 0) continue;
 
     // SOP-1: freeze the owner path onto each occurrence, exactly as the template

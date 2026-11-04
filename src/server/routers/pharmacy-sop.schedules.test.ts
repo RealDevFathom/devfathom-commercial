@@ -238,8 +238,10 @@ describe('generate ("Create today\'s work now")', () => {
   it('hands the engine only this site’s engine branch', async () => {
     await caller().generate(BRANCH_INPUT);
     expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledTimes(1);
+    // A schedule created today starts at its next due time (never overdue on day one).
     expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledWith(db, {
       branchIds: [SITE.sopBranchId],
+      skipDueBeforeAssignmentCreated: true,
     });
     expect(audited('pharmacy.sop.generate')).toHaveLength(1);
   });
@@ -279,6 +281,7 @@ describe('startOnDemand', () => {
       now: expect.any(Date),
       branchIds: [SITE.sopBranchId],
       assignmentIds: ['asg_new'],
+      skipDueBeforeAssignmentCreated: true,
     });
     noEscalationWrites();
   });
@@ -454,6 +457,8 @@ describe('automatic generation after setAutoSchedule', () => {
       now,
       branchIds: ['sopbranch_2'],
       lookbackDays: 0,
+      skipDueBeforeAssignmentCreated: true,
+      skipDueBefore: expect.any(Date),
     });
     noEscalationWrites();
   });

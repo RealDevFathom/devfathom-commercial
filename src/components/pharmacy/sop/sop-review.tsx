@@ -9,13 +9,19 @@ import { Textarea } from '@/components/ui/textarea';
 import { trpc } from '@/lib/trpc';
 
 import {
-  formatWhen,
-  statusCopy,
+  CONFLICT_MESSAGE,
+  errorCode,
   errorMessage,
+  formatWhen,
   provenanceReviewNote,
+  statusCopy,
   type SopBoardItem,
   type SopEvidenceRow,
+  type SopRecordLink,
+  type SopRejection,
+  type SopReworkNote,
 } from './sop-model';
+import { RecordLinkList, ReworkNoteList, SentBackNotice } from './sop-rework';
 
 export function SopReviewQueue({
   items,
@@ -83,17 +89,37 @@ export function SopReviewQueue({
  * reason. When some proof cannot be accepted yet (added outside the pharmacy
  * workspace, or present with an unconfirmed capture), the reviewer is told why
  * before choosing; the proof itself is never described as missing.
+ *
+ * The reviewer sees the records the work linked (with what each says) and,
+ * after an earlier send-back, the reason given then and the notes saying what
+ * changed since.
  */
 export function SopReviewDecision({
   pharmacyBranchId,
   occurrenceId,
   evidence = [],
+  links = [],
+  rejection = null,
+  reworkNotes = [],
+  stepName,
+  timezone = null,
   onDone,
+  onConflict,
 }: {
   pharmacyBranchId: string;
   occurrenceId: string;
   evidence?: readonly Pick<SopEvidenceRow, 'provenance'>[];
+  links?: readonly SopRecordLink[];
+  rejection?: SopRejection | null;
+  reworkNotes?: readonly SopReworkNote[];
+  stepName?: (occurrenceStepId: string | null) => string | null;
+  timezone?: string | null;
   onDone: (message: string) => void;
+  /**
+   * Someone else decided first (or the work changed): show the server's words
+   * and re-read the procedure, so the screen shows where it stands now.
+   */
+  onConflict?: (message: string) => void;
 }) {
   const proofNote = provenanceReviewNote(evidence);
   const id = useId();
@@ -101,14 +127,22 @@ export function SopReviewDecision({
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [reasonMissing, setReasonMissing] = useState(false);
+  const failed = (cause: unknown) => {
+    if (errorCode(cause) === 'CONFLICT' && onConflict) {
+      onConflict(errorMessage(cause, CONFLICT_MESSAGE));
+      return;
+    }
+    setError(errorMessage(cause, 'The review could not be saved. Retry.'));
+  };
   const verify = trpc.pharmacySop.verify.useMutation({
     onSuccess: () => onDone('Procedure checked and closed.'),
-    onError: (cause) => setError(errorMessage(cause, 'The review could not be saved. Retry.')),
+    onError: failed,
   });
   const reject = trpc.pharmacySop.reject.useMutation({
     onSuccess: () => onDone('Procedure sent back with your reason.'),
-    onError: (cause) => setError(errorMessage(cause, 'The review could not be saved. Retry.')),
+    onError: failed,
   });
+  const answered = reworkNotes.filter((note) => note.afterLatestRejection);
   const busy = verify.isPending || reject.isPending;
 
   return (
@@ -119,6 +153,35 @@ export function SopReviewDecision({
       <h3 id={`${id}-title`} className="font-semibold text-text-strong">
         Your review
       </h3>
+      {rejection ? (
+        <div className="grid gap-2">
+          <SentBackNotice rejection={rejection} timezone={timezone}>
+            This was sent back before. Check that what changed answers this reason.
+          </SentBackNotice>
+          <p className="text-sm font-medium text-text-strong">What they changed</p>
+          {answered.length ? (
+            <ReworkNoteList
+              notes={answered}
+              timezone={timezone}
+              stepName={stepName}
+              label="What they changed since it was sent back"
+            />
+          ) : (
+            <p className="text-sm text-text-muted">No note says what changed.</p>
+          )}
+        </div>
+      ) : null}
+      {links.length ? (
+        <div className="grid gap-2">
+          <p className="text-sm font-medium text-text-strong">Linked records</p>
+          <RecordLinkList
+            links={links}
+            timezone={timezone}
+            stepName={stepName}
+            label="Linked records to check"
+          />
+        </div>
+      ) : null}
       {proofNote ? (
         <p
           id={`${id}-proof`}

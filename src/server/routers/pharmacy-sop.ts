@@ -14,14 +14,20 @@ import {
   ensurePharmacySopJobRoles,
   ensurePharmacySopStaffProfile,
   linkPharmacySopRecord,
+  describePharmacySopRecords,
   listPharmacySopBranches,
+  listPharmacySopLinkableRecords,
+  pharmacySopRecordDetailKey,
   pharmacySopRolesAt,
+  unavailablePharmacySopRecordDetail,
+  PHARMACY_SOP_ROLES,
   resolvePharmacySopActor,
   resolvePharmacySopSite,
   setPharmacySopRoleHolding,
   type PharmacySopActor,
   type PharmacySopRoleKey,
   type PharmacySopSiteRef,
+  type PharmacySopTemperatureZone,
 } from '@/lib/pharmacy/sop-adapter';
 import {
   isPharmacySopProof,
@@ -174,86 +180,179 @@ function mapAccessError(err: PharmacySopAccessError): never {
   throw new TRPCError({ code: 'FORBIDDEN' });
 }
 
+/** What the caller was doing when the engine refused: picks the plain wording. */
+export type SopCommand =
+  'start' | 'completeStep' | 'submit' | 'verify' | 'reject' | 'schedule' | 'other';
+
+/** Fixed wording for state refusals: the engine's own text names internal states. */
+export const SOP_STATE_MESSAGES = {
+  changed: 'This procedure has changed since you opened it. Refresh to see its current state.',
+  alreadyChecked: 'This procedure has already been checked.',
+  notInReview: 'This procedure has not been sent for review yet.',
+  ownWork: 'Only the person this procedure is assigned to, or who claimed it, can work on it.',
+  claimFirst: 'Claim this procedure before working on it.',
+  stepDone: 'This step is already done.',
+  scheduleReplaced: 'This schedule was replaced by a newer one, so it can’t be resumed.',
+  templateChanged:
+    'This procedure template has changed since you opened it. Refresh to see its current state.',
+  invalid: 'That could not be saved. Refresh and try again.',
+} as const;
+
 /**
- * Engine refusals, mapped the way the restaurant SOP routers map them. A
- * not-found refusal gets fixed wording: the engine's own message can embed an
- * internal id ("Branch <id> was not found.") that a pharmacy caller must not see.
+ * The engine's proof refusals, by the exact engine text, mapped to pharmacy
+ * wording. This is a lookup, never a pass-through: an unknown text gets the
+ * fixed fallback for the command.
  */
-function mapSopError(err: unknown): never {
+const PROOF_MESSAGES: Readonly<Record<string, string>> = {
+  'Photo proof is required before completing this step.':
+    'Add the photo this step needs before marking it done.',
+  'Signature proof is required before completing this step.':
+    'Add the signature this step needs before marking it done.',
+  'A completion note is required before completing this step.':
+    'Add the note this step needs before marking it done.',
+  'Complete every checklist step before submitting for review.':
+    'Finish every step before sending it for review.',
+  'Every required note and proof item must be present before submitting for review.':
+    'Add every note and proof the steps need before sending it for review.',
+};
+
+function proofMessage(engineMessage: string, command: SopCommand): string {
+  return (
+    PROOF_MESSAGES[engineMessage] ??
+    (command === 'submit'
+      ? 'Add every note and proof the steps need before sending it for review.'
+      : 'Add the proof or note this step needs before marking it done.')
+  );
+}
+
+/** Schedule refusals, by the exact engine text; anything else gets the fixed fallback. */
+const RECURRENCE_MESSAGES: Readonly<Record<string, string>> = {
+  'INTERVAL end time must be later than its start time.':
+    'Choose a last check time later than the first check time.',
+  'INTERVAL interval must be at least 15 minutes.': 'Minimum is 15 minutes.',
+  'INTERVAL requires at least one selected weekday.': 'Select at least one weekday.',
+  'endDate must not precede startDate.': 'The end date must be on or after the start date.',
+};
+
+/**
+ * Engine refusals, mapped the way the restaurant SOP routers map them, but
+ * never forwarding engine text: the engine's messages name internal states
+ * ("Cannot reject an occurrence in status VERIFIED. Expected SUBMITTED or
+ * LATE.") or embed internal ids ("Branch <id> was not found."), which a
+ * pharmacy caller must not see. Each refusal gets fixed, plain wording chosen
+ * by its reason and the command that hit it.
+ */
+export function mapSopError(err: unknown, command: SopCommand = 'other'): never {
   if (err instanceof TRPCError) throw err;
   if (err instanceof PharmacySopAccessError) mapAccessError(err);
   if (err instanceof SopExecutionError) {
-    if (err.reason === 'NOT_FOUND') {
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+    switch (err.reason) {
+      case 'NOT_FOUND':
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+      case 'STEP_NOT_FOUND':
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Step not found on this occurrence.' });
+      case 'NOT_OWNER':
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: /^Claim\b/.test(err.message)
+            ? SOP_STATE_MESSAGES.claimFirst
+            : SOP_STATE_MESSAGES.ownWork,
+        });
+      case 'INVALID_STATE':
+        throw new TRPCError({ code: 'CONFLICT', message: SOP_STATE_MESSAGES.changed });
+      case 'STEP_ALREADY_COMPLETED':
+        throw new TRPCError({ code: 'CONFLICT', message: SOP_STATE_MESSAGES.stepDone });
+      case 'PROOF_REQUIRED':
+        throw new TRPCError({ code: 'BAD_REQUEST', message: proofMessage(err.message, command) });
+      default:
+        throw new TRPCError({ code: 'BAD_REQUEST', message: SOP_STATE_MESSAGES.invalid });
     }
-    if (err.reason === 'STEP_NOT_FOUND') {
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Step not found on this occurrence.' });
-    }
-    const code =
-      err.reason === 'NOT_OWNER'
-        ? 'FORBIDDEN'
-        : err.reason === 'INVALID_STATE' || err.reason === 'STEP_ALREADY_COMPLETED'
-          ? 'CONFLICT'
-          : 'BAD_REQUEST';
-    throw new TRPCError({ code, message: err.message });
   }
   if (err instanceof SopVerificationError) {
-    if (err.reason === 'NOT_FOUND') {
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+    switch (err.reason) {
+      case 'NOT_FOUND':
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+      case 'INVALID_STATE':
+        // Only a review decision moves a procedure out of review, so a review
+        // that finds it gone means someone already checked it.
+        throw new TRPCError({ code: 'CONFLICT', message: SOP_STATE_MESSAGES.alreadyChecked });
+      case 'CO_AUTH_REQUIRED':
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'A second person must approve this before it can go ahead.',
+        });
+      default:
+        throw new TRPCError({ code: 'BAD_REQUEST', message: SOP_STATE_MESSAGES.invalid });
     }
-    const code =
-      err.reason === 'INVALID_STATE'
-        ? 'CONFLICT'
-        : err.reason === 'CO_AUTH_REQUIRED'
-          ? 'FORBIDDEN'
-          : 'BAD_REQUEST';
-    throw new TRPCError({ code, message: err.message });
   }
   if (err instanceof SopTemplateError) {
-    if (err.reason === 'NOT_FOUND') {
-      throw new TRPCError({
-        code: 'NOT_FOUND',
-        message: 'That SOP template, assignment or branch was not found.',
-      });
+    switch (err.reason) {
+      case 'NOT_FOUND':
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'That SOP template, assignment or branch was not found.',
+        });
+      case 'TEMPLATE_LIMIT_REACHED':
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'This workspace has reached its procedure template limit.',
+        });
+      case 'INVALID_STATE':
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message:
+            command === 'schedule'
+              ? SOP_STATE_MESSAGES.scheduleReplaced
+              : SOP_STATE_MESSAGES.templateChanged,
+        });
+      case 'DRAFT_EXISTS':
+      case 'VERSION_NOT_DRAFT':
+        throw new TRPCError({ code: 'CONFLICT', message: SOP_STATE_MESSAGES.templateChanged });
+      case 'NO_STEPS':
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'This procedure has no steps yet.' });
+      default:
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Check the procedure details and try again.',
+        });
     }
-    const code =
-      err.reason === 'TEMPLATE_LIMIT_REACHED' ||
-      err.reason === 'DRAFT_EXISTS' ||
-      err.reason === 'VERSION_NOT_DRAFT' ||
-      err.reason === 'INVALID_STATE'
-        ? 'CONFLICT'
-        : 'BAD_REQUEST';
-    throw new TRPCError({ code, message: err.message });
   }
   if (err instanceof PharmacySopLibraryScopeError) {
     throw new TRPCError({ code: 'FORBIDDEN', message: err.message });
   }
   if (err instanceof RecurrenceError) {
-    throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message:
+        RECURRENCE_MESSAGES[err.message] ?? 'Check the schedule’s days and times and try again.',
+    });
   }
   if (err instanceof AssigneeTargetError) {
-    if (err.reason === 'ROLE_NOT_FOUND' || err.reason === 'STAFF_NOT_FOUND') {
-      throw new TRPCError({
-        code: 'BAD_REQUEST',
-        message: 'That assignee was not found at this branch.',
-      });
-    }
-    throw new TRPCError({
-      code: err.reason === 'ROLE_INACTIVE' ? 'CONFLICT' : 'BAD_REQUEST',
-      message: err.message,
-    });
+    throw new TRPCError(
+      err.reason === 'ROLE_INACTIVE'
+        ? { code: 'CONFLICT', message: 'That role is no longer active at this branch.' }
+        : err.reason === 'ROLE_NOT_FOUND' || err.reason === 'STAFF_NOT_FOUND'
+          ? { code: 'BAD_REQUEST', message: 'That assignee was not found at this branch.' }
+          : { code: 'BAD_REQUEST', message: 'Choose who this procedure is assigned to.' }
+    );
   }
   throw err;
 }
 
 /** Run a resolver body and translate every known SOP refusal. */
-async function guarded<T>(work: () => Promise<T>): Promise<T> {
+async function guarded<T>(work: () => Promise<T>, command: SopCommand = 'other'): Promise<T> {
   try {
     return await work();
   } catch (err) {
-    mapSopError(err);
+    mapSopError(err, command);
   }
 }
+
+/** `guarded` for one command, so its refusals get that command's wording. */
+const guardedAs =
+  (command: SopCommand) =>
+  <T>(work: () => Promise<T>): Promise<T> =>
+    guarded(work, command);
 
 /** One transaction for `work`; a request-level transaction is reused (scoped-db). */
 function runInTransaction<T>(db: TRPCContext['db'], work: (tx: TRPCContext['db']) => Promise<T>) {
@@ -472,10 +571,7 @@ function assertOwnWork(
 ) {
   const owner = occ.assignedStaffProfileId ?? occ.claimedByStaffProfileId;
   if (owner !== actor.staffProfileId) {
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'Only the assigned or claiming staff member may work on this occurrence.',
-    });
+    throw new TRPCError({ code: 'FORBIDDEN', message: SOP_STATE_MESSAGES.ownWork });
   }
 }
 
@@ -591,14 +687,14 @@ async function assertLinkableRecordType(
   occurrenceId: string,
   occurrenceStepId: string | null,
   recordType: PharmacySopRecordType
-): Promise<void> {
+): Promise<PharmacySopPackStep | undefined> {
   if (!packRecordTypes(pack).has(recordType)) {
     throw new TRPCError({
       code: 'BAD_REQUEST',
       message: `This procedure does not link a ${recordTypeLabel(recordType)}.`,
     });
   }
-  if (!occurrenceStepId) return;
+  if (!occurrenceStepId) return undefined;
   const step = await ctx.db.restaurantSopOccurrenceStep.findFirst({
     where: { id: occurrenceStepId, occurrenceId },
     select: { templateStep: { select: { title: true, stepOrder: true } } },
@@ -606,7 +702,8 @@ async function assertLinkableRecordType(
   if (!step) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Step not found on this occurrence.' });
   }
-  const required = requiredRecordTypeOf(packStepFor(pack, step.templateStep));
+  const packStep = packStepFor(pack, step.templateStep);
+  const required = requiredRecordTypeOf(packStep);
   if (required !== recordType) {
     throw new TRPCError({
       code: 'BAD_REQUEST',
@@ -615,6 +712,14 @@ async function assertLinkableRecordType(
         : 'This step does not take a linked record.',
     });
   }
+  return packStep;
+}
+
+/** The storage zone a temperature step reads, or null (any location / not a temperature step). */
+function temperatureZoneOf(
+  step: PharmacySopPackStep | undefined
+): PharmacySopTemperatureZone | null {
+  return step?.requiredRecordType === 'TEMPERATURE_LOG' ? (step.temperatureZone ?? null) : null;
 }
 
 /** Site + occurrence + session actor: the preamble of every occurrence command. */
@@ -623,6 +728,85 @@ async function occurrenceContext(ctx: TRPCContext, pharmacyBranchId: string, occ
   const occurrence = await assertOccurrenceAtSite(ctx.db, { occurrenceId, site });
   const actor = await actorFor(ctx);
   return { site, occurrence, actor };
+}
+
+/**
+ * A review decision needs the procedure in review. Checked before the engine
+ * call so the refusal is plain: already checked (verified, waived or sent
+ * back) or not sent for review yet. A concurrent decision that slips past this
+ * still gets the engine's INVALID_STATE, mapped to "already been checked".
+ */
+function assertInReview(occurrence: { status: string }): void {
+  if ((REVIEW_STATUSES as readonly string[]).includes(occurrence.status)) return;
+  throw new TRPCError({
+    code: 'CONFLICT',
+    message:
+      TERMINAL_STATUSES.has(occurrence.status) || occurrence.status === 'REJECTED'
+        ? SOP_STATE_MESSAGES.alreadyChecked
+        : SOP_STATE_MESSAGES.notInReview,
+  });
+}
+
+// ── Rework after a send-back ──────────────────────────────────────────────────
+
+export const REWORK_NOTE_REQUIRED_MESSAGE =
+  'Say what you changed after it was sent back before sending it for review again.';
+const REWORK_NOTE_MAX_LENGTH = 2_000;
+
+/** Newest first; `id` breaks a same-instant tie (the migration trigger uses the same order). */
+const LATEST_FIRST = [{ createdAt: 'desc' as const }, { id: 'desc' as const }];
+
+type VerificationRow = { id: string; action: string; createdAt: Date };
+
+/** The latest verification row of a list (any action), by createdAt then id. */
+function latestOf<T extends VerificationRow>(rows: readonly T[]): T | null {
+  let latest: T | null = null;
+  for (const row of rows) {
+    if (
+      !latest ||
+      row.createdAt.getTime() > latest.createdAt.getTime() ||
+      (row.createdAt.getTime() === latest.createdAt.getTime() && row.id > latest.id)
+    ) {
+      latest = row;
+    }
+  }
+  return latest;
+}
+
+/** The latest REJECT of a list, or null when the procedure was never sent back. */
+function latestRejectionOf<T extends VerificationRow>(rows: readonly T[]): T | null {
+  return latestOf(rows.filter((row) => row.action === 'REJECT'));
+}
+
+/**
+ * After a send-back the engine keeps every step completed, so resubmitting
+ * unchanged would be a no-op rework. When the occurrence has any REJECT, at
+ * least one rework note must answer the latest one. Proof and record links
+ * added after the send-back go through the normal routes and stay required
+ * exactly as before.
+ */
+async function assertReworkNoted(
+  ctx: TRPCContext,
+  site: PharmacySopSiteRef,
+  occurrenceId: string
+): Promise<void> {
+  const rejection = await ctx.db.restaurantSopVerification.findFirst({
+    where: { occurrenceId, action: 'REJECT' },
+    orderBy: LATEST_FIRST,
+    select: { id: true },
+  });
+  if (!rejection) return;
+  const note = await ctx.db.pharmacySopReworkNote.findFirst({
+    where: {
+      occurrenceId,
+      pharmacyBranchId: site.pharmacyBranchId,
+      rejectionVerificationId: rejection.id,
+    },
+    select: { id: true },
+  });
+  if (!note) {
+    throw new TRPCError({ code: 'PRECONDITION_FAILED', message: REWORK_NOTE_REQUIRED_MESSAGE });
+  }
 }
 
 // ── Pharmacy submission requirements ──────────────────────────────────────────
@@ -1102,6 +1286,7 @@ export const pharmacySopRouter = router({
             steps: (version?.steps ?? []).map((step) => ({
               ...step,
               requiredRecordType: requiredRecordTypeOf(packStepFor(pack, step)),
+              temperatureZone: temperatureZoneOf(packStepFor(pack, step)),
             })),
           },
         ];
@@ -1168,7 +1353,7 @@ export const pharmacySopRouter = router({
   ),
 
   createAssignment: manageProcedure.input(CreateAssignmentInput).mutation(({ ctx, input }) =>
-    guarded(async () => {
+    guardedAs('schedule')(async () => {
       const site = await siteFor(ctx, input.pharmacyBranchId);
       const { template, pack } = await pharmacyTemplate(ctx, input.templateId);
       if (pack.pharmacy.trigger === 'EVENT') {
@@ -1264,7 +1449,7 @@ export const pharmacySopRouter = router({
   setAssignmentActive: manageProcedure
     .input(z.object({ ...BRANCH, assignmentId: ID, active: z.boolean() }).strict())
     .mutation(({ ctx, input }) =>
-      guarded(async () => {
+      guardedAs('schedule')(async () => {
         const site = await siteFor(ctx, input.pharmacyBranchId);
         const existing = await ctx.db.restaurantSopAssignment.findUnique({
           where: { id: input.assignmentId },
@@ -1273,6 +1458,8 @@ export const pharmacySopRouter = router({
             branchId: true,
             frequency: true,
             assigneeTargetType: true,
+            assigneeJobRoleId: true,
+            assigneeStaff: { select: { displayName: true } },
             template: { select: { name: true } },
           },
         });
@@ -1293,7 +1480,25 @@ export const pharmacySopRouter = router({
             ? 'Resumed pharmacy SOP assignment'
             : 'Paused pharmacy SOP assignment',
         });
-        return updated;
+        // What the workspace needs for its notice ("Paused “Pharmacy — opening”
+        // for Qualified person (pharmacist)"), in plain words.
+        const roleKey =
+          existing.assigneeTargetType === 'ROLE' && existing.assigneeJobRoleId
+            ? ((await pharmacyJobRoleIds(ctx)).byId.get(existing.assigneeJobRoleId) ?? null)
+            : null;
+        return {
+          ...updated,
+          templateName: existing.template.name,
+          assigneeType: (existing.assigneeTargetType === 'PERSON' ? 'PERSON' : 'ROLE') as
+            'PERSON' | 'ROLE',
+          assigneeLabel:
+            existing.assigneeTargetType === 'PERSON'
+              ? (existing.assigneeStaff?.displayName ?? null)
+              : roleKey
+                ? PHARMACY_SOP_ROLES[roleKey].name
+                : null,
+          roleKey,
+        };
       })
     ),
 
@@ -1434,7 +1639,12 @@ export const pharmacySopRouter = router({
   generate: manageProcedure.input(z.object(BRANCH).strict()).mutation(({ ctx, input }) =>
     guarded(async () => {
       const site = await siteFor(ctx, input.pharmacyBranchId);
-      const result = await generateDueSopOccurrences(ctx.db, { branchIds: [site.sopBranchId] });
+      // A schedule created today starts at its next due time: nothing due
+      // before it existed is created (it would start overdue).
+      const result = await generateDueSopOccurrences(ctx.db, {
+        branchIds: [site.sopBranchId],
+        skipDueBeforeAssignmentCreated: true,
+      });
       audit(ctx, site, {
         action: 'pharmacy.sop.generate',
         targetType: 'PharmacySopSite',
@@ -1497,6 +1707,7 @@ export const pharmacySopRouter = router({
               organizationId: sessionScope(ctx).organizationId,
               sopBranchId: site.sopBranchId,
               now: new Date(),
+              enabledAt: result.setting.changedAt,
             })
           : null;
         audit(ctx, site, {
@@ -1609,10 +1820,13 @@ export const pharmacySopRouter = router({
           // materialised: a non-manager starting an event procedure must never
           // generate the branch's other schedules, which run only when a manager
           // creates them or turns automatic scheduling on.
+          // Its one due time is this minute, the minute the assignment was
+          // created, so the creation floor (minute precision) keeps it.
           await generateDueSopOccurrences(tx, {
             now,
             branchIds: [site.sopBranchId],
             assignmentIds: [assignment.id],
+            skipDueBeforeAssignmentCreated: true,
           });
           const occurrence = await tx.restaurantSopOccurrence.findFirst({
             where: { assignmentId: assignment.id },
@@ -1810,6 +2024,7 @@ export const pharmacySopRouter = router({
                   contentHash: true,
                   uploaderStaffProfileId: true,
                   capturedAt: true,
+                  createdAt: true,
                   uploader: { select: { displayName: true } },
                 },
               },
@@ -1842,7 +2057,42 @@ export const pharmacySopRouter = router({
           pharmacyJobRoleIds(ctx),
         ]);
         if (!detail) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
-        const evidenceProvenance = await provenanceOf(ctx, detail.id, detail.evidence);
+        const latestRejection = latestRejectionOf(detail.verifications);
+        const after = (at: Date | null | undefined) =>
+          Boolean(latestRejection && at && at.getTime() > latestRejection.createdAt.getTime());
+        const [evidenceProvenance, recordDetails, reworkNotes] = await Promise.all([
+          provenanceOf(ctx, detail.id, detail.evidence),
+          links.length
+            ? describePharmacySopRecords(ctx.db, {
+                organizationId: sessionScope(ctx).organizationId,
+                pharmacyBranchId: site.pharmacyBranchId,
+                timezone: site.timezone,
+                records: links,
+              })
+            : Promise.resolve(new Map()),
+          // A note can only exist after a send-back (the insert trigger).
+          latestRejection
+            ? ctx.db.pharmacySopReworkNote.findMany({
+                where: { occurrenceId: detail.id, pharmacyBranchId: site.pharmacyBranchId },
+                orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+                select: {
+                  id: true,
+                  occurrenceStepId: true,
+                  rejectionVerificationId: true,
+                  note: true,
+                  createdAt: true,
+                  authorStaffProfileId: true,
+                },
+              })
+            : Promise.resolve([]),
+        ]);
+        const authorIds = [...new Set(reworkNotes.map((row) => row.authorStaffProfileId))];
+        const authors = authorIds.length
+          ? await ctx.db.restaurantStaffProfile.findMany({
+              where: { id: { in: authorIds } },
+              select: { id: true, displayName: true },
+            })
+          : [];
         const pack = pharmacySopPackForTemplateName(detail.assignment.template.name);
         const isOwner =
           (detail.assignedStaffProfileId ?? detail.claimedByStaffProfileId) ===
@@ -1896,6 +2146,8 @@ export const pharmacySopRouter = router({
               requiresNote: step.templateStep.requiresNote,
               requiresSignature: step.templateStep.requiresSignature,
               requiredRecordType: requiredRecordTypeOf(packStepFor(pack, step.templateStep)),
+              // Temperature steps: which zone's reading the step takes (null = any).
+              temperatureZone: temperatureZoneOf(packStepFor(pack, step.templateStep)),
               completed: step.completed,
               completedAt: step.completedAt,
               completedByName: step.completedBy?.displayName ?? null,
@@ -1914,9 +2166,37 @@ export const pharmacySopRouter = router({
               provenance,
               // Kept for older readers: true for RECEIPT and LEGACY_HMAC.
               capturedInPharmacy: isPharmacySopProof(provenance),
+              // New proof added in response to the latest send-back.
+              createdAfterLatestRejection: after(row.createdAt),
             };
           }),
-          recordLinks: links,
+          recordLinks: links.map((link) => ({
+            ...link,
+            detail:
+              recordDetails.get(pharmacySopRecordDetailKey(link.recordType, link.recordId)) ??
+              unavailablePharmacySopRecordDetail(link.recordType),
+            createdAfterLatestRejection: after(link.createdAt),
+          })),
+          // The latest send-back and what the worker said they changed.
+          rework: {
+            latestRejection: latestRejection
+              ? {
+                  reason: latestRejection.reason,
+                  createdAt: latestRejection.createdAt,
+                  reviewerName: latestRejection.actor?.displayName ?? null,
+                }
+              : null,
+            notes: reworkNotes.map((row) => ({
+              id: row.id,
+              occurrenceStepId: row.occurrenceStepId,
+              note: row.note,
+              createdAt: row.createdAt,
+              authorName:
+                authors.find((author) => author.id === row.authorStaffProfileId)?.displayName ??
+                null,
+              afterLatestRejection: row.rejectionVerificationId === latestRejection?.id,
+            })),
+          },
           verifications: detail.verifications.map((row) => ({
             id: row.id,
             action: row.action,
@@ -2000,7 +2280,7 @@ export const pharmacySopRouter = router({
   ),
 
   start: completeProcedure.input(z.object(OCCURRENCE).strict()).mutation(({ ctx, input }) =>
-    guarded(async () => {
+    guardedAs('start')(async () => {
       const { site, occurrence, actor } = await occurrenceContext(
         ctx,
         input.pharmacyBranchId,
@@ -2026,7 +2306,7 @@ export const pharmacySopRouter = router({
   completeStep: completeProcedure
     .input(z.object({ ...OCCURRENCE, templateStepId: ID, note: NOTE }).strict())
     .mutation(({ ctx, input }) =>
-      guarded(async () => {
+      guardedAs('completeStep')(async () => {
         const { site, occurrence, actor } = await occurrenceContext(
           ctx,
           input.pharmacyBranchId,
@@ -2074,13 +2354,15 @@ export const pharmacySopRouter = router({
             message: 'Start the occurrence before linking records to it.',
           });
         }
-        await assertLinkableRecordType(
+        const packStep = await assertLinkableRecordType(
           ctx,
           await packForVersion(ctx, occurrence.templateVersionId),
           occurrence.id,
           input.occurrenceStepId ?? null,
           input.recordType
         );
+        // A refrigerator step takes only a cold-chain reading, the ambient step
+        // only an ambient one (checked by the adapter against the location).
         const result = await linkPharmacySopRecord(ctx.db, {
           site,
           occurrenceId: occurrence.id,
@@ -2089,6 +2371,7 @@ export const pharmacySopRouter = router({
           recordId: input.recordId,
           note: input.note ?? null,
           actor,
+          temperatureZone: temperatureZoneOf(packStep),
         });
         if (result.created) {
           audit(ctx, site, {
@@ -2139,8 +2422,24 @@ export const pharmacySopRouter = router({
       })
     ),
 
+  /**
+   * Records the picker may offer: this branch's own records of one type the
+   * procedure links, inside the link window. Each carries a plain-language
+   * `detail` (no status codes). With `occurrenceStepId`, only records that
+   * step accepts are offered: its record type, and for a temperature step only
+   * readings from its storage zone (refrigerator = cold-chain locations,
+   * ambient = the others) — the same rule `linkRecord` enforces.
+   */
   linkableRecords: completeProcedure
-    .input(z.object({ ...OCCURRENCE, recordType: RECORD_TYPE }).strict())
+    .input(
+      z
+        .object({
+          ...OCCURRENCE,
+          recordType: RECORD_TYPE,
+          occurrenceStepId: ID.nullable().optional(),
+        })
+        .strict()
+    )
     .query(({ ctx, input }) =>
       guarded(async () => {
         const { site, occurrence, actor } = await occurrenceContext(
@@ -2156,111 +2455,138 @@ export const pharmacySopRouter = router({
             message: `This procedure does not link a ${recordTypeLabel(input.recordType)}.`,
           });
         }
+        const packStep = input.occurrenceStepId
+          ? await assertLinkableRecordType(
+              ctx,
+              pack,
+              occurrence.id,
+              input.occurrenceStepId,
+              input.recordType
+            )
+          : undefined;
         const window = await ctx.db.restaurantSopOccurrence.findUnique({
           where: { id: occurrence.id },
           select: { dueAt: true, windowEndsAt: true },
         });
         if (!window) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
-        const branchId = site.pharmacyBranchId;
-        const take = 50;
         // Offer only records the link will accept (the adapter enforces the
         // same bounds); null means the type is not time-bounded.
-        const bounds = pharmacySopRecordTimeBounds(input.recordType, window);
-        switch (input.recordType) {
-          case 'TEMPERATURE_LOG': {
-            const rows = await ctx.db.pharmacyTemperatureLog.findMany({
-              where: { branchId, ...(bounds ? { recordedAt: bounds } : {}) },
-              orderBy: [{ recordedAt: 'desc' }, { id: 'asc' }],
-              take,
-              select: {
-                id: true,
-                recordedAt: true,
-                temperatureC: true,
-                outOfRange: true,
-                location: { select: { name: true } },
+        return listPharmacySopLinkableRecords(ctx.db, {
+          organizationId: sessionScope(ctx).organizationId,
+          pharmacyBranchId: site.pharmacyBranchId,
+          timezone: site.timezone,
+          recordType: input.recordType,
+          bounds: pharmacySopRecordTimeBounds(input.recordType, window),
+          temperatureZone: temperatureZoneOf(packStep),
+          take: 50,
+        });
+      })
+    ),
+
+  /**
+   * After a reviewer sends a procedure back and its owner starts it again, say
+   * what changed (optionally against one step). Append-only: a note is never
+   * edited or removed; add another instead. The occurrence must be the actor's
+   * own work, back IN_PROGRESS, with a send-back as its latest review; the note
+   * answers that send-back. The author is the session actor. The database
+   * trigger re-checks every one of these rules.
+   */
+  addReworkNote: completeProcedure
+    .input(
+      z
+        .object({
+          ...OCCURRENCE,
+          occurrenceStepId: ID.nullable().optional(),
+          note: z.string().trim().min(1, 'Say what you changed.').max(REWORK_NOTE_MAX_LENGTH),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      guarded(async () => {
+        const { site, occurrence, actor } = await occurrenceContext(
+          ctx,
+          input.pharmacyBranchId,
+          input.occurrenceId
+        );
+        assertOwnWork(occurrence, actor);
+        await assertStepOnOccurrence(ctx, occurrence.id, input.occurrenceStepId);
+        const { organizationId } = sessionScope(ctx);
+        const created = await runInTransaction(ctx.db, async (tx) => {
+          // Share-lock the occurrence so a concurrent submit waits for this
+          // note (or this note sees the submit), then re-read it under the lock.
+          await tx.$queryRaw(
+            Prisma.sql`SELECT 1 FROM "restaurant_sop_occurrences" WHERE "id" = ${occurrence.id} AND "organizationId" = ${organizationId} AND "branchId" = ${site.sopBranchId} FOR SHARE`
+          );
+          const current = await tx.restaurantSopOccurrence.findFirst({
+            where: { id: occurrence.id, branchId: site.sopBranchId },
+            select: {
+              status: true,
+              assignedStaffProfileId: true,
+              claimedByStaffProfileId: true,
+              verifications: {
+                orderBy: LATEST_FIRST,
+                take: 1,
+                select: { id: true, action: true },
               },
-            });
-            return rows.map((row) => ({
-              id: row.id,
-              recordType: input.recordType,
-              label: `${row.location.name}: ${row.temperatureC.toFixed(1)} °C`,
-              occurredAt: row.recordedAt,
-              outOfRange: row.outOfRange,
-            }));
+            },
+          });
+          if (!current) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
           }
-          case 'CONTROLLED_REGISTER_ENTRY': {
-            const rows = await ctx.db.pharmacyControlledRegisterEntry.findMany({
-              where: { branchId },
-              orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
-              take,
-              select: {
-                id: true,
-                serial: true,
-                entryKind: true,
-                batchNumber: true,
-                runningBalance: true,
-                createdAt: true,
-              },
+          assertOwnWork(current, actor);
+          const latest = current.verifications[0];
+          if (!latest || latest.action !== 'REJECT') {
+            throw new TRPCError({
+              code: 'PRECONDITION_FAILED',
+              message: 'This procedure has not been sent back, so there is nothing to answer.',
             });
-            return rows.map((row) => ({
-              id: row.id,
-              recordType: input.recordType,
-              label: `#${row.serial} ${row.entryKind} · batch ${row.batchNumber} · balance ${row.runningBalance}`,
-              occurredAt: row.createdAt,
-              outOfRange: null,
-            }));
           }
-          case 'GOODS_RECEIPT': {
-            const rows = await ctx.db.pharmacyGoodsReceipt.findMany({
-              where: { branchId, ...(bounds ? { receivedAt: bounds } : {}) },
-              orderBy: [{ receivedAt: 'desc' }, { id: 'asc' }],
-              take,
-              select: { id: true, reference: true, status: true, receivedAt: true },
+          if (current.status !== 'IN_PROGRESS') {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message:
+                current.status === 'REJECTED'
+                  ? 'Start this procedure again before saying what you changed.'
+                  : SOP_STATE_MESSAGES.changed,
             });
-            return rows.map((row) => ({
-              id: row.id,
-              recordType: input.recordType,
-              label: `${row.reference} (${row.status})`,
-              occurredAt: row.receivedAt,
-              outOfRange: null,
-            }));
           }
-          case 'MANUFACTURING_BATCH': {
-            const rows = await ctx.db.pharmacyManufacturingBatch.findMany({
-              where: { lots: { some: { branchId } } },
-              orderBy: [{ expiresAt: 'asc' }, { id: 'asc' }],
-              take,
-              select: { id: true, batchNumber: true, expiresAt: true, state: true },
-            });
-            return rows.map((row) => ({
-              id: row.id,
-              recordType: input.recordType,
-              label: `Batch ${row.batchNumber} (${row.state})`,
-              occurredAt: row.expiresAt,
-              outOfRange: null,
-            }));
-          }
-          case 'RECALL_NOTICE': {
-            const rows = await ctx.db.pharmacyRecallNotice.findMany({
-              where: { status: 'OPEN' },
-              orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
-              take,
-              select: { id: true, reference: true, reason: true, createdAt: true },
-            });
-            return rows.map((row) => ({
-              id: row.id,
-              recordType: input.recordType,
-              label: `${row.reference}: ${row.reason}`,
-              occurredAt: row.createdAt,
-              outOfRange: null,
-            }));
-          }
-        }
+          return tx.pharmacySopReworkNote.create({
+            data: {
+              organizationId,
+              pharmacyBranchId: site.pharmacyBranchId,
+              occurrenceId: occurrence.id,
+              occurrenceStepId: input.occurrenceStepId ?? null,
+              rejectionVerificationId: latest.id,
+              note: input.note,
+              authorStaffProfileId: actor.staffProfileId,
+              authorUserId: actor.userId,
+            },
+            select: { id: true, occurrenceStepId: true, note: true, createdAt: true },
+          });
+        });
+        audit(ctx, site, {
+          action: 'pharmacy.sop.addReworkNote',
+          targetType: 'PharmacySopReworkNote',
+          targetId: created.id,
+          description: 'Noted what changed after a send-back',
+          metadata: {
+            occurrenceId: occurrence.id,
+            ...(created.occurrenceStepId ? { occurrenceStepId: created.occurrenceStepId } : {}),
+          },
+        });
+        return {
+          id: created.id,
+          occurrenceStepId: created.occurrenceStepId,
+          note: created.note,
+          createdAt: created.createdAt,
+          authorName: actor.displayName,
+          afterLatestRejection: true,
+        };
       })
     ),
 
   submit: completeProcedure.input(z.object(OCCURRENCE).strict()).mutation(({ ctx, input }) =>
-    guarded(async () => {
+    guardedAs('submit')(async () => {
       const { site, occurrence, actor } = await occurrenceContext(
         ctx,
         input.pharmacyBranchId,
@@ -2270,9 +2596,13 @@ export const pharmacySopRouter = router({
       if (occurrence.status !== 'IN_PROGRESS') {
         throw new TRPCError({
           code: 'CONFLICT',
-          message: `Cannot submit an occurrence in status ${occurrence.status}.`,
+          message:
+            occurrence.status === 'SCHEDULED' || occurrence.status === 'REJECTED'
+              ? 'Start this procedure before sending it for review.'
+              : SOP_STATE_MESSAGES.changed,
         });
       }
+      await assertReworkNoted(ctx, site, occurrence.id);
       await assertPharmacySubmissionRequirements(ctx, site, occurrence.id);
       const result = await submitOccurrence(ctx.db, {
         occurrenceId: occurrence.id,
@@ -2293,12 +2623,13 @@ export const pharmacySopRouter = router({
   verify: verifyProcedure
     .input(z.object({ ...OCCURRENCE, reason: NOTE }).strict())
     .mutation(({ ctx, input }) =>
-      guarded(async () => {
+      guardedAs('verify')(async () => {
         const { site, occurrence, actor } = await occurrenceContext(
           ctx,
           input.pharmacyBranchId,
           input.occurrenceId
         );
+        assertInReview(occurrence);
         await assertIndependentPharmacyVerifier(ctx.db, {
           occurrenceId: occurrence.id,
           site,
@@ -2335,12 +2666,13 @@ export const pharmacySopRouter = router({
   reject: verifyProcedure
     .input(z.object({ ...OCCURRENCE, reason: z.string().trim().min(1).max(2_000) }).strict())
     .mutation(({ ctx, input }) =>
-      guarded(async () => {
+      guardedAs('reject')(async () => {
         const { site, occurrence, actor } = await occurrenceContext(
           ctx,
           input.pharmacyBranchId,
           input.occurrenceId
         );
+        assertInReview(occurrence);
         await assertIndependentPharmacyVerifier(ctx.db, {
           occurrenceId: occurrence.id,
           site,

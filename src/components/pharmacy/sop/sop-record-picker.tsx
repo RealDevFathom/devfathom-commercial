@@ -8,14 +8,14 @@ import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc';
 
 import {
+  errorCode,
   errorMessage,
   RECORD_LABEL,
   type SopLinkableRecord,
-  type SopOccurrence,
+  type SopRecordLink,
   type SopRecordType,
 } from './sop-model';
-
-type SopRecordLink = SopOccurrence['recordLinks'][number];
+import { RecordLinkList, recordStatusLabel } from './sop-rework';
 
 /** Where each kind of record is written, when the workspace has a screen for it. */
 const RECORD_HOME: Partial<Record<SopRecordType, { href: string; label: string }>> = {
@@ -36,7 +36,41 @@ export type SopRecordPickerProps = {
   value: string;
   onChange: (recordId: string) => void;
   onLinked: () => void;
+  /** Branch timezone, for when a linked reading was recorded. */
+  timezone?: string | null;
+  /**
+   * `step`: the step's own record requirement, with what is already linked.
+   * `another`: after a send-back, linking one more record to a done step (the
+   * step summary already lists what is linked).
+   */
+  variant?: 'step' | 'another';
+  /** The step that records an out-of-range reading and what was done, when the procedure has one. */
+  excursionStep?: { stepOrder: number; title: string } | null;
+  /** The procedure changed underneath this person; re-read it. */
+  onConflict?: () => void;
 };
+
+/** A record in the list, in plain words: what it is, its state, and whether it was out of range. */
+export function recordOptionLabel(record: Pick<SopLinkableRecord, 'detail'>) {
+  const detail = record.detail;
+  return [
+    detail?.label ?? 'Record',
+    recordStatusLabel(detail),
+    detail?.outOfRange ? 'out of range' : null,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(' · ');
+}
+
+/** Where to write what happened about an out-of-range reading. */
+export function outOfRangeAdvice(
+  excursion: { stepOrder: number; title: string } | null | undefined,
+  stepTitle: string
+) {
+  return excursion && excursion.title !== stepTitle
+    ? `A linked reading is out of range. On step ${excursion.stepOrder}, “${excursion.title}”, write what happened and what you did before sending this for review.`
+    : 'A linked reading is out of range. Write what happened and what you did in this step’s note before sending this for review.';
+}
 
 /**
  * Point a step at a record that already exists at this branch. Linking never
@@ -52,6 +86,10 @@ export function SopRecordPicker({
   value,
   onChange,
   onLinked,
+  timezone = null,
+  variant = 'step',
+  excursionStep = null,
+  onConflict,
 }: SopRecordPickerProps) {
   const id = useId();
   const [error, setError] = useState<string | null>(null);
@@ -66,28 +104,30 @@ export function SopRecordPicker({
       onChange('');
       onLinked();
     },
-    onError: (cause) => setError(errorMessage(cause, `The ${label} could not be linked. Retry.`)),
+    onError: (cause) => {
+      setError(errorMessage(cause, `The ${label} could not be linked. Retry.`));
+      if (errorCode(cause) === 'CONFLICT') onConflict?.();
+    },
   });
   const linkedIds = new Set(linked.map((row) => row.recordId));
   const all: SopLinkableRecord[] = records.data ?? [];
-  const byId = new Map(all.map((record) => [record.id, record]));
   const options = all.filter((record) => !linkedIds.has(record.id));
-  const describe = (record: SopLinkableRecord) =>
-    record.outOfRange ? `${record.label} · out of range` : record.label;
   const home = RECORD_HOME[recordType];
+  const another = variant === 'another';
 
   return (
     <div className="grid gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
       {/* The requirement itself is stated once, in the step's "still needed" list. */}
-      <p className="text-sm font-medium text-text-strong">Linked {label}</p>
-      {linked.length ? (
-        <ul className="grid gap-1 text-sm text-text-body">
-          {linked.map((row) => {
-            const record = byId.get(row.recordId);
-            return <li key={row.id}>{record ? describe(record) : `Linked ${label}`}</li>;
-          })}
-        </ul>
-      ) : null}
+      <p className="text-sm font-medium text-text-strong">
+        {another ? `Link another ${label}` : `Linked ${label}`}
+      </p>
+      {another ? null : (
+        <RecordLinkList
+          links={linked}
+          timezone={timezone}
+          label={`Linked ${label}s for ${stepTitle}`}
+        />
+      )}
       {records.isLoading ? (
         <p className="text-sm text-text-muted" role="status">
           Looking for {label}s at this branch…
@@ -152,7 +192,7 @@ export function SopRecordPicker({
               <option value="">Select…</option>
               {options.map((record) => (
                 <option key={record.id} value={record.id}>
-                  {describe(record)}
+                  {recordOptionLabel(record)}
                 </option>
               ))}
             </select>
@@ -162,11 +202,8 @@ export function SopRecordPicker({
           </Button>
         </form>
       )}
-      {linked.some((row) => byId.get(row.recordId)?.outOfRange) ? (
-        <p className="text-sm text-warning">
-          A linked reading is out of range. Write what happened and what you did in the note before
-          sending this for review.
-        </p>
+      {!another && linked.some((row) => row.detail?.outOfRange) ? (
+        <p className="text-sm text-warning">{outOfRangeAdvice(excursionStep, stepTitle)}</p>
       ) : null}
       {error ? (
         <p className="text-sm text-destructive" role="alert">

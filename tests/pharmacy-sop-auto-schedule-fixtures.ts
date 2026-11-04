@@ -12,7 +12,12 @@ import type { Client } from 'pg';
 
 export type FixtureBranch = { key: string; on: boolean };
 
-/** One daily 09:00 (Asia/Karachi = 04:00Z) assignment per branch. */
+/**
+ * One daily 09:00 (Asia/Karachi = 04:00Z) assignment per branch, created on
+ * 1 Nov (pinned: pharmacy generation never creates work due before its
+ * schedule existed, so a wall-clock creation time would make runs depend on
+ * when the suite ran).
+ */
 export async function seedOrganization(
   runtime: Client,
   org: string,
@@ -57,8 +62,8 @@ export async function seedOrganization(
       [`${org}_rb${key}`, org, `Branch ${key}`]
     );
     await q(
-      `INSERT INTO "restaurant_sop_assignments" ("id","organizationId","branchId","templateId","frequency","startDate","dueTimeMinutes","assigneeTargetType","assigneeStaffProfileId","updatedAt")
-       VALUES ($1,$2,$3,$4,'DAILY','2026-11-01',540,'PERSON',$5,now())`,
+      `INSERT INTO "restaurant_sop_assignments" ("id","organizationId","branchId","templateId","frequency","startDate","dueTimeMinutes","assigneeTargetType","assigneeStaffProfileId","createdAt","updatedAt")
+       VALUES ($1,$2,$3,$4,'DAILY','2026-11-01',540,'PERSON',$5,'2026-11-01 00:00',now())`,
       [`${org}_asg${key}`, org, `${org}_rb${key}`, `${org}_tpl`, `${org}_sp`]
     );
     if (!opts.pharmacy) continue;

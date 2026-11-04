@@ -22,6 +22,12 @@ export type SopBoardItem = SopBoard['mine'][number];
 export type SopOccurrence = Outputs['occurrence'];
 export type SopOccurrenceStep = SopOccurrence['steps'][number];
 export type SopLinkableRecord = Outputs['linkableRecords'][number];
+export type SopRecordLink = SopOccurrence['recordLinks'][number];
+/** What a linked (or linkable) record says, in plain words, for the reviewer. */
+export type SopRecordDetail = SopRecordLink['detail'];
+export type SopRework = SopOccurrence['rework'];
+export type SopReworkNote = SopRework['notes'][number];
+export type SopRejection = NonNullable<SopRework['latestRejection']>;
 export type SopReport = Outputs['report'];
 
 export type SopRoleKey = 'pharmacy-manager' | 'pharmacy-qualified-person' | 'pharmacy-assistant';
@@ -115,21 +121,41 @@ export function timeToMinutes(value: string): number | null {
   return minutes >= 0 && minutes < 1440 ? minutes : null;
 }
 
+/** A repeat gap in words: "Every hour", "Every 4 hours", "Every 90 minutes". */
+function everyLabel(minutes: number) {
+  if (minutes > 0 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return hours === 1 ? 'Every hour' : `Every ${hours} hours`;
+  }
+  return `Every ${minutes} minutes`;
+}
+
 /**
  * A schedule in words. A pack suggestion has no time of day (`dueTimeMinutes`
- * null): the manager chooses it, so only the frequency is described.
+ * null): the manager chooses it, so only the frequency is described. A
+ * repeating check names its first and last time ("Every 4 hours from 09:00 to
+ * 21:00").
  */
 export function recurrenceLabel(value: {
   frequency: SopFrequency;
   interval: number;
   daysOfWeek: number[];
   dueTimeMinutes: number | null;
+  intervalEndTimeMinutes?: number | null;
 }) {
   const at = value.dueTimeMinutes == null ? '' : ` at ${minutesToTime(value.dueTimeMinutes)}`;
-  const from = value.dueTimeMinutes == null ? '' : ` from ${minutesToTime(value.dueTimeMinutes)}`;
-  const days = value.daysOfWeek.length
-    ? ` on ${value.daysOfWeek.map((day) => WEEKDAYS[day] ?? '').join(', ')}`
-    : '';
+  const range =
+    value.dueTimeMinutes == null
+      ? ''
+      : value.intervalEndTimeMinutes == null
+        ? ` from ${minutesToTime(value.dueTimeMinutes)}`
+        : ` from ${minutesToTime(value.dueTimeMinutes)} to ${minutesToTime(value.intervalEndTimeMinutes)}`;
+  // Every day of the week is just "every day": listing all seven says nothing.
+  const everyDay = new Set(value.daysOfWeek).size >= 7;
+  const days =
+    value.daysOfWeek.length && !everyDay
+      ? ` on ${value.daysOfWeek.map((day) => WEEKDAYS[day] ?? '').join(', ')}`
+      : '';
   switch (value.frequency) {
     case 'ONCE':
       return `Once${at}`;
@@ -140,7 +166,7 @@ export function recurrenceLabel(value: {
     case 'MONTHLY':
       return `Monthly${at}`;
     case 'INTERVAL':
-      return `Every ${value.interval} minutes${from}${days}`;
+      return `${everyLabel(value.interval)}${range}${days}`;
   }
 }
 
@@ -187,7 +213,9 @@ export function provenanceReviewNote(evidence: readonly Pick<SopEvidenceRow, 'pr
     return `${foreign === 1 ? 'One proof was' : `${foreign} proofs were`} added outside the pharmacy workspace, so this procedure cannot be marked as checked. Ask a manager to review it, or send it back.`;
   }
   if (unconfirmed) {
-    return `${unconfirmed === 1 ? 'One proof is' : `${unconfirmed} proofs are`} present, but where ${unconfirmed === 1 ? 'it was' : 'they were'} captured cannot be confirmed. Ask a manager to run the legacy receipt backfill, or send it back.`;
+    return unconfirmed === 1
+      ? "This older proof can't be confirmed as captured here. Ask your manager to confirm it, or send it back so it can be captured again."
+      : `These ${unconfirmed} older proofs can't be confirmed as captured here. Ask your manager to confirm them, or send it back so they can be captured again.`;
   }
   return null;
 }
@@ -243,6 +271,51 @@ export function stepBlockers(
   return reasons;
 }
 
+// ── Sent back and reworked ──────────────────────────────────────────────────
+
+/**
+ * The latest send-back: who sent it back, when, and why. Read from the
+ * server's rework summary, falling back to the review trail so the reason is
+ * never hidden behind History.
+ */
+export function latestRejection(
+  occurrence: Pick<SopOccurrence, 'verifications'> & { rework?: SopRework | null }
+): SopRejection | null {
+  const fromServer = occurrence.rework?.latestRejection;
+  if (fromServer) return fromServer;
+  const row = [...occurrence.verifications]
+    .reverse()
+    .find((candidate) => candidate.action === 'REJECT');
+  return row ? { reason: row.reason, createdAt: row.createdAt, reviewerName: row.actorName } : null;
+}
+
+export function reworkNotes(occurrence: { rework?: SopRework | null }): SopReworkNote[] {
+  return occurrence.rework?.notes ?? [];
+}
+
+/**
+ * Reworking: the owner started again after a send-back. Steps stay done (the
+ * engine keeps them), so the person adds new proof, links and notes instead.
+ */
+export function isReworking(occurrence: SopOccurrence) {
+  return occurrence.status === 'IN_PROGRESS' && latestRejection(occurrence) !== null;
+}
+
+/** After a send-back, at least one note must say what changed before it goes back for review. */
+export function needsReworkNote(occurrence: SopOccurrence) {
+  return (
+    isReworking(occurrence) && !reworkNotes(occurrence).some((note) => note.afterLatestRejection)
+  );
+}
+
+export const REWORK_NOTE_BLOCKER = 'Say what you changed after it was sent back.';
+
+/** The step that records an out-of-range reading and what was done about it, if the procedure has one. */
+const EXCURSION_STEP = /excursion|corrective/i;
+export function excursionStep(occurrence: Pick<SopOccurrence, 'steps'>) {
+  return occurrence.steps.find((step) => EXCURSION_STEP.test(step.title)) ?? null;
+}
+
 /** Why the whole procedure cannot be sent for review yet. */
 export function submitBlockers(occurrence: SopOccurrence): string[] {
   switch (occurrence.status) {
@@ -258,16 +331,36 @@ export function submitBlockers(occurrence: SopOccurrence): string[] {
     default:
       return ['This procedure is closed.'];
   }
-  return occurrence.steps
+  const reasons = occurrence.steps
     .filter((step) => !step.completed)
     .map((step) => `Step ${step.stepOrder}, “${step.title}”, is not done yet.`);
+  if (needsReworkNote(occurrence)) reasons.push(REWORK_NOTE_BLOCKER);
+  return reasons;
 }
+
+/**
+ * Engine wording that must never reach a person: a bare code, a state name
+ * ("status SUBMITTED", "IN_PROGRESS") or an assertion ("Expected IN_PROGRESS").
+ * The server sends plain fixed text; this is the defensive net behind it.
+ */
+const ENGINE_TEXT = [
+  /^[A-Z_]+$/,
+  /\bstatus [A-Z_]{2,}\b/,
+  /\bExpected [A-Z]/,
+  /\b[A-Z]{2,}_[A-Z_]+\b/,
+];
+
+/** Shown when a refusal says the procedure changed underneath this person. */
+export const CONFLICT_MESSAGE =
+  'This procedure was changed by someone else while you had it open. It now shows the latest version.';
 
 /** A readable reason from a failed request, without internal codes. */
 export function errorMessage(error: unknown, fallback: string) {
   const message =
     error && typeof error === 'object' && 'message' in error ? String(error.message) : '';
-  if (!message || /^[A-Z_]+$/.test(message) || message.length > 300) return fallback;
+  if (!message || message.length > 300 || ENGINE_TEXT.some((pattern) => pattern.test(message))) {
+    return fallback;
+  }
   return message;
 }
 

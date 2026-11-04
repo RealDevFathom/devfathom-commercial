@@ -81,20 +81,26 @@ export function SopBoardView({
 
   const data: SopBoard = board.data;
   const nothing = data.mine.length === 0 && data.pool.length === 0;
+  // The review count only means something to someone who reviews here.
+  const reviewer = access.canVerify && data.canReview;
 
   return (
     <div className="grid min-w-0 gap-6">
       <section
         aria-label="Today at this branch"
-        className="grid grid-cols-1 gap-4 rounded-lg border border-border-subtle bg-card p-5 min-[420px]:grid-cols-3"
+        className={`grid grid-cols-1 gap-4 rounded-lg border border-border-subtle bg-card p-5 ${
+          reviewer ? 'min-[420px]:grid-cols-3' : 'min-[420px]:grid-cols-2'
+        }`}
       >
         <Stat label="Overdue" value={data.counts.overdue} valueClassName="text-[1.75rem]" />
         <Stat label="Due today" value={data.counts.dueToday} valueClassName="text-[1.75rem]" />
-        <Stat
-          label="Awaiting review"
-          value={data.counts.awaitingReview}
-          valueClassName="text-[1.75rem]"
-        />
+        {reviewer ? (
+          <Stat
+            label="Awaiting review"
+            value={data.counts.awaitingReview}
+            valueClassName="text-[1.75rem]"
+          />
+        ) : null}
       </section>
 
       {claimError ? (

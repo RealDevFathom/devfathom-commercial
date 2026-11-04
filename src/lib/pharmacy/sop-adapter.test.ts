@@ -21,11 +21,13 @@ import {
   PharmacySopAccessError,
   assertIndependentPharmacyVerifier,
   assertOccurrenceAtSite,
+  describePharmacySopRecords,
   enablePharmacySopSite,
   ensurePharmacySopJobRoles,
   ensurePharmacySopStaffProfile,
   linkPharmacySopRecord,
   listPharmacySopBranches,
+  pharmacySopRecordDetailKey,
   pharmacySopRecordTimeBounds,
   pharmacySopRolesAt,
   resolvePharmacySopActor,
@@ -1284,5 +1286,182 @@ describe('linkPharmacySopRecord', () => {
       await reason(linkPharmacySopRecord(db, { ...base, ...record, note: 'x'.repeat(2001) }))
     ).toBe('INVALID_INPUT');
     expect(tables.links).toHaveLength(0);
+  });
+});
+
+describe('temperature steps take only their own storage zone', () => {
+  const actor = { staffProfileId: 'sp_manager', displayName: 'Mona', userId: 'u_manager' };
+  const base = {
+    site: mainSite,
+    occurrenceId: 'occ_live',
+    actor,
+    recordType: 'TEMPERATURE_LOG' as const,
+  };
+
+  function zoned() {
+    const setup = fixture();
+    setup.tables.temperatureLogs.push(
+      {
+        id: 'temp_fridge',
+        organizationId: ORG,
+        branchId: 'pb_main',
+        outOfRange: false,
+        recordedAt: at('2026-11-04T07:00:00Z'),
+        location: { coldChain: true },
+      },
+      {
+        id: 'temp_shelf',
+        organizationId: ORG,
+        branchId: 'pb_main',
+        outOfRange: false,
+        recordedAt: at('2026-11-04T07:00:00Z'),
+        location: { coldChain: false },
+      }
+    );
+    return setup;
+  }
+
+  it('a refrigerator step links a cold-chain reading and refuses an ambient one', async () => {
+    const { db, tables } = zoned();
+    const link = (recordId: string, temperatureZone: 'COLD_CHAIN' | 'AMBIENT' | null) =>
+      linkPharmacySopRecord(db, { ...base, recordId, temperatureZone });
+    await expect(link('temp_shelf', 'COLD_CHAIN')).rejects.toMatchObject({
+      reason: 'INVALID_INPUT',
+      message:
+        'This step needs a refrigerator reading. Choose a reading from a cold-chain location.',
+    });
+    await expect(link('temp_fridge', 'AMBIENT')).rejects.toMatchObject({
+      reason: 'INVALID_INPUT',
+      message: 'This step needs an ambient storage reading, not a refrigerator one.',
+    });
+    expect(tables.links).toHaveLength(0);
+    expect(await reason(link('temp_fridge', 'COLD_CHAIN'))).toBe('RESOLVED');
+    expect(await reason(link('temp_shelf', 'AMBIENT'))).toBe('RESOLVED');
+    // No zone (an occurrence-level link, or the opening check): any location.
+    expect(await reason(link('temp_main', null))).toBe('RESOLVED');
+    expect(tables.links.map((row) => row.recordId)).toEqual([
+      'temp_fridge',
+      'temp_shelf',
+      'temp_main',
+    ]);
+  });
+});
+
+describe('describePharmacySopRecords', () => {
+  it('describes records in plain words, reading only this tenant and branch', async () => {
+    const { db, tables } = fixture();
+    tables.temperatureLogs.push({
+      id: 'temp_qa',
+      organizationId: ORG,
+      branchId: 'pb_main',
+      temperatureC: 11.5,
+      outOfRange: false,
+      recordedAt: at('2026-11-04T10:20:00Z'),
+      location: { name: 'QA Fridge', coldChain: true },
+    });
+    tables.registerEntries.push({
+      id: 'reg_qa',
+      organizationId: ORG,
+      branchId: 'pb_main',
+      serial: 12,
+      entryKind: 'CORRECTION',
+      batchNumber: 'B-7',
+      runningBalance: 40,
+      createdAt: at('2026-11-04T09:00:00Z'),
+      medicine: { productName: 'Morphine 10 mg' },
+    });
+    tables.goodsReceipts.push({
+      id: 'grn_qa',
+      organizationId: ORG,
+      branchId: 'pb_main',
+      reference: 'GRN-0042',
+      status: 'POSTED',
+      receivedAt: at('2026-11-04T09:00:00Z'),
+      supplierInvoiceRef: 'INV-9',
+      supplier: { name: 'Medline Traders' },
+    });
+    tables.batches.push({
+      id: 'batch_qa',
+      organizationId: ORG,
+      batchNumber: 'LOT-1',
+      expiresAt: at('2027-01-31T00:00:00Z'),
+      state: 'QUARANTINED',
+      medicine: { productName: 'Insulin' },
+    });
+    tables.lots.push({
+      id: 'lot_qa',
+      organizationId: ORG,
+      branchId: 'pb_main',
+      manufacturingBatchId: 'batch_qa',
+    });
+    tables.recalls.push({
+      id: 'recall_qa',
+      organizationId: ORG,
+      reference: 'DRAP-77',
+      reason: 'Labelling error',
+      status: 'OPEN',
+      createdAt: at('2026-11-02T00:00:00Z'),
+    });
+    const details = await describePharmacySopRecords(db, {
+      organizationId: ORG,
+      pharmacyBranchId: 'pb_main',
+      timezone: 'Asia/Karachi',
+      records: [
+        { recordType: 'TEMPERATURE_LOG', recordId: 'temp_qa' },
+        { recordType: 'TEMPERATURE_LOG', recordId: 'temp_plain' },
+        { recordType: 'TEMPERATURE_LOG', recordId: 'temp_other' },
+        { recordType: 'CONTROLLED_REGISTER_ENTRY', recordId: 'reg_qa' },
+        { recordType: 'GOODS_RECEIPT', recordId: 'grn_qa' },
+        { recordType: 'GOODS_RECEIPT', recordId: 'grn_plain' },
+        { recordType: 'MANUFACTURING_BATCH', recordId: 'batch_qa' },
+        { recordType: 'MANUFACTURING_BATCH', recordId: 'batch_elsewhere' },
+        { recordType: 'RECALL_NOTICE', recordId: 'recall_qa' },
+        { recordType: 'RECALL_NOTICE', recordId: 'recall_b' },
+      ],
+    });
+    const detail = (type: Parameters<typeof pharmacySopRecordDetailKey>[0], id: string) =>
+      details.get(pharmacySopRecordDetailKey(type, id));
+    expect(detail('TEMPERATURE_LOG', 'temp_qa')).toEqual({
+      kind: 'TEMPERATURE_LOG',
+      label: 'QA Fridge · 11.5 °C at 15:20',
+      value: '11.5 °C',
+      location: 'QA Fridge',
+      recordedAt: at('2026-11-04T10:20:00Z'),
+      outOfRange: false,
+      statusLabel: 'In range',
+    });
+    expect(detail('CONTROLLED_REGISTER_ENTRY', 'reg_qa')).toMatchObject({
+      label: 'Register entry 12 · Correction · Morphine 10 mg · batch B-7 · balance 40',
+      value: 'Balance 40',
+      statusLabel: 'Correction',
+    });
+    expect(detail('GOODS_RECEIPT', 'grn_qa')).toMatchObject({
+      label: 'Receipt GRN-0042 · Medline Traders',
+      value: 'Invoice INV-9',
+      statusLabel: 'Posted',
+    });
+    expect(detail('MANUFACTURING_BATCH', 'batch_qa')).toMatchObject({
+      label: 'Batch LOT-1 · Insulin',
+      value: 'Expires 2027-01-31',
+      statusLabel: 'Quarantined',
+    });
+    expect(detail('RECALL_NOTICE', 'recall_qa')).toMatchObject({
+      label: 'Recall DRAP-77 · Labelling error',
+      statusLabel: 'Open',
+    });
+    // Another branch's (or tenant's) record is never read.
+    for (const [type, id] of [
+      ['TEMPERATURE_LOG', 'temp_plain'],
+      ['TEMPERATURE_LOG', 'temp_other'],
+      ['GOODS_RECEIPT', 'grn_plain'],
+      ['MANUFACTURING_BATCH', 'batch_elsewhere'],
+      ['RECALL_NOTICE', 'recall_b'],
+    ] as const) {
+      expect(detail(type, id)).toBeUndefined();
+    }
+    // No raw status code anywhere.
+    expect(JSON.stringify([...details.values()])).not.toMatch(
+      /POSTED|QUARANTINED|CORRECTION|OPEN"|DRAFT/
+    );
   });
 });

@@ -154,6 +154,8 @@ function makeDb() {
     pharmacyTemperatureLog: model(),
     restaurantSopEvidence: model(),
     pharmacySopEvidenceCapture: model(),
+    restaurantSopVerification: model(),
+    pharmacySopReworkNote: model(),
   };
   const typed = db as Record<keyof typeof db, Delegate> & {
     $transaction: ReturnType<typeof vi.fn>;
@@ -163,6 +165,7 @@ function makeDb() {
 }
 
 let db: ReturnType<typeof makeDb>;
+let occurrenceStatus = 'IN_PROGRESS';
 
 function caller() {
   return app.createCaller({
@@ -248,20 +251,21 @@ beforeEach(() => {
   mocks.granted = new Set(['sop:manage', 'sop:complete', 'sop:verify']);
   mocks.adapter.resolvePharmacySopSite.mockResolvedValue(SITE);
   mocks.adapter.resolvePharmacySopActor.mockResolvedValue(ACTOR);
-  mocks.adapter.assertOccurrenceAtSite.mockResolvedValue({
+  // Stateful: a submit moves it into review, where verify finds it.
+  occurrenceStatus = 'IN_PROGRESS';
+  mocks.adapter.assertOccurrenceAtSite.mockImplementation(async () => ({
     id: 'occ_1',
-    status: 'IN_PROGRESS',
+    status: occurrenceStatus,
     templateVersionId: 'ver_1',
     assignedStaffProfileId: ACTOR.staffProfileId,
     claimedByStaffProfileId: null,
     poolJobRoleId: null,
-  });
+  }));
   mocks.adapter.assertIndependentPharmacyVerifier.mockResolvedValue(undefined);
   mocks.adapter.pharmacySopRolesAt.mockResolvedValue(['pharmacy-manager']);
-  mocks.engine.submitOccurrence.mockResolvedValue({
-    occurrenceId: 'occ_1',
-    status: 'SUBMITTED',
-    submittedAt: new Date(),
+  mocks.engine.submitOccurrence.mockImplementation(async () => {
+    occurrenceStatus = 'SUBMITTED';
+    return { occurrenceId: 'occ_1', status: 'SUBMITTED', submittedAt: new Date() };
   });
   mocks.engine.verifyOccurrence.mockResolvedValue({ verificationId: 'v_1', action: 'VERIFY' });
   mocks.engine.getOccurrenceAuditTrail.mockResolvedValue([]);
@@ -294,6 +298,7 @@ describe('receipt-backed proof', () => {
   it('survives even with no secret configured at all', async () => {
     const signature = pharmacyEvidence('ev_sig', 'ostep_3', 'signature');
     db.pharmacySopEvidenceCapture.findMany.mockResolvedValue([receiptFor(signature)]);
+    occurrenceStatus = 'SUBMITTED';
     delete process.env.AUTH_SECRET;
     db.restaurantSopEvidence.findMany.mockResolvedValue([signature]);
     await caller().verify(OCC_INPUT);
@@ -301,6 +306,7 @@ describe('receipt-backed proof', () => {
   });
 
   it('ignores a receipt that does not describe its row', async () => {
+    occurrenceStatus = 'SUBMITTED';
     const foreign = foreignEvidence('ev_foreign', 'ostep_3', 'signature');
     for (const receipt of [
       receiptFor(foreign, { occurrenceId: 'occ_other' }),
@@ -341,6 +347,7 @@ describe('legacy HMAC proof without a receipt', () => {
       }),
     ]);
 
+    occurrenceStatus = 'SUBMITTED';
     db.restaurantSopEvidence.findMany.mockResolvedValue([signature]);
     const verify = caller().verify(OCC_INPUT);
     await expect(verify).rejects.toMatchObject({
@@ -375,6 +382,7 @@ describe('legacy HMAC proof without a receipt', () => {
   it('a receipt written before rotation (the backfill) makes it verify again', async () => {
     const signature = pharmacyEvidence('ev_sig', 'ostep_3', 'signature');
     process.env.AUTH_SECRET = SECRET_AFTER;
+    occurrenceStatus = 'SUBMITTED';
     db.pharmacySopEvidenceCapture.findMany.mockResolvedValue([receiptFor(signature)]);
     db.restaurantSopEvidence.findMany.mockResolvedValue([signature]);
     await caller().verify(OCC_INPUT);
@@ -387,6 +395,7 @@ describe('foreign proof', () => {
     const legacy = pharmacyEvidence('ev_legacy', 'ostep_3', 'signature');
     const foreign = foreignEvidence('ev_foreign', 'ostep_3', 'signature');
     process.env.AUTH_SECRET = SECRET_AFTER;
+    occurrenceStatus = 'SUBMITTED';
     db.restaurantSopEvidence.findMany.mockResolvedValue([legacy, foreign]);
     await expect(caller().verify(OCC_INPUT)).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
