@@ -386,9 +386,14 @@ describe('custom ABAC decisions', () => {
       'pharmacy:catalogue-review',
       'pharmacy:orders',
       'pharmacy:counter',
+      // #654: pharmacist day close/reconcile. Exact-grant only; the tenant ADMIN
+      // fallback lives in the close procedure, not in a default policy.
+      'pharmacy:close',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
+    // 47 = the 45 pinned before #654 + 'pharmacy:close' (default deny, above) +
+    // 'pharmacy:prescriptions' (#418, [isAdmin] policy, covered separately).
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(47);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);

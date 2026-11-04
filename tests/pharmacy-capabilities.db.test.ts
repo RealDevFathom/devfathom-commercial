@@ -30,6 +30,13 @@ const administratorReportsMigration = readFileSync(
   'prisma/migrations/20261029000258_pharmacy_administrator_reports/migration.sql',
   'utf8'
 );
+// #654 added 'pharmacy:close' to the Pharmacist template; existing roles need the backfill.
+const pharmacistCloseMigration = readFileSync(
+  'prisma/migrations/20261104090000_pharmacy_pharmacist_close_capability/migration.sql',
+  'utf8'
+)
+  .replace(/^BEGIN;$/m, '')
+  .replace(/^COMMIT;$/m, '');
 const expiry = new Date('2035-01-02T00:00:00.000Z');
 const expired = new Date('2020-01-02T00:00:00.000Z');
 const legacy: Record<string, string[]> = {
@@ -156,9 +163,29 @@ const legacy: Record<string, string[]> = {
       `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'reports:operational','DENY')`,
       [id('admin_reports_deny'), other, id('admin')]
     );
+    // #654 backfill: a system Pharmacist's explicit close DENY survives, and a
+    // tenant-authored 'pharmacist' lookalike is not widened.
+    for (const [key, isSystem, roleOrg] of [
+      ['denied_pharmacist', true, other],
+      ['custom_pharmacist', false, third],
+    ] as const) {
+      await client.query(
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,'pharmacist','pharmacist',$3,now())`,
+        [id(key), roleOrg, isSystem]
+      );
+      await client.query(
+        `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:dispense','ALLOW')`,
+        [id(`${key}_dispense`), roleOrg, id(key)]
+      );
+    }
+    await client.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:close','DENY')`,
+      [id('denied_pharmacist_close'), other, id('denied_pharmacist')]
+    );
     await client.query(migration);
     await client.query(managerProcurementMigration);
     await client.query(administratorReportsMigration);
+    await client.query(pharmacistCloseMigration);
   }, 60_000);
   afterAll(async () => {
     await client.query('ROLLBACK');
@@ -233,6 +260,22 @@ const legacy: Record<string, string[]> = {
       [id('custom_administrator')]
     );
     expect(customAdministrator.rows).toEqual([]);
+    for (const [key, expected] of [
+      [
+        'denied_pharmacist',
+        [
+          { capability: 'pharmacy:close', effect: 'DENY' },
+          { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+        ],
+      ],
+      ['custom_pharmacist', [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]],
+    ] as const) {
+      const pharmacist = await client.query(
+        `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 ORDER BY capability`,
+        [id(key)]
+      );
+      expect(pharmacist.rows).toEqual(expected);
+    }
     const custom = await client.query(
       `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
       [id('other_custom')]
@@ -267,6 +310,7 @@ const legacy: Record<string, string[]> = {
     await client.query(migration);
     await client.query(managerProcurementMigration);
     await client.query(administratorReportsMigration);
+    await client.query(pharmacistCloseMigration);
     expect(
       (
         await client.query(

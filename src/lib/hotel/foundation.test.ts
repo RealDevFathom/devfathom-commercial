@@ -24,7 +24,11 @@ const priorCatalogDigests = {
   AGENCY: '54e0ca2cb112bd14c7bde79c1aba7ceeb7875fc51c5a0e5dd05c0db326440769',
   RESTAURANT: '94d6616c691e680b51b340e75547478e5fdd98e9aa208efc12ce64670dc950a7',
   // QA-130: canonical capability names and explicit Owner report grants.
-  PHARMACY: '72ac46b3a8e9809a563bdb02d78774b4ba26260780dd1700992fd656ef092ff8',
+  // #654 (c2e50018): Pharmacist template gains exact 'pharmacy:close'.
+  // #975 (47518cbf): Owner / Operator template gains exact 'pharmacy:procurement',
+  // 'pharmacy:inventory', 'pharmacy:counter', 'pharmacy:close', 'pharmacy:manage'.
+  // No other PHARMACY catalog value changed.
+  PHARMACY: '46ef4f4c249b2b57984ba61985f9b2e7c7cac14818ff8bd44f312dedbe2f008a',
 };
 
 const property = {
