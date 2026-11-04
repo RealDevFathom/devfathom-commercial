@@ -18,6 +18,8 @@ import {
   evidencePurposeOf,
   formatWhen,
   isDenied,
+  PROVENANCE_LABEL,
+  provenanceTone,
   RECORD_LABEL,
   statusCopy,
   stepBlockers,
@@ -26,6 +28,7 @@ import {
   submitBlockers,
   type EvidencePurpose,
   type SopAccess,
+  type SopEvidenceRow,
   type SopOccurrence,
   type SopOccurrenceStep,
   type StepDraft,
@@ -364,6 +367,7 @@ export function SopRunner({
           <SopReviewDecision
             pharmacyBranchId={pharmacyBranchId}
             occurrenceId={occurrenceId}
+            evidence={occurrence.evidence}
             onDone={(text) => {
               onNotice({ tone: 'success', text });
               void refresh();
@@ -408,6 +412,11 @@ function StepItem({
   const photos = stepEvidence(occurrence, step, 'photo');
   const signatures = stepEvidence(occurrence, step, 'signature');
   const links = stepLinks(occurrence, step);
+  // Proof that is on the step but does not count here yet. It exists, so it is
+  // never described as missing; the pill says what is wrong with it.
+  const unsettled = [...photos, ...signatures].filter(
+    (row) => row.provenance === 'UNCONFIRMED' || row.provenance === 'FOREIGN'
+  );
   const needs = [
     step.requiredRecordType ? `linked ${RECORD_LABEL[step.requiredRecordType]}` : null,
     step.requiresPhoto ? 'photo' : null,
@@ -432,6 +441,19 @@ function StepItem({
         <p className="mt-2 text-sm leading-relaxed whitespace-pre-wrap text-text-muted">
           {step.instructions}
         </p>
+      ) : null}
+      {unsettled.length ? (
+        <ul aria-label={`Proof to check on ${step.title}`} className="mt-2 flex flex-wrap gap-1.5">
+          {unsettled.map((row) => (
+            <li key={row.id}>
+              <StatusPill
+                status={row.provenance}
+                tone={provenanceTone(row.provenance)}
+                label={`${evidencePurposeOf(row.mimeType) === 'signature' ? 'Signature' : 'Photo'}: ${PROVENANCE_LABEL[row.provenance]}`}
+              />
+            </li>
+          ))}
+        </ul>
       ) : null}
       {/* While editing, each control and the "still needed" list say what the
           step needs; the summary line would only repeat it. */}
@@ -557,6 +579,8 @@ type HistoryEntry = {
   detail: string | null;
   at: Date | string;
   proof: { href: string; image: boolean; alt: string } | null;
+  /** Where the proof came from, in plain words (proof entries only). */
+  provenance: SopEvidenceRow['provenance'] | null;
 };
 
 /**
@@ -585,6 +609,7 @@ export function historyEntries(occurrence: SopOccurrence): HistoryEntry[] {
             actor: row.actorName,
             detail: where,
             at: row.at,
+            provenance: evidence?.provenance ?? null,
             proof:
               ref && FILE_REF.test(ref)
                 ? {
@@ -605,6 +630,7 @@ export function historyEntries(occurrence: SopOccurrence): HistoryEntry[] {
             detail: stepTitle(row.id),
             at: row.at,
             proof: null,
+            provenance: null,
           };
         }
         return {
@@ -614,6 +640,7 @@ export function historyEntries(occurrence: SopOccurrence): HistoryEntry[] {
           detail: row.detail,
           at: row.at,
           proof: null,
+          provenance: null,
         };
       })
     : occurrence.verifications.map((row) => ({
@@ -623,6 +650,7 @@ export function historyEntries(occurrence: SopOccurrence): HistoryEntry[] {
         detail: row.reason,
         at: row.createdAt,
         proof: null,
+        provenance: null,
       }));
   const moments: HistoryEntry[] = [];
   if (occurrence.claimedAt) {
@@ -633,6 +661,7 @@ export function historyEntries(occurrence: SopOccurrence): HistoryEntry[] {
       detail: null,
       at: occurrence.claimedAt,
       proof: null,
+      provenance: null,
     });
   }
   if (occurrence.startedAt) {
@@ -643,6 +672,7 @@ export function historyEntries(occurrence: SopOccurrence): HistoryEntry[] {
       detail: null,
       at: occurrence.startedAt,
       proof: null,
+      provenance: null,
     });
   }
   if (occurrence.submittedAt) {
@@ -653,6 +683,7 @@ export function historyEntries(occurrence: SopOccurrence): HistoryEntry[] {
       detail: null,
       at: occurrence.submittedAt,
       proof: null,
+      provenance: null,
     });
   }
   return [...fromTrail, ...moments].sort(
@@ -681,6 +712,14 @@ function History({ occurrence, timezone }: { occurrence: SopOccurrence; timezone
                   </time>
                 </div>
                 {entry.actor ? <p className="mt-1 text-xs text-text-muted">{entry.actor}</p> : null}
+                {entry.provenance ? (
+                  <StatusPill
+                    className="mt-2"
+                    status={entry.provenance}
+                    tone={provenanceTone(entry.provenance)}
+                    label={PROVENANCE_LABEL[entry.provenance]}
+                  />
+                ) : null}
                 {entry.detail ? (
                   <p className="mt-1 text-sm break-words whitespace-pre-wrap text-text-body">
                     {entry.detail}

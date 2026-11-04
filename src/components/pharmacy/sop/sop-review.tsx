@@ -8,7 +8,14 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { Textarea } from '@/components/ui/textarea';
 import { trpc } from '@/lib/trpc';
 
-import { formatWhen, statusCopy, errorMessage, type SopBoardItem } from './sop-model';
+import {
+  formatWhen,
+  statusCopy,
+  errorMessage,
+  provenanceReviewNote,
+  type SopBoardItem,
+  type SopEvidenceRow,
+} from './sop-model';
 
 export function SopReviewQueue({
   items,
@@ -71,16 +78,24 @@ export function SopReviewQueue({
   );
 }
 
-/** Verify or send back one submitted procedure. Sending back always needs a reason. */
+/**
+ * Verify or send back one submitted procedure. Sending back always needs a
+ * reason. When some proof cannot be accepted yet (added outside the pharmacy
+ * workspace, or present with an unconfirmed capture), the reviewer is told why
+ * before choosing; the proof itself is never described as missing.
+ */
 export function SopReviewDecision({
   pharmacyBranchId,
   occurrenceId,
+  evidence = [],
   onDone,
 }: {
   pharmacyBranchId: string;
   occurrenceId: string;
+  evidence?: readonly Pick<SopEvidenceRow, 'provenance'>[];
   onDone: (message: string) => void;
 }) {
+  const proofNote = provenanceReviewNote(evidence);
   const id = useId();
   const reasonRef = useRef<HTMLTextAreaElement>(null);
   const [reason, setReason] = useState('');
@@ -104,6 +119,14 @@ export function SopReviewDecision({
       <h3 id={`${id}-title`} className="font-semibold text-text-strong">
         Your review
       </h3>
+      {proofNote ? (
+        <p
+          id={`${id}-proof`}
+          className="rounded-xs border border-warning/30 bg-warning/10 p-3 text-sm text-text-body"
+        >
+          {proofNote}
+        </p>
+      ) : null}
       <div className="grid gap-1.5">
         <label className="text-sm font-medium text-text-strong" htmlFor={`${id}-reason`}>
           Reason
@@ -141,6 +164,7 @@ export function SopReviewDecision({
           type="button"
           size="touch"
           disabled={busy}
+          aria-describedby={proofNote ? `${id}-proof` : undefined}
           onClick={() => {
             setError(null);
             verify.mutate({

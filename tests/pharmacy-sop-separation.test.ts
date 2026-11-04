@@ -16,7 +16,9 @@ import { describe, expect, it } from 'vitest';
  *    router installs the template library on request, and the inspection pack
  *    exports SOP history for inspectors.
  * 2. SOP code never writes a pharmacy operation table. It may only append its
- *    own site and record-link rows; record links point at existing records.
+ *    own site, setting, record-link and capture-receipt rows; record links
+ *    point at existing records. Only the pharmacy evidence route and the
+ *    manual legacy backfill script write capture receipts.
  * 3. SOP code reaches pharmacy operation code only through a read helper.
  * 4. SOP code never enqueues a scheduler/restaurant job, and the per-branch
  *    automatic-scheduling setting is read by no pharmacy operation code. The
@@ -30,6 +32,7 @@ const SOP_FILES = new Set([
   'src/lib/pharmacy/sop-adapter.ts',
   'src/lib/pharmacy/sop-library.ts',
   'src/lib/pharmacy/sop-evidence.ts',
+  'src/lib/pharmacy/sop-evidence-mac.ts',
   'src/lib/pharmacy/sop-shared.ts',
   'src/lib/pharmacy/sop-settings.ts',
   'src/server/routers/pharmacy-sop.ts',
@@ -116,10 +119,43 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
       ].map((match) => match[1]);
       // Only its own append-only rows.
       expect(
-        writes.filter((model) => !/^pharmacySop(Site|SiteSetting|RecordLink)$/.test(model!))
+        writes.filter(
+          (model) => !/^pharmacySop(Site|SiteSetting|RecordLink|EvidenceCapture)$/.test(model!)
+        )
       ).toEqual([]);
       // No raw SQL write against a pharmacy table.
       expect(source).not.toMatch(/\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+"?pharmacy_/i);
+    }
+  });
+
+  it('only the pharmacy evidence route and the legacy backfill write capture receipts', () => {
+    // The receipt writer itself lives in sop-evidence.ts; who may call it is pinned here.
+    const RECEIPT_WRITE =
+      /pharmacySopEvidenceCapture\.(create|createMany|upsert)\b|writePharmacySopUploadReceipt\s*\(|INSERT\s+INTO\s+"?pharmacy_sop_evidence_captures/;
+    const writers = [...walk('src'), ...walk('scripts'), ...walk('prisma')]
+      .filter((file) => !file.startsWith('src/generated/'))
+      .filter((file) => RECEIPT_WRITE.test(readFileSync(join(ROOT, file), 'utf8')))
+      .sort();
+    expect(writers).toEqual([
+      'scripts/pharmacy-sop-legacy-capture-backfill.ts',
+      'src/app/api/pharmacy/sop/evidence/route.ts',
+      'src/lib/pharmacy/sop-evidence.ts',
+    ]);
+    const evidence = readFileSync(join(ROOT, 'src/lib/pharmacy/sop-evidence.ts'), 'utf8');
+    const callers = walk('src').filter(
+      (file) =>
+        file !== 'src/lib/pharmacy/sop-evidence.ts' &&
+        /writePharmacySopUploadReceipt/.test(readFileSync(join(ROOT, file), 'utf8'))
+    );
+    expect(evidence).toMatch(/export async function writePharmacySopUploadReceipt/);
+    expect(callers).toEqual(['src/app/api/pharmacy/sop/evidence/route.ts']);
+    // Receipts are never updated or deleted by any code.
+    for (const file of [...walk('src'), ...walk('scripts')].filter(
+      (path) => !path.startsWith('src/generated/')
+    )) {
+      expect(readFileSync(join(ROOT, file), 'utf8')).not.toMatch(
+        /pharmacySopEvidenceCapture\.(update|updateMany|delete|deleteMany)\b|(UPDATE|DELETE\s+FROM)\s+"?pharmacy_sop_evidence_captures/
+      );
     }
   });
 
@@ -132,7 +168,7 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
         ),
       ];
       for (const [, names, module] of imports) {
-        if (/^sop-(adapter|library|evidence|shared|settings)$/.test(module!)) continue;
+        if (/^sop-(adapter|library|evidence|evidence-mac|shared|settings)$/.test(module!)) continue;
         expect(module).toBe('controlled-register');
         expect(
           names!

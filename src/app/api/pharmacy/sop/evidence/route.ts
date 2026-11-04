@@ -302,7 +302,9 @@ export async function POST(request: Request) {
           'This exact image is already on the step but was not captured in the pharmacy workspace. Take a new photo, or ask a manager to review it.',
       });
     }
-    if (stage === 'receipt') {
+    // `stage` moves to 'receipt' inside the transaction callback, which
+    // control-flow narrowing does not follow; widen it back to the union.
+    if ((stage as Stage) === 'receipt') {
       // Nothing was kept: the attach rolled back with the receipt. A retry
       // re-attaches idempotently and writes the receipt again.
       return json(503, { error: 'Proof was not saved. Retry in a moment.', retryable: true });

@@ -155,6 +155,43 @@ export function formatWhen(value: When | null | undefined, timeZone: string | nu
   }).format(date);
 }
 
+// ── Where proof came from ────────────────────────────────────────────────────
+
+export type SopEvidenceRow = SopOccurrence['evidence'][number];
+export type SopProvenance = SopEvidenceRow['provenance'];
+
+/**
+ * Plain words for proof provenance. Every label describes proof that EXISTS:
+ * none of them may ever read as "missing".
+ */
+export const PROVENANCE_LABEL: Record<SopProvenance, string> = {
+  RECEIPT: 'Captured here',
+  LEGACY_HMAC: 'Captured here (older proof)',
+  UNCONFIRMED: 'Proof present, capture not confirmed',
+  FOREIGN: 'Added outside the pharmacy workspace',
+};
+
+export function provenanceTone(provenance: SopProvenance): StatusTone {
+  return provenance === 'RECEIPT' || provenance === 'LEGACY_HMAC'
+    ? 'success'
+    : provenance === 'UNCONFIRMED'
+      ? 'warning'
+      : 'danger';
+}
+
+/** Proof a verifier cannot accept yet, with what to do about it (null when all is fine). */
+export function provenanceReviewNote(evidence: readonly Pick<SopEvidenceRow, 'provenance'>[]) {
+  const foreign = evidence.filter((row) => row.provenance === 'FOREIGN').length;
+  const unconfirmed = evidence.filter((row) => row.provenance === 'UNCONFIRMED').length;
+  if (foreign) {
+    return `${foreign === 1 ? 'One proof was' : `${foreign} proofs were`} added outside the pharmacy workspace, so this procedure cannot be marked as checked. Ask a manager to review it, or send it back.`;
+  }
+  if (unconfirmed) {
+    return `${unconfirmed === 1 ? 'One proof is' : `${unconfirmed} proofs are`} present, but where ${unconfirmed === 1 ? 'it was' : 'they were'} captured cannot be confirmed. Ask a manager to run the legacy receipt backfill, or send it back.`;
+  }
+  return null;
+}
+
 // ── What stops a step or a submission ───────────────────────────────────────
 
 /** Proof the engine counts as a signature; every other image counts as a photo. */
