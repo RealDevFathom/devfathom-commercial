@@ -68,15 +68,14 @@ export function recordStatusLabel(detail: SopRecordDetail | null | undefined) {
   return detail?.outOfRange && /out of range/i.test(status) ? null : status;
 }
 
-/** One line of facts about a linked record: value, place and time, when known. */
+/**
+ * The line under a linked record's label. The server's label already names the
+ * place and the reading ("QA Fridge · 11.5 °C at 15:20"), so this line only
+ * adds when it was recorded; nothing is said twice.
+ */
 export function recordFacts(link: Pick<SopRecordLink, 'detail'>, timezone: string | null) {
-  const detail = link.detail;
-  if (!detail) return [];
-  return [
-    detail.value,
-    detail.location,
-    detail.recordedAt ? `Recorded ${formatWhen(detail.recordedAt, timezone)}` : null,
-  ].filter((part): part is string => Boolean(part));
+  const recordedAt = link.detail?.recordedAt;
+  return recordedAt ? [`Recorded ${formatWhen(recordedAt, timezone)}`] : [];
 }
 
 /** Linked records as a reviewer needs them: what, where, when, and whether it was out of range. */

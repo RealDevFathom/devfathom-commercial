@@ -35,7 +35,7 @@ function given(occ: Record<string, unknown>) {
         recordType: 'TEMPERATURE_LOG',
         occurredAt: new Date('2026-11-04T05:30:00Z'),
         detail: recordDetail({
-          label: 'Vaccine fridge reading',
+          label: 'Vaccine fridge · 5.1 °C at 10:30',
           value: '5.1 °C',
           outOfRange: false,
         }),
@@ -320,9 +320,12 @@ describe('the reviewer of a reworked procedure', () => {
     const review = asReviewer();
     const links = within(review).getByRole('list', { name: 'Linked records to check' });
     const [reading, receipt] = within(links).getAllByRole('listitem');
-    expect(reading).toHaveTextContent('Vaccine fridge reading');
-    expect(reading).toHaveTextContent('9.4 °C');
-    expect(reading).toHaveTextContent('Vaccine fridge');
+    expect(reading).toHaveTextContent('Vaccine fridge · 9.4 °C at 09:30');
+    // The label carries the place and reading; the line below adds only the time.
+    expect(within(reading).getByText(/^Recorded /)).toHaveTextContent(
+      /^Recorded Nov 4, 2026, 9:30\sAM$/
+    );
+    expect(reading.textContent?.match(/9\.4 °C/g)).toHaveLength(1);
     expect(reading).toHaveTextContent('Recorded Nov 4, 2026, 9:30 AM');
     expect(within(reading).getByText('Out of range')).toBeVisible();
     expect(reading).toHaveTextContent('New since sent back');
@@ -331,7 +334,7 @@ describe('the reviewer of a reworked procedure', () => {
     expect(within(receipt).queryByText('Out of range')).not.toBeInTheDocument();
     // The completed-step summary carries the same detail.
     expect(screen.getByRole('list', { name: 'Linked records for step 1' })).toHaveTextContent(
-      '9.4 °C · Vaccine fridge'
+      'Vaccine fridge · 9.4 °C at 09:30'
     );
   });
 
@@ -374,7 +377,8 @@ describe('history of a reworked procedure', () => {
     const entries = historyEntries(occ);
     expect(entries.find((entry) => entry.id === 'link:link-1')).toMatchObject({
       label: 'Record linked',
-      detail: 'Step 1 · Confirm the refrigerator temperature was recorded · Vaccine fridge reading',
+      detail:
+        'Step 1 · Confirm the refrigerator temperature was recorded · Vaccine fridge · 9.4 °C at 09:30',
     });
     expect(entries.find((entry) => entry.id === 'rework:note-1')).toMatchObject({
       label: 'Rework note added',

@@ -37,7 +37,7 @@ export function step(overrides: Record<string, unknown> = {}) {
 export function recordDetail(overrides: Record<string, unknown> = {}) {
   return {
     kind: 'TEMPERATURE_LOG',
-    label: 'Vaccine fridge reading',
+    label: 'Vaccine fridge · 9.4 °C at 09:30',
     value: '9.4 °C',
     location: 'Vaccine fridge',
     recordedAt: new Date('2026-11-04T04:30:00Z'),

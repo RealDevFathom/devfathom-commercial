@@ -129,8 +129,13 @@ describe('linked records in the runner', () => {
     expect(screen.getByText('1 photo · Signature added')).toBeVisible();
     expect(screen.queryByText(/signed/)).not.toBeInTheDocument();
     const links = screen.getByRole('list', { name: 'Linked records for step 1' });
-    expect(links).toHaveTextContent('Vaccine fridge reading');
-    expect(links).toHaveTextContent('9.4 °C · Vaccine fridge · Recorded Nov 4, 2026, 9:30 AM');
+    expect(links).toHaveTextContent('Vaccine fridge · 9.4 °C at 09:30');
+    // Only when it was recorded is added below the label; value and place are not repeated.
+    expect(within(links).getByText(/^Recorded /)).toHaveTextContent(
+      /^Recorded Nov 4, 2026, 9:30\sAM$/
+    );
+    expect(links.textContent?.match(/Vaccine fridge/g)).toHaveLength(1);
+    expect(links.textContent?.match(/9\.4 °C/g)).toHaveLength(1);
     expect(within(links).getByText('Out of range')).toBeVisible();
   });
 });
