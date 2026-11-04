@@ -14,18 +14,25 @@ const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
   const postWriteOffEntry = vi.fn();
-  const recordAudit = vi.fn();
-  return { hasModule, postWriteOffEntry, recordAudit };
+  const afterTenantTransaction = vi.fn<(work: () => void) => void>();
+  const withTenantDb = vi.fn();
+  return { hasModule, postWriteOffEntry, afterTenantTransaction, withTenantDb };
 });
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+  withTenantDb: mocks.withTenantDb,
+}));
+vi.mock('@/lib/side-effects/scope', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/side-effects/scope')>()),
+  afterTenantTransaction: mocks.afterTenantTransaction,
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.hasModule,
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/server/audit', () => ({
-  recordAudit: mocks.recordAudit,
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
@@ -97,6 +104,7 @@ function makeDb() {
     pharmacyInterbranchTransfer: model(),
     pharmacyPurchaseReturn: model(),
     pharmacyPurchaseReturnLine: model(),
+    auditLog: { create: vi.fn().mockResolvedValue({}) },
     pharmacyBranchAssignment: {
       findFirst: vi.fn().mockResolvedValue({ id: 'assignment_a' }),
       findMany: vi.fn().mockResolvedValue([{ branchId: 'branch_a' }]),
@@ -117,6 +125,8 @@ function makeDb() {
 let db = makeDb();
 /** The session role every caller() carries; reset to ADMIN before each test. */
 let sessionRole: 'ADMIN' | 'EMPLOYEE' = 'ADMIN';
+/** Extra session-user fields, e.g. a platform support session. Reset before each test. */
+let sessionExtras: Record<string, unknown> = {};
 function caller(overrides: { enabledModules?: string[]; userId?: string | null } = {}) {
   return pharmacyInventoryRouter.createCaller({
     db,
@@ -133,7 +143,12 @@ function caller(overrides: { enabledModules?: string[]; userId?: string | null }
         ? null
         : {
             expires: 'later',
-            user: { id: overrides.userId ?? 'user_a', role: sessionRole, status: 'ACTIVE' },
+            user: {
+              id: overrides.userId ?? 'user_a',
+              role: sessionRole,
+              status: 'ACTIVE',
+              ...sessionExtras,
+            },
           },
     organization: null,
     support: null,
@@ -163,8 +178,9 @@ const CAPABILITY_REFUSAL = {
 beforeEach(() => {
   db = makeDb();
   sessionRole = 'ADMIN';
-  mocks.recordAudit.mockReset();
-  mocks.recordAudit.mockResolvedValue(undefined);
+  sessionExtras = {};
+  mocks.afterTenantTransaction.mockReset();
+  mocks.withTenantDb.mockReset();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
   mocks.postWriteOffEntry.mockReset();
 });
@@ -743,7 +759,8 @@ const ASSIGNMENT_QUERY = {
 
 /** Every delegate call except the authorization lookups themselves. */
 function dataAccess(): string[] {
-  const authorization = new Set(['user', 'pharmacyBranch', 'pharmacyBranchAssignment']);
+  // Authorization lookups and the exception's own audit row are not stock access.
+  const authorization = new Set(['user', 'pharmacyBranch', 'pharmacyBranchAssignment', 'auditLog']);
   const touched: string[] = [];
   for (const [name, delegate] of Object.entries(db)) {
     if (authorization.has(name) || name === '$transaction') continue;
@@ -953,6 +970,9 @@ const ADMIN_RECORD_QUERY = {
 
 /** The dedicated, awaited audit row each use of the ADMIN exception writes. */
 const ADMIN_EXCEPTION_AUDIT = expect.objectContaining({
+  id: expect.any(String),
+  operation: 'OTHER',
+  outcome: 'SUCCESS',
   organizationId: 'org_a',
   actorType: 'USER',
   actorId: 'user_a',
@@ -993,6 +1013,30 @@ const asksForAdminRecord = () =>
 
 /** The branch stock reads carry no capability of their own on develop. */
 /**
+ * The exception schedules one after-transaction work item that re-writes the
+ * same row (same id) with skipDuplicates on its own connection.
+ */
+async function expectIdempotentReinsert() {
+  expect(mocks.afterTenantTransaction).toHaveBeenCalledTimes(1);
+  const reinsert = { auditLog: { createMany: vi.fn().mockResolvedValue({ count: 0 }) } };
+  mocks.withTenantDb.mockImplementation(async (_org: string, run: (tx: unknown) => unknown) =>
+    run(reinsert)
+  );
+  mocks.afterTenantTransaction.mock.calls[0]![0]();
+  await mocks.withTenantDb.mock.results[0]!.value;
+  expect(mocks.withTenantDb).toHaveBeenCalledWith('org_a', expect.any(Function), {
+    maxWait: 1_000,
+    timeout: 5_000,
+    skipDrain: true,
+  });
+  const written = (db.auditLog.create.mock.calls[0]![0] as { data: unknown }).data;
+  expect(reinsert.auditLog.createMany).toHaveBeenCalledWith({
+    data: [written],
+    skipDuplicates: true,
+  });
+}
+
+/**
  * A reads procedure refuses at the branch rule today; PR #994 puts transferBoard
  * behind pharmacy:inventory, after which it refuses at the capability check.
  * Either is a refusal, so the read-side assertions accept both.
@@ -1026,7 +1070,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
       expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith(ASSIGNMENT_QUERY);
       expect(asksForAdminRecord()).toBe(false);
-      expect(mocks.recordAudit).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
     }
   );
@@ -1046,8 +1090,10 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       // Past the branch rule; whatever the mocked ledger answers next is not a refusal of scope.
       expect(outcome?.message).not.toBe(OUTSIDE_SCOPE.message);
       expect(db.user.findFirst).toHaveBeenCalledWith(ADMIN_RECORD_QUERY);
-      // Written on the request's own client, awaited, exactly once per use.
-      expect(mocks.recordAudit).toHaveBeenCalledExactlyOnceWith(ADMIN_EXCEPTION_AUDIT, db);
+      // Written on the request's own client, awaited, exactly once per use ...
+      expect(db.auditLog.create).toHaveBeenCalledExactlyOnceWith({ data: ADMIN_EXCEPTION_AUDIT });
+      // ... and the same row is re-written idempotently after the transaction ends.
+      await expectIdempotentReinsert();
     }
   );
 
@@ -1061,7 +1107,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
 
       await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
       expect(db.user.findFirst).toHaveBeenCalledWith(ADMIN_RECORD_QUERY);
-      expect(mocks.recordAudit).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
     }
   );
@@ -1074,7 +1120,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       confirmAdmin('org_b');
 
       await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
-      expect(mocks.recordAudit).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
     }
   );
@@ -1108,7 +1154,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       await expect(invoke()).rejects.toMatchObject(
         READS.has(name) ? READ_REFUSAL : CAPABILITY_REFUSAL
       );
-      expect(mocks.recordAudit).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
     }
   );
@@ -1121,7 +1167,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       confirmAdmin();
 
       await expect(invoke()).rejects.toMatchObject(READ_REFUSAL);
-      expect(mocks.recordAudit).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
     }
   );
@@ -1132,10 +1178,11 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       grant([allow(capability)]);
       db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
       confirmAdmin();
-      mocks.recordAudit.mockRejectedValue(new Error('audit store unavailable'));
+      db.auditLog.create.mockRejectedValue(new Error('audit store unavailable'));
 
       // The refusal is the audit failure itself, not whatever the ledger answers later.
       await expect(invoke()).rejects.toMatchObject({ message: 'audit store unavailable' });
+      expect(mocks.afterTenantTransaction).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
     }
   );
@@ -1176,6 +1223,49 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
     }
   );
 
+  it.each(['pharmacy:*', '*'])(
+    'treats a %s DENY like an inventory DENY for the exception',
+    async (denied) => {
+      grant([allow('pharmacy:inventory')], [deny(denied)]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+
+      await expect(caller().nearExpiryBoard({ branchId: 'branch_a' })).rejects.toMatchObject(
+        READ_REFUSAL
+      );
+      await expect(
+        caller().createLocation({ branchId: 'branch_a', code: 'X', name: 'X', kind: 'STORE' })
+      ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it('names the platform support session on the exception row', async () => {
+    sessionExtras = {
+      isSupportSession: true,
+      supportSessionId: 'support_1',
+      platformUserId: 'platform_1',
+    };
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    confirmAdmin();
+
+    await caller().nearExpiryBoard({ branchId: 'branch_a' });
+    expect(db.auditLog.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        actorId: 'user_a',
+        metadata: {
+          branchId: 'branch_a',
+          reason: 'tenant-admin-inventory-access-without-branch-assignment',
+          supportSessionId: 'support_1',
+          platformUserId: 'platform_1',
+          actingAsTenantUserId: 'user_a',
+        },
+      }),
+    });
+  });
+
   it('uses the assignment, not the exception, for an assigned ADMIN', async () => {
     grant([allow('pharmacy:inventory')]);
     confirmAdmin();
@@ -1184,7 +1274,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       caller().createLocation({ branchId: 'branch_a', code: 'MAIN', name: 'Main', kind: 'STORE' })
     ).resolves.toMatchObject({ organizationId: 'org_a', branchId: 'branch_a' });
     expect(asksForAdminRecord()).toBe(false);
-    expect(mocks.recordAudit).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('lists only the active, assigned branches for a non-admin', async () => {

@@ -530,6 +530,38 @@ describeIfDatabase('inventory branch assignment against Postgres', () => {
     });
   });
 
+  it("keeps the exception's audit row when the request transaction rolls back", async () => {
+    // /api/trpc runs a whole batch in one transaction and rolls it back when any
+    // call fails, which also undoes the in-transaction row. The after-transaction
+    // re-insert (same id, skipDuplicates) must leave exactly one row behind.
+    const count = () =>
+      withTenantDb(ids.orgA, (tx) =>
+        tx.auditLog.count({
+          where: {
+            actorId: ids.admin,
+            action: inventory.ADMIN_BRANCH_EXCEPTION_ACTION,
+            targetId: ids.branchB,
+          },
+        })
+      );
+    const before = await count();
+
+    await expect(
+      withTenantDb(
+        ids.orgA,
+        async (tx) => {
+          const ctx = context(tx, ids.orgA, person(ids.admin, 'ADMIN'));
+          const api = inventory.pharmacyInventoryRouter.createCaller(ctx) as InventoryCaller;
+          await expect(api.transferBoard({ branchId: ids.branchB })).resolves.toEqual([]);
+          throw new Error('abort the request transaction');
+        },
+        { timeout: 60_000 }
+      )
+    ).rejects.toThrow('abort the request transaction');
+
+    await expect.poll(count, { timeout: 5_000, interval: 100 }).toBe(before + 1);
+  });
+
   it("still refuses that ADMIN an inactive branch and another tenant's branch", async () => {
     await act(person(ids.admin, 'ADMIN'), async (api) => {
       await expectRefusedEverywhere(api, ids.closedBranch, NOT_IN_WORKSPACE);

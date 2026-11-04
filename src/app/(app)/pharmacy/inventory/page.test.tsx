@@ -316,6 +316,14 @@ describe('DEV-660 — only assigned branches are offered', () => {
     expect(nearExpiry).not.toHaveBeenCalled();
   });
 
+  it('reads no stock directly when the gated branch read refuses', async () => {
+    nearExpiry.mockRejectedValue(new Error('Branch is outside your scope.'));
+    await expect(
+      PharmacyInventoryPage({ searchParams: Promise.resolve({ branch: branch.id }) })
+    ).rejects.toThrow('Branch is outside your scope.');
+    expect(lots).not.toHaveBeenCalled();
+  });
+
   it('offers to receive a transfer only at its destination branch', async () => {
     ctx.db.pharmacyBranch.findMany.mockResolvedValue([branch, other]);
     const lines = [{ id: 'line-1', quantityUnits: 5, receivedUnits: 0 }];

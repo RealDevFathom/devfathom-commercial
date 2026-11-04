@@ -7,6 +7,8 @@
  * input, pins the tenant/branch/actor scope to the SESSION rather than the
  * payload, and maps the domain error onto a tRPC code.
  */
+import { randomUUID } from 'node:crypto';
+
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -69,7 +71,7 @@ import {
   roleDashboard,
   snoozeSignal,
 } from '@/lib/pharmacy/stock-signals-operations';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   CsvTemperatureReadingSource,
   ingestTemperatureReadings,
@@ -78,7 +80,7 @@ import {
 } from '@/lib/pharmacy/temperature-log';
 
 import { can, subjectFromSession } from '@/lib/abac';
-import { recordAudit } from '@/server/audit';
+import { afterTenantTransaction } from '@/lib/side-effects/scope';
 
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 import { assertInOrganization } from '../org-refs';
@@ -222,9 +224,16 @@ async function tenantAdminException(
 export const ADMIN_BRANCH_EXCEPTION_ACTION = 'pharmacy.inventory.admin_branch_exception';
 
 /**
- * One awaited audit row per use of the ADMIN exception, written before any
- * stock is read or moved. It does not ride on the request's shared audit detail
- * (a batched request shares one), and a failed write fails the request closed.
+ * One audit row per use of the ADMIN exception, written before any stock is read
+ * or moved, so it never rides on the request's shared audit detail (a batched
+ * request shares one).
+ *
+ * The insert is awaited on the request's own client: if it fails, the request
+ * fails closed. On /api/trpc that client is the request transaction, which rolls
+ * back when any call in the batch fails, so the same row (same id) is written
+ * again after the transaction ends, idempotently, on its own connection. A
+ * committed request makes that second write a no-op; an aborted one keeps the
+ * row it would otherwise lose.
  */
 async function recordAdminBranchException(
   ctx: TRPCContext,
@@ -239,37 +248,50 @@ async function recordAdminBranchException(
     supportSessionId?: string;
     platformUserId?: string;
   };
-  await recordAudit(
-    {
-      organizationId: scope.organizationId,
-      actorType: 'USER',
-      actorId: scope.actorId,
-      actorName: user.name ?? null,
-      actorEmail: user.email ?? null,
-      actorRole: user.role ?? null,
-      source: 'TRPC',
-      category: 'PHARMACY',
-      operation: 'READ',
-      action: ADMIN_BRANCH_EXCEPTION_ACTION,
-      description: 'Tenant ADMIN reached an inventory branch without a branch assignment',
-      targetType: 'PharmacyBranch',
-      targetId: branch,
-      metadata: {
-        branchId: branch,
-        reason: 'tenant-admin-inventory-access-without-branch-assignment',
-        ...(user.isSupportSession
-          ? {
-              supportSessionId: user.supportSessionId,
-              platformUserId: user.platformUserId,
-              actingAsTenantUserId: scope.actorId,
-            }
-          : {}),
-      },
-      ip: ctx.requestMeta?.ip ?? null,
-      userAgent: ctx.requestMeta?.userAgent ?? null,
+  const data = {
+    id: randomUUID(),
+    organizationId: scope.organizationId,
+    actorType: 'USER' as const,
+    actorId: scope.actorId,
+    actorName: user.name ?? null,
+    actorEmail: user.email ?? null,
+    actorRole: user.role ?? null,
+    source: 'TRPC' as const,
+    category: 'PHARMACY',
+    operation: 'OTHER' as const,
+    action: ADMIN_BRANCH_EXCEPTION_ACTION,
+    description: 'Tenant ADMIN reached an inventory branch without a branch assignment',
+    targetType: 'PharmacyBranch',
+    targetId: branch,
+    metadata: {
+      branchId: branch,
+      reason: 'tenant-admin-inventory-access-without-branch-assignment',
+      ...(user.isSupportSession
+        ? {
+            supportSessionId: user.supportSessionId,
+            platformUserId: user.platformUserId,
+            actingAsTenantUserId: scope.actorId,
+          }
+        : {}),
     },
-    ctx.db
-  );
+    ip: ctx.requestMeta?.ip ?? null,
+    userAgent: ctx.requestMeta?.userAgent ?? null,
+    outcome: 'SUCCESS' as const,
+  };
+  await ctx.db.auditLog.create({ data });
+  afterTenantTransaction(() => {
+    void withTenantDb(
+      scope.organizationId,
+      (tx) => tx.auditLog.createMany({ data: [data], skipDuplicates: true }),
+      { maxWait: 1_000, timeout: 5_000, skipDrain: true }
+    ).catch((error: unknown) => {
+      console.error(
+        '[audit] failed to re-record',
+        ADMIN_BRANCH_EXCEPTION_ACTION,
+        error instanceof Error ? error.name : 'error'
+      );
+    });
+  });
 }
 
 /**

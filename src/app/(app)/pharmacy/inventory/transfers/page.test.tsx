@@ -74,3 +74,12 @@ it('DEV-660: opens an assigned branch instead of an unassigned one named in the 
   expect(within(branchSelect).queryByRole('option', { name: /Other/ })).toBeNull();
   expect(within(branchSelect).getByRole('option', { name: /Main/ })).toBeInTheDocument();
 });
+
+it('DEV-660: reads no stock directly when the gated transfer board refuses', async () => {
+  mocks.board.mockRejectedValue(new Error('Branch is outside your scope.'));
+
+  await expect(Page({ searchParams: Promise.resolve({ branch: main.id }) })).rejects.toThrow(
+    'Branch is outside your scope.'
+  );
+  expect(ctx.db.pharmacyStockBalance.findMany).not.toHaveBeenCalled();
+});

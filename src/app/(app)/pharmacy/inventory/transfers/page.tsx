@@ -134,8 +134,10 @@ export default async function PharmacyTransfersPage({
   }
 
   const caller = pharmacyInventoryRouter.createCaller(ctx);
-  const [transfers, balances, destinationLocations, witnesses] = await Promise.all([
-    caller.transferBoard({ branchId: branch.id }),
+  // DEV-660: the gated read admits the branch (and, for a tenant ADMIN without an
+  // assignment, writes the exception's audit row) before any direct stock read.
+  const transfers = await caller.transferBoard({ branchId: branch.id });
+  const [balances, destinationLocations, witnesses] = await Promise.all([
     ctx.db.pharmacyStockBalance.findMany({
       where: {
         organizationId,
