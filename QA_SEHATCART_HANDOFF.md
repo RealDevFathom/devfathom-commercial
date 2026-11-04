@@ -2,7 +2,7 @@
 
 > PR #1224 kept this log at the repository root as `HANDOFF.md`. After #1224 merged, DEV-576 (#1238) replaced the root `HANDOFF.md` with its own, so this log now lives under its own name, like `FRESH_DB_HANDOFF.md`.
 
-Last updated: 2026-11-04 06:20 PKT (01:20 UTC)
+Last updated: 2026-11-04 06:24 PKT (01:24 UTC)
 Branch: `saad/great-brown-id2w5x` (`develop` @ `92878a9` merged in at `e1aa615`; normal pushes only)
 PRs: [#1224](https://github.com/RealDevFathom/devfathom-commercial/pull/1224) merged 2026-11-03 00:42 UTC as squash `4847d04` (report, BA doc, evidence, harness). Follow-up PR: [#1390](https://github.com/RealDevFathom/devfathom-commercial/pull/1390) (this file, issue links in `ba-recommendations.md`, tenant clean-up note), open into `develop`, not to be merged by this session; please squash-merge.
 Linear: no Linear issue is attached to this QA pass.
@@ -42,6 +42,15 @@ Not filed because already tracked (no duplicates created):
 - 28 → Linear DEV-504: **comment added** (unused workspace Locale, Urdu receipt details). 29 → #1236. 30 → #1232.
 
 Corrections after the completeness critic (`wf_7026951b-8f2`, agent `a2d620bc0934d4493`): issue bodies #1242, #1243, #1245, #1251, #1254, #1259, #1264 were edited to cite saved evidence only; UI observations that existed only in run output are now saved verbatim in `qa/sehatcart-2026-11-02/api-evidence/ui-run-log-excerpts.md` (commit `7dbce5d`). `qa-report.md` carries the same corrections and every issue number.
+
+## PR #1390 review status
+
+| Check                             | Verdict                | Notes                                                      |
+| --------------------------------- | ---------------------- | ---------------------------------------------------------- |
+| Machine checks (CI)               | none configured        | 0 check runs on the PR; `mergeable_state: clean`.          |
+| Codex code review (`9b7fc1d`)     | completed, no findings | 2026-11-04 01:21 UTC.                                      |
+| Codex security review (`9b7fc1d`) | completed, no findings | 2026-11-04 01:23 UTC. No review threads or reviews posted. |
+| Still queued                      | human merge decision   | Please squash-merge (see Open questions 7).                |
 
 ## PR #1224 review status
 
