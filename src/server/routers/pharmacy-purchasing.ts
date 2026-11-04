@@ -67,7 +67,6 @@ import {
 } from '@/lib/pharmacy/receiving';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
-  effectiveSupplierCompliancePolicy,
   enforceSupplierCompliance,
   readSupplierCompliancePolicy,
   recordSupplierComplianceSkip,
@@ -617,13 +616,7 @@ const purchasingRouter = router({
           organizationId,
           quoteLines.flatMap((line) => line.quote.supplier.licences.map((licence) => licence.id))
         );
-        // Controlled medicines keep the supplier checks whatever the owner policy says.
-        const policy = await effectiveSupplierCompliancePolicy(
-          ctx.db,
-          organizationId,
-          await readSupplierCompliancePolicy(ctx.db, organizationId),
-          { medicineIds: [requisitionLine.medicineId] }
-        );
+        const policy = await readSupplierCompliancePolicy(ctx.db, organizationId);
         const candidates: QuoteCandidate[] = quoteLines.map((line) => ({
           quoteId: line.quoteId,
           supplierId: line.quote.supplierId,
@@ -714,7 +707,6 @@ const purchasingRouter = router({
           {
             operation: 'PURCHASE_ORDER_CREATE',
             reference: input.reference,
-            medicineIds: input.lines.map((line) => line.medicineId),
           },
           { record: false }
         );
@@ -1124,7 +1116,6 @@ const purchasingRouter = router({
               operation: 'GOODS_RECEIPT_CREATE',
               purchaseOrderId: input.purchaseOrderId ?? null,
               reference: input.reference,
-              medicineIds: input.lines.map((line) => line.medicineId),
             }
           );
           if (input.directPurchase) {

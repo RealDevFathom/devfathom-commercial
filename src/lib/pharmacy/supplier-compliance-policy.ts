@@ -4,7 +4,6 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   assertSupplierEligible,
-  ENFORCED_SUPPLIER_COMPLIANCE,
   licenceEvidence,
   PharmacyPurchasingError,
   type SupplierComplianceOutcome,
@@ -12,7 +11,6 @@ import {
   type SupplierLicenceEvidence,
 } from './purchasing';
 import {
-  CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS,
   SUPPLIER_COMPLIANCE_WARNING,
   supplierComplianceAcknowledgementRecord,
   type SupplierComplianceOperation,
@@ -207,57 +205,7 @@ export type SupplierComplianceSubject = {
   purchaseOrderId?: string | null;
   goodsReceiptId?: string | null;
   reference?: string | null;
-  /** The medicines this write orders or receives, when they are not yet on a stored order. */
-  medicineIds?: readonly string[];
 };
-
-/**
- * Whether an order or receipt includes a controlled medicine. While
- * CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS holds (a pending product decision, see
- * supplier-compliance.ts), such writes keep the supplier licence and trade-authorization
- * checks even with the owner's switch off.
- */
-export async function involvesControlledMedicine(
-  db: ScopedDb,
-  organizationId: string,
-  subject: Pick<SupplierComplianceSubject, 'medicineIds' | 'purchaseOrderId'>
-): Promise<boolean> {
-  const medicineIds = [...new Set(subject.medicineIds ?? [])];
-  if (medicineIds.length > 0) {
-    const controlled = await db.medicine.count({
-      where: { organizationId, id: { in: medicineIds }, controlled: true },
-    });
-    if (controlled > 0) return true;
-  }
-  if (subject.purchaseOrderId) {
-    const controlled = await db.pharmacyPurchaseOrderLine.count({
-      where: {
-        organizationId,
-        purchaseOrderId: subject.purchaseOrderId,
-        medicine: { controlled: true },
-      },
-    });
-    if (controlled > 0) return true;
-  }
-  return false;
-}
-
-/**
- * The policy a write actually applies: the owner's, except that the checks stay on for
- * anything involving a controlled medicine.
- */
-export async function effectiveSupplierCompliancePolicy(
-  db: ScopedDb,
-  organizationId: string,
-  policy: SupplierCompliancePolicy,
-  subject: Pick<SupplierComplianceSubject, 'medicineIds' | 'purchaseOrderId'>
-): Promise<SupplierCompliancePolicy> {
-  if (policy.checksEnabled !== false || !CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS) return policy;
-  if (await involvesControlledMedicine(db, organizationId, subject)) {
-    return { ...ENFORCED_SUPPLIER_COMPLIANCE, version: policy.version };
-  }
-  return policy;
-}
 
 /** Append one immutable "supplier gate passed without a check" evidence row. */
 export async function recordSupplierComplianceSkip(
@@ -305,13 +253,9 @@ export async function enforceSupplierCompliance(
     record?: boolean;
   } = {}
 ): Promise<SupplierComplianceOutcome> {
-  const policy = await effectiveSupplierCompliancePolicy(
-    db,
-    scope.organizationId,
+  const policy =
     options.policy ??
-      (await readSupplierCompliancePolicy(db, scope.organizationId, { lock: 'share' })),
-    subject
-  );
+    (await readSupplierCompliancePolicy(db, scope.organizationId, { lock: 'share' }));
   const outcome = assertSupplierEligible({
     authorized: supplier.authorized,
     licences: await strictLicenceEvidence(db, scope.organizationId, supplier.licences),

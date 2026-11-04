@@ -49,7 +49,6 @@ import {
   recordSupplierComplianceSkip,
   strictLicenceEvidence,
 } from './supplier-compliance-policy';
-import { CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS } from './supplier-compliance';
 import {
   expiryInstant,
   normalizeExpiryBoundary,
@@ -259,18 +258,11 @@ export async function postGoodsReceipt(
   // PUR-01 / DEV-753: the owner's supplier-compliance policy at the moment of
   // posting, under a share lock so a concurrent owner change waits for this
   // posting to commit. Supersession is read strictly across the register (DEV-466).
-  // Pending decision (CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS): a receipt with a
-  // controlled medicine keeps the supplier checks. The witness PIN and register above
-  // are independent controlled-drug controls and never depend on this policy.
-  const ownerPolicy = await readSupplierCompliancePolicy(db, scope.organizationId, {
+  // The policy covers supplier licence and authorization only, for every medicine. The
+  // controlled-drug witness PIN and register above are independent and never read it.
+  const supplierCompliance = await readSupplierCompliancePolicy(db, scope.organizationId, {
     lock: 'share',
   });
-  const supplierCompliance =
-    ownerPolicy.checksEnabled === false &&
-    CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS &&
-    controlledIds.size > 0
-      ? { checksEnabled: true, version: ownerPolicy.version }
-      : ownerPolicy;
   const supplierEvidence = {
     authorized: receipt.supplier.authorized,
     licences: await strictLicenceEvidence(db, scope.organizationId, receipt.supplier.licences),

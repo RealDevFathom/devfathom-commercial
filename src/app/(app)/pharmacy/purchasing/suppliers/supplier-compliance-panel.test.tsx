@@ -168,6 +168,24 @@ describe('DEV-753 owner panel', () => {
     expect(screen.queryByRole('checkbox')).toBeNull();
   });
 
+  it('says OFF includes controlled-medicine suppliers and leaves the controlled-drug safeguards in place', () => {
+    panel({ read: read({ checksEnabled: false, canManage: false }) });
+    expect(
+      screen.getByText(/This includes suppliers of controlled medicines\./)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/pharmacist witness PIN at goods-in, the controlled[\s\S]*register/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/remains responsible for[\s\S]*legal sourcing obligations/)
+    ).toBeInTheDocument();
+    // The owner's warning says the same before the switch is turned off.
+    const warning = SUPPLIER_COMPLIANCE_WARNING.paragraphs.join(' ');
+    expect(warning).toMatch(/controlled medicines included/);
+    expect(warning).toMatch(/pharmacist witness PIN at goods-in, the controlled register/);
+    expect(warning).not.toMatch(/Controlled medicines are not affected/);
+  });
+
   it('tells staff the checks are off without giving them a control', () => {
     panel({ read: read({ checksEnabled: false, canManage: false }) });
     expect(screen.getByText('Checks disabled')).toBeInTheDocument();

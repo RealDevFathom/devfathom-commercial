@@ -945,7 +945,7 @@ async function seedEnforcementOrganization() {
         await seedOrder(tx, orderOf(state.key, 'send-on'), state.supplierId, 'APPROVED');
         await seedOrder(tx, orderOf(state.key, 'send-off'), state.supplierId, 'APPROVED');
       }
-      // Orders of a controlled medicine, for the checks that the owner switch never waives.
+      // Orders of a controlled medicine: refused while ON, unchecked (with evidence) while OFF.
       const ctl = stateOf('supersededByUnverified');
       await seedOrder(
         tx,
@@ -2065,6 +2065,54 @@ describeIfDatabase(
         }
       );
 
+      it.each(NON_VALID)(
+        'refuses a controlled-medicine order, receipt and central order for a supplier with $label',
+        async (state) => {
+          const reference = `PO-on-controlled-${state.key}-${suffix}`;
+          await expect(
+            asPurchasing(buyer, (api) =>
+              api.createPurchaseOrder(orderInput(state.supplierId, reference, CONTROLLED()))
+            )
+          ).rejects.toMatchObject({ code: 'FORBIDDEN', message: state.refusal });
+          const input = receiptInput(state.supplierId, `on-controlled-${state.key}`, {
+            line: CONTROLLED(),
+          });
+          await expect(
+            asPurchasing(buyer, (api) => api.createGoodsReceipt(input))
+          ).rejects.toMatchObject({ code: 'FORBIDDEN', message: state.refusal });
+          const central = `CPO-on-controlled-${state.key}-${suffix}`;
+          await expect(
+            asPurchasing(buyer, (api) =>
+              api.createCentralPurchaseOrder(centralInput(state.supplierId, central, CONTROLLED()))
+            )
+          ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+          expect(await countWhere('pharmacy_purchase_orders', 'reference', reference)).toBe(0);
+          expect(await countWhere('pharmacy_purchase_orders', 'reference', central)).toBe(0);
+          expect(await countWhere('pharmacy_goods_receipts', 'reference', input.reference)).toBe(0);
+          expect(await skipCount()).toBe(0);
+        }
+      );
+
+      it('refuses approval and send of controlled-medicine orders for a supplier licensed only on paper', async () => {
+        const ctl = stateOf('supersededByUnverified');
+        await expect(
+          asPurchasing(approver, (api) =>
+            api.approvePurchaseOrder({
+              purchaseOrderId: orderOf(ctl.key, 'approve-controlled'),
+              decision: 'APPROVED',
+            })
+          )
+        ).rejects.toMatchObject({ code: 'FORBIDDEN', message: ctl.refusal });
+        await expect(
+          asPurchasing(buyer, (api) =>
+            api.sendPurchaseOrder({ purchaseOrderId: orderOf(ctl.key, 'send-controlled') })
+          )
+        ).rejects.toMatchObject({ code: 'FORBIDDEN', message: ctl.refusal });
+        expect(await orderStatus(orderOf(ctl.key, 'approve-controlled'))).toBe('SUBMITTED');
+        expect(await orderStatus(orderOf(ctl.key, 'send-controlled'))).toBe('APPROVED');
+        expect(await skipCount()).toBe(0);
+      });
+
       it('ranks only the valid supplier as comparable, and says every supplier was checked', async () => {
         const result = await asPurchasing(buyer, (api) =>
           api.compareQuotes({ requisitionLineId: E.requisitionLine })
@@ -2438,101 +2486,113 @@ describeIfDatabase(
         });
       });
 
-      describe('keeps the supplier checks for anything involving a controlled medicine', () => {
+      describe('applies to controlled medicines too, and leaves the controlled-drug safeguards alone', () => {
         const state = stateOf('supersededByUnverified');
 
-        /** Unlicensed, unauthorized, and licensed only on paper: all still refused. */
+        /** Unlicensed, unauthorized, and licensed only on paper: all unchecked while OFF. */
         const CONTROLLED_STATES = [stateOf('none'), stateOf('unauthorized'), state];
 
         it.each(CONTROLLED_STATES)(
-          'refuses an order of a controlled medicine from a supplier with $label, and allows its ordinary order',
+          'raises an order of a controlled medicine (alone or among ordinary lines) from a supplier with $label, recording one skip each',
           async (subject) => {
             const reference = `PO-off-controlled-${subject.key}-${suffix}`;
-            await expect(
-              asPurchasing(buyer, (api) =>
-                api.createPurchaseOrder(orderInput(subject.supplierId, reference, CONTROLLED()))
-              )
-            ).rejects.toMatchObject({ code: 'FORBIDDEN', message: subject.refusal });
-            expect(await countWhere('pharmacy_purchase_orders', 'reference', reference)).toBe(0);
-            expect(await skipsAbout({ reference })).toEqual([]);
-
-            // One controlled line among ordinary ones is enough.
-            const mixed = `PO-off-mixed-${subject.key}-${suffix}`;
-            const input = orderInput(subject.supplierId, mixed);
-            await expect(
-              asPurchasing(buyer, (api) =>
-                api.createPurchaseOrder({
-                  ...input,
-                  lines: [...input.lines, { ...input.lines[0]!, ...CONTROLLED() }],
-                })
-              )
-            ).rejects.toMatchObject({ code: 'FORBIDDEN', message: subject.refusal });
-            expect(await skipsAbout({ reference: mixed })).toEqual([]);
-
-            // The same supplier's ordinary order goes through, unchecked, with its one skip.
-            const ordinary = `PO-off-ordinary-${subject.key}-${suffix}`;
             const order = await asPurchasing(buyer, (api) =>
-              api.createPurchaseOrder(orderInput(subject.supplierId, ordinary))
+              api.createPurchaseOrder(orderInput(subject.supplierId, reference, CONTROLLED()))
             );
-            expect(await skipsAbout({ reference: ordinary, purchaseOrderId: order!.id })).toEqual([
+            expect(order).toMatchObject({ reference, supplierId: subject.supplierId });
+            expect(await skipsAbout({ reference, purchaseOrderId: order!.id })).toEqual([
               expectedSkip('PURCHASE_ORDER_CREATE', subject, {
                 purchaseOrderId: order!.id,
-                reference: ordinary,
+                reference,
               }),
+            ]);
+
+            const mixed = `PO-off-mixed-${subject.key}-${suffix}`;
+            const input = orderInput(subject.supplierId, mixed);
+            const mixedOrder = await asPurchasing(buyer, (api) =>
+              api.createPurchaseOrder({
+                ...input,
+                lines: [...input.lines, { ...input.lines[0]!, ...CONTROLLED() }],
+              })
+            );
+            expect(await skipsAbout({ reference: mixed, purchaseOrderId: mixedOrder!.id })).toEqual(
+              [
+                expectedSkip('PURCHASE_ORDER_CREATE', subject, {
+                  purchaseOrderId: mixedOrder!.id,
+                  reference: mixed,
+                }),
+              ]
+            );
+          }
+        );
+
+        it.each(CONTROLLED_STATES)(
+          'drafts a controlled goods receipt from a supplier with $label (one skip), and posting still waits for the qualified-person PIN',
+          async (subject) => {
+            const input = receiptInput(subject.supplierId, `off-controlled-${subject.key}`, {
+              line: CONTROLLED(),
+            });
+            const receipt = await asPurchasing(buyer, (api) => api.createGoodsReceipt(input));
+            expect(receipt).toMatchObject({ status: 'DRAFT', supplierId: subject.supplierId });
+            // The pharmacist witness PIN is an independent controlled-drug safeguard: the
+            // owner switch never reads it, so posting is held exactly as with the checks ON.
+            await expect(
+              asPurchasing(buyer, (api) =>
+                api.postGoodsReceipt({ branchId: E.branch, goodsReceiptId: receipt!.id })
+              )
+            ).resolves.toEqual({ blocked: 'A different qualified person must enter their PIN.' });
+            expect(await receiptStatus(receipt!.id)).toBe('DRAFT');
+            expect(
+              await skipsAbout({ goodsReceiptId: receipt!.id, reference: input.reference })
+            ).toEqual([
+              expectedSkip('GOODS_RECEIPT_CREATE', subject, { reference: input.reference }),
             ]);
           }
         );
 
         it.each(CONTROLLED_STATES)(
-          'refuses a goods receipt of a controlled medicine from a supplier with $label',
-          async (subject) => {
-            const input = receiptInput(subject.supplierId, `off-controlled-${subject.key}`, {
-              line: CONTROLLED(),
-            });
-            await expect(
-              asPurchasing(buyer, (api) => api.createGoodsReceipt(input))
-            ).rejects.toMatchObject({ code: 'FORBIDDEN', message: subject.refusal });
-            expect(await countWhere('pharmacy_goods_receipts', 'reference', input.reference)).toBe(
-              0
-            );
-            expect(await skipsAbout({ reference: input.reference })).toEqual([]);
-          }
-        );
-
-        it.each(CONTROLLED_STATES)(
-          'refuses a central order of a controlled medicine from a supplier with $label as NOT_FOUND',
+          'creates a central order of a controlled medicine for a supplier with $label, recording one skip',
           async (subject) => {
             const reference = `CPO-off-controlled-${subject.key}-${suffix}`;
-            await expect(
-              asPurchasing(buyer, (api) =>
-                api.createCentralPurchaseOrder(
-                  centralInput(subject.supplierId, reference, CONTROLLED())
-                )
+            const order = await asPurchasing(buyer, (api) =>
+              api.createCentralPurchaseOrder(
+                centralInput(subject.supplierId, reference, CONTROLLED())
               )
-            ).rejects.toMatchObject({ code: 'NOT_FOUND' });
-            expect(await countWhere('pharmacy_purchase_orders', 'reference', reference)).toBe(0);
-            expect(await skipsAbout({ reference })).toEqual([]);
+            );
+            expect(order).toMatchObject({ reference, supplierId: subject.supplierId });
+            expect(await skipsAbout({ reference, purchaseOrderId: order!.id })).toEqual([
+              expectedSkip('CENTRAL_PURCHASE_ORDER_CREATE', subject, {
+                purchaseOrderId: order!.id,
+                reference,
+              }),
+            ]);
           }
         );
 
-        it('refuses to approve or send an order that holds a controlled medicine', async () => {
+        it('approves and sends an order that holds a controlled medicine, recording one skip each', async () => {
           const toApprove = orderOf(state.key, 'approve-controlled');
           const toSend = orderOf(state.key, 'send-controlled');
-          await expect(
-            asPurchasing(approver, (api) =>
-              api.approvePurchaseOrder({ purchaseOrderId: toApprove, decision: 'APPROVED' })
-            )
-          ).rejects.toMatchObject({ code: 'FORBIDDEN', message: state.refusal });
-          await expect(
-            asPurchasing(buyer, (api) => api.sendPurchaseOrder({ purchaseOrderId: toSend }))
-          ).rejects.toMatchObject({ code: 'FORBIDDEN', message: state.refusal });
-          expect(await orderStatus(toApprove)).toBe('SUBMITTED');
-          expect(await orderStatus(toSend)).toBe('APPROVED');
-          expect(await skipsAbout({ purchaseOrderId: toApprove })).toEqual([]);
-          expect(await skipsAbout({ purchaseOrderId: toSend })).toEqual([]);
+          await asPurchasing(approver, (api) =>
+            api.approvePurchaseOrder({ purchaseOrderId: toApprove, decision: 'APPROVED' })
+          );
+          await asPurchasing(buyer, (api) => api.sendPurchaseOrder({ purchaseOrderId: toSend }));
+          expect(await orderStatus(toApprove)).toBe('APPROVED');
+          expect(await orderStatus(toSend)).toBe('SENT');
+          expect(await skipsAbout({ purchaseOrderId: toApprove })).toEqual([
+            expectedSkip(
+              'PURCHASE_ORDER_APPROVE',
+              state,
+              { purchaseOrderId: toApprove },
+              1,
+              E.approver
+            ),
+          ]);
+          expect(await skipsAbout({ purchaseOrderId: toSend })).toEqual([
+            expectedSkip('PURCHASE_ORDER_SEND', state, { purchaseOrderId: toSend }),
+          ]);
         });
 
-        it("checks a valid supplier's controlled receipt (no skip) and holds it for the qualified-person PIN", async () => {
+        it("records a valid supplier's controlled receipt as unchecked too, and still holds it for the PIN", async () => {
           const valid = stateOf('valid');
           const input = receiptInput(valid.supplierId, 'off-controlled-valid', {
             line: CONTROLLED(),
@@ -2547,7 +2607,7 @@ describeIfDatabase(
           expect(await receiptStatus(receipt!.id)).toBe('DRAFT');
           expect(
             await skipsAbout({ goodsReceiptId: receipt!.id, reference: input.reference })
-          ).toEqual([]);
+          ).toEqual([expectedSkip('GOODS_RECEIPT_CREATE', valid, { reference: input.reference })]);
         });
       });
 

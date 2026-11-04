@@ -2,7 +2,6 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { SupplierLicenceStatus } from '@/lib/pharmacy/purchasing';
 import {
-  CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS,
   SUPPLIER_CHECKS_DISABLED_LABEL,
   SUPPLIER_COMPLIANCE_WARNING,
   type SupplierComplianceOperation,
@@ -104,12 +103,12 @@ export function SupplierCompliancePanel({
             &ldquo;Not checked&rdquo;.{setBy(read)}
           </p>
           <p className="text-text-muted">
-            {CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS
-              ? 'Orders and receipts that include a controlled medicine still need an authorized, licensed supplier. '
-              : ''}
-            Approvals and PINs, batch, expiry and stock checks, invoice and accounting records,
-            branch access, and the controlled-drug witness PIN and register still apply. Licences on
-            file are kept unchanged.
+            This includes suppliers of controlled medicines. The controlled-drug safeguards
+            themselves are unchanged: the pharmacist witness PIN at goods-in, the controlled
+            register and the counter&rsquo;s controlled-medicine checks still apply, as do approvals
+            and PINs, batch, expiry and stock checks, invoice and accounting records and branch
+            access. Licences on file are kept unchanged. The pharmacy remains responsible for its
+            legal sourcing obligations.
           </p>
           {!read.canManage ? (
             <p className="text-text-muted">Only the pharmacy owner can change this setting.</p>
@@ -230,12 +229,9 @@ export function SupplierPolicyStanding({
     return (
       <p className="text-sm text-text-body">
         Supplier checks are off, so orders, sends and receipts are not refused for a missing licence
-        or authorization
-        {CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS
-          ? ', except where they include a controlled medicine'
-          : ''}
-        . This supplier has not been checked. {`${LICENCE_STATUS_LABEL[licenceStatus]}.`}{' '}
-        Authorization and licences can still be recorded as evidence.
+        or authorization, controlled medicines included. This supplier has not been checked.{' '}
+        {`${LICENCE_STATUS_LABEL[licenceStatus]}.`} Authorization and licences can still be recorded
+        as evidence.
       </p>
     );
   }
