@@ -18,7 +18,7 @@ function section(heading: string): string {
 }
 
 const tableRows = (text: string) =>
-  text.split('\n').filter((line) => /^\| (HW-[A-Z]+-\d{2}) /.test(line));
+  text.split('\n').filter((line) => /^\| (HW-[A-Z0-9]+-\d{2}) /.test(line));
 
 describe('hardware acceptance matrix document', () => {
   it('opens with the no-acceptance banner', () => {
@@ -101,6 +101,19 @@ describe('hardware acceptance matrix document', () => {
     expect(doc).toContain('iPhone');
     expect(doc).toContain('No test\nhas been run');
     expect(doc).toContain('must never write to the DVR or its\nrecordings');
+  });
+
+  it('records the printer plan without claiming compatibility', () => {
+    expect(doc).toContain('Canon PIXMA G3416');
+    expect(doc).toContain('USB thermal printing first');
+    expect(doc).toContain('Do not assume ESC/POS or any Epson-specific compatibility');
+    expect(doc).not.toMatch(
+      /(Canon PIXMA G3416|Epson)[^.\n]{0,80}(is|are) (verified|certified|compatible|supported)/i
+    );
+    const rows = tableRows(doc);
+    for (const prefix of ['| HW-USB-', '| HW-A4-', '| HW-NET-', '| HW-BT-']) {
+      expect(rows.filter((row) => row.startsWith(prefix)).length, prefix).toBeGreaterThan(0);
+    }
   });
 
   it('separates every evidence class and keeps manual tender out of integration', () => {

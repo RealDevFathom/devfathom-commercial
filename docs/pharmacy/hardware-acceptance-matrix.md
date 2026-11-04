@@ -236,6 +236,18 @@ diameter), cutter yes/no, print width in dots, character code pages, driver name
 version, host OS and version, whether the OS shows a named queue, and whether the vendor
 publishes an ESC/POS command reference. Never test with an unknown shared printer.
 
+Printers named so far (planning details from DEV-744, nothing verified on a device):
+
+| Role | Printer | Known | Unknown |
+| --- | --- | --- | --- |
+| A4 | Canon PIXMA G3416 (user-confirmed) | Model name only | Host OS, driver, connection used (USB / Wi-Fi), browser |
+| Thermal | Possibly an Epson thermal printer | Nothing reliable | Exact model, paper width, interface(s), cutter, code pages, driver. **Do not assume ESC/POS or any Epson-specific compatibility.** |
+
+Priority set by the owner on 2026-11-04: **USB thermal printing first.** Network and Bluetooth
+thermal printers used by other pharmacies stay a planned path, not a supported or tested one.
+Standard A4 printing must keep working. The Canon A4 test is planned separately from, and does
+not depend on, the later USB thermal test.
+
 ### 4.3 Scanners (one row per scanner)
 
 Make/model, firmware, interface mode (USB-HID keyboard wedge, USB-CDC serial, Bluetooth
@@ -302,6 +314,44 @@ any such app is compatible with the gateway or with ONVIF on the DVR, is **unver
 
 A pass here would show only that this phone, app and gateway work together in this setup. It would
 not show that a CCTV camera, the DVR or its firmware work.
+
+### 5.2a Printer connection plan and order (planned, none performed)
+
+| Order | Track | Why | Status |
+| --- | --- | --- | --- |
+| 1 | USB thermal (printer model to be identified) | Owner priority | UNTESTED, planned |
+| 2 | Canon PIXMA G3416, A4, browser/OS dialog | Current A4 printer; independent of the thermal work | UNTESTED, planned |
+| 3 | Network (LAN) thermal | Used by other pharmacies; path preserved | UNTESTED, planned option only, not scheduled |
+| 4 | Bluetooth thermal | Used by other pharmacies; path preserved | UNTESTED, planned option only, not scheduled |
+
+What the code supports at `396e265`, so nobody assumes more:
+- The app has **no** WebUSB, Web Serial or Web Bluetooth code. Browser printing can reach a USB
+  printer only through an OS-installed queue and driver. Bluetooth works the same way, only if the
+  OS pairs the printer and exposes a queue. Which OS and browser can do that is unverified.
+- The raw ESC/POS job is not dispatched at all today (DEV-741). The Restaurant bridge parser accepts
+  `tcp://host:9100`, `queue:///name` (macOS/Windows) and POSIX `/dev/` character devices
+  (`src/lib/restaurant/printing/target.ts`). A USB printer would reach the bridge as an OS queue
+  or a `/dev/` device, a LAN printer as `tcp://`. **There is no Bluetooth target form.**
+  This is bridge parsing only; the bridge is not wired to Pharmacy and was not run.
+- Compatibility of any printer, OS, browser, driver or connection type is **unverified** until a
+  user-authorized real test records an evidence pack (section 9).
+
+| ID | Check | Method | Expected | Evidence | Prerequisite | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| HW-USB-01 | Identify the thermal printer exactly | Read label and driver page; record model, paper width, cutter, interface | Complete section 4.2 row; Epson brand not assumed | Photo of label, driver page | Owner access | UNTESTED |
+| HW-USB-02 | OS sees the USB printer and a named queue | Host OS printer list | Queue present with vendor driver | Screenshot | HW-USB-01; install only with approval | UNTESTED |
+| HW-USB-03 | Browser dialog print, 80 mm or 58 mm to the USB queue | Counter -> Print receipt -> pick the queue | Correct width, no clipping | Photo of paper | HW-USB-02 | UNTESTED |
+| HW-USB-04 | Raw ESC/POS over USB (queue or device) | Bridge hand-off of the generated job | Prints; app shows an honest delivery state | Photo + app state | [BLOCKED: DEV-741] | UNTESTED |
+| HW-USB-05 | Unplug, replug, sleep and wake the host | Disturb the connection | Visible error, safe retry, no duplicate paper | Capture | HW-USB-03 | UNTESTED |
+| HW-A4-01 | Record the Canon PIXMA G3416 setup | Host OS, driver, connection, browser | Complete row | Sheet | Owner access | UNTESTED |
+| HW-A4-02 | A4 receipt and Z-report to the Canon | Counter -> A4; Z-report | Fits page, 10 mm margins, readable | Photo of page | HW-A4-01 | UNTESTED |
+| HW-A4-03 | Urdu text on A4 | Urdu locale print | Correct shaping, right-to-left | Photo | Urdu font on host | UNTESTED |
+| HW-A4-04 | Cancel, retry, out-of-paper | Cancel the dialog; run out of paper | App never claims paper output | UI state | HW-A4-01 | UNTESTED |
+| HW-NET-01 | LAN thermal printer (planned option) | Needs a static address on a private network and a vendor-documented raw port | Only after owner approval and DEV-741 | Pack | Not scheduled | UNTESTED |
+| HW-BT-01 | Bluetooth thermal printer (planned option) | Needs OS pairing and a queue | Per-OS result recorded, not assumed | Pack | Not scheduled | UNTESTED |
+
+The Canon rows never touch the thermal printer and run on their own approval. Do not change
+printer settings, firmware or network configuration without separate written approval.
 
 ### 5.2 Thermal printers (58 / 80 mm) and A4 — raw and browser
 
@@ -377,7 +427,7 @@ No live financial transaction occurs without separate written approval.
 | Print path | Browser dialog, raw ESC/POS | UNTESTED |
 | Network | Same LAN, VPN, offline | UNTESTED |
 
-Direct USB/serial printing from the browser is not supported by the app. A host with an
+Direct USB/serial/Bluetooth printing from the browser is not supported by the app (no WebUSB, Web Serial or Web Bluetooth code). A host with an
 OS-visible queue and a working driver is the prerequisite for the browser path
 (`COUNTER-PRINTING.md`).
 
@@ -412,10 +462,12 @@ claim a retry is safe without a test showing it.
 | P1 | Reprint flag comes from the client | Unmarked repeat copies possible | DEV-195 |
 | P1 | Browser print cannot detect cancel or paper | No honest "printed" state | DEV-741 / DEV-742 |
 | P1 | Real DVR stills unsupported | Transaction and cold-chain evidence cannot use real cameras | DEV-745 |
+| P1 | Thermal printer model unknown (possibly Epson) and USB path unproven; USB is the owner's first priority | USB thermal cannot be planned or accepted without the exact model, driver and a dispatch path | Operator, DEV-741 |
 | P2 | Saved paper format has no Pharmacy UI | Operators re-pick format every session | DEV-742 |
 | P2 | Urdu thermal output depends on host fonts | Possible wrong glyphs on paper | DEV-742 / acceptance |
 | P2 | DVR identified from a label photo only; firmware, protocols, codec and any connected camera models unknown | Cannot predict playback; DVR currently has no connected camera | Operator |
 | P2 | Goods-in search only on Enter | Slower scanning workflow | DEV-734 |
+| P3 | Network and Bluetooth thermal paths are preserved on paper only; no code target for Bluetooth | Other pharmacies may need them later | DEV-741 |
 | P3 | Supported-browser policy for hardware features not documented | Support ambiguity | Product |
 | P3 | Sensor ingest absent | Out of scope here | DEV-82 |
 
