@@ -46,6 +46,7 @@ const storedPolicy = (checksEnabled: boolean) => ({
 
 import OrdersPage from './orders/page';
 import OverviewPage from './page';
+import ReceivingPage from './receiving/page';
 
 const FORBIDDEN_OFF_WORDS = /verified|licensed|authorized/i;
 
@@ -172,7 +173,7 @@ const ORDERS_OFF = {
   description:
     'Demand becomes a requisition, quotes are compared and explained, and an approved order is sent to a supplier. Supplier checks are off, so suppliers are not checked.',
   stat: 'Supplier checks off: not checked',
-  send: 'The owner turned supplier checks off, so this supplier is not checked when the order is sent.',
+  send: 'Supplier checks are off, so this supplier is not checked when the order is sent.',
 };
 
 describe('orders page supplier-check copy', () => {
@@ -301,5 +302,110 @@ describe('with no supplier listed yet, the stored setting decides the wording', 
 
     expect(screen.getByText(OVERVIEW_OFF.why)).toBeVisible();
     expect(screen.queryByText(OVERVIEW_ON.why)).toBeNull();
+  });
+});
+
+describe('receiving page supplier hint, by the stored setting', () => {
+  const RECEIVING_EMPTY_ON =
+    'No orderable supplier. Authorize one and file a verified licence first.';
+  const RECEIVING_EMPTY_OFF = 'No supplier yet. Add one in the supplier register first.';
+
+  /** Enough of a receiving bench for the direct-purchase form to render, with no supplier yet. */
+  function receivingCaller() {
+    const bench = {
+      branches: [
+        {
+          id: 'branch-1',
+          code: 'MAIN',
+          name: 'Main branch',
+          city: 'Karachi',
+          defaultStockLocationId: 'loc-1',
+        },
+      ],
+      stockLocations: [
+        {
+          id: 'loc-1',
+          branchId: 'branch-1',
+          code: 'SHELF',
+          name: 'Front shelf',
+          kind: 'STORE',
+          coldChain: false,
+        },
+        {
+          id: 'loc-q',
+          branchId: 'branch-1',
+          code: 'QUAR',
+          name: 'Quarantine',
+          kind: 'QUARANTINE',
+          coldChain: false,
+        },
+      ],
+      medicines: [
+        {
+          id: 'med-1',
+          productName: 'Amoxicillin 500mg',
+          brandName: null,
+          coldChain: false,
+          controlled: false,
+          packs: [
+            {
+              packLevelId: 'pack-1',
+              level: 'STRIP',
+              presentation: 'Capsule, 10 per strip',
+              canonicalUnitsPerPack: 10,
+              conversionLabel: '1 STRIP = 10 units',
+            },
+          ],
+        },
+      ],
+      suppliers: [],
+      approvers: [{ id: 'user-2', name: 'Bilal', email: 'bilal@example.test' }],
+    };
+    return {
+      ...callerFor([]),
+      workspace: vi.fn().mockResolvedValue(bench),
+      goodsReceipts: vi.fn().mockResolvedValue([]),
+      receivedAgainstOrder: vi.fn().mockResolvedValue({}),
+      lotsFromReceipt: vi.fn().mockResolvedValue([]),
+    };
+  }
+
+  // The receiving bench re-checks procurement access on the live user row.
+  const withProcurementAccess = () =>
+    mocks.createTRPCContext.mockResolvedValue({
+      ...contextStub(),
+      db: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            organizationRole: {
+              permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
+            },
+            permissionOverrides: [],
+          }),
+        },
+      },
+    });
+
+  it('does not ask for a licence or authorization while the stored setting is off', async () => {
+    withProcurementAccess();
+    mocks.createCaller.mockReturnValue(receivingCaller());
+    mocks.policy.mockResolvedValue(storedPolicy(false));
+
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+
+    expect(screen.getByText(RECEIVING_EMPTY_OFF)).toBeVisible();
+    expect(screen.getByText(RECEIVING_EMPTY_OFF).textContent).not.toMatch(FORBIDDEN_OFF_WORDS);
+    expect(screen.queryByText(RECEIVING_EMPTY_ON)).toBeNull();
+  });
+
+  it('keeps today’s hint while the stored setting is on', async () => {
+    withProcurementAccess();
+    mocks.createCaller.mockReturnValue(receivingCaller());
+    mocks.policy.mockResolvedValue(storedPolicy(true));
+
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+
+    expect(screen.getByText(RECEIVING_EMPTY_ON)).toBeVisible();
+    expect(screen.queryByText(RECEIVING_EMPTY_OFF)).toBeNull();
   });
 });

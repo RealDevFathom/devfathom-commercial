@@ -5,8 +5,9 @@
 -- "pharmacy_owner_policy_audit" written by trigger whoever writes the row.
 --
 -- "supplierComplianceChecksEnabled" defaults to ON, and a missing row means ON, so the
--- PUR-01 supplier licence and supplier trade-authorization checks are unchanged until a
--- verified tenant owner turns them off. The switch changes software enforcement only. It
+-- PUR-01 supplier licence and supplier trade-authorization checks are unchanged until the
+-- verified tenant owner, or a verified tenant ADMIN holding the pharmacy settings
+-- capability, turns them off (for every medicine, controlled medicines included). The switch changes software enforcement only. It
 -- never changes supplier rows, licence evidence or anyone's capabilities.
 --
 -- The allowCashierRxSale branch of the audit trigger is kept byte-for-byte as #518 wrote
@@ -282,8 +283,9 @@ CREATE POLICY tenant_isolation ON "pharmacy_supplier_compliance_skips"
 -- a stored OFF lets the write through on those two facts; anything else (no row, ON,
 -- unreadable) enforces, and enforces strictly: the licence must also be unsuperseded
 -- (DEV-466), matching the application gate. A supplier from another tenant is refused
--- either way. The controlled-medicine exception (a pending product decision) lives in
--- the application gate only; these backstops stay a plain reading of the owner policy.
+-- either way. The policy covers every medicine, controlled medicines included; the
+-- controlled-drug safeguards (witness PIN, controlled register) are separate and never
+-- read it.
 CREATE FUNCTION pharmacy_supplier_checks_enforced(p_organization_id text) RETURNS boolean
 LANGUAGE plpgsql STABLE AS $$
 DECLARE enabled boolean;

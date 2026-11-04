@@ -644,7 +644,7 @@ export function compareQuotes(input: {
     );
     if (!supplierChecked) {
       reasons.push(
-        'Supplier licence and trade authorization not checked: the owner has turned these checks off.'
+        'Supplier licence and trade authorization not checked: supplier checks are turned off.'
       );
     }
 

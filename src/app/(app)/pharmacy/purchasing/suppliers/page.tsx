@@ -537,7 +537,7 @@ function SupplierDetail({
             detail={
               checked
                 ? 'File the drug sale licence or distribution licence below. It must be verified and unexpired before this supplier can be ordered from.'
-                : 'Optional while supplier checks are off. A licence filed below is kept as evidence and is checked again if the owner turns the checks back on.'
+                : 'Optional while supplier checks are off. A licence filed below is kept as evidence and is checked again if the checks are turned back on.'
             }
           />
         ) : (

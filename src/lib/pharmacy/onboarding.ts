@@ -165,7 +165,7 @@ export type PharmacyReadiness = {
   ready: boolean;
   /** P0 gates that are not PASSED, in walk order. */
   blocking: readonly PharmacyOnboardingGate[];
-  /** DEV-753: false only when the owner turned supplier checks off. Absent reads as on. */
+  /** DEV-753: false only when supplier checks are turned off. Absent reads as on. */
   supplierChecksEnabled?: boolean;
 };
 

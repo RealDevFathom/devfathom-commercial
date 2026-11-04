@@ -462,7 +462,7 @@ export default async function PharmacyOrdersPage({
 
   const orderable = workspace.suppliers.filter((supplier) => supplier.eligibility.orderable);
   const medicinesWithPacks = workspace.medicines.filter((medicine) => medicine.packs.length > 0);
-  // DEV-753: the owner turned supplier checks off. A summary without `compliance` reads as checked.
+  // DEV-753: supplier checks are off. A summary without `compliance` reads as checked.
   // Off when a listed supplier says so; with no supplier listed yet, ask the stored setting
   // (read fail-closed: anything but a positive OFF reads as checks on).
   const checksOff =
@@ -667,7 +667,9 @@ export default async function PharmacyOrdersPage({
                     ? checksOff
                       ? 'There are no suppliers yet. Add one in the supplier register; supplier checks are off, so it can be ordered from once added.'
                       : 'There are no suppliers yet. Add one and file a verified licence before raising an order.'
-                    : 'Every supplier is either unauthorized or without an unexpired verified licence. PUR-01 refuses an order to any of them.'
+                    : checksOff
+                      ? 'No supplier can be ordered from right now. Open the supplier register to add or reactivate one.'
+                      : 'Every supplier is either unauthorized or without an unexpired verified licence. PUR-01 refuses an order to any of them.'
                 }
                 steps={[
                   {
@@ -1089,7 +1091,7 @@ function OrderDetailPanel({
     }[];
   } | null;
   actorId: string;
-  /** DEV-753: the owner turned supplier checks off. */
+  /** DEV-753: supplier checks are off. */
   checksOff: boolean;
   comparisons: LineComparison[];
   notice: Notice | null;
@@ -1301,7 +1303,7 @@ function OrderDetailPanel({
             <SubmitButton>Send to supplier</SubmitButton>
             <p className="mt-2 text-sm text-text-muted">
               {checksOff
-                ? 'The owner turned supplier checks off, so this supplier is not checked when the order is sent.'
+                ? 'Supplier checks are off, so this supplier is not checked when the order is sent.'
                 : 'The supplier’s authorization and licence are checked again at this moment; either can have lapsed since the order was drafted.'}
             </p>
           </PurchasingActionForm>

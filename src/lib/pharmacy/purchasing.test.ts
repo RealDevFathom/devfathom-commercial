@@ -26,7 +26,7 @@ const VALID_LICENCE: SupplierLicenceEvidence = {
 };
 /** The owner policy as it stands by default: supplier checks ON. */
 const ON: SupplierCompliancePolicy = ENFORCED_SUPPLIER_COMPLIANCE;
-/** The owner turned supplier checks off at policy version 3. */
+/** Supplier checks turned off at policy version 3. */
 const OFF: SupplierCompliancePolicy = { checksEnabled: false, version: 3 };
 
 describe('PUR-01 supplier eligibility', () => {
@@ -822,7 +822,7 @@ describe('DEV-753 owner supplier-compliance policy with DEV-466 strict supersess
       expect(row).toMatchObject({ comparable: true, supplierChecked: false, rank: 1 });
       expect(row!.effectiveUnitCostMicroMinor).not.toBeNull();
       expect(row!.reasons).toContain(
-        'Supplier licence and trade authorization not checked: the owner has turned these checks off.'
+        'Supplier licence and trade authorization not checked: supplier checks are turned off.'
       );
       expect(row!.reasons.join(' ')).not.toMatch(/not authorized|no unexpired verified licence/i);
     });

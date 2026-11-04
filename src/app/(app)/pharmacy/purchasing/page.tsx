@@ -185,7 +185,7 @@ export default async function PharmacyPurchasingPage({
 
   const orderable = workspace.suppliers.filter((supplier) => supplier.eligibility.orderable);
   const medicinesWithPacks = workspace.medicines.filter((medicine) => medicine.packs.length > 0);
-  // DEV-753: the owner turned supplier checks off. A summary without `compliance` reads as checked.
+  // DEV-753: supplier checks are off. A summary without `compliance` reads as checked.
   // Off when a listed supplier says so; with no supplier listed yet, ask the stored setting
   // (read fail-closed: anything but a positive OFF reads as checks on).
   const checksOff =

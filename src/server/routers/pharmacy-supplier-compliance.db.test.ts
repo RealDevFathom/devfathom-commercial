@@ -202,6 +202,9 @@ const H = {
   ownerOperatorAdmin: `u753h_owner_operator_admin_${suffix}`,
   adminNoRole: `u753h_admin_norole_${suffix}`,
   manager: `u753h_manager_${suffix}`,
+  adminRoleDenied: `u753h_admin_role_denied_${suffix}`,
+  adminUserDenied: `u753h_admin_user_denied_${suffix}`,
+  inactiveAdmin: `u753h_inactive_admin_${suffix}`,
 };
 /** Org E: enforcement through the real purchasing router. */
 const E = {
@@ -1196,7 +1199,7 @@ beforeAll(async () => {
   );
   await seedOrganization(
     H.org,
-    [ROLES.superAdmin, ROLES.ownerOperator, ROLES.manager],
+    [ROLES.superAdmin, ROLES.ownerOperator, ROLES.manager, ROLES.adminNoSettings],
     [
       { id: H.admin, name: `Hira Admin ${suffix}`, role: 'super-admin', tenantRole: 'ADMIN' },
       {
@@ -1207,6 +1210,26 @@ beforeAll(async () => {
       },
       { id: H.adminNoRole, name: 'Legacy Admin H', tenantRole: 'ADMIN' },
       { id: H.manager, name: 'Store Manager H', role: 'manager' },
+      {
+        id: H.adminRoleDenied,
+        name: 'Admin Role Denied H',
+        role: 'admin-no-settings',
+        tenantRole: 'ADMIN',
+      },
+      {
+        id: H.adminUserDenied,
+        name: 'Admin User Denied H',
+        role: 'super-admin',
+        tenantRole: 'ADMIN',
+        deny: { capability: 'pharmacy:manage', expiresAt: null },
+      },
+      {
+        id: H.inactiveAdmin,
+        name: 'Departed Admin H',
+        role: 'super-admin',
+        tenantRole: 'ADMIN',
+        status: 'INACTIVE',
+      },
     ]
   );
   await seedEnforcementOrganization();
@@ -2409,7 +2432,7 @@ describeIfDatabase(
         for (const row of result.ranking) {
           expect(row).toMatchObject({ comparable: true, supplierChecked: false });
           expect(row.reasons).toContain(
-            'Supplier licence and trade authorization not checked: the owner has turned these checks off.'
+            'Supplier licence and trade authorization not checked: supplier checks are turned off.'
           );
         }
         // A read leaves no evidence row.
@@ -3157,9 +3180,19 @@ describeIfDatabase(
           WHERE "organizationId" = $1`;
       const refusal = await sqlRefusal(H.org, turnOff, [H.org, H.adminNoRole], H.adminNoRole);
       expect(refusal).toContain('SUPPLIER_COMPLIANCE_POLICY_AUTHORITY_REQUIRED');
-      expect(await sqlRefusal(H.org, turnOff, [H.org, H.manager], H.manager)).toContain(
-        'SUPPLIER_COMPLIANCE_POLICY_AUTHORITY_REQUIRED'
-      );
+      // The same bounded rule as the application: a role DENY or a user DENY wins over the
+      // ADMIN's '*', an inactive ADMIN is out, and another tenant's ADMIN is no one here.
+      for (const userId of [
+        H.manager,
+        H.adminRoleDenied,
+        H.adminUserDenied,
+        H.inactiveAdmin,
+        B.owner,
+      ]) {
+        expect(await sqlRefusal(H.org, turnOff, [H.org, userId], userId), userId).toContain(
+          'SUPPLIER_COMPLIANCE_POLICY_AUTHORITY_REQUIRED'
+        );
+      }
       expect(await policyRow(H.org)).toEqual([
         expect.objectContaining({
           supplierComplianceChecksEnabled: true,
