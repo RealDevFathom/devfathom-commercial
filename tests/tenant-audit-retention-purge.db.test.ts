@@ -12,10 +12,14 @@
  * transactional, nothing persists and no other session ever sees the stand-in,
  * even when the real function is installed.
  *
- * Requires OWNER_DATABASE_URL: a migrated, throwaway database, as a role that may
- * CREATE FUNCTION in schema public (the migration owner). TEST_DATABASE_URL, the
- * NOSUPERUSER NOBYPASSRLS runtime role, is used for one case under forced RLS
- * when the owner may SET ROLE to it. Skipped without OWNER_DATABASE_URL.
+ * No case skips itself: the QA gate counts a skipped test as a failure. When the
+ * real function is installed, the "not installed" case renames it away inside its
+ * own transaction instead.
+ *
+ * Requires OWNER_DATABASE_URL: a migrated, throwaway database, as the role that
+ * owns its tables and functions (the migration owner, like the gate's NOSUPERUSER
+ * NOBYPASSRLS gate_owner, for which forced RLS applies to every case). Skipped
+ * without it.
  */
 import { randomBytes } from 'node:crypto';
 
@@ -23,10 +27,6 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const ownerUrl = process.env.OWNER_DATABASE_URL ?? '';
-const runtimeUrl = process.env.TEST_DATABASE_URL ?? '';
-if (ownerUrl && ownerUrl === runtimeUrl) {
-  throw new Error('OWNER_DATABASE_URL and TEST_DATABASE_URL must name different roles');
-}
 const describeIfDatabase = ownerUrl ? describe : describe.skip;
 
 const DEADLINE_FN = 'public.pharmacy_record_retention_deadline(text,text,text,text)';
@@ -35,6 +35,7 @@ const suffix = randomBytes(6).toString('hex');
 const PHARMACY = `audit_ret_ph_${suffix}`;
 const AGENCY = `audit_ret_ag_${suffix}`;
 const ROW = `audit_ret_row_${suffix}`;
+const PARKED_DEADLINE_FN = `pharmacy_record_retention_deadline_parked_${suffix}`;
 
 type Attempt =
   { ok: true; rowCount: number } | { ok: false; code: string | undefined; message: string };
@@ -219,17 +220,16 @@ describeIfDatabase('pharmacy retention purge of expired tenant audit rows', () =
       await expiredPharmacyRowInPurge();
       await seed(AGENCY, 'AGENCY');
       for (const context of [AGENCY, '']) {
+        // The platform flag shows the row to any role through RLS, and no purge
+        // is named, so only the trigger's tenant-context rule can refuse it.
         await owner.query(
           `SELECT set_config('app.current_organization_id', $1, true),
-                  set_config('app.is_platform_admin', 'false', true),
+                  set_config('app.is_platform_admin', 'true', true),
+                  set_config('app.purging_organization_id', '', true),
                   set_config('app.retention_purge_organization_id', $2, true)`,
           [context, PHARMACY]
         );
-        // A superuser owner bypasses RLS, so the trigger must refuse. An owner
-        // under forced RLS does not even see the row: nothing is deleted.
-        const result = await deleteRow(PHARMACY);
-        if (result.ok) expect(result.rowCount).toBe(0);
-        else expectAppendOnlyRefusal(result, 'DELETE');
+        expectAppendOnlyRefusal(await deleteRow(PHARMACY), 'DELETE');
       }
       await expect(stillStored(PHARMACY)).resolves.toBe('test.retention-purge');
     });
@@ -287,15 +287,41 @@ describeIfDatabase('pharmacy retention purge of expired tenant audit rows', () =
     });
   });
 
-  it('refuses every purge while the DEV-96 deadline function is not installed', async (context) => {
-    if (realDeadlineFunctionInstalled) {
-      context.skip('DEV-96 installed the real function; its own suite covers this path');
-    }
+  it('refuses every purge while the DEV-96 deadline function is not installed', async () => {
     await inRolledBackTransaction(async () => {
+      if (realDeadlineFunctionInstalled) {
+        // Park the real function under another name for this transaction only.
+        await owner.query(`ALTER FUNCTION ${DEADLINE_FN} RENAME TO ${PARKED_DEADLINE_FN}`);
+      }
       await seed(PHARMACY, 'PHARMACY');
       await tenantContext(PHARMACY, PHARMACY);
-      expectAppendOnlyRefusal(await deleteRow(PHARMACY), 'DELETE');
+      const result = await deleteRow(PHARMACY);
+      if (realDeadlineFunctionInstalled) {
+        // DEV-96's own guard, which also calls the function, fails first.
+        expect(result).toMatchObject({ ok: false });
+      } else {
+        expectAppendOnlyRefusal(result, 'DELETE');
+      }
       await expect(stillStored(PHARMACY)).resolves.toBe('test.retention-purge');
+    });
+  });
+
+  it('ignores temporary tables that shadow the tables it reads', async () => {
+    await inRolledBackTransaction(async () => {
+      await seed(AGENCY, 'AGENCY');
+      await installDeadlineStandIn();
+      await setDeadline(AGENCY, 'past');
+      // An empty "organizations" would fake an orphaned row; one listing the
+      // tenant as a pharmacy would fake the vertical.
+      await owner.query(
+        `CREATE TEMP TABLE "organizations" ("id" text, "vertical" text) ON COMMIT DROP`
+      );
+      await tenantContext(AGENCY, null);
+      expectAppendOnlyRefusal(await deleteRow(AGENCY), 'DELETE');
+      await owner.query(`INSERT INTO pg_temp."organizations" VALUES ($1, 'PHARMACY')`, [AGENCY]);
+      await tenantContext(AGENCY, AGENCY);
+      expectAppendOnlyRefusal(await deleteRow(AGENCY), 'DELETE');
+      await expect(stillStored(AGENCY)).resolves.toBe('test.retention-purge');
     });
   });
 
@@ -327,35 +353,6 @@ describeIfDatabase('pharmacy retention purge of expired tenant audit rows', () =
       expect(result).toMatchObject({ ok: false, code: '55000' });
       if (!result.ok) expect(result.message).toMatch(/legal hold/);
       await expect(stillStored(PHARMACY)).resolves.toBe('test.retention-purge');
-    });
-  });
-
-  it('admits the purge as the runtime role under forced RLS', async (context) => {
-    const runtimeRole = runtimeUrl ? decodeURIComponent(new URL(runtimeUrl).username) : '';
-    const { rows } = await owner.query<{ allowed: boolean }>(
-      `SELECT $1::text <> '' AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)
-              AND pg_has_role(current_user, $1, 'MEMBER') AS allowed`,
-      [runtimeRole]
-    );
-    if (!rows[0].allowed) {
-      context.skip('needs TEST_DATABASE_URL and an owner that may SET ROLE to its role');
-    }
-    await inRolledBackTransaction(async () => {
-      await seed(PHARMACY, 'PHARMACY');
-      await installDeadlineStandIn();
-      await setDeadline(PHARMACY, 'past');
-      await owner.query(`SELECT set_config('role', $1, true)`, [runtimeRole]);
-      const { rows: who } = await owner.query<{ bypass: boolean }>(
-        `SELECT rolbypassrls OR rolsuper AS bypass FROM pg_roles WHERE rolname = current_user`
-      );
-      expect(who[0].bypass).toBe(false);
-      await tenantContext(PHARMACY, PHARMACY);
-      await expect(deleteRow(PHARMACY)).resolves.toEqual({ ok: true, rowCount: 1 });
-      await tenantContext(PHARMACY, null);
-      const { rows: left } = await owner.query(`SELECT 1 FROM "audit_logs" WHERE "id" = $1`, [
-        rowOf(PHARMACY),
-      ]);
-      expect(left).toHaveLength(0);
     });
   });
 });

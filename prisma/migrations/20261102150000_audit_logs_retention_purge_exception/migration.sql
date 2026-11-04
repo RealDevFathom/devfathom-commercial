@@ -29,13 +29,20 @@
 -- named tenant, and the orphaned rows of a deleted organization. The pharmacy
 -- legal-hold trigger (aa_pharmacy_audit_legal_hold) still fires first on DELETE.
 --
+-- Name resolution is pinned too. The tables this function reads are
+-- schema-qualified and pg_temp is searched last, so a session's temporary table
+-- named "organizations", "users" or "restaurant_staff_profiles" can no longer
+-- stand in for the real one and fake an orphaned row, a deleted actor or a
+-- pharmacy vertical. 20261102090000 resolved those names through the caller's
+-- search_path, where pg_temp comes first.
+--
 -- Idempotent: CREATE OR REPLACE of the trigger function in one transaction. The
 -- trigger itself is unchanged and keeps pointing at this function.
 
 BEGIN;
 
 CREATE OR REPLACE FUNCTION tenant_audit_log_append_only() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   retention_deadline timestamp;
 BEGIN
@@ -48,14 +55,14 @@ BEGIN
   END IF;
 
   IF TG_OP = 'DELETE' THEN
-    IF NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId") THEN
+    IF NOT EXISTS (SELECT 1 FROM public."organizations" WHERE "id" = OLD."organizationId") THEN
       RETURN OLD;
     END IF;
 
     IF NULLIF(current_setting('app.retention_purge_organization_id', true), '') = OLD."organizationId"
        AND NULLIF(current_setting('app.current_organization_id', true), '') = OLD."organizationId"
        AND EXISTS (
-         SELECT 1 FROM "organizations"
+         SELECT 1 FROM public."organizations"
           WHERE "id" = OLD."organizationId" AND "vertical"::text = 'PHARMACY'
        )
        AND to_regprocedure('public.pharmacy_record_retention_deadline(text,text,text,text)') IS NOT NULL THEN
@@ -72,11 +79,11 @@ BEGIN
           = (to_jsonb(OLD) - 'actorId' - 'actorStaffProfileId')
         AND (NEW."actorId" IS NOT DISTINCT FROM OLD."actorId"
              OR (NEW."actorId" IS NULL
-                 AND NOT EXISTS (SELECT 1 FROM "users" WHERE "id" = OLD."actorId")))
+                 AND NOT EXISTS (SELECT 1 FROM public."users" WHERE "id" = OLD."actorId")))
         AND (NEW."actorStaffProfileId" IS NOT DISTINCT FROM OLD."actorStaffProfileId"
              OR (NEW."actorStaffProfileId" IS NULL
                  AND NOT EXISTS (
-                   SELECT 1 FROM "restaurant_staff_profiles" WHERE "id" = OLD."actorStaffProfileId"
+                   SELECT 1 FROM public."restaurant_staff_profiles" WHERE "id" = OLD."actorStaffProfileId"
                  ))) THEN
     RETURN NEW;
   END IF;
