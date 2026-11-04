@@ -88,3 +88,71 @@ describe('contract seat entitlements', () => {
     expect(db.organizationModule.updateMany).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('commercial contract entitlement synchronization', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const createContract = (moduleIds: string[]) =>
+    executePlatformCommand(
+      actor,
+      'commercial.contract.create',
+      {
+        ...common,
+        number: 'CON-304',
+        title: 'Package-safe contract',
+        status: 'ACTIVE',
+        moduleIds,
+      },
+      request
+    );
+
+  it('creates overrides only for active modules included in the contract', async () => {
+    db.platformModule.findMany.mockResolvedValueOnce([{ id: 'mod_contract' }] as never);
+
+    await createContract(['mod_contract', 'mod_inactive']);
+
+    expect(db.platformModule.findMany).toHaveBeenCalledWith({
+      where: { active: true, id: { in: ['mod_contract', 'mod_inactive'] } },
+      select: { id: true },
+    });
+    expect(db.organizationModule.upsert).toHaveBeenCalledTimes(1);
+    expect(db.organizationModule.upsert).toHaveBeenCalledWith({
+      where: {
+        organizationId_moduleId: {
+          organizationId: 'org_1',
+          moduleId: 'mod_contract',
+        },
+      },
+      update: {
+        status: 'ENABLED',
+        expiresAt: new Date(common.endDate),
+        reason: 'Contract CON-304',
+        changedById: 'operator_1',
+      },
+      create: {
+        organizationId: 'org_1',
+        moduleId: 'mod_contract',
+        status: 'ENABLED',
+        expiresAt: new Date(common.endDate),
+        reason: 'Contract CON-304',
+        changedById: 'operator_1',
+      },
+    });
+  });
+
+  it('never enables a module that is no longer in the active catalog', async () => {
+    db.platformModule.findMany.mockResolvedValueOnce([] as never);
+
+    await createContract(['mod_inactive']);
+
+    expect(db.organizationModule.upsert).not.toHaveBeenCalled();
+  });
+
+  it('does not disable modules the contract omits', async () => {
+    await createContract([]);
+
+    expect(db.platformModule.findMany).not.toHaveBeenCalled();
+    expect(db.organizationModule.upsert).not.toHaveBeenCalled();
+    expect(db.organizationModule.updateMany).not.toHaveBeenCalled();
+  });
+});

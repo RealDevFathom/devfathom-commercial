@@ -10,6 +10,17 @@ type RoleAttributes = {
   rolcreaterole: boolean;
   rolinherit: boolean;
 };
+// pg_trgm search entry points used by medicine search; prepare-extensions.sql
+// revokes PUBLIC EXECUTE on every pg_trgm function.
+const PG_TRGM_SEARCH_FUNCTIONS = [
+  'public.similarity(text,text)',
+  'public.word_similarity(text,text)',
+  'public.word_similarity_op(text,text)',
+  'public.word_similarity_commutator_op(text,text)',
+  'public.strict_word_similarity(text,text)',
+  'public.strict_word_similarity_op(text,text)',
+  'public.strict_word_similarity_commutator_op(text,text)',
+] as const;
 type QueryResult<Row> = { rows: Row[] };
 export type RuntimeRoleClient = {
   query<Row = never>(sql: string, values?: unknown[]): Promise<QueryResult<Row>>;
@@ -99,6 +110,11 @@ export async function prepareRuntimeRole(
     [
       'medicine search similarity operator',
       `GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO ${ROLE_NAME}`,
+    ],
+    [
+      // The pg_trgm migration skips these grants when it runs before this role exists.
+      'medicine search pg_trgm functions',
+      `GRANT EXECUTE ON FUNCTION ${PG_TRGM_SEARCH_FUNCTIONS.join(', ')} TO ${ROLE_NAME}`,
     ],
     [
       'future tables',

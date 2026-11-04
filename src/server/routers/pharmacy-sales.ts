@@ -118,7 +118,6 @@ import { assertInOrganization } from '../org-refs';
 import {
   adminProcedure,
   auditedProtectedProcedure,
-  capabilityProcedure,
   protectedProcedure,
   router,
 } from '../trpc';
@@ -302,6 +301,30 @@ function fail(error: unknown): never {
   throw error;
 }
 
+const DAY_CLOSE_DATABASE_ERROR =
+  'The day could not be closed safely. Refresh the preview and try again. If it still fails, ask a supervisor.';
+
+/** Keep database policy and append-only implementation details off the counter screen. */
+export function failDayClose(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  const databaseError = error as {
+    message?: unknown;
+    code?: unknown;
+    meta?: { code?: unknown; message?: unknown };
+  };
+  const details = [databaseError.message, databaseError.meta?.message]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ');
+  if (
+    databaseError.code === '55000' ||
+    databaseError.meta?.code === '55000' ||
+    /append-only|pharmacy_reject_money_mutation/i.test(details)
+  ) {
+    throw new TRPCError({ code: 'CONFLICT', message: DAY_CLOSE_DATABASE_ERROR });
+  }
+  fail(error);
+}
+
 async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: string) {
   const [branch, organization] = await Promise.all([
     ctx.db.pharmacyBranch.findFirst({
@@ -425,14 +448,16 @@ async function requireCounterReceiptAccess(
 
   const overrides = member.permissionOverrides;
   const roleRules = member.organizationRole?.permissions ?? [];
-  // Treat the names as one capability family. Otherwise an ALLOW on one alias
-  // can accidentally outrun an explicit DENY on another alias.
-  // Combine user overrides and role rules into ONE family decision so any
-  // explicit DENY (user or role, on any alias) beats any ALLOW.
+  // Treat the names as one capability family, combining user overrides and
+  // role rules so a DENY on any alias beats every ALLOW. A same-organization
+  // administrator may bypass a missing grant, but never an explicit denial.
+  // A caller-supplied member check (Khata, refunds) owns its own decision.
   const rules = [...overrides, ...roleRules];
+  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
+  const decision = authorizeMember ? null : counterCapabilityDecision(rules);
   const capable = authorizeMember
     ? authorizeMember(rules)
-    : counterCapabilityDecision(rules) === 'ALLOW';
+    : decision === 'ALLOW' || (decision !== 'DENY' && orgAdmin);
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -462,7 +487,6 @@ async function requireCounterReceiptAccess(
 
   // Session role only. An organization-role key is not an administrator grant.
   // An assigned admin still reaches every other active branch of this organization.
-  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
   if (orgAdmin) {
     annotateAudit(ctx, {
       targetType: 'PharmacyBranch',
@@ -637,7 +661,7 @@ export const pharmacySalesRouter = router({
           closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
-        fail(error);
+        failDayClose(error);
       }
     }),
   customerSnapshot: protectedProcedure
@@ -686,9 +710,9 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  // Loyalty redemption can complete any sale, including an all-OTC sale, so it
-  // always requires the exact dispense capability before entering the domain.
-  redeemPoints: capabilityProcedure('pharmacy:dispense')
+  // The domain applies dispensing authorization to Rx lines; OTC redemptions
+  // use the same canonical counter and branch authorization as other tenders.
+  redeemPoints: protectedProcedure
     .input(
       z
         .object({
@@ -703,9 +727,9 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          redeemSalePoints(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        // A redemption is a tender: it needs pharmacy:counter, not receipt access alone.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return await ctx.db.$transaction(async (tx) => redeemSalePoints(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
@@ -802,7 +826,7 @@ export const pharmacySalesRouter = router({
           cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
-        fail(error);
+        failDayClose(error);
       }
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
@@ -966,11 +990,10 @@ export const pharmacySalesRouter = router({
     }),
   create: protectedProcedure
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) =>
-        createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
-      )
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return ctx.db.$transaction(async (tx) => createSale(txDb(tx), scope, input.quotation));
+    }),
   addLine: protectedProcedure
     .input(
       z
@@ -1055,9 +1078,9 @@ export const pharmacySalesRouter = router({
         });
       }
       try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });

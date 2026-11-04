@@ -637,6 +637,46 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     });
   });
 
+  it('rolls back completion when a cashier would become the dispenser of a referenced OTC line', async () => {
+    const saleId = await newSale(ids.pharmacist);
+    const added = await act(ids.pharmacist, (api) =>
+      api.addLine(line(saleId, otc, withReference(lines.otcForAyesha)))
+    );
+    const { completePaidPharmacySale, completionSaleInclude } =
+      await import('@/lib/pharmacy/sale-completion');
+    await expect(
+      withTenantDb(
+        ids.org,
+        async (tx) => {
+          const sale = await tx.pharmacySale.findFirstOrThrow({
+            where: { id: saleId, organizationId: ids.org, branchId: ids.branch },
+            include: completionSaleInclude,
+          });
+          await completePaidPharmacySale(
+            tx,
+            { organizationId: ids.org, branchId: ids.branch, actorId: ids.cashier },
+            sale,
+            { deviceId: `cashier_ref_${suffix}`, businessDate: new Date('2026-10-23') }
+          );
+        },
+        { userId: ids.cashier }
+      )
+    ).rejects.toMatchObject({
+      reason: 'PRESCRIPTION_NEEDS_PHARMACIST',
+    });
+    const state = await withTenantDb(ids.org, async (tx) => ({
+      sale: await tx.pharmacySale.findFirstOrThrow({ where: { id: saleId } }),
+      fills: await tx.prescriptionFill.count({
+        where: { idempotencyKey: `rx-reference:${added.line.id}` },
+      }),
+      events: await tx.pharmacySaleEvent.count({ where: { saleId, kind: 'COMPLETED' } }),
+    }));
+    expect(state.sale.status).toBe('OPEN');
+    expect(state.sale.receiptNumber).toBeNull();
+    expect(state.fills).toBe(0);
+    expect(state.events).toBe(0);
+  });
+
   it('makes completion retries idempotent', async () => {
     const added = await addReferencedSale(lines.retried);
     await recordCompletion(added.saleLineId);

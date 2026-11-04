@@ -802,6 +802,8 @@ export const pharmacyInventoryRouter = router({
       z
         .object({
           manufacturingBatchId: z.string().min(1),
+          // The domain serializes reactivation with recall creation and refuses
+          // it while a medicine-wide or batch-specific recall remains open.
           state: z.enum(['ACTIVE', 'RECALLED', 'QUARANTINED']),
           reason: z.string().trim().max(500).optional(),
         })

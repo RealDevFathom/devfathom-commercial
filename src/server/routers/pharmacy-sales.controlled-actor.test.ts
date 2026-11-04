@@ -54,7 +54,11 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
     $queryRaw: lock,
-    pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
+    pharmacyBranch: {
+      findMany: async () => [{ id: 'branch-1' }],
+      findFirst: async () => ({ id: 'branch-1' }),
+    },
+    pharmacyBranchAssignment: { findMany: async () => [{ branchId: 'branch-1' }] },
     branchRegulatoryProfile: {
       findFirst: async () => ({
         branchId: 'branch-1',
@@ -80,6 +84,7 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
     user: {
       findUnique: async () => ({
         status: 'ACTIVE',
+        organizationId: 'org-1',
         organizationRole: { permissions },
         permissionOverrides,
       }),
@@ -127,10 +132,9 @@ describe('pharmacySales.addLine controlled actor', () => {
       [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
       [{ capability: 'pharmacy:dispense', effect: 'DENY' }]
     );
-    await expect(caller.addLine(line)).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-      message: 'You do not have permission to dispense a controlled medicine.',
-    });
+    // A dispense DENY belongs to the counter capability family, so the counter
+    // gate refuses before the controlled-actor check is reached.
+    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(credential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
@@ -143,10 +147,9 @@ describe('pharmacySales.addLine controlled actor', () => {
         [{ capability, effect: 'DENY' }],
         [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]
       );
-      await expect(caller.addLine(line)).rejects.toMatchObject({
-        code: 'FORBIDDEN',
-        message: 'You do not have permission to dispense a controlled medicine.',
-      });
+      // The role DENY covers the counter capability family, so the counter gate
+      // refuses before the controlled-actor check is reached.
+      await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(lock).not.toHaveBeenCalled();
       expect(credential).not.toHaveBeenCalled();
       expect(addSaleLine).not.toHaveBeenCalled();

@@ -438,6 +438,65 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
   });
 
+  it('requires the pharmacy safety capability before changing a batch state', async () => {
+    await expect(
+      caller().setBatchState({
+        manufacturingBatchId: 'batch_1',
+        state: 'QUARANTINED',
+        reason: 'Temperature excursion',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyManufacturingBatch.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+  });
+
+  it('cannot change a batch state outside the session organization', async () => {
+    grant([allow('pharmacy:safety')]);
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue(null);
+
+    await expect(
+      caller().setBatchState({
+        manufacturingBatchId: 'batch_from_org_b',
+        state: 'QUARANTINED',
+        reason: 'Temperature excursion',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(db.pharmacyManufacturingBatch.findFirst).toHaveBeenCalledWith({
+      where: { id: 'batch_from_org_b', organizationId: 'org_a' },
+    });
+    expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+  });
+
+  it('tenant-scopes both the batch-state read and write', async () => {
+    grant([allow('pharmacy:safety')]);
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({ id: 'batch_1' });
+
+    await caller().setBatchState({
+      manufacturingBatchId: 'batch_1',
+      state: 'RECALLED',
+      reason: 'Manufacturer recall',
+    });
+
+    expect(db.pharmacyManufacturingBatch.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'batch_1', organizationId: 'org_a' } })
+    );
+  });
+
+  it('cannot reactivate a recalled batch before closing its recall', async () => {
+    grant([allow('pharmacy:safety')]);
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
+      id: 'batch_1',
+      medicineId: 'medicine_1',
+      state: 'RECALLED',
+    });
+    db.pharmacyRecallNotice.count.mockResolvedValue(1);
+
+    await expect(
+      caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'ACTIVE' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+  });
+
   it('rejects a write-off witness who is not an active member assigned to the branch', async () => {
     grant([allow('pharmacy:inventory')]);
 
@@ -636,7 +695,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     await caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'ACTIVE' });
 
     expect(db.pharmacyManufacturingBatch.update).toHaveBeenCalledWith({
-      where: { id: 'batch_1' },
+      where: { id: 'batch_1', organizationId: 'org_a' },
       data: { state: 'ACTIVE', stateReason: null, stateChangedAt: null },
     });
   });

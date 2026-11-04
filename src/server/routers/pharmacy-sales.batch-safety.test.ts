@@ -30,20 +30,29 @@ import { pharmacySalesRouter } from './pharmacy-sales';
 const app = router({ pharmacySales: pharmacySalesRouter });
 const BRANCH = 'branch-1';
 
-function caller(granted = true) {
+function caller(granted: boolean | null = true) {
   const db = {
     $transaction: vi.fn(
       async (callback: (tx: unknown) => unknown): Promise<unknown> => callback(db)
     ),
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: BRANCH }]) },
     pharmacyBranch: {
+      findFirst: vi.fn(async () => ({ id: BRANCH })),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
     },
     user: {
       findUnique: vi.fn(async () => ({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
         organizationRole: {
-          permissions: [{ capability: 'pharmacy:dispense', effect: granted ? 'ALLOW' : 'DENY' }],
+          permissions: [
+            { capability: 'pharmacy:counter', effect: 'ALLOW' },
+            ...(granted === null
+              ? []
+              : [{ capability: 'pharmacy:dispense', effect: granted ? 'ALLOW' : 'DENY' }]),
+          ],
         },
         permissionOverrides: [],
       })),
@@ -66,6 +75,25 @@ function caller(granted = true) {
 beforeEach(() => loyalty.redeemSalePoints.mockReset());
 
 describe('#633 batch refusal at tender', () => {
+  it('allows a counter cashier without a dispense grant to redeem an OTC bill', async () => {
+    loyalty.redeemSalePoints.mockResolvedValueOnce({ settled: true, receiptNumber: 42 });
+    await expect(
+      caller(null).redeemPoints({
+        branchId: BRANCH,
+        saleId: 'otc-sale',
+        points: 200,
+        deviceId: 'device-1',
+        businessDate: new Date('2026-10-22T00:00:00.000Z'),
+        idempotencyKey: 'redeem-otc',
+      })
+    ).resolves.toMatchObject({ settled: true, receiptNumber: 42 });
+    expect(loyalty.redeemSalePoints).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org-1', branchId: BRANCH, actorId: 'cashier-1' },
+      expect.objectContaining({ saleId: 'otc-sale' })
+    );
+  });
+
   it('keeps missing loyalty consent as a forbidden redemption', async () => {
     loyalty.redeemSalePoints.mockRejectedValueOnce(
       new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED')

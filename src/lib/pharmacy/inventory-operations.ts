@@ -70,7 +70,7 @@ export async function setManufacturingBatchState(
   }
 
   return db.pharmacyManufacturingBatch.update({
-    where: { id: batch.id },
+    where: { id: batch.id, organizationId },
     data: {
       state: input.state,
       stateReason: input.state === 'ACTIVE' ? null : (input.reason ?? null),

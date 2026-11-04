@@ -56,8 +56,14 @@ describe('runtime role preparation', () => {
     expect(queries.map(({ sql }) => sql)).toContain(
       'GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO devfathom_app'
     );
+    expect(queries.map(({ sql }) => sql)).toContain(
+      'GRANT EXECUTE ON FUNCTION public.similarity(text,text), public.word_similarity(text,text), ' +
+        'public.word_similarity_op(text,text), public.word_similarity_commutator_op(text,text), ' +
+        'public.strict_word_similarity(text,text), public.strict_word_similarity_op(text,text), ' +
+        'public.strict_word_similarity_commutator_op(text,text) TO devfathom_app'
+    );
     expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
-      7
+      8
     );
     expect([...output.log.mock.calls, ...output.warn.mock.calls].flat().join('\n')).not.toContain(
       'secret-value'
@@ -81,8 +87,14 @@ describe('runtime role preparation', () => {
 
     await prepareRuntimeRole(client, secret, output);
 
+    expect(queries.map(({ sql }) => sql)).toContain(
+      'GRANT EXECUTE ON FUNCTION public.similarity(text,text), public.word_similarity(text,text), ' +
+        'public.word_similarity_op(text,text), public.word_similarity_commutator_op(text,text), ' +
+        'public.strict_word_similarity(text,text), public.strict_word_similarity_op(text,text), ' +
+        'public.strict_word_similarity_commutator_op(text,text) TO devfathom_app'
+    );
     expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
-      7
+      8
     );
     expect(output.warn).toHaveBeenCalledWith(
       'password: skipped (permission denied; final posture verified)'
