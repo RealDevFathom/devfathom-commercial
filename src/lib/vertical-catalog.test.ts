@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 
 import {
+  PHARMACY_SOP_TEMPLATE_GRANTS,
   ALL_VERTICALS,
   AGENCY_MODULES,
   AGENCY_ROLE_TEMPLATES,
@@ -517,44 +518,22 @@ describe('optional pharmacy Owner / Operator', () => {
     expect(
       PHARMACY_ROLE_TEMPLATES.filter((role) => role.key !== 'owner-operator').map((role) => ({
         key: role.key,
-        capabilities: role.capabilities,
+        // DEV-751 SOP grants are appended separately and pinned below.
+        capabilities: role.capabilities.filter((grant) => !grant.startsWith('sop:')),
       }))
     ).toEqual([
-      {
-        key: 'owner',
-        capabilities: [
-          'pharmacy:*',
-          'reports:operational',
-          'reports:financial',
-          'sop:manage',
-          'sop:complete',
-          'sop:verify',
-        ],
-      },
+      { key: 'owner', capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'] },
       {
         key: 'pharmacist',
-        capabilities: [
-          'pharmacy:dispense',
-          'pharmacy:catalogue-review',
-          'pharmacy:close',
-          'sop:complete',
-          'sop:verify',
-        ],
+        capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
       },
       {
         key: 'manager',
-        capabilities: [
-          'pharmacy:manage',
-          'pharmacy:orders',
-          'pharmacy:procurement',
-          'sop:manage',
-          'sop:complete',
-          'sop:verify',
-        ],
+        capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
       },
-      { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders', 'sop:complete'] },
-      { key: 'procurement', capabilities: ['pharmacy:procurement', 'sop:complete'] },
-      { key: 'inventory', capabilities: ['pharmacy:inventory', 'sop:complete'] },
+      { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders'] },
+      { key: 'procurement', capabilities: ['pharmacy:procurement'] },
+      { key: 'inventory', capabilities: ['pharmacy:inventory'] },
       { key: 'finance', capabilities: ['reports:financial'] },
       { key: 'auditor', capabilities: ['reports:operational'] },
     ]);
@@ -676,6 +655,19 @@ describe('pharmacy SOP grants (DEV-751)', () => {
         role.capabilities.some((grant) => capabilityMatches(grant, action))
       )
     ).toEqual(expected);
+  });
+
+  it('SOP grants are only sop:* and never add, remove or reorder a pharmacy operation grant', () => {
+    for (const grantsForRole of Object.values(PHARMACY_SOP_TEMPLATE_GRANTS)) {
+      for (const grant of grantsForRole) expect(grant).toMatch(/^sop:(manage|complete|verify)$/);
+    }
+    for (const role of PHARMACY_ROLE_TEMPLATES) {
+      const appended = PHARMACY_SOP_TEMPLATE_GRANTS[role.key] ?? [];
+      const base = role.capabilities.slice(0, role.capabilities.length - appended.length);
+      expect(role.capabilities.slice(base.length)).toEqual(appended);
+      // No operation grant (pharmacy:close, pharmacy:counter, …) comes from SOP.
+      expect(base.some((grant) => grant.startsWith('sop:'))).toBe(false);
+    }
   });
 
   it('grants no restaurant module or restaurant capability to a pharmacy role', () => {

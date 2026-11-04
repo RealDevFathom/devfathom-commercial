@@ -1,19 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { PHARMACY_CHECKED_CAPABILITIES, PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import {
+  PHARMACY_CHECKED_CAPABILITIES,
+  PHARMACY_ROLE_TEMPLATES,
+  PHARMACY_SOP_TEMPLATE_GRANTS,
+} from '@/lib/vertical-catalog';
 import { EXACT_GRANT_ONLY_ACTIONS, capabilityMatches } from './capabilities';
 import { ALL_ACTIONS } from './policies';
 
 export const intendedPharmacyGrants = {
-  // DEV-751: the generic SOP actions are explicit, because `pharmacy:*` never
-  // matches another namespace.
-  owner: [
-    'pharmacy:*',
-    'reports:operational',
-    'reports:financial',
-    'sop:manage',
-    'sop:complete',
-    'sop:verify',
-  ],
+  owner: ['pharmacy:*', 'reports:operational', 'reports:financial'],
   'owner-operator': [
     'reports:operational',
     'reports:financial',
@@ -26,36 +21,27 @@ export const intendedPharmacyGrants = {
     'pharmacy:counter',
     'pharmacy:close',
     'pharmacy:manage',
-    'sop:manage',
-    'sop:complete',
-    'sop:verify',
   ],
-  pharmacist: [
-    'pharmacy:dispense',
-    'pharmacy:catalogue-review',
-    'pharmacy:close',
-    'sop:complete',
-    'sop:verify',
-  ],
-  manager: [
-    'pharmacy:manage',
-    'pharmacy:orders',
-    'pharmacy:procurement',
-    'sop:manage',
-    'sop:complete',
-    'sop:verify',
-  ],
-  cashier: ['pharmacy:counter', 'pharmacy:orders', 'sop:complete'],
-  procurement: ['pharmacy:procurement', 'sop:complete'],
-  inventory: ['pharmacy:inventory', 'sop:complete'],
+  pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
+  manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+  cashier: ['pharmacy:counter', 'pharmacy:orders'],
+  procurement: ['pharmacy:procurement'],
+  inventory: ['pharmacy:inventory'],
   finance: ['reports:financial'],
   auditor: ['reports:operational'],
 };
 
 describe('canonical capability contract (#130)', () => {
   it('grants exactly the intended actions to every pharmacy template', () => {
+    // DEV-751: the SOP grants are a separate, append-only map (they never touch a
+    // pharmacy operation grant), so the contract is base grants + SOP grants.
     expect(Object.fromEntries(PHARMACY_ROLE_TEMPLATES.map((r) => [r.key, r.capabilities]))).toEqual(
-      intendedPharmacyGrants
+      Object.fromEntries(
+        Object.entries(intendedPharmacyGrants).map(([key, grants]) => [
+          key,
+          [...grants, ...(PHARMACY_SOP_TEMPLATE_GRANTS[key] ?? [])],
+        ])
+      )
     );
     for (const role of PHARMACY_ROLE_TEMPLATES) {
       for (const grant of role.capabilities) {

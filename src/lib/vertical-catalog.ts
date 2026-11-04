@@ -769,23 +769,12 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'reports:financial',
 ] as const;
 
-export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
+const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   {
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    // DEV-751: `pharmacy:*` never matches the generic `sop:*` actions, so the
-    // pharmacy SOP grants are explicit. Role templates are materialised only
-    // when an organization is created (platform createOrganization); existing
-    // tenants' roles are not changed by editing these lists.
-    capabilities: [
-      'pharmacy:*',
-      'reports:operational',
-      'reports:financial',
-      'sop:manage',
-      'sop:complete',
-      'sop:verify',
-    ],
+    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
@@ -811,22 +800,13 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'pharmacy:counter',
       'pharmacy:close',
       'pharmacy:manage',
-      'sop:manage',
-      'sop:complete',
-      'sop:verify',
     ],
   },
   {
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: [
-      'pharmacy:dispense',
-      'pharmacy:catalogue-review',
-      'pharmacy:close',
-      'sop:complete',
-      'sop:verify',
-    ],
+    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
   },
   {
     key: 'manager',
@@ -834,36 +814,53 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     isSystem: true,
     // Managers retain the purchasing and Goods-in access that predates the
     // explicit pharmacy capability model (#375).
-    capabilities: [
-      'pharmacy:manage',
-      'pharmacy:orders',
-      'pharmacy:procurement',
-      'sop:manage',
-      'sop:complete',
-      'sop:verify',
-    ],
+    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
   },
   {
     key: 'cashier',
     name: 'Cashier',
     isSystem: true,
-    capabilities: ['pharmacy:counter', 'pharmacy:orders', 'sop:complete'],
+    capabilities: ['pharmacy:counter', 'pharmacy:orders'],
   },
   {
     key: 'procurement',
     name: 'Procurement',
     isSystem: true,
-    capabilities: ['pharmacy:procurement', 'sop:complete'],
+    capabilities: ['pharmacy:procurement'],
   },
-  {
-    key: 'inventory',
-    name: 'Inventory',
-    isSystem: true,
-    capabilities: ['pharmacy:inventory', 'sop:complete'],
-  },
+  { key: 'inventory', name: 'Inventory', isSystem: true, capabilities: ['pharmacy:inventory'] },
   { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['reports:financial'] },
   { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['reports:operational'] },
 ];
+
+/**
+ * DEV-751 — pharmacy procedure (SOP) grants for NEW tenants' role templates.
+ *
+ * Kept apart from the base templates on purpose: SOPs are follow-up checklists
+ * and proof, and they never add, remove or depend on a pharmacy operation
+ * capability (`pharmacy:close`, `pharmacy:counter`, …). Ownership of those
+ * operation grants stays with the base list above; this map only appends the
+ * generic `sop:*` actions (which `pharmacy:*` does not match).
+ *
+ * Templates are materialised only when an organization is created, so editing
+ * this map never changes an existing tenant's roles.
+ */
+export const PHARMACY_SOP_TEMPLATE_GRANTS: Readonly<Record<string, readonly string[]>> = {
+  owner: ['sop:manage', 'sop:complete', 'sop:verify'],
+  'owner-operator': ['sop:manage', 'sop:complete', 'sop:verify'],
+  manager: ['sop:manage', 'sop:complete', 'sop:verify'],
+  pharmacist: ['sop:complete', 'sop:verify'],
+  cashier: ['sop:complete'],
+  procurement: ['sop:complete'],
+  inventory: ['sop:complete'],
+};
+
+export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = PHARMACY_BASE_ROLE_TEMPLATES.map(
+  (role) => ({
+    ...role,
+    capabilities: [...role.capabilities, ...(PHARMACY_SOP_TEMPLATE_GRANTS[role.key] ?? [])],
+  })
+);
 
 /**
  * H1-01 — the nineteen hospitality capabilities of `06-roles-reports` §1, in the
