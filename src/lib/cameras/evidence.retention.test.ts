@@ -66,9 +66,11 @@ function pending() {
     organizationId: 'org_a',
     branchId: 'branch_a',
     status: 'PENDING',
+    subjectKind: 'PHARMACY_TENDER',
     requestedAt: new Date(now.getTime() - 60_000),
     camera: {
       enabled: true,
+      counterEvidence: true,
       branchId: 'branch_a',
       sourceRef: 'sim-counter-1',
       gateway: { status: 'ACTIVE', revokedAt: null as Date | null },

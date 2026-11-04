@@ -59,16 +59,22 @@ function runtime(read: (scope: CameraSnapshotScope) => Promise<Uint8Array>) {
   };
 }
 
-function row(overrides: { camera?: object; gateway?: object } = {}) {
+function row(overrides: { camera?: object; gateway?: object; evidence?: object } = {}) {
   return {
     id: 'ev_1',
     organizationId: 'org_a',
     branchId: 'branch_a',
     status: 'PENDING',
+    subjectKind: 'PHARMACY_TENDER',
+    temperatureZoneId: null as string | null,
+    ...overrides.evidence,
     requestedAt: new Date(now.getTime() - 60_000),
     camera: {
       id: 'cam_a',
       enabled: true,
+      counterEvidence: true,
+      preset: null as string | null,
+      temperatureZoneId: null as string | null,
       branchId: 'branch_a',
       gatewayId: 'gw_a',
       sourceRef: 'pharmacy/branch-a/counter-1',
@@ -211,6 +217,49 @@ describe('captureCameraEvidence through a configured gateway', () => {
     ).resolves.toEqual({ evidenceId: 'ev_1', outcome: 'FAILED', reason: 'SNAPSHOT_UNSUPPORTED' });
     expect(snapshots.readSnapshot).not.toHaveBeenCalled();
     expect(files.size).toBe(0);
+  });
+
+  it.each([
+    ['counter evidence turned off after the request', { camera: { counterEvidence: false } }],
+    ['an unknown subject kind', { evidence: { subjectKind: 'SOMETHING_ELSE' } }],
+    [
+      'an excursion camera no longer COLD_CHAIN',
+      {
+        evidence: { subjectKind: 'PHARMACY_TEMPERATURE_EXCURSION', temperatureZoneId: 'zone_a' },
+        camera: { preset: null, temperatureZoneId: 'zone_a' },
+      },
+    ],
+    [
+      'an excursion camera moved to another zone',
+      {
+        evidence: { subjectKind: 'PHARMACY_TEMPERATURE_EXCURSION', temperatureZoneId: 'zone_a' },
+        camera: { preset: 'COLD_CHAIN', temperatureZoneId: 'zone_b' },
+      },
+    ],
+  ])('%s is re-checked at capture and fails before any read', async (_label, overrides) => {
+    const { runtime: configured, snapshots } = runtime(async () => makePng());
+    await expect(
+      capture(db(row(overrides)), evidenceSnapshotAdapter(configured, { vertical: 'pharmacy' }))
+    ).resolves.toMatchObject({ outcome: 'FAILED', reason: 'CAMERA_UNAVAILABLE' });
+    expect(snapshots.readSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('an excursion still is captured while the camera still watches that zone', async () => {
+    const { runtime: configured } = runtime(async () => makePng());
+    await expect(
+      capture(
+        db(
+          row({
+            evidence: {
+              subjectKind: 'PHARMACY_TEMPERATURE_EXCURSION',
+              temperatureZoneId: 'zone_a',
+            },
+            camera: { counterEvidence: false, preset: 'COLD_CHAIN', temperatureZoneId: 'zone_a' },
+          })
+        ),
+        evidenceSnapshotAdapter(configured, { vertical: 'pharmacy' })
+      )
+    ).resolves.toMatchObject({ outcome: 'CAPTURED' });
   });
 
   it('revoked gateways and disabled cameras fail before any read', async () => {

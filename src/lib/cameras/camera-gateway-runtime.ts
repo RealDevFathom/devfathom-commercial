@@ -23,6 +23,22 @@ export type CameraGatewayRuntime =
     }
   | { available: false; mode: 'unavailable'; adapter: null };
 
+/**
+ * Stills are optional and pharmacy-only. A malformed allowlist must not take
+ * down live viewing, restaurant cameras or other platform jobs, so it disables
+ * stills (they then fail as SNAPSHOT_UNSUPPORTED) and logs one fixed code.
+ */
+function optionalSnapshotTransport(raw: string | undefined): CameraSnapshotTransport | null {
+  const value = raw?.trim();
+  if (!value) return null;
+  try {
+    return createCameraSnapshotTransport(value);
+  } catch {
+    console.error(JSON.stringify({ event: 'camera-snapshot-bindings-invalid' }));
+    return null;
+  }
+}
+
 export function resolveCameraGatewayRuntime(env: CameraGatewayEnvironment): CameraGatewayRuntime {
   const configuredMode = env.CAMERA_GATEWAY_MODE?.trim().toLowerCase();
 
@@ -39,8 +55,7 @@ export function resolveCameraGatewayRuntime(env: CameraGatewayEnvironment): Came
 
   if (configuredMode === 'mediamtx') {
     const transport = createMediaMtxTransport(env.CAMERA_MEDIAMTX_BINDINGS ?? '');
-    const snapshotBindings = env.CAMERA_SNAPSHOT_BINDINGS?.trim();
-    const snapshots = snapshotBindings ? createCameraSnapshotTransport(snapshotBindings) : null;
+    const snapshots = optionalSnapshotTransport(env.CAMERA_SNAPSHOT_BINDINGS);
     const unsupported = async (): Promise<never> => {
       throw new Error('Operation unsupported by the configured live camera gateway.');
     };

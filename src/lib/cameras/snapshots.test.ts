@@ -23,6 +23,7 @@ import * as storage from '@/lib/storage';
 import {
   CAMERA_SNAPSHOT_MAX_BYTES,
   isAcceptableCameraSnapshot,
+  normalizePngStill,
   storeCameraSnapshot,
 } from './snapshots';
 import { makePng } from './png-still.fixtures';
@@ -50,7 +51,8 @@ test('simulated PNG bytes are stored and retrieved through private storage with 
     contentType: 'image/png',
     byteLength: bytes.byteLength,
   });
-  expect(await storage.getUpload('tenant-a', saved.filename)).toEqual(Buffer.from(bytes));
+  // Stored bytes are the canonical re-encode of the same image.
+  expect(await storage.getUpload('tenant-a', saved.filename)).toEqual(normalizePngStill(bytes));
   await expect(storage.getUpload('tenant-b', saved.filename)).rejects.toMatchObject({
     code: 'ENOENT',
   });
@@ -66,7 +68,7 @@ test('concurrent captures keep unique keys and independently owned snapshot byte
     )
   );
   expect(new Set(saved.map((value) => value.filename)).size).toBe(4);
-  const expected = Buffer.from(await gateway.getSnapshot('sim-camera-1'));
+  const expected = normalizePngStill(await gateway.getSnapshot('sim-camera-1'))!;
   expect(expected[0]).toBe(137);
   for (const value of saved) {
     expect(await storage.getUpload('tenant-a', value.filename)).toEqual(expected);
@@ -142,7 +144,10 @@ test('a complete PNG at the size bound is accepted and the target reaches the so
     { getSnapshot },
     { organizationId: 'tenant-a', cameraId: 'ref-a', target }
   );
-  expect(saved.byteLength).toBe(CAMERA_SNAPSHOT_MAX_BYTES);
+  // The padding chunk is dropped by the canonical re-encode.
+  expect(saved.byteLength).toBeLessThan(1024);
+  const stored = await storage.getUpload('tenant-a', saved.filename);
+  expect(stored.includes(Buffer.from('prVt'))).toBe(false);
   expect(getSnapshot).toHaveBeenCalledWith('ref-a', target);
 });
 
@@ -177,6 +182,33 @@ test('storage errors propagate without reporting a successful capture', async ()
       cameraId: 'sim-camera-1',
     })
   ).rejects.toBe(failure);
+});
+
+test('a malformed snapshot allowlist disables stills without breaking the gateway runtime', () => {
+  const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const runtime = resolveCameraGatewayRuntime({
+    NODE_ENV: 'production',
+    CAMERA_GATEWAY_MODE: 'mediamtx',
+    CAMERA_MEDIAMTX_BINDINGS: JSON.stringify([
+      {
+        organizationId: 'tenant-a',
+        branchId: 'branch-a',
+        gatewayId: 'gateway-a',
+        cameraId: 'camera-a',
+        baseUrl: 'https://gateway.example.test/',
+        address: '10.20.30.40',
+        path: 'tenant-a/camera-a',
+        username: 'fixture-reader',
+        password: 'fixture-only',
+      },
+    ]),
+    CAMERA_SNAPSHOT_BINDINGS: '[{"password":"fixture-snapshot-secret-do-not-log"',
+  });
+  expect(runtime.mode).toBe('mediamtx');
+  if (runtime.mode !== 'mediamtx') throw new Error('Expected configured runtime');
+  expect(runtime.snapshots).toBeNull();
+  expect(error).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(error.mock.calls)).not.toContain('fixture-snapshot-secret');
 });
 
 test('production MediaMTX rejects snapshots by bare camera ID', async () => {

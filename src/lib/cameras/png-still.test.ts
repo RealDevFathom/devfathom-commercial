@@ -7,6 +7,7 @@ import {
   CAMERA_SNAPSHOT_MAX_BYTES,
   inspectPngStill,
   isAcceptableCameraSnapshot,
+  normalizePngStill,
 } from './png-still';
 import { makePng, pngChunk } from './png-still.fixtures';
 
@@ -102,5 +103,40 @@ describe('inspectPngStill', () => {
     ]);
     expect(bomb.length).toBeLessThan(CAMERA_SNAPSHOT_MAX_BYTES);
     expect(inspectPngStill(bomb)).toBeNull();
+  });
+
+  it('normalizes to image-critical chunks only and drops data hidden after the zlib stream', () => {
+    const base = makePng({ width: 3, height: 2 });
+    const idatStart = 33;
+    const idatLength = base.readUInt32BE(idatStart);
+    const idatData = base.subarray(idatStart + 8, idatStart + 8 + idatLength);
+    const smuggled = Buffer.concat([
+      base.subarray(0, idatStart),
+      pngChunk('tEXt', Buffer.from('Comment\0exfiltrated-payload')),
+      pngChunk('eXIf', Buffer.from('MM\0*private-metadata')),
+      pngChunk('IDAT', Buffer.concat([idatData, Buffer.from('trailing-hidden-bytes')])),
+      pngChunk('prVt', Buffer.from('private-chunk')),
+      base.subarray(-12),
+    ]);
+    expect(inspectPngStill(smuggled)).toEqual({ width: 3, height: 2 });
+    const normalized = normalizePngStill(smuggled)!;
+    for (const marker of [
+      'exfiltrated',
+      'private-metadata',
+      'trailing-hidden',
+      'private-chunk',
+      'tEXt',
+      'eXIf',
+    ])
+      expect(normalized.includes(Buffer.from(marker))).toBe(false);
+    expect(inspectPngStill(normalized)).toEqual({ width: 3, height: 2 });
+    expect(normalizePngStill(Buffer.from('<html>'))).toBeNull();
+  });
+
+  it('keeps the palette for palette images and the simulator still decodes identically', async () => {
+    const paletted = normalizePngStill(makePng({ colour: 3, depth: 8 }))!;
+    expect(paletted.includes(Buffer.from('PLTE'))).toBe(true);
+    const simulated = await createSimulatedCameraGateway().getSnapshot('sim-camera-1');
+    expect(inspectPngStill(normalizePngStill(simulated))).toEqual({ width: 1, height: 1 });
   });
 });

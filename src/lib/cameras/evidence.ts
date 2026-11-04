@@ -107,6 +107,31 @@ export function evidenceSnapshotSupported(
   return source.supports ? source.supports(target) : true;
 }
 
+/**
+ * The owner's opt-in is re-read at capture, not only when the still was
+ * requested: turning off counter evidence, or moving a cold-chain camera off
+ * the zone, stops pending and retried captures too. Unknown kinds never capture.
+ */
+function stillOptedIn(
+  evidence: { subjectKind: string; temperatureZoneId?: string | null },
+  camera: { counterEvidence?: boolean; preset?: string | null; temperatureZoneId?: string | null }
+): boolean {
+  switch (evidence.subjectKind) {
+    case 'PHARMACY_TENDER':
+    case 'PHARMACY_REFUND':
+    case 'PHARMACY_DAILY_CLOSE':
+      return camera.counterEvidence === true;
+    case 'PHARMACY_TEMPERATURE_EXCURSION':
+      return (
+        camera.preset === 'COLD_CHAIN' &&
+        Boolean(evidence.temperatureZoneId) &&
+        camera.temperatureZoneId === evidence.temperatureZoneId
+      );
+    default:
+      return false;
+  }
+}
+
 async function settle(
   db: ScopedDb,
   evidence: { id: string; organizationId: string },
@@ -155,6 +180,7 @@ export async function captureCameraEvidence(
   const { camera } = evidence;
   if (
     !camera.enabled ||
+    !stillOptedIn(evidence, camera) ||
     camera.branchId !== evidence.branchId ||
     camera.gateway.status !== 'ACTIVE' ||
     camera.gateway.revokedAt !== null

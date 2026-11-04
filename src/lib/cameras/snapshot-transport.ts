@@ -44,8 +44,11 @@ export class CameraSnapshotError extends Error {
   }
 }
 
-/** The gateway service gives ffmpeg 4 s; this leaves room for TLS and transfer. */
-export const CAMERA_SNAPSHOT_DEADLINE_MS = 8_000;
+/**
+ * The gateway service's hard deadline is its ffmpeg timeout (1–8 s) plus 1 s;
+ * this leaves room above the 9 s maximum for TLS and transfer.
+ */
+export const CAMERA_SNAPSHOT_DEADLINE_MS = 10_000;
 const MAX_ACTIVE = 4;
 const MAX_BINDINGS = 256;
 const PATH = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/;

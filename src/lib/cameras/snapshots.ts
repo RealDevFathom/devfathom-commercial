@@ -2,9 +2,13 @@ import 'server-only';
 
 import { randomUUID } from 'node:crypto';
 import { assertStorageAvailable, putUpload } from '@/lib/storage';
-import { isAcceptableCameraSnapshot } from './png-still';
+import { normalizePngStill } from './png-still';
 
-export { CAMERA_SNAPSHOT_MAX_BYTES, isAcceptableCameraSnapshot } from './png-still';
+export {
+  CAMERA_SNAPSHOT_MAX_BYTES,
+  isAcceptableCameraSnapshot,
+  normalizePngStill,
+} from './png-still';
 
 /**
  * Everything the server already authorized about the camera a still is for.
@@ -46,11 +50,12 @@ export async function storeCameraSnapshot(
   }
 
   assertStorageAvailable();
-  const bytes = await adapter.getSnapshot(input.cameraId, input.target);
-  // One fixed message: never reflect adapter output, size or camera input.
-  if (!isAcceptableCameraSnapshot(bytes)) throw new Error('Camera snapshot unavailable.');
+  // Only a decoded, canonically re-encoded PNG is stored; one fixed message on
+  // failure, never reflecting adapter output, size or camera input.
+  const png = normalizePngStill(await adapter.getSnapshot(input.cameraId, input.target));
+  if (!png) throw new Error('Camera snapshot unavailable.');
 
   const filename = `camera-snapshot-${randomUUID()}.png`;
-  await putUpload(input.organizationId, filename, Buffer.from(bytes), 'image/png');
-  return { filename, contentType: 'image/png', byteLength: bytes.byteLength };
+  await putUpload(input.organizationId, filename, png, 'image/png');
+  return { filename, contentType: 'image/png', byteLength: png.length };
 }
