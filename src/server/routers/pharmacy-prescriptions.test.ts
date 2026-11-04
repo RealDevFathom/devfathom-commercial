@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   hasModule: vi.fn(),
   patient: vi.fn(),
+  patientRecord: vi.fn(),
   patients: vi.fn(),
   prescriber: vi.fn(),
   find: vi.fn(),
@@ -46,6 +47,7 @@ import { router, type TRPCContext } from '../trpc';
 import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
 import { GET } from '@/app/api/pharmacy/prescription-files/route';
 import { GET as sharedFileGET } from '@/app/api/files/[name]/route';
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 
 // Preserve the production procedure paths so the module-license guard runs.
 const testRouter = router({ pharmacyPrescriptions: pharmacyPrescriptionsRouter });
@@ -58,7 +60,11 @@ function context(
 ) {
   return {
     db: {
-      pharmacyPatient: { findFirst: mocks.patient, findMany: mocks.patients },
+      pharmacyPatient: {
+        findFirst: mocks.patient,
+        findFirstOrThrow: mocks.patientRecord,
+        findMany: mocks.patients,
+      },
       pharmacyPrescriber: { findFirst: mocks.prescriber },
       prescription: { findFirst: mocks.find, create: mocks.create },
       prescriptionLine: { findFirst: mocks.prescriptionLine },
@@ -770,6 +776,138 @@ describe('prescription capture and private delivery', () => {
     expect(response.status).toBe(400);
     expect(mocks.getUpload).not.toHaveBeenCalled();
   });
+});
+
+describe('protected patient reads and exports', () => {
+  const patient = {
+    id: 'patient-a',
+    organizationId: 'org-a',
+    displayName: 'Synthetic Patient',
+    cnic: '35202-1234567-1',
+    phone: '+923001234567',
+    dateOfBirth: new Date('1990-01-01'),
+    consents: [{ id: 'consent-a', purpose: 'DISPENSING', granted: true }],
+    prescriptions: [{ id: 'rx-a', lines: [{ id: 'line-a', fills: [{ id: 'fill-a' }] }] }],
+  };
+
+  function patientContext(role: string, denied = false) {
+    const ctx = context(role);
+    ctx.session!.user.role = role === 'owner' ? 'ADMIN' : 'EMPLOYEE';
+    ctx.db = {
+      ...ctx.db,
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          organizationRole: {
+            permissions: PHARMACY_ROLE_TEMPLATES.find(
+              (template) => template.key === role
+            )!.capabilities.map((capability) => ({ capability, effect: 'ALLOW' })),
+          },
+          permissionOverrides: denied
+            ? [{ capability: 'pharmacy:prescriptions', effect: 'DENY' }]
+            : [],
+        }),
+      } as unknown as typeof ctx.db.user,
+    };
+    return ctx;
+  }
+
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    // Exercise the real role/override policy through the router middleware.
+    mocks.can.mockImplementation(
+      (await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')).can
+    );
+    mocks.hasModule.mockReturnValue(true);
+    const { consents, prescriptions, ...identity } = patient;
+    mocks.patientRecord.mockImplementation(async ({ include }) =>
+      include ? { ...identity, consents, prescriptions } : identity
+    );
+  });
+
+  describe.each(['readPatient', 'exportPatient'] as const)('%s', (endpoint) => {
+    it.each(['cashier', 'procurement'])(
+      'denies %s before patient lookup or patient audit',
+      async (role) => {
+        const ctx = patientContext(role);
+        await expect(caller(ctx)[endpoint]({ patientId: patient.id })).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        expect(mocks.can).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ id: role }),
+          'pharmacy:prescriptions',
+          undefined,
+          { db: ctx.db, source: 'TRPC', ip: null }
+        );
+        expect(mocks.patientRecord).not.toHaveBeenCalled();
+        expect(mocks.patientAudit).not.toHaveBeenCalled();
+        expect(mocks.audit).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ path: `pharmacyPrescriptions.${endpoint}`, outcome: 'FAILURE' })
+        );
+      }
+    );
+
+    it('honors an explicit prescription DENY even for the owner', async () => {
+      await expect(
+        caller(patientContext('owner', true))[endpoint]({ patientId: patient.id })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.patientRecord).not.toHaveBeenCalled();
+      expect(mocks.patientAudit).not.toHaveBeenCalled();
+    });
+
+    it('retains the module gate for an otherwise permitted pharmacist', async () => {
+      mocks.hasModule.mockReturnValue(false);
+      await expect(
+        caller(patientContext('pharmacist'))[endpoint]({ patientId: patient.id })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.patientRecord).not.toHaveBeenCalled();
+      expect(mocks.patientAudit).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(['pharmacist', 'owner'])(
+    'allows %s with the same masked identifiers and complete audited export',
+    async (role) => {
+      const patientCaller = caller(patientContext(role));
+      const read = await patientCaller.readPatient({ patientId: patient.id });
+      const exported = await patientCaller.exportPatient({ patientId: patient.id });
+      const masked = { ...patient, cnic: '*********5671', phone: '*********4567' };
+      const { consents, prescriptions, ...identity } = masked;
+      expect(read).toEqual(identity);
+      expect(exported).toEqual(masked);
+      expect(exported.consents).toEqual(consents);
+      expect(exported.prescriptions[0].lines[0].fills).toEqual(prescriptions[0].lines[0].fills);
+      expect(patient.phone).toBe('+923001234567');
+      expect(patient.cnic).toBe('35202-1234567-1');
+      // Patient scope comes from the tenant DB, never a branch assignment.
+      expect(mocks.patientRecord).toHaveBeenNthCalledWith(1, { where: { id: patient.id } });
+      expect(mocks.patientRecord).toHaveBeenNthCalledWith(2, {
+        where: { id: patient.id },
+        include: {
+          consents: true,
+          prescriptions: { include: { lines: { include: { fills: true } } } },
+        },
+      });
+      expect(mocks.patientAudit.mock.calls).toEqual(
+        ['read', 'export'].map((action) => [
+          {
+            organizationId: 'org-a',
+            actorId: role,
+            source: 'TRPC',
+            category: 'PHARMACY_PATIENT',
+            operation: 'READ',
+            action: `pharmacy.patient.${action}`,
+            targetType: 'PharmacyPatient',
+            targetId: patient.id,
+            metadata: { protected: true, purpose: action === 'export' ? 'EXPORT' : 'DISPENSING' },
+          },
+        ])
+      );
+      expect(mocks.audit.mock.calls.map(([entry]) => entry.outcome)).toEqual([
+        'SUCCESS',
+        'SUCCESS',
+      ]);
+    }
+  );
 });
 
 describe('PH-A3 prescription OCR prefill', () => {

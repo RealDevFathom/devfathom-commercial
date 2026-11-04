@@ -1,0 +1,12 @@
+[
+  {
+    "role": "owner",
+    "q": "What were today's sales at my pharmacy?",
+    "status": 503,
+    "ms": 261,
+    "answer": "{\"error\":\"Ask Fathom is currently unavailable. No cached answer was used.\"}",
+    "tools": [],
+    "errors": [],
+    "at": "2026-11-02 23:31:50 PKT"
+  }
+]

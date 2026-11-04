@@ -78,6 +78,7 @@ vi.mock('@/server/routers/_app', async () => {
   const t = initTRPC
     .context<{
       db: { ledger: { create: (args: { data: { label: string } }) => Promise<unknown> } };
+      platformDb: { ledger: { create: (args: { data: { label: string } }) => Promise<unknown> } };
     }>()
     .create({ transformer: superjson });
 
@@ -110,6 +111,15 @@ vi.mock('@/server/routers/_app', async () => {
       readThenFail: t.procedure.query(async ({ ctx }) => {
         await ctx.db.ledger.create({ data: { label: 'cache' } });
         throw new Error('lookup failed');
+      }),
+      aiSettings: t.router({
+        write: t.procedure.mutation(async ({ ctx }) => {
+          await ctx.platformDb.ledger.create({ data: { label: 'platform-setting' } });
+          return { committed: true };
+        }),
+        fail: t.procedure.mutation(() => {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'invalid setting' });
+        }),
       }),
     }),
   };
@@ -269,6 +279,20 @@ describe('a procedure that fails after writing', () => {
     expect(reason(settled[0])?.message).toMatch(/rolled back/i);
     expect(reason(settled[0])?.data?.code).toBe('INTERNAL_SERVER_ERROR');
     expect(reason(settled[1])?.message).toBe('event failed');
+  });
+});
+
+describe('platform AI settings batches', () => {
+  it('rolls back successful siblings and returns no false success', async () => {
+    const response = await mutate(['aiSettings.write', 'aiSettings.fail']);
+    const body = (await response.json()) as unknown[];
+
+    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+    expect(harness.outcomes).toEqual(['ROLLBACK']);
+    expect(harness.writes).toEqual([]);
+    expect(body).toHaveLength(2);
+    expect(body[0]).not.toHaveProperty('result');
+    expect(body[1]).not.toHaveProperty('result');
   });
 });
 

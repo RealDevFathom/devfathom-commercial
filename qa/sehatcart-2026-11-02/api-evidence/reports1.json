@@ -1,0 +1,354 @@
+{
+  "owner pharmacyReports.commandCentre": {
+    "status": 200,
+    "ms": 377,
+    "ok": true,
+    "code": null,
+    "message": null,
+    "data": {
+      "filters": {
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "from": "2026-11-01",
+        "to": "2026-11-02",
+        "branchIds": ["cmvx5fc4p000cy5qrcgzjrc3b"]
+      },
+      "metricScopes": {
+        "safetyQueue": "organization"
+      },
+      "freshness": {
+        "status": "CURRENT",
+        "asOf": "2026-11-02T18:33:33.913Z",
+        "source": "transactional pharmacy ledgers"
+      },
+      "metrics": {
+        "salesMinor": 50598,
+        "marginMinor": 3600,
+        "cashMinor": 50598,
+        "refundsMinor": 42798,
+        "cashVarianceMinor": 0,
+        "openStockSignals": 0,
+        "lostDemandEvents": 0,
+        "recommendedOrders": 0,
+        "expiryValueMinor30": 0,
+        "expiryValueMinor60": 0,
+        "expiryValueMinor90": 0,
+        "expiryValueMinor180": 30800,
+        "openRecalls": 0,
+        "quarantineUnits": 140,
+        "openClaims": 0,
+        "openReceivingExceptions": 0,
+        "pharmacistCoverage": 1,
+        "safetyQueue": 0,
+        "agingFiscalDocuments": 0,
+        "rejectedFiscalDocuments": 0,
+        "accountsPayableMinor": null,
+        "accountsReceivableMinor": null,
+        "khataAgingMinor": 0,
+        "deviceFiscalOfflineExceptions": null
+      },
+      "permissions": {
+        "operational": true,
+        "financial": true
+      }
+    },
+    "raw": {
+      "result": {
+        "data": {
+          "json": {
+            "filters": {
+              "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+              "from": "2026-11-01",
+              "to": "2026-11-02",
+              "branchIds": ["cmvx5fc4p000cy5qrcgzjrc3b"]
+            },
+            "metricScopes": {
+              "safetyQueue": "organization"
+            },
+            "freshness": {
+              "status": "CURRENT",
+              "asOf": "2026-11-02T18:33:33.913Z",
+              "source": "transactional pharmacy ledgers"
+            },
+            "metrics": {
+              "salesMinor": 50598,
+              "marginMinor": 3600,
+              "cashMinor": 50598,
+              "refundsMinor": 42798,
+              "cashVarianceMinor": 0,
+              "openStockSignals": 0,
+              "lostDemandEvents": 0,
+              "recommendedOrders": 0,
+              "expiryValueMinor30": 0,
+              "expiryValueMinor60": 0,
+              "expiryValueMinor90": 0,
+              "expiryValueMinor180": 30800,
+              "openRecalls": 0,
+              "quarantineUnits": 140,
+              "openClaims": 0,
+              "openReceivingExceptions": 0,
+              "pharmacistCoverage": 1,
+              "safetyQueue": 0,
+              "agingFiscalDocuments": 0,
+              "rejectedFiscalDocuments": 0,
+              "accountsPayableMinor": null,
+              "accountsReceivableMinor": null,
+              "khataAgingMinor": 0,
+              "deviceFiscalOfflineExceptions": null
+            },
+            "permissions": {
+              "operational": true,
+              "financial": true
+            }
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:33:33 PKT"
+  },
+  "owner pharmacyReports.expiryAdvice": {
+    "status": 500,
+    "ms": 80,
+    "ok": false,
+    "code": "INTERNAL_SERVER_ERROR",
+    "message": "Something went wrong on our side. Please try again.",
+    "data": null,
+    "raw": {
+      "error": {
+        "json": {
+          "message": "Something went wrong on our side. Please try again.",
+          "code": -32603,
+          "data": {
+            "code": "INTERNAL_SERVER_ERROR",
+            "httpStatus": 500,
+            "path": "pharmacyReports.expiryAdvice",
+            "validation": null
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:33:34 PKT"
+  },
+  "owner pharmacyReports.anomalySignals": {
+    "status": 200,
+    "ms": 72,
+    "ok": true,
+    "code": null,
+    "message": null,
+    "data": [],
+    "raw": {
+      "result": {
+        "data": {
+          "json": []
+        }
+      }
+    },
+    "at": "2026-11-02 23:33:34 PKT"
+  },
+  "pharmacist pharmacyReports.commandCentre": {
+    "status": 403,
+    "ms": 61,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "You do not have permission for this action.",
+    "data": null,
+    "raw": {
+      "error": {
+        "json": {
+          "message": "You do not have permission for this action.",
+          "code": -32003,
+          "data": {
+            "code": "FORBIDDEN",
+            "httpStatus": 403,
+            "path": "pharmacyReports.commandCentre",
+            "validation": null
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:33:34 PKT"
+  },
+  "pharmacist pharmacyReports.expiryAdvice": {
+    "status": 403,
+    "ms": 79,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "You do not have permission for this action.",
+    "data": null,
+    "raw": {
+      "error": {
+        "json": {
+          "message": "You do not have permission for this action.",
+          "code": -32003,
+          "data": {
+            "code": "FORBIDDEN",
+            "httpStatus": 403,
+            "path": "pharmacyReports.expiryAdvice",
+            "validation": null
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:33:34 PKT"
+  },
+  "pharmacist pharmacyReports.anomalySignals": {
+    "status": 403,
+    "ms": 59,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "You do not have permission for this action.",
+    "data": null,
+    "raw": {
+      "error": {
+        "json": {
+          "message": "You do not have permission for this action.",
+          "code": -32003,
+          "data": {
+            "code": "FORBIDDEN",
+            "httpStatus": 403,
+            "path": "pharmacyReports.anomalySignals",
+            "validation": null
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:33:34 PKT"
+  },
+  "cashier pharmacyReports.commandCentre": {
+    "status": 403,
+    "ms": 59,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "You do not have permission for this action.",
+    "data": null,
+    "raw": {
+      "error": {
+        "json": {
+          "message": "You do not have permission for this action.",
+          "code": -32003,
+          "data": {
+            "code": "FORBIDDEN",
+            "httpStatus": 403,
+            "path": "pharmacyReports.commandCentre",
+            "validation": null
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:33:34 PKT"
+  },
+  "cashier pharmacyReports.expiryAdvice": {
+    "status": 403,
+    "ms": 59,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "You do not have permission for this action.",
+    "data": null,
+    "raw": {
+      "error": {
+        "json": {
+          "message": "You do not have permission for this action.",
+          "code": -32003,
+          "data": {
+            "code": "FORBIDDEN",
+            "httpStatus": 403,
+            "path": "pharmacyReports.expiryAdvice",
+            "validation": null
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:33:34 PKT"
+  },
+  "cashier pharmacyReports.anomalySignals": {
+    "status": 403,
+    "ms": 62,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "You do not have permission for this action.",
+    "data": null,
+    "raw": {
+      "error": {
+        "json": {
+          "message": "You do not have permission for this action.",
+          "code": -32003,
+          "data": {
+            "code": "FORBIDDEN",
+            "httpStatus": 403,
+            "path": "pharmacyReports.anomalySignals",
+            "validation": null
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:33:34 PKT"
+  },
+  "manager pharmacyReports.commandCentre": {
+    "status": 403,
+    "ms": 55,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "You do not have permission for this action.",
+    "data": null,
+    "raw": {
+      "error": {
+        "json": {
+          "message": "You do not have permission for this action.",
+          "code": -32003,
+          "data": {
+            "code": "FORBIDDEN",
+            "httpStatus": 403,
+            "path": "pharmacyReports.commandCentre",
+            "validation": null
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:33:34 PKT"
+  },
+  "manager pharmacyReports.expiryAdvice": {
+    "status": 403,
+    "ms": 56,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "You do not have permission for this action.",
+    "data": null,
+    "raw": {
+      "error": {
+        "json": {
+          "message": "You do not have permission for this action.",
+          "code": -32003,
+          "data": {
+            "code": "FORBIDDEN",
+            "httpStatus": 403,
+            "path": "pharmacyReports.expiryAdvice",
+            "validation": null
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:33:34 PKT"
+  },
+  "manager pharmacyReports.anomalySignals": {
+    "status": 403,
+    "ms": 55,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "You do not have permission for this action.",
+    "data": null,
+    "raw": {
+      "error": {
+        "json": {
+          "message": "You do not have permission for this action.",
+          "code": -32003,
+          "data": {
+            "code": "FORBIDDEN",
+            "httpStatus": 403,
+            "path": "pharmacyReports.anomalySignals",
+            "validation": null
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:33:34 PKT"
+  }
+}

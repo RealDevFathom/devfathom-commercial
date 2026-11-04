@@ -107,9 +107,89 @@ Parameters:
   EmailDeliveryMode:
     Type: String
     Default: capture
+  # AI providers (docs/ai-providers.md). The Anthropic and OpenAI keys live in
+  # existing Secrets Manager secrets that this template neither creates nor
+  # injects: the app reads them at runtime through the web task role. Bedrock
+  # uses the same role and no static keys. Azure is never configured here.
   AiProvider:
     Type: String
-    Default: disabled
+    Default: ''
+    AllowedValues: ['', auto, anthropic, openai, bedrock, disabled]
+    Description: >-
+      AI_PROVIDER. Empty means the environment default: auto in staging,
+      disabled in production (production AI stays off until its keys exist and
+      a value is set explicitly). auto is the routed chain in AiProviderOrder;
+      anthropic, openai or bedrock puts that provider first; disabled turns AI
+      off and the SuperAdmin settings cannot turn it back on.
+  AiProviderOrder:
+    Type: String
+    Default: anthropic,openai,bedrock
+    AllowedPattern: '^(anthropic|openai|bedrock)(,(anthropic|openai|bedrock)){0,2}$'
+    Description: AI_PROVIDER_ORDER, the fallback order. A saved SuperAdmin order wins.
+  AnthropicApiKeySecretId:
+    Type: String
+    Default: ''
+    AllowedPattern: '^[A-Za-z0-9/_+=.@-]*$'
+    Description: >-
+      Name (not ARN) of the existing secret holding the Anthropic API key.
+      Empty means devfathom/<EnvironmentName>/anthropic-api-key.
+  OpenAiApiKeySecretId:
+    Type: String
+    Default: ''
+    AllowedPattern: '^[A-Za-z0-9/_+=.@-]*$'
+    Description: >-
+      Name (not ARN) of the existing secret holding the OpenAI API key.
+      Empty means devfathom/<EnvironmentName>/openai-api-key.
+  AiSecretsRegion:
+    Type: String
+    Default: ap-southeast-1
+    AllowedPattern: '^[a-z]{2}(-[a-z]+)+-[0-9]$'
+    Description: AI_SECRETS_REGION, the region of the two API key secrets.
+  # Bedrock is the last fallback. It is called from AiBedrockRegion through the
+  # global cross-Region inference profiles (the only Claude 5.5 option from
+  # ap-southeast-1). The deep tier uses the standard model on Bedrock.
+  AiBedrockRegion:
+    Type: String
+    Default: ap-southeast-1
+    AllowedPattern: '^[a-z]{2}(-[a-z]+)+-[0-9]$'
+    Description: BEDROCK_REGION, the Bedrock source Region.
+  AiBedrockCheapModelId:
+    Type: String
+    Default: global.anthropic.claude-haiku-5-5
+    AllowedPattern: '^(global|us|eu|apac|au|jp)\.anthropic\.[A-Za-z0-9][A-Za-z0-9.:-]*$'
+    Description: AI_BEDROCK_MODEL_CHEAP, the Anthropic inference profile for the cheap tier.
+  AiBedrockStandardModelId:
+    Type: String
+    Default: global.anthropic.claude-sonnet-5-5
+    AllowedPattern: '^(global|us|eu|apac|au|jp)\.anthropic\.[A-Za-z0-9][A-Za-z0-9.:-]*$'
+    Description: AI_BEDROCK_MODEL_STANDARD, the Anthropic inference profile for the standard tier.
+  AiBedrockDeepModelId:
+    Type: String
+    Default: global.anthropic.claude-sonnet-5-5
+    AllowedPattern: '^(global|us|eu|apac|au|jp)\.anthropic\.[A-Za-z0-9][A-Za-z0-9.:-]*$'
+    Description: AI_BEDROCK_MODEL_DEEP, the Anthropic inference profile for the deep tier.
+  AiHaikuLookups:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      AF_HAIKU_LOOKUPS. true lets the small model answer Ask Fathom quick
+      lookups; false sends them to the default model.
+  AiAnthropicMonthlyCapUsd:
+    Type: Number
+    Default: 190
+    MinValue: 0
+    Description: AI_ANTHROPIC_MONTHLY_CAP_USD. A saved SuperAdmin cap wins.
+  AiOpenAiMonthlyCapUsd:
+    Type: Number
+    Default: 190
+    MinValue: 0
+    Description: AI_OPENAI_MONTHLY_CAP_USD. A saved SuperAdmin cap wins.
+  AiBedrockMonthlyCapUsd:
+    Type: Number
+    Default: 300
+    MinValue: 0
+    Description: AI_BEDROCK_MONTHLY_CAP_USD. A saved SuperAdmin cap wins.
   StorageAdapter:
     Type: String
     Default: disabled
@@ -147,6 +227,9 @@ Conditions:
   IsProduction: !Equals [!Ref EnvironmentName, production]
   IsStaging: !Equals [!Ref EnvironmentName, staging]
   DbMultiAzEnabled: !Equals [!Ref DbMultiAz, 'true']
+  HasAnthropicApiKeySecretId: !Not [!Equals [!Ref AnthropicApiKeySecretId, '']]
+  HasOpenAiApiKeySecretId: !Not [!Equals [!Ref OpenAiApiKeySecretId, '']]
+  HasAiProvider: !Not [!Equals [!Ref AiProvider, '']]
   JobsEnabled: !And
     - !Equals [!Ref EnableJobsSchedule, 'true']
     - !Condition HasCertificate
@@ -406,6 +489,12 @@ Resources:
         PasswordLength: 48
         ExcludePunctuation: true
 
+  # The Anthropic and OpenAI API keys are not created here: they already exist,
+  # outside this stack (AnthropicApiKeySecretId, OpenAiApiKeySecretId), and the
+  # app reads them at runtime through WebTaskRole. A stack that ever held the
+  # old AnthropicApiKeySecret resource keeps that secret when it is removed
+  # (its DeletionPolicy was Retain).
+
   # Initialization-only credentials, passed to the migration task only when it
   # seeds (staging) or bootstraps (production): sign-in passwords for the seeded
   # users and the first workspace and platform administrators.
@@ -620,6 +709,33 @@ Resources:
                 Resource:
                   - !Ref DatabaseAdminUrlSecret
                   - !Ref DatabaseAppUrlSecret
+                  # The seed password exists in staging only.
+                  - !If [IsStaging, !Ref SeedPasswordSecret, !Ref AWS::NoValue]
+                  - !Ref AdminPasswordSecret
+                  - !Ref PlatformAdminPasswordSecret
+                  - !If [MigrationSeeds, !Ref DemoAccessCodeSecret, !Ref AWS::NoValue]
+
+  WebTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-web-task-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DatabaseAppUrlSecret
                   - !Ref AuthSecret
                   - !Ref PlatformEncryptionKeySecret
                   - !Ref CameraCredentialKeySecret
@@ -655,6 +771,62 @@ Resources:
               - Effect: Allow
                 Action: s3:ListBucket
                 Resource: !GetAtt UploadsBucket.Arn
+        # The app reads the two existing API key secrets at runtime (the SDK's
+        # default credential chain resolves this task role inside the container).
+        # The -?????? suffix matches the six random characters Secrets Manager
+        # appends to a secret's ARN, and nothing longer.
+        - PolicyName: read-ai-provider-keys
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadAIProviderKeys
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub
+                    - 'arn:${AWS::Partition}:secretsmanager:${AiSecretsRegion}:${AWS::AccountId}:secret:${Name}-??????'
+                    - Name: !If
+                        - HasAnthropicApiKeySecretId
+                        - !Ref AnthropicApiKeySecretId
+                        - !Sub devfathom/${EnvironmentName}/anthropic-api-key
+                  - !Sub
+                    - 'arn:${AWS::Partition}:secretsmanager:${AiSecretsRegion}:${AWS::AccountId}:secret:${Name}-??????'
+                    - Name: !If
+                        - HasOpenAiApiKeySecretId
+                        - !Ref OpenAiApiKeySecretId
+                        - !Sub devfathom/${EnvironmentName}/openai-api-key
+        # Bedrock: every Anthropic Claude model and inference profile, including
+        # the global cross-Region profiles called from AiBedrockRegion. Converse
+        # and ConverseStream are authorized by these two actions; there is no
+        # separate Converse IAM action. A global profile call needs the profile
+        # ARN, the foundation model in the Regions it routes to, and the
+        # Region-less global foundation-model ARN, which AWS evaluates with
+        # aws:RequestedRegion set to "unspecified".
+        - PolicyName: invoke-bedrock-anthropic
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: InvokeAnthropicInferenceProfiles
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*anthropic.claude-*'
+              - Sid: InvokeAnthropicRegionalModels
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/anthropic.claude-*'
+              - Sid: InvokeAnthropicGlobalModels
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: !Sub 'arn:${AWS::Partition}:bedrock:::foundation-model/anthropic.claude-*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: unspecified
 
   MigrateTaskRole:
     Type: AWS::IAM::Role
@@ -679,7 +851,7 @@ Resources:
       RuntimePlatform:
         CpuArchitecture: X86_64
         OperatingSystemFamily: LINUX
-      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      ExecutionRoleArn: !GetAtt WebTaskExecutionRole.Arn
       TaskRoleArn: !GetAtt WebTaskRole.Arn
       ContainerDefinitions:
         - Name: web
@@ -707,8 +879,44 @@ Resources:
               Value: org_devfathom
             - Name: EMAIL_DELIVERY_MODE
               Value: !Ref EmailDeliveryMode
+            # AI providers (docs/ai-providers.md). Secret ids only: the app
+            # reads the key values at runtime through WebTaskRole, so they never
+            # appear in the task definition or the container environment.
             - Name: AI_PROVIDER
-              Value: !Ref AiProvider
+              Value: !If
+                - HasAiProvider
+                - !Ref AiProvider
+                - !If [IsProduction, disabled, auto]
+            - Name: AI_PROVIDER_ORDER
+              Value: !Ref AiProviderOrder
+            - Name: ANTHROPIC_API_KEY_SECRET_ID
+              Value: !If
+                - HasAnthropicApiKeySecretId
+                - !Ref AnthropicApiKeySecretId
+                - !Sub devfathom/${EnvironmentName}/anthropic-api-key
+            - Name: OPENAI_API_KEY_SECRET_ID
+              Value: !If
+                - HasOpenAiApiKeySecretId
+                - !Ref OpenAiApiKeySecretId
+                - !Sub devfathom/${EnvironmentName}/openai-api-key
+            - Name: AI_SECRETS_REGION
+              Value: !Ref AiSecretsRegion
+            - Name: BEDROCK_REGION
+              Value: !Ref AiBedrockRegion
+            - Name: AI_BEDROCK_MODEL_CHEAP
+              Value: !Ref AiBedrockCheapModelId
+            - Name: AI_BEDROCK_MODEL_STANDARD
+              Value: !Ref AiBedrockStandardModelId
+            - Name: AI_BEDROCK_MODEL_DEEP
+              Value: !Ref AiBedrockDeepModelId
+            - Name: AF_HAIKU_LOOKUPS
+              Value: !Ref AiHaikuLookups
+            - Name: AI_ANTHROPIC_MONTHLY_CAP_USD
+              Value: !Ref AiAnthropicMonthlyCapUsd
+            - Name: AI_OPENAI_MONTHLY_CAP_USD
+              Value: !Ref AiOpenAiMonthlyCapUsd
+            - Name: AI_BEDROCK_MONTHLY_CAP_USD
+              Value: !Ref AiBedrockMonthlyCapUsd
             - Name: STORAGE_ADAPTER
               Value: !Ref StorageAdapter
             - Name: S3_UPLOADS_BUCKET

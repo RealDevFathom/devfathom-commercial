@@ -1,0 +1,523 @@
+[
+  {
+    "l": "cashier expiryBoardLots",
+    "status": 400,
+    "code": "BAD_REQUEST",
+    "message": "Within Days: Invalid input",
+    "data": null,
+    "at": "2026-11-02 23:30:49 PKT"
+  },
+  {
+    "l": "cashier suppliers",
+    "status": 200,
+    "code": null,
+    "message": null,
+    "data": [
+      {
+        "id": "cmvxq8la7005s1xqr9mhliwix",
+        "name": "QA Cashier Supplier",
+        "legalName": "QA Cashier Supplier Ltd",
+        "authorized": false,
+        "active": true,
+        "serviceArea": "Karachi",
+        "contactName": "QA",
+        "contactPhone": "+92 300 0000002",
+        "paymentTermsDays": 0,
+        "creditLimitMinor": 0,
+        "eligibility": {
+          "orderable": false,
+          "reason": "NOT_AUTHORIZED"
+        },
+        "governingLicence": null,
+        "licences": []
+      },
+      {
+        "id": "cmvxwcrze00144oqrkzyxfyk3",
+        "name": "QA Cashier Supplier 2",
+        "legalName": "QA Cashier Supplier 2 Ltd",
+        "authorized": false,
+        "active": true,
+        "serviceArea": "Lahore",
+        "contactName": "QA",
+        "contactPhone": "+92 300 0000003",
+        "paymentTermsDays": 0,
+        "creditLimitMinor": 0,
+        "eligibility": {
+          "orderable": false,
+          "reason": "NOT_AUTHORIZED"
+        },
+        "governingLicence": null,
+        "licences": []
+      },
+      {
+        "id": "cmvxpznfk003y1xqrmmzp7p8k",
+        "name": "QA Test Distributors",
+        "legalName": "QA Test Distributors (Pvt) Ltd",
+        "authorized": true,
+        "active": true,
+        "serviceArea": "Karachi",
+        "contactName": "QA Contact",
+        "contactPhone": "+92 300 0000001",
+        "paymentTermsDays": 0,
+        "creditLimitMinor": 0,
+        "eligibility": {
+          "orderable": true,
+          "reason": null
+        },
+        "governingLicence": {
+          "id": "cmvxw9inb000l4oqrzzq1m5jn",
+          "licenceType": "Drug distribution licence",
+          "licenceNumber": "DRAP-QA-SUP-0001",
+          "issuingAuthority": "DRAP QA",
+          "issuedAt": "2026-11-01T00:00:00.000Z",
+          "expiresAt": "2028-12-31T00:00:00.000Z",
+          "evidenceUri": "QA folder (fake)",
+          "verified": true,
+          "superseded": false,
+          "daysToExpiry": 789
+        },
+        "licences": [
+          {
+            "id": "cmvxw9inb000l4oqrzzq1m5jn",
+            "licenceType": "Drug distribution licence",
+            "licenceNumber": "DRAP-QA-SUP-0001",
+            "issuingAuthority": "DRAP QA",
+            "issuedAt": "2026-11-01T00:00:00.000Z",
+            "expiresAt": "2028-12-31T00:00:00.000Z",
+            "evidenceUri": "QA folder (fake)",
+            "verified": true,
+            "superseded": false,
+            "daysToExpiry": 789
+          }
+        ]
+      },
+      {
+        "id": "cmvzlcwf201ss4oqr3ssr634c",
+        "name": "QA-20261102-CASHCHECK-Supplier",
+        "legalName": "QA-20261102-CASHCHECK-Synthetic QA Distributor",
+        "authorized": true,
+        "active": true,
+        "serviceArea": "Karachi",
+        "contactName": null,
+        "contactPhone": null,
+        "paymentTermsDays": 0,
+        "creditLimitMinor": 0,
+        "eligibility": {
+          "orderable": true,
+          "reason": null
+        },
+        "governingLicence": {
+          "id": "cmvzlcwmd01su4oqrpx9ocrjh",
+          "licenceType": "Synthetic QA distribution licence",
+          "licenceNumber": "QA-20261102-CASHCHECK-LIC",
+          "issuingAuthority": "Synthetic QA only",
+          "issuedAt": "2026-01-01T00:00:00.000Z",
+          "expiresAt": "2027-12-31T00:00:00.000Z",
+          "evidenceUri": "QA-20261102-CASHCHECK-Not a real licence",
+          "verified": true,
+          "superseded": false,
+          "daysToExpiry": 423
+        },
+        "licences": [
+          {
+            "id": "cmvzlcwmd01su4oqrpx9ocrjh",
+            "licenceType": "Synthetic QA distribution licence",
+            "licenceNumber": "QA-20261102-CASHCHECK-LIC",
+            "issuingAuthority": "Synthetic QA only",
+            "issuedAt": "2026-01-01T00:00:00.000Z",
+            "expiresAt": "2027-12-31T00:00:00.000Z",
+            "evidenceUri": "QA-20261102-CASHCHECK-Not a real licence",
+            "verified": true,
+            "superseded": false,
+            "daysToExpiry": 423
+          }
+        ]
+      },
+      {
+        "id": "cmvzkp6bb01824oqrty6prj18",
+        "name": "QA-20261102-FUNC-Supplier",
+        "legalName": "QA-20261102-FUNC-Synthetic Test Distributor",
+        "authorized": false,
+        "active": true,
+        "serviceArea": "Lahore",
+        "contactName": null,
+        "contactPhone": null,
+        "paymentTermsDays": 0,
+        "creditLimitMinor": 0,
+        "eligibility": {
+          "orderable": false,
+          "reason": "NOT_AUTHORIZED"
+        },
+        "governingLicence": {
+          "id": "cmvzkpu0d018m4oqr7trkmrq9",
+          "licenceType": "Synthetic QA distribution licence",
+          "licenceNumber": "QA-20261102-FUNC-LIC-01",
+          "issuingAuthority": "Synthetic QA only",
+          "issuedAt": "2026-01-01T00:00:00.000Z",
+          "expiresAt": "2027-12-31T00:00:00.000Z",
+          "evidenceUri": "QA-20261102-FUNC-No real licence",
+          "verified": true,
+          "superseded": false,
+          "daysToExpiry": 423
+        },
+        "licences": [
+          {
+            "id": "cmvzkpu0d018m4oqr7trkmrq9",
+            "licenceType": "Synthetic QA distribution licence",
+            "licenceNumber": "QA-20261102-FUNC-LIC-01",
+            "issuingAuthority": "Synthetic QA only",
+            "issuedAt": "2026-01-01T00:00:00.000Z",
+            "expiresAt": "2027-12-31T00:00:00.000Z",
+            "evidenceUri": "QA-20261102-FUNC-No real licence",
+            "verified": true,
+            "superseded": false,
+            "daysToExpiry": 423
+          }
+        ]
+      },
+      {
+        "id": "cmvzktbce01cs4oqrsxjjoswy",
+        "name": "QA-RBAC-mvzktau8 supplier",
+        "legalName": "QA-RBAC-mvzktau8 Ltd",
+        "authorized": true,
+        "active": true,
+        "serviceArea": "Lahore",
+        "contactName": null,
+        "contactPhone": null,
+        "paymentTermsDays": 0,
+        "creditLimitMinor": 0,
+        "eligibility": {
+          "orderable": true,
+          "reason": null
+        },
+        "governingLicence": {
+          "id": "cmvzktbe801cu4oqrm3fk73l2",
+          "licenceType": "Drug sale licence (distribution)",
+          "licenceNumber": "QA-RBAC-mvzktau8-LIC",
+          "issuingAuthority": "QA self-asserted",
+          "issuedAt": "2026-01-01T00:00:00.000Z",
+          "expiresAt": "2027-12-31T00:00:00.000Z",
+          "evidenceUri": null,
+          "verified": true,
+          "superseded": false,
+          "daysToExpiry": 423
+        },
+        "licences": [
+          {
+            "id": "cmvzktbe801cu4oqrm3fk73l2",
+            "licenceType": "Drug sale licence (distribution)",
+            "licenceNumber": "QA-RBAC-mvzktau8-LIC",
+            "issuingAuthority": "QA self-asserted",
+            "issuedAt": "2026-01-01T00:00:00.000Z",
+            "expiresAt": "2027-12-31T00:00:00.000Z",
+            "evidenceUri": null,
+            "verified": true,
+            "superseded": false,
+            "daysToExpiry": 423
+          }
+        ]
+      }
+    ],
+    "at": "2026-11-02 23:30:49 PKT"
+  },
+  {
+    "l": "cashier lotsFromReceipt",
+    "status": 200,
+    "code": null,
+    "message": null,
+    "data": [
+      {
+        "lineNumber": 1,
+        "batchNumber": "QA-B2",
+        "medicine": {
+          "id": "cmvxpws13002v1xqrfsg4p4hz",
+          "productName": "Paracetamol 500mg Tablets"
+        },
+        "inventoryLot": {
+          "id": "cmvzl8u3u01pq4oqrosqy5nsi",
+          "printedMrpMinor": 2800,
+          "unitCostMinor": 110,
+          "unitsPerPack": 10,
+          "receivedExpiresAt": "2027-01-31T19:00:00.000Z",
+          "batch": {
+            "batchNumber": "QA-B2",
+            "expiresAt": "2027-01-31T19:00:00.000Z",
+            "state": "ACTIVE"
+          },
+          "balances": [
+            {
+              "disposition": "AVAILABLE",
+              "onHandUnits": 280,
+              "location": {
+                "name": "Main Shelf"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "lineNumber": 2,
+        "batchNumber": "QA-B3",
+        "medicine": {
+          "id": "cmvxpws13002v1xqrfsg4p4hz",
+          "productName": "Paracetamol 500mg Tablets"
+        },
+        "inventoryLot": {
+          "id": "cmvzl8u4a01pt4oqrafza14oh",
+          "printedMrpMinor": 3000,
+          "unitCostMinor": 120,
+          "unitsPerPack": 10,
+          "receivedExpiresAt": "2028-03-31T19:00:00.000Z",
+          "batch": {
+            "batchNumber": "QA-B3",
+            "expiresAt": "2028-03-31T19:00:00.000Z",
+            "state": "ACTIVE"
+          },
+          "balances": [
+            {
+              "disposition": "AVAILABLE",
+              "onHandUnits": 300,
+              "location": {
+                "name": "Main Shelf"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "at": "2026-11-02 23:30:49 PKT"
+  },
+  {
+    "l": "manager openDrawer",
+    "status": 200,
+    "code": null,
+    "message": null,
+    "data": {
+      "id": "cmvzlh4uo01ym4oqr6qev0j0t",
+      "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+      "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+      "deviceId": "qa-rbac-manager-device",
+      "businessDate": "2026-11-02T00:00:00.000Z",
+      "status": "OPEN",
+      "openingFloatMinor": 0,
+      "countedCashMinor": null,
+      "controlledCountHook": null,
+      "openedByActorId": "cqamgrd345d9c39d10ed4f66c",
+      "closedByActorId": null,
+      "openedAt": "2026-11-02T18:30:50.064Z",
+      "closedAt": null
+    },
+    "at": "2026-11-02 23:30:50 PKT"
+  },
+  {
+    "l": "manager drawerMovement PAID_IN 100",
+    "status": 200,
+    "code": null,
+    "message": null,
+    "data": {
+      "id": "cmvzlh4wo01yo4oqrkuurk3en",
+      "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+      "drawerSessionId": "cmvzlh4uo01ym4oqr6qev0j0t",
+      "kind": "PAID_IN",
+      "amountMinor": 10000,
+      "reason": "QA RBAC probe",
+      "actorId": "cqamgrd345d9c39d10ed4f66c",
+      "createdAt": "2026-11-02T18:30:50.136Z"
+    },
+    "at": "2026-11-02 23:30:50 PKT"
+  },
+  {
+    "l": "manager drawerMovement PAID_OUT 100",
+    "status": 200,
+    "code": null,
+    "message": null,
+    "data": {
+      "id": "cmvzlh4ym01yq4oqrhe7anozx",
+      "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+      "drawerSessionId": "cmvzlh4uo01ym4oqr6qev0j0t",
+      "kind": "PAID_OUT",
+      "amountMinor": 10000,
+      "reason": "QA RBAC probe",
+      "actorId": "cqamgrd345d9c39d10ed4f66c",
+      "createdAt": "2026-11-02T18:30:50.206Z"
+    },
+    "at": "2026-11-02 23:30:50 PKT"
+  },
+  {
+    "l": "manager closeDrawer",
+    "status": 200,
+    "code": null,
+    "message": null,
+    "data": {
+      "drawer": {
+        "id": "cmvzlh4uo01ym4oqr6qev0j0t",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "deviceId": "qa-rbac-manager-device",
+        "businessDate": "2026-11-02T00:00:00.000Z",
+        "status": "CLOSED",
+        "openingFloatMinor": 0,
+        "countedCashMinor": 0,
+        "controlledCountHook": null,
+        "openedByActorId": "cqamgrd345d9c39d10ed4f66c",
+        "closedByActorId": "cqamgrd345d9c39d10ed4f66c",
+        "openedAt": "2026-11-02T18:30:50.064Z",
+        "closedAt": "2026-11-02T18:30:50.273Z"
+      },
+      "expectedCashMinor": 0,
+      "varianceMinor": 0
+    },
+    "at": "2026-11-02 23:30:50 PKT"
+  },
+  {
+    "l": "manager createPatient",
+    "status": 200,
+    "code": null,
+    "message": null,
+    "data": {
+      "id": "cmvzlh52601yu4oqrsc39zbx9",
+      "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+      "displayName": "QA-RBAC Patient",
+      "cnic": null,
+      "phone": "+923001234567",
+      "address": null,
+      "dateOfBirth": null,
+      "createdAt": "2026-11-02T18:30:50.334Z",
+      "updatedAt": "2026-11-02T18:30:50.334Z"
+    },
+    "at": "2026-11-02 23:30:50 PKT"
+  },
+  {
+    "l": "manager recordConsent MARKETING/WHATSAPP",
+    "status": 200,
+    "code": null,
+    "message": null,
+    "data": {
+      "id": "cmvzlh53z01yw4oqr79s1sbep",
+      "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+      "patientId": "cmvzlh52601yu4oqrsc39zbx9",
+      "purpose": "MARKETING",
+      "channel": "WHATSAPP",
+      "version": 1,
+      "granted": true,
+      "recordedByUserId": "cqamgrd345d9c39d10ed4f66c",
+      "source": "COUNTER_TABLET",
+      "staffId": "cqamgrd345d9c39d10ed4f66c",
+      "recordedAt": "2026-11-02T18:30:50.394Z",
+      "revokedAt": null,
+      "supersedesId": null
+    },
+    "at": "2026-11-02 23:30:50 PKT"
+  },
+  {
+    "l": "manager readPatient",
+    "status": 200,
+    "code": null,
+    "message": null,
+    "data": {
+      "id": "cmvzlh52601yu4oqrsc39zbx9",
+      "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+      "displayName": "QA-RBAC Patient",
+      "cnic": null,
+      "phone": "*********4567",
+      "address": null,
+      "dateOfBirth": null,
+      "createdAt": "2026-11-02T18:30:50.334Z",
+      "updatedAt": "2026-11-02T18:30:50.334Z"
+    },
+    "at": "2026-11-02 23:30:50 PKT"
+  },
+  {
+    "l": "manager exportPatient",
+    "status": 200,
+    "code": null,
+    "message": null,
+    "data": {
+      "id": "cmvzlh52601yu4oqrsc39zbx9",
+      "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+      "displayName": "QA-RBAC Patient",
+      "cnic": null,
+      "phone": "+923001234567",
+      "address": null,
+      "dateOfBirth": null,
+      "createdAt": "2026-11-02T18:30:50.334Z",
+      "updatedAt": "2026-11-02T18:30:50.334Z",
+      "consents": [
+        {
+          "id": "cmvzlh53z01yw4oqr79s1sbep",
+          "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+          "patientId": "cmvzlh52601yu4oqrsc39zbx9",
+          "purpose": "MARKETING",
+          "channel": "WHATSAPP",
+          "version": 1,
+          "granted": true,
+          "recordedByUserId": "cqamgrd345d9c39d10ed4f66c",
+          "source": "COUNTER_TABLET",
+          "staffId": "cqamgrd345d9c39d10ed4f66c",
+          "recordedAt": "2026-11-02T18:30:50.394Z",
+          "revokedAt": null,
+          "supersedesId": null
+        }
+      ],
+      "prescriptions": []
+    },
+    "at": "2026-11-02 23:30:50 PKT"
+  },
+  {
+    "l": "cashier exportPatient",
+    "status": 200,
+    "code": null,
+    "message": null,
+    "data": {
+      "id": "cmvzlh52601yu4oqrsc39zbx9",
+      "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+      "displayName": "QA-RBAC Patient",
+      "cnic": null,
+      "phone": "+923001234567",
+      "address": null,
+      "dateOfBirth": null,
+      "createdAt": "2026-11-02T18:30:50.334Z",
+      "updatedAt": "2026-11-02T18:30:50.334Z",
+      "consents": [
+        {
+          "id": "cmvzlh53z01yw4oqr79s1sbep",
+          "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+          "patientId": "cmvzlh52601yu4oqrsc39zbx9",
+          "purpose": "MARKETING",
+          "channel": "WHATSAPP",
+          "version": 1,
+          "granted": true,
+          "recordedByUserId": "cqamgrd345d9c39d10ed4f66c",
+          "source": "COUNTER_TABLET",
+          "staffId": "cqamgrd345d9c39d10ed4f66c",
+          "recordedAt": "2026-11-02T18:30:50.394Z",
+          "revokedAt": null,
+          "supersedesId": null
+        }
+      ],
+      "prescriptions": []
+    },
+    "at": "2026-11-02 23:30:50 PKT"
+  },
+  {
+    "l": "cashier createPharmacovigilanceReport",
+    "status": 500,
+    "code": "INTERNAL_SERVER_ERROR",
+    "message": "Something went wrong on our side. Please try again.",
+    "data": null,
+    "at": "2026-11-02 23:30:50 PKT"
+  },
+  {
+    "l": "manager exportPharmacovigilanceDrap",
+    "status": 200,
+    "code": null,
+    "message": null,
+    "data": {
+      "format": "DRAP_PHARMACOVIGILANCE_V1",
+      "from": "2026-10-01T00:00:00.000Z",
+      "to": "2026-11-03T00:00:00.000Z",
+      "reports": []
+    },
+    "at": "2026-11-02 23:30:50 PKT"
+  }
+]

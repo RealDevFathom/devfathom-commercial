@@ -1,0 +1,39 @@
+Captured 2026-11-03 PKT from /pharmacy/inventory/import (owner, dry run only; no stock changed)
+CSV: qa/sehatcart-2026-11-02/api-evidence/opening-import.csv
+
+3. Review the opening-stock diff
+COMMIT BLOCKED
+
+3 rows · 78 counted base units · PKR 819.00 opening valuation.
+
+No inventory has changed during this dry run. Each valid row adds its physical count as a new opening lot. The export is comparison evidence. Previously imported lots cannot be imported again.
+
+Opening imports must finish before sales, receiving, or other stock operations begin. Use inventory receiving or counts for an operating branch.
+Opening stock rows, count differences, and blocking validation errors
+ROW / SOURCE	MEDICINE / PACK / BATCH	EXPIRY	CURRENT	EXPORTED	COUNTED / ADDED	PROPOSED TOTAL	VARIANCE	VALIDATION
+2 · OLD-POS-1	Paracetamol 500mg Tablets
+cmvxpy8hn003t1xqr9az7aste · QA-OPEN-1
+10 base units per pack	2027-08-31	0	50	50	50	0	
+READY
+
+MRP PKR 27.00 per pack · Cost PKR 10.50 per base unit
+
+
+3 · OLD-POS-2	Unmatched medicine
+UNKNOWN-PACK-999 · QA-OPEN-2
+Unknown conversion	2027-08-31	0	20	20	20	0	
+Match exactly one published medicine pack with a valid current conversion, using its barcode or pack ID.
+
+4 · =HYPERLINK("http://example.invalid","click")	Paracetamol 500mg Tablets
+cmvxpy8hn003t1xqr9az7aste · QA-OPEN-3
+10 base units per pack	2027-09-30	0	10	8	8	-2	
+READY
+
+MRP PKR 27.00 per pack · Cost PKR 10.50 per base unit
+
+Variance note: =1+1 counted short
+
+I verified the physical counts, unit costs, printed pack MRPs, pack conversions, batches, expiry dates and destination. Commit all rows as opening stock and record their valuation.
+Commit opening stock
+
+This posts the entire reviewed file once. A retry recovers the same receipt. Every count difference must carry a variance explanation; independent sign-off is not performed by this import.

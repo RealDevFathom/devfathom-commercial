@@ -1,9 +1,21 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { isAssistantAvailable, useAssistant } from './assistant-store';
+import {
+  assistantAvailabilityMessage,
+  isAssistantAvailable,
+  useAssistant,
+} from './assistant-store';
 
 const settings = (askFathomEnabled: boolean, organizationId = 'org-a') => ({
   organizationId,
   askFathomEnabled,
+  available: askFathomEnabled,
+  unavailableReason: askFathomEnabled ? null : ('COMPANY_DISABLED' as const),
+});
+const unconfigured = (organizationId = 'org-a') => ({
+  organizationId,
+  askFathomEnabled: true,
+  available: false,
+  unavailableReason: 'AI_NOT_CONFIGURED' as const,
 });
 
 beforeEach(() => useAssistant.setState(useAssistant.getInitialState()));
@@ -86,5 +98,36 @@ describe('organization-bound Ask Fathom presentation state', () => {
       hasOpened: false,
       askFathomEnabled: null,
     });
+  });
+
+  it('stays closed with an explanation while the company switch is on but no AI provider is configured', () => {
+    const store = useAssistant.getState();
+    store.setOrganization('org-a');
+    store.confirmSettings(settings(true), 10);
+    store.setOpen(true);
+    const epoch = useAssistant.getState().panelEpoch;
+    store.confirmSettings(unconfigured(), 20);
+    expect(useAssistant.getState()).toMatchObject({
+      open: false,
+      hasOpened: false,
+      askFathomEnabled: true,
+      unavailableReason: 'AI_NOT_CONFIGURED',
+    });
+    expect(useAssistant.getState().panelEpoch).toBeGreaterThan(epoch);
+    expect(isAssistantAvailable(useAssistant.getState(), 'org-a')).toBe(false);
+    store.toggle();
+    store.setOpen(true);
+    expect(useAssistant.getState().open).toBe(false);
+    expect(assistantAvailabilityMessage(useAssistant.getState(), 'org-a')).toBe(
+      'Ask Fathom is unavailable because no AI provider is configured for this environment.'
+    );
+    // The company switch explanation wins when both apply.
+    store.confirmSettings(settings(false), 30);
+    expect(assistantAvailabilityMessage(useAssistant.getState(), 'org-a')).toBe(
+      'Ask Fathom chat is off for this organization.'
+    );
+    store.confirmSettings(settings(true), 40);
+    store.setOpen(true);
+    expect(useAssistant.getState().open).toBe(true);
   });
 });

@@ -4904,6 +4904,7 @@ model Organization {
   seatLimit                Int                        @default(1)
   isDemo                   Boolean                    @default(false)
   askFathomEnabled         Boolean                    @default(true)
+  aiDeepStrategyEnabled    Boolean                    @default(false)
   lastDemoResetAt          DateTime?
   gracePeriodDays          Int                        @default(0)
   activatedAt              DateTime?
@@ -4931,6 +4932,7 @@ model Organization {
   limits                                    OrganizationLimit[]
   usageCounters                             OrganizationUsageCounter[]
   aiUsages                                  AIUsage[]
+  aiAssistantActions                        AIAssistantAction[]
   brand                                     OrganizationBrand?
   emailSettings                             OrganizationEmailSettings?
   domains                                   OrganizationDomain[]
@@ -10713,9 +10715,35 @@ model PlatformUser {
   sessions                             PlatformSession[]
   recoveryCodes                        PlatformRecoveryCode[]
   restaurantActivationAcknowledgements RestaurantActivationAcknowledgement[]
+  platformNotifications                 PlatformNotification[]
 
   @@index([role, active])
   @@map("platform_users")
+}
+
+model PlatformNotification {
+  id             String   @id @default(cuid())
+  platformUserId String
+  type           String
+  title          String
+  message        String
+  isRead         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  platformUser PlatformUser @relation(fields: [platformUserId], references: [id], onDelete: Cascade)
+
+  @@index([platformUserId, isRead, createdAt(sort: Desc)])
+  @@map("platform_notifications")
+}
+
+/// One claim per provider and Asia/Karachi month, so each spend-cap alert fans out once.
+model AIBudgetAlertMonth {
+  provider  String
+  month     String
+  createdAt DateTime @default(now())
+
+  @@id([provider, month])
+  @@map("ai_budget_alert_months")
 }
 
 model PlatformRecoveryCode {
@@ -10795,6 +10823,72 @@ model PlatformSetting {
 
   @@index([category])
   @@map("platform_settings")
+}
+
+enum AISettingsMode {
+  Auto
+  ForceAnthropic
+  ForceOpenAI
+  ForceBedrock
+  Disabled
+}
+
+/// Platform-wide AI routing policy set by a SUPER_ADMIN. The database enforces the
+/// singleton id. Every override is optional: an empty order and a null cap or model
+/// fall back to the environment, then to the code defaults (src/lib/ai/model-defaults.ts).
+model AISetting {
+  id                    String         @id @default("default")
+  mode                  AISettingsMode @default(Auto)
+  /// Fallback order; empty means AI_PROVIDER_ORDER / the default order.
+  providerOrder         String[]       @default([])
+  fallbackEnabled       Boolean        @default(true)
+  anthropicMonthlyCapUsd Decimal?      @db.Decimal(12, 4)
+  openaiMonthlyCapUsd   Decimal?       @db.Decimal(12, 4)
+  bedrockMonthlyCapUsd  Decimal?       @db.Decimal(12, 4)
+  cheapAnthropicModel   String?
+  standardAnthropicModel String?
+  deepAnthropicModel    String?
+  cheapOpenaiModel      String?
+  standardOpenaiModel   String?
+  deepOpenaiModel       String?
+  cheapBedrockModel     String?
+  standardBedrockModel  String?
+  deepBedrockModel      String?
+  updatedAt             DateTime       @updatedAt
+  updatedBy             String?
+
+  @@map("ai_settings")
+}
+
+model AIModelPrice {
+  id                String   @id @default(cuid())
+  provider          String
+  model             String
+  inputUsdPerMTok   Decimal  @db.Decimal(14, 6)
+  outputUsdPerMTok  Decimal  @db.Decimal(14, 6)
+  effectiveFrom     DateTime
+
+  @@unique([provider, model, effectiveFrom])
+  @@index([provider, model, effectiveFrom(sort: Desc)])
+  @@map("ai_model_prices")
+}
+
+/// Platform spend ledger: one row per billed provider attempt, priced in USD. Spend
+/// caps read it. Tenant attribution stays in AIUsage (ai_usage).
+model AIProviderUsage {
+  id             String   @id @default(cuid())
+  provider       String
+  tier           String
+  model          String
+  feature        String
+  organizationId String?
+  inputTokens    Int
+  outputTokens   Int
+  costUsd        Decimal  @db.Decimal(18, 8)
+  createdAt      DateTime @default(now())
+
+  @@index([provider, createdAt])
+  @@map("ai_provider_usage")
 }
 
 model PlatformModule {
@@ -10932,6 +11026,43 @@ model AIUsage {
   @@index([organizationId, createdAt])
   @@index([organizationId, branchId, createdAt])
   @@map("ai_usage")
+}
+
+enum AIAssistantActionStatus {
+  PROPOSED
+  EXECUTING
+  SUCCEEDED
+  FAILED
+}
+
+/// DEV-576 — the confirmed-write ledger for Ask Fathom. One row per write the
+/// server proposed for approval (a `tool-approval-request` it emitted). The
+/// wrapped tool `execute` runs only against a matching row, so a forged or
+/// modified approval is refused, and a resent approval or a provider failover
+/// returns the stored result instead of running the write again.
+/// `id` is the idempotency key: SHA-256 (HMAC-SHA-256 when AUTH_SECRET is set)
+/// over organization, user, tool call id, tool name and the canonical input.
+/// The input itself is never stored; `result` is redacted, JSON-safe output.
+model AIAssistantAction {
+  id             String                  @id
+  organizationId String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  toolName       String
+  toolCallId     String
+  approvalId     String
+  payloadHash    String
+  status         AIAssistantActionStatus @default(PROPOSED)
+  result         Json?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @default(now()) @updatedAt
+  startedAt      DateTime?
+  completedAt    DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, toolCallId])
+  @@index([organizationId, createdAt])
+  @@map("ai_assistant_actions")
 }
 
 model OrganizationRole {
