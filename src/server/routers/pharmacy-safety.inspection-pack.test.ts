@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ createInspectionPack: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  createInspectionPack: vi.fn(),
+  installPharmacySopLibrary: vi.fn(),
+}));
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
@@ -18,6 +21,12 @@ vi.mock('@/server/audit', () => ({
 vi.mock('@/lib/abac', async () => ({
   ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
   can: vi.fn(async (_subject, action: string) => action === 'pharmacy:safety'),
+}));
+vi.mock('@/lib/pharmacy/sop-library', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/pharmacy/sop-library')>(
+    '@/lib/pharmacy/sop-library'
+  )),
+  installPharmacySopLibrary: mocks.installPharmacySopLibrary,
 }));
 vi.mock('@/lib/pharmacy/inspection-pack', () => ({
   createInspectionPack: mocks.createInspectionPack,
@@ -79,5 +88,14 @@ describe('createInspectionPack branch scope', () => {
       branchId: 'branch_mine',
       ...RANGE,
     });
+  });
+});
+
+describe('installSopLibrary', () => {
+  it('installs into the session organization', async () => {
+    mocks.installPharmacySopLibrary.mockResolvedValue([]);
+    const f = fixture([]);
+    await f.caller.installSopLibrary();
+    expect(mocks.installPharmacySopLibrary).toHaveBeenCalledWith(f.db, { organizationId: 'org_1' });
   });
 });

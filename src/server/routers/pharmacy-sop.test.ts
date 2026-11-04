@@ -198,6 +198,7 @@ function makeDb() {
     pharmacyBranchAssignment: model(),
     pharmacySopRecordLink: model(),
     pharmacyTemperatureLog: model(),
+    pharmacyGoodsReceipt: model(),
     restaurantSopEvidence: model(),
   };
   const typed = db as Record<keyof typeof db, Delegate> & {
@@ -1384,4 +1385,64 @@ describe('engine refusals never echo internal ids', () => {
       message: 'Occurrence not found.',
     });
   });
+});
+
+describe('coordinator follow-ups', () => {
+  it('installs the library into the session organization', async () => {
+    mocks.engine.installPharmacySopLibrary.mockResolvedValue([]);
+    await caller().installLibrary();
+    expect(mocks.engine.installPharmacySopLibrary).toHaveBeenCalledWith(db, {
+      organizationId: 'org_1',
+    });
+  });
+
+  it.each([
+    ['NOT_INDEPENDENT', 'You cannot grant yourself a verifier role.'],
+    ['ROLE_REQUIRED', 'The qualified-person role needs the pharmacist dispensing permission.'],
+  ] as const)('setRoleHolding passes the adapter %s wording through', async (reason, text) => {
+    mocks.adapter.setPharmacySopRoleHolding.mockRejectedValueOnce(
+      new PharmacySopAccessError(text, reason)
+    );
+    await expect(
+      caller().setRoleHolding({
+        ...BRANCH_INPUT,
+        userId: 'user_2',
+        roleKey: 'pharmacy-qualified-person',
+        held: true,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: text });
+  });
+
+  it('verify keeps the fixed independence wording', async () => {
+    occurrenceRow = { ...occurrenceRow, status: 'SUBMITTED', assignedStaffProfileId: 'staff_op' };
+    mocks.adapter.assertIndependentPharmacyVerifier.mockRejectedValueOnce(
+      new PharmacySopAccessError('you completed step 2 of occ_1', 'NOT_INDEPENDENT')
+    );
+    await expect(caller().verify(OCC_INPUT)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'A verifier must not have worked on the occurrence they verify.',
+    });
+  });
+
+  it.each([
+    ['TEMPERATURE_LOG', temperatureLog.name, 'pharmacyTemperatureLog', 'recordedAt'],
+    ['GOODS_RECEIPT', receiving.name, 'pharmacyGoodsReceipt', 'receivedAt'],
+  ] as const)(
+    'linkableRecords bounds %s candidates to the link window',
+    async (recordType, packName, delegate, column) => {
+      const dueAt = new Date('2026-11-04T08:00:00.000Z');
+      const windowEndsAt = new Date('2026-11-04T12:00:00.000Z');
+      db.restaurantSopTemplateVersion.findFirst.mockResolvedValue({ template: { name: packName } });
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({ dueAt, windowEndsAt });
+      await caller().linkableRecords({ ...OCC_INPUT, recordType });
+      expect(db[delegate].findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            branchId: SITE.pharmacyBranchId,
+            [column]: { gte: new Date(dueAt.getTime() - 86_400_000), lte: windowEndsAt },
+          },
+        })
+      );
+    }
+  );
 });
