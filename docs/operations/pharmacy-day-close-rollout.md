@@ -45,6 +45,11 @@ Tell the affected pharmacies before phase 1, because it removes some access:
 | Anyone whose role or override grants `pharmacy:close` (any profession, e.g. a pharmacist given a closing role) | Any branch                 | Only branches they are actively assigned to                                           | Same              |
 | Cashier                                                                                                        | Cannot close               | Cannot close                                                                          | Cannot close      |
 
+A Pharmacist role that a previous revision provisions during the phase 1 deploy window
+still carries the old ALLOW, so it can close its assigned branches. That lasts until
+phase 2 removes the grant, or until a re-run of the phase 1 revoke does. The
+provisioning freeze prevents this case, and check A detects it.
+
 A pharmacy where a pharmacist closes the day today needs one of the following until
 phase 2:
 
@@ -64,9 +69,15 @@ Its managers can close after phase 2.
    - A new revision that provisions an organization gives its Manager `pharmacy:close` from
      the new template. A previous revision has no branch-assignment check and could serve
      that Manager's close.
-2. Deploy normally: the migration job, then the web revision.
-3. After every replica serves the new image, run the read-only checks below. Expect
-   check A = 0. Check B may be greater than 0 until phase 2.
+2. Before the migration job, run the read-only checks below and record P and C (the
+   baseline).
+3. Deploy normally: the migration job, then the web revision.
+4. After every replica serves the new image, run the checks again. Expect:
+   - P > 0;
+   - A = 0;
+   - C equal to its baseline.
+
+   B may be greater than 0 until phase 2.
 
 ## Phase 2 migration (follow-up PR, only after phase 1 is verified)
 
@@ -81,10 +92,37 @@ Keep the explicit `BEGIN`/`COMMIT`. Without it, the transaction-local `set_confi
 not reach the statements, forced RLS matches no rows, and the migration reports success
 having done nothing (#975).
 
+Phase 2 deploy:
+
+1. Record the baseline P and C.
+2. Apply the phase 2 migration.
+3. Expect:
+   - P > 0;
+   - A = 0;
+   - B = 0;
+   - C equal to its baseline.
+
+When phase 2 ships, point the database test at the new migration file, or assert that it
+is byte-identical to this file. Then delete this docs copy, so the shipped SQL and the
+tested SQL cannot drift apart.
+
+## Rollback
+
+- **Never roll the web revision back past phase 1 once phase 2 is applied.** A
+  pre-DEV-739 revision's close gate has no branch-assignment check, so every Manager
+  holding `pharmacy:close` could close any branch. Roll back to a phase 1 revision
+  instead.
+- **Rolling back phase 1 alone** (back to a pre-DEV-739 revision) is safe only if the new
+  revision provisioned no pharmacy organization. Managers created from the new template
+  hold `pharmacy:close` and would be served by the old gate. If any were created, remove
+  their `pharmacy:close` ALLOW before or together with the rollback.
+- The phase 1 revoke has no rollback. Restoring a default pharmacist grant would
+  contradict the decision above.
+
 ## Read-only checks (after each phase)
 
-These tables use forced row-level security, and the database administrator cannot bypass
-it. Run the checks exactly as written. Without the transaction-local
+These tables use forced row-level security. A migration or operator role without
+SUPERUSER or BYPASSRLS (the production setup) is subject to it. Run the checks exactly as written. Without the transaction-local
 `app.is_platform_admin` setting every count reads 0, a false pass (#975). Check P is the
 positive control: if P is 0, the checks saw no rows and prove nothing.
 
@@ -113,9 +151,14 @@ WHERE o.vertical = 'PHARMACY' AND r.key = 'manager' AND r."isSystem"
   AND NOT EXISTS (SELECT 1 FROM organization_role_permissions p
                   WHERE p."organizationRoleId" = r.id AND p.capability = 'pharmacy:close');
 
--- C. Explicit DENYs are preserved: compare this count before and after each phase.
-SELECT count(*) FROM organization_role_permissions
-WHERE capability = 'pharmacy:close' AND effect = 'DENY';
+-- C. Explicit DENYs are preserved: compare this count with the baseline taken before
+--    the phase. Scoped to the roles the phases touch, so unrelated DENYs added
+--    meanwhile do not move it.
+SELECT count(*) FROM organization_role_permissions p
+JOIN organization_roles r ON r.id = p."organizationRoleId"
+JOIN organizations o ON o.id = r."organizationId"
+WHERE o.vertical = 'PHARMACY' AND r."isSystem" AND r.key IN ('pharmacist', 'manager')
+  AND p.capability = 'pharmacy:close' AND p.effect = 'DENY';
 
 ROLLBACK;
 ```

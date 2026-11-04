@@ -520,6 +520,9 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string): Promise<Led
   // says so. An administrator suspended, removed or demoted inside the session
   // revalidation window closes as the row now is (DEV-739 active identity).
   let organizationWide = false;
+  // The role the capability check sees: the stored role when the row was read, so a
+  // demoted administrator is never judged on the stale session claim.
+  let subject = subjectFromSession(user);
   if (user.role === 'ADMIN') {
     const row = await ctx.db.user.findUnique({
       where: { id: user.id },
@@ -559,11 +562,13 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string): Promise<Led
       );
       if (denied) throw noCloseCapability();
       organizationWide = true;
+    } else {
+      subject = { ...subject, role: row.role, status: row.status };
     }
   }
   if (
     !organizationWide &&
-    !(await can(subjectFromSession(user), 'pharmacy:close', undefined, {
+    !(await can(subject, 'pharmacy:close', undefined, {
       db: ctx.db,
       source: 'TRPC',
     }))
@@ -571,10 +576,12 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string): Promise<Led
     throw noCloseCapability();
   }
   const scope = await scopeFor(ctx, branch);
-  if (organizationWide) return scope;
   const outside = () =>
     new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  // Defence in depth: the branch's organization is the session's (already enforced by
+  // tenant RLS on the scoped db), checked explicitly before organization-wide reach.
   if (user.organizationId !== scope.organizationId) throw outside();
+  if (organizationWide) return scope;
   const member = await ctx.db.user.findUnique({
     where: { id: user.id },
     select: { status: true, organizationId: true },

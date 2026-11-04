@@ -408,16 +408,13 @@ const legacy: Record<string, string[]> = {
     expect(await can(subject('pharmacist'), 'pharmacy:safety', undefined, { db })).toBe(false);
     expect(await can(subject('owner'), 'reports:financial', undefined, { db })).toBe(true);
     expect(await can(subject('manager'), 'pharmacy:procurement', undefined, { db })).toBe(true);
-    // Day close: managers and owners only (DEV-32/DEV-739), never a pharmacist or cashier.
+    // Day close: owners, administrators and managers (DEV-32/DEV-739). The Pharmacist and
+    // Cashier templates carry no default grant.
     // An installed Manager role is granted in rollout phase 2; a Manager provisioned
     // from the current template already holds it (pharmacy-sales.branch-scope.test.ts).
-    for (const [key, allowed] of [
-      ['pharmacist', false],
-      ['cashier', false],
-      ['manager', false],
-      ['owner', true],
-      ['owner-operator', true],
-    ] as const) {
+    for (const [key, allowed] of PHARMACY_ROLE_TEMPLATES.map(
+      (role) => [role.key, role.key === 'owner' || role.key === 'owner-operator'] as const
+    )) {
       expect({
         key,
         allowed: await can(subject(key), 'pharmacy:close', undefined, { db }),
@@ -444,6 +441,8 @@ const legacy: Record<string, string[]> = {
           [id(role)]
         )
         .then((result) => result.rows);
+    // Isolated from the phase 1 assertions above, so test order does not matter.
+    await client.query('SAVEPOINT rollout_phase_2');
     await client.query(`SELECT set_config('app.is_platform_admin','true',true)`);
     // A previous revision provisioned a Pharmacist from the old template during phase 1.
     await client.query(
@@ -527,11 +526,9 @@ const legacy: Record<string, string[]> = {
         }),
       },
     } as unknown as AuthzDb;
-    for (const [key, allowed] of [
-      ['manager', true],
-      ['pharmacist', false],
-      ['cashier', false],
-    ] as const) {
+    for (const [key, allowed] of PHARMACY_ROLE_TEMPLATES.map(
+      (role) => [role.key, ['manager', 'owner', 'owner-operator'].includes(role.key)] as const
+    )) {
       expect({
         key,
         allowed: await can(
@@ -543,5 +540,6 @@ const legacy: Record<string, string[]> = {
       }).toEqual({ key, allowed });
     }
     await client.query('RESET ROLE');
+    await client.query('ROLLBACK TO SAVEPOINT rollout_phase_2');
   });
 });

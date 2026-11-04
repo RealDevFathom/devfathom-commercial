@@ -322,6 +322,39 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
     expect(await rowsFor(ACTIVE)).toEqual({ drawers: 1, movements: 3, closed: 1, closes: 0 });
   });
 
+  it('lets an expired pharmacy:close DENY lapse for the administrator, and a live one refuse', async () => {
+    const NO_CLOSE = {
+      code: 'FORBIDDEN',
+      message: 'Day-close permission is required to reconcile and close a day.',
+    };
+    // (userId, capability) is unique: one override, first expired, then made live.
+    const overrideId = `${ACTOR}_close_deny`;
+    const platformSql = (sql: string, ...values: unknown[]) =>
+      withPlatformDb((db) => db.$executeRawUnsafe(sql, ...values));
+    try {
+      await platformSql(
+        `INSERT INTO user_permission_overrides (id, "organizationId", "userId", capability, effect, reason, "expiresAt", "updatedAt") VALUES ($1, $2, $3, 'pharmacy:close', 'DENY', 'DEV-739 fixture', $4, now())`,
+        overrideId,
+        ORG,
+        ACTOR,
+        new Date(Date.now() - 60_000)
+      );
+      await expect(
+        asAdmin((c) => c.closePreview({ branchId: ACTIVE, businessDate }))
+      ).resolves.toMatchObject({ branchName: `Branch ${ACTIVE}` });
+      await platformSql(
+        `UPDATE user_permission_overrides SET "expiresAt" = $2, "updatedAt" = now() WHERE id = $1`,
+        overrideId,
+        new Date(Date.now() + 3_600_000)
+      );
+      await expect(
+        asAdmin((c) => c.closePreview({ branchId: ACTIVE, businessDate }))
+      ).rejects.toMatchObject(NO_CLOSE);
+    } finally {
+      await platformSql(`DELETE FROM user_permission_overrides WHERE id = $1`, overrideId);
+    }
+  });
+
   it('answers the daily close’s typed refusals as typed errors, not as a 500', async () => {
     // A later business day on the active branch, with a drawer still open.
     const day = new Date('2026-10-21T00:00:00.000Z');

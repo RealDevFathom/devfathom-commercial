@@ -352,16 +352,13 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
       capability,
       effect: 'ALLOW',
     }));
+  // Every shipped template: only these close by default; a template that later picks
+  // up pharmacy:close fails here until the policy says so.
+  const CLOSES_BY_DEFAULT = new Set(['manager', 'owner', 'owner-operator']);
   const closeRoleMatrix = closeProcedures.flatMap(([name, run]) =>
-    (
-      [
-        ['pharmacist', false],
-        ['cashier', false],
-        ['manager', true],
-        ['owner', true],
-        ['owner-operator', true],
-      ] as const
-    ).map(([role, allowed]) => [name, role, allowed, run] as const)
+    PHARMACY_ROLE_TEMPLATES.map(
+      (role) => [name, role.key, CLOSES_BY_DEFAULT.has(role.key), run] as const
+    )
   );
 
   it.each(closeRoleMatrix)(
@@ -516,6 +513,21 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
         expect(error).not.toMatchObject(OUTSIDE);
       });
       expect(db.$transaction).toHaveBeenCalledOnce();
+    }
+  );
+
+  // Counting one's own drawer is not day close: closeDrawer keeps its own policy and
+  // never passes the day-close gate (DEV-739 scope).
+  it.each(['pharmacist', 'cashier'])(
+    'lets the %s template reach closeDrawer without pharmacy:close',
+    async (role) => {
+      db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+      db.user.findUnique.mockResolvedValue(member(template(role)));
+      await caller('EMPLOYEE')
+        .closeDrawer({ branchId: BRANCH, drawerSessionId: 'drawer-1', countedCashMinor: 0 })
+        .catch((error: unknown) => expect(error).not.toMatchObject(NO_CLOSE));
+      expect(db.$transaction).toHaveBeenCalledOnce();
+      expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
     }
   );
 

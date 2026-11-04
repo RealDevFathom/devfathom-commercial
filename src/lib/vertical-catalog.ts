@@ -801,7 +801,7 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     name: 'Pharmacist',
     isSystem: true,
     // Day close is for managers and owners only (Saad, DEV-32 2026-11-01, reaffirmed
-    // on DEV-739): pharmacists sell, dispense and take payment but never close the day.
+    // on DEV-739): pharmacists sell, dispense and take payment; no default day-close grant.
     capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
   },
   {
