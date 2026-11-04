@@ -39,6 +39,7 @@ import {
   CalendarClock,
   Landmark,
   MapPin,
+  Printer,
   Bike,
   FileText,
   ClipboardCheck,
@@ -417,6 +418,14 @@ export const navigation: NavItem[] = [
     adminOnly: true,
     group: 'Pharmacy',
     module: 'pharmacy-core',
+  },
+  // DEV-742: counter staff may test print; only administrators can save (server-enforced).
+  {
+    label: 'Printers',
+    href: '/pharmacy/settings/printers',
+    icon: Printer,
+    group: 'Pharmacy',
+    module: 'pharmacy-counter',
   },
   // H1-01 — the hospitality rail. Only configuration surfaces are here so far:
   // every operating surface arrives with its own lane, and a nav entry pointing

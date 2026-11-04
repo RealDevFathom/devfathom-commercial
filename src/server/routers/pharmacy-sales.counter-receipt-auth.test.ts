@@ -811,7 +811,7 @@ describe('counter receipt authorization', () => {
       showOrderNumber: true,
       showChannel: true,
     };
-    vi.mocked(savePharmacyReceiptFormat).mockResolvedValue({ layout, revision: 1 });
+    vi.mocked(savePharmacyReceiptFormat).mockResolvedValue({ layout, output: 'A4', revision: 1 });
     const admin = fixture(dispense, 'ADMIN');
     await expect(
       admin.caller().counterSaveReceiptFormat({ branchId: 'branch-a', revision: 0, layout })
@@ -821,6 +821,24 @@ describe('counter receipt authorization', () => {
       'org-a',
       expect.objectContaining({ branchId: 'branch-a' })
     );
+
+    // DEV-742: the counter's saved paper travels with the same admin-only, revisioned save.
+    await admin
+      .caller()
+      .counterSaveReceiptFormat({ branchId: 'branch-a', revision: 0, layout, output: 'A4' });
+    expect(savePharmacyReceiptFormat).toHaveBeenLastCalledWith(
+      admin.db,
+      'org-a',
+      expect.objectContaining({ branchId: 'branch-a', output: 'A4' })
+    );
+    await expect(
+      admin.caller().counterSaveReceiptFormat({
+        branchId: 'branch-a',
+        revision: 0,
+        layout,
+        output: 'LABEL_50x30' as never,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 
     vi.mocked(savePharmacyReceiptFormat).mockClear();
     await expect(

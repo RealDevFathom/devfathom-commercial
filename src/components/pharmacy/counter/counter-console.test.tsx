@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentProps } from 'react';
 
@@ -112,6 +112,7 @@ vi.mock('@/lib/trpc', () => {
         'counterSearch',
         'counterCart',
         'counterReceipt',
+        'counterReceiptFormat',
         'counterLotOptions',
         'counterEvidence',
         'customerSnapshot',
@@ -322,6 +323,7 @@ beforeEach(() => {
     'counterSearch',
     'counterCart',
     'counterReceipt',
+    'counterReceiptFormat',
     'counterLotOptions',
     'counterEvidence',
     'customerSnapshot',
@@ -431,6 +433,25 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
     renderPayment(<PharmacyCounterConsole />);
     expect(screen.queryByText('Settled')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
+  });
+
+  it('DEV-742: starts on the branch saved paper, else thermal 80 mm', () => {
+    renderPayment(<PharmacyCounterConsole />);
+    expect(mocks.receiptProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ format: 'THERMAL' })
+    );
+    cleanup();
+    mocks.queries.counterReceiptFormat = query({
+      layout: { paperWidth: 58 },
+      output: 'A4',
+      revision: 2,
+    });
+    renderPayment(<PharmacyCounterConsole />);
+    expect(mocks.receiptProps).toHaveBeenLastCalledWith(expect.objectContaining({ format: 'A4' }));
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'counterReceiptFormat',
+      expect.objectContaining({ enabled: true })
+    );
   });
 
   it('allows an empty bill to recover without locking bill actions or claiming settlement', async () => {

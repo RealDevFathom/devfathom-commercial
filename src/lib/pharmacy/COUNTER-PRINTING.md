@@ -1,5 +1,28 @@
 # WHA-1358 Pharmacy browser printing evidence
 
+## DEV-742 — branch printer settings and test print (current)
+
+Supersedes the "saved layout read/write remains unconnected" notes below.
+
+- **Settings:** `/pharmacy/settings/printers` (pharmacy vertical only; other verticals get 404,
+  DEV-355). Each branch saves a thermal roll width (`58 | 80`, the shared `ReceiptLayout.paperWidth`
+  the ESC/POS job already uses) and the paper the counter starts with (`output: THERMAL | A4`).
+  Both live in the existing `pharmacy_branches.receiptLayout` JSON with its optimistic
+  `receiptLayoutRevision`. There is no migration. `src/lib/pharmacy/printer-settings.ts` splits
+  `output` out, so the shared layout stays strict.
+- **Access:** reading needs counter access to the branch (`counterReceiptFormat`). Saving is
+  admin-only (`counterSaveReceiptFormat`, `adminProcedure`, audited). A stale revision returns
+  `CONFLICT`. A layout-only save keeps the stored `output`.
+- **Counter:** `useBranchReceiptFormat` preselects the saved paper. The operator can still switch
+  for the session. If the settings can't be read, the counter falls back to thermal 80 mm.
+- **Test print:** `printer-test-print.ts` builds an escaped, bilingual (en/ur) test page. It holds
+  no sale, receipt number, money or patient data, so it can't be passed off as an original or a
+  reprint (DEV-195). It opens through the browser/OS print dialog only. Browsers don't report
+  print versus cancel, so the operator confirms the result; that confirmation is not saved.
+- **Not here:** direct thermal dispatch, device binding, queues, acknowledgement and retry are
+  DEV-741. Physical acceptance on real printers is DEV-744. Receipt wording is DEV-636 and
+  reprint marking is DEV-195.
+
 ## Authorized private consumer integration — September 5
 
 Supervisor comment `32c4b49a-3067-462c-83bd-bbb143cd363c` authorized these exact

@@ -97,6 +97,17 @@ describe('restaurant navigation', () => {
 
 describe('pharmacy navigation', () => {
   const pharmacyRoutes = ['/pharmacy', '/pharmacy/counter', '/pharmacy/regulatory'];
+
+  // DEV-742: counter staff reach Printers to test print; saving stays admin-only on the server.
+  it.each(['ADMIN', 'MEMBER'])('shows Printers to %s with the counter licence', (role) => {
+    const href = (enabledModules: string[], vertical: 'PHARMACY' | 'RESTAURANT' = 'PHARMACY') =>
+      visibleNavigation({ vertical, enabledModules }, role).map((item) => item.href);
+    expect(href(['pharmacy-core', 'pharmacy-counter'])).toContain('/pharmacy/settings/printers');
+    expect(href(['pharmacy-core'])).not.toContain('/pharmacy/settings/printers');
+    expect(href(['pharmacy-core', 'pharmacy-counter'], 'RESTAURANT')).not.toContain(
+      '/pharmacy/settings/printers'
+    );
+  });
   const operations = [
     ['/pharmacy/inventory', 'pharmacy-inventory'],
     ['/pharmacy/purchasing', 'pharmacy-procurement'],

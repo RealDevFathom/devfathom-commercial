@@ -44,6 +44,7 @@ import {
   type CounterReceiptSettlement,
 } from './counter-receipt-view';
 import { CounterReturnPanel } from './counter-return-panel';
+import { useBranchReceiptFormat } from './use-branch-receipt-format';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
@@ -98,7 +99,6 @@ import {
   printCounterBrowserReceipt,
   reserveCounterBrowserPrint,
   type CounterBrowserPrintReservation,
-  type CounterReceiptFormat,
 } from '@/lib/pharmacy/counter-browser-print';
 import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
@@ -350,7 +350,6 @@ function ScopedPharmacyCounterConsole({
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [redeemPoints, setRedeemPoints] = useState(0);
   const [receiptLocale, setReceiptLocale] = useState<CounterReceiptLocale>('en');
-  const [receiptFormat, setReceiptFormat] = useState<CounterReceiptFormat>('THERMAL');
   const [receiptRenders, setReceiptRenders] = useState(0);
   const [autoPrint, setAutoPrint] = useState(false);
   const [receiptSettlement, setReceiptSettlement] = useState<CounterReceiptSettlement | null>(null);
@@ -393,6 +392,8 @@ function ScopedPharmacyCounterConsole({
   // Derived, not mirrored into state: the default branch is simply "the first
   // one" until the operator picks another, so an effect would only add a render.
   const branchId = selectedBranchId || (branches[0]?.id ?? '');
+  // DEV-742: starts on the branch's saved paper; the operator may still switch it.
+  const [receiptFormat, setReceiptFormat] = useBranchReceiptFormat(branchId);
   const recoveryScope = useMemo<TenderAttemptScope>(
     () => ({ organizationId, accountId, branchId }),
     [organizationId, accountId, branchId]

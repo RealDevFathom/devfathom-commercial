@@ -71,7 +71,7 @@ import {
   readPharmacyReceiptTaxIdentity,
   savePharmacyReceiptFormat,
 } from '@/lib/pharmacy/receipt-print';
-import { SaveReceiptLayoutSchema } from '@/lib/receipts/configuration';
+import { SavePharmacyReceiptFormatSchema } from '@/lib/pharmacy/printer-settings';
 import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
 import {
   declineSubstitute,
@@ -1915,9 +1915,12 @@ export const pharmacySalesRouter = router({
       readPharmacyReceiptFormat(ctx.db, await requireCounterReceiptAccess(ctx, input.branchId))
     ),
 
-  /** PH-A7: save the branch receipt format. Optimistic revision; admins only. */
+  /**
+   * PH-A7: save the branch receipt format. Optimistic revision; admins only.
+   * DEV-742: optional `output` saves the paper the counter preselects (thermal roll or A4).
+   */
   counterSaveReceiptFormat: adminProcedure
-    .input(SaveReceiptLayoutSchema)
+    .input(SavePharmacyReceiptFormatSchema)
     .mutation(async ({ ctx, input }) => {
       // Active, in-organization branch or FORBIDDEN (scopeFor checks it).
       const scope = await branchScopeOrForbidden(ctx, input.branchId);

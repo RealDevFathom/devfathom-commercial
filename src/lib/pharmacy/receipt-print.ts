@@ -17,11 +17,7 @@
 
 import { TRPCError } from '@trpc/server';
 
-import {
-  readReceiptLayout,
-  SaveReceiptLayoutSchema,
-  type ReceiptLayout,
-} from '@/lib/receipts/configuration';
+import { type ReceiptLayout } from '@/lib/receipts/configuration';
 import type { ReceiptPreviewFacts } from '@/lib/receipts/preview';
 import {
   RawPrintValidationError,
@@ -30,6 +26,12 @@ import {
 } from '@/lib/restaurant/printing/contract';
 import { renderEscPos } from '@/lib/restaurant/printing/esc-pos';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+import {
+  readPharmacyPrinterSettings,
+  SavePharmacyReceiptFormatSchema,
+  storedPharmacyPrinterSettings,
+} from './printer-settings';
 
 import {
   COUNTER_RECEIPT_STRINGS,
@@ -188,8 +190,9 @@ type BranchScope = { organizationId: string; branchId: string };
 
 /**
  * The branch's saved receipt format (shared `ReceiptLayout` on
- * `PharmacyBranch.receiptLayout`). Absent configuration gets the shared default;
- * a corrupt stored value fails closed.
+ * `PharmacyBranch.receiptLayout`, plus DEV-742's counter `output`). Absent
+ * configuration gets the shared default; a corrupt stored value fails closed.
+ * `layout` stays the strict shared layout, so ESC/POS never sees the pharmacy key.
  */
 export async function readPharmacyReceiptFormat(db: FormatDb, scope: BranchScope) {
   const branch = await db.pharmacyBranch.findFirst({
@@ -197,8 +200,10 @@ export async function readPharmacyReceiptFormat(db: FormatDb, scope: BranchScope
     select: { receiptLayout: true, receiptLayoutRevision: true },
   });
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
+  const settings = readPharmacyPrinterSettings(branch.receiptLayout);
   return {
-    layout: readReceiptLayout(branch.receiptLayout),
+    layout: settings.layout,
+    output: settings.output,
     revision: branch.receiptLayoutRevision,
   };
 }
@@ -231,20 +236,36 @@ export async function savePharmacyReceiptFormat(
   organizationId: string,
   raw: unknown
 ) {
-  const input = SaveReceiptLayoutSchema.parse(raw);
-  const updated = await db.pharmacyBranch.updateMany({
-    where: {
-      id: input.branchId,
-      organizationId,
-      active: true,
-      receiptLayoutRevision: input.revision,
-    },
-    data: { receiptLayout: input.layout, receiptLayoutRevision: { increment: 1 } },
-  });
-  if (updated.count !== 1)
-    throw new TRPCError({
+  const input = SavePharmacyReceiptFormatSchema.parse(raw);
+  const conflict = () =>
+    new TRPCError({
       code: 'CONFLICT',
       message: 'Branch unavailable or format changed. Reload saved settings before trying again.',
     });
-  return { layout: input.layout, revision: input.revision + 1 };
+  const where = {
+    id: input.branchId,
+    organizationId,
+    active: true,
+    receiptLayoutRevision: input.revision,
+  };
+  let output = input.output;
+  if (output === undefined) {
+    // A layout-only save keeps the stored counter paper. The revision predicate on the
+    // write below still rejects anything that changed after this read.
+    const current = await db.pharmacyBranch.findFirst({
+      where,
+      select: { receiptLayout: true },
+    });
+    if (!current) throw conflict();
+    output = readPharmacyPrinterSettings(current.receiptLayout).output;
+  }
+  const updated = await db.pharmacyBranch.updateMany({
+    where,
+    data: {
+      receiptLayout: storedPharmacyPrinterSettings({ layout: input.layout, output }),
+      receiptLayoutRevision: { increment: 1 },
+    },
+  });
+  if (updated.count !== 1) throw conflict();
+  return { layout: input.layout, output, revision: input.revision + 1 };
 }
