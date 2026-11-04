@@ -9,7 +9,9 @@
  * audited. Refused: an inactive or sibling-only assignment, a deactivated or
  * demoted ADMIN still holding an ADMIN session, another tenant's ADMIN, an
  * Owner-role or `*`-role non-admin, an inactive branch and another tenant's
- * branch. An explicit capability DENY still wins for an ADMIN. Skipped unless
+ * branch. The exception needs the canonical pharmacy:inventory capability, so an
+ * ADMIN with an explicit DENY or no inventory grant is refused everywhere, reads
+ * included, and each use writes a persisted audit row. Skipped unless
  * TEST_DATABASE_URL names that role on a migrated disposable database.
  */
 import { randomUUID } from 'node:crypto';
@@ -42,6 +44,8 @@ const ids = {
   inactiveAdmin: `user_invasg_iadm_${suffix}`,
   demotedAdmin: `user_invasg_dadm_${suffix}`,
   deniedAdmin: `user_invasg_xadm_${suffix}`,
+  bareAdmin: `user_invasg_badm_${suffix}`,
+  roleBare: `role_invasg_bare_${suffix}`,
   outsiderAdmin: `user_invasg_oadm_${suffix}`,
   assigned: `user_invasg_ok_${suffix}`,
   inactive: `user_invasg_off_${suffix}`,
@@ -345,6 +349,14 @@ beforeAll(async () => {
         permissions: { create: [{ capability: '*', effect: 'ALLOW' }] },
       },
     });
+    await tx.organizationRole.create({
+      data: {
+        id: ids.roleBare,
+        key: `reports-${suffix}`,
+        name: 'Reports only',
+        permissions: { create: [{ capability: 'reports:operational', effect: 'ALLOW' }] },
+      },
+    });
     const people = [
       { id: ids.assigned, role: 'EMPLOYEE' as const, roleId: ids.roleA },
       { id: ids.inactive, role: 'EMPLOYEE' as const, roleId: ids.roleA },
@@ -362,6 +374,8 @@ beforeAll(async () => {
       // The record says EMPLOYEE; the test session will still claim ADMIN.
       { id: ids.demotedAdmin, role: 'EMPLOYEE' as const, roleId: ids.roleA },
       { id: ids.deniedAdmin, role: 'ADMIN' as const, roleId: ids.roleA },
+      // ADMIN with a role that grants nothing in inventory.
+      { id: ids.bareAdmin, role: 'ADMIN' as const, roleId: ids.roleBare },
     ];
     for (const person of people) {
       await tx.user.create({
@@ -485,16 +499,30 @@ describeIfDatabase('inventory branch assignment against Postgres', () => {
         new Set([ids.branchA, ids.branchB])
       );
     });
-    await act(person(ids.admin, 'ADMIN'), async (api, ctx) => {
-      await expect(api.transferBoard({ branchId: ids.branchB })).resolves.toEqual([]);
-      expect((ctx as { audit: { detail: unknown } }).audit.detail).toMatchObject({
-        targetType: 'PharmacyBranch',
-        targetId: ids.branchB,
-        metadata: {
-          branchId: ids.branchB,
-          reason: 'tenant-admin-inventory-access-without-branch-assignment',
-        },
-      });
+    // One persisted audit row per use: all 18 procedures, at each branch.
+    await withTenantDb(ids.orgA, async (tx) => {
+      for (const branchId of [ids.branchA, ids.branchB]) {
+        const rows = await tx.auditLog.findMany({
+          where: {
+            actorId: ids.admin,
+            action: inventory.ADMIN_BRANCH_EXCEPTION_ACTION,
+            targetType: 'PharmacyBranch',
+            targetId: branchId,
+          },
+          select: { metadata: true, source: true, outcome: true },
+        });
+        expect(rows).toHaveLength(18);
+        for (const row of rows) {
+          expect(row).toMatchObject({
+            source: 'TRPC',
+            outcome: 'SUCCESS',
+            metadata: {
+              branchId,
+              reason: 'tenant-admin-inventory-access-without-branch-assignment',
+            },
+          });
+        }
+      }
     });
   });
 
@@ -557,20 +585,24 @@ describeIfDatabase('inventory branch assignment against Postgres', () => {
     });
   });
 
-  it('keeps an explicit capability DENY authoritative for an ADMIN', async () => {
-    await act(person(ids.deniedAdmin, 'ADMIN'), async (api) => {
+  it.each([
+    ['an explicit inventory DENY', 'deniedAdmin'],
+    ['no inventory grant', 'bareAdmin'],
+  ] as const)('gives no exception to an ADMIN with %s, reads included', async (_label, key) => {
+    await act(person(ids[key], 'ADMIN'), async (api, ctx) => {
       for (const [name, call] of gatedCalls(api, ids.branchA)) {
         const message = await call().then(
           () => null,
           (error: { message?: string }) => error.message ?? null
         );
-        if (READS.has(name)) {
-          // The reads carry no capability; the branch exception still applies.
-          expect({ name, message }).not.toMatchObject({ message: OUTSIDE_SCOPE.message });
-        } else {
-          expect({ name, message }).toEqual({ name, message: CAPABILITY_REFUSAL.message });
-        }
+        // The capability-gated procedures refuse at the capability check; the reads,
+        // which carry no capability of their own, refuse at the branch rule.
+        expect({ name, message }).toEqual({
+          name,
+          message: READS.has(name) ? OUTSIDE_SCOPE.message : CAPABILITY_REFUSAL.message,
+        });
       }
+      await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
     });
   });
 

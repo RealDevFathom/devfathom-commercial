@@ -14,8 +14,8 @@ const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
   const postWriteOffEntry = vi.fn();
-  const annotateAudit = vi.fn();
-  return { hasModule, postWriteOffEntry, annotateAudit };
+  const recordAudit = vi.fn();
+  return { hasModule, postWriteOffEntry, recordAudit };
 });
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -25,7 +25,7 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/server/audit', () => ({
-  annotateAudit: mocks.annotateAudit,
+  recordAudit: mocks.recordAudit,
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
@@ -163,7 +163,8 @@ const CAPABILITY_REFUSAL = {
 beforeEach(() => {
   db = makeDb();
   sessionRole = 'ADMIN';
-  mocks.annotateAudit.mockReset();
+  mocks.recordAudit.mockReset();
+  mocks.recordAudit.mockResolvedValue(undefined);
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
   mocks.postWriteOffEntry.mockReset();
 });
@@ -950,14 +951,20 @@ const ADMIN_RECORD_QUERY = {
   select: { id: true },
 };
 
-const ADMIN_EXCEPTION_AUDIT = {
+/** The dedicated, awaited audit row each use of the ADMIN exception writes. */
+const ADMIN_EXCEPTION_AUDIT = expect.objectContaining({
+  organizationId: 'org_a',
+  actorType: 'USER',
+  actorId: 'user_a',
+  source: 'TRPC',
+  action: 'pharmacy.inventory.admin_branch_exception',
   targetType: 'PharmacyBranch',
   targetId: 'branch_a',
   metadata: {
     branchId: 'branch_a',
     reason: 'tenant-admin-inventory-access-without-branch-assignment',
   },
-};
+});
 
 /**
  * The user record the database holds for user_a. `confirmAdmin()` makes it an
@@ -1007,7 +1014,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
       expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith(ASSIGNMENT_QUERY);
       expect(asksForAdminRecord()).toBe(false);
-      expect(mocks.annotateAudit).not.toHaveBeenCalled();
+      expect(mocks.recordAudit).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
     }
   );
@@ -1027,7 +1034,8 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       // Past the branch rule; whatever the mocked ledger answers next is not a refusal of scope.
       expect(outcome?.message).not.toBe(OUTSIDE_SCOPE.message);
       expect(db.user.findFirst).toHaveBeenCalledWith(ADMIN_RECORD_QUERY);
-      expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), ADMIN_EXCEPTION_AUDIT);
+      // Written on the request's own client, awaited, exactly once per use.
+      expect(mocks.recordAudit).toHaveBeenCalledExactlyOnceWith(ADMIN_EXCEPTION_AUDIT, db);
     }
   );
 
@@ -1041,7 +1049,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
 
       await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
       expect(db.user.findFirst).toHaveBeenCalledWith(ADMIN_RECORD_QUERY);
-      expect(mocks.annotateAudit).not.toHaveBeenCalled();
+      expect(mocks.recordAudit).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
     }
   );
@@ -1054,7 +1062,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       confirmAdmin('org_b');
 
       await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
-      expect(mocks.annotateAudit).not.toHaveBeenCalled();
+      expect(mocks.recordAudit).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
     }
   );
@@ -1076,16 +1084,46 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
     }
   );
 
-  it.each(ASSIGNMENT_GATED.filter((gated) => !READS.has(gated.name)))(
-    'still refuses $name for a verified ADMIN whose capability is explicitly denied',
-    async ({ capability, invoke }) => {
+  it.each(ASSIGNMENT_GATED)(
+    'still refuses $name for a verified ADMIN whose inventory capability is explicitly denied',
+    async ({ name, capability, invoke }) => {
+      // Capability-gated procedures refuse at the capability check; the reads,
+      // which carry no capability, refuse because the exception itself needs it.
       grant([allow(capability)], [deny(capability)]);
       db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
       confirmAdmin();
 
-      await expect(invoke()).rejects.toMatchObject(CAPABILITY_REFUSAL);
-      expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
-      expect(mocks.annotateAudit).not.toHaveBeenCalled();
+      await expect(invoke()).rejects.toMatchObject(
+        READS.has(name) ? OUTSIDE_SCOPE : CAPABILITY_REFUSAL
+      );
+      expect(mocks.recordAudit).not.toHaveBeenCalled();
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED.filter((gated) => READS.has(gated.name)))(
+    'gives no exception on $name to a verified ADMIN without any inventory grant',
+    async ({ invoke }) => {
+      grant([]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+
+      await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(mocks.recordAudit).not.toHaveBeenCalled();
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
+    'fails $name closed, before any stock access, when the exception audit cannot be written',
+    async ({ capability, invoke }) => {
+      grant([allow(capability)]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+      mocks.recordAudit.mockRejectedValue(new Error('audit store unavailable'));
+
+      // The refusal is the audit failure itself, not whatever the ledger answers later.
+      await expect(invoke()).rejects.toMatchObject({ message: 'audit store unavailable' });
       expect(dataAccess()).toEqual([]);
     }
   );
@@ -1134,7 +1172,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       caller().createLocation({ branchId: 'branch_a', code: 'MAIN', name: 'Main', kind: 'STORE' })
     ).resolves.toMatchObject({ organizationId: 'org_a', branchId: 'branch_a' });
     expect(asksForAdminRecord()).toBe(false);
-    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+    expect(mocks.recordAudit).not.toHaveBeenCalled();
   });
 
   it('lists only the active, assigned branches for a non-admin', async () => {
@@ -1163,6 +1201,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
   });
 
   it('lists every active branch of the tenant for a verified ADMIN', async () => {
+    grant([allow('pharmacy:inventory')]);
     confirmAdmin();
     db.pharmacyBranch.findMany.mockResolvedValue([{ id: 'branch_a' }, { id: 'branch_b' }]);
     const ctx = {
@@ -1180,6 +1219,27 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       select: { id: true },
     });
     expect(db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['without any inventory grant', [] as Rule[], [] as Rule[]],
+    [
+      'with an explicit inventory DENY',
+      [allow('pharmacy:inventory')],
+      [deny('pharmacy:inventory')],
+    ],
+  ])('lists only assigned branches for a verified ADMIN %s', async (_label, role, overrides) => {
+    grant(role, overrides);
+    confirmAdmin();
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+    const ctx = {
+      db,
+      entitlements: { organizationId: 'org_a' },
+      session: { user: { id: 'user_a', role: 'ADMIN', status: 'ACTIVE' } },
+    } as unknown as TRPCContext;
+
+    await expect(admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set(['branch_a']));
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
   });
 
   it('lists only assigned branches for an ADMIN session the record does not confirm', async () => {

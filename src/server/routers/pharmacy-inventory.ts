@@ -77,7 +77,8 @@ import {
   ManualTemperatureReadingSource,
 } from '@/lib/pharmacy/temperature-log';
 
-import { annotateAudit } from '@/server/audit';
+import { can, subjectFromSession } from '@/lib/abac';
+import { recordAudit } from '@/server/audit';
 
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 import { assertInOrganization } from '../org-refs';
@@ -199,10 +200,84 @@ async function isActiveTenantAdmin(
 }
 
 /**
+ * The exception is an inventory privilege, so it also needs the canonical
+ * `pharmacy:inventory` capability through `can()` (deny-wins). An explicit DENY
+ * — on the user or the role, `pharmacy:*` or `*` included — or no inventory
+ * grant at all leaves an ADMIN with only the branches they are assigned to,
+ * including on the reads that carry no capability of their own.
+ */
+async function tenantAdminException(
+  ctx: TRPCContext,
+  organizationId: string,
+  userId: string
+): Promise<boolean> {
+  if (!(await isActiveTenantAdmin(ctx, organizationId, userId))) return false;
+  return can(subjectFromSession(ctx.session!.user), 'pharmacy:inventory', undefined, {
+    db: ctx.db,
+    source: 'TRPC',
+    ip: ctx.requestMeta?.ip ?? null,
+  });
+}
+
+export const ADMIN_BRANCH_EXCEPTION_ACTION = 'pharmacy.inventory.admin_branch_exception';
+
+/**
+ * One awaited audit row per use of the ADMIN exception, written before any
+ * stock is read or moved. It does not ride on the request's shared audit detail
+ * (a batched request shares one), and a failed write fails the request closed.
+ */
+async function recordAdminBranchException(
+  ctx: TRPCContext,
+  scope: LedgerScope,
+  branch: string
+): Promise<void> {
+  const user = ctx.session!.user as {
+    name?: string | null;
+    email?: string | null;
+    role?: string | null;
+    isSupportSession?: boolean;
+    supportSessionId?: string;
+    platformUserId?: string;
+  };
+  await recordAudit(
+    {
+      organizationId: scope.organizationId,
+      actorType: 'USER',
+      actorId: scope.actorId,
+      actorName: user.name ?? null,
+      actorEmail: user.email ?? null,
+      actorRole: user.role ?? null,
+      source: 'TRPC',
+      category: 'PHARMACY',
+      operation: 'READ',
+      action: ADMIN_BRANCH_EXCEPTION_ACTION,
+      description: 'Tenant ADMIN reached an inventory branch without a branch assignment',
+      targetType: 'PharmacyBranch',
+      targetId: branch,
+      metadata: {
+        branchId: branch,
+        reason: 'tenant-admin-inventory-access-without-branch-assignment',
+        ...(user.isSupportSession
+          ? {
+              supportSessionId: user.supportSessionId,
+              platformUserId: user.platformUserId,
+              actingAsTenantUserId: scope.actorId,
+            }
+          : {}),
+      },
+      ip: ctx.requestMeta?.ip ?? null,
+      userAgent: ctx.requestMeta?.userAgent ?? null,
+    },
+    ctx.db
+  );
+}
+
+/**
  * DEV-211 / DEV-660: besides being an active branch of the session tenant, the
  * requested branch must carry an active assignment for the session actor, or the
- * actor must be a verified active ADMIN of the tenant — that exception is
- * written to the request's audit record. It guards the stock-creating and
+ * actor must be a verified active ADMIN of the tenant who holds the canonical
+ * `pharmacy:inventory` capability — that exception writes its own audit row
+ * first. It guards the stock-creating and
  * stock-removing mutations (createLocation, receiveLot, createCount, writeOff),
  * the branch stock reads, allocateForSale and every transfer step.
  *
@@ -216,15 +291,8 @@ async function admittedScopeFor(ctx: TRPCContext, branch: string): Promise<Ledge
     select: { id: true },
   });
   if (assignment) return scope;
-  if (await isActiveTenantAdmin(ctx, scope.organizationId, scope.actorId)) {
-    annotateAudit(ctx, {
-      targetType: 'PharmacyBranch',
-      targetId: branch,
-      metadata: {
-        branchId: branch,
-        reason: 'tenant-admin-inventory-access-without-branch-assignment',
-      },
-    });
+  if (await tenantAdminException(ctx, scope.organizationId, scope.actorId)) {
+    await recordAdminBranchException(ctx, scope, branch);
     return scope;
   }
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
@@ -233,13 +301,14 @@ async function admittedScopeFor(ctx: TRPCContext, branch: string): Promise<Ledge
 /**
  * The active branches of the session tenant the session actor is admitted to —
  * the same rule as admittedScopeFor, as a set: every active branch for a
- * verified active tenant ADMIN, otherwise the assigned ones. The inventory pages
+ * verified active tenant ADMIN holding `pharmacy:inventory`, otherwise the
+ * assigned ones. The inventory pages
  * offer only these, so the default branch and a `?branch=` value are both ones
  * the gated reads admit.
  */
 export async function admittedInventoryBranchIds(ctx: TRPCContext): Promise<Set<string>> {
   const { organizationId, actorId } = actorFor(ctx);
-  if (await isActiveTenantAdmin(ctx, organizationId, actorId)) {
+  if (await tenantAdminException(ctx, organizationId, actorId)) {
     const branches = await ctx.db.pharmacyBranch.findMany({
       where: { organizationId, active: true },
       select: { id: true },
