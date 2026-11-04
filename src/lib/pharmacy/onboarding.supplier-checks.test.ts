@@ -59,10 +59,11 @@ function readinessDb(suppliers: readonly SupplierRow[], policy: PolicyRead) {
     medicinePublicationEntry: { count: vi.fn(async () => 0) },
     pharmacyInventoryLot: { count: vi.fn(async () => 0) },
     pharmacySupplier: {
-      count: vi.fn(async ({ where }: { where: Partial<SupplierRow> }) =>
-        suppliers.filter((row) =>
-          (Object.keys(where) as (keyof SupplierRow)[]).every((key) => row[key] === where[key])
-        ).length
+      count: vi.fn(
+        async ({ where }: { where: Partial<SupplierRow> }) =>
+          suppliers.filter((row) =>
+            (Object.keys(where) as (keyof SupplierRow)[]).every((key) => row[key] === where[key])
+          ).length
       ),
     },
   } as unknown as PrismaClient;
