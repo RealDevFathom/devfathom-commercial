@@ -55,11 +55,18 @@ export function readPharmacyPrinterSettings(value: unknown): PharmacyPrinterSett
   };
 }
 
-/** The JSON written to `pharmacy_branches.receiptLayout`. */
+/**
+ * The JSON written to `pharmacy_branches.receiptLayout`. The default (thermal) writes the plain
+ * shared layout, byte-compatible with builds before DEV-742. Only an A4 branch carries `output`;
+ * a build that predates DEV-742 reads that key as corrupt and fails closed. Before rolling back
+ * past DEV-742, run:
+ *   UPDATE pharmacy_branches SET "receiptLayout" = "receiptLayout" - 'output'
+ *   WHERE "receiptLayout" ? 'output';
+ */
 export function storedPharmacyPrinterSettings(
   settings: PharmacyPrinterSettings
-): ReceiptLayout & { output: PharmacyReceiptOutput } {
-  return { ...settings.layout, output: settings.output };
+): ReceiptLayout | (ReceiptLayout & { output: 'A4' }) {
+  return settings.output === 'A4' ? { ...settings.layout, output: 'A4' } : { ...settings.layout };
 }
 
 /** The counter's paper choice that a branch's saved settings preselect. */

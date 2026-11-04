@@ -7,9 +7,10 @@ import { counterFormatForSettings } from '@/lib/pharmacy/printer-settings';
 
 /**
  * DEV-742: the counter's receipt paper. It starts on the branch's saved paper (Settings →
- * Printers) and the operator can still switch it for this session; switching branch goes
- * back to that branch's saved paper. If the saved settings cannot be read, it falls back to
- * thermal 80 mm, the counter's previous fixed default, rather than blocking the sale.
+ * Printers) and the operator can still switch it for this session. A manual switch applies
+ * only to the branch it was made on; another branch opens on its own saved paper. While the
+ * settings load, or if they cannot be read, it uses thermal 80 mm, the counter's previous
+ * fixed default, rather than blocking the sale.
  */
 export function useBranchReceiptFormat(
   branchId: string

@@ -13,6 +13,9 @@ Supersedes the "saved layout read/write remains unconnected" notes below.
 - **Access:** reading needs counter access to the branch (`counterReceiptFormat`). Saving is
   admin-only (`counterSaveReceiptFormat`, `adminProcedure`, audited). A stale revision returns
   `CONFLICT`. A layout-only save keeps the stored `output`.
+- **Rollback:** thermal saves store the plain shared layout. Only an A4 branch stores `output`,
+  which a build before DEV-742 rejects as corrupt. Before rolling back, run
+  `UPDATE pharmacy_branches SET "receiptLayout" = "receiptLayout" - 'output' WHERE "receiptLayout" ? 'output';`
 - **Counter:** `useBranchReceiptFormat` preselects the saved paper. The operator can still switch
   for the session. If the settings can't be read, the counter falls back to thermal 80 mm.
 - **Test print:** `printer-test-print.ts` builds an escaped, bilingual (en/ur) test page. It holds

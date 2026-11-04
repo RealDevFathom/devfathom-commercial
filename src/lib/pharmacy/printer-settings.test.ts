@@ -39,6 +39,13 @@ describe('readPharmacyPrinterSettings', () => {
     expect(() => readPharmacyPrinterSettings(value)).toThrow();
   });
 
+  it('stores a thermal branch as the plain shared layout, readable by pre-DEV-742 builds', () => {
+    const stored = storedPharmacyPrinterSettings({ layout, output: 'THERMAL' });
+    expect(stored).toEqual(layout);
+    expect(stored).not.toHaveProperty('output');
+    expect(readPharmacyPrinterSettings(stored)).toEqual({ layout, output: 'THERMAL' });
+  });
+
   it('round-trips the stored JSON', () => {
     const stored = storedPharmacyPrinterSettings({ layout, output: 'A4' });
     expect(stored).toEqual({ ...layout, output: 'A4' });

@@ -17,12 +17,15 @@ const mocks = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   isPending: false,
   setData: vi.fn(),
+  cancel: vi.fn(async () => undefined),
   openPage: vi.fn(),
 }));
 
 vi.mock('@/lib/trpc', () => ({
   trpc: {
-    useUtils: () => ({ pharmacySales: { counterReceiptFormat: { setData: mocks.setData } } }),
+    useUtils: () => ({
+      pharmacySales: { counterReceiptFormat: { setData: mocks.setData, cancel: mocks.cancel } },
+    }),
     pharmacySales: {
       counterBranches: { useQuery: () => mocks.branches },
       counterReceiptFormat: {
@@ -98,6 +101,10 @@ describe('PharmacyPrinterSettings', () => {
       layout: { ...layout, paperWidth: 58 },
       output: 'A4',
     });
+    expect(mocks.cancel).toHaveBeenCalledWith({ branchId: 'branch-a' });
+    expect(mocks.cancel.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.setData.mock.invocationCallOrder[0]!
+    );
     expect(mocks.setData).toHaveBeenCalledWith(
       { branchId: 'branch-a' },
       expect.objectContaining({ revision: 4, output: 'A4' })
@@ -158,7 +165,7 @@ describe('PharmacyPrinterSettings', () => {
     mocks.format = query(undefined, { isError: true, error: trpcError('FORBIDDEN') });
     render(<PharmacyPrinterSettings canEdit={false} />);
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'You can open printer settings only for branches you are assigned to'
+      'You need counter access at Saddar to open its printer settings. Choose another branch above'
     );
     expect(screen.queryByRole('button', { name: 'Print test page' })).toBeNull();
   });

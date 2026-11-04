@@ -87,7 +87,8 @@ export function PharmacyPrinterSettings({ canEdit }: { canEdit: boolean }) {
 
   const formatQuery = trpc.pharmacySales.counterReceiptFormat.useQuery(
     { branchId },
-    { enabled: Boolean(branchId), retry: false }
+    // An audited read, and a focus refetch must not silently replace an admin's draft.
+    { enabled: Boolean(branchId), retry: false, staleTime: 5 * 60_000, refetchOnWindowFocus: false }
   );
   const saved = formatQuery.data;
   const save = trpc.pharmacySales.counterSaveReceiptFormat.useMutation();
@@ -144,6 +145,8 @@ export function PharmacyPrinterSettings({ canEdit }: { canEdit: boolean }) {
         layout: { ...saved.layout, paperWidth: current.paperWidth },
         output: current.output,
       });
+      // A read started before the save must not overwrite the newer revision afterwards.
+      await utils.pharmacySales.counterReceiptFormat.cancel({ branchId });
       utils.pharmacySales.counterReceiptFormat.setData({ branchId }, result);
       setDraft(null);
       setSaveMessage({
@@ -273,15 +276,15 @@ export function PharmacyPrinterSettings({ canEdit }: { canEdit: boolean }) {
       ) : denied ? (
         <SectionCard title="This branch is not available to you" titleLevel={2}>
           <p role="alert" className="text-sm text-text-body">
-            You can open printer settings only for branches you are assigned to with counter access.
-            Ask a workspace administrator to assign you to {branch?.name}.
+            You need counter access at {branch?.name} to open its printer settings. Choose another
+            branch above, or ask a workspace administrator for access.
           </p>
         </SectionCard>
       ) : formatQuery.isError || !saved || !current ? (
         <SectionCard title="Printer settings could not be loaded" titleLevel={2}>
           <p role="alert" className="text-sm text-text-body">
-            Nothing was changed. The counter keeps printing on thermal 80 mm until these settings
-            load. Try again, or ask an administrator to check this branch.
+            Nothing was changed. Try again, or ask an administrator to check this branch’s saved
+            printer settings.
           </p>
           <Button
             className="mt-3"
@@ -510,7 +513,7 @@ function TestResult({
   onProblem: (format: PrinterTestFormat) => void;
 }) {
   return (
-    <div aria-live="polite" className="space-y-3">
+    <div className="space-y-3">
       {status.kind === 'error' ? (
         <p role="alert" className="text-sm text-destructive">
           {status.message}
@@ -518,7 +521,7 @@ function TestResult({
       ) : null}
       {status.kind === 'opened' ? (
         <>
-          <p className="text-sm text-text-body">
+          <p role="status" className="text-sm text-text-body">
             The print dialog was opened for {PAPER_LABEL[status.format]}. DevFathom can’t see
             whether the page printed or the dialog was cancelled. Check the printer, then tell us
             what happened.
