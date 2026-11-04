@@ -13,6 +13,7 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
+import { financeAccountLabel } from '@/lib/finance/account-labels';
 
 export const metadata: Metadata = { title: 'Trial-balance control · Pharmacy accounts' };
 
@@ -89,7 +90,13 @@ function ControlForm({ controls }: { controls?: Partial<Controls> }) {
         </label>
         <label className="grid gap-2 text-sm">
           From (UTC)
-          <Input className="min-h-11" name="from" type="date" defaultValue={controls?.from} required />
+          <Input
+            className="min-h-11"
+            name="from"
+            type="date"
+            defaultValue={controls?.from}
+            required
+          />
         </label>
         <label className="grid gap-2 text-sm">
           To, exclusive (UTC)
@@ -235,8 +242,8 @@ function Results({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
                     key={`${row.accountCode.length}:${row.accountCode}${row.currency}`}
                     className="border-t border-border-subtle"
                   >
-                    <th scope="row" className="p-3 text-left font-medium">
-                      {row.accountCode}
+                    <th scope="row" className="p-3 text-left font-medium" title={row.accountCode}>
+                      {financeAccountLabel(row.accountCode)}
                     </th>
                     <td className="p-3 text-right">{row.currency}</td>
                     {[row.opening, row.debit, row.credit, row.closing, row.rowDifference].map(
