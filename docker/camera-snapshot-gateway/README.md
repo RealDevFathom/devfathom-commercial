@@ -5,7 +5,9 @@ next to MediaMTX, and answers `GET /<path>/snapshot.png` with one PNG frame take
 MediaMTX's own loopback RTSP output (`rtsp://127.0.0.1:8554/<path>`). The DevFathom app
 (`src/lib/cameras/snapshot-transport.ts`) calls it to capture pharmacy counter evidence stills.
 
-`server.mjs` is plain Node 22 ESM with zero npm dependencies. It needs `node` and `ffmpeg`.
+`server.mjs` is plain Node 22 ESM with zero npm dependencies. It needs Node.js 22 (not Bun:
+its HTTP server timeouts are not verified) and **ffmpeg 5.0 or newer**. ffmpeg 4.x reads the
+RTSP `-timeout` option as listen mode, so the service refuses to start on it.
 
 > **Not tested against MediaMTX, the DVR, or any camera.** The automated tests use injected
 > fakes and, for the real-ffmpeg test, a synthetic `lavfi` source in place of the RTSP input.
@@ -19,9 +21,13 @@ MediaMTX's own loopback RTSP output (`rtsp://127.0.0.1:8554/<path>`). The DevFat
   `record` (default `false`), playback, or any path `source`. Existing DVR recordings are not
   touched. MediaMTX itself still pulls the path from its configured source, as it does for
   live view.
-- **Loopback RTSP only.** `rtspOrigin` must be `rtsp://127.0.0.1:<port>` or `rtsp://[::1]:<port>`
-  with no path or credentials. MediaMTX grants anonymous `read` on the snapshot paths to
-  loopback only (`mediamtx.snapshot.example.yml`).
+- **Loopback RTSP, authenticated.** `rtspOrigin` must be `rtsp://127.0.0.1:<port>` or
+  `rtsp://[::1]:<port>` with no path or credentials. ffmpeg reads as a dedicated MediaMTX
+  user (`rtspReader`) with `read` on the snapshot paths only, from loopback only
+  (`mediamtx.snapshot.example.yml`). There is deliberately no anonymous loopback grant: a
+  same-host reverse proxy for HLS would make every LAN client look like loopback.
+- **Network-confined.** The systemd unit allows only loopback and the app's egress address,
+  so the process cannot reach the DVR or the rest of the LAN.
 - **Allowlist + per-path secret.** Only paths listed in `config.json` are served. Each needs
   HTTP Basic auth; the config stores only `sha256(secret)`. Comparisons use
   `crypto.timingSafeEqual`, the hash work runs even for unknown paths, and an unknown path,
@@ -40,8 +46,9 @@ MediaMTX's own loopback RTSP output (`rtsp://127.0.0.1:8554/<path>`). The DevFat
   `{ at, path, status, ms, bytes }`. `path` is set only for configured paths. Credentials,
   usernames, the Authorization header and ffmpeg output are never logged. A client that
   disconnects before the answer is logged as status `499`.
-- **TLS.** HTTPS only, TLS 1.2 minimum, `headersTimeout` 5 s, `requestTimeout` 10 s,
-  `maxHeaderSize` 8192, one request per connection.
+- **TLS.** HTTPS only, TLS 1.2 minimum, TLS handshake timeout 5 s, `headersTimeout` 5 s and
+  `requestTimeout` 10 s (checked every second), `maxHeaderSize` 8192, one request per
+  connection, at most 64 connections.
 
 ## Install and operate (owner)
 
@@ -68,11 +75,15 @@ MediaMTX's own loopback RTSP output (`rtsp://127.0.0.1:8554/<path>`). The DevFat
    `snapshotBaseUrl` (the same host as the HLS gateway `baseUrl`), issued by a CA the app
    trusts. Store `tls.key` readable only by root and the `devfathom-snapshot` group.
 
-4. **MediaMTX.** Apply `mediamtx.snapshot.example.yml`: a loopback-only `any` user with `read`
-   on each snapshot path, and remove the stock anonymous `read`/`publish`/`playback` catch-all.
-   Do not change `record`, playback or the DVR source.
+4. **MediaMTX.** Generate a second, URL-safe secret (`openssl rand -hex 24`) for the
+   snapshot reader. Put it in `config.json` `rtspReader.password` and in the snippet's `pass`.
+   Apply `mediamtx.snapshot.example.yml`: one authenticated, loopback-only reader with `read`
+   on each snapshot path. Remove the stock anonymous `read`/`publish`/`playback` catch-all,
+   keep `api`, `metrics`, `pprof` and `playback` disabled (or authenticated), and do not change
+   `record`, playback or the DVR source.
 
-5. **Service.** Review `camera-snapshot-gateway.service` (an example), install it, then
+5. **Service.** Review `camera-snapshot-gateway.service` (an example). Set `IPAddressAllow`
+   to loopback plus the app's egress address(es), install it, then
    `systemctl enable --now camera-snapshot-gateway`. Logs: `journalctl -u camera-snapshot-gateway`.
 
 6. **Firewall.** Allow the listen port only from the DevFathom app's egress address(es). Do

@@ -12,6 +12,10 @@ export const sha256Hex = (value: string) => createHash('sha256').update(value).d
 export const basic = (user: string, pass: string) =>
   `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
 
+/** MediaMTX reader credential used by the gateway's ffmpeg (fixture only). */
+export const RTSP_READER_USER = 'snapshot-reader';
+export const RTSP_READER_PASS = 'fixture-mediamtx-reader-0123456789';
+
 export function rawConfig(overrides: Record<string, unknown> = {}) {
   return {
     listen: { host: '10.0.0.10', port: 8899 },
@@ -20,6 +24,7 @@ export function rawConfig(overrides: Record<string, unknown> = {}) {
       keyFile: '/etc/devfathom-snapshot/tls.key',
     },
     rtspOrigin: 'rtsp://127.0.0.1:8554',
+    rtspReader: { username: RTSP_READER_USER, password: RTSP_READER_PASS },
     ffmpegPath: '/usr/bin/ffmpeg',
     paths: [{ path: PATH, username: USERNAME, passwordSha256: sha256Hex(SECRET) }],
     ...overrides,

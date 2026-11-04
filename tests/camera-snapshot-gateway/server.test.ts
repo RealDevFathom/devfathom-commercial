@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   createSnapshotHandler,
   ffmpegArgs,
+  isSupportedFfmpegVersion,
   isPngStill,
   parseConfig,
 } from '../../docker/camera-snapshot-gateway/server.mjs';
@@ -19,6 +20,7 @@ import {
   makePng,
   PATH,
   rawConfig,
+  RTSP_READER_PASS,
   SECRET,
   sha256Hex,
   STDERR_MARKER,
@@ -94,6 +96,17 @@ describe('parseConfig', () => {
       { ...base, paths: Array.from({ length: 257 }, (_, i) => ({ ...entry, path: `p${i}` })) },
     ],
     ['duplicate path', { ...base, paths: [entry, { ...entry, username: 'other' }] }],
+    ['missing rtspReader', { ...base, rtspReader: undefined }],
+    ['rtspReader extra key', { ...base, rtspReader: { ...base.rtspReader, ips: [] } }],
+    [
+      'rtspReader weak password',
+      { ...base, rtspReader: { ...base.rtspReader, password: 'short' } },
+    ],
+    [
+      'rtspReader URL syntax in password',
+      { ...base, rtspReader: { ...base.rtspReader, password: 'abcdefghijklmnopqrstuvwx@evil' } },
+    ],
+    ['rtspReader colon username', { ...base, rtspReader: { ...base.rtspReader, username: 'a:b' } }],
     ['non-loopback rtspOrigin', { ...base, rtspOrigin: 'rtsp://10.0.0.5:8554' }],
     ['hostname rtspOrigin', { ...base, rtspOrigin: 'rtsp://localhost:8554' }],
     ['rtspOrigin with path', { ...base, rtspOrigin: 'rtsp://127.0.0.1:8554/live' }],
@@ -172,7 +185,7 @@ describe('ffmpegArgs', () => {
       '-timeout',
       '3000000',
       '-i',
-      'rtsp://127.0.0.1:8554/pharmacy/branch-1/counter-1',
+      'rtsp://snapshot-reader:fixture-mediamtx-reader-0123456789@127.0.0.1:8554/pharmacy/branch-1/counter-1',
       '-frames:v',
       '1',
       '-an',
@@ -397,6 +410,21 @@ describe('createSnapshotHandler', () => {
     expect(calls).toHaveLength(2);
   });
 
+  test('an error from a running ffmpeg kills it and keeps the slot until it exits', async () => {
+    const { request, children, calls } = setup({ maxConcurrent: 1 });
+    const res = request();
+    const child = children[0] as unknown as { pid?: number; killed: string[] };
+    child.pid = 4242;
+    children[0].emit('error', new Error('kill EPERM'));
+    expect(res.status).toBe(502);
+    expect(child.killed).toEqual(['SIGKILL']);
+    // Still counted until 'close' confirms the process is gone.
+    expect(request().status).toBe(503);
+    await tick();
+    request();
+    expect(calls).toHaveLength(2);
+  });
+
   test('spawn throwing synchronously → 502', () => {
     const { request } = setup({}, () => {
       throw new Error('EAGAIN');
@@ -418,7 +446,15 @@ describe('createSnapshotHandler', () => {
     await children[1].finish(Buffer.from(STDERR_MARKER));
     bodies.push(bad);
     const text = JSON.stringify(logs);
-    for (const secret of [SECRET, USERNAME, 'Basic', AUTH.slice(6), STDERR_MARKER, 'hunter2']) {
+    for (const secret of [
+      SECRET,
+      USERNAME,
+      'Basic',
+      AUTH.slice(6),
+      STDERR_MARKER,
+      'hunter2',
+      RTSP_READER_PASS,
+    ]) {
       expect(text).not.toContain(secret);
     }
     for (const res of bodies) {
@@ -429,5 +465,18 @@ describe('createSnapshotHandler', () => {
       expect(visible).not.toContain(PATH);
     }
     expect(logs.map((entry) => entry.status)).toEqual([401, 401, 404, 503, 200, 502]);
+  });
+});
+
+describe('isSupportedFfmpegVersion', () => {
+  test.each([
+    ['ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023', true],
+    ['ffmpeg version 5.0 Copyright', true],
+    ['ffmpeg version n7.1 Copyright', true],
+    ['ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright', false],
+    ['ffmpeg version N-112345-gabcdef Copyright', false],
+    ['', false],
+  ])('%s → %s', (line, expected) => {
+    expect(isSupportedFfmpegVersion(line)).toBe(expected);
   });
 });

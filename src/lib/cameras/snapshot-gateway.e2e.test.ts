@@ -199,6 +199,7 @@ describe.skipIf(!runnable)('real gateway service + real ffmpeg + app transport',
         listen: { host: '127.0.0.1', port: 8899 },
         tls: { certFile: join(dir, 'cert.pem'), keyFile: join(dir, 'key.pem') },
         rtspOrigin: 'rtsp://127.0.0.1:8554',
+        rtspReader: { username: 'snapshot-reader', password: 'e2e-mediamtx-reader-0123456789' },
         ffmpegPath: FFMPEG,
         timeoutMs: 6000,
         maxWidth: 1920,
@@ -236,7 +237,9 @@ describe.skipIf(!runnable)('real gateway service + real ffmpeg + app transport',
 
     // The gateway asked ffmpeg for the configured MediaMTX loopback path only.
     expect(spawnedArgs).toHaveLength(1);
-    expect(spawnedArgs[0]).toContain(`rtsp://127.0.0.1:8554/${PATH}`);
+    expect(spawnedArgs[0]).toContain(
+      `rtsp://snapshot-reader:e2e-mediamtx-reader-0123456789@127.0.0.1:8554/${PATH}`
+    );
     expect(pinnedLookups).toEqual([PINNED]);
 
     const stored = [...files.values()];

@@ -15,12 +15,14 @@ DEV-745 therefore adds a small service that runs **on the gateway host, beside M
 (`docker/camera-snapshot-gateway/`). It relies only on documented behavior:
 
 - MediaMTX re-serves every path over RTSP (`rtspAddress: :8554`).
-- `authInternalUsers` can limit anonymous `read` to loopback (`ips: ["127.0.0.1", "::1"]`)
-  for specific paths.
-- ffmpeg's RTSP demuxer (`-rtsp_transport tcp -timeout`) and PNG encoder take one frame
-  (`-frames:v 1 -f image2pipe -c:v png`).
+- `authInternalUsers` gives one dedicated reader `read` on specific paths, from loopback only.
+  There is no anonymous grant, because a same-host HLS proxy would make LAN clients look like
+  loopback.
+- ffmpeg 5.0 or newer: its RTSP demuxer (`-rtsp_transport tcp -timeout`) and PNG encoder
+  take one frame (`-frames:v 1 -f image2pipe -c:v png`). The service refuses older ffmpeg.
 
-The service reads the live path only. It never uses MediaMTX recording, playback or the API,
+The systemd unit confines the service to loopback plus the app's egress address, so it cannot
+reach the DVR. The service reads the live path only. It never uses MediaMTX recording, playback or the API,
 never connects to the DVR, never writes to disk, and does not change `record` (default
 `false`). Old DVR recordings are untouched.
 
@@ -28,7 +30,8 @@ never connects to the DVR, never writes to disk, and does not change `record` (d
 
 1. A tender, refund, daily close or cold-chain excursion writes a `PENDING` evidence row in the
    money or reading transaction, for an enabled camera that opted in (`counterEvidence`, or the
-   `COLD_CHAIN` preset for the zone). This is unchanged.
+   `COLD_CHAIN` preset for the zone). The opt-in is checked again at capture, so an owner's
+   opt-out stops pending and retried captures.
 2. The `pharmacy.camera.snapshot.v1` platform job drops platform privileges (tenant RLS) and
    calls `captureCameraEvidence`.
 3. `evidenceSnapshotAdapter(runtime, { vertical: 'pharmacy' })`:

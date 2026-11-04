@@ -7,7 +7,7 @@
 //
 // Plain Node 22 ESM with zero npm dependencies.
 
-import { spawn as nodeSpawn } from 'node:child_process';
+import { execFileSync, spawn as nodeSpawn } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:https';
@@ -21,6 +21,7 @@ import { pathToFileURL } from 'node:url';
  *   listen: { host: string, port: number },
  *   tls: { certFile: string, keyFile: string },
  *   rtspOrigin: string,
+ *   rtspReader: { username: string, password: string },
  *   ffmpegPath: string,
  *   timeoutMs: number,
  *   maxBytes: number,
@@ -41,6 +42,10 @@ const PATH_PATTERN = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/;
 const URL_PATTERN = /^\/([A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*)\/snapshot\.png$/;
 const RTSP_ORIGIN_PATTERN = /^rtsp:\/\/(?:127\.0\.0\.1|\[::1\]):([0-9]{1,5})$/;
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
+// MediaMTX reader credential: URL-safe characters only, so it never needs escaping.
+const READER_USER_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const READER_PASS_PATTERN = /^[A-Za-z0-9_-]{24,128}$/;
+const MIN_FFMPEG_MAJOR = 5;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const REALM = 'Basic realm="camera-snapshot"';
 const FFMPEG_ENV = Object.freeze({ PATH: '/usr/bin:/bin' });
@@ -49,6 +54,7 @@ const TOP_KEYS = [
   'listen',
   'tls',
   'rtspOrigin',
+  'rtspReader',
   'ffmpegPath',
   'timeoutMs',
   'maxBytes',
@@ -125,7 +131,7 @@ export function parseConfig(raw) {
     const data = JSON.parse(raw);
     if (!isPlainObject(data)) fail();
     const root = /** @type {Record<string, unknown>} */ (data);
-    checkKeys(root, TOP_KEYS, ['listen', 'tls', 'rtspOrigin', 'ffmpegPath', 'paths']);
+    checkKeys(root, TOP_KEYS, ['listen', 'tls', 'rtspOrigin', 'rtspReader', 'ffmpegPath', 'paths']);
 
     if (!isPlainObject(root.listen)) fail();
     const listen = /** @type {Record<string, unknown>} */ (root.listen);
@@ -141,6 +147,14 @@ export function parseConfig(raw) {
     const origin = RTSP_ORIGIN_PATTERN.exec(/** @type {string} */ (root.rtspOrigin));
     if (!origin) fail();
     integer(Number(/** @type {RegExpExecArray} */ (origin)[1]), 1, 65535);
+
+    // A dedicated MediaMTX reader, never an anonymous loopback grant: a reverse
+    // proxy on this host would otherwise make every LAN client look like loopback.
+    if (!isPlainObject(root.rtspReader)) fail();
+    const reader = /** @type {Record<string, unknown>} */ (root.rtspReader);
+    checkKeys(reader, ['username', 'password'], ['username', 'password']);
+    if (typeof reader.username !== 'string' || !READER_USER_PATTERN.test(reader.username)) fail();
+    if (typeof reader.password !== 'string' || !READER_PASS_PATTERN.test(reader.password)) fail();
 
     if (!Array.isArray(root.paths) || root.paths.length < 1 || root.paths.length > 256) fail();
     const seen = new Set();
@@ -177,6 +191,10 @@ export function parseConfig(raw) {
         keyFile: absolutePath(tls.keyFile),
       }),
       rtspOrigin: /** @type {string} */ (root.rtspOrigin),
+      rtspReader: Object.freeze({
+        username: /** @type {string} */ (reader.username),
+        password: /** @type {string} */ (reader.password),
+      }),
       ffmpegPath: absolutePath(root.ffmpegPath),
       timeoutMs: integer(root.timeoutMs, 1000, 8000, 4000),
       maxBytes: integer(root.maxBytes, 1, MAX_PNG_BYTES, MAX_PNG_BYTES),
@@ -194,7 +212,11 @@ export function parseConfig(raw) {
  * The exact ffmpeg argument vector for one still. Pure; `path` must be a
  * configured path (it is re-checked against the path grammar).
  *
- * @param {Pick<SnapshotConfig, 'rtspOrigin' | 'timeoutMs' | 'maxWidth'>} config
+ * The MediaMTX reader credential is in the URL argument. The systemd unit's
+ * ProtectProc=invisible hides the process from other users, and stderr (which
+ * can echo the URL) is never read or logged.
+ *
+ * @param {Pick<SnapshotConfig, 'rtspOrigin' | 'rtspReader' | 'timeoutMs' | 'maxWidth'>} config
  * @param {string} path
  * @returns {string[]}
  */
@@ -212,7 +234,10 @@ export function ffmpegArgs(config, path) {
     '-timeout',
     String(config.timeoutMs * 1000),
     '-i',
-    `${config.rtspOrigin}/${path}`,
+    `${config.rtspOrigin.replace(
+      'rtsp://',
+      `rtsp://${config.rtspReader.username}:${config.rtspReader.password}@`
+    )}/${path}`,
     '-frames:v',
     '1',
     '-an',
@@ -310,7 +335,8 @@ function basicCredentials(header) {
   if (typeof header !== 'string' || header.length > 2048) return null;
   const match = /^Basic ([A-Za-z0-9+/]+={0,2})$/i.exec(header);
   if (!match) return null;
-  const decoded = Buffer.from(match[1], 'base64').toString('utf8');
+  // latin1 maps bytes 1:1, so distinct byte strings never compare equal.
+  const decoded = Buffer.from(match[1], 'base64').toString('latin1');
   const colon = decoded.indexOf(':');
   if (colon < 0) return null;
   return { username: decoded.slice(0, colon), password: decoded.slice(colon + 1) };
@@ -450,8 +476,12 @@ export function createSnapshotHandler({
     child.stderr?.resume();
 
     child.on('error', () => {
-      exited = true;
-      release();
+      // Never spawned: nothing to wait for. Otherwise it may still be running:
+      // kill it and keep the slot until 'close' confirms it is gone.
+      if (child.pid === undefined) {
+        exited = true;
+        release();
+      } else kill();
       finish(502);
     });
     child.on('close', (/** @type {number | null} */ code) => {
@@ -484,8 +514,11 @@ export function createGatewayServer(config, deps = {}) {
       cert: readFileSync(config.tls.certFile),
       key: readFileSync(config.tls.keyFile),
       minVersion: 'TLSv1.2',
+      handshakeTimeout: 5_000,
       requestTimeout: 10_000,
       headersTimeout: 5_000,
+      // Enforce the two timeouts every second, not every 30 s (Node's default).
+      connectionsCheckingInterval: 1_000,
       maxHeaderSize: 8192,
       keepAlive: false,
     },
@@ -493,7 +526,20 @@ export function createGatewayServer(config, deps = {}) {
   );
   server.keepAliveTimeout = 0;
   server.maxRequestsPerSocket = 1;
+  server.maxConnections = 64;
   return server;
+}
+
+/**
+ * ffmpeg before 5.0 reads the RTSP `-timeout` option as listen mode (it would
+ * bind MediaMTX's port instead of reading from it), so older builds are refused.
+ *
+ * @param {string} versionOutput the first line of `ffmpeg -version`
+ * @returns {boolean}
+ */
+export function isSupportedFfmpegVersion(versionOutput) {
+  const major = /^ffmpeg version n?(\d+)\./.exec(String(versionOutput))?.[1];
+  return major !== undefined && Number(major) >= MIN_FFMPEG_MAJOR;
 }
 
 /**
@@ -506,6 +552,14 @@ export async function main(env = process.env) {
   const file = env.SNAPSHOT_GATEWAY_CONFIG;
   if (!file) throw new Error(CONFIG_ERROR);
   const config = parseConfig(readFileSync(file, 'utf8'));
+  const version = execFileSync(config.ffmpegPath, ['-version'], {
+    env: { ...FFMPEG_ENV },
+    timeout: 5_000,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).toString('utf8');
+  if (!isSupportedFfmpegVersion(version)) {
+    throw Object.assign(new Error(CONFIG_ERROR), { code: 'FFMPEG_VERSION_UNSUPPORTED' });
+  }
   const server = createGatewayServer(config);
   return new Promise((resolve, reject) => {
     server.once('error', reject);
