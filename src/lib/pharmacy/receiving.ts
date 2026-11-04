@@ -27,6 +27,7 @@
 import {
   assertSupplierEligible,
   PharmacyPurchasingError,
+  type SupplierCompliancePolicy,
   type SupplierLicenceEvidence,
 } from './purchasing';
 
@@ -104,6 +105,12 @@ export type SaleableEvidence = {
    * than being quietly treated as unlicensed.
    */
   supplier: { authorized: boolean; licences: readonly SupplierLicenceEvidence[] } | null;
+  /**
+   * DEV-753: the owner's supplier-compliance policy in force at posting. With the
+   * checks off, supplier licence and trade authorization stop being refusal reasons;
+   * every other field above is still required.
+   */
+  supplierCompliance: SupplierCompliancePolicy;
   at: Date;
 };
 
@@ -138,13 +145,15 @@ export function assertSaleableOnReceipt(evidence: SaleableEvidence): void {
     throw new PharmacyReceivingError('MISSING_MRP');
   }
   // PUR-01 decides supplier eligibility for the whole lane; receiving asks it
-  // again here because authorization can lapse between order and delivery.
+  // again here because authorization can lapse between order and delivery. A
+  // supplier the tenant cannot see is refused whatever the owner policy says.
   if (!evidence.supplier) throw new PharmacyReceivingError('SUPPLIER_NOT_AUTHORIZED');
   try {
     assertSupplierEligible({
       authorized: evidence.supplier.authorized,
       licences: evidence.supplier.licences,
       at: evidence.at,
+      policy: evidence.supplierCompliance,
     });
   } catch (error) {
     if (error instanceof PharmacyPurchasingError) {

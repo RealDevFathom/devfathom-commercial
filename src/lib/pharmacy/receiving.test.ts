@@ -20,7 +20,13 @@ import {
 } from './receiving';
 
 const AT = new Date('2026-09-02T09:00:00.000Z');
-const LICENCE = { expiresAt: new Date('2027-01-01T00:00:00.000Z'), verified: true };
+const LICENCE = {
+  expiresAt: new Date('2027-01-01T00:00:00.000Z'),
+  verified: true,
+  superseded: false,
+};
+const CHECKS_ON = { checksEnabled: true, version: 0 };
+const CHECKS_OFF = { checksEnabled: false, version: 2 };
 
 /** Everything present: the one shape that is allowed to become saleable stock. */
 function completeEvidence(overrides: Partial<SaleableEvidence> = {}): SaleableEvidence {
@@ -32,6 +38,7 @@ function completeEvidence(overrides: Partial<SaleableEvidence> = {}): SaleableEv
     canonicalUnitsPerPack: 10,
     printedMrpMinor: 25_000,
     supplier: { authorized: true, licences: [LICENCE] },
+    supplierCompliance: CHECKS_ON,
     at: AT,
     ...overrides,
   };
@@ -77,7 +84,13 @@ describe('PUR-02 — stock is not saleable until every named field is present', 
           completeEvidence({
             supplier: {
               authorized: true,
-              licences: [{ expiresAt: new Date('2026-09-01T00:00:00.000Z'), verified: true }],
+              licences: [
+                {
+                  expiresAt: new Date('2026-09-01T00:00:00.000Z'),
+                  verified: true,
+                  superseded: false,
+                },
+              ],
             },
           })
         )
@@ -95,6 +108,64 @@ describe('PUR-02 — stock is not saleable until every named field is present', 
         )
       )
     ).toBe('SUPPLIER_LICENCE_EXPIRED');
+  });
+
+  it('refuses a superseded licence filing as no licence (DEV-466)', () => {
+    expect(
+      reasonOf(() =>
+        assertSaleableOnReceipt(
+          completeEvidence({
+            supplier: { authorized: true, licences: [{ ...LICENCE, superseded: true }] },
+          })
+        )
+      )
+    ).toBe('SUPPLIER_LICENCE_EXPIRED');
+  });
+
+  describe('DEV-753 with the owner policy OFF', () => {
+    it('posts an unauthorized, unlicensed supplier without refusing on those two facts', () => {
+      expect(() =>
+        assertSaleableOnReceipt(
+          completeEvidence({
+            supplier: { authorized: false, licences: [] },
+            supplierCompliance: CHECKS_OFF,
+          })
+        )
+      ).not.toThrow();
+    });
+
+    it('still refuses a supplier the tenant cannot see', () => {
+      expect(
+        reasonOf(() =>
+          assertSaleableOnReceipt(
+            completeEvidence({ supplier: null, supplierCompliance: CHECKS_OFF })
+          )
+        )
+      ).toBe('SUPPLIER_NOT_AUTHORIZED');
+    });
+
+    // The switch is bounded to supplier licence and trade authorization: every other
+    // field PUR-02 names stays mandatory.
+    it.each([
+      ['batch number', { batchNumber: '   ' }, 'MISSING_BATCH'],
+      ['printed expiry', { printedExpiry: null }, 'MISSING_EXPIRY'],
+      ['supplier invoice', { supplierInvoiceRef: '' }, 'MISSING_INVOICE_EVIDENCE'],
+      ['warranty evidence', { warrantyEvidenceRef: '' }, 'MISSING_WARRANTY_EVIDENCE'],
+      ['pack conversion', { canonicalUnitsPerPack: 0 }, 'MISSING_PACK_CONVERSION'],
+      ['printed MRP', { printedMrpMinor: 0 }, 'MISSING_MRP'],
+    ] as const)('still refuses stock with no %s', (_field, missing, reason) => {
+      expect(
+        reasonOf(() =>
+          assertSaleableOnReceipt(
+            completeEvidence({
+              ...missing,
+              supplier: { authorized: false, licences: [] },
+              supplierCompliance: CHECKS_OFF,
+            })
+          )
+        )
+      ).toBe(reason);
+    });
   });
 
   it('refuses a supplier the tenant cannot see rather than reading it as unlicensed', () => {

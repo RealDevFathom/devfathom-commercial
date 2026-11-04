@@ -58,25 +58,115 @@ function divideRoundHalfUp(numerator: number, denominator: number): number {
 export type SupplierLicenceEvidence = {
   /** Exclusive: a licence that expires today is still valid for the whole of today. */
   expiresAt: Date;
-  /** A superseded or unverified filing is evidence of paperwork, not of a licence. */
+  /** An unverified filing is evidence of paperwork, not of a licence. */
   verified: boolean;
+  /**
+   * DEV-466: another filing in this organization names this one in `supersedesId`.
+   * Licence evidence is append-only, so a correction supersedes rather than rewrites;
+   * a superseded filing stays on file as evidence but no longer licenses anything.
+   */
+  superseded: boolean;
 };
 
 /**
- * PUR-01: an unauthorized supplier, or one with no unexpired verified licence
- * evidence, cannot be ordered from. Called before a PO is created and again
- * before it is sent, because authorization can lapse between the two.
+ * DEV-753: the tenant owner's supplier-compliance policy as the server resolved it.
+ * `checksEnabled` defaults to true; a missing or unreadable policy is enforced.
+ * `version` is 0 until the owner first changes it.
+ */
+export type SupplierCompliancePolicy = { checksEnabled: boolean; version: number };
+
+/** The fail-closed policy: what every path enforces when no stored policy says otherwise. */
+export const ENFORCED_SUPPLIER_COMPLIANCE: SupplierCompliancePolicy = Object.freeze({
+  checksEnabled: true,
+  version: 0,
+});
+
+/**
+ * What the licence evidence on file says, independent of any policy. VALID is the only
+ * status that satisfies PUR-01; the others name why not, for display and for evidence.
+ */
+export type SupplierLicenceStatus = 'VALID' | 'NONE' | 'UNVERIFIED' | 'EXPIRED' | 'SUPERSEDED';
+
+function licenceIsCurrent(licence: SupplierLicenceEvidence, at: Date): boolean {
+  return licence.expiresAt.getTime() >= at.getTime();
+}
+
+export function supplierLicenceStatus(
+  licences: readonly SupplierLicenceEvidence[],
+  at: Date
+): SupplierLicenceStatus {
+  if (licences.length === 0) return 'NONE';
+  if (licences.some((l) => l.verified && !l.superseded && licenceIsCurrent(l, at))) return 'VALID';
+  const standing = licences.filter((licence) => !licence.superseded);
+  if (standing.length === 0) return 'SUPERSEDED';
+  if (standing.some((licence) => !licence.verified && licenceIsCurrent(licence, at))) {
+    return 'UNVERIFIED';
+  }
+  if (standing.some((licence) => !licenceIsCurrent(licence, at))) return 'EXPIRED';
+  return 'UNVERIFIED';
+}
+
+/**
+ * The outcome of the PUR-01 gate. `checked: false` means the owner policy had the
+ * supplier licence and trade-authorization checks off, so nothing about the supplier
+ * was verified; the facts are what the check would have read, kept for evidence.
+ */
+export type SupplierComplianceOutcome =
+  | { checked: true }
+  | {
+      checked: false;
+      policyVersion: number;
+      supplierAuthorized: boolean;
+      licenceStatus: SupplierLicenceStatus;
+    };
+
+/**
+ * PUR-01: an unauthorized supplier, or one with no unexpired, verified and
+ * unsuperseded licence evidence, cannot be ordered from or received from. Called
+ * before a PO is created and again at approval, send, receipt creation and receipt
+ * posting, because authorization and licences can lapse in between.
+ *
+ * DEV-753: the owner policy is a required argument, so no caller can forget it. With
+ * the checks off, supplier trade authorization and licence evidence stop being
+ * refusal reasons and the outcome says they were not checked. Nothing else in the
+ * purchasing or receiving lanes is relaxed by it.
  */
 export function assertSupplierEligible(input: {
   authorized: boolean;
   licences: readonly SupplierLicenceEvidence[];
   at: Date;
-}): void {
+  policy: SupplierCompliancePolicy;
+}): SupplierComplianceOutcome {
+  // Anything other than an explicit `false` enforces.
+  if (input.policy.checksEnabled === false) {
+    return {
+      checked: false,
+      policyVersion: input.policy.version,
+      supplierAuthorized: input.authorized === true,
+      licenceStatus: supplierLicenceStatus(input.licences, input.at),
+    };
+  }
   if (!input.authorized) throw new PharmacyPurchasingError('SUPPLIER_NOT_AUTHORIZED');
-  const valid = input.licences.some(
-    (licence) => licence.verified && licence.expiresAt.getTime() >= input.at.getTime()
-  );
-  if (!valid) throw new PharmacyPurchasingError('SUPPLIER_LICENCE_EXPIRED');
+  if (supplierLicenceStatus(input.licences, input.at) !== 'VALID') {
+    throw new PharmacyPurchasingError('SUPPLIER_LICENCE_EXPIRED');
+  }
+  return { checked: true };
+}
+
+/**
+ * DEV-466: supersession is a property of the organization's whole licence register,
+ * not of one supplier's own filings: any filing whose id another row names in
+ * `supersedesId` is superseded. `supersededIds` is that set as the server read it.
+ */
+export function licenceEvidence(
+  licences: readonly { id: string; expiresAt: Date; verifiedAt: Date | null }[],
+  supersededIds: ReadonlySet<string>
+): SupplierLicenceEvidence[] {
+  return licences.map((licence) => ({
+    expiresAt: licence.expiresAt,
+    verified: licence.verifiedAt !== null,
+    superseded: supersededIds.has(licence.id),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -84,12 +174,7 @@ export function assertSupplierEligible(input: {
 // ---------------------------------------------------------------------------
 
 export type PurchaseOrderStatus =
-  | 'DRAFT'
-  | 'SUBMITTED'
-  | 'APPROVED'
-  | 'SENT'
-  | 'RECEIVING'
-  | 'CANCELLED';
+  'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
 
 /**
  * DRAFT → SUBMITTED → APPROVED → SENT → RECEIVING, with cancellation available
@@ -394,6 +479,11 @@ export type QuoteComparisonRow = {
   leadTimeDays: number;
   minimumExpiryDays: number;
   moqPacks: number;
+  /**
+   * DEV-753: whether the supplier's licence and trade authorization were checked for
+   * this ranking. `false` only while the owner policy has those checks off.
+   */
+  supplierChecked: boolean;
   /** Plain-language reasons — the operator awards, the comparison does not. */
   reasons: readonly string[];
 };
@@ -459,8 +549,10 @@ export function compareQuotes(input: {
   requiredPacks: number;
   candidates: readonly QuoteCandidate[];
   at: Date;
+  /** DEV-753: the owner's supplier-compliance policy, resolved on the server. */
+  policy: SupplierCompliancePolicy;
 }): readonly QuoteComparisonRow[] {
-  const { requiredPacks, candidates, at } = input;
+  const { requiredPacks, candidates, at, policy } = input;
   if (!Number.isSafeInteger(requiredPacks) || requiredPacks <= 0) {
     throw new PharmacyPurchasingError('INVALID_QUANTITY');
   }
@@ -468,13 +560,15 @@ export function compareQuotes(input: {
   const rows = candidates.map((candidate) => {
     const reasons: string[] = [];
     let comparable = true;
+    let supplierChecked = true;
 
     try {
-      assertSupplierEligible({
+      supplierChecked = assertSupplierEligible({
         authorized: candidate.supplierAuthorized,
         licences: candidate.supplierLicences,
         at,
-      });
+        policy,
+      }).checked;
     } catch (error) {
       comparable = false;
       reasons.push(
@@ -548,6 +642,11 @@ export function compareQuotes(input: {
     reasons.push(
       `Lead time ${candidate.leadTimeDays} days; shortest shelf life offered ${candidate.minimumExpiryDays} days.`
     );
+    if (!supplierChecked) {
+      reasons.push(
+        'Supplier licence and trade authorization not checked: the owner has turned these checks off.'
+      );
+    }
 
     return {
       quoteId: candidate.quoteId,
@@ -566,6 +665,7 @@ export function compareQuotes(input: {
       leadTimeDays: candidate.leadTimeDays,
       minimumExpiryDays: candidate.minimumExpiryDays,
       moqPacks: candidate.moqPacks,
+      supplierChecked,
       reasons,
     };
   });

@@ -1,6 +1,7 @@
 import type * as React from 'react';
 
 import { StatusPill } from '@/components/ui/status-pill';
+import { SUPPLIER_NOT_CHECKED_LABEL } from '@/lib/pharmacy/supplier-compliance';
 import { cn } from '@/lib/utils';
 import type { Notice, SupplierPickerOption } from '../_lib/types';
 
@@ -190,17 +191,20 @@ export function SelectField({
  * PUR-01 in a dropdown. A supplier that cannot be ordered from stays visible
  * and says why, but is not selectable: offering it would produce a refusal the
  * operator could not have predicted, and hiding it would make an authorized
- * supplier that lapsed look deleted.
+ * supplier that lapsed look deleted. While the owner has the supplier checks off
+ * (DEV-753) every supplier is selectable and says it was not checked.
  */
 export function supplierOptions(suppliers: readonly SupplierPickerOption[]): SelectOption[] {
   return suppliers.map((supplier) => ({
     value: supplier.id,
     disabled: !supplier.eligibility.orderable,
-    label: supplier.eligibility.orderable
-      ? supplier.name
-      : `${supplier.name} — ${
-          supplier.eligibility.reason === 'NOT_AUTHORIZED' ? 'not authorized' : 'no valid licence'
-        }`,
+    label: !supplier.compliance.checked
+      ? `${supplier.name} — not checked`
+      : supplier.eligibility.orderable
+        ? supplier.name
+        : `${supplier.name} — ${
+            supplier.eligibility.reason === 'NOT_AUTHORIZED' ? 'not authorized' : 'no valid licence'
+          }`,
   }));
 }
 
@@ -252,6 +256,11 @@ export function Derived({ label, value }: { label: string; value: React.ReactNod
 }
 
 export function LicenceBadge({ supplier }: { supplier: SupplierPickerOption }) {
+  // DEV-753: with the owner's checks off nothing was verified, so the badge says so
+  // and never reads "Orderable", "Licensed" or "Authorized" on the policy's account.
+  if (!supplier.compliance.checked) {
+    return <StatusPill status="Not checked" tone="warning" label={SUPPLIER_NOT_CHECKED_LABEL} />;
+  }
   if (supplier.eligibility.orderable) {
     const days = supplier.governingLicence?.daysToExpiry;
     return (
