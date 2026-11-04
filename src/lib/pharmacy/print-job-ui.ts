@@ -54,7 +54,9 @@ export type PrintFallbackCode =
   | 'A4_OUTPUT'
   | 'PAPER_MISMATCH'
   | 'UNSUPPORTED_PRINT_TEXT'
-  | 'INVALID_PRINT_DOCUMENT';
+  | 'INVALID_PRINT_DOCUMENT'
+  | 'SETTINGS_CHANGED'
+  | 'SETTINGS_UNAVAILABLE';
 
 export const PRINT_FALLBACK_TEXT: Record<PrintFallbackCode, string> = {
   NO_BRIDGE:
@@ -69,6 +71,10 @@ export const PRINT_FALLBACK_TEXT: Record<PrintFallbackCode, string> = {
     'The thermal printer cannot print this text (for example Urdu). Nothing was sent. Use the browser print dialog.',
   INVALID_PRINT_DOCUMENT:
     'This receipt could not be prepared for the thermal printer. Nothing was sent. Use the browser print dialog.',
+  SETTINGS_CHANGED:
+    'The branch’s printer settings changed just now. Nothing was sent. Reload, then try again.',
+  SETTINGS_UNAVAILABLE:
+    'The branch’s saved printer settings could not be read. Nothing was sent. Use the browser print dialog and ask an administrator to check Printers settings.',
 };
 
 export function fallbackText(code: string | undefined | null): string {

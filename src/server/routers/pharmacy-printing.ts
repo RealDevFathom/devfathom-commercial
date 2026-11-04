@@ -12,6 +12,9 @@ import {
   bridgeView,
   enqueuePharmacyReceiptPrint,
   enqueuePharmacyTestPagePrint,
+  findPharmacyPrintJobByKey,
+  receiptPrintIdempotencyKey,
+  testPagePrintIdempotencyKey,
   enrollPharmacyPrintBridge,
   listPharmacyPrintBridges,
   PharmacyPrintQueueError,
@@ -107,17 +110,40 @@ function outputFallback(code: PrintFallbackCode) {
  * caller's paper must equal the saved roll width, so a stale or still-loading
  * client default cannot misroute a job.
  */
-async function thermalOutputRefusal(
-  db: Parameters<typeof readPharmacyReceiptFormat>[0],
-  scope: { organizationId: string; branchId: string },
+type FormatDb = Parameters<typeof readPharmacyReceiptFormat>[0];
+type BranchScope = { organizationId: string; branchId: string };
+
+async function thermalOutput(
+  db: FormatDb,
+  scope: BranchScope,
   paper: z.infer<typeof thermalPaper>
-) {
-  const format = await readPharmacyReceiptFormat(db, scope);
-  if (format.output === 'A4') return outputFallback('A4_OUTPUT');
-  if (thermalPaperForWidth(format.layout.paperWidth) !== paper) {
-    return outputFallback('PAPER_MISMATCH');
+): Promise<{ refusal: PrintFallbackCode } | { revision: number }> {
+  let format: Awaited<ReturnType<typeof readPharmacyReceiptFormat>>;
+  try {
+    format = await readPharmacyReceiptFormat(db, scope);
+  } catch (error) {
+    // Corrupt stored settings fail closed with an explanation, not a 500.
+    if (error instanceof TRPCError) throw error;
+    return { refusal: 'SETTINGS_UNAVAILABLE' };
   }
-  return null;
+  if (format.output === 'A4') return { refusal: 'A4_OUTPUT' };
+  if (thermalPaperForWidth(format.layout.paperWidth) !== paper)
+    return { refusal: 'PAPER_MISMATCH' };
+  return { revision: format.revision };
+}
+
+/** Thrown inside the enqueue transaction when the saved format moved after the guard. */
+class OutputChanged extends Error {}
+
+/** Re-check, inside the enqueue transaction, that the format the guard approved is still saved. */
+async function assertOutputUnchanged(
+  db: FormatDb,
+  scope: BranchScope,
+  paper: z.infer<typeof thermalPaper>,
+  revision: number
+) {
+  const now = await thermalOutput(db, scope, paper);
+  if (!('revision' in now) || now.revision !== revision) throw new OutputChanged();
 }
 
 function queueError(error: unknown): never {
@@ -224,8 +250,18 @@ export const pharmacyPrintingRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
-      const refusal = await thermalOutputRefusal(ctx.db, scope, input.paper);
-      if (refusal) return refusal;
+      // A replay answers with the job already queued, whatever the settings say now.
+      const prior = await findPharmacyPrintJobByKey(
+        ctx.db,
+        scope,
+        receiptPrintIdempotencyKey(input.saleId, input.reprint, input.requestKey)
+      );
+      if (prior && prior.kind === 'RECEIPT' && prior.saleId === input.saleId) {
+        if (prior.reprint !== input.reprint) queueError(new PharmacyPrintQueueError('CHANGED'));
+        return { status: 'QUEUED' as const, replayed: true, job: printJobView(prior, new Date()) };
+      }
+      const output = await thermalOutput(ctx.db, scope, input.paper);
+      if ('refusal' in output) return outputFallback(output.refusal);
       const built = await buildSettledCounterReceiptPrintJob(ctx, input);
       if (built.status !== 'READY') return built;
       // The format may have changed between the guard and the build; never queue a width
@@ -235,8 +271,9 @@ export const pharmacyPrintingRouter = router({
       }
       const now = new Date();
       try {
-        const { job, replayed } = await ctx.db.$transaction((tx) =>
-          enqueuePharmacyReceiptPrint(tx as ScopedDb, {
+        const { job, replayed } = await ctx.db.$transaction(async (tx) => {
+          await assertOutputUnchanged(tx as ScopedDb, scope, input.paper, output.revision);
+          return enqueuePharmacyReceiptPrint(tx as ScopedDb, {
             organizationId: built.scope.organizationId,
             branchId: built.scope.branchId,
             actorId: built.scope.actorId,
@@ -249,10 +286,11 @@ export const pharmacyPrintingRouter = router({
             byteCount: built.job.escPos.byteCount,
             paperWidth: built.job.paperWidth,
             now,
-          })
-        );
+          });
+        });
         return { status: 'QUEUED' as const, replayed, job: printJobView(job, now) };
       } catch (error) {
+        if (error instanceof OutputChanged) return outputFallback('SETTINGS_CHANGED');
         if (error instanceof PharmacyPrintQueueError && BROWSER_FALLBACK[error.reason]) {
           return {
             status: 'FALLBACK' as const,
@@ -284,16 +322,26 @@ export const pharmacyPrintingRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
-      const refusal = await thermalOutputRefusal(ctx.db, scope, input.paper);
-      if (refusal) return refusal;
+      const prior = await findPharmacyPrintJobByKey(
+        ctx.db,
+        scope,
+        testPagePrintIdempotencyKey(input.requestKey)
+      );
+      if (prior) {
+        if (prior.kind !== 'TEST_PAGE') queueError(new PharmacyPrintQueueError('CHANGED'));
+        return { status: 'QUEUED' as const, replayed: true, job: printJobView(prior, new Date()) };
+      }
+      const output = await thermalOutput(ctx.db, scope, input.paper);
+      if ('refusal' in output) return outputFallback(output.refusal);
       const now = new Date();
       const built = buildPrinterTestPrintJob({
         paperWidth: input.paper === 'THERMAL_58' ? 58 : 80,
         now,
       });
       try {
-        const { job, replayed } = await ctx.db.$transaction((tx) =>
-          enqueuePharmacyTestPagePrint(tx as ScopedDb, {
+        const { job, replayed } = await ctx.db.$transaction(async (tx) => {
+          await assertOutputUnchanged(tx as ScopedDb, scope, input.paper, output.revision);
+          return enqueuePharmacyTestPagePrint(tx as ScopedDb, {
             organizationId: scope.organizationId,
             branchId: scope.branchId,
             actorId: scope.actorId,
@@ -303,10 +351,11 @@ export const pharmacyPrintingRouter = router({
             byteCount: built.byteCount,
             paperWidth: built.paperWidth,
             now,
-          })
-        );
+          });
+        });
         return { status: 'QUEUED' as const, replayed, job: printJobView(job, now) };
       } catch (error) {
+        if (error instanceof OutputChanged) return outputFallback('SETTINGS_CHANGED');
         if (error instanceof PharmacyPrintQueueError && BROWSER_FALLBACK[error.reason]) {
           return outputFallback(error.reason as PrintFallbackCode);
         }
@@ -339,13 +388,27 @@ export const pharmacyPrintingRouter = router({
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       const now = new Date();
       try {
-        const job = await ctx.db.$transaction((tx) =>
-          retryPharmacyPrintJob(tx as ScopedDb, scope, {
+        const job = await ctx.db.$transaction(async (tx) => {
+          // DEV-742: a retry resends stored bytes, so it gets the same output guard:
+          // never after the branch moved to A4 or to another roll width.
+          const stored = await readPharmacyPrintJob(tx as ScopedDb, scope, input.jobId);
+          const output = await thermalOutput(
+            tx as ScopedDb,
+            scope,
+            thermalPaperForWidth(stored.paperWidth === 58 ? 58 : 80)
+          );
+          if ('refusal' in output) {
+            throw new TRPCError({
+              code: 'PRECONDITION_FAILED',
+              message: `${PRINT_FALLBACK_TEXT[output.refusal]} Print it again from the sale or page.`,
+            });
+          }
+          return retryPharmacyPrintJob(tx as ScopedDb, scope, {
             jobId: input.jobId,
             paperChecked: input.confirmNoPaperPrinted,
             now,
-          })
-        );
+          });
+        });
         return printJobView(job, now);
       } catch (error) {
         queueError(error);

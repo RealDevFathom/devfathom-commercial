@@ -390,6 +390,27 @@ export async function enqueuePharmacyReceiptPrint(
   return { job, replayed: false };
 }
 
+/**
+ * DEV-742: the job a key already names, if any. Callers answer a replay with the
+ * existing job BEFORE any settings guard, so a settings change can never hide a
+ * job that was already queued (and invite a second, browser-printed original).
+ */
+export async function findPharmacyPrintJobByKey(
+  db: Pick<ScopedDb, 'pharmacyPrintJob'>,
+  scope: Scope,
+  idempotencyKey: string
+): Promise<PharmacyPrintJob | null> {
+  return db.pharmacyPrintJob.findUnique({
+    where: {
+      organizationId_branchId_idempotencyKey: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        idempotencyKey,
+      },
+    },
+  });
+}
+
 /** DEV-742: one key per operator click; the `test:` prefix keeps it apart from receipt keys. */
 export function testPagePrintIdempotencyKey(requestKey: string) {
   if (!/^[A-Za-z0-9_-]{8,64}$/.test(requestKey)) {

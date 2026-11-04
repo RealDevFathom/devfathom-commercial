@@ -25,6 +25,8 @@ vi.mock('@/lib/pharmacy/receipt-print', () => format);
 const queue = vi.hoisted(() => ({
   enqueuePharmacyReceiptPrint: vi.fn(),
   enqueuePharmacyTestPagePrint: vi.fn(),
+  findPharmacyPrintJobByKey: vi.fn(),
+  readPharmacyPrintJob: vi.fn(),
   retryPharmacyPrintJob: vi.fn(),
   enrollPharmacyPrintBridge: vi.fn(),
 }));
@@ -113,6 +115,8 @@ beforeEach(() => {
     output: 'THERMAL',
     revision: 1,
   });
+  queue.findPharmacyPrintJobByKey.mockResolvedValue(null);
+  queue.readPharmacyPrintJob.mockResolvedValue(jobRow);
 });
 
 describe('pharmacyPrinting.enqueueReceipt', () => {
@@ -260,6 +264,96 @@ describe('DEV-742 output guard on pharmacyPrinting.enqueueReceipt', () => {
     );
     await expect(caller().enqueueReceipt(input)).rejects.toThrow();
     expect(format.readPharmacyReceiptFormat).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-742 review fixes: replay first, in-transaction recheck, retry guard, corrupt settings', () => {
+  const input = {
+    branchId: 'branch-a',
+    saleId: 'sale-a',
+    locale: 'en' as const,
+    reprint: false,
+    paper: 'THERMAL_58' as const,
+  };
+  const a4 = { layout: { paperWidth: 58 }, output: 'A4', revision: 2 };
+
+  it('answers a replayed original with the queued job even after the branch moved to A4', async () => {
+    queue.findPharmacyPrintJobByKey.mockResolvedValue(jobRow);
+    format.readPharmacyReceiptFormat.mockResolvedValue(a4);
+    await expect(caller().enqueueReceipt(input)).resolves.toMatchObject({
+      status: 'QUEUED',
+      replayed: true,
+      job: { id: 'job-1', paperConfirmed: false },
+    });
+    expect(queue.findPharmacyPrintJobByKey).toHaveBeenCalledWith(
+      expect.anything(),
+      scope,
+      'sale:sale-a:original'
+    );
+    expect(sales.buildSettledCounterReceiptPrintJob).not.toHaveBeenCalled();
+    expect(queue.enqueuePharmacyReceiptPrint).not.toHaveBeenCalled();
+  });
+
+  it('answers a replayed test-page click with its job, before any settings guard', async () => {
+    queue.findPharmacyPrintJobByKey.mockResolvedValue({
+      ...jobRow,
+      kind: 'TEST_PAGE',
+      saleId: null,
+      receiptNumber: null,
+    });
+    format.readPharmacyReceiptFormat.mockResolvedValue(a4);
+    await expect(
+      caller().enqueueTestPage({
+        branchId: 'branch-a',
+        paper: 'THERMAL_58',
+        requestKey: 'click-0001',
+      })
+    ).resolves.toMatchObject({ status: 'QUEUED', replayed: true, job: { kind: 'TEST_PAGE' } });
+    expect(queue.findPharmacyPrintJobByKey).toHaveBeenCalledWith(
+      expect.anything(),
+      scope,
+      'test:click-0001'
+    );
+  });
+
+  it('refuses when the saved format changes between the guard and the queue write', async () => {
+    sales.buildSettledCounterReceiptPrintJob.mockResolvedValue(ready);
+    format.readPharmacyReceiptFormat
+      .mockResolvedValueOnce({ layout: { paperWidth: 58 }, output: 'THERMAL', revision: 1 })
+      .mockResolvedValueOnce(a4);
+    await expect(caller().enqueueReceipt(input)).resolves.toMatchObject({
+      status: 'FALLBACK',
+      code: 'SETTINGS_CHANGED',
+    });
+    expect(queue.enqueuePharmacyReceiptPrint).not.toHaveBeenCalled();
+  });
+
+  it('fails closed with an explanation when saved settings are unreadable', async () => {
+    format.readPharmacyReceiptFormat.mockRejectedValue(new Error('ZodError: corrupt layout'));
+    await expect(caller().enqueueReceipt(input)).resolves.toMatchObject({
+      status: 'FALLBACK',
+      code: 'SETTINGS_UNAVAILABLE',
+    });
+    await expect(
+      caller().enqueueTestPage({
+        branchId: 'branch-a',
+        paper: 'THERMAL_58',
+        requestKey: 'click-0002',
+      })
+    ).resolves.toMatchObject({ status: 'FALLBACK', code: 'SETTINGS_UNAVAILABLE' });
+    expect(queue.enqueuePharmacyReceiptPrint).not.toHaveBeenCalled();
+    expect(queue.enqueuePharmacyTestPagePrint).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['moved to A4', a4],
+    ['changed roll width', { layout: { paperWidth: 80 }, output: 'THERMAL', revision: 3 }],
+  ])('never resends stored bytes after the branch %s', async (_label, saved) => {
+    format.readPharmacyReceiptFormat.mockResolvedValue(saved);
+    await expect(
+      caller().retryJob({ branchId: 'branch-a', jobId: 'job-1', confirmNoPaperPrinted: true })
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(queue.retryPharmacyPrintJob).not.toHaveBeenCalled();
   });
 });
 
