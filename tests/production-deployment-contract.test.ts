@@ -25,6 +25,116 @@ function createdExtensions(source: string) {
   );
 }
 
+type ContainerProbe = {
+  type: string;
+  source: string;
+  initialDelaySeconds: number;
+  periodSeconds: number;
+  failureThreshold: number;
+  timeoutSeconds: number;
+};
+
+/** Probes declared on the web container, parsed from the Bicep `probes: [...]` block. */
+function webContainerProbes(template: string): ContainerProbe[] {
+  const block = template.match(/\n\s*probes: \[\n([\s\S]*?)\n\s*\]\n/);
+  expect(block, 'web container probes block').not.toBeNull();
+
+  return [...block![1].matchAll(/\{\n([\s\S]*?)\n\s*\}(?=\n|$)/g)].map(([, source]) => {
+    const field = (name: string) => {
+      const match = source.match(new RegExp(`^\\s*${name}: (\\d+)$`, 'm'));
+      expect(match, `${name} in probe:\n${source}`).not.toBeNull();
+      return Number(match![1]);
+    };
+    const type = source.match(/^\s*type: '(\w+)'$/m);
+    expect(type, `type in probe:\n${source}`).not.toBeNull();
+
+    return {
+      type: type![1],
+      source,
+      initialDelaySeconds: field('initialDelaySeconds'),
+      periodSeconds: field('periodSeconds'),
+      failureThreshold: field('failureThreshold'),
+      timeoutSeconds: field('timeoutSeconds'),
+    };
+  });
+}
+
+/** Seconds before a probe that never succeeds reaches its failure threshold. */
+function failureWindowSeconds(probe: ContainerProbe) {
+  return probe.initialDelaySeconds + probe.failureThreshold * probe.periodSeconds;
+}
+
+describe('container app probe contract (DEV-339)', () => {
+  // Measured staging cold start from scale-to-zero (revision devfathom-stg--0000013).
+  const MEASURED_COLD_START_SECONDS = 35.92;
+
+  it('declares explicit Startup, Liveness and Readiness probes instead of platform defaults', () => {
+    const probes = webContainerProbes(read('infra', 'environment.bicep'));
+
+    expect(probes.map((probe) => probe.type)).toEqual(['Startup', 'Liveness', 'Readiness']);
+    const [startup, liveness, readiness] = probes;
+
+    expect(startup).toMatchObject({
+      initialDelaySeconds: 10,
+      periodSeconds: 10,
+      failureThreshold: 10,
+      timeoutSeconds: 5,
+    });
+    expect(startup.source).toContain('tcpSocket: { port: 3000 }');
+    expect(liveness).toMatchObject({
+      initialDelaySeconds: 60,
+      periodSeconds: 30,
+      failureThreshold: 3,
+      timeoutSeconds: 5,
+    });
+    expect(liveness.source).toContain('tcpSocket: { port: 3000 }');
+    expect(readiness).toMatchObject({
+      initialDelaySeconds: 10,
+      periodSeconds: 10,
+      failureThreshold: 12,
+      timeoutSeconds: 5,
+    });
+    expect(readiness.source).toContain(
+      "httpGet: { path: '/api/ready', port: 3000, scheme: 'HTTP' }"
+    );
+  });
+
+  it('sizes the probes with real margin over the measured 35.92 s cold start', () => {
+    const [startup, liveness, readiness] = webContainerProbes(read('infra', 'environment.bicep'));
+
+    // The probe that can kill a booting container must allow at least twice the measured boot,
+    // not the ~1.1 s margin observed under the old platform-default liveness probe.
+    expect(failureWindowSeconds(startup)).toBe(110);
+    expect(failureWindowSeconds(startup)).toBeGreaterThanOrEqual(2 * MEASURED_COLD_START_SECONDS);
+    // Liveness would not fire mid-boot even if Startup gating were ever removed.
+    expect(liveness.initialDelaySeconds).toBeGreaterThan(MEASURED_COLD_START_SECONDS);
+    expect(liveness.failureThreshold * liveness.periodSeconds).toBe(90);
+    expect(failureWindowSeconds(readiness)).toBe(130);
+    expect(failureWindowSeconds(readiness)).toBeGreaterThanOrEqual(2 * MEASURED_COLD_START_SECONDS);
+    for (const probe of [startup, liveness, readiness]) {
+      expect(probe.timeoutSeconds, probe.type).toBeLessThan(probe.periodSeconds);
+    }
+  });
+
+  it('documents the measured margin beside the probes and preserves the replica policy', () => {
+    const template = read('infra', 'environment.bicep');
+    const probeComment = template.split('probes: [', 1)[0].split('DEV-339', 2)[1];
+
+    expect(probeComment).toBeDefined();
+    expect(probeComment).toContain('35.92 s cold start');
+    expect(probeComment).toContain('110 s window');
+    expect(probeComment).toContain('130 s');
+    expect(probeComment).toContain('tests/production-deployment-contract.test.ts');
+
+    // Probe margins are for scale-to-zero environments; replica policy is unchanged.
+    expect(template).toContain('param minReplicas int = 0');
+    expect(template).toContain('scale: { minReplicas: minReplicas, maxReplicas: 1 }');
+    expect(read('infra', 'production.bicepparam')).toContain('param minReplicas = 1');
+    expect(read('infra', 'production.bootstrap.bicepparam')).toContain('param minReplicas = 1');
+    expect(read('infra', 'staging.bicepparam')).not.toContain('minReplicas');
+  });
+});
+
 describe('production deployment contract', () => {
   it('keeps the dispatch digest out of shell source and verifies the promoted revision', () => {
     const workflow = read('.github', 'workflows', 'promote-production.yml');

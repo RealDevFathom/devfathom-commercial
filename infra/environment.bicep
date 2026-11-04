@@ -546,6 +546,16 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           image: initialImage
           env: webEnvironment
           resources: { cpu: json('0.5'), memory: '1Gi' }
+          // DEV-339 / GitHub #321: every probe is explicit so no Azure platform default
+          // judges a booting container. Sized against the measured 35.92 s cold start
+          // (scale-to-zero, staging revision devfathom-stg--0000013):
+          // - Startup: 10 s + 10 x 10 s = 110 s window (~3x the measured boot).
+          //   Liveness and Readiness do not run until Startup succeeds.
+          // - Liveness: 60 s initial delay (> 35.92 s even without Startup gating),
+          //   then 3 x 30 s = 90 s of consecutive failures before a restart.
+          // - Readiness: 10 s + 12 x 10 s = 130 s before giving up on /api/ready.
+          // tests/production-deployment-contract.test.ts locks these margins; re-measure
+          // the cold start after any change that moves boot time.
           probes: [
             {
               type: 'Startup'
