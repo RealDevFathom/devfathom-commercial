@@ -21,9 +21,9 @@ import type { PharmacySopSiteRef } from '@/lib/pharmacy/sop-adapter';
  * means OFF. With it off, a manager still creates the day's work explicitly
  * ("Create today's work now"), which is never affected by this setting.
  *
- * `generateAutoPharmacySopOccurrences` is the only function a recurring
- * trigger would call. No trigger is wired: nothing in the repository enqueues
- * it, registers it with the scheduler, or exposes it on a route.
+ * `generateAutoPharmacySopOccurrences` is called only by the hourly background
+ * job in `sop-auto-schedule-job.ts`, which exists only while at least one
+ * branch is ON (see that module). It is not exposed on a route.
  */
 
 /** No row for a branch reads as this value. */

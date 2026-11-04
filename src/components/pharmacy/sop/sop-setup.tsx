@@ -1119,7 +1119,13 @@ function Schedules({ pharmacyBranchId, onNotice }: { pharmacyBranchId: string; o
 
 /** What the automatic-scheduling switch does, said in plain words beside it. */
 export const AUTO_SCHEDULE_COPY =
-  "Opt this branch in to automatic scheduling. Automatic creation of today's procedures is not running yet, so use 'Create today's work now' until it is. Procedures never block pharmacy work.";
+  "When on, this branch's procedures are created automatically from its schedules, due at the times you set. The background job worker does this every hour. When off, use 'Create today's work now'. Procedures never block pharmacy work.";
+
+/** The notice after the switch changes. */
+export const AUTO_SCHEDULE_ON_NOTICE =
+  "Automatic scheduling is on. This branch's scheduled procedures are created now, then every hour by the background job worker.";
+export const AUTO_SCHEDULE_OFF_NOTICE =
+  "Automatic scheduling is off. Use 'Create today's work now' when you are ready.";
 
 /**
  * Per-branch automatic scheduling. OFF until a manager turns it on; a missing
@@ -1142,9 +1148,7 @@ function AutoScheduling({
       setError(null);
       onNotice({
         tone: 'success',
-        text: result.autoScheduleEnabled
-          ? "This branch is opted in. Until automatic creation is running, use 'Create today's work now'."
-          : "Automatic scheduling is off. Use 'Create today's work now' when you are ready.",
+        text: result.autoScheduleEnabled ? AUTO_SCHEDULE_ON_NOTICE : AUTO_SCHEDULE_OFF_NOTICE,
       });
       await utils.pharmacySop.siteSettings.invalidate({ pharmacyBranchId });
     },

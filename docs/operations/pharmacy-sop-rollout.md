@@ -49,7 +49,8 @@ Defaults that stay in place after every phase:
 
 - **Automatic scheduling is OFF for every branch** until a manager turns it on for that
   branch (`src/lib/pharmacy/sop-settings.ts`; no settings row means OFF). Until then, work is
-  created only when a manager asks for it.
+  created only when a manager asks for it, and no background job exists for the
+  organization. See "Automatic scheduling: the background job worker" below.
 - **No default escalation.** Nothing notifies or escalates to anyone unless a manager sets
   it up.
 - Procedures never block, gate or change opening, closing, the counter, Goods-in or any
@@ -127,8 +128,8 @@ Do this on every replica after the new revision serves. No data changes.
    or evidence are refused.
 3. **Module gate.** In an organization without the `pharmacy-safety` module licensed,
    `/pharmacy/sop` and every `pharmacySop.*` procedure are refused, even for `admin`.
-4. Automatic scheduling reads OFF for every branch. No trigger enqueues pharmacy SOP
-   generation.
+4. Automatic scheduling reads OFF for every branch, and no `pharmacy.sop.autoGenerate` job
+   exists (check 1 in "Automatic scheduling" below returns no rows).
 
 Stop if any check fails. Phase 3 must not run before phase 1 passes, because the grants
 would then reach code that does not enforce branch scope.
@@ -286,6 +287,51 @@ After rollback:
   access. Rolling those back is a code change, not this script.
 - To withdraw SOP access from the whole product, turn off the `pharmacy-safety` module for
   the organization. That is a separate decision.
+
+## Automatic scheduling: the background job worker
+
+Turning automatic scheduling on for a branch does two things. It creates that branch's due
+procedures straight away, and it queues one `pharmacy.sop.autoGenerate` job for the
+organization on the existing restaurant job queue (`restaurant_jobs`), due at the start of
+the next hour. Each run creates the due procedures for every branch that is on, from its
+schedules and in its timezone, then queues the next hour. When no branch in the organization
+is on, the run queues nothing and the hourly job stops. The job only creates procedures: it
+escalates nothing, sweeps nothing and never touches a pharmacy operation table
+(`src/lib/pharmacy/sop-auto-schedule-job.ts`).
+
+- **The worker must be running.** The hourly runs happen only where the job worker
+  (`bun run restaurant:jobs`, `scripts/run-restaurant-jobs.ts`) runs against the
+  environment's database. Without it, turning a branch on still creates that branch's work
+  once, but nothing more is created automatically. This change adds no deployment config:
+  where the worker does not already run, someone must decide to run it.
+- **Nothing exists until a branch opts in.** No settings row and no job are created by this
+  rollout or by deploy.
+
+Verify (read-only, as a platform reader):
+
+```sql
+-- 1. Queued or running hourly jobs: one row per organization with a branch on.
+SELECT "organizationId", "status", "scheduledAt", "idempotencyKey"
+  FROM restaurant_jobs
+ WHERE "type" = 'pharmacy.sop.autoGenerate' AND "status" IN ('QUEUED', 'RUNNING');
+
+-- 2. Recent runs and their outcome (SUCCEEDED expected; DEAD means the hourly job stopped).
+SELECT j."organizationId", j."scheduledAt", j."status", e."outcome", e."error", e."finishedAt"
+  FROM restaurant_jobs j
+  LEFT JOIN restaurant_job_executions e ON e."jobId" = j."id"
+ WHERE j."type" = 'pharmacy.sop.autoGenerate'
+ ORDER BY j."scheduledAt" DESC
+ LIMIT 20;
+```
+
+In the application, the branch's procedures board lists the work created from its
+schedules, due at the times set in Setup.
+
+Stop: turn automatic scheduling off for the branch in Setup. The setting is appended at
+once. The job already queued for the next hour still runs, finds the branch off, creates
+nothing for it, and (if no other branch in the organization is on) queues nothing more.
+Procedures already created stay as they are. If a run ends DEAD after its retries, the
+hourly job has stopped: fix the cause, then turn the branch off and on again to restart it.
 
 ## Not covered here
 

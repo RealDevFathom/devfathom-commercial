@@ -45,6 +45,7 @@ import {
   pharmacySopAutoSchedule,
   setPharmacySopAutoSchedule,
 } from '@/lib/pharmacy/sop-settings';
+import { startPharmacySopAutoSchedule } from '@/lib/pharmacy/sop-auto-schedule-job';
 import { businessDateToUtcDate, resolveBusinessDate } from '@/lib/restaurant/business-date';
 import {
   AssigneeTargetError,
@@ -1460,8 +1461,12 @@ export const pharmacySopRouter = router({
 
   /**
    * Turn automatic scheduling on or off for one branch (append-only, audited).
-   * Changes only whether today's procedures are created automatically; it never
-   * blocks or changes any pharmacy workflow.
+   * ON: after the setting row, ensure the organization's hourly background job
+   * (idempotent per slot) and create this branch's due procedures now (engine
+   * restricted to this site's engine branch). OFF: append the setting only; the
+   * next hourly run skips the branch and stops once no branch is ON. Changes
+   * only whether procedures are created automatically; it never blocks or
+   * changes any pharmacy workflow, and creates no escalation.
    */
   setAutoSchedule: manageProcedure
     .input(
@@ -1482,6 +1487,14 @@ export const pharmacySopRouter = router({
           userId: sessionScope(ctx).userId,
           reason: input.reason,
         });
+        // Re-ensured even when already ON: idempotent, and restarts a chain
+        // whose last job failed for good.
+        const started = result.setting.autoScheduleEnabled
+          ? await startPharmacySopAutoSchedule(ctx.db, {
+              sopBranchId: site.sopBranchId,
+              now: new Date(),
+            })
+          : null;
         audit(ctx, site, {
           action: 'pharmacy.sop.setAutoSchedule',
           targetType: 'PharmacySopSite',
@@ -1493,6 +1506,12 @@ export const pharmacySopRouter = router({
             enabled: input.enabled,
             changed: result.changed,
             ...(input.reason ? { reason: input.reason } : {}),
+            ...(started
+              ? {
+                  generated: started.generated.created,
+                  nextRunAt: started.job.slot.toISOString(),
+                }
+              : {}),
           },
         });
         return {
@@ -1501,6 +1520,8 @@ export const pharmacySopRouter = router({
           changedAt: result.setting.changedAt,
           reason: result.setting.reason,
           changed: result.changed,
+          generated: started ? started.generated.created : null,
+          nextRunAt: started ? started.job.slot : null,
         };
       })
     ),

@@ -7,6 +7,10 @@ import {
   menuImportExtractHandler,
 } from '@/lib/restaurant/menu-import-legacy';
 import {
+  PHARMACY_SOP_AUTO_GENERATE_JOB,
+  pharmacySopAutoGenerateHandler,
+} from '@/lib/pharmacy/sop-auto-schedule-job';
+import {
   coreRestaurantJobHandlers,
   resolveRestaurantJobHandler as resolveHandler,
   runRestaurantJob as runJob,
@@ -24,6 +28,9 @@ export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {
   ...coreRestaurantJobHandlers,
   [MENU_IMPORT_EXTRACT_JOB]: menuImportExtractHandler,
   [DEMO_RESET_JOB_TYPE]: demoResetJobHandler,
+  // DEV-751: opt-in pharmacy SOP automatic scheduling (enqueued only once a
+  // pharmacy branch turns it on; a no-op in an organization with no SOP site).
+  [PHARMACY_SOP_AUTO_GENERATE_JOB]: pharmacySopAutoGenerateHandler,
 };
 
 export function resolveRestaurantJobHandler(type: string): RestaurantJobHandler | undefined {

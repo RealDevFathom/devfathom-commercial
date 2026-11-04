@@ -20,9 +20,11 @@ import { describe, expect, it } from 'vitest';
  *    point at existing records. Only the pharmacy evidence route and the
  *    manual legacy backfill script write capture receipts.
  * 3. SOP code reaches pharmacy operation code only through a read helper.
- * 4. SOP code never enqueues a scheduler/restaurant job, and the per-branch
- *    automatic-scheduling setting is read by no pharmacy operation code. The
- *    automatic generator has no trigger wired: nothing calls it yet.
+ * 4. SOP code enqueues exactly one job type, its own hourly automatic-
+ *    scheduling job, from exactly one module; it never enqueues an engine,
+ *    escalation, sweep or restaurant job. The per-branch automatic-scheduling
+ *    setting is read by no pharmacy operation code, and only that job module
+ *    calls the automatic generator.
  */
 
 const ROOT = join(__dirname, '..');
@@ -35,10 +37,14 @@ const SOP_FILES = new Set([
   'src/lib/pharmacy/sop-evidence-mac.ts',
   'src/lib/pharmacy/sop-shared.ts',
   'src/lib/pharmacy/sop-settings.ts',
+  'src/lib/pharmacy/sop-auto-schedule-job.ts',
   'src/server/routers/pharmacy-sop.ts',
   'src/app/api/pharmacy/sop/evidence/route.ts',
 ]);
 const SOP_DIRS = ['src/components/pharmacy/sop/', 'src/app/(app)/pharmacy/sop/'];
+
+/** The one SOP module allowed to enqueue a job (its own type only). */
+const AUTO_SCHEDULE_JOB_MODULE = 'src/lib/pharmacy/sop-auto-schedule-job.ts';
 
 /** Read-only touch points, each limited to what is listed. */
 const READ_ONLY_EXCEPTIONS: Record<string, RegExp[]> = {
@@ -168,7 +174,12 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
         ),
       ];
       for (const [, names, module] of imports) {
-        if (/^sop-(adapter|library|evidence|evidence-mac|shared|settings)$/.test(module!)) continue;
+        if (
+          /^sop-(adapter|library|evidence|evidence-mac|shared|settings|auto-schedule-job)$/.test(
+            module!
+          )
+        )
+          continue;
         expect(module).toBe('controlled-register');
         expect(
           names!
@@ -180,16 +191,38 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
     }
   });
 
-  it('SOP code never enqueues a scheduler, engine or restaurant job', () => {
+  it('SOP code enqueues only its own automatic-scheduling job, from one module', () => {
     const sopSources = [...SOP_FILES, ...SOP_DIRS.flatMap((dir) => walk(dir.replace(/\/$/, '')))];
     expect(sopSources).toContain('src/lib/pharmacy/sop-settings.ts');
     expect(sopSources).toContain('src/components/pharmacy/sop/sop-setup.tsx');
     const ENQUEUE =
       /restaurantJob\b|restaurant_jobs\b|@\/lib\/restaurant\/(scheduler|job-handlers)|\benqueue[A-Z]?\w*\s*\(|SOP_GENERATE_OCCURRENCES_JOB|SOP_ESCALATION_JOB|'sop\.(generateOccurrences|runEscalation)'/;
-    const offenders = sopSources.filter((file) =>
-      ENQUEUE.test(readFileSync(join(ROOT, file), 'utf8'))
+    const offenders = sopSources.filter(
+      (file) =>
+        file !== AUTO_SCHEDULE_JOB_MODULE && ENQUEUE.test(readFileSync(join(ROOT, file), 'utf8'))
     );
     expect(offenders).toEqual([]);
+
+    // The job module: one enqueue call, of its own type, and no other job.
+    const job = readFileSync(join(ROOT, AUTO_SCHEDULE_JOB_MODULE), 'utf8');
+    expect(job).toContain(
+      "export const PHARMACY_SOP_AUTO_GENERATE_JOB = 'pharmacy.sop.autoGenerate';"
+    );
+    expect(job.match(/\benqueue[A-Z]?\w*\s*\(/g)).toEqual(['enqueue(']);
+    expect(job).toMatch(/type: PHARMACY_SOP_AUTO_GENERATE_JOB,/);
+    expect(job).not.toMatch(
+      /SOP_(GENERATE_OCCURRENCES|ESCALATION|LATE_MISSED)_JOB|'sop\.\w+'|sop-escalation|sop-late-missed|@\/lib\/restaurant\/job-handlers'/
+    );
+    // Its type is registered once (job-handlers.ts) and referenced nowhere else.
+    const references = [...walk('src'), ...walk('scripts')]
+      .filter((file) => !file.startsWith('src/generated/'))
+      .filter((file) =>
+        /PHARMACY_SOP_AUTO_GENERATE_JOB|pharmacy\.sop\.autoGenerate/.test(
+          readFileSync(join(ROOT, file), 'utf8')
+        )
+      )
+      .sort();
+    expect(references).toEqual([AUTO_SCHEDULE_JOB_MODULE, 'src/lib/restaurant/job-handlers.ts']);
   });
 
   it('the automatic-scheduling setting never appears in pharmacy operation code', () => {
@@ -201,14 +234,13 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('the automatic generator has no trigger wired (no route, job or scheduler calls it)', () => {
+  it('only the automatic-scheduling job calls the automatic generator (no route)', () => {
     const callers = walk('src').filter(
       (file) =>
         file !== 'src/lib/pharmacy/sop-settings.ts' &&
         /generateAutoPharmacySopOccurrences/.test(readFileSync(join(ROOT, file), 'utf8'))
     );
-    // Wiring a recurring trigger is an ops decision; update this pin with it.
-    expect(callers).toEqual([]);
+    expect(callers).toEqual([AUTO_SCHEDULE_JOB_MODULE]);
   });
 
   it('SOP grants never come from, or depend on, a pharmacy operation capability', async () => {

@@ -399,8 +399,9 @@ describe('setAutoSchedule', () => {
     });
   });
 
-  it('changes only the setting: no generation, escalation or job', async () => {
-    await caller().setAutoSchedule({ ...BRANCH_INPUT, enabled: true });
+  it('turning it off changes only the setting: no generation, escalation or job', async () => {
+    // Turning it ON starts the hourly job: see pharmacy-sop.auto-schedule.test.ts.
+    await caller().setAutoSchedule({ ...BRANCH_INPUT, enabled: false });
     expect(mocks.engine.generateDueSopOccurrences).not.toHaveBeenCalled();
     noEscalationWrites();
   });
@@ -423,6 +424,10 @@ describe('generateAutoPharmacySopOccurrences', () => {
       sopBranchId: 'sopbranch_2',
     });
     await caller().setAutoSchedule({ pharmacyBranchId: 'pbranch_2', enabled: true });
+    // Turning it ON also starts the hourly job and creates that branch's work now
+    // (pharmacy-sop.auto-schedule.test.ts); only the automatic pass is pinned here.
+    mocks.engine.generateDueSopOccurrences.mockClear();
+    db.restaurantJob.create.mockClear();
     const now = new Date('2026-11-04T06:00:00Z');
     await generateAutoPharmacySopOccurrences(db as never, { now });
     expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledWith(db, {

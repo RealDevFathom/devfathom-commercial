@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * DEV-751 — Setup scheduling is opt-in and assumes no time of day: the
- * per-branch "Automatic scheduling" switch starts off, and every schedule time
- * starts empty and must be chosen.
+ * per-branch "Automatic scheduling" switch starts off, its copy says plainly
+ * what turning it on does (procedures created from this branch's schedules by
+ * the hourly background job worker), and every schedule time starts empty and
+ * must be chosen.
  */
 
 type QueryValue = { data?: unknown; error?: unknown; loading?: boolean };
@@ -49,7 +51,12 @@ vi.mock('@/lib/trpc', () => {
   };
 });
 
-import { AUTO_SCHEDULE_COPY, SopSetupView } from './sop-setup';
+import {
+  AUTO_SCHEDULE_COPY,
+  AUTO_SCHEDULE_OFF_NOTICE,
+  AUTO_SCHEDULE_ON_NOTICE,
+  SopSetupView,
+} from './sop-setup';
 
 const BRANCH = {
   pharmacyBranchId: 'pb_1',
@@ -147,7 +154,7 @@ describe('Automatic scheduling switch', () => {
     expect(toggle).toBeEnabled();
     expect(toggle).toHaveAccessibleDescription(AUTO_SCHEDULE_COPY);
     expect(AUTO_SCHEDULE_COPY).toBe(
-      "Opt this branch in to automatic scheduling. Automatic creation of today's procedures is not running yet, so use 'Create today's work now' until it is. Procedures never block pharmacy work."
+      "When on, this branch's procedures are created automatically from its schedules, due at the times you set. The background job worker does this every hour. When off, use 'Create today's work now'. Procedures never block pharmacy work."
     );
     expect(screen.getByText('Off')).toBeVisible();
   });
@@ -159,8 +166,23 @@ describe('Automatic scheduling switch', () => {
     expect(h.calls.setAutoSchedule).toEqual([{ pharmacyBranchId: 'pb_1', enabled: true }]);
     expect(onNotice).toHaveBeenCalledWith({
       tone: 'success',
-      text: "This branch is opted in. Until automatic creation is running, use 'Create today's work now'.",
+      text: AUTO_SCHEDULE_ON_NOTICE,
     });
+    expect(AUTO_SCHEDULE_ON_NOTICE).toBe(
+      "Automatic scheduling is on. This branch's scheduled procedures are created now, then every hour by the background job worker."
+    );
+  });
+
+  it('turns off for this branch only, and points to creating work by hand', () => {
+    h.queries.siteSettings = { data: { pharmacyBranchId: 'pb_1', autoScheduleEnabled: true } };
+    h.outcomes.setAutoSchedule = () => ({ autoScheduleEnabled: false, changed: true });
+    const { onNotice } = renderSetup();
+    fireEvent.click(screen.getByRole('switch', { name: 'Automatic scheduling' }));
+    expect(h.calls.setAutoSchedule).toEqual([{ pharmacyBranchId: 'pb_1', enabled: false }]);
+    expect(onNotice).toHaveBeenCalledWith({ tone: 'success', text: AUTO_SCHEDULE_OFF_NOTICE });
+    expect(AUTO_SCHEDULE_OFF_NOTICE).toBe(
+      "Automatic scheduling is off. Use 'Create today's work now' when you are ready."
+    );
   });
 
   it('shows the saved state when it is on', () => {
