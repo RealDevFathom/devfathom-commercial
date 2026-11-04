@@ -219,6 +219,8 @@ describe('capture outcomes', () => {
     expect(mocks.store).toHaveBeenCalledWith(adapter, {
       organizationId: 'org_a',
       cameraId: 'sim-counter-1',
+      // DEV-745: the authorized scope travels with every capture.
+      target: expect.objectContaining({ organizationId: 'org_a', branchId: 'branch_a' }),
     });
     expect(db.cameraEvidence.updateMany).toHaveBeenCalledWith({
       where: { id: 'ev_1', organizationId: 'org_a', status: 'PENDING' },

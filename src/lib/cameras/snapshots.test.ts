@@ -25,6 +25,7 @@ import {
   isAcceptableCameraSnapshot,
   storeCameraSnapshot,
 } from './snapshots';
+import { makePng } from './png-still.fixtures';
 
 beforeEach(() => {
   files.clear();
@@ -105,18 +106,13 @@ test('empty snapshots fail before storage', async () => {
   expect(write).not.toHaveBeenCalled();
 });
 
-const png = (size: number) => {
-  const bytes = new Uint8Array(size);
-  bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
-  return bytes;
-};
-
 test.each([
   ['JPEG bytes', new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46])],
   ['HTML error page', new TextEncoder().encode('<html>401 rtsp://user:secret@cam</html>')],
   ['HLS manifest', new TextEncoder().encode('#EXTM3U\n#EXTINF:2,\nsegment-1.ts\n')],
-  ['signature only', png(8)],
-  ['oversized PNG', png(CAMERA_SNAPSHOT_MAX_BYTES + 1)],
+  ['signature only', new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])],
+  ['truncated PNG', new Uint8Array(makePng().subarray(0, -12))],
+  ['oversized PNG', new Uint8Array(makePng({ padTo: CAMERA_SNAPSHOT_MAX_BYTES + 1 }))],
   ['non-byte value', 'iVBORw0KGgo=' as unknown as Uint8Array],
 ])('%s is refused before storage with a fixed message', async (_label, bytes) => {
   const write = vi.spyOn(storage, 'putUpload');
@@ -130,14 +126,46 @@ test.each([
   expect(files.size).toBe(0);
 });
 
-test('a PNG at the size bound is accepted', async () => {
-  const bytes = png(CAMERA_SNAPSHOT_MAX_BYTES);
+test('a complete PNG at the size bound is accepted and the target reaches the source', async () => {
+  const bytes = new Uint8Array(makePng({ padTo: CAMERA_SNAPSHOT_MAX_BYTES }));
   expect(isAcceptableCameraSnapshot(bytes)).toBe(true);
+  const getSnapshot = vi.fn(async () => bytes);
+  const target = {
+    organizationId: 'tenant-a',
+    branchId: 'branch-a',
+    gatewayId: 'gateway-a',
+    gatewayBranchId: 'branch-a',
+    gatewayBaseUrl: 'https://gateway.example.test/',
+    cameraId: 'camera-a',
+  };
   const saved = await storeCameraSnapshot(
-    { getSnapshot: async () => bytes },
-    { organizationId: 'tenant-a', cameraId: 'sim-camera-1' }
+    { getSnapshot },
+    { organizationId: 'tenant-a', cameraId: 'ref-a', target }
   );
   expect(saved.byteLength).toBe(CAMERA_SNAPSHOT_MAX_BYTES);
+  expect(getSnapshot).toHaveBeenCalledWith('ref-a', target);
+});
+
+test('a target for another organization is refused before camera access', async () => {
+  const getSnapshot = vi.fn();
+  await expect(
+    storeCameraSnapshot(
+      { getSnapshot },
+      {
+        organizationId: 'tenant-a',
+        cameraId: 'ref-a',
+        target: {
+          organizationId: 'tenant-b',
+          branchId: 'branch-a',
+          gatewayId: 'gateway-a',
+          gatewayBranchId: 'branch-a',
+          gatewayBaseUrl: 'https://gateway.example.test/',
+          cameraId: 'camera-a',
+        },
+      }
+    )
+  ).rejects.toThrow('Invalid snapshot organization.');
+  expect(getSnapshot).not.toHaveBeenCalled();
 });
 
 test('storage errors propagate without reporting a successful capture', async () => {

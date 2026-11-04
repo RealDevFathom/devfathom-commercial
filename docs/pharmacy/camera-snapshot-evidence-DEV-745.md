@@ -1,66 +1,110 @@
-# Pharmacy camera snapshot evidence: capability finding (DEV-745)
+# Pharmacy camera snapshot evidence (DEV-745)
 
-Status: **blocked on a gateway prerequisite.** No real snapshot transport exists. Simulator
-capture is unchanged. No hardware, DVR, network or staging acceptance has been run.
+Status: **software implemented; hardware acceptance not run.** The DVR (Dahua DH-XVR1B16-I V2)
+has no camera attached. Nothing here has been tested against MediaMTX, the DVR or a real camera.
+Simulator capture is unchanged.
 
-## Preflight result
+## Why a gateway-side service
 
-| Source                                   | Snapshot transport? | Notes                                                                                                                                         |
-| ---------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `develop` @ `396e2653`                   | No                  | `evidenceSnapshotAdapter` returns an adapter only in `simulated` mode. `mediamtx` mode fails closed as `SNAPSHOT_UNSUPPORTED`.                |
-| `2c3d825e` (`fix/followup-rgap-cameras`) | No                  | Restaurant gateway lifecycle UI, privacy/retention and branch-source fixes. Not merged into `develop`. No still capture.                      |
-| `f81ae0c3` (archived WHA-1357 gateway)   | No                  | Configured private **HLS** transport and audit redaction. The vertical-neutral copy already lives in `src/lib/cameras/mediamtx.ts`.           |
-| MediaMTX upstream docs / Control API     | No                  | Neither documents a snapshot, still or JPEG endpoint. Community workarounds use an ffmpeg sidecar, which is not part of our reviewed gateway. |
+MediaMTX, the existing on-prem gateway, documents no snapshot, still or JPEG endpoint (checked
+against its README, Control API spec and `mediamtx.yml`). HLS playback does not provide event
+evidence, and decoding HLS in the app server would add a video dependency there. Vendor still
+APIs are not assumed, and the app never talks to camera devices.
 
-HLS playback does not prove a snapshot transport. Taking a frame from an HLS segment
-would mean decoding video in the app server, a new dependency and backend change, and
-it would not establish _when_ the frame was captured relative to the sale or excursion.
-The DVR model is unconfirmed, so vendor still APIs (ONVIF `GetSnapshotUri`, vendor CGI)
-are not assumed. Reaching them directly would also break the rule that only the gateway
-talks to camera devices.
+DEV-745 therefore adds a small service that runs **on the gateway host, beside MediaMTX**
+(`docker/camera-snapshot-gateway/`). It relies only on documented behavior:
 
-## What this change does
+- MediaMTX re-serves every path over RTSP (`rtspAddress: :8554`).
+- `authInternalUsers` can limit anonymous `read` to loopback (`ips: ["127.0.0.1", "::1"]`)
+  for specific paths.
+- ffmpeg's RTSP demuxer (`-rtsp_transport tcp -timeout`) and PNG encoder take one frame
+  (`-frames:v 1 -f image2pipe -c:v png`).
 
-It hardens the existing evidence seam (`src/lib/cameras/snapshots.ts`) so that any
-future adapter is held to the same contract as the simulator:
+The service reads the live path only. It never uses MediaMTX recording, playback or the API,
+never connects to the DVR, never writes to disk, and does not change `record` (default
+`false`). Old DVR recordings are untouched.
 
-- Bytes must carry the PNG signature, because stills are stored and served as
-  `image/png`. JPEG bytes, HTML error pages, HLS manifests and non-byte values are refused.
-- Bytes are capped at `CAMERA_SNAPSHOT_MAX_BYTES` (4 MiB).
-- A rejected still is never written to tenant storage. The error message is fixed and
-  never repeats adapter output.
+## End-to-end path
 
-The job's existing retry, `SNAPSHOT_UNAVAILABLE` on final attempt, capture window,
-retention purge, legal hold, RLS scope and audit behavior are unchanged. So are the
-simulator, router permissions and the live-viewing path (DEV-740).
+1. A tender, refund, daily close or cold-chain excursion writes a `PENDING` evidence row in the
+   money or reading transaction, for an enabled camera that opted in (`counterEvidence`, or the
+   `COLD_CHAIN` preset for the zone). This is unchanged.
+2. The `pharmacy.camera.snapshot.v1` platform job drops platform privileges (tenant RLS) and
+   calls `captureCameraEvidence`.
+3. `evidenceSnapshotAdapter(runtime, { vertical: 'pharmacy' })`:
+   - **simulated** mode: the simulator, unchanged;
+   - **mediamtx** mode with `CAMERA_SNAPSHOT_BINDINGS`: a scope-bound source;
+   - anything else: `null`, which settles as `SNAPSHOT_UNSUPPORTED`.
+4. The scope is built from the evidence row:
+   `{ vertical: 'pharmacy', organizationId, branchId, gatewayId, cameraId, baseUrl }`. It is
+   the same shape as the DEV-740 stream route. If the gateway's branch differs from the
+   evidence branch, or no binding matches the exact scope, the row settles as
+   `SNAPSHOT_UNSUPPORTED` with no request.
+5. `snapshot-transport.ts` sends `GET <snapshotBaseUrl><path>/snapshot.png` with these
+   protections:
+   - Basic auth with a snapshot-only reader secret.
+   - Connection pinned to the binding's RFC1918 IPv4 address, with TLS hostname verification.
+   - No redirects, no compression, and `image/png` only.
+   - At most 4 MiB, an 8 s deadline and 4 concurrent reads.
+6. `png-still.ts` accepts only a complete PNG: signature, IHDR first, CRC on every chunk, legal
+   colour type and bit depth, non-interlaced, at most 4096×4096, contiguous IDAT that inflates
+   (bounded) to exactly the promised scanline size with legal row filters, and IEND last.
+   Anything else stores nothing.
+7. The still goes to private tenant storage, and the row becomes `CAPTURED`. Gateway errors
+   retry, then settle as `SNAPSHOT_UNAVAILABLE`. No URL, host, path or credential is ever
+   persisted.
+8. Existing retention applies: purge after the gateway's `retentionDays`, legal and fiscal
+   holds, and read expiry.
 
-## Prerequisite before real capture (coordinate via Linear with DEV-740)
+## Configuration (server-only secret)
 
-A real adapter should be added only after a gateway owner provides a **documented,
-reviewed** still endpoint on the same private gateway. Proposed contract, for review only
-and not yet implemented:
+`CAMERA_SNAPSHOT_BINDINGS` is a JSON array, read only in `CAMERA_GATEWAY_MODE=mediamtx`. It is
+kept separate from `CAMERA_MEDIAMTX_BINDINGS` so it does not touch the shared HLS binding list
+that DEV-740 (#1415) is changing, and so snapshot credentials differ from HLS reader credentials.
 
-1. A scope-bound transport read, `readSnapshot(scope: CameraBindingScope)`, alongside the
-   existing HLS `read`. It must use the same static binding allowlist, private RFC1918
-   address pinning, TLS verification, no redirects, no compression and the concurrency cap.
-2. A fixed resource name on the binding's path. No caller-supplied URL, query or path.
-3. PNG output, or an agreed change of the stored content type, with a byte limit no larger
-   than `CAMERA_SNAPSHOT_MAX_BYTES` and a short deadline (≤ 5 s, since a still is small).
-4. `evidenceSnapshotAdapter` then resolves the evidence row's organization, branch,
-   gateway and camera into that scope after the existing `CAMERA_UNAVAILABLE` checks. It
-   never resolves a bare `sourceRef`.
-5. A per-binding capability flag (for example `snapshot: true`). Bindings without it keep
-   failing closed as `SNAPSHOT_UNSUPPORTED`, so an HLS-only gateway stays honest.
+```json
+[
+  {
+    "vertical": "pharmacy",
+    "organizationId": "<org id>",
+    "branchId": "<branch id>",
+    "gatewayId": "<camera_gateways.id>",
+    "cameraId": "<cameras.id>",
+    "baseUrl": "https://gateway.example.internal/",
+    "snapshotBaseUrl": "https://gateway.example.internal:8899/",
+    "address": "10.0.0.10",
+    "path": "pharmacy/branch-1/counter-1",
+    "username": "app-snapshot",
+    "password": "<generated reader secret, at least 24 characters>"
+  }
+]
+```
+
+The rules: every key is required, and unknown keys are rejected. `vertical` must be
+`pharmacy`. `baseUrl` must equal the registered gateway URL. `snapshotBaseUrl` must share its
+hostname. `address` must be RFC1918 IPv4. Each camera and each stream appears once. A malformed
+value fails startup without echoing anything.
+
+For consoles, `evidenceSnapshotSupported(runtime, target)` returns true only for a provisioned
+camera. DEV-740 can use it to replace its configured-mode "unsupported" label.
 
 ## Hardware acceptance checklist (not run)
 
-Requires separate approval and a real test; do not mark as passed without it.
+This needs separate approval and a real test. Do not mark anything as passed without one.
 
-- [ ] DVR model, firmware, channel and codec recorded (no passwords in chat or tickets).
-- [ ] Gateway still endpoint documented by its owner and reviewed for auth, TLS and logs.
-- [ ] A sale or excursion still is captured within the 15-minute window on the right branch camera.
-- [ ] A cross-tenant or cross-branch binding mismatch fails closed.
-- [ ] Revoked gateway or disabled camera fails as `CAMERA_UNAVAILABLE`.
-- [ ] Gateway down fails as retry, then `SNAPSHOT_UNAVAILABLE`, with no credential in the stored row.
-- [ ] Retention purge and legal hold behave as with the simulator.
-- [ ] Privacy signage and consent text match the real capture behavior.
+- [ ] Owner provisions the gateway host, MediaMTX path, snapshot service, TLS certificate and
+      firewall (see `docker/camera-snapshot-gateway/README.md`). Device credentials never go in
+      chat or tickets.
+- [ ] A camera is attached to the DVR channel, and the channel's codec and firmware are
+      recorded. Old recordings are left untouched.
+- [ ] A sale or excursion still is captured within the 15-minute window from the right branch
+      camera.
+- [ ] A cross-tenant or cross-branch scope, a wrong gateway URL, and an unbound camera each
+      fail as `SNAPSHOT_UNSUPPORTED`.
+- [ ] A revoked gateway or disabled camera fails as `CAMERA_UNAVAILABLE`.
+- [ ] With the service or MediaMTX down, the capture retries, then fails as
+      `SNAPSHOT_UNAVAILABLE`, with no secret in the stored row.
+- [ ] With no video signal (the DVR's current state), the capture fails rather than storing a
+      frame. This is unverified: the DVR may send a placeholder frame.
+- [ ] Retention purge and legal holds behave as they do with the simulator.
+- [ ] Privacy signage and consent text match real capture.
