@@ -8,7 +8,11 @@ import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { TenderDraft } from './tender-attempt-storage';
-import { isManualTender, manualTenderCaptureSchema, type ManualPaymentSettings } from '@/lib/pharmacy/manual-payments';
+import {
+  isManualTender,
+  manualTenderCaptureSchema,
+  type ManualPaymentSettings,
+} from '@/lib/pharmacy/manual-payments';
 
 /** The tenders POS-05 recognises. Card and wallet need a certified adapter. */
 const TENDER_TYPES = [
@@ -54,7 +58,12 @@ export type CounterTenderPanelProps = {
   pending?: boolean;
   disabled?: boolean;
   error?: string | null;
-  initialDraft?: TenderDraft & { type: CounterTenderType; payerName?: string; providerRef?: string; referenceSkipped?: boolean };
+  initialDraft?: TenderDraft & {
+    type: CounterTenderType;
+    payerName?: string;
+    providerRef?: string;
+    referenceSkipped?: boolean;
+  };
   recoveryOutcome?: CounterTenderResult | null;
   checkingOutcome?: boolean;
   onCheckOutcome?: () => Promise<CounterTenderResult>;
@@ -130,7 +139,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [statementPending, setStatementPending] = useState(false);
     const [providerRef, setProviderRef] = useState(initialDraft?.providerRef ?? '');
     const [payerName, setPayerName] = useState(initialDraft?.payerName ?? '');
-    const [referenceSkipped, setReferenceSkipped] = useState(initialDraft?.referenceSkipped ?? false);
+    const [referenceSkipped, setReferenceSkipped] = useState(
+      initialDraft?.referenceSkipped ?? false
+    );
     const [type, setType] = useState<CounterTenderType>(initialDraft?.type ?? 'CASH');
     const [amount, setAmount] = useState(initialDraft?.amount ?? '');
     const [cashReceived, setCashReceived] = useState(initialDraft?.cashReceived ?? '');
@@ -167,9 +178,13 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     useEffect(() => {
       if (editable && merchant && !merchant.allowReferenceSkip) setReferenceSkipped(false);
     }, [editable, merchant]);
-    const capture = manual ? manualTenderCaptureSchema.safeParse({
-      type, payerName, ...(referenceSkipped ? { referenceSkipped: true } : { providerRef }),
-    }) : null;
+    const capture = manual
+      ? manualTenderCaptureSchema.safeParse({
+          type,
+          payerName,
+          ...(referenceSkipped ? { referenceSkipped: true } : { providerRef }),
+        })
+      : null;
     const account = accounts.find((row) => row.id === accountId);
     const overLimit = Boolean(
       account &&
@@ -205,8 +220,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       amountValid &&
       !cashShort &&
       !cashInvalid &&
-      (!manual || (!manualSettingsLoading && !manualSettingsError && Boolean(merchant) &&
-        capture?.success === true && (!referenceSkipped || merchant?.allowReferenceSkip === true))) &&
+      (!manual ||
+        (!manualSettingsLoading &&
+          !manualSettingsError &&
+          Boolean(merchant) &&
+          capture?.success === true &&
+          (!referenceSkipped || merchant?.allowReferenceSkip === true))) &&
       (!isKhata ||
         (Boolean(account) &&
           !khataLoading &&
@@ -240,10 +259,14 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               ? { familyAccountId: accountId, ownerOverride: overLimit && ownerOverride }
               : {}),
             ...(type === 'CASH' && cashReceivedMinor !== null ? { cashReceivedMinor } : {}),
-            ...(manual && capture?.success ? {
-              payerName: capture.data.payerName,
-              ...(capture.data.referenceSkipped ? { referenceSkipped: true } : { providerRef: capture.data.providerRef }),
-            } : {}),
+            ...(manual && capture?.success
+              ? {
+                  payerName: capture.data.payerName,
+                  ...(capture.data.referenceSkipped
+                    ? { referenceSkipped: true }
+                    : { providerRef: capture.data.providerRef }),
+                }
+              : {}),
           },
           { amount, cashReceived: type === 'CASH' ? cashReceived : '' }
         );
@@ -251,7 +274,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         if (result.status === 'accepted') {
           setAmount('');
           setCashReceived('');
-          setProviderRef(''); setPayerName(''); setReferenceSkipped(false);
+          setProviderRef('');
+          setPayerName('');
+          setReferenceSkipped(false);
           if (isKhata && loadKhataAccounts) {
             try {
               setAccounts(await loadKhataAccounts());
@@ -296,19 +321,24 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     }
 
     return (
-      <div ref={ref} tabIndex={-1} className="space-y-2 focus-visible:outline-none">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm text-text-body">
-            Balance due{' '}
-            <span className="inline-block min-w-24 text-right font-mono text-sm tabular-nums text-text-strong">
+      <div ref={ref} tabIndex={-1} className="min-w-0 space-y-5 focus-visible:outline-none">
+        <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
+          <p className="space-y-2">
+            <span className="block font-mono text-xs tracking-wide text-text-muted uppercase">
+              Balance due
+            </span>
+            <span className="block text-3xl font-semibold tracking-tight tabular-nums text-text-strong">
               {balanceKnown && (state === 'ready' || state === 'settled') && !unknown
                 ? formatMinor(balanceMinor)
                 : 'Unavailable'}
             </span>
           </p>
-          {state === 'settled' && balanceMinor === 0 && !unknown && !takingPayment ? (
-            <StatusPill status="settled" tone="success" label="Settled" />
-          ) : null}
+          <div className="flex flex-col items-end gap-2">
+            <span className="font-mono text-xs text-text-muted">PKR</span>
+            {state === 'settled' && balanceMinor === 0 && !unknown && !takingPayment ? (
+              <StatusPill status="settled" tone="success" label="Settled" />
+            ) : null}
+          </div>
         </div>
 
         <p
@@ -317,7 +347,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           id="tender-status"
           role="status"
           aria-live="polite"
-          className="text-sm text-text-body focus-visible:outline-ring"
+          className="text-sm leading-relaxed text-text-body focus-visible:outline-ring"
         >
           {takingPayment
             ? 'Taking payment… Keep this bill open.'
@@ -340,7 +370,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           <Button
             type="button"
             variant="outline"
-            className="h-9"
+            className="min-h-11 rounded-sm"
             disabled={checkingOutcome || takingPayment}
             aria-describedby="tender-status tender-error"
             onClick={() => void checkOutcome()}
@@ -349,16 +379,23 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           </Button>
         ) : null}
         {!takingPayment && ['error', 'stale', 'unavailable'].includes(state) ? (
-          <Button type="button" variant="outline" className="h-9" onClick={onRetry}>
+          <Button type="button" variant="outline" className="min-h-11 rounded-sm" onClick={onRetry}>
             Refresh bill
           </Button>
         ) : null}
 
         {blocked ? (
-          <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-text-body">
-            This bill carries an unresolved safety block. Resolve it in the prescription panel
-            before taking payment.
-          </p>
+          <div
+            id="tender-blocked"
+            role="alert"
+            className="space-y-2 rounded-md border border-destructive/20 bg-destructive/10 p-4 text-sm text-text-body"
+          >
+            <StatusPill status="blocked" tone="danger" label="Payment locked" />
+            <p>
+              This bill carries an unresolved safety block. Resolve it in the prescription panel
+              before taking payment.
+            </p>
+          </div>
         ) : null}
 
         <div className="space-y-1.5">
@@ -369,9 +406,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             disabled={!editable}
             onChange={(event) => {
               setType(event.target.value as CounterTenderType);
-              setProviderRef(''); setPayerName(''); setReferenceSkipped(false);
+              setProviderRef('');
+              setPayerName('');
+              setReferenceSkipped(false);
             }}
-            className="h-9 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+            className="h-11 w-full rounded-sm border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           >
             {TENDER_TYPES.map((entry) => (
               <option key={entry.value} value={entry.value}>
@@ -397,10 +436,14 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             value={amount}
             disabled={!editable}
             aria-invalid={state === 'ready' && amount.trim() !== '' && !amountValid}
-            aria-describedby="tender-status tender-error tender-amount-error"
+            aria-describedby="tender-status tender-error tender-amount-help tender-amount-error"
             onChange={(event) => setAmount(event.target.value)}
-            className="h-9"
+            className="h-11 rounded-sm font-mono tabular-nums"
           />
+          <p id="tender-amount-help" className="text-sm text-text-muted">
+            Leave blank to pay the balance due. Enter a smaller amount to split payment across
+            tenders.
+          </p>
           {state === 'ready' && amount.trim() !== '' && !amountValid ? (
             <p id="tender-amount-error" className="text-sm text-destructive" role="alert">
               Enter an amount between 0.01 and the balance due.
@@ -409,36 +452,101 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         </div>
 
         {manual ? (
-          <div className="space-y-3 rounded-md border border-border-default p-3">
+          <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
             {manualSettingsLoading ? <p role="status">Loading merchant details…</p> : null}
             {manualSettingsError ? <p role="alert">Merchant details could not be loaded.</p> : null}
-            {!manualSettingsLoading && !manualSettingsError && !merchant ? <p role="alert">This branch has no merchant details for {type}. Ask an administrator to configure them in Finance.</p> : null}
-            {onReloadManualSettings ? <Button variant="outline" disabled={takingPayment || manualSettingsLoading} onClick={onReloadManualSettings}>Reload merchant details</Button> : null}
-            {merchant ? <>
-              <p className="font-mono text-lg tabular-nums">{amountMinor === null ? 'Enter amount' : `PKR ${formatMinor(amountMinor)}`}</p>
-              {merchant.destination ? <p className="break-all text-sm text-text-strong">{merchant.destination}</p> : null}
-              {merchant.qrImageDataUrl ? <>
-                {/* Static embedded raster; no remote image requests or proxy. */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={merchant.qrImageDataUrl} alt={`${type} merchant QR`} className="h-56 w-full rounded-sm bg-surface-card object-contain" />
-              </> : null}
-              <p className="text-sm text-text-muted">Confirm receipt in the merchant bank or wallet account before taking payment. This QR is static; the payer enters the amount shown.</p>
-              <Label htmlFor="manual-payer-name">Payer’s name</Label>
-              <Input id="manual-payer-name" className="min-h-11" value={payerName} maxLength={100} disabled={!editable} onChange={(event) => setPayerName(event.target.value)} />
-              <Label htmlFor="manual-provider-reference">Transaction ID (last 4–6 digits)</Label>
-              <Input id="manual-provider-reference" className="min-h-11" inputMode="numeric" value={providerRef} maxLength={6} disabled={!editable || referenceSkipped} aria-invalid={!referenceSkipped && providerRef !== '' && !/^\d{4,6}$/.test(providerRef)} aria-describedby="manual-reference-help" onChange={(event) => setProviderRef(event.target.value)} />
-              <p id="manual-reference-help" className="text-sm text-text-muted">{referenceSkipped ? 'Reference explicitly skipped under branch policy.' : 'Enter 4–6 digits from the payer’s transaction ID.'}</p>
-              {merchant.allowReferenceSkip ? <Label className="flex min-h-11 items-center gap-2"><input type="checkbox" checked={referenceSkipped} disabled={!editable} onChange={(event) => { setReferenceSkipped(event.target.checked); setProviderRef(''); }} /> Skip reference under branch policy</Label> : null}
-            </> : null}
+            {!manualSettingsLoading && !manualSettingsError && !merchant ? (
+              <p role="alert">
+                This branch has no merchant details for {type}. Ask an administrator to configure
+                them in Finance.
+              </p>
+            ) : null}
+            {onReloadManualSettings ? (
+              <Button
+                variant="outline"
+                className="min-h-11 rounded-sm"
+                disabled={takingPayment || manualSettingsLoading}
+                onClick={onReloadManualSettings}
+              >
+                Reload merchant details
+              </Button>
+            ) : null}
+            {merchant ? (
+              <>
+                <p className="font-mono text-lg tabular-nums">
+                  {amountMinor === null ? 'Enter amount' : `PKR ${formatMinor(amountMinor)}`}
+                </p>
+                {merchant.destination ? (
+                  <p className="break-all text-sm text-text-strong">{merchant.destination}</p>
+                ) : null}
+                {merchant.qrImageDataUrl ? (
+                  <>
+                    {/* Static embedded raster; no remote image requests or proxy. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={merchant.qrImageDataUrl}
+                      alt={`${type} merchant QR`}
+                      className="h-56 w-full rounded-sm bg-surface-card object-contain"
+                    />
+                  </>
+                ) : null}
+                <p className="text-sm text-text-muted">
+                  Confirm receipt in the merchant bank or wallet account before taking payment. This
+                  QR is static; the payer enters the amount shown.
+                </p>
+                <Label htmlFor="manual-payer-name">Payer’s name</Label>
+                <Input
+                  id="manual-payer-name"
+                  className="min-h-11"
+                  value={payerName}
+                  maxLength={100}
+                  disabled={!editable}
+                  onChange={(event) => setPayerName(event.target.value)}
+                />
+                <Label htmlFor="manual-provider-reference">Transaction ID (last 4–6 digits)</Label>
+                <Input
+                  id="manual-provider-reference"
+                  className="min-h-11"
+                  inputMode="numeric"
+                  value={providerRef}
+                  maxLength={6}
+                  disabled={!editable || referenceSkipped}
+                  aria-invalid={
+                    !referenceSkipped && providerRef !== '' && !/^\d{4,6}$/.test(providerRef)
+                  }
+                  aria-describedby="manual-reference-help"
+                  onChange={(event) => setProviderRef(event.target.value)}
+                />
+                <p id="manual-reference-help" className="text-sm text-text-muted">
+                  {referenceSkipped
+                    ? 'Reference explicitly skipped under branch policy.'
+                    : 'Enter 4–6 digits from the payer’s transaction ID.'}
+                </p>
+                {merchant.allowReferenceSkip ? (
+                  <Label className="flex min-h-11 items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={referenceSkipped}
+                      disabled={!editable}
+                      onChange={(event) => {
+                        setReferenceSkipped(event.target.checked);
+                        setProviderRef('');
+                      }}
+                    />{' '}
+                    Skip reference under branch policy
+                  </Label>
+                ) : null}
+              </>
+            ) : null}
           </div>
         ) : null}
 
         {isKhata ? (
-          <div className="space-y-3 rounded-md border border-border-default p-3">
+          <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
             <Label htmlFor="khata-account">Family Khata account</Label>
             <select
               id="khata-account"
-              className="h-11 w-full rounded-md border border-border-default bg-surface-card px-3 text-sm"
+              className="h-11 w-full rounded-sm border border-border-default bg-surface-card px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
               value={accountId}
               disabled={!editable || khataLoading}
               onChange={(event) => {
@@ -489,7 +597,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       value={password}
                       disabled={!editable}
                       onChange={(event) => setPassword(event.target.value)}
-                      className="h-9"
+                      className="h-11 rounded-sm"
                     />
                     <Label htmlFor="khata-totp">Authentication or recovery code (if enabled)</Label>
                     <Input
@@ -498,7 +606,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       value={totp}
                       disabled={!editable}
                       onChange={(event) => setTotp(event.target.value)}
-                      className="h-9"
+                      className="h-11 rounded-sm"
                     />
                   </>
                 ) : null}
@@ -507,6 +615,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             <Button
               type="button"
               variant="outline"
+              className="min-h-11 rounded-sm"
               disabled={
                 !account || statementPending || takingPayment || unknown || !printKhataStatement
               }
@@ -542,7 +651,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               aria-invalid={cashShort || cashInvalid || undefined}
               aria-describedby="tender-status tender-error tender-cash-error"
               onChange={(event) => setCashReceived(event.target.value)}
-              className="h-9"
+              className="h-11 rounded-sm font-mono tabular-nums"
             />
             {cashInvalid ? (
               <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
@@ -553,9 +662,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 Cash received is less than the amount tendered.
               </p>
             ) : changeMinor !== null ? (
-              <p className="text-sm text-text-body" aria-live="polite">
-                Change{' '}
-                <span className="font-mono tabular-nums text-text-strong">
+              <p
+                className="flex flex-wrap items-center justify-between gap-2 rounded-sm bg-surface-sunken px-4 py-3 text-sm text-text-body"
+                aria-live="polite"
+              >
+                <span>Change</span>
+                <span className="font-mono text-lg tabular-nums text-text-strong">
                   {formatMinor(changeMinor)}
                 </span>
               </p>
@@ -565,7 +677,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
         <p
           id="tender-error"
-          className="text-sm text-destructive"
+          className="text-sm text-destructive empty:hidden"
           role={error ? 'alert' : undefined}
         >
           {error}
@@ -573,9 +685,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
         <Button
           type="button"
-          className="h-11 w-full"
+          className="min-h-12 w-full rounded-sm"
           disabled={!submittable}
-          aria-describedby="tender-status tender-error"
+          aria-describedby={
+            blocked ? 'tender-status tender-error tender-blocked' : 'tender-status tender-error'
+          }
           onClick={() => void submitTender()}
         >
           {takingPayment ? 'Taking payment…' : 'Take payment'}

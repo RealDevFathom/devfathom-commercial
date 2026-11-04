@@ -47,6 +47,7 @@ export const WRITER_INSERT_COLUMNS: Record<(typeof WRITER_TABLES)[number], strin
     'seatLimit',
     'isDemo',
     'askFathomEnabled',
+    'aiDeepStrategyEnabled',
     'gracePeriodDays',
     'createdAt',
     'updatedAt',

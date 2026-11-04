@@ -172,7 +172,8 @@ export type VisionRxOcrOptions = {
 };
 
 export function createVisionRxOcrAdapter(options: VisionRxOcrOptions = {}): RxOcrAdapter {
-  const selectModel = options.selectModel ?? (() => createAIModel());
+  const selectModel =
+    options.selectModel ?? (() => createAIModel(process.env, { feature: 'pharmacy-rx-ocr' }));
   const timeoutMs = options.timeoutMs ?? 45_000;
 
   return {
@@ -209,6 +210,8 @@ export function createVisionRxOcrAdapter(options: VisionRxOcrOptions = {}): RxOc
             },
           ],
           temperature: 0,
+          // Retries belong to the routed chain (one jittered retry, then failover).
+          maxRetries: 0,
           abortSignal: signal,
           providerOptions: selection.providerOptions,
         }));

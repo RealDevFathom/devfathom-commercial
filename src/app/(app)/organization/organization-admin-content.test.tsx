@@ -2,12 +2,17 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import { useAssistant } from '@/lib/assistant-store';
+import type { AskFathomAvailability as Settings } from '@/lib/ai/ask-fathom-settings';
 
 const mocks = vi.hoisted(() => ({
   session: { status: 'authenticated', data: { user: { organizationId: 'org-a', role: 'ADMIN' } } },
   settings: {
-    data: { organizationId: 'org-a', askFathomEnabled: true } as
-      { organizationId: string; askFathomEnabled: boolean } | undefined,
+    data: {
+      organizationId: 'org-a',
+      askFathomEnabled: true,
+      available: true,
+      unavailableReason: null,
+    } as Settings | undefined,
     isError: false,
     isFetching: false,
     refetch: vi.fn(),
@@ -39,6 +44,15 @@ vi.mock('@/lib/trpc', () => ({
 
 import { OrganizationAskFathomSettings } from './organization-admin-content';
 
+function settingsFor(organizationId: string, askFathomEnabled: boolean): Settings {
+  return {
+    organizationId,
+    askFathomEnabled,
+    available: askFathomEnabled,
+    unavailableReason: askFathomEnabled ? null : 'COMPANY_DISABLED',
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.session = {
@@ -46,7 +60,7 @@ beforeEach(() => {
     data: { user: { organizationId: 'org-a', role: 'ADMIN' } },
   };
   mocks.settings = {
-    data: { organizationId: 'org-a', askFathomEnabled: true },
+    data: settingsFor('org-a', true),
     isError: false,
     isFetching: false,
     refetch: vi.fn(),
@@ -80,7 +94,7 @@ describe('organization Ask Fathom chat control', () => {
   it('preserves a failed manual change, retries, cancels old query before installing confirmed data', async () => {
     mocks.mutateAsync
       .mockRejectedValueOnce(new Error('Save failed'))
-      .mockResolvedValueOnce({ organizationId: 'org-a', askFathomEnabled: false });
+      .mockResolvedValueOnce(settingsFor('org-a', false));
     render(<OrganizationAskFathomSettings />);
     expect(screen.getByText(/Reports, Insights, and other enabled/)).toBeInTheDocument();
     const control = screen.getByRole('switch', { name: 'Enable Ask Fathom chat' });
@@ -102,11 +116,7 @@ describe('organization Ask Fathom chat control', () => {
     );
     expect(mocks.invalidate).toHaveBeenCalledOnce();
     // A render effect holding pre-save query data cannot re-enable chat.
-    act(() =>
-      useAssistant
-        .getState()
-        .confirmSettings({ organizationId: 'org-a', askFathomEnabled: true }, 1)
-    );
+    act(() => useAssistant.getState().confirmSettings(settingsFor('org-a', true), 1));
     expect(useAssistant.getState().askFathomEnabled).toBe(false);
   });
 
@@ -133,7 +143,7 @@ describe('organization Ask Fathom chat control', () => {
   );
 
   it('does not install a mutation response after the administrator changes organizations', async () => {
-    let finish!: (data: { organizationId: string; askFathomEnabled: boolean }) => void;
+    let finish!: (data: Settings) => void;
     mocks.mutateAsync.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -147,7 +157,7 @@ describe('organization Ask Fathom chat control', () => {
     mocks.session.data.user.organizationId = 'org-b';
     act(() => useAssistant.getState().setOrganization('org-b'));
     view.rerender(<OrganizationAskFathomSettings />);
-    await act(async () => finish({ organizationId: 'org-a', askFathomEnabled: false }));
+    await act(async () => finish(settingsFor('org-a', false)));
     await waitFor(() => expect(mocks.setData).not.toHaveBeenCalled());
     expect(useAssistant.getState().organizationId).toBe('org-b');
   });
@@ -155,7 +165,7 @@ describe('organization Ask Fathom chat control', () => {
   it('cancels a real query cache request so its late enabled response cannot undo a saved disable', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const queryKey = ['organizationAdmin', 'askFathomSettings'];
-    let respond!: (data: { organizationId: string; askFathomEnabled: boolean }) => void;
+    let respond!: (data: Settings) => void;
     client.setQueryData(queryKey, mocks.settings.data);
     const oldRequest = client
       .fetchQuery({
@@ -171,19 +181,16 @@ describe('organization Ask Fathom chat control', () => {
       client.setQueryData(queryKey, data);
       mocks.settings.data = data;
     });
-    mocks.mutateAsync.mockResolvedValue({ organizationId: 'org-a', askFathomEnabled: false });
+    mocks.mutateAsync.mockResolvedValue(settingsFor('org-a', false));
     render(<OrganizationAskFathomSettings />);
     fireEvent.click(screen.getByRole('switch'));
     fireEvent.click(screen.getByRole('button', { name: 'Save chat setting' }));
     await screen.findByText('Chat setting saved.');
     await act(async () => {
-      respond({ organizationId: 'org-a', askFathomEnabled: true });
+      respond(settingsFor('org-a', true));
       await oldRequest;
     });
-    expect(client.getQueryData(queryKey)).toEqual({
-      organizationId: 'org-a',
-      askFathomEnabled: false,
-    });
+    expect(client.getQueryData(queryKey)).toEqual(settingsFor('org-a', false));
     expect(useAssistant.getState().askFathomEnabled).toBe(false);
     client.clear();
   });
