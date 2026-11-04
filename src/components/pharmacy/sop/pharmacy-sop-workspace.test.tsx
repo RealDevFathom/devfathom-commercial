@@ -181,6 +181,7 @@ function setup({
     },
     occurrence: { data: occ },
     templates: { data: [] },
+    onDemandTemplates: { data: [] },
     linkableRecords: { data: [] },
   };
 }

@@ -18,7 +18,6 @@ import {
   type SopAccess,
   type SopBoard,
   type SopBoardItem,
-  type SopTemplate,
 } from './sop-model';
 
 export type SopBoardViewProps = {
@@ -247,7 +246,10 @@ function StartOnDemand({
   const utils = trpc.useUtils();
   const [templateId, setTemplateId] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const templates = trpc.pharmacySop.templates.useQuery(undefined, { retry: false });
+  const templates = trpc.pharmacySop.onDemandTemplates.useQuery(
+    { pharmacyBranchId },
+    { retry: false }
+  );
   const startOnDemand = trpc.pharmacySop.startOnDemand.useMutation({
     onSuccess: async (result) => {
       setError(null);
@@ -263,9 +265,7 @@ function StartOnDemand({
     },
     onError: (cause) => setError(errorMessage(cause, 'The procedure could not be started. Retry.')),
   });
-  const onDemand = (templates.data ?? []).filter(
-    (template: SopTemplate) => template.isActive && template.pack.trigger === 'EVENT'
-  );
+  const onDemand = templates.data ?? [];
   if (!templates.data || onDemand.length === 0) return null;
 
   return (
@@ -295,7 +295,7 @@ function StartOnDemand({
             onChange={(event) => setTemplateId(event.target.value)}
           >
             <option value="">Select…</option>
-            {onDemand.map((template: SopTemplate) => (
+            {onDemand.map((template) => (
               <option key={template.id} value={template.id}>
                 {template.name}
               </option>

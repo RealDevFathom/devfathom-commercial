@@ -319,8 +319,7 @@ describe('capability gates', () => {
       'sop:complete',
       (c) => c.startOnDemand({ ...BRANCH_INPUT, templateId: 'tpl_1' }),
     ],
-    ['board', 'sop:complete', (c) => c.board(BRANCH_INPUT)],
-    ['occurrence', 'sop:complete', (c) => c.occurrence(OCC_INPUT)],
+    ['onDemandTemplates', 'sop:complete', (c) => c.onDemandTemplates(BRANCH_INPUT)],
     ['claim', 'sop:complete', (c) => c.claim(OCC_INPUT)],
     ['start', 'sop:complete', (c) => c.start(OCC_INPUT)],
     [
@@ -369,6 +368,25 @@ describe('capability gates', () => {
       organizationId: 'org_1',
       userId: 'user_1',
     });
+  });
+
+  it('board and occurrence need complete or verify; manage alone is refused', async () => {
+    mocks.granted = new Set(['sop:manage']);
+    await expect(caller().board(BRANCH_INPUT)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().occurrence(OCC_INPUT)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.adapter.resolvePharmacySopSite).not.toHaveBeenCalled();
+  });
+
+  it('a reviewer holding only sop:verify reaches the board', async () => {
+    mocks.granted = new Set(['sop:verify']);
+    mocks.adapter.pharmacySopRolesAt.mockResolvedValue(['pharmacy-qualified-person']);
+    mocks.engine.listStaffSopOccurrences.mockResolvedValue([]);
+    mocks.engine.listClaimablePoolOccurrences.mockResolvedValue([]);
+    db.restaurantSopOccurrence.findMany.mockResolvedValue([]);
+    const board = await caller().board(BRANCH_INPUT);
+    expect(board.canReview).toBe(true);
+    expect(board.mine).toEqual([]);
+    expect(mocks.adapter.resolvePharmacySopSite).toHaveBeenCalled();
   });
 
   it('access reports each capability separately', async () => {
@@ -860,6 +878,28 @@ describe('evidenceTarget', () => {
 });
 
 // ── Board ────────────────────────────────────────────────────────────────────
+
+describe('onDemandTemplates', () => {
+  it('lists only active on-demand packs whose role the caller holds at the site', async () => {
+    mocks.adapter.pharmacySopRolesAt.mockResolvedValue(['pharmacy-assistant']);
+    db.restaurantSopTemplate.findMany.mockResolvedValue([
+      { id: 'tpl_receiving', name: 'Pharmacy — receiving', category: 'Receiving' },
+    ]);
+    await expect(caller().onDemandTemplates(BRANCH_INPUT)).resolves.toEqual([
+      { id: 'tpl_receiving', name: 'Pharmacy — receiving', category: 'Receiving' },
+    ]);
+    const where = db.restaurantSopTemplate.findMany.mock.calls[0][0].where;
+    expect(where.isActive).toBe(true);
+    // The assistant owns receiving but not the manager-owned incident pack.
+    expect(where.name.in).toEqual(['Pharmacy — receiving']);
+  });
+
+  it('returns nothing without a matching role and never queries templates', async () => {
+    mocks.adapter.pharmacySopRolesAt.mockResolvedValue([]);
+    await expect(caller().onDemandTemplates(BRANCH_INPUT)).resolves.toEqual([]);
+    expect(db.restaurantSopTemplate.findMany).not.toHaveBeenCalled();
+  });
+});
 
 describe('board', () => {
   it('splits my work, the pool and (for an entitled verifier) the review queue', async () => {

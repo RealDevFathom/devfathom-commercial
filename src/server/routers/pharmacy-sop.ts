@@ -1106,264 +1106,305 @@ export const pharmacySopRouter = router({
       })
     ),
 
-  board: completeProcedure.input(z.object(BRANCH).strict()).query(({ ctx, input }) =>
-    guarded(async () => {
-      const site = await siteFor(ctx, input.pharmacyBranchId);
-      const actor = await actorFor(ctx);
-      const now = new Date();
-      const today = resolveBusinessDate(now, site.timezone, site.businessDayCutoff);
-      const window = {
-        branchId: site.sopBranchId,
-        businessDateFrom: businessDateToUtcDate(addDaysISO(today, -BOARD_LOOKBACK_DAYS)),
-        businessDateTo: businessDateToUtcDate(addDaysISO(today, 1)),
-      };
-      const [own, pool, heldRoles, roles, canVerifyCap] = await Promise.all([
-        listStaffSopOccurrences(ctx.db, actor.staffProfileId, window),
-        listClaimablePoolOccurrences(ctx.db, actor.staffProfileId, window),
-        pharmacySopRolesAt(ctx.db, {
-          staffProfileId: actor.staffProfileId,
-          sopBranchId: site.sopBranchId,
-        }),
-        pharmacyJobRoleIds(ctx),
-        allowed(ctx, 'sop:verify'),
-      ]);
-      const canReview =
-        canVerifyCap && heldRoles.some((role) => PHARMACY_SOP_VERIFIER_ROLE_KEYS.includes(role));
-      const mayVerify = (row: BoardRow) =>
-        verifierRolesOf(pharmacySopPackForTemplateName(row.assignment.template.name)).some((role) =>
-          heldRoles.includes(role)
+  // A reviewer who holds only `sop:verify` still needs their review queue, so
+  // the board admits either capability; `mine`/`pool` are simply empty for them.
+  board: auditedProtectedProcedure
+    .input(z.object(BRANCH).strict())
+    .query(async ({ ctx, input }) => {
+      await requireAnyCapability(ctx, ['sop:complete', 'sop:verify']);
+      return guarded(async () => {
+        const site = await siteFor(ctx, input.pharmacyBranchId);
+        const actor = await actorFor(ctx);
+        const now = new Date();
+        const today = resolveBusinessDate(now, site.timezone, site.businessDayCutoff);
+        const window = {
+          branchId: site.sopBranchId,
+          businessDateFrom: businessDateToUtcDate(addDaysISO(today, -BOARD_LOOKBACK_DAYS)),
+          businessDateTo: businessDateToUtcDate(addDaysISO(today, 1)),
+        };
+        const [own, pool, heldRoles, roles, canVerifyCap] = await Promise.all([
+          listStaffSopOccurrences(ctx.db, actor.staffProfileId, window),
+          listClaimablePoolOccurrences(ctx.db, actor.staffProfileId, window),
+          pharmacySopRolesAt(ctx.db, {
+            staffProfileId: actor.staffProfileId,
+            sopBranchId: site.sopBranchId,
+          }),
+          pharmacyJobRoleIds(ctx),
+          allowed(ctx, 'sop:verify'),
+        ]);
+        const canReview =
+          canVerifyCap && heldRoles.some((role) => PHARMACY_SOP_VERIFIER_ROLE_KEYS.includes(role));
+        const mayVerify = (row: BoardRow) =>
+          verifierRolesOf(pharmacySopPackForTemplateName(row.assignment.template.name)).some(
+            (role) => heldRoles.includes(role)
+          );
+
+        const mineIds = own
+          .filter((row) => row.paths.includes('DIRECT') || row.paths.includes('CLAIMED'))
+          .map((row) => row.occurrenceId);
+        const poolIds = pool
+          .filter((row) => (OPEN_STATUSES as readonly string[]).includes(row.status))
+          .map((row) => row.id);
+        const [mineRows, poolRows, reviewRows] = await Promise.all([
+          mineIds.length
+            ? ctx.db.restaurantSopOccurrence.findMany({
+                where: { id: { in: mineIds }, branchId: site.sopBranchId },
+                orderBy: [{ dueAt: 'asc' }, { id: 'asc' }],
+                select: BOARD_SELECT,
+              })
+            : Promise.resolve([]),
+          poolIds.length
+            ? ctx.db.restaurantSopOccurrence.findMany({
+                where: { id: { in: poolIds }, branchId: site.sopBranchId },
+                orderBy: [{ dueAt: 'asc' }, { id: 'asc' }],
+                select: BOARD_SELECT,
+              })
+            : Promise.resolve([]),
+          canReview
+            ? ctx.db.restaurantSopOccurrence.findMany({
+                where: {
+                  branchId: site.sopBranchId,
+                  status: { in: [...REVIEW_STATUSES] },
+                  NOT: [
+                    { assignedStaffProfileId: actor.staffProfileId },
+                    { claimedByStaffProfileId: actor.staffProfileId },
+                  ],
+                },
+                orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
+                take: 100,
+                select: BOARD_SELECT,
+              })
+            : Promise.resolve([]),
+        ]);
+        const pharmacyOnly = (rows: BoardRow[]) =>
+          rows
+            .filter((row) => pharmacySopPackForTemplateName(row.assignment.template.name))
+            .map((row) => boardItem(row, now, roles.byId));
+        const mine = pharmacyOnly(mineRows as BoardRow[]).filter(
+          (item) => !TERMINAL_STATUSES.has(item.status)
         );
+        const poolItems = pharmacyOnly(poolRows as BoardRow[]);
+        const review = pharmacyOnly((reviewRows as BoardRow[]).filter(mayVerify));
+        const todayDate = businessDateToUtcDate(today).getTime();
+        const actionable = [...mine, ...poolItems];
+        return {
+          businessDate: today,
+          canReview,
+          mine,
+          pool: poolItems,
+          review,
+          counts: {
+            overdue: actionable.filter((item) => item.overdue).length,
+            dueToday: actionable.filter(
+              (item) =>
+                item.businessDate.getTime() === todayDate &&
+                (OPEN_STATUSES as readonly string[]).includes(item.status)
+            ).length,
+            awaitingReview: review.length,
+          },
+        };
+      });
+    }),
 
-      const mineIds = own
-        .filter((row) => row.paths.includes('DIRECT') || row.paths.includes('CLAIMED'))
-        .map((row) => row.occurrenceId);
-      const poolIds = pool
-        .filter((row) => (OPEN_STATUSES as readonly string[]).includes(row.status))
-        .map((row) => row.id);
-      const [mineRows, poolRows, reviewRows] = await Promise.all([
-        mineIds.length
-          ? ctx.db.restaurantSopOccurrence.findMany({
-              where: { id: { in: mineIds }, branchId: site.sopBranchId },
-              orderBy: [{ dueAt: 'asc' }, { id: 'asc' }],
-              select: BOARD_SELECT,
-            })
-          : Promise.resolve([]),
-        poolIds.length
-          ? ctx.db.restaurantSopOccurrence.findMany({
-              where: { id: { in: poolIds }, branchId: site.sopBranchId },
-              orderBy: [{ dueAt: 'asc' }, { id: 'asc' }],
-              select: BOARD_SELECT,
-            })
-          : Promise.resolve([]),
-        canReview
-          ? ctx.db.restaurantSopOccurrence.findMany({
-              where: {
-                branchId: site.sopBranchId,
-                status: { in: [...REVIEW_STATUSES] },
-                NOT: [
-                  { assignedStaffProfileId: actor.staffProfileId },
-                  { claimedByStaffProfileId: actor.staffProfileId },
-                ],
+  // Same rule for one occurrence: assertOccurrenceVisible still decides whether
+  // this person may see it (owner, eligible pool holder, verifier or manager).
+  occurrence: auditedProtectedProcedure
+    .input(z.object(OCCURRENCE).strict())
+    .query(async ({ ctx, input }) => {
+      await requireAnyCapability(ctx, ['sop:complete', 'sop:verify']);
+      return guarded(async () => {
+        const { site, occurrence, actor } = await occurrenceContext(
+          ctx,
+          input.pharmacyBranchId,
+          input.occurrenceId
+        );
+        const { canVerify } = await assertOccurrenceVisible(
+          ctx,
+          site,
+          actor,
+          occurrence,
+          await packForVersion(ctx, occurrence.templateVersionId)
+        );
+        const [detail, links, trail, roles] = await Promise.all([
+          ctx.db.restaurantSopOccurrence.findUnique({
+            where: { id: occurrence.id },
+            select: {
+              id: true,
+              status: true,
+              businessDate: true,
+              dueAt: true,
+              windowEndsAt: true,
+              startedAt: true,
+              submittedAt: true,
+              resolvedAt: true,
+              assignedStaffProfileId: true,
+              claimedByStaffProfileId: true,
+              poolJobRoleId: true,
+              assignment: {
+                select: {
+                  graceMinutes: true,
+                  template: { select: { id: true, name: true, category: true } },
+                },
               },
-              orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
-              take: 100,
-              select: BOARD_SELECT,
-            })
-          : Promise.resolve([]),
-      ]);
-      const pharmacyOnly = (rows: BoardRow[]) =>
-        rows
-          .filter((row) => pharmacySopPackForTemplateName(row.assignment.template.name))
-          .map((row) => boardItem(row, now, roles.byId));
-      const mine = pharmacyOnly(mineRows as BoardRow[]).filter(
-        (item) => !TERMINAL_STATUSES.has(item.status)
-      );
-      const poolItems = pharmacyOnly(poolRows as BoardRow[]);
-      const review = pharmacyOnly((reviewRows as BoardRow[]).filter(mayVerify));
-      const todayDate = businessDateToUtcDate(today).getTime();
-      const actionable = [...mine, ...poolItems];
-      return {
-        businessDate: today,
-        canReview,
-        mine,
-        pool: poolItems,
-        review,
-        counts: {
-          overdue: actionable.filter((item) => item.overdue).length,
-          dueToday: actionable.filter(
-            (item) =>
-              item.businessDate.getTime() === todayDate &&
-              (OPEN_STATUSES as readonly string[]).includes(item.status)
-          ).length,
-          awaitingReview: review.length,
-        },
-      };
-    })
-  ),
-
-  occurrence: completeProcedure.input(z.object(OCCURRENCE).strict()).query(({ ctx, input }) =>
-    guarded(async () => {
-      const { site, occurrence, actor } = await occurrenceContext(
-        ctx,
-        input.pharmacyBranchId,
-        input.occurrenceId
-      );
-      const { canVerify } = await assertOccurrenceVisible(
-        ctx,
-        site,
-        actor,
-        occurrence,
-        await packForVersion(ctx, occurrence.templateVersionId)
-      );
-      const [detail, links, trail, roles] = await Promise.all([
-        ctx.db.restaurantSopOccurrence.findUnique({
-          where: { id: occurrence.id },
-          select: {
-            id: true,
-            status: true,
-            businessDate: true,
-            dueAt: true,
-            windowEndsAt: true,
-            startedAt: true,
-            submittedAt: true,
-            resolvedAt: true,
-            assignedStaffProfileId: true,
-            claimedByStaffProfileId: true,
-            poolJobRoleId: true,
-            assignment: {
-              select: {
-                graceMinutes: true,
-                template: { select: { id: true, name: true, category: true } },
-              },
-            },
-            steps: {
-              select: {
-                id: true,
-                templateStepId: true,
-                completed: true,
-                completedAt: true,
-                note: true,
-                completedBy: { select: { displayName: true } },
-                templateStep: {
-                  select: {
-                    stepOrder: true,
-                    title: true,
-                    instructions: true,
-                    requiresPhoto: true,
-                    requiresNote: true,
-                    requiresSignature: true,
+              steps: {
+                select: {
+                  id: true,
+                  templateStepId: true,
+                  completed: true,
+                  completedAt: true,
+                  note: true,
+                  completedBy: { select: { displayName: true } },
+                  templateStep: {
+                    select: {
+                      stepOrder: true,
+                      title: true,
+                      instructions: true,
+                      requiresPhoto: true,
+                      requiresNote: true,
+                      requiresSignature: true,
+                    },
                   },
                 },
               },
-            },
-            evidence: {
-              orderBy: { capturedAt: 'asc' },
-              select: {
-                id: true,
-                occurrenceStepId: true,
-                mimeType: true,
-                sizeBytes: true,
-                storageRef: true,
-                capturedAt: true,
-                uploader: { select: { displayName: true } },
+              evidence: {
+                orderBy: { capturedAt: 'asc' },
+                select: {
+                  id: true,
+                  occurrenceStepId: true,
+                  mimeType: true,
+                  sizeBytes: true,
+                  storageRef: true,
+                  capturedAt: true,
+                  uploader: { select: { displayName: true } },
+                },
+              },
+              verifications: {
+                orderBy: { createdAt: 'asc' },
+                select: {
+                  id: true,
+                  action: true,
+                  reason: true,
+                  createdAt: true,
+                  actor: { select: { displayName: true } },
+                },
               },
             },
-            verifications: {
-              orderBy: { createdAt: 'asc' },
-              select: {
-                id: true,
-                action: true,
-                reason: true,
-                createdAt: true,
-                actor: { select: { displayName: true } },
-              },
+          }),
+          ctx.db.pharmacySopRecordLink.findMany({
+            where: { occurrenceId: occurrence.id, pharmacyBranchId: site.pharmacyBranchId },
+            orderBy: { createdAt: 'asc' },
+            select: {
+              id: true,
+              occurrenceStepId: true,
+              recordType: true,
+              recordId: true,
+              note: true,
+              createdAt: true,
+              linkedByStaffProfileId: true,
             },
+          }),
+          getOccurrenceAuditTrail(ctx.db, occurrence.id),
+          pharmacyJobRoleIds(ctx),
+        ]);
+        if (!detail) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+        const pack = pharmacySopPackForTemplateName(detail.assignment.template.name);
+        const isOwner =
+          (detail.assignedStaffProfileId ?? detail.claimedByStaffProfileId) ===
+          actor.staffProfileId;
+        audit(ctx, site, {
+          operation: 'READ',
+          action: 'pharmacy.sop.occurrence.read',
+          targetType: 'RestaurantSopOccurrence',
+          targetId: detail.id,
+        });
+        return {
+          id: detail.id,
+          status: detail.status,
+          businessDate: detail.businessDate,
+          dueAt: detail.dueAt,
+          windowEndsAt: detail.windowEndsAt,
+          startedAt: detail.startedAt,
+          submittedAt: detail.submittedAt,
+          resolvedAt: detail.resolvedAt,
+          overdue: isOverdue(detail, new Date()),
+          template: detail.assignment.template,
+          pack: pack ? packSummary(pack) : null,
+          poolRoleKey: detail.poolJobRoleId ? (roles.byId.get(detail.poolJobRoleId) ?? null) : null,
+          viewer: {
+            isOwner,
+            canClaim: Boolean(
+              detail.poolJobRoleId &&
+              !detail.claimedByStaffProfileId &&
+              (OPEN_STATUSES as readonly string[]).includes(detail.status)
+            ),
+            canVerify: canVerify && !isOwner,
           },
-        }),
-        ctx.db.pharmacySopRecordLink.findMany({
-          where: { occurrenceId: occurrence.id, pharmacyBranchId: site.pharmacyBranchId },
-          orderBy: { createdAt: 'asc' },
-          select: {
-            id: true,
-            occurrenceStepId: true,
-            recordType: true,
-            recordId: true,
-            note: true,
-            createdAt: true,
-            linkedByStaffProfileId: true,
-          },
-        }),
-        getOccurrenceAuditTrail(ctx.db, occurrence.id),
-        pharmacyJobRoleIds(ctx),
-      ]);
-      if (!detail) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
-      const pack = pharmacySopPackForTemplateName(detail.assignment.template.name);
-      const isOwner =
-        (detail.assignedStaffProfileId ?? detail.claimedByStaffProfileId) === actor.staffProfileId;
-      audit(ctx, site, {
-        operation: 'READ',
-        action: 'pharmacy.sop.occurrence.read',
-        targetType: 'RestaurantSopOccurrence',
-        targetId: detail.id,
-      });
-      return {
-        id: detail.id,
-        status: detail.status,
-        businessDate: detail.businessDate,
-        dueAt: detail.dueAt,
-        windowEndsAt: detail.windowEndsAt,
-        startedAt: detail.startedAt,
-        submittedAt: detail.submittedAt,
-        resolvedAt: detail.resolvedAt,
-        overdue: isOverdue(detail, new Date()),
-        template: detail.assignment.template,
-        pack: pack ? packSummary(pack) : null,
-        poolRoleKey: detail.poolJobRoleId ? (roles.byId.get(detail.poolJobRoleId) ?? null) : null,
-        viewer: {
-          isOwner,
-          canClaim: Boolean(
-            detail.poolJobRoleId &&
-            !detail.claimedByStaffProfileId &&
-            (OPEN_STATUSES as readonly string[]).includes(detail.status)
-          ),
-          canVerify: canVerify && !isOwner,
-        },
-        steps: [...detail.steps]
-          .sort((a, b) => a.templateStep.stepOrder - b.templateStep.stepOrder)
-          .map((step) => ({
-            id: step.id,
-            templateStepId: step.templateStepId,
-            stepOrder: step.templateStep.stepOrder,
-            title: step.templateStep.title,
-            instructions: step.templateStep.instructions,
-            requiresPhoto: step.templateStep.requiresPhoto,
-            requiresNote: step.templateStep.requiresNote,
-            requiresSignature: step.templateStep.requiresSignature,
-            requiredRecordType: requiredRecordTypeOf(packStepFor(pack, step.templateStep)),
-            completed: step.completed,
-            completedAt: step.completedAt,
-            completedByName: step.completedBy?.displayName ?? null,
-            note: step.note,
+          steps: [...detail.steps]
+            .sort((a, b) => a.templateStep.stepOrder - b.templateStep.stepOrder)
+            .map((step) => ({
+              id: step.id,
+              templateStepId: step.templateStepId,
+              stepOrder: step.templateStep.stepOrder,
+              title: step.templateStep.title,
+              instructions: step.templateStep.instructions,
+              requiresPhoto: step.templateStep.requiresPhoto,
+              requiresNote: step.templateStep.requiresNote,
+              requiresSignature: step.templateStep.requiresSignature,
+              requiredRecordType: requiredRecordTypeOf(packStepFor(pack, step.templateStep)),
+              completed: step.completed,
+              completedAt: step.completedAt,
+              completedByName: step.completedBy?.displayName ?? null,
+              note: step.note,
+            })),
+          evidence: detail.evidence.map((row) => ({
+            id: row.id,
+            occurrenceStepId: row.occurrenceStepId,
+            mimeType: row.mimeType,
+            sizeBytes: row.sizeBytes,
+            storageRef: row.storageRef,
+            capturedAt: row.capturedAt,
+            uploaderName: row.uploader?.displayName ?? null,
           })),
-        evidence: detail.evidence.map((row) => ({
-          id: row.id,
-          occurrenceStepId: row.occurrenceStepId,
-          mimeType: row.mimeType,
-          sizeBytes: row.sizeBytes,
-          storageRef: row.storageRef,
-          capturedAt: row.capturedAt,
-          uploaderName: row.uploader?.displayName ?? null,
-        })),
-        recordLinks: links,
-        verifications: detail.verifications.map((row) => ({
-          id: row.id,
-          action: row.action,
-          reason: row.reason,
-          createdAt: row.createdAt,
-          actorName: row.actor?.displayName ?? null,
-        })),
-        auditTrail: trail ?? [],
-      };
+          recordLinks: links,
+          verifications: detail.verifications.map((row) => ({
+            id: row.id,
+            action: row.action,
+            reason: row.reason,
+            createdAt: row.createdAt,
+            actorName: row.actor?.displayName ?? null,
+          })),
+          auditTrail: trail ?? [],
+        };
+      });
+    }),
+
+  /**
+   * On-demand (EVENT) procedures the caller may start at this branch: active
+   * pharmacy pack templates whose pack role the caller holds at the site. Staff
+   * use this instead of the manager-only `templates` listing.
+   */
+  onDemandTemplates: completeProcedure.input(z.object(BRANCH).strict()).query(({ ctx, input }) =>
+    guarded(async () => {
+      const site = await siteFor(ctx, input.pharmacyBranchId);
+      const actor = await actorFor(ctx);
+      const heldRoles = await pharmacySopRolesAt(ctx.db, {
+        staffProfileId: actor.staffProfileId,
+        sopBranchId: site.sopBranchId,
+      });
+      const eventPacks = PHARMACY_SOP_PACKS.filter(
+        (pack) => pack.pharmacy.trigger === 'EVENT' && heldRoles.includes(pack.pharmacy.roleKey)
+      );
+      if (eventPacks.length === 0) return [];
+      const templates = await ctx.db.restaurantSopTemplate.findMany({
+        where: { isActive: true, name: { in: eventPacks.map((pack) => pack.name) } },
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true, category: true },
+      });
+      return templates.map((template) => ({
+        id: template.id,
+        name: template.name,
+        category: template.category,
+      }));
     })
   ),
 
