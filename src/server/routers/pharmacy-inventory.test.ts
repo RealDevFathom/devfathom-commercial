@@ -1244,38 +1244,53 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
 
   it('contains a failed after-transaction re-insert instead of crashing the process', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    grant([allow('pharmacy:inventory')]);
-    db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
-    confirmAdmin();
-    mocks.withTenantDb.mockRejectedValue(new Error('pool exhausted'));
+    try {
+      grant([allow('pharmacy:inventory')]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+      mocks.withTenantDb.mockRejectedValue(new Error('pool exhausted'));
 
-    await caller().nearExpiryBoard({ branchId: 'branch_a' });
-    mocks.afterTenantTransaction.mock.calls[0]![0]();
-    await vi.waitFor(() =>
-      expect(errors).toHaveBeenCalledWith(
-        '[audit] failed to re-record',
-        'pharmacy.inventory.admin_branch_exception',
-        'Error'
-      )
-    );
-    errors.mockRestore();
+      await caller().nearExpiryBoard({ branchId: 'branch_a' });
+      mocks.afterTenantTransaction.mock.calls[0]![0]();
+      await vi.waitFor(() =>
+        expect(errors).toHaveBeenCalledWith(
+          '[audit] failed to re-record',
+          'pharmacy.inventory.admin_branch_exception',
+          'Error'
+        )
+      );
+    } finally {
+      errors.mockRestore();
+    }
   });
 
-  it('flags the exception row while the placeholder regulatory rule set is active', async () => {
-    grant([allow('pharmacy:inventory')]);
-    db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
-    confirmAdmin();
-    Object.assign(db, {
-      branchRegulatoryProfile: { findFirst: vi.fn().mockResolvedValue({ id: 'placeholder_1' }) },
-    });
+  it.each([
+    ['flags', { id: 'placeholder_1' }, true],
+    ['does not flag', null, false],
+  ] as const)(
+    '%s the exception row by the placeholder regulatory rule set',
+    async (_label, profile, flagged) => {
+      grant([allow('pharmacy:inventory')]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+      const findPlaceholder = vi.fn().mockResolvedValue(profile);
+      Object.assign(db, { branchRegulatoryProfile: { findFirst: findPlaceholder } });
 
-    await caller().nearExpiryBoard({ branchId: 'branch_a' });
-    expect(db.auditLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        metadata: expect.objectContaining({ placeholder: true }),
-      }),
-    });
-  });
+      await caller().nearExpiryBoard({ branchId: 'branch_a' });
+      // The same lookup recordAudit makes for every tenant audit row.
+      expect(findPlaceholder).toHaveBeenCalledWith({
+        where: { organizationId: 'org_a', isPlaceholder: true, effectiveTo: null },
+        select: { id: true },
+      });
+      const { metadata } = (
+        db.auditLog.create.mock.calls[0]![0] as {
+          data: { metadata: Record<string, unknown> };
+        }
+      ).data;
+      expect('placeholder' in metadata).toBe(flagged);
+      if (flagged) expect(metadata.placeholder).toBe(true);
+    }
+  );
 
   it('names the platform support session on the exception row', async () => {
     sessionExtras = {
