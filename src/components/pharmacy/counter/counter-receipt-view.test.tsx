@@ -92,6 +92,13 @@ it('DEV-742: hands thermal printing to the print queue only for a known branch',
   });
 });
 
+it('DEV-742: passes the thermal-queued callback through', () => {
+  thermal.mockClear();
+  const onThermalQueued = vi.fn();
+  render(<CounterReceiptView {...props({ branchId: 'branch-1', onThermalQueued })} />);
+  expect(thermal).toHaveBeenLastCalledWith(expect.objectContaining({ onThermalQueued }));
+});
+
 it('shows recorded payment, exact change and an issued receipt preview without printing again', () => {
   const input = props();
   input.receipt!.lines[0]!.identityStatus = 'ISSUED';

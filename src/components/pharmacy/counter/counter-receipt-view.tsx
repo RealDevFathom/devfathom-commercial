@@ -72,6 +72,8 @@ export type CounterReceiptViewProps = {
   settlement?: CounterReceiptSettlement | null;
   /** Clear the event here; keep this view mounted across bills to retain deduplication. */
   onSettlementPresented?: (result: CounterReceiptPresentationResult) => void;
+  /** DEV-742: a thermal send was queued for this receipt, so a later browser print is a reprint. */
+  onThermalQueued?: () => void;
 };
 
 const EVIDENCE_KIND: Record<CounterEvidenceView['kind'], string> = {
@@ -174,6 +176,7 @@ export function CounterReceiptView({
   branchId,
   settlement,
   onSettlementPresented,
+  onThermalQueued,
 }: CounterReceiptViewProps) {
   const [labelError, setLabelError] = useState<{ saleId: string; message: string } | null>(null);
   const receiptRegion = useRef<HTMLElement>(null);
@@ -359,6 +362,7 @@ export function CounterReceiptView({
             settled={settled}
             printing={printing}
             onBrowserPrint={onPrint}
+            onThermalQueued={onThermalQueued}
           />
         ) : null}
         {receipt.receiptNumber === null ? (

@@ -32,6 +32,8 @@ export type CounterThermalPrintProps = {
   settled: boolean;
   printing: boolean;
   onBrowserPrint: () => void;
+  /** A send was queued for this sale (a replay included), so a later browser print is a reprint. */
+  onThermalQueued?: (saleId: string) => void;
 };
 
 type EnqueueInput = {
@@ -51,6 +53,14 @@ type Attempt = { key: string; input: EnqueueInput } & (
   /** `uncertain`: the request may or may not have reached the server; resend the same input. */
   | { phase: 'error'; message: string; uncertain: boolean }
 );
+
+/** Fallbacks that mean the cached saved paper may be stale. */
+const SETTINGS_FALLBACKS = new Set([
+  'A4_OUTPUT',
+  'PAPER_MISMATCH',
+  'SETTINGS_CHANGED',
+  'SETTINGS_UNAVAILABLE',
+]);
 
 const PAPER_MM: Record<ThermalPaper, 58 | 80> = { THERMAL_58: 58, THERMAL_80: 80 };
 
@@ -94,6 +104,7 @@ export function CounterThermalPrint({
   settled,
   printing,
   onBrowserPrint,
+  onThermalQueued,
 }: CounterThermalPrintProps) {
   const ids = useId();
   const utils = trpc.useUtils();
@@ -143,6 +154,8 @@ export function CounterThermalPrint({
       refetchOnWindowFocus: false,
       retry: false,
       refetchInterval: (query) => {
+        // A failing status read stops polling; the operator rechecks by hand.
+        if (query.state.status === 'error') return false;
         const state = query.state.data?.state;
         return state && isPrintJobSettled(state) ? false : PRINT_JOB_POLL_MS;
       },
@@ -177,9 +190,10 @@ export function CounterThermalPrint({
           replayed: result.replayed,
         });
         setQueuedSales((prior) => new Set(prior).add(input.saleId));
+        onThermalQueued?.(input.saleId);
       } else {
         setAttempt({ key: attemptKey, input, phase: 'fallback', code: result.code });
-        if (result.code === 'A4_OUTPUT' || result.code === 'PAPER_MISMATCH') void saved.refetch();
+        if (SETTINGS_FALLBACKS.has(result.code)) void saved.refetch();
         else void status.refetch();
       }
     } catch (error) {
@@ -232,6 +246,8 @@ export function CounterThermalPrint({
         jobId: target.id,
         message: errorMessage(error, 'The print job could not be resent.'),
       });
+      // PRECONDITION_FAILED includes "the branch moved to A4 or another width".
+      if (errorCode(error) === 'PRECONDITION_FAILED') void saved.refetch();
       void jobQuery.refetch();
     } finally {
       inFlight.current = false;
@@ -319,8 +335,22 @@ export function CounterThermalPrint({
   }
 
   const sending = enqueue.isPending || current?.phase === 'sending';
+  // An unresolved uncertain request: only "Try again" (same key) or "Discard" may follow.
+  const unresolved = current?.phase === 'error' && current.uncertain ? current : null;
+  // FAILED / UNCONFIRMED may have printed: only the paper-checked resend may follow.
+  const needsPaperCheck = job !== null && job.retryRequiresPaperCheck;
   const canSend =
-    settled && !printing && !sending && !jobInFlight && (!needsChoice || chosen !== undefined);
+    settled &&
+    !printing &&
+    !sending &&
+    !jobInFlight &&
+    !unresolved &&
+    !needsPaperCheck &&
+    (!needsChoice || chosen !== undefined);
+  // Try again resends the stored input, so it needs the same routing as Send, on the same paper.
+  const retryPaperMoved = unresolved !== null && unresolved.input.paper !== paper;
+  const canTryAgain =
+    unresolved !== null && !blocked && !retryPaperMoved && settled && !printing && !sending;
 
   return (
     <section aria-label="Thermal print queue" className="max-w-full min-w-0 space-y-3">
@@ -369,6 +399,8 @@ export function CounterThermalPrint({
           <p id={`${ids}-paper`} className="text-sm text-text-muted">
             Thermal · {PAPER_MM[paper!]} mm, this branch’s saved roll.
             {needsChoice && !chosen ? ' Choose a printer first.' : ''}
+            {unresolved ? ' Resolve the request below first: Try again or Discard.' : ''}
+            {needsPaperCheck ? ' Check the printer and use Resend this job below.' : ''}
           </p>
         </div>
       )}
@@ -392,15 +424,41 @@ export function CounterThermalPrint({
               : ''}
           </p>
           {current.uncertain ? (
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11"
-              disabled={sending || printing}
-              onClick={() => void send(current.input)}
-            >
-              Try again
-            </Button>
+            <>
+              {canTryAgain ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11"
+                  onClick={() => void send(current.input)}
+                >
+                  Try again
+                </Button>
+              ) : (
+                <p className="text-sm text-text-muted">
+                  Try again is unavailable:{' '}
+                  {blocked
+                    ? blocked.text
+                    : retryPaperMoved
+                      ? 'the paper changed since this request.'
+                      : 'wait until the receipt is ready.'}
+                </p>
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11"
+                disabled={sending}
+                aria-describedby={`${ids}-discard`}
+                onClick={() => setAttempt(null)}
+              >
+                Discard
+              </Button>
+              <p id={`${ids}-discard`} className="text-sm text-warning">
+                Discard only after checking the printer: the previous request may already have
+                queued a job, and a new send can print another copy.
+              </p>
+            </>
           ) : null}
         </div>
       ) : null}
@@ -421,15 +479,27 @@ export function CounterThermalPrint({
             <p className="text-sm text-text-muted">{PRINT_JOB_STATE_TEXT[job.state].detail}</p>
             {queued.replayed ? (
               <p className="text-sm text-text-muted">
-                This sale’s original receipt was already queued, so this shows that job. Use Send
-                reprint for another copy.
+                {queued.input.reprint
+                  ? 'This reprint was already queued; showing its status.'
+                  : 'This sale’s original receipt was already queued, so this shows that job. Use Send reprint for another copy.'}
               </p>
             ) : null}
           </div>
           {jobQuery.isError ? (
-            <p role="alert" className="text-sm text-destructive">
-              The job status could not be refreshed: {jobQuery.error.message}
-            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <p role="alert" className="text-sm text-destructive">
+                The job status could not be refreshed: {jobQuery.error.message}. Updates are paused.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11"
+                disabled={jobQuery.isFetching}
+                onClick={() => void jobQuery.refetch()}
+              >
+                Check again
+              </Button>
+            </div>
           ) : null}
           {job.retryable ? (
             <div className="flex flex-wrap items-center gap-3">

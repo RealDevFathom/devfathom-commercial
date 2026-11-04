@@ -435,6 +435,17 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
     expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
   });
 
+  it('DEV-742: marks the next browser copy as a reprint once the thermal original is queued', () => {
+    renderPayment(<PharmacyCounterConsole />);
+    const props = mocks.receiptProps.mock.lastCall![0] as {
+      reprint: boolean;
+      onThermalQueued?: () => void;
+    };
+    expect(props.reprint).toBe(false);
+    act(() => props.onThermalQueued?.());
+    expect(mocks.receiptProps).toHaveBeenLastCalledWith(expect.objectContaining({ reprint: true }));
+  });
+
   it('DEV-742: starts on the branch saved paper, else thermal 80 mm', () => {
     renderPayment(<PharmacyCounterConsole />);
     expect(mocks.receiptProps).toHaveBeenLastCalledWith(

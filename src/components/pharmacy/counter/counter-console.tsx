@@ -2778,6 +2778,8 @@ function ScopedPharmacyCounterConsole({
           locale={receiptLocale}
           format={receiptFormat}
           reprint={receiptRenders > 0}
+          // DEV-742: once the thermal printer has the original, a browser copy is a reprint.
+          onThermalQueued={() => setReceiptRenders((count) => Math.max(count, 1))}
           printing={receiptQuery.isFetching}
           error={receiptQuery.error ? messageFrom(receiptQuery.error) : null}
           onLocaleChange={setReceiptLocale}

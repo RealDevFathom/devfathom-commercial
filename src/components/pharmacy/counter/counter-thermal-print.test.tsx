@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   saved: null as unknown as QueryStub,
   status: null as unknown as QueryStub,
   jobData: undefined as unknown,
+  jobError: null as Error | null,
+  jobRefetch: vi.fn(),
   enqueue: vi.fn(),
   enqueuePending: false,
   retry: vi.fn(),
@@ -46,9 +48,10 @@ vi.mock('@/lib/trpc', () => ({
           mocks.jobQuery(input, options);
           return {
             data: mocks.jobData ?? options.initialData,
-            isError: false,
-            error: null,
-            refetch: vi.fn(),
+            isError: mocks.jobError !== null,
+            isFetching: false,
+            error: mocks.jobError,
+            refetch: mocks.jobRefetch,
           };
         },
       },
@@ -126,6 +129,7 @@ beforeEach(() => {
   mocks.saved = query(settings(80));
   mocks.status = query({ bridges: [bridge('a')], paperConfirmation: 'UNAVAILABLE' });
   mocks.jobData = undefined;
+  mocks.jobError = null;
   mocks.enqueuePending = false;
 });
 afterEach(cleanup);
@@ -246,7 +250,7 @@ describe('sending', () => {
     );
   });
 
-  it('retries a network failure with the same key; a new click uses a new key', async () => {
+  it('retries a network failure with the same key; a new click after Discard uses a new key', async () => {
     mocks.enqueue.mockRejectedValue(networkError());
     render(<CounterThermalPrint {...props({ reprint: true })} />);
     await act(async () => {
@@ -257,6 +261,11 @@ describe('sending', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     });
+    // Item 2: while the outcome is uncertain, Send cannot mint a new key.
+    expect(screen.getByRole('button', { name: 'Send reprint to thermal printer' })).toBeDisabled();
+    expect(screen.getByText(/may already have\s+queued a job/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Send reprint to thermal printer' }));
     });
@@ -264,6 +273,58 @@ describe('sending', () => {
     expect(keys).toHaveLength(3);
     expect(keys[1]).toBe(keys[0]);
     expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it.each([
+    ['the format switched to A4', () => props({ reprint: true, format: 'A4' }), /A4 prints/],
+    [
+      'the saved settings are loading',
+      () => {
+        mocks.saved = query(undefined);
+        return props({ reprint: true });
+      },
+      /Checking this branch’s saved paper/,
+    ],
+    [
+      'the saved settings errored',
+      () => {
+        mocks.saved = query(undefined, { isError: true, error: new Error('x') });
+        return props({ reprint: true });
+      },
+      /saved paper could not be read/,
+    ],
+    [
+      'the saved width now mismatches',
+      () => {
+        mocks.saved = query(settings(58));
+        return props({ reprint: true });
+      },
+      /switch Format to Thermal · 58 mm/,
+    ],
+  ])('hides Try again when %s', async (_case, blockedProps, reason) => {
+    mocks.enqueue.mockRejectedValue(networkError());
+    const { rerender } = render(<CounterThermalPrint {...props({ reprint: true })} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send reprint to thermal printer' }));
+    });
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+    rerender(<CounterThermalPrint {...blockedProps()} />);
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(screen.getByText(/Try again is unavailable/)).toHaveTextContent(reason);
+    expect(screen.getByRole('button', { name: 'Discard' })).toBeEnabled();
+    expect(mocks.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it('hides Try again when the paper changed since the request', async () => {
+    mocks.enqueue.mockRejectedValue(networkError());
+    const { rerender } = render(<CounterThermalPrint {...props({ reprint: true })} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send reprint to thermal printer' }));
+    });
+    mocks.saved = query(settings(58));
+    rerender(<CounterThermalPrint {...props({ reprint: true, format: 'THERMAL_58' })} />);
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(screen.getByText(/the paper changed since this request/)).toBeTruthy();
   });
 
   it('offers no same-key retry when the server refused the request', async () => {
@@ -327,6 +388,73 @@ describe('after sending', () => {
     expect(mocks.enqueue.mock.lastCall![0]).toEqual(
       expect.objectContaining({ reprint: true, requestKey: expect.any(String) })
     );
+  });
+
+  it('blocks Send while a job may have printed, but not after EXPIRED', async () => {
+    mocks.enqueue.mockResolvedValue(
+      queuedResult(job({ state: 'FAILED', retryable: true, retryRequiresPaperCheck: true }))
+    );
+    const { rerender } = render(<CounterThermalPrint {...props()} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send to thermal printer' }));
+    });
+    expect(screen.getByRole('button', { name: 'Send reprint to thermal printer' })).toBeDisabled();
+    expect(screen.getByText(/use Resend this job below/)).toBeTruthy();
+    mocks.jobData = job({ state: 'EXPIRED', retryable: true, retryRequiresPaperCheck: false });
+    rerender(<CounterThermalPrint {...props()} />);
+    expect(screen.getByRole('button', { name: 'Send reprint to thermal printer' })).toBeEnabled();
+  });
+
+  it('stops polling on a status read error and offers a manual check', async () => {
+    mocks.enqueue.mockResolvedValue(queuedResult(job()));
+    const { rerender } = render(<CounterThermalPrint {...props()} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send to thermal printer' }));
+    });
+    const interval = mocks.jobQuery.mock.lastCall![1].refetchInterval as (
+      q: unknown
+    ) => number | false;
+    expect(interval({ state: { status: 'error', data: { state: 'QUEUED' } } })).toBe(false);
+    expect(interval({ state: { status: 'success', data: { state: 'QUEUED' } } })).toBe(2_000);
+    mocks.jobError = new Error('Print job not found.');
+    rerender(<CounterThermalPrint {...props()} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Print job not found.');
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    expect(mocks.jobRefetch).toHaveBeenCalledOnce();
+  });
+
+  it('says a replayed reprint was already queued, not the original', async () => {
+    mocks.enqueue.mockResolvedValue(queuedResult(job({ reprint: true }), true));
+    render(<CounterThermalPrint {...props({ reprint: true })} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send reprint to thermal printer' }));
+    });
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'This reprint was already queued; showing its status.'
+    );
+    expect(screen.getByRole('status')).not.toHaveTextContent('original');
+  });
+
+  it('reports every QUEUED send, replays included, but not a fallback', async () => {
+    const onThermalQueued = vi.fn();
+    mocks.enqueue.mockResolvedValueOnce({
+      status: 'FALLBACK',
+      code: 'SETTINGS_CHANGED',
+      fallback: 'BROWSER_OS',
+      message: 'x',
+    });
+    render(<CounterThermalPrint {...props({ onThermalQueued })} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send to thermal printer' }));
+    });
+    expect(onThermalQueued).not.toHaveBeenCalled();
+    expect(mocks.saved.refetch).toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('printer settings changed');
+    mocks.enqueue.mockResolvedValueOnce(queuedResult(job({ state: 'SENT_TO_PRINTER' }), true));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send to thermal printer' }));
+    });
+    expect(onThermalQueued).toHaveBeenCalledExactlyOnceWith('sale-1');
   });
 
   it('explains a replayed original', async () => {
