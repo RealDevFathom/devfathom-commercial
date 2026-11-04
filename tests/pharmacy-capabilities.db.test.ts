@@ -32,10 +32,12 @@ const administratorReportsMigration = readFileSync(
   'prisma/migrations/20261029000258_pharmacy_administrator_reports/migration.sql',
   'utf8'
 );
-// DEV-32/DEV-739: day close is for managers and owners only. Reconciles roles that
-// #654's Pharmacist template had granted, and gives system Managers the grant.
+// DEV-32/DEV-739 rollout phase 1: day close is for managers and owners only. Removes
+// the close ALLOW #654's Pharmacist template had granted. Existing system Managers gain
+// close only in phase 2, after the branch-assignment close gate is serving (see
+// docs/operations/pharmacy-day-close-rollout.md).
 const dayCloseMigration = readFileSync(
-  'prisma/migrations/20261104120000_pharmacy_day_close_managers_and_owners/migration.sql',
+  'prisma/migrations/20261104120000_pharmacy_pharmacist_day_close_revoke/migration.sql',
   'utf8'
 )
   .replace(/^BEGIN;$/m, '')
@@ -187,7 +189,7 @@ const legacy: Record<string, string[]> = {
       // Tenant-authored lookalike and another vertical are untouched.
       ['custom_pharmacist', 'pharmacist', false, lookalike, 'ALLOW'],
       ['restaurant_pharmacist', 'pharmacist', true, restaurant, 'ALLOW'],
-      // A system Manager without the grant gains it; a DENY is not overridden.
+      // Phase 1 grants no Manager anything; a Manager's DENY stays a DENY.
       ['other_manager', 'manager', true, other, null],
       ['denied_manager', 'manager', true, third, 'DENY'],
       ['custom_manager', 'manager', false, lookalike, null],
@@ -224,8 +226,12 @@ const legacy: Record<string, string[]> = {
         [id(template.key)]
       );
       // Owner's redundant explicit order grant remains harmless and is not removed.
+      // An installed Manager gains the template's 'pharmacy:close' only in rollout
+      // phase 2, after the branch-assignment close gate is live (DEV-739).
       const expected = [
-        ...template.capabilities,
+        ...template.capabilities.filter(
+          (capability) => !(template.key === 'manager' && capability === 'pharmacy:close')
+        ),
         ...(template.key === 'owner' ? ['pharmacy:orders'] : []),
       ].sort();
       expect(rows.rows.map((r) => r.capability)).toEqual(expected);
@@ -294,7 +300,7 @@ const legacy: Record<string, string[]> = {
       ['custom_pharmacist', [close('ALLOW'), dispense]],
       ['restaurant_pharmacist', [close('ALLOW'), dispense]],
       // System Managers also hold #375's procurement backfill (20261022100000).
-      ['other_manager', [close('ALLOW'), dispense, procurement]],
+      ['other_manager', [dispense, procurement]],
       ['denied_manager', [close('DENY'), dispense, procurement]],
       ['custom_manager', [dispense]],
       ['restaurant_manager', [dispense]],
@@ -397,10 +403,12 @@ const legacy: Record<string, string[]> = {
     expect(await can(subject('owner'), 'reports:financial', undefined, { db })).toBe(true);
     expect(await can(subject('manager'), 'pharmacy:procurement', undefined, { db })).toBe(true);
     // Day close: managers and owners only (DEV-32/DEV-739), never a pharmacist or cashier.
+    // An installed Manager role is granted in rollout phase 2; a Manager provisioned
+    // from the current template already holds it (pharmacy-sales.branch-scope.test.ts).
     for (const [key, allowed] of [
       ['pharmacist', false],
       ['cashier', false],
-      ['manager', true],
+      ['manager', false],
       ['owner', true],
       ['owner-operator', true],
     ] as const) {

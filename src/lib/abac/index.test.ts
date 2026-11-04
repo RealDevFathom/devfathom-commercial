@@ -386,8 +386,9 @@ describe('custom ABAC decisions', () => {
       'pharmacy:catalogue-review',
       'pharmacy:orders',
       'pharmacy:counter',
-      // #654: pharmacist day close/reconcile. Exact-grant only; the tenant ADMIN
-      // fallback lives in the close procedure, not in a default policy.
+      // Day close/reconcile (#654): managers and owners only (DEV-32/DEV-739). No
+      // default policy: it is granted explicitly (Manager, Owner / Operator) or by
+      // `pharmacy:*`/`*` (Owner); the session-ADMIN path lives in the close procedure.
       'pharmacy:close',
     ] as const satisfies readonly Action[];
 

@@ -153,6 +153,21 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
         data: { currency: 'USD', timezone: 'America/Chicago' },
       })
     );
+    // ORG's administrator is a real user row: the close gate reads its rules for an
+    // explicit pharmacy:close DENY and refuses an ADMIN it cannot read (DEV-739).
+    await withPlatformDb(async (db) => {
+      await db.$executeRawUnsafe(
+        `INSERT INTO organization_departments (id, "organizationId", key, name, "updatedAt") VALUES ($1, $2, 'Pharmacy', 'Pharmacy', now())`,
+        `${ACTOR}_department`,
+        ORG
+      );
+      await db.$executeRawUnsafe(
+        `INSERT INTO users (id, "organizationId", name, email, role, department, title, "updatedAt") VALUES ($1, $2, 'Administrator', $3, 'ADMIN', 'Pharmacy', 'Owner', now())`,
+        ACTOR,
+        ORG,
+        `${ACTOR}@example.test`
+      );
+    });
     await createBranch(ORG, ACTIVE);
     await createBranch(ORG, RETIRED);
     await createBranch(OTHER_ORG, FOREIGN);

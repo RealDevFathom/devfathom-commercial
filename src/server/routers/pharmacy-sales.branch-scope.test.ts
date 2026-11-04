@@ -178,7 +178,8 @@ beforeEach(() => {
     },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue(null) },
-    user: { findUnique: vi.fn().mockResolvedValue(null) },
+    // A user row with no custom rules: the close gate reads it for an ADMIN's DENYs.
+    user: { findUnique: vi.fn().mockResolvedValue(memberWithoutCustomRules) },
     pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue(null) },
   };
 });
@@ -413,6 +414,17 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
     expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
   });
+
+  it.each(closeProcedures)(
+    '%s refuses a session ADMIN whose user row cannot be read (fails closed)',
+    async (_name, run) => {
+      db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+      db.user.findUnique.mockResolvedValue(null);
+      await expect(run(caller('ADMIN'))).rejects.toMatchObject(NO_CLOSE);
+      expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(closeProcedures)(
     '%s keeps a session ADMIN whose only DENY is on another action',

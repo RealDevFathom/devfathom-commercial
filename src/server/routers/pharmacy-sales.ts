@@ -528,9 +528,12 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string): Promise<Led
         },
       },
     });
+    // Fail closed like can(): without a readable user row there is no proof that
+    // no DENY applies (a deleted user inside the session revalidation window).
+    if (!rules) throw noCloseCapability();
     const denied = [
-      ...(rules?.permissionOverrides ?? []),
-      ...(rules?.organizationRole?.permissions ?? []),
+      ...rules.permissionOverrides,
+      ...(rules.organizationRole?.permissions ?? []),
     ].some(
       (rule) =>
         rule.effect === 'DENY' && capabilityMatches(rule.capability, 'pharmacy:close', 'DENY')
