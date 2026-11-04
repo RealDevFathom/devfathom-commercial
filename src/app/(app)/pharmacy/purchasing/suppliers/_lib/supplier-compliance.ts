@@ -35,9 +35,16 @@ export async function readPolicyForDisplay(
   }
 }
 
-/** Supplier checks are on unless the server positively said they are off. */
-export function supplierChecksOn(read: SupplierCompliancePolicyRead | null): boolean {
-  return read?.policy.checksEnabled !== false;
+/**
+ * Supplier checks are on unless the server positively said they are off: from the policy
+ * read, or, when that read is unavailable, from the register's own per-supplier status.
+ */
+export function supplierChecksOn(
+  read: SupplierCompliancePolicyRead | null,
+  suppliers?: readonly { compliance?: { checked: boolean } }[] | null
+): boolean {
+  if (read) return read.policy.checksEnabled !== false;
+  return !(suppliers ?? []).some((supplier) => supplier.compliance?.checked === false);
 }
 
 /**

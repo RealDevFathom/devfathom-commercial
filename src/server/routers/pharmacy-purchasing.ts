@@ -67,8 +67,10 @@ import {
 } from '@/lib/pharmacy/receiving';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
+  effectiveSupplierCompliancePolicy,
   enforceSupplierCompliance,
   readSupplierCompliancePolicy,
+  recordSupplierComplianceSkip,
   supersededLicenceIds,
   type SupplierComplianceSubject,
 } from '@/lib/pharmacy/supplier-compliance-policy';
@@ -341,19 +343,21 @@ async function assertOrderableSupplier(
     licences: { id: string; expiresAt: Date; verifiedAt: Date | null }[];
   } | null,
   at: Date,
-  subject: SupplierComplianceSubject
+  subject: SupplierComplianceSubject,
+  options: { record?: boolean } = {}
 ) {
   if (!supplier) throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
   const actorId = ctx.session?.user?.id;
   if (!actorId) {
     throw new TRPCError({ code: 'UNAUTHORIZED', message: 'No tenant actor on this request.' });
   }
-  await enforceSupplierCompliance(
+  return enforceSupplierCompliance(
     db,
     { organizationId: tenantScope(ctx).organizationId, actorId },
     supplier,
     at,
-    subject
+    subject,
+    options
   );
 }
 
@@ -613,7 +617,13 @@ const purchasingRouter = router({
           organizationId,
           quoteLines.flatMap((line) => line.quote.supplier.licences.map((licence) => licence.id))
         );
-        const policy = await readSupplierCompliancePolicy(ctx.db, organizationId);
+        // Controlled medicines keep the supplier checks whatever the owner policy says.
+        const policy = await effectiveSupplierCompliancePolicy(
+          ctx.db,
+          organizationId,
+          await readSupplierCompliancePolicy(ctx.db, organizationId),
+          { medicineIds: [requisitionLine.medicineId] }
+        );
         const candidates: QuoteCandidate[] = quoteLines.map((line) => ({
           quoteId: line.quoteId,
           supplierId: line.quote.supplierId,
@@ -692,7 +702,8 @@ const purchasingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         // PUR-01: refuse an unauthorized or licence-expired supplier before anything is written.
-        await assertOrderableSupplier(
+        // With the owner's checks off, the evidence is written below, naming the new order.
+        const supplierGate = await assertOrderableSupplier(
           ctx.db,
           ctx,
           await ctx.db.pharmacySupplier.findFirst({
@@ -700,7 +711,12 @@ const purchasingRouter = router({
             include: WITH_LICENCES,
           }),
           new Date(),
-          { operation: 'PURCHASE_ORDER_CREATE', reference: input.reference }
+          {
+            operation: 'PURCHASE_ORDER_CREATE',
+            reference: input.reference,
+            medicineIds: input.lines.map((line) => line.medicineId),
+          },
+          { record: false }
         );
         if (
           input.requisitionId &&
@@ -760,7 +776,7 @@ const purchasingRouter = router({
         }
 
         const { lines, ...purchaseOrder } = input;
-        return await ctx.db.pharmacyPurchaseOrder.create({
+        const created = await ctx.db.pharmacyPurchaseOrder.create({
           data: {
             ...purchaseOrder,
             createdByUserId: ctx.session.user.id,
@@ -779,6 +795,21 @@ const purchasingRouter = router({
           },
           include: { lines: true },
         });
+        // DEV-753: an order raised past the unchecked supplier gate says so, by its own id.
+        if (!supplierGate.checked) {
+          await recordSupplierComplianceSkip(
+            ctx.db,
+            { organizationId: tenantScope(ctx).organizationId, actorId: ctx.session.user.id },
+            {
+              operation: 'PURCHASE_ORDER_CREATE',
+              supplierId: input.supplierId,
+              purchaseOrderId: created.id,
+              reference: input.reference,
+              outcome: supplierGate,
+            }
+          );
+        }
+        return created;
       } catch (error) {
         domainError(error);
       }
@@ -898,19 +929,24 @@ const purchasingRouter = router({
         if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
         assertPurchaseOrderTransition(order.status, 'SENT');
         // PUR-01 again: the supplier must still be orderable at the moment it is sent.
-        await assertOrderableSupplier(
-          ctx.db,
-          ctx,
-          await ctx.db.pharmacySupplier.findFirst({
-            where: { id: order.supplierId },
-            include: WITH_LICENCES,
-          }),
-          new Date(),
-          { operation: 'PURCHASE_ORDER_SEND', purchaseOrderId: order.id }
-        );
-        return await ctx.db.pharmacyPurchaseOrder.update({
-          where: { id: order.id },
-          data: { status: 'SENT', sentAt: new Date() },
+        // One transaction (DEV-753): the owner policy is share-locked for the send, and
+        // any unchecked-gate evidence commits with it.
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await assertOrderableSupplier(
+            db,
+            ctx,
+            await db.pharmacySupplier.findFirst({
+              where: { id: order.supplierId },
+              include: WITH_LICENCES,
+            }),
+            new Date(),
+            { operation: 'PURCHASE_ORDER_SEND', purchaseOrderId: order.id }
+          );
+          return db.pharmacyPurchaseOrder.update({
+            where: { id: order.id },
+            data: { status: 'SENT', sentAt: new Date() },
+          });
         });
       } catch (error) {
         domainError(error);
@@ -1088,6 +1124,7 @@ const purchasingRouter = router({
               operation: 'GOODS_RECEIPT_CREATE',
               purchaseOrderId: input.purchaseOrderId ?? null,
               reference: input.reference,
+              medicineIds: input.lines.map((line) => line.medicineId),
             }
           );
           if (input.directPurchase) {

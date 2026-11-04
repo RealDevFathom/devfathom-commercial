@@ -115,7 +115,7 @@ export default async function PharmacySuppliersPage({
   // server positively says the checks are off.
   const complianceCaller = await supplierComplianceCaller();
   const policyRead = await readPolicyForDisplay(complianceCaller);
-  const checksOn = supplierChecksOn(policyRead);
+  const checksOn = supplierChecksOn(policyRead, suppliers);
   const [policyHistory, selectedSkips] = await Promise.all([
     policyRead?.canManage && complianceCaller
       ? complianceCaller.history({ limit: 5 }).catch(() => null)

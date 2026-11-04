@@ -104,6 +104,8 @@ function receiptDb(line: {
       }),
       update: vi.fn().mockResolvedValue({}),
     },
+    // DEV-753/DEV-466: the posting gate reads supersession across the licence register.
+    pharmacySupplierLicence: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyManufacturingBatch: {
       findFirst: batchFind,
       create: vi.fn().mockResolvedValue({ id: 'batch' }),

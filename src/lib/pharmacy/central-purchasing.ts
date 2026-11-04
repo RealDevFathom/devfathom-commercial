@@ -3,6 +3,7 @@ import { allocateTransfer } from './inventory-operations';
 import type { InterbranchTransferSuggestion } from './interbranch-transfer-suggestions';
 import { assertSupplierEligible, PharmacyPurchasingError } from './purchasing';
 import {
+  effectiveSupplierCompliancePolicy,
   readSupplierCompliancePolicy,
   recordSupplierComplianceSkip,
   strictLicenceEvidence,
@@ -116,9 +117,13 @@ export async function createCentralPurchaseOrder(
     // With the checks on, an ineligible supplier stays NOT_FOUND here as before, now
     // with supersession read strictly (DEV-466). With them off the order is raised and
     // the skip is recorded against it in the same transaction.
-    const policy = await readSupplierCompliancePolicy(tx, scope.organizationId, {
-      lock: 'share',
-    });
+    // Controlled medicines keep the supplier checks whatever the owner policy says.
+    const policy = await effectiveSupplierCompliancePolicy(
+      tx,
+      scope.organizationId,
+      await readSupplierCompliancePolicy(tx, scope.organizationId, { lock: 'share' }),
+      { medicineIds: input.lines.map((line) => line.medicineId) }
+    );
     const licences = await strictLicenceEvidence(tx, scope.organizationId, supplier.licences);
     let outcome: ReturnType<typeof assertSupplierEligible>;
     try {

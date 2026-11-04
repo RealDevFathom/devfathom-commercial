@@ -4,6 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   assertSupplierEligible,
+  ENFORCED_SUPPLIER_COMPLIANCE,
   licenceEvidence,
   PharmacyPurchasingError,
   type SupplierComplianceOutcome,
@@ -11,6 +12,7 @@ import {
   type SupplierLicenceEvidence,
 } from './purchasing';
 import {
+  CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS,
   SUPPLIER_COMPLIANCE_WARNING,
   supplierComplianceAcknowledgementRecord,
   type SupplierComplianceOperation,
@@ -114,19 +116,32 @@ export async function readSupplierCompliancePolicy(
   }
 }
 
+/** A live DENY on any of these takes the owner's procurement-policy authority away. */
+const OWNER_POLICY_DENIALS = ['*', 'pharmacy:*', 'pharmacy:procurement'] as const;
+
 /**
  * The durable tenant owner, verified from the live database rather than the session:
  * an ACTIVE user of this organization holding this organization's system `owner` role,
- * without a live DENY on `*`. A tenant ADMIN, a wildcard grant on a custom role, or the
- * `owner-operator` template is not the owner.
+ * without a live DENY on `*`, `pharmacy:*` or `pharmacy:procurement`. A tenant ADMIN, a
+ * wildcard grant on a custom role, or the `owner-operator` template is not the owner.
+ *
+ * With `lock`, the user row is share-locked for the rest of the transaction, so a
+ * concurrent demotion or deactivation waits for the write this check guards.
  */
 export async function actorIsVerifiedTenantOwner(
   db: ScopedDb,
   organizationId: string,
   userId: string,
-  now: Date = new Date()
+  options: { now?: Date; lock?: boolean } = {}
 ): Promise<boolean> {
   if (!organizationId || !userId) return false;
+  const now = options.now ?? new Date();
+  if (options.lock) {
+    await db.$queryRaw(Prisma.sql`
+      SELECT "id" FROM "users"
+       WHERE "id" = ${userId} AND "organizationId" = ${organizationId}
+       FOR SHARE`);
+  }
   const user = await db.user.findFirst({
     where: { id: userId, organizationId, status: 'ACTIVE' },
     select: {
@@ -136,7 +151,7 @@ export async function actorIsVerifiedTenantOwner(
       organizationRole: { select: { key: true, isSystem: true, organizationId: true } },
       permissionOverrides: {
         where: {
-          capability: '*',
+          capability: { in: [...OWNER_POLICY_DENIALS] },
           effect: 'DENY',
           OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
         },
@@ -192,7 +207,57 @@ export type SupplierComplianceSubject = {
   purchaseOrderId?: string | null;
   goodsReceiptId?: string | null;
   reference?: string | null;
+  /** The medicines this write orders or receives, when they are not yet on a stored order. */
+  medicineIds?: readonly string[];
 };
+
+/**
+ * Whether an order or receipt includes a controlled medicine. While
+ * CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS holds (a pending product decision, see
+ * supplier-compliance.ts), such writes keep the supplier licence and trade-authorization
+ * checks even with the owner's switch off.
+ */
+export async function involvesControlledMedicine(
+  db: ScopedDb,
+  organizationId: string,
+  subject: Pick<SupplierComplianceSubject, 'medicineIds' | 'purchaseOrderId'>
+): Promise<boolean> {
+  const medicineIds = [...new Set(subject.medicineIds ?? [])];
+  if (medicineIds.length > 0) {
+    const controlled = await db.medicine.count({
+      where: { organizationId, id: { in: medicineIds }, controlled: true },
+    });
+    if (controlled > 0) return true;
+  }
+  if (subject.purchaseOrderId) {
+    const controlled = await db.pharmacyPurchaseOrderLine.count({
+      where: {
+        organizationId,
+        purchaseOrderId: subject.purchaseOrderId,
+        medicine: { controlled: true },
+      },
+    });
+    if (controlled > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * The policy a write actually applies: the owner's, except that the checks stay on for
+ * anything involving a controlled medicine.
+ */
+export async function effectiveSupplierCompliancePolicy(
+  db: ScopedDb,
+  organizationId: string,
+  policy: SupplierCompliancePolicy,
+  subject: Pick<SupplierComplianceSubject, 'medicineIds' | 'purchaseOrderId'>
+): Promise<SupplierCompliancePolicy> {
+  if (policy.checksEnabled !== false || !CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS) return policy;
+  if (await involvesControlledMedicine(db, organizationId, subject)) {
+    return { ...ENFORCED_SUPPLIER_COMPLIANCE, version: policy.version };
+  }
+  return policy;
+}
 
 /** Append one immutable "supplier gate passed without a check" evidence row. */
 export async function recordSupplierComplianceSkip(
@@ -231,18 +296,29 @@ export async function enforceSupplierCompliance(
   },
   at: Date,
   subject: SupplierComplianceSubject,
-  options: { policy?: SupplierCompliancePolicy } = {}
+  options: {
+    policy?: SupplierCompliancePolicy;
+    /**
+     * `false` when the caller writes the evidence itself once the order or receipt it
+     * guards exists, so the row can name it (purchase-order create).
+     */
+    record?: boolean;
+  } = {}
 ): Promise<SupplierComplianceOutcome> {
-  const policy =
+  const policy = await effectiveSupplierCompliancePolicy(
+    db,
+    scope.organizationId,
     options.policy ??
-    (await readSupplierCompliancePolicy(db, scope.organizationId, { lock: 'share' }));
+      (await readSupplierCompliancePolicy(db, scope.organizationId, { lock: 'share' })),
+    subject
+  );
   const outcome = assertSupplierEligible({
     authorized: supplier.authorized,
     licences: await strictLicenceEvidence(db, scope.organizationId, supplier.licences),
     at,
     policy,
   });
-  if (!outcome.checked) {
+  if (!outcome.checked && options.record !== false) {
     await recordSupplierComplianceSkip(db, scope, { ...subject, supplierId: supplier.id, outcome });
   }
   return outcome;
@@ -336,6 +412,24 @@ export async function writeSupplierCompliancePolicy(
     throw new SupplierCompliancePolicyError('VERSION_CONFLICT');
   }
   return { changed: true, previous: current, policy };
+}
+
+/**
+ * When and by whom the supplier setting last changed, from its own audit rows: the
+ * policy row's `updatedAt`/`updatedByUserId` are shared with the prescription setting.
+ */
+export async function readSupplierCompliancePolicyLastChange(
+  db: ScopedDb,
+  organizationId: string
+): Promise<{ changedAt: Date; actorUserId: string | null } | null> {
+  const rows = await db.$queryRaw<{ changedAt: Date; actorUserId: string | null }[]>(Prisma.sql`
+    SELECT "changedAt", "actorUserId"
+      FROM "pharmacy_owner_policy_audit"
+     WHERE "organizationId" = ${organizationId}
+       AND "setting" = ${SUPPLIER_COMPLIANCE_SETTING}
+     ORDER BY "changedAt" DESC, "id" DESC
+     LIMIT 1`);
+  return rows[0] ?? null;
 }
 
 export type SupplierCompliancePolicyChange = {

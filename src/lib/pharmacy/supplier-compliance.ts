@@ -9,6 +9,16 @@
  */
 
 /**
+ * PENDING PRODUCT DECISION (DEV-753, Saad): whether orders and receipts that include a
+ * controlled medicine keep the supplier licence and trade-authorization checks while the
+ * owner has them off. Until decided this stays `true`, the stricter reading. It is NOT an
+ * approved rule. Either answer is this one constant; the warning text and every write gate
+ * follow it. The independent controlled-drug controls (witness PIN at receipt posting, the
+ * controlled register, counter gates) are separate code paths the switch never touches.
+ */
+export const CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS = true;
+
+/**
  * The warning the owner acknowledges before turning the checks off. The version is
  * stored with the acknowledgement, so changing any of this text needs a new version.
  */
@@ -18,7 +28,12 @@ export const SUPPLIER_COMPLIANCE_WARNING = Object.freeze({
   paragraphs: Object.freeze([
     'This only stops the app from asking for supplier licence evidence and supplier trade authorization, and from refusing purchase orders and goods receipts when they are missing.',
     'It does not remove any legal obligation to buy medicines only from licensed suppliers. As the pharmacy owner, you remain responsible for where your stock comes from and for your pharmacy’s compliance.',
-    'Everything else is still checked: approvals and PINs, batch, expiry and stock checks, invoice and accounting records, branch access, and controlled-medicine rules. Licences already on file stay on file and are not changed.',
+    ...(CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS
+      ? [
+          'Controlled medicines are not affected: an order or receipt that includes one still needs an authorized supplier with a valid, verified licence.',
+        ]
+      : []),
+    'Everything else is still checked: approvals and PINs, batch, expiry and stock checks, invoice and accounting records, branch access, and the controlled-drug witness PIN and register. Licences already on file stay on file and are not changed.',
   ]),
   acknowledgement:
     'I understand that turning off these checks does not remove supplier-licensing obligations, and that I remain responsible for sourcing and compliance.',

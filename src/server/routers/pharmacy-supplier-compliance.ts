@@ -9,6 +9,7 @@ import {
   actorIsVerifiedTenantOwner,
   readSupplierCompliancePolicy,
   readSupplierCompliancePolicyHistory,
+  readSupplierCompliancePolicyLastChange,
   readSupplierComplianceSkips,
   SupplierCompliancePolicyError,
   writeSupplierCompliancePolicy,
@@ -45,13 +46,17 @@ function actor(ctx: TRPCContext): { organizationId: string; actorId: string } {
   return { organizationId, actorId };
 }
 
-async function isOwner(ctx: TRPCContext, db: ScopedDb = ctx.db): Promise<boolean> {
+async function isOwner(
+  ctx: TRPCContext,
+  db: ScopedDb = ctx.db,
+  options: { lock?: boolean } = {}
+): Promise<boolean> {
   const { organizationId, actorId } = actor(ctx);
-  return actorIsVerifiedTenantOwner(db, organizationId, actorId);
+  return actorIsVerifiedTenantOwner(db, organizationId, actorId, options);
 }
 
 /** Owner, or someone who already works the purchasing lane. Nothing wider. */
-async function assertCanReadPolicy(ctx: TRPCContext): Promise<{ owner: boolean }> {
+async function assertCanReadEvidence(ctx: TRPCContext): Promise<{ owner: boolean }> {
   const { actorId } = actor(ctx);
   if (await isOwner(ctx)) return { owner: true };
   if (await actorCanProcure(ctx.db, actorId)) return { owner: false };
@@ -104,20 +109,29 @@ async function view(
   organizationId: string,
   policy: SupplierCompliancePolicyState
 ): Promise<SupplierCompliancePolicyView> {
-  const byId = await names(db, organizationId, [policy.updatedByUserId]);
+  // The supplier setting's own last change; the row's timestamps are shared with Rx.
+  const last =
+    policy.source === 'STORED'
+      ? await readSupplierCompliancePolicyLastChange(db, organizationId)
+      : null;
+  const byId = await names(db, organizationId, [last?.actorUserId ?? null]);
   return {
     checksEnabled: policy.checksEnabled,
     version: policy.version,
     source: policy.source,
-    updatedAt: policy.updatedAt,
-    updatedByName: policy.updatedByUserId ? (byId.get(policy.updatedByUserId) ?? null) : null,
+    updatedAt: last?.changedAt ?? null,
+    updatedByName: last?.actorUserId ? (byId.get(last.actorUserId) ?? null) : null,
   };
 }
 
 export const pharmacySupplierComplianceRouter = router({
-  /** The policy in force, and whether this caller may change it. */
+  /**
+   * The policy in force, and whether this caller may change it. Readable by anyone who
+   * can read the supplier register (same module gate), because the register shows its
+   * effect; the change history and the skip evidence stay narrower.
+   */
   policy: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
-    const { owner } = await assertCanReadPolicy(ctx);
+    const owner = await isOwner(ctx);
     const { organizationId } = actor(ctx);
     const policy = await readSupplierCompliancePolicy(ctx.db, organizationId);
     return {
@@ -167,7 +181,7 @@ export const pharmacySupplierComplianceRouter = router({
         })
     )
     .query(async ({ ctx, input }) => {
-      await assertCanReadPolicy(ctx);
+      await assertCanReadEvidence(ctx);
       const { organizationId } = actor(ctx);
       const skips = await readSupplierComplianceSkips(
         ctx.db,
@@ -214,7 +228,9 @@ export const pharmacySupplierComplianceRouter = router({
         const result = await ctx.db.$transaction(async (tx) => {
           const db = tx as unknown as ScopedDb;
           // Re-verified inside the write transaction, against the live database.
-          if (!(await isOwner(ctx, db))) throw new SupplierCompliancePolicyError('NOT_OWNER');
+          if (!(await isOwner(ctx, db, { lock: true }))) {
+            throw new SupplierCompliancePolicyError('NOT_OWNER');
+          }
           return writeSupplierCompliancePolicy(db, scope, input);
         });
         if (result.changed) {

@@ -98,6 +98,36 @@ describe('DEV-753 owner panel', () => {
     expect(data.get('warningVersion')).toBe(SUPPLIER_COMPLIANCE_WARNING.version);
   });
 
+  it('keeps the turn-off form collapsed so the register stays above the fold', () => {
+    panel({ read: read({ checksEnabled: true, canManage: true }) });
+    const details = screen.getByText('Turn supplier checks off…').closest('details')!;
+    expect(details).not.toHaveAttribute('open');
+    expect(within(details).getByRole('note')).toBeInTheDocument();
+  });
+
+  it('reopens the form when the server sends the owner back to the acknowledgement', () => {
+    panel({
+      read: read({ checksEnabled: true, canManage: true }),
+      notice: {
+        message: 'Tick the acknowledgement before turning supplier checks off.',
+        kind: 'error',
+        outcome: 'rejected',
+        field: 'acknowledged',
+      },
+    });
+    expect(screen.getByText('Turn supplier checks off…').closest('details')).toHaveAttribute(
+      'open'
+    );
+  });
+
+  it('offers no change while the stored setting cannot be read (enforced)', () => {
+    const failClosed = read({ checksEnabled: true, canManage: true });
+    panel({ read: { ...failClosed!, policy: { ...failClosed!.policy, source: 'FAIL_CLOSED' } } });
+    expect(screen.getByText(/could not be read, so the checks are enforced/)).toBeInTheDocument();
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByText('Turn supplier checks off…')).toBeNull();
+  });
+
   it('never claims the switch makes unlicensed supply lawful', () => {
     const text = [
       SUPPLIER_COMPLIANCE_WARNING.title,
@@ -153,10 +183,12 @@ describe('DEV-753 owner panel', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('says the checks stay on when the setting cannot be read', () => {
+  it('says the stored setting governs, and that the server fails closed, when it cannot be shown', () => {
     panel({ read: null });
     expect(
-      screen.getByText(/could not be read, so supplier licence and authorization checks stay on/)
+      screen.getByText(
+        /could not be shown here[\s\S]*if the server cannot read it the supplier checks stay\s+on/
+      )
     ).toBeInTheDocument();
     expect(screen.queryByRole('button')).toBeNull();
   });

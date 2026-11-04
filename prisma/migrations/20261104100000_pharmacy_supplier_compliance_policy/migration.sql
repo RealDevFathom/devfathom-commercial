@@ -22,14 +22,19 @@ ALTER TABLE "pharmacy_owner_policy_audit"
   ADD COLUMN "acknowledgement" TEXT;
 
 -- The version and acknowledgement move only with the value, whoever writes the row:
--- each effective change bumps the version by one, needs a named actor, and turning the
--- checks off needs the recorded warning acknowledgement. A write that does not change
--- the value cannot rewrite either column.
+-- each effective change bumps the version by one, and turning the checks off needs the
+-- recorded warning acknowledgement. A write that does not change the value cannot
+-- rewrite either column. An effective change must name the session's own user
+-- (app.current_user_id) as the actor, and that user must hold this organization's
+-- system `owner` role and be ACTIVE: the application checks this first, and the
+-- database refuses any other writer too. Versions continue from the audit trail, so
+-- recreating the row never reuses a version that evidence already cites.
 CREATE FUNCTION pharmacy_owner_policy_supplier_compliance_guard() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
   changed boolean;
   actor text;
+  last_version integer := 0;
 BEGIN
   IF TG_OP = 'INSERT' THEN
     -- A missing row already means ON, so only an inserted OFF is a change.
@@ -39,9 +44,16 @@ BEGIN
       IS DISTINCT FROM OLD."supplierComplianceChecksEnabled";
   END IF;
 
+  IF TG_OP = 'INSERT' THEN
+    SELECT COALESCE(MAX("policyVersion"), 0) INTO last_version
+      FROM "pharmacy_owner_policy_audit"
+     WHERE "organizationId" = NEW."organizationId"
+       AND "setting" = 'supplierComplianceChecksEnabled';
+  END IF;
+
   IF NOT changed THEN
     IF TG_OP = 'INSERT' THEN
-      NEW."supplierCompliancePolicyVersion" := 0;
+      NEW."supplierCompliancePolicyVersion" := last_version;
       NEW."supplierComplianceAcknowledgement" := NULL;
     ELSE
       NEW."supplierCompliancePolicyVersion" := OLD."supplierCompliancePolicyVersion";
@@ -54,9 +66,22 @@ BEGIN
     RAISE EXCEPTION 'SUPPLIER_COMPLIANCE_POLICY_INVALID' USING ERRCODE = '23514';
   END IF;
 
-  actor := COALESCE(NEW."updatedByUserId", NULLIF(current_setting('app.current_user_id', true), ''));
-  IF actor IS NULL THEN
+  actor := NULLIF(current_setting('app.current_user_id', true), '');
+  IF actor IS NULL OR NEW."updatedByUserId" IS DISTINCT FROM actor THEN
     RAISE EXCEPTION 'SUPPLIER_COMPLIANCE_POLICY_ACTOR_REQUIRED' USING ERRCODE = '23514';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+      FROM "users" u
+      JOIN "organization_roles" r ON r."id" = u."organizationRoleId"
+     WHERE u."id" = actor
+       AND u."organizationId" = NEW."organizationId"
+       AND u."status" = 'ACTIVE'
+       AND r."organizationId" = NEW."organizationId"
+       AND r."isSystem"
+       AND r."key" = 'owner'
+  ) THEN
+    RAISE EXCEPTION 'SUPPLIER_COMPLIANCE_POLICY_OWNER_REQUIRED' USING ERRCODE = '42501';
   END IF;
 
   IF NEW."supplierComplianceChecksEnabled" = false THEN
@@ -69,7 +94,7 @@ BEGIN
   END IF;
 
   NEW."supplierCompliancePolicyVersion" :=
-    CASE WHEN TG_OP = 'INSERT' THEN 0 ELSE OLD."supplierCompliancePolicyVersion" END + 1;
+    CASE WHEN TG_OP = 'INSERT' THEN last_version ELSE OLD."supplierCompliancePolicyVersion" END + 1;
   NEW."updatedByUserId" := actor;
   NEW."updatedAt" := CURRENT_TIMESTAMP;
   RETURN NEW;
@@ -150,9 +175,72 @@ CREATE INDEX "pharmacy_supplier_compliance_skips_org_order_idx"
 CREATE INDEX "pharmacy_supplier_compliance_skips_org_receipt_idx"
   ON "pharmacy_supplier_compliance_skips"("organizationId", "goodsReceiptId");
 
+-- Append-only for the life of the tenant, destroyed only with it: the sanctioned purge
+-- of this row's own tenant (platform admin naming it in app.purging_organization_id),
+-- or the declared ON DELETE CASCADE once the organization row is gone. Same rule as
+-- 20261021104500_purge_guards_require_platform_admin. UPDATE is always refused.
+CREATE FUNCTION pharmacy_append_only_unless_tenant_purge() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF NULLIF(current_setting('app.purging_organization_id', true), '') = OLD."organizationId"
+       AND current_setting('app.is_platform_admin', true) = 'true' THEN
+      RETURN OLD;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId") THEN
+      RETURN OLD;
+    END IF;
+  END IF;
+  RAISE EXCEPTION '% is append-only', TG_TABLE_NAME USING ERRCODE = '55000';
+END $$;
+
 CREATE TRIGGER pharmacy_supplier_compliance_skips_append_only
   BEFORE UPDATE OR DELETE ON "pharmacy_supplier_compliance_skips"
-  FOR EACH ROW EXECUTE FUNCTION pharmacy_reject_mutation();
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_append_only_unless_tenant_purge();
+
+-- This feature is what first fills the #518 audit, so it gets the same purge-aware
+-- guard (UPDATE still refused; DELETE only with its tenant), and the policy row itself
+-- can no longer be deleted outside that path: deleting it would silently restore the
+-- default without an audit row.
+DROP TRIGGER pharmacy_owner_policy_audit_append_only ON "pharmacy_owner_policy_audit";
+CREATE TRIGGER pharmacy_owner_policy_audit_append_only
+  BEFORE UPDATE OR DELETE ON "pharmacy_owner_policy_audit"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_append_only_unless_tenant_purge();
+
+CREATE FUNCTION pharmacy_owner_policy_delete_only_with_tenant() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NULLIF(current_setting('app.purging_organization_id', true), '') = OLD."organizationId"
+     AND current_setting('app.is_platform_admin', true) = 'true' THEN
+    RETURN OLD;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId") THEN
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION 'pharmacy owner policies are removed only with their organization'
+    USING ERRCODE = '55000';
+END $$;
+CREATE TRIGGER pharmacy_owner_policies_delete_only_with_tenant
+  BEFORE DELETE ON "pharmacy_owner_policies"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_owner_policy_delete_only_with_tenant();
+
+-- DEV-466: a licence filing may only supersede a filing of the same supplier. Strict
+-- supersession is read across the register, so a cross-supplier link would otherwise let
+-- a filing on one supplier silently void another supplier's licence.
+CREATE FUNCTION pharmacy_supplier_licence_same_supplier_supersession() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW."supersedesId" IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM "pharmacy_supplier_licences"
+     WHERE "organizationId" = NEW."organizationId"
+       AND "id" = NEW."supersedesId"
+       AND "supplierId" = NEW."supplierId"
+  ) THEN
+    RAISE EXCEPTION 'SUPPLIER_LICENCE_SUPERSESSION_CROSS_SUPPLIER' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER pharmacy_supplier_licence_same_supplier_supersession
+  BEFORE INSERT ON "pharmacy_supplier_licences"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_supplier_licence_same_supplier_supersession();
 
 ALTER TABLE "pharmacy_supplier_compliance_skips" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "pharmacy_supplier_compliance_skips" FORCE ROW LEVEL SECURITY;

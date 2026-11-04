@@ -2,6 +2,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { SupplierLicenceStatus } from '@/lib/pharmacy/purchasing';
 import {
+  CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS,
   SUPPLIER_CHECKS_DISABLED_LABEL,
   SUPPLIER_COMPLIANCE_WARNING,
   type SupplierComplianceOperation,
@@ -62,8 +63,9 @@ export function SupplierCompliancePanel({
     return (
       <SectionCard eyebrow="Owner policy" title="Supplier compliance checks" titleLevel={2}>
         <p className="text-sm text-text-body">
-          The supplier compliance setting could not be read, so supplier licence and authorization
-          checks stay on for every order and receipt. Reload to try again.
+          The supplier compliance setting could not be shown here. Orders and receipts follow the
+          setting stored on the server, and if the server cannot read it the supplier checks stay
+          on.
         </p>
       </SectionCard>
     );
@@ -96,15 +98,18 @@ export function SupplierCompliancePanel({
         </p>
       ) : (
         <div className="space-y-2 text-sm text-text-body">
-          <p>
+          <p className="text-text-body">
             Supplier licence and trade-authorization checks are off. Orders and receipts are not
             refused because a licence or authorization is missing, and suppliers are shown as
             &ldquo;Not checked&rdquo;.{setBy(read)}
           </p>
           <p className="text-text-muted">
+            {CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS
+              ? 'Orders and receipts that include a controlled medicine still need an authorized, licensed supplier. '
+              : ''}
             Approvals and PINs, batch, expiry and stock checks, invoice and accounting records,
-            branch access and controlled-medicine rules still apply. Licences on file are kept
-            unchanged.
+            branch access, and the controlled-drug witness PIN and register still apply. Licences on
+            file are kept unchanged.
           </p>
           {!read.canManage ? (
             <p className="text-text-muted">Only the pharmacy owner can change this setting.</p>
@@ -112,51 +117,60 @@ export function SupplierCompliancePanel({
         </div>
       )}
 
-      {read.canManage ? (
+      {read.canManage && read.policy.source !== 'FAIL_CLOSED' ? (
         on ? (
-          <PurchasingActionForm
-            operation={{ resource: 'supplier-compliance-policy', action: 'turn-off' }}
-            action={onSetPolicy}
-            className="mt-4 space-y-4"
-          >
-            <input name="checksEnabled" type="hidden" value="false" />
-            <input name="expectedVersion" type="hidden" value={read.policy.version} />
-            <input name="warningVersion" type="hidden" value={read.warningVersion} />
-            <div
-              className="rounded-[var(--radius-sm)] border border-warning/40 bg-warning/10 p-4"
-              role="note"
-              aria-labelledby="supplier-compliance-warning-title"
+          // Collapsed by default so the register and the selected supplier stay above the
+          // fold; opened again when the server sends the operator back to this form.
+          <details className="mt-3" open={notice?.field === 'acknowledged'}>
+            <summary className="flex min-h-11 cursor-pointer items-center rounded-[var(--radius-sm)] text-sm font-medium text-text-strong underline-offset-4 hover:underline focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2">
+              Turn supplier checks off…
+            </summary>
+            <PurchasingActionForm
+              operation={{ resource: 'supplier-compliance-policy', action: 'turn-off' }}
+              action={onSetPolicy}
+              className="mt-4 space-y-4"
             >
-              <p
-                className="text-sm font-semibold text-text-strong"
-                id="supplier-compliance-warning-title"
+              <input name="checksEnabled" type="hidden" value="false" />
+              <input name="expectedVersion" type="hidden" value={read.policy.version} />
+              <input name="warningVersion" type="hidden" value={read.warningVersion} />
+              <div
+                className="rounded-[var(--radius-sm)] border border-warning/40 bg-warning/10 p-4"
+                role="note"
+                aria-labelledby="supplier-compliance-warning-title"
               >
-                {SUPPLIER_COMPLIANCE_WARNING.title}
-              </p>
-              <div className="mt-2 space-y-2 text-sm text-text-body">
-                {SUPPLIER_COMPLIANCE_WARNING.paragraphs.map((paragraph) => (
-                  <p key={paragraph}>{paragraph}</p>
-                ))}
+                <p
+                  className="text-sm font-semibold text-text-strong"
+                  id="supplier-compliance-warning-title"
+                >
+                  {SUPPLIER_COMPLIANCE_WARNING.title}
+                </p>
+                <div className="mt-2 space-y-2 text-sm text-text-body">
+                  {SUPPLIER_COMPLIANCE_WARNING.paragraphs.map((paragraph) => (
+                    <p className="text-text-body" key={paragraph}>
+                      {paragraph}
+                    </p>
+                  ))}
+                </div>
               </div>
-            </div>
-            <Field label="Acknowledgement" name="acknowledged" notice={notice}>
-              {(control) => (
-                <label className="flex min-h-11 items-start gap-2 text-sm text-text-body">
-                  <input
-                    aria-describedby={control['aria-describedby']}
-                    aria-invalid={control['aria-invalid']}
-                    className="mt-0.5 size-4 shrink-0"
-                    id={control.id}
-                    name="acknowledged"
-                    required
-                    type="checkbox"
-                  />
-                  {SUPPLIER_COMPLIANCE_WARNING.acknowledgement}
-                </label>
-              )}
-            </Field>
-            <SubmitButton variant="destructive">Turn supplier checks off</SubmitButton>
-          </PurchasingActionForm>
+              <Field label="Acknowledgement" name="acknowledged" notice={notice}>
+                {(control) => (
+                  <label className="flex min-h-11 items-start gap-2 text-sm text-text-body">
+                    <input
+                      aria-describedby={control['aria-describedby']}
+                      aria-invalid={control['aria-invalid']}
+                      className="mt-0.5 size-4 shrink-0 accent-primary"
+                      id={control.id}
+                      name="acknowledged"
+                      required
+                      type="checkbox"
+                    />
+                    {SUPPLIER_COMPLIANCE_WARNING.acknowledgement}
+                  </label>
+                )}
+              </Field>
+              <SubmitButton variant="destructive">Turn supplier checks off</SubmitButton>
+            </PurchasingActionForm>
+          </details>
         ) : (
           <PurchasingActionForm
             operation={{ resource: 'supplier-compliance-policy', action: 'turn-on' }}
@@ -175,8 +189,10 @@ export function SupplierCompliancePanel({
       ) : null}
 
       {read.canManage && history && history.length > 0 ? (
-        <div className="mt-5 border-t border-border-subtle pt-4">
-          <h3 className="eyebrow">Change history</h3>
+        <details className="mt-4 border-t border-border-subtle pt-3">
+          <summary className="flex min-h-11 cursor-pointer items-center rounded-[var(--radius-sm)] text-sm font-medium text-text-strong underline-offset-4 hover:underline focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2">
+            Change history ({history.length})
+          </summary>
           <ul className="mt-2 space-y-2">
             {history.slice(0, 5).map((change) => (
               <li className="text-sm text-text-body" key={change.id}>
@@ -189,7 +205,7 @@ export function SupplierCompliancePanel({
               </li>
             ))}
           </ul>
-        </div>
+        </details>
       ) : null}
     </SectionCard>
   );
@@ -214,9 +230,12 @@ export function SupplierPolicyStanding({
     return (
       <p className="text-sm text-text-body">
         Supplier checks are off, so orders, sends and receipts are not refused for a missing licence
-        or authorization. This supplier has not been checked.{' '}
-        {`${LICENCE_STATUS_LABEL[licenceStatus]}.`} Authorization and licences can still be recorded
-        as evidence.
+        or authorization
+        {CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS
+          ? ', except where they include a controlled medicine'
+          : ''}
+        . This supplier has not been checked. {`${LICENCE_STATUS_LABEL[licenceStatus]}.`}{' '}
+        Authorization and licences can still be recorded as evidence.
       </p>
     );
   }
