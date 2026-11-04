@@ -6,6 +6,7 @@ import { assertValidRule } from '@/lib/restaurant/sop-recurrence';
 import { PHARMACY_SOP_ROLE_KEYS } from './sop-adapter';
 import {
   PHARMACY_SOP_PACKS,
+  PharmacySopLibraryScopeError,
   PharmacySopRecurrenceError,
   findPharmacySopPack,
   installPharmacySopLibrary,
@@ -161,18 +162,34 @@ describe('temperatureLogRecurrence', () => {
 /**
  * A tiny in-memory template store that models the advisory lock: a second
  * transaction waits until the first commits, exactly as pg_advisory_xact_lock
- * serializes two installs for one organization.
+ * serializes two installs for one organization. `setting` is the transaction's
+ * tenant GUCs; `withOrganizationDefaults` changes go through $queryRawUnsafe.
  */
-function libraryDatabase() {
+function libraryDatabase(
+  setting: { organizationId: string | null; platformAdmin: string } = {
+    organizationId: 'org_a',
+    platformAdmin: 'false',
+  }
+) {
   const templates: { id: string; name: string; versions: { id: string }[] }[] = [];
   let lockTail: Promise<void> = Promise.resolve();
   const lockCalls: string[] = [];
+  const lockKeys: unknown[] = [];
+  const scopeChanges: unknown[][] = [];
   const assignmentCreate = vi.fn();
 
   function txClient(): ScopedDb {
     return {
-      $queryRaw: vi.fn(async (sql: { strings?: readonly string[] }) => {
-        lockCalls.push((sql.strings ?? []).join('?'));
+      $queryRaw: vi.fn(async (sql: { strings?: readonly string[]; values?: unknown[] }) => {
+        const text = (sql.strings ?? []).join('?');
+        if (text.includes('current_setting')) return [setting];
+        lockCalls.push(text);
+        lockKeys.push(sql.values?.[0]);
+        return [];
+      }),
+      $queryRawUnsafe: vi.fn(async (sql: string, ...values: unknown[]) => {
+        if (sql.includes('set_config')) scopeChanges.push(values);
+        else return [setting];
         return [];
       }),
       restaurantSopTemplate: {
@@ -207,6 +224,8 @@ function libraryDatabase() {
     db: { $transaction } as unknown as ScopedDb,
     templates,
     lockCalls,
+    lockKeys,
+    scopeChanges,
     $transaction,
     assignmentCreate,
   };
@@ -226,7 +245,7 @@ describe('installPharmacySopLibrary', () => {
   });
 
   it('serializes concurrent installs behind a per-organization advisory lock', async () => {
-    const { db, templates, lockCalls, $transaction } = libraryDatabase();
+    const { db, templates, lockCalls, lockKeys, $transaction } = libraryDatabase();
     const [left, right] = await Promise.all([
       installPharmacySopLibrary(db),
       installPharmacySopLibrary(db),
@@ -234,7 +253,9 @@ describe('installPharmacySopLibrary', () => {
     expect($transaction).toHaveBeenCalledTimes(2);
     expect(lockCalls).toHaveLength(2);
     expect(lockCalls[0]).toContain('pg_advisory_xact_lock');
-    expect(lockCalls[0]).toContain('pharmacy-sop-library:');
+    // The key is a bound parameter naming the organization, never the raw GUC.
+    expect(lockCalls[0]).not.toContain('current_setting');
+    expect(lockKeys).toEqual(['pharmacy-sop-library:org_a', 'pharmacy-sop-library:org_a']);
     expect(templates).toHaveLength(PHARMACY_SOP_PACKS.length);
     expect([...left, ...right].filter((result) => result.created)).toHaveLength(
       PHARMACY_SOP_PACKS.length
@@ -248,5 +269,49 @@ describe('installPharmacySopLibrary', () => {
     expect(assignmentCreate).not.toHaveBeenCalled();
     // The in-memory client exposes no occurrence or job-role delegate, so any
     // attempt to schedule or grant would have thrown.
+  });
+
+  it('accepts an explicit organization that matches the tenant scope', async () => {
+    const { db, lockKeys, scopeChanges } = libraryDatabase();
+    await installPharmacySopLibrary(db, { organizationId: 'org_a' });
+    expect(lockKeys).toEqual(['pharmacy-sop-library:org_a']);
+    expect(scopeChanges).toEqual([]);
+  });
+
+  it('fails closed with no organization, before any lock or write', async () => {
+    const { db, templates, lockCalls } = libraryDatabase({
+      organizationId: null,
+      platformAdmin: 'true',
+    });
+    await expect(installPharmacySopLibrary(db)).rejects.toBeInstanceOf(
+      PharmacySopLibraryScopeError
+    );
+    await expect(installPharmacySopLibrary(db, { organizationId: '  ' })).rejects.toBeInstanceOf(
+      PharmacySopLibraryScopeError
+    );
+    expect(lockCalls).toEqual([]);
+    expect(templates).toEqual([]);
+  });
+
+  it('refuses an explicit organization that disagrees with the tenant scope', async () => {
+    const { db, templates, lockCalls } = libraryDatabase();
+    await expect(installPharmacySopLibrary(db, { organizationId: 'org_b' })).rejects.toBeInstanceOf(
+      PharmacySopLibraryScopeError
+    );
+    expect(lockCalls).toEqual([]);
+    expect(templates).toEqual([]);
+  });
+
+  it('installs from a platform context under that organization’s own tenant scope', async () => {
+    const { db, templates, lockKeys, scopeChanges } = libraryDatabase({
+      organizationId: null,
+      platformAdmin: 'true',
+    });
+    const results = await installPharmacySopLibrary(db, { organizationId: 'org_c' });
+    expect(results).toHaveLength(PHARMACY_SOP_PACKS.length);
+    expect(templates).toHaveLength(PHARMACY_SOP_PACKS.length);
+    expect(lockKeys).toEqual(['pharmacy-sop-library:org_c']);
+    // Narrowed to the tenant for the install, then restored.
+    expect(scopeChanges).toEqual([['org_c'], ['', 'true']]);
   });
 });

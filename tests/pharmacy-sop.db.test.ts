@@ -24,15 +24,18 @@ const migration = readFileSync(
 );
 
 describe('DEV-751 pharmacy SOP migration contract', () => {
-  it('forces tenant/branch RLS on both tables and keeps record links append-only', () => {
+  it('forces tenant/branch RLS on both tables and keeps both append-only', () => {
+    expect(migration).toContain('app.current_branch_id');
     for (const table of tables) {
       expect(migration).toContain(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY`);
       expect(migration).toContain(`ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY`);
+      expect(migration).toMatch(new RegExp(`ON "${table}" FOR SELECT`));
+      expect(migration).toMatch(new RegExp(`ON "${table}" FOR INSERT`));
+      // Every policy names its command: a bare policy defaults to FOR ALL.
+      const policies = migration.match(new RegExp(`CREATE POLICY \\w+ ON "${table}"[^\\n]*`, 'g'));
+      expect(policies).toHaveLength(2);
+      for (const policy of policies ?? []) expect(policy).toMatch(/ FOR (SELECT|INSERT)$/);
     }
-    expect(migration).toContain('app.current_branch_id');
-    expect(migration).toMatch(/ON "pharmacy_sop_record_links" FOR SELECT/);
-    expect(migration).toMatch(/ON "pharmacy_sop_record_links" FOR INSERT/);
-    expect(migration).not.toMatch(/ON "pharmacy_sop_record_links" FOR (UPDATE|DELETE|ALL)/);
   });
 
   it('keys every cross-table reference by organization', () => {
@@ -206,7 +209,8 @@ describeIfDatabase('DEV-751 pharmacy SOP PostgreSQL RLS', () => {
     expect(policies.rows.map((row) => [row.tablename, row.cmd])).toEqual([
       ['pharmacy_sop_record_links', 'INSERT'],
       ['pharmacy_sop_record_links', 'SELECT'],
-      ['pharmacy_sop_sites', 'ALL'],
+      ['pharmacy_sop_sites', 'INSERT'],
+      ['pharmacy_sop_sites', 'SELECT'],
     ]);
     for (const policy of policies.rows) {
       expect(policy.expr).toContain('app.current_organization_id');
@@ -337,5 +341,27 @@ describeIfDatabase('DEV-751 pharmacy SOP PostgreSQL RLS', () => {
       (await runtime.query(`DELETE FROM pharmacy_sop_record_links WHERE id = $1`, [id('fresh')]))
         .rowCount
     ).toBe(0);
+  });
+
+  it('never lets the runtime role re-point or remove a site', async () => {
+    for (const scope of [A, null]) {
+      // Tenant A's own session, then the platform-admin escape.
+      await as(scope);
+      const repointed = await runtime.query(
+        `UPDATE pharmacy_sop_sites SET "sopBranchId" = $2 WHERE id = $1`,
+        [`${A}_site`, `${A}_rb_unbound`]
+      );
+      expect(repointed.rowCount).toBe(0);
+      const deleted = await runtime.query(`DELETE FROM pharmacy_sop_sites WHERE id = $1`, [
+        `${A}_site`,
+      ]);
+      expect(deleted.rowCount).toBe(0);
+    }
+    await as(A);
+    const site = await runtime.query<{ sopBranchId: string }>(
+      `SELECT "sopBranchId" FROM pharmacy_sop_sites WHERE id = $1`,
+      [`${A}_site`]
+    );
+    expect(site.rows).toEqual([{ sopBranchId: `${A}_rb` }]);
   });
 });

@@ -14,8 +14,10 @@
 -- schedule is created. Both tables carry forced RLS with the pharmacy
 -- tenant/branch clause (app.current_organization_id, optional
 -- app.current_branch_id, and the app.is_platform_admin control-plane escape).
--- Record links get SELECT + INSERT policies only, the restaurant_sop_evidence
--- append-only pattern, so the runtime role cannot UPDATE or DELETE a link.
+-- Both tables get SELECT + INSERT policies only, the restaurant_sop_evidence
+-- append-only pattern, so the runtime role cannot UPDATE or DELETE a link, and
+-- cannot re-point a site at another engine branch or remove it. Nothing in the
+-- application updates or deletes either table.
 
 CREATE TYPE "PharmacySopRecordType" AS ENUM (
   'TEMPERATURE_LOG',
@@ -51,13 +53,14 @@ CREATE UNIQUE INDEX "pharmacy_sop_sites_org_sop_branch_key"
 
 ALTER TABLE "pharmacy_sop_sites" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "pharmacy_sop_sites" FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_branch_isolation ON "pharmacy_sop_sites"
+CREATE POLICY tenant_branch_isolation_select ON "pharmacy_sop_sites" FOR SELECT
   USING (
     current_setting('app.is_platform_admin', true) = 'true' OR
     ("organizationId" = NULLIF(current_setting('app.current_organization_id', true), '') AND
      (NULLIF(current_setting('app.current_branch_id', true), '') IS NULL OR
       "pharmacyBranchId" = current_setting('app.current_branch_id', true)))
-  )
+  );
+CREATE POLICY tenant_branch_isolation_insert ON "pharmacy_sop_sites" FOR INSERT
   WITH CHECK (
     current_setting('app.is_platform_admin', true) = 'true' OR
     ("organizationId" = NULLIF(current_setting('app.current_organization_id', true), '') AND

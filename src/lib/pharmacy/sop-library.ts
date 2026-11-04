@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { Prisma, type PharmacySopRecordType } from '@/generated/prisma/client';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withOrganizationDefaults, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   installSopPackDefinition,
   type InstallPackResult,
@@ -397,27 +397,67 @@ export function pharmacySopPackForTemplateName(name: string): PharmacySopPack | 
   return PHARMACY_SOP_PACKS.find((candidate) => candidate.name === name);
 }
 
+export class PharmacySopLibraryScopeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PharmacySopLibraryScopeError';
+  }
+}
+
 /**
- * Install every pharmacy pack into the current organization. Idempotent (a pack
+ * Install every pharmacy pack into one organization. Idempotent (a pack
  * already present by name is left untouched) and serialized per organization:
  * the shared installer is find-then-create, so two concurrent installs take a
  * transaction advisory lock and the second sees the first's templates.
+ *
+ * The organization is `opts.organizationId` when given, else the transaction's
+ * `app.current_organization_id`; neither (a platform context with no explicit
+ * organization) throws before any read or write, and an explicit id that
+ * disagrees with a non-empty tenant setting throws too. The lock key always
+ * names that organization. The shared installer scopes its reads and its
+ * inserts by RLS and the column default, so unless the transaction is already
+ * plain tenant scope for that organization, the install runs inside
+ * `withOrganizationDefaults` — a platform-admin read would otherwise see every
+ * tenant's templates.
  */
 export async function installPharmacySopLibrary(
   db: ScopedDb,
-  opts: { now?: Date } = {}
+  opts: { now?: Date; organizationId?: string } = {}
 ): Promise<InstallPackResult[]> {
   const transaction = db.$transaction.bind(db) as unknown as <T>(
     work: (tx: ScopedDb) => Promise<T>
   ) => Promise<T>;
   return transaction(async (tx) => {
-    await tx.$queryRaw(
-      Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended('pharmacy-sop-library:' || current_setting('app.current_organization_id', true), 0))`
+    const [setting] = await tx.$queryRaw<
+      { organizationId: string | null; platformAdmin: string | null }[]
+    >(
+      Prisma.sql`SELECT NULLIF(current_setting('app.current_organization_id', true), '') AS "organizationId", current_setting('app.is_platform_admin', true) AS "platformAdmin"`
     );
-    const results: InstallPackResult[] = [];
-    for (const definition of PHARMACY_SOP_PACKS) {
-      results.push(await installSopPackDefinition(tx, definition, opts));
+    const current = setting?.organizationId?.trim() || null;
+    const requested = opts.organizationId?.trim() || null;
+    if (requested && current && requested !== current) {
+      throw new PharmacySopLibraryScopeError(
+        'The organization to install into does not match the current tenant.'
+      );
     }
-    return results;
+    const organizationId = requested ?? current;
+    if (!organizationId) {
+      throw new PharmacySopLibraryScopeError(
+        'Choose the organization to install the pharmacy procedure library into.'
+      );
+    }
+
+    const install = async (scoped: ScopedDb) => {
+      await scoped.$queryRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-sop-library:${organizationId}`}, 0))`
+      );
+      const results: InstallPackResult[] = [];
+      for (const definition of PHARMACY_SOP_PACKS) {
+        results.push(await installSopPackDefinition(scoped, definition, { now: opts.now }));
+      }
+      return results;
+    };
+    const tenantScoped = current === organizationId && setting?.platformAdmin !== 'true';
+    return tenantScoped ? install(tx) : withOrganizationDefaults(tx, organizationId, install);
   });
 }

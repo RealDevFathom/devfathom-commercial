@@ -1,8 +1,23 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+/** ABAC stand-in: every user may dispense unless listed here. */
+const abac = vi.hoisted(() => ({ nonDispensers: new Set<string>() }));
+const can = vi.hoisted(() =>
+  vi.fn(async (user: { id: string }, action: string) => {
+    return action === 'pharmacy:dispense' && !abac.nonDispensers.has(user.id);
+  })
+);
+vi.mock('@/lib/abac', () => ({ can }));
+
+beforeEach(() => {
+  abac.nonDispensers.clear();
+  can.mockClear();
+});
+
 import {
+  PHARMACY_SOP_RECORD_LOOKBACK_MS,
   PharmacySopAccessError,
   assertIndependentPharmacyVerifier,
   assertOccurrenceAtSite,
@@ -10,6 +25,7 @@ import {
   ensurePharmacySopJobRoles,
   linkPharmacySopRecord,
   listPharmacySopBranches,
+  pharmacySopRecordTimeBounds,
   pharmacySopRolesAt,
   resolvePharmacySopActor,
   resolvePharmacySopSite,
@@ -87,6 +103,9 @@ function select(row: Row, shape: Row | undefined, tables: Tables): Row {
     if (key === 'jobRole') {
       const role = tables.jobRoles.find((candidate) => candidate.id === row.jobRoleId)!;
       out.jobRole = select(role, (value as { select: Row }).select, tables);
+    } else if (key === 'user') {
+      const user = tables.users.find((candidate) => candidate.id === row.userId);
+      out.user = user ? { ...user } : null;
     } else if (key === 'template') {
       out.template = { name: row.templateName };
     } else out[key] = row[key];
@@ -138,6 +157,7 @@ function delegate(tables: Tables, name: keyof Tables, uniqueKeys?: (row: Row) =>
 
 const ORG = 'org_a';
 const OTHER_ORG = 'org_b';
+const at = (iso: string) => new Date(iso);
 
 function fixture() {
   const tables: Tables = {
@@ -244,6 +264,46 @@ function fixture() {
         poolJobRoleId: null,
       },
       {
+        id: 'occ_live',
+        organizationId: ORG,
+        branchId: 'rb_main',
+        status: 'IN_PROGRESS',
+        resolvedAt: null,
+        templateVersionId: 'ver_opening',
+        dueAt: new Date('2026-11-04T08:00:00Z'),
+        windowEndsAt: new Date('2026-11-04T12:00:00Z'),
+        assignedStaffProfileId: null,
+        claimedByStaffProfileId: 'sp_manager',
+        poolJobRoleId: 'role_pool',
+      },
+      {
+        id: 'occ_submitted_own',
+        organizationId: ORG,
+        branchId: 'rb_main',
+        status: 'SUBMITTED',
+        resolvedAt: null,
+        templateVersionId: 'ver_opening',
+        dueAt: new Date('2026-11-04T08:00:00Z'),
+        windowEndsAt: new Date('2026-11-04T12:00:00Z'),
+        assignedStaffProfileId: null,
+        claimedByStaffProfileId: 'sp_manager',
+        poolJobRoleId: 'role_pool',
+      },
+      {
+        id: 'occ_assigned_elsewhere',
+        organizationId: ORG,
+        branchId: 'rb_main',
+        status: 'IN_PROGRESS',
+        resolvedAt: null,
+        templateVersionId: 'ver_opening',
+        dueAt: new Date('2026-11-04T08:00:00Z'),
+        windowEndsAt: new Date('2026-11-04T12:00:00Z'),
+        // The assignee owns the work even when someone else claimed it.
+        assignedStaffProfileId: 'sp_pharmacist',
+        claimedByStaffProfileId: 'sp_manager',
+        poolJobRoleId: null,
+      },
+      {
         id: 'occ_restaurant',
         organizationId: ORG,
         branchId: 'rb_restaurant',
@@ -263,6 +323,7 @@ function fixture() {
         completedByStaffProfileId: 'sp_completer',
       },
       { id: 'step_counts', organizationId: ORG, occurrenceId: 'occ_counts' },
+      { id: 'step_live', organizationId: ORG, occurrenceId: 'occ_live' },
     ],
     evidence: [
       {
@@ -279,14 +340,85 @@ function fixture() {
     ],
     links: [],
     temperatureLogs: [
-      { id: 'temp_main', organizationId: ORG, branchId: 'pb_main', outOfRange: true },
-      { id: 'temp_plain', organizationId: ORG, branchId: 'pb_plain', outOfRange: false },
-      { id: 'temp_other', organizationId: OTHER_ORG, branchId: 'pb_other', outOfRange: false },
+      {
+        id: 'temp_main',
+        organizationId: ORG,
+        branchId: 'pb_main',
+        outOfRange: true,
+        recordedAt: at('2026-11-04T07:00:00Z'),
+      },
+      // Exactly on the bounds: dueAt − 24h and windowEndsAt.
+      {
+        id: 'temp_earliest',
+        organizationId: ORG,
+        branchId: 'pb_main',
+        outOfRange: false,
+        recordedAt: at('2026-11-03T08:00:00Z'),
+      },
+      {
+        id: 'temp_latest',
+        organizationId: ORG,
+        branchId: 'pb_main',
+        outOfRange: false,
+        recordedAt: at('2026-11-04T12:00:00Z'),
+      },
+      {
+        id: 'temp_stale',
+        organizationId: ORG,
+        branchId: 'pb_main',
+        outOfRange: false,
+        recordedAt: at('2026-11-03T07:59:59Z'),
+      },
+      {
+        id: 'temp_after',
+        organizationId: ORG,
+        branchId: 'pb_main',
+        outOfRange: false,
+        recordedAt: at('2026-11-04T12:00:01Z'),
+      },
+      {
+        id: 'temp_plain',
+        organizationId: ORG,
+        branchId: 'pb_plain',
+        outOfRange: false,
+        recordedAt: at('2026-11-04T07:00:00Z'),
+      },
+      {
+        id: 'temp_other',
+        organizationId: OTHER_ORG,
+        branchId: 'pb_other',
+        outOfRange: false,
+        recordedAt: at('2026-11-04T07:00:00Z'),
+      },
     ],
-    registerEntries: [{ id: 'reg_main', organizationId: ORG, branchId: 'pb_main' }],
+    // Register entries are not time-bounded: the balance checked may be old.
+    registerEntries: [
+      {
+        id: 'reg_main',
+        organizationId: ORG,
+        branchId: 'pb_main',
+        createdAt: at('2026-09-01T00:00:00Z'),
+      },
+    ],
     goodsReceipts: [
-      { id: 'grn_main', organizationId: ORG, branchId: 'pb_main' },
-      { id: 'grn_plain', organizationId: ORG, branchId: 'pb_plain' },
+      {
+        id: 'grn_main',
+        organizationId: ORG,
+        branchId: 'pb_main',
+        receivedAt: at('2026-11-04T09:00:00Z'),
+      },
+      {
+        id: 'grn_old',
+        organizationId: ORG,
+        branchId: 'pb_main',
+        receivedAt: at('2026-10-01T09:00:00Z'),
+      },
+      {
+        id: 'grn_plain',
+        organizationId: ORG,
+        branchId: 'pb_plain',
+        receivedAt: at('2026-11-04T09:00:00Z'),
+      },
     ],
     batches: [
       { id: 'batch_main', organizationId: ORG },
@@ -308,9 +440,13 @@ function fixture() {
   };
 
   const lockKeys: string[] = [];
+  const shareLocks: string[] = [];
   const db = {
-    $queryRaw: vi.fn(async (sql: { values?: unknown[] }) => {
-      lockKeys.push(String(sql.values?.[0]));
+    $queryRaw: vi.fn(async (sql: { strings?: readonly string[]; values?: unknown[] }) => {
+      const text = (sql.strings ?? []).join('?');
+      if (text.includes('pg_advisory_xact_lock')) lockKeys.push(String(sql.values?.[0]));
+      else if (text.includes('FOR SHARE')) shareLocks.push(String(sql.values?.[0]));
+      else throw new Error(`unexpected raw query: ${text}`);
       return [];
     }),
     pharmacyBranchAssignment: delegate(tables, 'assignments'),
@@ -340,7 +476,7 @@ function fixture() {
   db.$transaction = vi.fn(async (work: (tx: ScopedDb) => Promise<unknown>) =>
     work(db as unknown as ScopedDb)
   );
-  return { db: db as unknown as ScopedDb, tables, lockKeys, raw: db };
+  return { db: db as unknown as ScopedDb, tables, lockKeys, shareLocks, raw: db };
 }
 
 const mainSite: PharmacySopSiteRef = {
@@ -666,6 +802,86 @@ describe('setPharmacySopRoleHolding', () => {
       )
     ).toBe('SITE_NOT_ENABLED');
   });
+
+  it.each(['pharmacy-qualified-person', 'pharmacy-manager'] as const)(
+    'refuses a self-grant of the %s verifier role',
+    async (roleKey) => {
+      const { db, tables } = fixture();
+      expect(
+        await reason(
+          setPharmacySopRoleHolding(db, { ...base, roleKey, targetUserId: 'u_manager', held: true })
+        )
+      ).toBe('NOT_INDEPENDENT');
+      expect(tables.holdings).toHaveLength(0);
+      expect(tables.holdingAudits).toHaveLength(0);
+    }
+  );
+
+  it('still lets a manager revoke their own verifier role, and grant a non-verifier role', async () => {
+    const { db, tables } = fixture();
+    await grantRole(db, 'sp_manager', 'pharmacy-manager', tables);
+    await expect(
+      setPharmacySopRoleHolding(db, {
+        ...base,
+        roleKey: 'pharmacy-manager',
+        targetUserId: 'u_manager',
+        held: false,
+      })
+    ).resolves.toEqual({ staffProfileId: 'sp_manager', changed: true });
+    await expect(
+      setPharmacySopRoleHolding(db, { ...base, targetUserId: 'u_manager', held: true })
+    ).resolves.toEqual({ staffProfileId: 'sp_manager', changed: true });
+  });
+
+  it('refuses a grant from a grantor with no staff profile in the tenant', async () => {
+    const { db } = fixture();
+    expect(
+      await reason(
+        setPharmacySopRoleHolding(db, {
+          ...base,
+          roleKey: 'pharmacy-manager',
+          grantedByStaffProfileId: 'sp_missing',
+          targetUserId: 'u_pharmacist',
+          held: true,
+        })
+      )
+    ).toBe('NO_STAFF_PROFILE');
+  });
+
+  it('grants the qualified-person role only to a user the ABAC engine lets dispense', async () => {
+    const { db, tables } = fixture();
+    const grant = {
+      ...base,
+      roleKey: 'pharmacy-qualified-person' as const,
+      targetUserId: 'u_pharmacist',
+      held: true,
+    };
+    abac.nonDispensers.add('u_pharmacist');
+    expect(await reason(setPharmacySopRoleHolding(db, grant))).toBe('ROLE_REQUIRED');
+    expect(tables.holdings).toHaveLength(0);
+    expect(can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'u_pharmacist', organizationId: ORG, status: 'ACTIVE' }),
+      'pharmacy:dispense',
+      undefined,
+      { db }
+    );
+
+    // The manager role is not gated on dispensing, and revoking never is.
+    await expect(
+      setPharmacySopRoleHolding(db, { ...grant, roleKey: 'pharmacy-manager' })
+    ).resolves.toMatchObject({ changed: true });
+
+    abac.nonDispensers.clear();
+    await expect(setPharmacySopRoleHolding(db, grant)).resolves.toEqual({
+      staffProfileId: 'sp_pharmacist',
+      changed: true,
+    });
+    abac.nonDispensers.add('u_pharmacist');
+    await expect(setPharmacySopRoleHolding(db, { ...grant, held: false })).resolves.toEqual({
+      staffProfileId: 'sp_pharmacist',
+      changed: true,
+    });
+  });
 });
 
 describe('occurrence scope and independent verification', () => {
@@ -725,6 +941,29 @@ describe('occurrence scope and independent verification', () => {
     ).toBe('ROLE_REQUIRED');
   });
 
+  it('re-checks the role and the dispensing permission at verification time', async () => {
+    const { db, tables } = fixture();
+    const input = {
+      occurrenceId: 'occ_main',
+      site: mainSite,
+      verifierStaffProfileId: 'sp_pharmacist',
+    };
+    await grantRole(db, 'sp_pharmacist', 'pharmacy-qualified-person', tables);
+    expect(await reason(assertIndependentPharmacyVerifier(db, input))).toBe('RESOLVED');
+
+    // Dispensing withdrawn after the grant: a qualified-person-only verifier stops.
+    abac.nonDispensers.add('u_pharmacist');
+    expect(await reason(assertIndependentPharmacyVerifier(db, input))).toBe('ROLE_REQUIRED');
+    // A manager role still qualifies on a pack the manager may verify.
+    await grantRole(db, 'sp_pharmacist', 'pharmacy-manager', tables);
+    expect(await reason(assertIndependentPharmacyVerifier(db, input))).toBe('RESOLVED');
+
+    // Holdings are re-read: once both are revoked, verification is refused.
+    abac.nonDispensers.clear();
+    tables.holdings.length = 0;
+    expect(await reason(assertIndependentPharmacyVerifier(db, input))).toBe('ROLE_REQUIRED');
+  });
+
   it('lets only a qualified person verify controlled counts', async () => {
     const { db, tables } = fixture();
     await grantRole(db, 'sp_manager', 'pharmacy-manager', tables);
@@ -778,15 +1017,42 @@ describe('occurrence scope and independent verification', () => {
   });
 });
 
+describe('pharmacySopRecordTimeBounds', () => {
+  const occurrence = {
+    dueAt: at('2026-11-04T08:00:00Z'),
+    windowEndsAt: at('2026-11-04T12:00:00Z'),
+  };
+
+  it('bounds event records from dueAt − 24h to windowEndsAt', () => {
+    for (const recordType of ['TEMPERATURE_LOG', 'GOODS_RECEIPT'] as const) {
+      expect(pharmacySopRecordTimeBounds(recordType, occurrence)).toEqual({
+        gte: new Date(occurrence.dueAt.getTime() - PHARMACY_SOP_RECORD_LOOKBACK_MS),
+        lte: occurrence.windowEndsAt,
+      });
+    }
+    expect(PHARMACY_SOP_RECORD_LOOKBACK_MS).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it('leaves register balances and state records unbounded', () => {
+    for (const recordType of [
+      'CONTROLLED_REGISTER_ENTRY',
+      'MANUFACTURING_BATCH',
+      'RECALL_NOTICE',
+    ] as const) {
+      expect(pharmacySopRecordTimeBounds(recordType, occurrence)).toBeNull();
+    }
+  });
+});
+
 describe('linkPharmacySopRecord', () => {
   const actor = { staffProfileId: 'sp_manager', displayName: 'Mona', userId: 'u_manager' };
-  const base = { site: mainSite, occurrenceId: 'occ_main', actor };
+  const base = { site: mainSite, occurrenceId: 'occ_live', actor };
 
   it('links an existing temperature log once, reports its range flag, and is idempotent', async () => {
-    const { db, tables } = fixture();
+    const { db, tables, shareLocks } = fixture();
     const first = await linkPharmacySopRecord(db, {
       ...base,
-      occurrenceStepId: 'step_1',
+      occurrenceStepId: 'step_live',
       recordType: 'TEMPERATURE_LOG',
       recordId: ' temp_main ',
       note: '  fridge door left open  ',
@@ -802,13 +1068,15 @@ describe('linkPharmacySopRecord', () => {
       expect.objectContaining({
         organizationId: ORG,
         pharmacyBranchId: 'pb_main',
-        occurrenceStepId: 'step_1',
+        occurrenceStepId: 'step_live',
         recordId: 'temp_main',
         note: 'fridge door left open',
         linkedByStaffProfileId: 'sp_manager',
         linkedByUserId: 'u_manager',
       }),
     ]);
+    // The occurrence row is share-locked inside the transaction before it is read.
+    expect(shareLocks).toEqual(['occ_live', 'occ_live']);
   });
 
   it('validates each record type at the branch or, for recalls, in the tenant', async () => {
@@ -830,6 +1098,65 @@ describe('linkPharmacySopRecord', () => {
     expect(await link('CONTROLLED_REGISTER_ENTRY', 'missing')).toBe('RECORD_OUT_OF_SCOPE');
   });
 
+  it('only links temperature logs and goods receipts inside the occurrence window', async () => {
+    const { db, tables } = fixture();
+    const link = (
+      recordType: Parameters<typeof linkPharmacySopRecord>[1]['recordType'],
+      recordId: string
+    ) => reason(linkPharmacySopRecord(db, { ...base, recordType, recordId }));
+    // Both bounds are inclusive.
+    expect(await link('TEMPERATURE_LOG', 'temp_earliest')).toBe('RESOLVED');
+    expect(await link('TEMPERATURE_LOG', 'temp_latest')).toBe('RESOLVED');
+    expect(await link('TEMPERATURE_LOG', 'temp_stale')).toBe('RECORD_OUT_OF_SCOPE');
+    expect(await link('TEMPERATURE_LOG', 'temp_after')).toBe('RECORD_OUT_OF_SCOPE');
+    expect(await link('GOODS_RECEIPT', 'grn_old')).toBe('RECORD_OUT_OF_SCOPE');
+    expect(tables.links.map((row) => row.recordId).sort()).toEqual([
+      'temp_earliest',
+      'temp_latest',
+    ]);
+  });
+
+  it('refuses an occurrence that is not IN_PROGRESS, re-read inside the transaction', async () => {
+    const { db, tables } = fixture();
+    const record = { recordType: 'TEMPERATURE_LOG' as const, recordId: 'temp_main' };
+    expect(
+      await reason(
+        linkPharmacySopRecord(db, { ...base, ...record, occurrenceId: 'occ_submitted_own' })
+      )
+    ).toBe('INVALID_INPUT');
+    // A status change between the router's check and the link is caught too.
+    tables.occurrences.find((row) => row.id === 'occ_live')!.status = 'SUBMITTED';
+    expect(await reason(linkPharmacySopRecord(db, { ...base, ...record }))).toBe('INVALID_INPUT');
+    expect(tables.links).toHaveLength(0);
+  });
+
+  it('refuses anyone but the occurrence owner (assignee, else claimer)', async () => {
+    const { db, tables } = fixture();
+    const record = { recordType: 'TEMPERATURE_LOG' as const, recordId: 'temp_main' };
+    const pharmacist = {
+      staffProfileId: 'sp_pharmacist',
+      displayName: 'Paul',
+      userId: 'u_pharmacist',
+    };
+    expect(await reason(linkPharmacySopRecord(db, { ...base, ...record, actor: pharmacist }))).toBe(
+      'INVALID_INPUT'
+    );
+    expect(
+      await reason(
+        linkPharmacySopRecord(db, { ...base, ...record, occurrenceId: 'occ_assigned_elsewhere' })
+      )
+    ).toBe('INVALID_INPUT');
+    expect(tables.links).toHaveLength(0);
+    await expect(
+      linkPharmacySopRecord(db, {
+        ...base,
+        ...record,
+        occurrenceId: 'occ_assigned_elsewhere',
+        actor: pharmacist,
+      })
+    ).resolves.toMatchObject({ created: true });
+  });
+
   it('refuses closed occurrences, other-branch occurrences, foreign steps and bad input', async () => {
     const { db, tables } = fixture();
     const record = { recordType: 'TEMPERATURE_LOG' as const, recordId: 'temp_main' };
@@ -843,11 +1170,11 @@ describe('linkPharmacySopRecord', () => {
         linkPharmacySopRecord(db, { ...base, ...record, occurrenceId: 'occ_restaurant' })
       )
     ).toBe('OCCURRENCE_OUT_OF_SCOPE');
-    expect(
-      await reason(
-        linkPharmacySopRecord(db, { ...base, ...record, occurrenceStepId: 'step_counts' })
-      )
-    ).toBe('OCCURRENCE_OUT_OF_SCOPE');
+    for (const occurrenceStepId of ['step_counts', 'step_1']) {
+      expect(
+        await reason(linkPharmacySopRecord(db, { ...base, ...record, occurrenceStepId }))
+      ).toBe('OCCURRENCE_OUT_OF_SCOPE');
+    }
     expect(
       await reason(
         linkPharmacySopRecord(db, {

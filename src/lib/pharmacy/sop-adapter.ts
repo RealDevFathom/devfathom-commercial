@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { Prisma, type PharmacySopRecordType } from '@/generated/prisma/client';
+import { can } from '@/lib/abac';
 import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
 import { BusinessDateError, parseCutoffMinutes } from '@/lib/restaurant/business-date';
 import { grantJobRole, JobRoleError, revokeJobRole } from '@/lib/restaurant/job-roles';
@@ -116,6 +117,38 @@ export const PHARMACY_SOP_RECORD_TYPES: readonly PharmacySopRecordType[] = [
 const CLOSED_OCCURRENCE_STATUSES = ['VERIFIED', 'WAIVED'] as const;
 const NOTE_MAX_LENGTH = 2000;
 const RECORD_ID_MAX_LENGTH = 191;
+
+/** How far before an occurrence's due time a linked event record may fall. */
+export const PHARMACY_SOP_RECORD_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The time window an EVENT record must fall in to be linked to an occurrence,
+ * or null when the record type is not time-bounded. One definition, so the
+ * record picker and the link check agree:
+ *
+ * - TEMPERATURE_LOG (`recordedAt`) and GOODS_RECEIPT (`receivedAt`): from
+ *   `dueAt` − 24h to `windowEndsAt`. A reading or delivery is evidence for the
+ *   round or receiving check it happened in, never for a later one.
+ * - CONTROLLED_REGISTER_ENTRY: not bounded. A count reconciles to the running
+ *   balance, and the entry carrying it may be weeks old when stock has not
+ *   moved; entries are server-timestamped, so none can postdate the link.
+ * - MANUFACTURING_BATCH and RECALL_NOTICE: state, not events, so not bounded.
+ */
+export function pharmacySopRecordTimeBounds(
+  recordType: PharmacySopRecordType,
+  occurrence: { dueAt: Date; windowEndsAt: Date }
+): { gte: Date; lte: Date } | null {
+  switch (recordType) {
+    case 'TEMPERATURE_LOG':
+    case 'GOODS_RECEIPT':
+      return {
+        gte: new Date(occurrence.dueAt.getTime() - PHARMACY_SOP_RECORD_LOOKBACK_MS),
+        lte: occurrence.windowEndsAt,
+      };
+    default:
+      return null;
+  }
+}
 
 function refuse(reason: PharmacySopAccessErrorReason, message: string): never {
   throw new PharmacySopAccessError(message, reason);
@@ -406,6 +439,13 @@ export async function ensurePharmacySopJobRoles(
  * user with no profile at all is refused the same way. Grants and revokes go
  * through the shared job-role helpers, so each change appends one entry to
  * `restaurant_staff_job_role_audits` and a no-op appends none.
+ *
+ * Verifier roles carry two extra grant checks (revoking stays unrestricted,
+ * including revoking your own role):
+ * - Nobody grants a verifier role to themselves: the grantor's staff profile
+ *   and user must not be the target's (NOT_INDEPENDENT).
+ * - `pharmacy-qualified-person` is granted only to a user the ABAC engine
+ *   allows `pharmacy:dispense` (ROLE_REQUIRED).
  */
 export async function setPharmacySopRoleHolding(
   db: ScopedDb,
@@ -436,12 +476,42 @@ export async function setPharmacySopRoleHolding(
 
     const user = await tx.user.findFirst({
       where: { id: targetUserId, organizationId, status: 'ACTIVE' },
-      select: { id: true, name: true },
+      include: {
+        organizationRole: { include: { permissions: true } },
+        permissionOverrides: true,
+      },
     });
     if (!user) refuse('BRANCH_OUT_OF_SCOPE', 'This person is not assigned to this branch.');
     const assigned = await assignedRegisterBranchIds(tx, organizationId, targetUserId);
     if (!assigned.includes(site.pharmacyBranchId)) {
       refuse('BRANCH_OUT_OF_SCOPE', 'This person is not assigned to this branch.');
+    }
+
+    const grantsVerifierRole =
+      input.held && PHARMACY_SOP_VERIFIER_ROLE_KEYS.includes(input.roleKey);
+    if (grantsVerifierRole) {
+      const grantor = await tx.restaurantStaffProfile.findFirst({
+        where: { id: input.grantedByStaffProfileId, organizationId },
+        select: { userId: true },
+      });
+      if (!grantor) {
+        refuse('NO_STAFF_PROFILE', 'Your account has no active staff profile in this workspace.');
+      }
+      // The target's profile is found by user id, so a matching user covers
+      // the grantor's own profile too.
+      if (grantor.userId === targetUserId) {
+        refuse('NOT_INDEPENDENT', 'You cannot grant yourself a verifier role.');
+      }
+    }
+    if (
+      input.held &&
+      input.roleKey === 'pharmacy-qualified-person' &&
+      !(await can(user, 'pharmacy:dispense', undefined, { db: tx }))
+    ) {
+      refuse(
+        'ROLE_REQUIRED',
+        'Only someone permitted to dispense can be made the qualified person.'
+      );
     }
 
     // One profile per user is not a database constraint, so creation is
@@ -572,6 +642,11 @@ export async function pharmacySopVerifierRolesFor(
  * and must not be the assignee, claimer, any step completer or any evidence
  * uploader of the occurrence. Throws ROLE_REQUIRED / NOT_INDEPENDENT.
  *
+ * Holdings are re-read on every call, so a role revoked after it was granted
+ * stops verification at once. A verifier qualifying only through
+ * `pharmacy-qualified-person` must also still be allowed `pharmacy:dispense`,
+ * the same condition that granting that role requires.
+ *
  * Linking a pharmacy record to the occurrence also counts as taking part.
  */
 export async function assertIndependentPharmacyVerifier(
@@ -586,7 +661,8 @@ export async function assertIndependentPharmacyVerifier(
     pharmacySopVerifierRolesFor(db, occurrence.templateVersionId),
     pharmacySopRolesAt(db, { staffProfileId: verifier, sopBranchId: input.site.sopBranchId }),
   ]);
-  if (!held.some((key) => allowed.includes(key))) {
+  const qualifying = held.filter((key) => allowed.includes(key));
+  if (qualifying.length === 0) {
     refuse('ROLE_REQUIRED', 'A verifier role is required at this branch.');
   }
 
@@ -613,6 +689,28 @@ export async function assertIndependentPharmacyVerifier(
     }),
   ]);
   if (completedStep || uploadedEvidence || linkedRecord) notIndependent();
+
+  if (qualifying.every((key) => key === 'pharmacy-qualified-person')) {
+    const profile = await db.restaurantStaffProfile.findFirst({
+      where: { id: verifier, status: 'ACTIVE' },
+      select: {
+        user: {
+          include: {
+            organizationRole: { include: { permissions: true } },
+            permissionOverrides: true,
+          },
+        },
+      },
+    });
+    const user = profile?.user;
+    if (
+      !user ||
+      user.status !== 'ACTIVE' ||
+      !(await can(user, 'pharmacy:dispense', undefined, { db }))
+    ) {
+      refuse('ROLE_REQUIRED', 'A verifier role is required at this branch.');
+    }
+  }
 }
 
 /**
@@ -628,15 +726,15 @@ async function pharmacyRecordAtBranch(
     recordType: PharmacySopRecordType;
     recordId: string;
   }
-): Promise<{ outOfRange?: boolean } | null> {
+): Promise<{ outOfRange?: boolean; occurredAt?: Date } | null> {
   const { organizationId, pharmacyBranchId: branchId, recordId: id } = input;
   switch (input.recordType) {
     case 'TEMPERATURE_LOG': {
       const log = await db.pharmacyTemperatureLog.findFirst({
         where: { id, organizationId, branchId },
-        select: { outOfRange: true },
+        select: { outOfRange: true, recordedAt: true },
       });
-      return log ? { outOfRange: log.outOfRange } : null;
+      return log ? { outOfRange: log.outOfRange, occurredAt: log.recordedAt } : null;
     }
     case 'CONTROLLED_REGISTER_ENTRY':
       return (await db.pharmacyControlledRegisterEntry.findFirst({
@@ -645,13 +743,13 @@ async function pharmacyRecordAtBranch(
       }))
         ? {}
         : null;
-    case 'GOODS_RECEIPT':
-      return (await db.pharmacyGoodsReceipt.findFirst({
+    case 'GOODS_RECEIPT': {
+      const receipt = await db.pharmacyGoodsReceipt.findFirst({
         where: { id, organizationId, branchId },
-        select: { id: true },
-      }))
-        ? {}
-        : null;
+        select: { receivedAt: true },
+      });
+      return receipt ? { occurredAt: receipt.receivedAt } : null;
+    }
     case 'MANUFACTURING_BATCH':
       return (await db.pharmacyManufacturingBatch.findFirst({
         where: { id, organizationId, lots: { some: { organizationId, branchId } } },
@@ -678,8 +776,11 @@ async function pharmacyRecordAtBranch(
  * posts or edits the record. Idempotent on (occurrence, type, record).
  *
  * A repeat of an existing link returns it with `created: false`; the step and
- * note of the first link stand. Verified, waived or otherwise resolved
- * occurrences refuse new links (INVALID_INPUT).
+ * note of the first link stand. Inside the transaction the occurrence row is
+ * share-locked and re-read: it must be IN_PROGRESS and the actor must be its
+ * owner (assignee, else claimer), otherwise INVALID_INPUT. Event records must
+ * fall in {@link pharmacySopRecordTimeBounds} of the occurrence
+ * (RECORD_OUT_OF_SCOPE otherwise).
  */
 export async function linkPharmacySopRecord(
   db: ScopedDb,
@@ -728,9 +829,23 @@ export async function linkPharmacySopRecord(
     if (!site) refuse('SITE_NOT_ENABLED', 'Procedures are not enabled at this branch yet.');
     const { organizationId, pharmacyBranchId } = site;
 
+    // Share-lock the occurrence first so a concurrent submit, verify or
+    // release waits for this link (or this read waits for it), then read the
+    // committed state under that lock.
+    await tx.$queryRaw(
+      Prisma.sql`SELECT 1 FROM "restaurant_sop_occurrences" WHERE "id" = ${input.occurrenceId} AND "organizationId" = ${organizationId} AND "branchId" = ${site.sopBranchId} FOR SHARE`
+    );
     const occurrence = await tx.restaurantSopOccurrence.findFirst({
       where: { id: input.occurrenceId, organizationId, branchId: site.sopBranchId },
-      select: { id: true, status: true, resolvedAt: true },
+      select: {
+        id: true,
+        status: true,
+        resolvedAt: true,
+        dueAt: true,
+        windowEndsAt: true,
+        assignedStaffProfileId: true,
+        claimedByStaffProfileId: true,
+      },
     });
     if (!occurrence) {
       refuse('OCCURRENCE_OUT_OF_SCOPE', 'This checklist is not available at this branch.');
@@ -740,6 +855,16 @@ export async function linkPharmacySopRecord(
       (CLOSED_OCCURRENCE_STATUSES as readonly string[]).includes(occurrence.status)
     ) {
       refuse('INVALID_INPUT', 'This checklist is already closed.');
+    }
+    if (occurrence.status !== 'IN_PROGRESS') {
+      refuse('INVALID_INPUT', 'Start the checklist before linking records to it.');
+    }
+    const owner = occurrence.assignedStaffProfileId ?? occurrence.claimedByStaffProfileId;
+    if (owner !== input.actor.staffProfileId) {
+      refuse(
+        'INVALID_INPUT',
+        'Only the assigned or claiming staff member may link records to this checklist.'
+      );
     }
     const occurrenceStepId = input.occurrenceStepId || null;
     if (occurrenceStepId) {
@@ -759,6 +884,13 @@ export async function linkPharmacySopRecord(
       recordId,
     });
     if (!record) refuse('RECORD_OUT_OF_SCOPE', 'That record was not found at this branch.');
+    const bounds = pharmacySopRecordTimeBounds(input.recordType, occurrence);
+    if (
+      bounds &&
+      (!record.occurredAt || record.occurredAt < bounds.gte || record.occurredAt > bounds.lte)
+    ) {
+      refuse('RECORD_OUT_OF_SCOPE', 'That record is outside this checklist’s time window.');
+    }
 
     const inserted = await tx.pharmacySopRecordLink.createMany({
       data: [
