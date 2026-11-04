@@ -2,9 +2,9 @@
 
 > PR #1224 kept this log at the repository root as `HANDOFF.md`. After #1224 merged, DEV-576 (#1238) replaced the root `HANDOFF.md` with its own, so this log now lives under its own name, like `FRESH_DB_HANDOFF.md`.
 
-Last updated: 2026-11-04 06:19 PKT (01:19 UTC)
+Last updated: 2026-11-04 06:20 PKT (01:20 UTC)
 Branch: `saad/great-brown-id2w5x` (`develop` @ `92878a9` merged in at `e1aa615`; normal pushes only)
-PRs: [#1224](https://github.com/RealDevFathom/devfathom-commercial/pull/1224) merged 2026-11-03 00:42 UTC as squash `4847d04` (report, BA doc, evidence, harness). Follow-up PR: see _Workstreams_ W10 (this file, issue links in `ba-recommendations.md`, tenant clean-up note).
+PRs: [#1224](https://github.com/RealDevFathom/devfathom-commercial/pull/1224) merged 2026-11-03 00:42 UTC as squash `4847d04` (report, BA doc, evidence, harness). Follow-up PR: [#1390](https://github.com/RealDevFathom/devfathom-commercial/pull/1390) (this file, issue links in `ba-recommendations.md`, tenant clean-up note), open into `develop`, not to be merged by this session; please squash-merge.
 Linear: no Linear issue is attached to this QA pass.
 
 ## Resume here
@@ -69,7 +69,7 @@ Merged 2026-11-03 00:42 UTC as squash `4847d04`. Verdicts before the merge:
 | W7  | Security + data integrity probes                                                      | done                | XSS pass; CSV pass (Sev4 gap); throttle N19; logout-not-revoked N20; concurrency pass; #521/#636 fixed; offline N21                                                                                                                         | Optional: cross-tenant host probe (needs another tenant host)                                                                                                                                  |
 | W8  | Write `qa-report.md` + `ba-recommendations.md`                                        | done                | After verification: 32 new findings (6 Sev1/7 Sev2/15 Sev3/4 Sev4), 23 re-verified, go/no-go = NO-GO; 39 BA recommendations (24 P1, 14 P2, 1 P3) + top 10                                                                                   | —                                                                                                                                                                                              |
 | W9  | File new findings as GitHub issues (no `claude` label, no fixes)                      | done                | 23 issues #1241–#1264; 9 already tracked (see table above); 4 evidence comments                                                                                                                                                             | —                                                                                                                                                                                              |
-| W10 | Post-merge wrap-up                                                                    | done                | Restored this log as `QA_SEHATCART_HANDOFF.md` (root `HANDOFF.md` is DEV-576's); linked the `ba-recommendations.md` citations to the filed issues; closed the three QA API drawers on the tenant; issue status snapshot (see _Resume here_) | —                                                                                                                                                                                              |
+| W10 | Post-merge wrap-up (PR #1390)                                                         | done                | Restored this log as `QA_SEHATCART_HANDOFF.md` (root `HANDOFF.md` is DEV-576's); linked the `ba-recommendations.md` citations to the filed issues; closed the three QA API drawers on the tenant; issue status snapshot (see _Resume here_) | —                                                                                                                                                                                              |
 
 ## Environment / test data (no passwords here — creds live only in a local, uncommitted file)
 
