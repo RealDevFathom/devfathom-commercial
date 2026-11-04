@@ -46,6 +46,9 @@ vi.mock('@/lib/pharmacy/printer-test-print', async (importOriginal) => ({
   openPrinterTestPage: mocks.openPage,
 }));
 
+// The bridge panel has its own tests (thermal-bridge-panel.test.tsx).
+vi.mock('./thermal-bridge-panel', () => ({ ThermalBridgePanel: () => null }));
+
 import { PharmacyPrinterSettings } from './printer-settings-console';
 import { PrinterTestPrintError } from '@/lib/pharmacy/printer-test-print';
 
@@ -240,14 +243,14 @@ describe('PharmacyPrinterSettings', () => {
   });
 
   // DEV-355: nothing restaurant-specific leaks into the pharmacy printer page.
-  it('shows no restaurant kitchen routing or bridge enrollment', () => {
+  it('shows no restaurant kitchen routing', () => {
     render(<PharmacyPrinterSettings canEdit />);
     const text = document.body.textContent ?? '';
-    for (const leak of [/kitchen/i, /KOT/, /KDS/, /print routing/i, /enrol/i, /station/i]) {
+    for (const leak of [/kitchen/i, /KOT/, /KDS/, /print routing/i, /station/i]) {
       expect(text).not.toMatch(leak);
     }
     expect(
-      screen.getByText(/without the print dialog, is not\s+available here yet/)
+      screen.getByText(/without the print dialog, needs an\s+enrolled print bridge/)
     ).toBeInTheDocument();
   });
 

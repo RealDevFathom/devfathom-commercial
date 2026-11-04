@@ -16,6 +16,8 @@ import {
   PrinterTestPrintError,
   type PrinterTestFormat,
 } from '@/lib/pharmacy/printer-test-print';
+import { thermalPaperForWidth } from '@/lib/pharmacy/print-job-ui';
+import { ThermalBridgePanel } from './thermal-bridge-panel';
 
 type PaperWidth = 58 | 80;
 type Draft = {
@@ -491,6 +493,18 @@ export function PharmacyPrinterSettings({ canEdit }: { canEdit: boolean }) {
           </SectionCard>
         </div>
       )}
+      {/* Same condition as the loaded branch view above. */}
+      {!formatQuery.isPending && !formatQuery.isError && saved && current ? (
+        <ThermalBridgePanel
+          branchId={branchId}
+          branchName={branch?.name ?? ''}
+          canEdit={canEdit}
+          savedPaper={{
+            paper: thermalPaperForWidth(saved.layout.paperWidth),
+            output: saved.output,
+          }}
+        />
+      ) : null}
 
       <PrinterConnectionGuide />
     </div>
@@ -586,7 +600,8 @@ function TestResult({
  * DEV-742: USB thermal first, with network and Bluetooth kept for other pharmacies. Wording
  * stays connection-level and brand-neutral: nothing is marked compatible until the actual
  * printer, driver and computer pass an authorized real-device test (DEV-744). Direct
- * printing without the dialog (DEV-741) is not offered here until its API is on develop.
+ * printing without the dialog goes through an enrolled DEV-741 print bridge
+ * (ThermalBridgePanel), never for A4.
  */
 const CONNECTIONS: ReadonlyArray<{ title: string; body: string }> = [
   {
@@ -628,9 +643,9 @@ function PrinterConnectionGuide() {
           ))}
         </ul>
         <p className="text-xs text-text-muted">
-          Sending receipts straight to a thermal printer, without the print dialog, is not available
-          here yet. No printer model or connection is listed as supported until it has been tested
-          on real hardware.
+          Sending receipts straight to a thermal printer, without the print dialog, needs an
+          enrolled print bridge (see Thermal print bridge above). No printer model or connection is
+          listed as supported until it has been tested on real hardware.
         </p>
       </div>
     </SectionCard>

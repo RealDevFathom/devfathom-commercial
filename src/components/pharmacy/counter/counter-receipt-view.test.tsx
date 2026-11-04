@@ -1,6 +1,14 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
+const thermal = vi.hoisted(() => vi.fn());
+vi.mock('./counter-thermal-print', () => ({
+  CounterThermalPrint: (props: unknown) => {
+    thermal(props);
+    return null;
+  },
+}));
+
 import { CounterReceiptView, type CounterReceiptViewProps } from './counter-receipt-view';
 
 afterEach(cleanup);
@@ -58,7 +66,30 @@ it('offers labeled paper selection and routes printing through the provided hand
   expect(input.onFormatChange).toHaveBeenCalledWith('THERMAL_58');
   fireEvent.click(screen.getByRole('button', { name: 'Print receipt' }));
   expect(input.onPrint).toHaveBeenCalledOnce();
-  expect(screen.getByText(/saved designer settings are not connected yet/i)).toBeTruthy();
+  expect(
+    screen.getByText(/starts on this branch's saved setting from Printers settings/i)
+  ).toBeTruthy();
+  expect(screen.queryByText(/not connected yet/i)).toBeNull();
+});
+
+it('DEV-742: hands thermal printing to the print queue only for a known branch', () => {
+  thermal.mockClear();
+  const input = props({ reprint: true, format: 'THERMAL_58' });
+  const { rerender } = render(<CounterReceiptView {...input} />);
+  expect(thermal).not.toHaveBeenCalled();
+  expect(screen.queryByText(/ESC\/POS/)).toBeNull();
+  rerender(<CounterReceiptView {...input} branchId="branch-1" />);
+  expect(thermal).toHaveBeenLastCalledWith({
+    branchId: 'branch-1',
+    saleId: 'sale-1',
+    receiptNumber: 12,
+    locale: 'en',
+    format: 'THERMAL_58',
+    reprint: true,
+    settled: true,
+    printing: false,
+    onBrowserPrint: input.onPrint,
+  });
 });
 
 it('shows recorded payment, exact change and an issued receipt preview without printing again', () => {
