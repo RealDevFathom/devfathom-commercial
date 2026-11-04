@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   createTRPCContext: vi.fn(),
   hasModule: vi.fn(),
   createCaller: vi.fn(),
+  policy: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -27,6 +28,21 @@ vi.mock('next/navigation', () => ({ redirect: vi.fn(), useRouter: () => ({ refre
 vi.mock('@/server/routers/pharmacy-purchasing', () => ({
   pharmacyPurchasingRouter: { createCaller: mocks.createCaller },
 }));
+// With no supplier listed yet, the pages ask the stored setting through this router.
+vi.mock('@/server/routers/pharmacy-supplier-compliance', () => ({
+  pharmacySupplierComplianceRouter: { createCaller: () => ({ policy: mocks.policy }) },
+}));
+const storedPolicy = (checksEnabled: boolean) => ({
+  policy: {
+    checksEnabled,
+    version: checksEnabled ? 0 : 1,
+    source: checksEnabled ? 'DEFAULT' : 'STORED',
+    updatedAt: null,
+    updatedByName: null,
+  },
+  canManage: false,
+  warningVersion: 'supplier-compliance-off@1',
+});
 
 import OrdersPage from './orders/page';
 import OverviewPage from './page';
@@ -247,5 +263,43 @@ describe('purchasing overview supplier-check copy', () => {
 
     for (const text of Object.values(OVERVIEW_ON)) expect(screen.getByText(text)).toBeVisible();
     expect(screen.queryByText(OVERVIEW_OFF.stat)).toBeNull();
+  });
+});
+
+describe('with no supplier listed yet, the stored setting decides the wording', () => {
+  const ORDERS_EMPTY_ON =
+    'There are no suppliers yet. Add one and file a verified licence before raising an order.';
+  const ORDERS_EMPTY_OFF =
+    'There are no suppliers yet. Add one in the supplier register; supplier checks are off, so it can be ordered from once added.';
+
+  it('does not ask for a licence on the orders page while the stored setting is off', async () => {
+    mocks.createCaller.mockReturnValue(callerFor([]));
+    mocks.policy.mockResolvedValue(storedPolicy(false));
+
+    render(await OrdersPage({ searchParams: params() }));
+
+    expect(screen.getByText(ORDERS_EMPTY_OFF)).toBeVisible();
+    expect(screen.getByText(ORDERS_EMPTY_OFF).textContent).not.toMatch(FORBIDDEN_OFF_WORDS);
+    expect(screen.queryByText(ORDERS_EMPTY_ON)).toBeNull();
+  });
+
+  it('keeps asking for a verified licence when the stored setting cannot be read (fail closed)', async () => {
+    mocks.createCaller.mockReturnValue(callerFor([]));
+    mocks.policy.mockRejectedValue(new Error('policy read failed'));
+
+    render(await OrdersPage({ searchParams: params() }));
+
+    expect(screen.getByText(ORDERS_EMPTY_ON)).toBeVisible();
+    expect(screen.queryByText(ORDERS_EMPTY_OFF)).toBeNull();
+  });
+
+  it('explains the unmet supplier row without licence demands on the overview while off', async () => {
+    mocks.createCaller.mockReturnValue(callerFor([]));
+    mocks.policy.mockResolvedValue(storedPolicy(false));
+
+    render(await OverviewPage({ searchParams: params() }));
+
+    expect(screen.getByText(OVERVIEW_OFF.why)).toBeVisible();
+    expect(screen.queryByText(OVERVIEW_ON.why)).toBeNull();
   });
 });

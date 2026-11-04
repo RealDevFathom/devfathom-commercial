@@ -56,6 +56,11 @@ import {
   type Notice,
   type SearchQuery,
 } from '../_lib/console';
+import {
+  readPolicyForDisplay,
+  supplierChecksOn,
+  supplierComplianceCaller,
+} from '../suppliers/_lib/supplier-compliance';
 
 export const metadata: Metadata = { title: 'Requisitions & orders · Pharmacy purchasing' };
 
@@ -458,7 +463,12 @@ export default async function PharmacyOrdersPage({
   const orderable = workspace.suppliers.filter((supplier) => supplier.eligibility.orderable);
   const medicinesWithPacks = workspace.medicines.filter((medicine) => medicine.packs.length > 0);
   // DEV-753: the owner turned supplier checks off. A summary without `compliance` reads as checked.
-  const checksOff = workspace.suppliers.some((supplier) => supplier.compliance?.checked === false);
+  // Off when a listed supplier says so; with no supplier listed yet, ask the stored setting
+  // (read fail-closed: anything but a positive OFF reads as checks on).
+  const checksOff =
+    workspace.suppliers.length > 0
+      ? workspace.suppliers.some((supplier) => supplier.compliance?.checked === false)
+      : !supplierChecksOn(await readPolicyForDisplay(await supplierComplianceCaller()));
   const description = checksOff ? DESCRIPTION_CHECKS_OFF : DESCRIPTION;
 
   return (
@@ -654,7 +664,9 @@ export default async function PharmacyOrdersPage({
                 title="No supplier can be ordered from"
                 detail={
                   workspace.suppliers.length === 0
-                    ? 'There are no suppliers yet. Add one and file a verified licence before raising an order.'
+                    ? checksOff
+                      ? 'There are no suppliers yet. Add one in the supplier register; supplier checks are off, so it can be ordered from once added.'
+                      : 'There are no suppliers yet. Add one and file a verified licence before raising an order.'
                     : 'Every supplier is either unauthorized or without an unexpired verified licence. PUR-01 refuses an order to any of them.'
                 }
                 steps={[
@@ -679,7 +691,11 @@ export default async function PharmacyOrdersPage({
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <TextField label="Reference" name="reference" notice={notice} required />
                   <SelectField
-                    emptyHint="No orderable supplier — authorize one and file a licence first."
+                    emptyHint={
+                      checksOff
+                        ? 'No supplier yet — add one in the supplier register first.'
+                        : 'No orderable supplier — authorize one and file a licence first.'
+                    }
                     label="Supplier"
                     name="supplierId"
                     notice={notice}
