@@ -13,6 +13,7 @@ import { readDeepStrategySettings } from '@/lib/ai/deep-strategy-settings';
 import { readAIProviderReadiness } from '@/lib/ai/provider';
 import { passwordSchema } from '@/lib/password-policy';
 import { organizationRolePermissionsSchema } from '@/lib/organization-role';
+import { actorCanProcure, procurementCapabilityGranted } from '@/lib/pharmacy/procurement-access';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { ianaTimezone } from '@/lib/timezone';
@@ -39,6 +40,7 @@ const departmentKey = z
   .max(80)
   .regex(/^[A-Z0-9_]+$/, 'Use uppercase letters, numbers, and underscores only.');
 const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
+const GOODS_IN_CAPABILITY = 'pharmacy:procurement';
 
 function occupiesSeat(status: string): boolean {
   return (OCCUPIED_SEAT_STATUSES as readonly string[]).includes(status);
@@ -313,6 +315,12 @@ export const organizationAdminRouter = router({
             department: true,
             organizationRoleId: true,
             lastActiveAt: true,
+            permissionOverrides: {
+              where: {
+                OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+              },
+              select: { id: true, capability: true, effect: true },
+            },
           },
         },
         usageCounters: { orderBy: { updatedAt: 'desc' }, take: 25 },
@@ -338,6 +346,17 @@ export const organizationAdminRouter = router({
       pharmacyBranches,
       organization: {
         ...organization,
+        users: organization.users.map((user) => ({
+          ...user,
+          goodsInAccess: procurementCapabilityGranted({
+            overrides: user.permissionOverrides,
+            role:
+              organization.roles.find((role) => role.id === user.organizationRoleId)?.permissions ??
+              [],
+            // Mirror actorCanProcure's legacy admin fallback (effective access).
+            tenantAdminWithoutRole: user.role === 'ADMIN' && user.organizationRoleId === null,
+          }),
+        })),
         package: assignedPackage,
         emailSettings: organization.emailSettings
           ? {
@@ -607,6 +626,83 @@ export const organizationAdminRouter = router({
         metadata: { before, after: input },
       });
       return saved;
+    }),
+
+  setMemberGoodsInAccess: adminProcedure
+    .input(z.object({ id: z.string().trim().min(1).max(128), granted: z.boolean() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const id = organizationId(ctx);
+      const actorId = ctx.session.user.id;
+      const user = await ctx.db.user.findFirst({
+        where: { id: input.id, organizationId: id },
+        select: { id: true, email: true },
+      });
+      if (!user) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+
+      // Branch scope: an administrator assigned to pharmacy branches may only
+      // change Goods-in access for members of one of those branches. An
+      // administrator without branch assignments keeps organization-wide scope.
+      const [actorBranches, memberBranches] = await Promise.all([
+        ctx.db.pharmacyBranchAssignment.findMany({
+          where: { organizationId: id, userId: actorId, active: true, branch: { active: true } },
+          select: { branchId: true },
+        }),
+        ctx.db.pharmacyBranchAssignment.findMany({
+          where: { organizationId: id, userId: user.id, active: true, branch: { active: true } },
+          select: { branchId: true },
+        }),
+      ]);
+      const actorBranchIds = new Set(actorBranches.map((row) => row.branchId));
+      const sharedBranchIds = memberBranches
+        .map((row) => row.branchId)
+        .filter((branchId) => actorBranchIds.has(branchId));
+      if (actorBranchIds.size > 0 && sharedBranchIds.length === 0) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Member is outside your branch scope.' });
+      }
+
+      // An administrator cannot hand out Goods-in access they do not hold.
+      if (input.granted && !(await actorCanProcure(ctx.db, actorId))) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You need Goods-in access yourself before granting it.',
+        });
+      }
+
+      // An explicit denial also revokes grants inherited from roles or wildcards.
+      const effect = input.granted ? 'ALLOW' : 'DENY';
+      const reason = `Goods-in access ${input.granted ? 'granted' : 'revoked'} by workspace administrator`;
+      await ctx.db.userPermissionOverride.upsert({
+        where: {
+          userId_capability: { userId: user.id, capability: GOODS_IN_CAPABILITY },
+        },
+        update: {
+          effect,
+          reason,
+          expiresAt: null,
+        },
+        create: {
+          organizationId: id,
+          userId: user.id,
+          capability: GOODS_IN_CAPABILITY,
+          effect,
+          reason,
+          createdById: actorId,
+        },
+      });
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: user.id,
+        targetLabel: user.email,
+        description: `${input.granted ? 'Granted' : 'Removed'} Goods-in access for ${user.email}`,
+        metadata: {
+          capability: GOODS_IN_CAPABILITY,
+          granted: input.granted,
+          grantedByUserId: actorId,
+          targetUserId: user.id,
+          branchScope: actorBranchIds.size > 0 ? sharedBranchIds : 'organization',
+        },
+      });
+      return { granted: input.granted };
     }),
 
   createMember: adminProcedure

@@ -85,6 +85,7 @@ describe('isolation', () => {
     'restaurantNotifications.configureWebhook',
     'team.changePassword',
     'twoFactor.disable',
+    'organizationAdmin.setMemberGoodsInAccess',
   ])('blocks restricted mutation but preserves same-name query: %s', (path) => {
     expect(isDemoProcedureBlocked(path, 'mutation')).toBe(true);
     expect(isDemoProcedureBlocked(path, 'query')).toBe(false);
