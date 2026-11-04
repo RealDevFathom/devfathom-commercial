@@ -9,7 +9,14 @@ const mocks = vi.hoisted(() => ({
     data: { user: { organizationId: 'org-a', name: 'Amina', role: 'ADMIN' } },
   },
   settings: {
-    data: undefined as { organizationId: string; askFathomEnabled: boolean } | undefined,
+    data: undefined as
+      | {
+          organizationId: string;
+          askFathomEnabled: boolean;
+          available: boolean;
+          unavailableReason: 'COMPANY_DISABLED' | 'AI_NOT_CONFIGURED' | null;
+        }
+      | undefined,
     dataUpdatedAt: 0,
     errorUpdatedAt: 0,
     isError: false,
@@ -116,9 +123,24 @@ function shell(organizationId = 'org-a') {
     </AppShell>
   );
 }
-function confirm(askFathomEnabled: boolean, updatedAt: number, organizationId = 'org-a') {
+function confirm(
+  askFathomEnabled: boolean,
+  updatedAt: number,
+  organizationId = 'org-a',
+  aiConfigured = true
+) {
+  const unavailableReason = !askFathomEnabled
+    ? ('COMPANY_DISABLED' as const)
+    : aiConfigured
+      ? null
+      : ('AI_NOT_CONFIGURED' as const);
   mocks.settings = {
-    data: { organizationId, askFathomEnabled },
+    data: {
+      organizationId,
+      askFathomEnabled,
+      available: unavailableReason === null,
+      unavailableReason,
+    },
     dataUpdatedAt: updatedAt,
     errorUpdatedAt: 0,
     isError: false,
@@ -228,9 +250,15 @@ describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
 
   it('checks the session organization in each button even before the shell effect runs', () => {
     useAssistant.getState().setOrganization('org-b');
-    useAssistant
-      .getState()
-      .confirmSettings({ organizationId: 'org-b', askFathomEnabled: true }, 10);
+    useAssistant.getState().confirmSettings(
+      {
+        organizationId: 'org-b',
+        askFathomEnabled: true,
+        available: true,
+        unavailableReason: null,
+      },
+      10
+    );
     render(
       <>
         <Topbar />
@@ -270,5 +298,35 @@ describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
     view.rerender(shell());
     expect(mocks.settingsQuery).not.toHaveBeenCalled();
     expect(useAssistant.getState().organizationId).toBeNull();
+  });
+
+  it('disables both launchers with an accessible explanation when no AI provider is configured', () => {
+    confirm(true, 10, 'org-a', false);
+    render(shell());
+    const message =
+      'Ask Fathom is unavailable because no AI provider is configured for this environment.';
+    const [topbar, dashboard] = launchers();
+    for (const button of [topbar, dashboard]) {
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+    }
+    expect(useAssistant.getState().open).toBe(false);
+    expect(screen.queryByLabelText('Chat draft')).not.toBeInTheDocument();
+    expect(topbar).toHaveAttribute('title', message);
+    expect(topbar).toHaveAccessibleDescription(message);
+    expect(dashboard).toHaveTextContent(message);
+    // The ordinary workspace stays usable.
+    expect(screen.getByRole('button', { name: 'Arrange' })).toBeEnabled();
+  });
+
+  it('re-enables the launcher once the provider is configured', () => {
+    confirm(true, 10, 'org-a', false);
+    const view = render(shell());
+    for (const button of launchers()) expect(button).toBeDisabled();
+    confirm(true, 20);
+    view.rerender(shell());
+    for (const button of launchers()) expect(button).toBeEnabled();
+    fireEvent.click(launchers()[0]);
+    expect(useAssistant.getState().open).toBe(true);
   });
 });

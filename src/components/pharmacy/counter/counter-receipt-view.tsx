@@ -26,6 +26,7 @@ import {
 import {
   buildCounterReceiptPreview,
   counterLinePresentation,
+  counterLinePricing,
 } from '@/lib/pharmacy/counter-receipt-presentation';
 
 export type CounterReceiptSettlement =
@@ -336,6 +337,40 @@ export function CounterReceiptView({
 
   return (
     <div className="space-y-4">
+      {settled && document !== null ? (
+        <div
+          role="status"
+          lang={language}
+          dir={direction}
+          className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border-subtle bg-success/10 p-4"
+        >
+          <div className="space-y-2">
+            <StatusPill status="settled" tone="success" label={receiptTitle(receipt, locale)} />
+            <h3 className="text-xl font-semibold tracking-tight text-text-strong">
+              {locale === 'ur' ? 'ادائیگی درج ہو گئی' : 'Payment recorded'}
+            </h3>
+            <p className="text-sm text-text-muted">
+              {receipt.branchName} ·{' '}
+              {receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}
+            </p>
+          </div>
+          <dl className="flex flex-wrap gap-x-8 gap-y-3">
+            <div>
+              <dt className="font-mono text-xs text-text-muted">{strings.net}</dt>
+              <dd className="text-2xl font-semibold tabular-nums text-text-strong">
+                {receipt.currency} {formatMinor(receipt.totals.netMinor)}
+              </dd>
+            </div>
+            <div>
+              <dt className="font-mono text-xs text-text-muted">{strings.change}</dt>
+              <dd className="text-2xl font-semibold tabular-nums text-text-strong">
+                {receipt.currency} {formatMinor(receipt.totals.changeMinor)}
+              </dd>
+            </div>
+          </dl>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-1.5">
           <Label htmlFor="receipt-locale">Language</Label>
@@ -455,6 +490,9 @@ export function CounterReceiptView({
         </p>
       ) : null}
 
+      <h3 className="font-mono text-xs uppercase tracking-wider text-text-muted">
+        {locale === 'ur' ? 'رسید کا پیش منظر' : 'Receipt preview'}
+      </h3>
       <section
         ref={receiptRegion}
         tabIndex={-1}
@@ -470,9 +508,9 @@ export function CounterReceiptView({
         }`}
       >
         <header className="space-y-1 border-b border-border-subtle pb-3">
-          <p className="text-base font-semibold text-text-strong">
+          <h4 className="text-base font-semibold text-text-strong">
             {receiptTitle(receipt, locale)}
-          </p>
+          </h4>
           <p className="text-text-muted">
             {strings.branch}: {receipt.branchName}
           </p>
@@ -507,10 +545,7 @@ export function CounterReceiptView({
                     {formatMinor(line.lineTotalMinor)}
                   </span>
                 </div>
-                <p className="text-text-muted">
-                  {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
-                  {formatMinor(line.unitPriceMinor)}
-                </p>
+                <p className="text-text-muted">{counterLinePricing(line, locale)}</p>
                 {counterLinePresentation(line, locale).allocations.map((allocation, index) => (
                   <p
                     key={line.allocations![index]!.allocationId}

@@ -194,6 +194,7 @@ function claimedJob(payload: unknown = { organizationId: ORGANIZATION_ID }): Cla
     attempts: 1,
     maxAttempts: 5,
     claimedBy: 'demo-restaurants-cron',
+    claimToken: 'demo-reset-test-claim',
     startedAt: NOW,
   };
 }

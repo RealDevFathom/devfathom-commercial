@@ -33,6 +33,8 @@ export type OrderDetail = {
   orderNumber: number;
   status: string;
   channel: string;
+  deliveryStatus?: string | null;
+  settled?: boolean;
   publicationId: string | null;
   coverCount: number | null;
   items: OrderItem[];
@@ -40,6 +42,14 @@ export type OrderDetail = {
   tables: { id: string; tableId: string; active: boolean }[];
   totals: { subtotal: string; tax: string; serviceCharge: string; deliveryFee?: string };
 };
+
+export function canCloseDeliveredOrder(
+  order: Pick<OrderDetail, 'channel' | 'deliveryStatus' | 'settled'>
+) {
+  return (
+    order.channel === 'DELIVERY' && order.deliveryStatus === 'DELIVERED' && order.settled === true
+  );
+}
 
 export type VoidItemInput = {
   itemId: string;
@@ -130,7 +140,11 @@ export function OrderTicketPanel({
       setVoidError('Select a manager and enter their 4–8 digit PIN.');
       return;
     }
-    if (postPrep && managerId.trim() === actingOperatorId) {
+    if (
+      postPrep &&
+      managerId.trim() === actingOperatorId &&
+      !operators.some((operator) => operator.id === managerId.trim() && operator.canSelfApprove)
+    ) {
       setVoidError('The acting operator cannot approve their own void.');
       return;
     }
@@ -169,6 +183,9 @@ export function OrderTicketPanel({
       !activeTables.includes(table.id) &&
       (!table.occupied || table.activeOrderIds.includes(order.id))
   );
+  const shouldCollectPayment =
+    !canCloseDeliveredOrder(order) &&
+    (order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY');
 
   return (
     <>
@@ -180,283 +197,278 @@ export function OrderTicketPanel({
         className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
       >
         <div className="flex min-h-0 flex-1 flex-col">
-        <div className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border-subtle pb-2 text-xs text-text-muted">
-          <span>
-            {order.channel === 'DINE_IN'
-              ? 'Dine in'
-              : order.channel === 'TAKEAWAY'
-                ? 'Takeaway'
-                : 'Delivery'}
-          </span>
-          <span>{activeTables.length ? activeTables.map(tableLabel).join(', ') : 'No table'}</span>
-          <Button
-            type="button"
-            onClick={onSend}
-            disabled={pending}
-            className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-          >
-            Send whole order
-          </Button>
-        </div>
-
-        {(order.kitchenTickets?.length ?? 0) > 0 ? (
-          <div className="mb-2 flex shrink-0 flex-wrap gap-1" aria-label="Kitchen ticket reprints">
-            {order.kitchenTickets?.map((ticket) => (
-              <Button
-                key={ticket.id}
-                type="button"
-                variant="outline"
-                onClick={() => onReprint(ticket.id)}
-                disabled={pending}
-                className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-              >
-                Reprint KOT {ticket.ticketNumber}
-              </Button>
-            ))}
+          <div className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border-subtle pb-2 text-xs text-text-muted">
+            <span>
+              {order.channel === 'DINE_IN'
+                ? 'Dine in'
+                : order.channel === 'TAKEAWAY'
+                  ? 'Takeaway'
+                  : 'Delivery'}
+            </span>
+            <span>
+              {activeTables.length ? activeTables.map(tableLabel).join(', ') : 'No table'}
+            </span>
+            <Button
+              type="button"
+              onClick={onSend}
+              disabled={pending}
+              className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+            >
+              Send whole order
+            </Button>
           </div>
-        ) : null}
 
-        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
-        {courses.length === 0 ? (
-          <p className="py-2 text-center text-sm text-text-muted">
-            Ticket empty. Select menu items.
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {courses.map(([course, items]) => (
-              <section
-                key={course}
-                className="rounded-md border border-border-subtle p-2"
-              >
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="font-mono text-xs font-semibold tracking-wide text-text-muted uppercase">
-                    Course {course}
-                  </h3>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => onHold(course)}
-                      disabled={pending}
-                      className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                    >
-                      Hold
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => onFire(course)}
-                      disabled={pending}
-                      className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                    >
-                      Fire
-                    </Button>
-                  </div>
-                </div>
-                <ul className="divide-y divide-border-subtle">
-                  {items.map((item) => {
-                    const canRemake = ['PREPARED', 'SERVED'].includes(item.status);
-                    return (
-                      <li key={item.id} className="space-y-1 py-2 first:pt-0 last:pb-0">
-                        <div className="flex min-w-0 items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="font-medium text-text-strong">
-                              {item.quantity} × {item.name}
-                              {item.seatNumber ? ` · Seat ${item.seatNumber}` : ''}
-                            </p>
-                            {item.modifiers.length ? (
-                              <p className="mt-1 text-xs text-text-muted">
-                                {item.modifiers.map((modifier) => modifier.name).join(', ')}
-                              </p>
-                            ) : null}
-                          </div>
-                          <StatusPill status={item.status} tone={tone(item.status)} />
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {['PREPARED', 'REMAKE_REQUESTED'].includes(item.status) ? (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              onClick={() => onServed(item.id)}
-                              disabled={pending}
-                              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                            >
-                              Mark served
-                            </Button>
-                          ) : null}
-                          <Button
-                            type="button"
-                            variant="destructive"
-                            onClick={() => openVoid(item)}
-                            disabled={pending || item.status === 'VOIDED'}
-                            className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                          >
-                            Void {item.name}
-                          </Button>
-                        </div>
-                        {canRemake ? (
-                          <div className="flex flex-col gap-2 sm:flex-row">
-                            <div className="min-w-0 flex-1">
-                              <Label htmlFor={`remake-${item.id}`} className="sr-only">
-                                Remake reason for {item.name}
-                              </Label>
-                              <Input
-                                id={`remake-${item.id}`}
-                                value={remakeReasons[item.id] ?? ''}
-                                onChange={(event) =>
-                                  setRemakeReasons((current) => ({
-                                    ...current,
-                                    [item.id]: event.target.value,
-                                  }))
-                                }
-                                placeholder="Remake reason"
-                                className="h-8"
-                              />
+          {(order.kitchenTickets?.length ?? 0) > 0 ? (
+            <div
+              className="mb-2 flex shrink-0 flex-wrap gap-1"
+              aria-label="Kitchen ticket reprints"
+            >
+              {order.kitchenTickets?.map((ticket) => (
+                <Button
+                  key={ticket.id}
+                  type="button"
+                  variant="outline"
+                  onClick={() => onReprint(ticket.id)}
+                  disabled={pending}
+                  className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                >
+                  Reprint KOT {ticket.ticketNumber}
+                </Button>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+            {courses.length === 0 ? (
+              <p className="py-2 text-center text-sm text-text-muted">
+                Ticket empty. Select menu items.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {courses.map(([course, items]) => (
+                  <section key={course} className="rounded-md border border-border-subtle p-2">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="font-mono text-xs font-semibold tracking-wide text-text-muted uppercase">
+                        Course {course}
+                      </h3>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="touch"
+                          onClick={() => onHold(course)}
+                          disabled={pending}
+                          className="shadow-none hover:translate-y-0 active:translate-y-0"
+                        >
+                          Hold
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="touch"
+                          onClick={() => onFire(course)}
+                          disabled={pending}
+                          className="shadow-none hover:translate-y-0 active:translate-y-0"
+                        >
+                          Fire
+                        </Button>
+                      </div>
+                    </div>
+                    <ul className="divide-y divide-border-subtle">
+                      {items.map((item) => {
+                        const canRemake = ['PREPARED', 'SERVED'].includes(item.status);
+                        return (
+                          <li key={item.id} className="space-y-1 py-2 first:pt-0 last:pb-0">
+                            <div className="flex min-w-0 items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="font-medium text-text-strong">
+                                  {item.quantity} × {item.name}
+                                  {item.seatNumber ? ` · Seat ${item.seatNumber}` : ''}
+                                </p>
+                                {item.modifiers.length ? (
+                                  <p className="mt-1 text-xs text-text-muted">
+                                    {item.modifiers.map((modifier) => modifier.name).join(', ')}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <StatusPill status={item.status} tone={tone(item.status)} />
                             </div>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              disabled={pending || !remakeReasons[item.id]?.trim()}
-                              onClick={() => onRemake(item.id, remakeReasons[item.id].trim())}
-                              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                            >
-                              Request remake
-                            </Button>
-                          </div>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            ))}
-          </div>
-        )}
+                            <div className="flex flex-wrap gap-2">
+                              {['PREPARED', 'REMAKE_REQUESTED'].includes(item.status) ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => onServed(item.id)}
+                                  disabled={pending}
+                                  className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                                >
+                                  Mark served
+                                </Button>
+                              ) : null}
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                size="touch"
+                                onClick={() => openVoid(item)}
+                                disabled={pending || item.status === 'VOIDED'}
+                                className="shadow-none hover:translate-y-0 active:translate-y-0"
+                              >
+                                Void {item.name}
+                              </Button>
+                            </div>
+                            {canRemake ? (
+                              <div className="flex flex-col gap-2 sm:flex-row">
+                                <div className="min-w-0 flex-1">
+                                  <Label htmlFor={`remake-${item.id}`} className="sr-only">
+                                    Remake reason for {item.name}
+                                  </Label>
+                                  <Input
+                                    id={`remake-${item.id}`}
+                                    value={remakeReasons[item.id] ?? ''}
+                                    onChange={(event) =>
+                                      setRemakeReasons((current) => ({
+                                        ...current,
+                                        [item.id]: event.target.value,
+                                      }))
+                                    }
+                                    placeholder="Remake reason"
+                                    className="h-11"
+                                  />
+                                </div>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  disabled={pending || !remakeReasons[item.id]?.trim()}
+                                  onClick={() => onRemake(item.id, remakeReasons[item.id].trim())}
+                                  className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                                >
+                                  Request remake
+                                </Button>
+                              </div>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                ))}
+              </div>
+            )}
 
-        {order.channel === 'DINE_IN' ? (
-          <div className="mt-5 grid gap-3 border-t border-border-subtle pt-5 md:grid-cols-2">
-            <div className="space-y-2 rounded-lg border border-border-subtle p-3">
-              <p className="text-sm font-semibold text-text-strong">Move table</p>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <Label htmlFor="move-from">Current table</Label>
-                  <select
-                    id="move-from"
-                    value={fromTableId}
-                    onChange={(event) => setFromTableId(event.target.value)}
-                    className="mt-1.5 h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50"
+            {order.channel === 'DINE_IN' ? (
+              <div className="mt-5 grid gap-3 border-t border-border-subtle pt-5 md:grid-cols-2">
+                <div className="space-y-2 rounded-lg border border-border-subtle p-3">
+                  <p className="text-sm font-semibold text-text-strong">Move table</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label htmlFor="move-from">Current table</Label>
+                      <select
+                        id="move-from"
+                        value={fromTableId}
+                        onChange={(event) => setFromTableId(event.target.value)}
+                        className="mt-1.5 h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50"
+                      >
+                        <option value="">Choose table</option>
+                        {activeTables.map((id) => (
+                          <option key={id} value={id}>
+                            {tableLabel(id)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label htmlFor="move-to">Destination table</Label>
+                      <select
+                        id="move-to"
+                        value={toTableId}
+                        onChange={(event) => setToTableId(event.target.value)}
+                        className="mt-1.5 h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50"
+                      >
+                        <option value="">Choose available table</option>
+                        {availableDestinations.map((table) => (
+                          <option key={table.id} value={table.id}>
+                            {table.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={pending || !fromTableId.trim() || !toTableId.trim()}
+                    onClick={() => onMove(fromTableId.trim(), toTableId.trim())}
+                    className="h-11 w-full"
                   >
-                    <option value="">Choose table</option>
-                    {activeTables.map((id) => (
-                      <option key={id} value={id}>
-                        {tableLabel(id)}
-                      </option>
-                    ))}
-                  </select>
+                    Move order
+                  </Button>
                 </div>
-                <div>
-                  <Label htmlFor="move-to">Destination table</Label>
-                  <select
-                    id="move-to"
-                    value={toTableId}
-                    onChange={(event) => setToTableId(event.target.value)}
-                    className="mt-1.5 h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50"
+                <div className="space-y-2 rounded-lg border border-border-subtle p-3">
+                  <p className="text-sm font-semibold text-text-strong">Merge tables</p>
+                  <fieldset className="space-y-2">
+                    <legend className="text-sm font-medium">Additional available tables</legend>
+                    {availableDestinations.length === 0 ? (
+                      <p className="text-sm text-text-muted">No additional tables are available.</p>
+                    ) : (
+                      availableDestinations.map((table) => (
+                        <label
+                          key={table.id}
+                          className="flex min-h-11 items-center gap-3 rounded-md border border-border-subtle px-3 py-2 text-sm"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={mergeIds.includes(table.id)}
+                            disabled={pending}
+                            onChange={() =>
+                              setMergeIds((current) =>
+                                current.includes(table.id)
+                                  ? current.filter((id) => id !== table.id)
+                                  : [...current, table.id]
+                              )
+                            }
+                          />
+                          {table.label}
+                        </label>
+                      ))
+                    )}
+                  </fieldset>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={pending || mergeIds.length === 0}
+                    onClick={() => onMerge(mergeIds)}
+                    className="h-11 w-full"
                   >
-                    <option value="">Choose available table</option>
-                    {availableDestinations.map((table) => (
-                      <option key={table.id} value={table.id}>
-                        {table.label}
-                      </option>
-                    ))}
-                  </select>
+                    Merge tables
+                  </Button>
                 </div>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={pending || !fromTableId.trim() || !toTableId.trim()}
-                onClick={() => onMove(fromTableId.trim(), toTableId.trim())}
-                className="h-11 w-full"
-              >
-                Move order
-              </Button>
-            </div>
-            <div className="space-y-2 rounded-lg border border-border-subtle p-3">
-              <p className="text-sm font-semibold text-text-strong">Merge tables</p>
-              <fieldset className="space-y-2">
-                <legend className="text-sm font-medium">Additional available tables</legend>
-                {availableDestinations.length === 0 ? (
-                  <p className="text-sm text-text-muted">No additional tables are available.</p>
-                ) : (
-                  availableDestinations.map((table) => (
-                    <label
-                      key={table.id}
-                      className="flex min-h-11 items-center gap-3 rounded-md border border-border-subtle px-3 py-2 text-sm"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={mergeIds.includes(table.id)}
-                        disabled={pending}
-                        onChange={() =>
-                          setMergeIds((current) =>
-                            current.includes(table.id)
-                              ? current.filter((id) => id !== table.id)
-                              : [...current, table.id]
-                          )
-                        }
-                      />
-                      {table.label}
-                    </label>
-                  ))
-                )}
-              </fieldset>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={pending || mergeIds.length === 0}
-                onClick={() => onMerge(mergeIds)}
-                className="h-11 w-full"
-              >
-                Merge tables
-              </Button>
-            </div>
+            ) : null}
           </div>
-        ) : null}
-        </div>
 
-        <div className="mt-2 flex shrink-0 items-center justify-between gap-2 border-t border-border-subtle bg-card pt-2">
-          <div className="min-w-0 text-xs text-text-muted">
-            <span className="inline-block min-w-16 text-right font-mono text-sm tabular-nums text-text-strong">
-              {order.totals.subtotal}
-            </span>
-            <span className="ml-2 font-mono tabular-nums">
-              Tax {order.totals.tax} · Service {order.totals.serviceCharge}
-              {order.channel === 'DELIVERY'
-                ? ` · Delivery fee ${order.totals.deliveryFee ?? '0'}`
-                : ''}
-            </span>
+          <div className="mt-2 flex shrink-0 items-center justify-between gap-2 border-t border-border-subtle bg-card pt-2">
+            <div className="min-w-0 text-xs text-text-muted">
+              <span className="inline-block min-w-16 text-right font-mono text-sm tabular-nums text-text-strong">
+                {order.totals.subtotal}
+              </span>
+              <span className="ml-2 font-mono tabular-nums">
+                Tax {order.totals.tax} · Service {order.totals.serviceCharge}
+                {order.channel === 'DELIVERY'
+                  ? ` · Delivery fee ${order.totals.deliveryFee ?? '0'}`
+                  : ''}
+              </span>
+            </div>
+            <Button
+              type="button"
+              data-pos-pay
+              variant={shouldCollectPayment ? 'default' : 'outline'}
+              onClick={shouldCollectPayment ? onCollectPayment : onClose}
+              disabled={pending}
+              className="h-11 shrink-0 shadow-none hover:translate-y-0 active:translate-y-0"
+            >
+              {shouldCollectPayment ? 'Collect payment' : 'Close order'}
+            </Button>
           </div>
-          <Button
-            type="button"
-            data-pos-pay
-            variant={
-              order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
-                ? 'default'
-                : 'outline'
-            }
-            onClick={
-              order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
-                ? onCollectPayment
-                : onClose
-            }
-            disabled={pending}
-            className="h-11 shrink-0 shadow-none hover:translate-y-0 active:translate-y-0"
-          >
-            {order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
-              ? 'Collect payment'
-              : 'Close order'}
-          </Button>
-        </div>
         </div>
       </SectionCard>
 
@@ -494,7 +506,9 @@ export function OrderTicketPanel({
                     <RestaurantStaffSelect
                       id="manager-id"
                       required
-                      staff={operators.filter((operator) => operator.id !== actingOperatorId)}
+                      staff={operators.filter(
+                        (operator) => operator.id !== actingOperatorId || operator.canSelfApprove
+                      )}
                       value={managerId}
                       onChange={setManagerId}
                       label="Approving manager"

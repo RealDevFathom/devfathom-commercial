@@ -480,7 +480,7 @@ export function OrganizationAdminContent() {
 
       <Card
         title="People and access"
-        description={`${entitlements.activeSeats} of ${entitlements.seatLimit} licensed seats are currently occupied.`}
+        description={`${entitlements.activeSeats} of ${entitlements.seatLimit} licensed ${entitlements.seatLimit === 1 ? 'seat' : 'seats'} ${entitlements.activeSeats === 1 ? 'is' : 'are'} currently occupied.`}
       >
         <form
           className="mb-5 grid gap-3 rounded-xl bg-muted/35 p-4 sm:grid-cols-2 lg:grid-cols-3"
@@ -572,8 +572,9 @@ export function OrganizationAdminContent() {
             <SubmitButton pending={addMember.isPending}>Add staff</SubmitButton>
           </div>
           <p className="text-[11px] text-muted-foreground sm:col-span-2 lg:col-span-3">
-            Minimum 12-character password. The new member occupies one licensed seat (
-            {entitlements.activeSeats}/{entitlements.seatLimit} used).
+            12–256 characters, with a lowercase letter, an uppercase letter and a digit. The new
+            member occupies one licensed seat ({entitlements.activeSeats}/{entitlements.seatLimit}{' '}
+            used).
           </p>
         </form>
         <div className="divide-y divide-border/60">
@@ -590,25 +591,39 @@ export function OrganizationAdminContent() {
               </summary>
               <div className="grid gap-5 rounded-xl bg-muted/35 p-4 lg:grid-cols-2">
                 <form
+                  key={`${user.role}:${user.status}:${user.department}:${user.organizationRoleId ?? ''}:${user.title}`}
                   className="grid gap-3 sm:grid-cols-2"
                   onSubmit={(event) => {
                     event.preventDefault();
-                    const values = new FormData(event.currentTarget);
-                    member.mutate({
-                      id: user.id,
-                      role: formValue(values, 'role') as 'ADMIN' | 'HR' | 'EMPLOYEE',
-                      status: formValue(values, 'status') as
-                        'ACTIVE' | 'INACTIVE' | 'ON_LEAVE' | 'INVITED',
-                      organizationRoleId: formValue(values, 'organizationRoleId') || null,
-                      title: formValue(values, 'title'),
-                      department: formValue(values, 'department') as
-                        | 'LEADERSHIP'
-                        | 'ENGINEERING'
-                        | 'PRODUCT'
-                        | 'QUALITY'
-                        | 'MARKETING'
-                        | 'DESIGN',
-                    });
+                    const form = event.currentTarget;
+                    const values = new FormData(form);
+                    member.mutate(
+                      {
+                        id: user.id,
+                        role: formValue(values, 'role') as 'ADMIN' | 'HR' | 'EMPLOYEE',
+                        status: formValue(values, 'status') as
+                          | 'ACTIVE'
+                          | 'INACTIVE'
+                          | 'ON_LEAVE'
+                          | 'INVITED',
+                        organizationRoleId: formValue(values, 'organizationRoleId') || null,
+                        title: formValue(values, 'title'),
+                        department: formValue(values, 'department') as
+                          | 'LEADERSHIP'
+                          | 'ENGINEERING'
+                          | 'PRODUCT'
+                          | 'QUALITY'
+                          | 'MARKETING'
+                          | 'DESIGN',
+                      },
+                      {
+                        // Access fields are intentionally uncontrolled so native form reset
+                        // semantics remain available. A refused update must put them back to
+                        // the last server-confirmed values instead of displaying an unsaved
+                        // Goods-in (or other role) grant as if it succeeded.
+                        onError: () => form.reset(),
+                      }
+                    );
                   }}
                 >
                   {[
@@ -684,7 +699,8 @@ export function OrganizationAdminContent() {
                     <Input name="password" type="password" minLength={12} required />
                   </label>
                   <p className="text-[11px] text-muted-foreground">
-                    Minimum 12 characters. All existing sessions are revoked.
+                    12–256 characters, with a lowercase letter, an uppercase letter and a digit. All
+                    existing sessions are revoked.
                   </p>
                   <SubmitButton pending={password.isPending}>Reset password</SubmitButton>
                 </form>

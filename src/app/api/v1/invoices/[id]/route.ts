@@ -3,6 +3,12 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
+import {
+  INVOICE_STATUS_VALUES,
+  invoiceStatusTransitionError,
+  invoiceStatusUpdate,
+  type InvoiceStatusValue,
+} from '@/lib/finance/invoice-status';
 
 export const GET = withApiAuth(
   'finance:read',
@@ -21,7 +27,10 @@ export const GET = withApiAuth(
 );
 
 const updateSchema = z.object({
-  status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED']).optional(),
+  // Parse the same status domain enforced by the shared transition machine below.
+  // Keeping one canonical list prevents this REST surface from accepting a new
+  // status before its transition rules (and the other API surfaces) are ready.
+  status: z.enum(INVOICE_STATUS_VALUES).optional(),
 });
 
 export const PATCH = withApiAuth(
@@ -39,30 +48,44 @@ export const PATCH = withApiAuth(
       );
     }
 
-    const existing = await authCtx.db.invoice.findUnique({ where: { id }, select: { id: true } });
+    const existing = await authCtx.db.invoice.findUnique({
+      where: { id },
+      include: { client: { select: { name: true } } },
+    });
     if (!existing) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
 
-    const data: Record<string, unknown> = { ...parsed.data };
-    if (parsed.data.status === 'PAID') data.paidAt = new Date();
-    if (parsed.data.status === 'SENT') data.sentAt = new Date();
+    const next = parsed.data.status;
+    const transitionError = next
+      ? invoiceStatusTransitionError(existing.status as InvoiceStatusValue, next)
+      : null;
+    if (transitionError) {
+      return NextResponse.json({ error: transitionError }, { status: 400 });
+    }
 
-    const invoice = await authCtx.db.invoice.update({
+    if (next === existing.status) return NextResponse.json({ data: existing });
+    if (!next) return NextResponse.json({ data: existing });
+
+    // Compare-and-set makes the state check and write one atomic operation. Only
+    // the request that wins this update may emit transition side effects.
+    const changed = await authCtx.db.invoice.updateMany({
+      where: { id, status: existing.status },
+      data: invoiceStatusUpdate(existing.status as InvoiceStatusValue, next, new Date()),
+    });
+    if (changed.count !== 1) {
+      return NextResponse.json(
+        { error: 'Invoice status changed concurrently. Refresh and try again.' },
+        { status: 409 }
+      );
+    }
+    const invoice = await authCtx.db.invoice.findUniqueOrThrow({
       where: { id },
-      data,
       include: { client: { select: { name: true } } },
     });
 
-    if (parsed.data.status === 'SENT') {
+    if (next === 'SENT' && existing.status !== 'SENT') {
       logActivity(authCtx.db, authCtx.userId, {
         type: 'invoice_sent',
         message: `sent invoice ${invoice.invoiceNumber} to ${invoice.client.name} ($${Number(invoice.total).toLocaleString()})`,
-        entityType: 'Invoice',
-        entityId: invoice.id,
-      });
-    } else if (parsed.data.status === 'PAID') {
-      logActivity(authCtx.db, authCtx.userId, {
-        type: 'invoice_paid',
-        message: `marked invoice ${invoice.invoiceNumber} as paid ($${Number(invoice.total).toLocaleString()})`,
         entityType: 'Invoice',
         entityId: invoice.id,
       });

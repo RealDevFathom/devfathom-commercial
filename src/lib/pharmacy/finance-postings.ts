@@ -21,8 +21,8 @@
  *      goods raise quantity and lower unit cost, and no revenue account appears
  *      anywhere in a receipt posting.
  *
- *   3. EVERY LEG CARRIES ITS DIMENSIONS. Revenue and discount are split across
- *      the sale's allocations pro rata by units so that every leg — revenue,
+ *   3. EVERY LEG CARRIES ITS DIMENSIONS. Revenue and discount use each
+ *      allocation's immutable charged amounts so that every leg — revenue,
  *      discount and cost alike — names a branch, a product, a lot and the sale
  *      line it came from. That is what makes FIN-03's "margin by
  *      line/batch/product/branch" four groupings of one query instead of four
@@ -39,6 +39,8 @@ import {
   type JournalLineInput,
 } from '@/lib/finance/journal';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { saleAllocationMoney } from './sale-line-money';
+export { apportion } from './sale-line-money';
 
 export { FinancePostingError } from '@/lib/finance/journal';
 
@@ -60,26 +62,6 @@ export class PharmacyFinanceError extends Error {
 /** Deterministic, so the same event posts once however often it is retried. */
 function postingKey(sourceKind: FinanceSourceKind, sourceId: string): string {
   return `finance:${sourceKind}:${sourceId}`;
-}
-
-/**
- * Split `totalMinor` across `weights` in proportion, in whole minor units, with
- * the rounding remainder landing on the last share.
- *
- * Proportional shares of an integer amount do not divide evenly, and money that
- * is dropped in the rounding would leave the entry unbalanced. Giving the
- * remainder to the last share keeps `sum(shares) === totalMinor` exactly, for
- * any weights, which is the property the balance check depends on.
- */
-export function apportion(totalMinor: number, weights: readonly number[]): number[] {
-  const total = weights.reduce((sum, weight) => sum + weight, 0);
-  if (total <= 0 || weights.length === 0) return weights.map(() => 0);
-
-  const shares = weights.map((weight) => Math.floor((totalMinor * weight) / total));
-  const assigned = shares.reduce((sum, share) => sum + share, 0);
-  const last = shares.length - 1;
-  shares[last] = (shares[last] ?? 0) + (totalMinor - assigned);
-  return shares;
 }
 
 /** Drop zero-value legs. A zero leg is not a fact; it is a rounding artefact. */
@@ -200,10 +182,7 @@ export async function postSaleLineEntry(
     line.allocations.map((allocation) => allocation.inventoryLotId)
   );
 
-  const grossMinor = line.unitPriceMinor * line.quantity;
-  const units = line.allocations.map((allocation) => allocation.canonicalUnits);
-  const grossShares = apportion(grossMinor, units);
-  const discountShares = apportion(line.discountMinor, units);
+  const chargedAllocations = saleAllocationMoney(line);
 
   const lines: JournalLineInput[] = [];
   for (const [index, allocation] of line.allocations.entries()) {
@@ -217,8 +196,8 @@ export async function postSaleLineEntry(
       locationId: allocation.stockLocationId,
       sourceLineId: line.id,
     };
-    const gross = grossShares[index] ?? 0;
-    const discount = discountShares[index] ?? 0;
+    const gross = chargedAllocations[index]!.grossMinor;
+    const discount = chargedAllocations[index]!.discountMinor;
     // FIN-03: the exact landed cost of the lot this part of the line came from.
     const cost = lot.unitCostMinor * allocation.canonicalUnits;
 
@@ -295,7 +274,7 @@ export async function postSaleReturnEntry(
   const lot = lots.get(returnLine.inventoryLotId);
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
-  const grossMinor = saleLine.unitPriceMinor * saleLine.quantity;
+  const grossMinor = saleLine.grossMinor;
   const returned = returnLine.canonicalUnits;
   const sold = saleLine.canonicalUnits;
   // returnSaleLine holds the sold-line lock and posts each newly inserted
@@ -305,15 +284,19 @@ export async function postSaleReturnEntry(
     where: { organizationId: scope.organizationId, saleLineId: saleLine.id },
     _sum: { canonicalUnits: true },
   });
-  const through = cumulative._sum.canonicalUnits ?? 0;
+  const unidentified = await db.pharmacyUnidentifiedReturnHold.aggregate({
+    where: { organizationId: scope.organizationId, saleLineId: saleLine.id },
+    _sum: { canonicalUnits: true },
+  });
+  const through = (cumulative._sum.canonicalUnits ?? 0) + (unidentified._sum.canonicalUnits ?? 0);
   const before = through - returned;
   if (before < 0 || through > sold) throw new PharmacyFinanceError('INVALID_STATE');
   const delta = (amount: number) =>
     Math.floor((amount * through) / sold) - Math.floor((amount * before) / sold);
-  const discount = delta(saleLine.discountMinor);
+  const discount = returnLine.discountMinor ?? delta(saleLine.discountMinor);
   // Refund authorization rounds cumulative NET. Derive gross from that same
   // net plus discount, so every partial reversal clears its authorized refund.
-  const gross = delta(grossMinor - saleLine.discountMinor) + discount;
+  const gross = returnLine.grossMinor ?? delta(grossMinor - saleLine.discountMinor) + discount;
   const cost = lot.unitCostMinor * returned;
 
   const dimensions = {
@@ -323,6 +306,14 @@ export async function postSaleReturnEntry(
     locationId: returnLine.stockLocationId,
     sourceLineId: saleLine.id,
   };
+  const monetaryLines = nonZero([
+    { ...dimensions, accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: gross },
+    { ...dimensions, accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: gross },
+    { ...dimensions, accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: discount },
+    { ...dimensions, accountCode: 'SALES_DISCOUNT', side: 'CREDIT', amountMinor: discount },
+    { ...dimensions, accountCode: 'INVENTORY', side: 'DEBIT', amountMinor: cost },
+    { ...dimensions, accountCode: 'COST_OF_GOODS_SOLD', side: 'CREDIT', amountMinor: cost },
+  ]);
 
   return postJournalEntry(
     db,
@@ -334,19 +325,112 @@ export async function postSaleReturnEntry(
       occurredAt: input.at,
       idempotencyKey: postingKey('PHARMACY_SALE_RETURN_LINE', returnLine.id),
       branchId: returnLine.branchId,
-      lines: nonZero([
-        { ...dimensions, accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: gross },
-        { ...dimensions, accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: gross },
-        { ...dimensions, accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: discount },
-        { ...dimensions, accountCode: 'SALES_DISCOUNT', side: 'CREDIT', amountMinor: discount },
-        { ...dimensions, accountCode: 'INVENTORY', side: 'DEBIT', amountMinor: cost },
-        {
-          ...dimensions,
-          accountCode: 'COST_OF_GOODS_SOLD',
-          side: 'CREDIT',
-          amountMinor: cost,
-        },
-      ]),
+      // A free, zero-cost allocation still needs a durable posting receipt.
+      // Match unidentified returns with a balanced marker that changes no balance.
+      lines:
+        monetaryLines.length > 0
+          ? monetaryLines
+          : [
+              { ...dimensions, accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: 1 },
+              { ...dimensions, accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 1 },
+            ],
+    }
+  );
+}
+
+/** Reverse sale revenue when the returned pack cannot yet be tied to a lot.
+ * Inventory and COGS remain untouched until that physical identity is known. */
+export async function postUnidentifiedSaleReturnEntry(
+  db: ScopedDb,
+  scope: PostingScope,
+  input: { holdingId: string; at: Date }
+) {
+  const holding = await db.pharmacyUnidentifiedReturnHold.findFirst({
+    where: { id: input.holdingId, organizationId: scope.organizationId },
+    include: {
+      saleLine: { include: { returnLines: true, unidentifiedReturnHolds: true } },
+    },
+  });
+  if (!holding) throw new PharmacyFinanceError('NOT_FOUND');
+  if (holding.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+
+  const sourceKind: FinanceSourceKind = 'PHARMACY_UNIDENTIFIED_RETURN_HOLD';
+  const existing = await db.financeJournalEntry.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      idempotencyKey: postingKey(sourceKind, holding.id),
+    },
+    include: { lines: true },
+  });
+  if (existing) return existing;
+
+  const saleLine = holding.saleLine;
+  const through =
+    saleLine.returnLines.reduce((sum, row) => sum + row.canonicalUnits, 0) +
+    saleLine.unidentifiedReturnHolds.reduce((sum, row) => sum + row.canonicalUnits, 0);
+  const before = through - holding.canonicalUnits;
+  if (before < 0 || through > saleLine.canonicalUnits)
+    throw new PharmacyFinanceError('INVALID_STATE');
+  const delta = (amount: number) =>
+    Math.floor((amount * through) / saleLine.canonicalUnits) -
+    Math.floor((amount * before) / saleLine.canonicalUnits);
+  const discount = holding.discountMinor ?? delta(saleLine.discountMinor);
+  const gross =
+    holding.grossMinor ?? delta(saleLine.grossMinor - saleLine.discountMinor) + discount;
+  const dimensions = {
+    branchId: holding.branchId,
+    productId: saleLine.medicineId,
+    locationId: holding.quarantineLocationId,
+    sourceLineId: saleLine.id,
+  };
+  const monetaryLines = nonZero([
+    {
+      ...dimensions,
+      accountCode: 'SALES_REVENUE' as const,
+      side: 'DEBIT' as const,
+      amountMinor: gross,
+    },
+    {
+      ...dimensions,
+      accountCode: 'SALES_CLEARING' as const,
+      side: 'CREDIT' as const,
+      amountMinor: gross,
+    },
+    {
+      ...dimensions,
+      accountCode: 'SALES_CLEARING' as const,
+      side: 'DEBIT' as const,
+      amountMinor: discount,
+    },
+    {
+      ...dimensions,
+      accountCode: 'SALES_DISCOUNT' as const,
+      side: 'CREDIT' as const,
+      amountMinor: discount,
+    },
+  ]);
+
+  return postJournalEntry(
+    db,
+    { organizationId: scope.organizationId, actorId: scope.actorId },
+    {
+      sourceKind,
+      sourceId: holding.id,
+      description: `Unidentified return of sale line ${saleLine.id}`,
+      occurredAt: input.at,
+      idempotencyKey: postingKey(sourceKind, holding.id),
+      branchId: holding.branchId,
+      // Canonical units can be finer than a minor currency unit. Keep a
+      // balanced, net-zero clearing marker for those slices: the journal row
+      // remains the durable idempotency/completeness receipt without inventing
+      // revenue, discount, inventory, or COGS.
+      lines:
+        monetaryLines.length > 0
+          ? monetaryLines
+          : [
+              { ...dimensions, accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: 1 },
+              { ...dimensions, accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 1 },
+            ],
     }
   );
 }

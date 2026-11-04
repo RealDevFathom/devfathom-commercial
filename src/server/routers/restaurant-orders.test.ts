@@ -145,8 +145,17 @@ describe('read model (C10)', () => {
         }),
       })
     );
-    expect(result.orders[0].itemCount).toBe(2);
+    expect(result.orders[0].itemCount).toBe(3);
     expect(result.nextCursor).toBeNull();
+    expect(mocks.orderFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          items: expect.objectContaining({
+            where: { status: { not: 'VOIDED' }, remakeOfItemId: null },
+          }),
+        }),
+      })
+    );
   });
 
   it('returns a nextCursor when a full page + 1 is fetched', async () => {
@@ -208,6 +217,42 @@ describe('read model (C10)', () => {
             { id: 'm1', modifierOptionId: 'opt1', name: 'Cheese', priceDelta: D('1.50') },
           ],
         },
+        {
+          id: 'i1-remake-1',
+          course: 1,
+          seatNumber: null,
+          productId: 'p1',
+          variantId: null,
+          name: 'Burger',
+          unitPrice: D('10.00'),
+          quantity: 1,
+          taxAmount: D('0'),
+          serviceChargeAmount: D('0'),
+          status: 'QUEUED',
+          remakeOfItemId: 'i1',
+          voidedPostPrep: false,
+          wastageDisposition: null,
+          voidReason: null,
+          modifiers: [],
+        },
+        {
+          id: 'i1-remake-2',
+          course: 1,
+          seatNumber: null,
+          productId: 'p1',
+          variantId: null,
+          name: 'Burger',
+          unitPrice: D('10.00'),
+          quantity: 1,
+          taxAmount: D('0'),
+          serviceChargeAmount: D('0'),
+          status: 'QUEUED',
+          remakeOfItemId: 'i1-remake-1',
+          voidedPostPrep: false,
+          wastageDisposition: null,
+          voidReason: null,
+          modifiers: [],
+        },
       ],
       orderTables: [],
       events: [],
@@ -216,6 +261,11 @@ describe('read model (C10)', () => {
     const order = await caller().getOrder({ orderId: 'o1' });
     expect(order.items[0].unitPrice).toBe('10');
     expect(order.items[0].modifiers[0].priceDelta).toBe('1.5');
+    expect(order.items.map((item) => item.remakeOfItemId)).toEqual([
+      null,
+      'i1',
+      'i1-remake-1',
+    ]);
     expect(order.totals.subtotal).toBe('11.5');
     expect(order.totals.tax).toBe('0');
   });
@@ -332,10 +382,31 @@ describe('mutation wiring', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
+  it('maps opening an order on a closed day to CONFLICT', async () => {
+    mocks.openOrder.mockRejectedValueOnce(
+      new OrderCommandError('This business day is closed; no order can be opened.', 'DAY_CLOSED')
+    );
+    await expect(
+      caller().open({ branchId: 'b1', channel: 'DINE_IN', actor: ACTOR })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'This business day is closed; no order can be opened.',
+    });
+  });
+
   it('maps a terminal-state conflict to CONFLICT', async () => {
     mocks.closeOrder.mockRejectedValue(new OrderCommandError('already closed', 'ORDER_TERMINAL'));
     await expect(caller().close({ orderId: 'o1', actor: ACTOR })).rejects.toMatchObject({
       code: 'CONFLICT',
     });
+  });
+
+  it('maps a post-cut item void to CONFLICT', async () => {
+    mocks.voidItem.mockRejectedValue(
+      new OrderCommandError('void and recut the bill first', 'BILL_ALREADY_CUT')
+    );
+    await expect(
+      caller().voidItem({ orderId: 'o1', itemId: 'i1', reason: 'changed mind', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 });

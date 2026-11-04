@@ -5,6 +5,8 @@ import { requestCounterEvidence } from './counter-evidence';
 
 vi.mock('./finance-postings', () => ({ postSaleLineEntry: vi.fn(), postTenderEntry: vi.fn() }));
 vi.mock('./counter-evidence', () => ({ requestCounterEvidence: vi.fn() }));
+// #633: the batch re-check has its own PostgreSQL suite (sale-batch-safety.db.test.ts).
+vi.mock('./sale-batch-safety', () => ({ assertSaleBatchesSellable: vi.fn(async () => new Map()) }));
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'actor-a' };
 const input = {
@@ -23,6 +25,7 @@ function fixture() {
     quantity: 1,
     canonicalUnits: 1,
     unitPriceMinor: 200,
+    grossMinor: 200,
     discountMinor: 0,
     medicine: {
       organizationId: scope.organizationId,
@@ -92,7 +95,9 @@ describe('ordinary loyalty settlement completion (held policy fixtures excluded)
   it('refuses revoked consent before tender or point writes', async () => {
     const { db } = fixture();
     db.patientConsent.findFirst.mockResolvedValue({ granted: false, revokedAt: null });
-    await expect(redeemSalePoints(db as never, scope, input)).rejects.toThrow('CONSENT_REQUIRED');
+    await expect(redeemSalePoints(db as never, scope, input)).rejects.toThrow(
+      'LOYALTY_CONSENT_REQUIRED'
+    );
     expect(db.pharmacyTender.create).not.toHaveBeenCalled();
     expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
   });

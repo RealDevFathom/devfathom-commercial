@@ -4,12 +4,15 @@ import { Suspense } from 'react';
 import { MarginComparisonSection } from './margin-comparison';
 import { LedgerReportsSection, LedgerReportsLoading } from './ledger-reports';
 import type { Metadata } from 'next';
-import { redirect } from 'next/navigation';
-import { Button } from '@/components/ui/button';
+import Link from 'next/link';
+import { redirect, unstable_rethrow } from 'next/navigation';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
+import { ManualPaymentSettingsPanel } from '@/components/pharmacy/counter/manual-payment-settings-panel';
 import { StatusPill } from '@/components/ui/status-pill';
+import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
 import {
   Table,
   TableBody,
@@ -214,12 +217,19 @@ export default async function PharmacyFinancePage({
         });
         redirect(destination(branchId, 'Bank line matched to the selected transaction.'));
       }
+      if (action === 'reconcile-settlement') {
+        await actionCaller.reconcile({
+          branchId, statementLineId: field(data, 'statementLineId'),
+          settlementBatchId: field(data, 'settlementBatchId'), amountMinor: moneyMinor(data, 'amount'),
+        });
+        redirect(destination(branchId, 'Statement matched to POS settlement receipts.'));
+      }
       if (action === 'settlement-batch') {
         await actionCaller.createSettlementBatch({
           branchId,
           reference: field(data, 'reference'),
           provider: field(data, 'provider'),
-          tenderType: field(data, 'tenderType') as 'CARD' | 'WALLET' | 'BANK_TRANSFER',
+          tenderType: field(data, 'tenderType') as 'CARD' | 'WALLET' | 'BANK_TRANSFER' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA',
           businessDate: new Date(`${field(data, 'businessDate')}T12:00:00Z`),
           tenderIds: data.getAll('tenderIds').map(String),
         });
@@ -250,16 +260,10 @@ export default async function PharmacyFinancePage({
       }
       throw new Error('Choose a supported action.');
     } catch (error) {
-      if (error && typeof error === 'object' && 'digest' in error) throw error;
-      const message =
-        error instanceof Error ? error.message.replaceAll('_', ' ').toLowerCase() : 'Action failed';
-      redirect(
-        destination(
-          branchId || branch.id,
-          `Could not save: ${message}. Review the named fields and try again.`,
-          'error'
-        )
-      );
+      // Preserve Next.js control-flow errors without trusting a user/provider-controlled
+      // `digest` property as proof that an arbitrary thrown value is a framework error.
+      unstable_rethrow(error);
+      redirect(destination(branchId || branch.id, pharmacyActionErrorMessage('finance'), 'error'));
     }
   }
 
@@ -276,6 +280,14 @@ export default async function PharmacyFinancePage({
         eyebrow="Pharmacy operations"
         heading="Finance"
         description="Post and allocate money, reconcile the bank, control periods, and publish approved tax versions."
+        actions={
+          <Link
+            href={`/pharmacy/accounts/balance-sheet?${new URLSearchParams({ branch: branch.id })}`}
+            className={buttonVariants({ variant: 'outline', size: 'lg' })}
+          >
+            Balance sheet
+          </Link>
+        }
       />
       <Suspense fallback={<LedgerReportsLoading />}>
         <FinancialStatements
@@ -349,7 +361,8 @@ export default async function PharmacyFinancePage({
           </Button>
         </form>
       </SectionCard>
-      <SectionCard title="Create POS settlement batch" eyebrow="Card · wallet · bank transfer">
+      <ManualPaymentSettingsPanel key={branch.id} branchId={branch.id} />
+      <SectionCard title="Create POS settlement batch" eyebrow="Card · Raast · wallet · bank transfer">
         {workspace.settlementCandidates.length ? (
           <form action={perform} className="grid gap-4 md:grid-cols-3">
             <input type="hidden" name="action" value="settlement-batch" />
@@ -388,6 +401,9 @@ export default async function PharmacyFinancePage({
                 <option value="CARD">Card</option>
                 <option value="WALLET">Wallet</option>
                 <option value="BANK_TRANSFER">Bank transfer</option>
+                <option value="RAAST">Raast</option>
+                <option value="JAZZCASH">JazzCash</option>
+                <option value="EASYPAISA">Easypaisa</option>
               </select>
             </label>
             <fieldset className="space-y-2 md:col-span-2">
@@ -401,6 +417,8 @@ export default async function PharmacyFinancePage({
                   <span>
                     Receipt {tender.sale.receiptNumber ?? 'pending'} · {label(tender.type)} ·{' '}
                     {tender.provider ?? 'Direct'} · {money(tender.amountMinor)}
+                    {tender.payerName ? ` · ${tender.payerName}` : ''}
+                    {tender.providerRef ? ` · Ref ${tender.providerRef}` : tender.referenceSkipped ? ' · Reference skipped' : ''}
                   </span>
                 </label>
               ))}
@@ -427,6 +445,7 @@ export default async function PharmacyFinancePage({
                 </span>
                 <span className="tabular-nums text-sm text-text-muted">
                   {money(batch.expectedMinor)}
+                  {' '}· Matched {money(batch.settledMinor ?? 0)}
                 </span>
               </div>
             ))}
@@ -651,6 +670,30 @@ export default async function PharmacyFinancePage({
       </SectionCard>
       <div className="grid gap-6 xl:grid-cols-2">
         <SectionCard title="Bank reconciliation" eyebrow="Statement matching">
+          {workspace.bankLines.some((line) => line.status === 'UNMATCHED') && workspace.settlementBatches.some((batch) => (batch.settledMinor ?? 0) < batch.expectedMinor) ? (
+            <form action={perform} className="mb-5 grid gap-3">
+              <input type="hidden" name="action" value="reconcile-settlement" />
+              <input type="hidden" name="branchId" value={branch.id} />
+              <label className="text-sm">Bank or wallet statement line
+                <select className={inputClass} name="statementLineId" required>
+                  {workspace.bankLines.filter((line) => line.status === 'UNMATCHED' && line.amountMinor > 0).map((line) => (
+                    <option key={line.id} value={line.id}>{line.lineReference} · {money(line.amountMinor)}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">POS settlement batch
+                <select className={inputClass} name="settlementBatchId" required>
+                  {workspace.settlementBatches.filter((batch) => (batch.settledMinor ?? 0) < batch.expectedMinor).map((batch) => (
+                    <option key={batch.id} value={batch.id}>{batch.reference} · {label(batch.tenderType)} · Expected {money(batch.expectedMinor)} · Remaining {money(batch.expectedMinor - (batch.settledMinor ?? 0))}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">Amount to match (PKR)
+                <Input className="mt-1 min-h-11" name="amount" type="number" min="0.01" step="0.01" required />
+              </label>
+              <Button type="submit">Match POS settlement to statement</Button>
+            </form>
+          ) : null}
           <form action={perform} className="grid gap-3 sm:grid-cols-2">
             <input type="hidden" name="action" value="bank-line" />
             <input type="hidden" name="branchId" value={branch.id} />
@@ -727,6 +770,12 @@ export default async function PharmacyFinancePage({
           )}
         </SectionCard>
         <SectionCard title="Publish tax profile" eyebrow="FIN-04 · Accountant approval">
+          <a
+            href={`/pharmacy/accounts/tax-profile-review?${new URLSearchParams({ branch: branch.id })}`}
+            className="mb-5 inline-flex min-h-11 items-center text-sm text-primary underline underline-offset-4 hover:text-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Review recorded tax profile versions
+          </a>
           <form action={perform} className="grid gap-3 sm:grid-cols-2">
             <input type="hidden" name="action" value="tax" />
             <input type="hidden" name="branchId" value={branch.id} />

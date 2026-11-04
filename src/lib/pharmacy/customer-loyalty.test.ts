@@ -30,7 +30,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
         patientId: 'patient-a',
         displayName: 'Retail name',
       })
-    ).rejects.toEqual(new PharmacyLoyaltyError('CONSENT_REQUIRED'));
+    ).rejects.toEqual(new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED'));
     expect(db.patientConsent.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ purpose: 'LOYALTY', organizationId: 'org-a' }),
@@ -141,7 +141,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
             id: 'sale-a',
             receiptNumber: 7,
             completedAt: new Date('2026-09-04T10:00:00Z'),
-            lines: [{ quantity: 2, unitPriceMinor: 500, discountMinor: 100 }],
+            lines: [{ quantity: 2, unitPriceMinor: 500, grossMinor: 1000, discountMinor: 100 }],
             tenders: [{ type: 'CREDIT', amountMinor: 900, refunds: [{ amountMinor: 100 }] }],
           },
         ]),

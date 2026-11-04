@@ -44,6 +44,108 @@ describe('PH-RPT metric contract', () => {
     expect(sql).toContain('SUM(t."amountMinor")');
     expect(sql).not.toContain('SUM(t."amountMinor" - COALESCE(t."changeGivenMinor",0))');
   });
+
+  it('counts pharmacist coverage only during the qualified person validity window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-29T12:00:00.000Z'));
+    try {
+      const queryRaw = vi.fn().mockResolvedValue([]);
+      const count = vi.fn().mockResolvedValue(0);
+
+      await readPharmacyOwnerCommandCentre(
+        {
+          $queryRaw: queryRaw,
+          pharmacyRecallNotice: { count },
+          pharmacySupplierClaim: { count },
+          pharmacyReceivingException: { count },
+          branchRegulatoryProfile: { count },
+        } as never,
+        { branchIds: ['branch_1'], from: '2026-10-29', to: '2026-10-29' }
+      );
+
+      expect(count).toHaveBeenLastCalledWith({
+        where: {
+          branchId: { in: ['branch_1'] },
+          effectiveFrom: { lte: new Date('2026-10-29T12:00:00.000Z') },
+          OR: [
+            { effectiveTo: null },
+            { effectiveTo: { gt: new Date('2026-10-29T12:00:00.000Z') } },
+          ],
+          qualifiedPersonValidFrom: { lte: new Date('2026-10-29T12:00:00.000Z') },
+          qualifiedPersonValidTo: { gt: new Date('2026-10-29T12:00:00.000Z') },
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports overdue Khata principal net of payments for the selected branches', async () => {
+    const queryRaw = vi
+      .fn()
+      .mockImplementation(async (query: { strings: readonly string[] }) =>
+        query.strings.join('?').includes('FROM "pharmacy_khata_events" charge')
+          ? [{ value: BigInt(4250) }]
+          : []
+      );
+    const count = vi.fn().mockResolvedValue(0);
+    const result = await readPharmacyOwnerCommandCentre(
+      {
+        $queryRaw: queryRaw,
+        pharmacyRecallNotice: { count },
+        pharmacySupplierClaim: { count },
+        pharmacyReceivingException: { count },
+        branchRegulatoryProfile: { count },
+      } as never,
+      { branchIds: ['branch_1'], from: '2026-09-04', to: '2026-09-04' }
+    );
+
+    expect(result.metrics.khataAgingMinor).toBe(4_250);
+    const khataQuery = queryRaw.mock.calls.find(([query]) =>
+      (query as { strings: readonly string[] }).strings
+        .join('?')
+        .includes('FROM "pharmacy_khata_events" charge')
+    )?.[0] as { strings: readonly string[]; values: unknown[] };
+    const sql = khataQuery.strings.join('?');
+    expect(sql).toContain('charge."amountMinor"::bigint-COALESCE(payments.paid,0)');
+    expect(sql).toContain(')::bigint AS value');
+    expect(sql).toContain(`charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`);
+    expect(khataQuery.values).toEqual(['branch_1', 'branch_1']);
+  });
+
+  it('adds branch-scoped bigint results above the PostgreSQL integer limit', async () => {
+    const queryRaw = vi.fn().mockImplementation(async (query: { strings: readonly string[] }) => {
+      const sql = query.strings.join('?');
+      if (sql.includes("current_setting('app.current_branch_id'"))
+        return [{ branchId: 'original' }];
+      if (sql.includes('FROM "pharmacy_khata_events" charge'))
+        return [{ value: BigInt(1500000000) }];
+      return [];
+    });
+    const count = vi.fn().mockResolvedValue(0);
+    const result = await readPharmacyOwnerCommandCentre(
+      {
+        $queryRaw: queryRaw,
+        pharmacyRecallNotice: { count },
+        pharmacySupplierClaim: { count },
+        pharmacyReceivingException: { count },
+        branchRegulatoryProfile: { count },
+      } as never,
+      { branchIds: ['branch_1', 'branch_2'], from: '2026-09-04', to: '2026-09-04' }
+    );
+
+    expect(result.metrics.khataAgingMinor).toBe(3_000_000_000);
+    const configs = queryRaw.mock.calls.filter(([query]) =>
+      (query as { strings: readonly string[] }).strings
+        .join('?')
+        .includes("set_config('app.current_branch_id'")
+    );
+    expect(configs.map(([query]) => (query as { values: unknown[] }).values[0])).toEqual([
+      'branch_1',
+      'branch_2',
+      'original',
+    ]);
+  });
 });
 
 // Query-shape regressions follow the existing cash-tender test seam.

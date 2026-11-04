@@ -27,6 +27,7 @@ export type BranchRegulatoryState = {
   licenceCategory: string;
   licenceValidFrom: Date;
   licenceValidTo: Date;
+  licenceEvidenceFileRef: string;
   permittedSchedules: readonly string[];
   qualifiedPersonRegistration: string;
   qualifiedPersonValidFrom: Date;
@@ -40,6 +41,13 @@ export type BranchRegulatoryState = {
   auditDenied: (reason: BranchOperationDenialReason, action: BranchOperationAction) => void;
 };
 
+export type BranchRegulatoryStatus = {
+  effective: boolean;
+  inForce: boolean;
+  licenceExpired: boolean;
+  qualifiedPersonCoverageExpired: boolean;
+};
+
 type RuleField = { provisional?: boolean; values?: unknown };
 
 function ruleField(value: unknown): RuleField {
@@ -49,6 +57,10 @@ function ruleField(value: unknown): RuleField {
 function stringValues(value: unknown): readonly string[] {
   const values = ruleField(value).values;
   return Array.isArray(values) && values.every((item) => typeof item === 'string') ? values : [];
+}
+
+function permits(values: readonly string[], value: string): boolean {
+  return values.includes('*') || values.includes(value);
 }
 
 /**
@@ -76,7 +88,8 @@ export function assertBranchMayOperate(
 
   if (
     !branch.licenceCategory.trim() ||
-    !stringValues(branch.ruleSet.licenceCategories).includes(branch.licenceCategory) ||
+    !branch.licenceEvidenceFileRef.trim() ||
+    !permits(stringValues(branch.ruleSet.licenceCategories), branch.licenceCategory) ||
     at < branch.licenceValidFrom ||
     at >= branch.licenceValidTo
   ) {
@@ -96,10 +109,42 @@ export function assertBranchMayOperate(
   if (
     action.schedule &&
     (!branch.permittedSchedules.includes(action.schedule) ||
-      !stringValues(branch.ruleSet.permittedSchedules).includes(action.schedule))
+      !permits(stringValues(branch.ruleSet.permittedSchedules), action.schedule))
   ) {
     deny('SCHEDULE_NOT_PERMITTED');
   }
+}
+
+/**
+ * Read-side status for a regulatory profile, evaluated by the same fail-closed
+ * primitive used by dispensing and activation. This prevents a profile from
+ * being presented as "in force" after the operation gate has started refusing
+ * it, including at the exact instant a licence or coverage period ends.
+ */
+export function evaluateBranchRegulatoryStatus(
+  branch: Omit<BranchRegulatoryState, 'auditDenied'>,
+  effective: boolean,
+  at: Date
+): BranchRegulatoryStatus {
+  let inForce = effective;
+  if (effective) {
+    try {
+      assertBranchMayOperate(
+        { ...branch, auditDenied: () => undefined },
+        { name: 'REGULATORY_PROFILE_VIEW', at, requiresQualifiedPerson: true }
+      );
+    } catch (error) {
+      if (!(error instanceof BranchOperationDeniedError)) throw error;
+      inForce = false;
+    }
+  }
+
+  return {
+    effective,
+    inForce,
+    licenceExpired: effective && at >= branch.licenceValidTo,
+    qualifiedPersonCoverageExpired: effective && at >= branch.qualifiedPersonValidTo,
+  };
 }
 
 export async function assertStoredBranchMayOperate(

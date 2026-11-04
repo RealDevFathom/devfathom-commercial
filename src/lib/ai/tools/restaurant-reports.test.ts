@@ -1,3 +1,4 @@
+import type { ToolExecutionOptions } from 'ai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/db', () => ({ db: {} }));
@@ -86,9 +87,9 @@ function execute(input: unknown = baseInput) {
   return (
     tool.execute! as (
       value: unknown,
-      options: { toolCallId: string; messages: [] }
+      options: ToolExecutionOptions<unknown>
     ) => Promise<unknown>
-  )(input, { toolCallId: 'synthetic', messages: [] });
+  )(input, { toolCallId: 'synthetic', messages: [], context: {} });
 }
 
 beforeEach(() => {
@@ -160,7 +161,11 @@ describe('Restaurant report execute authorization and boundaries', () => {
     async (module) => {
       const tool = buildRestaurantReportTools(h).askRestaurantReports;
       h.ctx.enabledModules = h.ctx.enabledModules!.filter((value) => value !== module);
-      const result = await tool.execute!(baseInput, { toolCallId: 'test', messages: [] });
+      const result = await tool.execute!(baseInput, {
+        toolCallId: 'test',
+        messages: [],
+        context: {},
+      });
       expect(result).toMatchObject({ kind: 'refusal' });
       expect(payments).not.toHaveBeenCalled();
     }
@@ -576,7 +581,14 @@ it.each(['settled_sales', 'financial_breakdown'])(
     });
     const totals = computeCloseAggregate({
       bills: [bill('SETTLED', 100), bill('OPEN', 10000)],
-      refunds: [{ amount: decimal(20), deliveryFeeRefundAmount: decimal(0) }],
+      refunds: [
+        {
+          amount: decimal(20),
+          taxRefundAmount: decimal(0),
+          serviceChargeRefundAmount: decimal(0),
+          deliveryFeeRefundAmount: decimal(0),
+        },
+      ],
       drawers: [{ status: 'CLOSED', expectedCash: decimal(40), countedCash: decimal(39.5) }],
       tenders: [
         { type: 'CASH', amount: decimal(40), tipAmount: decimal(3.75) },

@@ -31,12 +31,16 @@ import {
   createRecall,
   dispatchTransfer,
   nearExpiryBoard,
+  OpenRecallConflictError,
   quarantinePart,
+  releaseQuarantinedPart,
   recallTrace,
   receiveTransferLine,
   reserveSupplierClaim,
+  setManufacturingBatchState,
   writeOff,
 } from '@/lib/pharmacy/inventory-operations';
+import { postWriteOffEntry } from '@/lib/pharmacy/finance-postings';
 import {
   allocateForSale,
   breakPack,
@@ -48,6 +52,11 @@ import {
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
+import {
+  expiryRiskBuckets,
+  maySuggestExpiryMarkdown,
+  supplierReturnDates,
+} from '@/lib/pharmacy/expiry-growth';
 import { createPurchaseReturn } from '@/lib/pharmacy/supplier-returns-operations';
 import {
   acknowledgeSignal,
@@ -80,7 +89,9 @@ import type { TRPCContext } from '../trpc';
 const branchId = z.string().trim().min(1).max(128);
 const expiryPrecision = z.enum(['DAY', 'MONTH']);
 const regulatory = capabilityProcedure('pharmacy:safety');
-const inventoryMutation = capabilityProcedure('pharmacy:inventory');
+// Storage zones and their cold-chain readings belong to whoever runs the stock
+// (the Inventory role, or `pharmacy:*`). Checked through `can()` before any read.
+const inventoryControl = capabilityProcedure('pharmacy:inventory');
 const drapNotice = z.discriminatedUnion('kind', [
   z
     .object({
@@ -260,7 +271,23 @@ async function lockExpiringLot(db: ScopedDb, scope: LedgerScope, inventoryLotId:
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: { id: inventoryLotId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: {
-      batch: { select: { batchNumber: true, expiresAt: true, state: true, medicineId: true } },
+      batch: {
+        select: {
+          batchNumber: true,
+          expiresAt: true,
+          state: true,
+          medicineId: true,
+          medicine: {
+            select: {
+              rx: true,
+              otc: true,
+              restricted: true,
+              controlled: true,
+              productFamily: true,
+            },
+          },
+        },
+      },
     },
   });
   if (!lot) throw new TRPCError({ code: 'FORBIDDEN', message: 'Lot is outside this branch.' });
@@ -625,7 +652,7 @@ export const pharmacyInventoryRouter = router({
       )
     ),
 
-  createLocation: inventoryMutation
+  createLocation: inventoryControl
     .input(
       z
         .object({
@@ -668,7 +695,7 @@ export const pharmacyInventoryRouter = router({
       });
     }),
 
-  recordTemperature: protectedProcedure
+  recordTemperature: inventoryControl
     .input(
       z
         .object({
@@ -693,7 +720,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  importTemperatureCsv: protectedProcedure
+  importTemperatureCsv: inventoryControl
     .input(
       z
         .object({
@@ -724,7 +751,7 @@ export const pharmacyInventoryRouter = router({
       return loadTemperatureZoneStatuses(ctx.db, scope, new Date());
     }),
 
-  configureTemperatureMonitoring: auditedProtectedProcedure
+  configureTemperatureMonitoring: inventoryControl
     .input(
       z
         .object({
@@ -759,7 +786,7 @@ export const pharmacyInventoryRouter = router({
       });
     }),
 
-  registerBatch: protectedProcedure
+  registerBatch: inventoryControl
     .input(
       z
         .object({
@@ -793,7 +820,7 @@ export const pharmacyInventoryRouter = router({
    * quarantine are organization-wide by §8A invariant 18, so this is not
    * branch-scoped.
    */
-  setBatchState: protectedProcedure
+  setBatchState: regulatory
     .input(
       z
         .object({
@@ -804,27 +831,25 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const batch = await ctx.db.pharmacyManufacturingBatch.findFirst({
-        where: { id: input.manufacturingBatchId },
-      });
-      if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Batch not found.' });
       if (input.state !== 'ACTIVE' && !input.reason) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Blocking a batch requires a reason.',
         });
       }
-      return ctx.db.pharmacyManufacturingBatch.update({
-        where: { id: batch.id },
-        data: {
-          state: input.state,
-          stateReason: input.state === 'ACTIVE' ? null : (input.reason ?? null),
-          stateChangedAt: input.state === 'ACTIVE' ? null : new Date(),
-        },
+      return ctx.db.$transaction(async (tx) => {
+        try {
+          return await setManufacturingBatchState(txDb(tx), actorFor(ctx).organizationId, input);
+        } catch (error) {
+          if (error instanceof OpenRecallConflictError) {
+            throw new TRPCError({ code: 'CONFLICT', message: error.message });
+          }
+          domainError(error);
+        }
       });
     }),
 
-  receiveLot: inventoryMutation
+  receiveLot: inventoryControl
     .input(
       z
         .object({
@@ -878,7 +903,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  allocateForSale: protectedProcedure
+  allocateForSale: inventoryControl
     .input(
       z
         .object({
@@ -922,7 +947,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  breakPack: protectedProcedure
+  breakPack: inventoryControl
     .input(
       z
         .object({
@@ -948,7 +973,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  transfer: protectedProcedure
+  transfer: inventoryControl
     .input(
       z
         .object({
@@ -983,7 +1008,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  createCount: inventoryMutation
+  createCount: inventoryControl
     .input(
       z
         .object({
@@ -1014,7 +1039,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  approveCount: protectedProcedure
+  approveCount: inventoryControl
     .input(
       z
         .object({
@@ -1039,7 +1064,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  writeOff: inventoryMutation
+  writeOff: inventoryControl
     .input(
       z
         .object({
@@ -1051,20 +1076,28 @@ export const pharmacyInventoryRouter = router({
           reason: z.string().trim().min(1).max(500),
           evidenceRef: z.string().trim().min(1).max(500),
           idempotencyKey: z.string().trim().min(1).max(200),
+          disposition: z.enum(['AVAILABLE', 'QUARANTINE']).optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          writeOff(txDb(tx), await assignedScopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await assignedScopeFor(ctx, input.branchId);
+          const written = await writeOff(db, scope, input);
+          await postWriteOffEntry(db, scope, {
+            stockMovementId: written.movement.id,
+            at: written.movement.occurredAt,
+          });
+          return written;
+        });
       } catch (error) {
         domainError(error);
       }
     }),
 
-  quarantinePart: protectedProcedure
+  quarantinePart: regulatory
     .input(
       z
         .object({
@@ -1088,7 +1121,30 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  allocateTransfer: protectedProcedure
+  releaseQuarantinedPart: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          inventoryLotId: z.string().min(1),
+          stockLocationId: z.string().min(1),
+          units: z.number().int().positive(),
+          reason: z.string().trim().min(1).max(500),
+          idempotencyKeyPrefix: z.string().trim().min(1).max(160),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          releaseQuarantinedPart(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  allocateTransfer: inventoryControl
     .input(
       z
         .object({
@@ -1117,7 +1173,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  approveTransfer: protectedProcedure
+  approveTransfer: inventoryControl
     .input(z.object({ branchId, transferId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -1127,7 +1183,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  dispatchTransfer: protectedProcedure
+  dispatchTransfer: inventoryControl
     .input(
       z
         .object({
@@ -1152,7 +1208,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  receiveTransferLine: protectedProcedure
+  receiveTransferLine: inventoryControl
     .input(
       z
         .object({
@@ -1174,7 +1230,9 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  createRecall: protectedProcedure
+  // Raising a recall moves every matching batch to RECALLED, the same regulated
+  // state change as setBatchState, so it needs the same exact pharmacy:safety grant.
+  createRecall: regulatory
     .input(
       z
         .object({
@@ -1205,21 +1263,20 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  acknowledgeRecall: protectedProcedure
+  acknowledgeRecall: regulatory
     .input(z.object({ branchId, recallNoticeId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await acknowledgeRecall(
-          ctx.db,
-          await scopeFor(ctx, input.branchId),
-          input.recallNoticeId
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) =>
+          acknowledgeRecall(txDb(tx), scope, input.recallNoticeId)
         );
       } catch (error) {
         domainError(error);
       }
     }),
 
-  closeRecall: protectedProcedure
+  closeRecall: regulatory
     .input(z.object({ recallNoticeId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -1231,7 +1288,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  reserveSupplierClaim: protectedProcedure
+  reserveSupplierClaim: inventoryControl
     .input(
       z
         .object({
@@ -1244,7 +1301,10 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await reserveSupplierClaim(ctx.db, await scopeFor(ctx, input.branchId), input);
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) =>
+          reserveSupplierClaim(txDb(tx), scope, input)
+        );
       } catch (error) {
         domainError(error);
       }
@@ -1271,7 +1331,7 @@ export const pharmacyInventoryRouter = router({
   // ── PUR-07 — the deterministic stock action centre ────────────────────────
 
   /** The approved threshold a stock-level signal is measured against. */
-  approveSafetyStock: auditedProtectedProcedure
+  approveSafetyStock: inventoryControl
     .input(
       z
         .object({
@@ -1314,7 +1374,7 @@ export const pharmacyInventoryRouter = router({
     }),
 
   /** Recompute the branch's signals from current ledger facts. */
-  refreshStockSignals: auditedProtectedProcedure
+  refreshStockSignals: inventoryControl
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) => {
       const scope = await scopeFor(ctx, input.branchId);
@@ -1327,13 +1387,13 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  markStaleSignals: auditedProtectedProcedure
+  markStaleSignals: inventoryControl
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) =>
       markStaleSignals(ctx.db, await scopeFor(ctx, input.branchId), new Date())
     ),
 
-  acknowledgeSignal: auditedProtectedProcedure
+  acknowledgeSignal: inventoryControl
     .input(z.object({ branchId, signalId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -1347,7 +1407,7 @@ export const pharmacyInventoryRouter = router({
     }),
 
   /** §8A invariant 29: a snooze is only auditable with its reason attached. */
-  snoozeSignal: auditedProtectedProcedure
+  snoozeSignal: inventoryControl
     .input(
       z
         .object({
@@ -1371,7 +1431,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  dismissSignal: auditedProtectedProcedure
+  dismissSignal: inventoryControl
     .input(
       z
         .object({
@@ -1397,7 +1457,7 @@ export const pharmacyInventoryRouter = router({
    * §8A invariant 29: the one-click action. Creates a DRAFT requisition,
    * transfer or claim — never an order, never a stock movement.
    */
-  createDraftAction: auditedProtectedProcedure
+  createDraftAction: inventoryControl
     .input(
       z.discriminatedUnion('kind', [
         z
@@ -1521,7 +1581,9 @@ export const pharmacyInventoryRouter = router({
       await assertBranch(ctx.db, scope);
       const at = new Date();
       const { withinDays } = input;
-      const horizon = new Date(at.getTime() + withinDays * DAY_MS);
+      // Always read through 90 days so the headline recovery ledger can show
+      // the same cumulative 30/60/90 comparison regardless of the list filter.
+      const horizon = new Date(at.getTime() + Math.max(withinDays, 90) * DAY_MS);
       const tenant = { organizationId: scope.organizationId, branchId: scope.branchId };
 
       const [balances, suppliers] = await Promise.all([
@@ -1548,7 +1610,17 @@ export const pharmacyInventoryRouter = router({
                     batchNumber: true,
                     expiresAt: true,
                     state: true,
-                    medicine: { select: { productName: true, brandName: true } },
+                    medicine: {
+                      select: {
+                        productName: true,
+                        brandName: true,
+                        rx: true,
+                        otc: true,
+                        restricted: true,
+                        controlled: true,
+                        productFamily: true,
+                      },
+                    },
                   },
                 },
                 receiptLines: {
@@ -1563,7 +1635,15 @@ export const pharmacyInventoryRouter = router({
         ctx.db.pharmacySupplier.findMany({
           where: { organizationId: scope.organizationId, active: true },
           orderBy: { name: 'asc' },
-          select: { id: true, name: true },
+          select: {
+            id: true,
+            name: true,
+            relationships: {
+              where: { branchId: scope.branchId, active: true },
+              select: { expiryReturnWindowDays: true },
+              take: 1,
+            },
+          },
         }),
       ]);
       const lotIds = [...new Set(balances.map((row) => row.inventoryLotId))];
@@ -1639,12 +1719,33 @@ export const pharmacyInventoryRouter = router({
       const supplierByName = new Map(
         suppliers.map((supplier) => [supplier.name.trim().toLowerCase(), supplier.id])
       );
+      const relationshipBySupplier = new Map(
+        suppliers.map((supplier) => [
+          supplier.id,
+          supplier.relationships[0]?.expiryReturnWindowDays ?? null,
+        ])
+      );
 
+      const riskBuckets = expiryRiskBuckets(
+        balances.map((row) => ({
+          daysLeft: Math.ceil((row.lot.batch.expiresAt.getTime() - at.getTime()) / DAY_MS),
+          valueAtRiskMinor: row.onHandUnits * row.lot.unitCostMinor,
+        }))
+      );
       const rows = balances
         .map((row) => {
           const { lot } = row;
           const expiresAt = lot.batch.expiresAt;
           const receiptSupplier = lot.receiptLines[0]?.goodsReceipt.supplierId ?? null;
+          const suggestedSupplierId =
+            receiptSupplier && supplierIds.has(receiptSupplier)
+              ? receiptSupplier
+              : (supplierByName.get(lot.supplierName.trim().toLowerCase()) ?? null);
+          const returnDates = supplierReturnDates(
+            expiresAt,
+            suggestedSupplierId ? (relationshipBySupplier.get(suggestedSupplierId) ?? null) : null
+          );
+          const markdownEligible = maySuggestExpiryMarkdown(lot.batch.medicine);
           return {
             key: `${row.inventoryLotId}:${row.stockLocationId}`,
             inventoryLotId: row.inventoryLotId,
@@ -1664,22 +1765,23 @@ export const pharmacyInventoryRouter = router({
             printedMrpMinor: lot.printedMrpMinor,
             valueAtRiskMinor: row.onHandUnits * lot.unitCostMinor,
             supplierName: lot.supplierName,
-            suggestedSupplierId:
-              receiptSupplier && supplierIds.has(receiptSupplier)
-                ? receiptSupplier
-                : (supplierByName.get(lot.supplierName.trim().toLowerCase()) ?? null),
+            suggestedSupplierId,
+            markdownEligible,
+            returnWindowOpensAt: returnDates?.opensAt ?? null,
+            returnDeadlineAt: returnDates?.deadlineAt ?? null,
             markdown:
               markdownByPosition.get(`${row.inventoryLotId}:${row.stockLocationId}`) ?? null,
             returnDraft: returnByLot.get(row.inventoryLotId) ?? null,
           };
         })
+        .filter((row) => row.expired || row.daysLeft <= withinDays)
         .sort(
           (left, right) =>
             left.expiresAt.getTime() - right.expiresAt.getTime() ||
             right.valueAtRiskMinor - left.valueAtRiskMinor ||
             left.key.localeCompare(right.key)
         );
-      return { generatedAt: at, withinDays, rows, suppliers };
+      return { generatedAt: at, withinDays, riskBuckets, rows, suppliers };
     }),
 
   /**
@@ -1687,7 +1789,7 @@ export const pharmacyInventoryRouter = router({
    * NEAR_EXPIRY signal. It changes no price — the counter keeps selling at the
    * printed MRP until a person applies the mark-down through pricing.
    */
-  draftExpiryMarkdown: auditedProtectedProcedure
+  draftExpiryMarkdown: inventoryControl
     .input(
       z
         .object({
@@ -1712,6 +1814,12 @@ export const pharmacyInventoryRouter = router({
             });
           }
           if (lot.batch.state !== 'ACTIVE') throw new PharmacyInventoryError('BLOCKED_STOCK');
+          if (!maySuggestExpiryMarkdown(lot.batch.medicine)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Mark-down suggestions are limited to OTC and non-drug stock.',
+            });
+          }
           assertOnBoard(lot.batch.expiresAt, at);
           const onHandUnits = await availableAt(
             tx,
@@ -1822,7 +1930,7 @@ export const pharmacyInventoryRouter = router({
    * A supplier return DRAFT (EXPIRY_CLAIM) for one near-expiry lot position. It
    * reserves nothing; submitting it in Purchasing → Returns is what holds stock.
    */
-  draftExpiryReturn: auditedProtectedProcedure
+  draftExpiryReturn: inventoryControl
     .input(
       z
         .object({
@@ -1915,7 +2023,7 @@ export const pharmacyInventoryRouter = router({
    * (AVAILABLE out, QUARANTINE in). `requestKey` is minted when the board is
    * rendered, so a double-submitted form replays instead of moving stock twice.
    */
-  quarantineExpiring: auditedProtectedProcedure
+  quarantineExpiring: inventoryControl
     .input(
       z
         .object({
@@ -1974,7 +2082,7 @@ export const pharmacyInventoryRouter = router({
     .query(async ({ ctx, input }) => transferBoard(ctx.db, await scopeFor(ctx, input.branchId))),
 
   /** WHA-1603 INV-07: close a transfer, posting any shortfall as a custody write-off. */
-  receiveTransferWithVariance: protectedProcedure
+  receiveTransferWithVariance: inventoryControl
     .input(
       z
         .object({

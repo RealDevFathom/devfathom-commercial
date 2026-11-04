@@ -99,7 +99,8 @@ function isSensitiveKey(key: string): boolean {
   const k = key.toLowerCase();
   // Camera renewal input can be audited before its resolver runs (including
   // denied or invalid requests). Match the identifier exactly, not all grants.
-  return k === 'previousgrantid' || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s));
+  // Match PIN exactly so unrelated keys such as shippingAddress remain useful.
+  return k === 'pin' || k === 'previousgrantid' || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s));
 }
 
 const MAX_STRING = 20_000;
@@ -373,8 +374,14 @@ export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<v
   if (db && !row.organizationId) {
     throw new Error('Transactional audit writes require a tenant organization.');
   }
-  const writeTenant = (tenantDb: ScopedDb) =>
-    tenantDb.auditLog.create({
+  const writeTenant = async (tenantDb: ScopedDb) => {
+    const placeholder = tenantDb.branchRegulatoryProfile
+      ? await tenantDb.branchRegulatoryProfile.findFirst({
+          where: { organizationId: row.organizationId!, isPlaceholder: true, effectiveTo: null },
+          select: { id: true },
+        })
+      : null;
+    return tenantDb.auditLog.create({
       data: {
         organizationId: row.organizationId!,
         actorType: row.actorType ?? 'USER',
@@ -396,7 +403,10 @@ export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<v
         input: (row.input ?? undefined) as never,
         changes: (row.changes ?? undefined) as never,
         result: (row.result ?? undefined) as never,
-        metadata: (row.metadata ?? undefined) as never,
+        metadata: {
+          ...((row.metadata && typeof row.metadata === 'object' ? row.metadata : {}) as object),
+          ...(placeholder ? { placeholder: true } : {}),
+        } as never,
         ip: row.ip ?? null,
         userAgent: row.userAgent ?? null,
         httpMethod: row.httpMethod ?? null,
@@ -408,6 +418,7 @@ export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<v
         durationMs: row.durationMs ?? null,
       },
     });
+  };
   if (db) return writeTenant(db).then(() => undefined);
   afterTenantTransaction(() => {
     const write = row.organizationId

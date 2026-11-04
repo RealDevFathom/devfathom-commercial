@@ -15,12 +15,14 @@ import type { PlatformIdentity } from '@/lib/platform/auth';
 import { assertPlatformCapability } from '@/lib/platform/auth';
 import { ActivationPreflightError, PlatformSecurityError } from '@/lib/platform/security';
 import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activation-gates';
+import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
+import { verifyTotp } from '@/lib/totp';
 import { type ScopedDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
 import type { DemoSeatIdentity } from '@/lib/platform/command-types';
 import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
-import { encryptSecret } from '@/lib/secret-crypto';
 import { emailSchema } from '@/lib/email-address';
+import { organizationRolePermissionsSchema } from '@/lib/organization-role';
 import { ianaTimezone } from '@/lib/timezone';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 import { OrganizationVertical } from '@/generated/prisma/enums';
@@ -226,6 +228,20 @@ export function auditProjection(result: Pick<CommandResult, 'audit' | 'auditBefo
   };
 }
 
+/**
+ * A command may put an operator-supplied reason in the immutable ledger only
+ * after its schema has accepted it and its explicit audit projection includes
+ * it. This avoids copying an untrusted `payload.reason` from commands that do
+ * not actually define that field.
+ */
+function auditReason(result: Pick<CommandResult, 'audit'>): string | undefined {
+  if (!result.audit || typeof result.audit !== 'object' || Array.isArray(result.audit)) {
+    return undefined;
+  }
+  const reason = (result.audit as Record<string, unknown>).reason;
+  return typeof reason === 'string' ? reason : undefined;
+}
+
 function sensitiveCommand(action: string): boolean {
   return (
     [
@@ -233,6 +249,8 @@ function sensitiveCommand(action: string): boolean {
       'organization.scim.token',
       'organization.scim.revoke',
       'organization.transition',
+      'organization.pharmacy.placeholder.apply',
+      'organization.pharmacy.placeholder.lock',
     ].includes(action) ||
     action === 'organization.identity' ||
     action.startsWith('organization.identity.') ||
@@ -319,6 +337,18 @@ async function persistCommandFailure(
         if (organization.length === 0) target.organizationId = undefined;
       }
 
+      const placeholder =
+        target.organizationId && db.branchRegulatoryProfile
+          ? await db.branchRegulatoryProfile.findFirst({
+              where: {
+                organizationId: target.organizationId,
+                isPlaceholder: true,
+                effectiveTo: null,
+              },
+              select: { id: true },
+            })
+          : null;
+
       try {
         await db.platformAuditLog.create({
           data: {
@@ -326,7 +356,10 @@ async function persistCommandFailure(
             ...target,
             actorPlatformUserId: actor.id,
             action,
-            metadata: { outcomeCategory: category },
+            metadata: {
+              outcomeCategory: category,
+              ...(placeholder ? { placeholder: true } : {}),
+            },
             requestId: correlationId,
             reason: FAILURE_REASON[category],
             success: false,
@@ -599,7 +632,6 @@ async function syncContractEntitlements(
     organizationId: string;
     number: string;
     status: string;
-    seatLimit: number;
     endDate: Date;
     graceUntil: Date | null;
     moduleIds: string[];
@@ -637,10 +669,6 @@ async function syncContractEntitlements(
       },
     });
   }
-  await db.organization.update({
-    where: { id: input.organizationId },
-    data: { seatLimit: input.seatLimit },
-  });
 }
 
 const organizationInput = z
@@ -839,12 +867,88 @@ async function createOrganizationRecord(
   }
 }
 
+type ClaimedConversionOpportunity = {
+  id: string;
+  accountId: string;
+  fromStage: 'DISCOVERY' | 'QUALIFIED' | 'PROPOSAL' | 'NEGOTIATION' | 'WON';
+};
+
+/**
+ * Reserve an eligible opportunity before provisioning starts. The conditional
+ * update is the concurrency guard: after PostgreSQL waits on a competing
+ * conversion, it rechecks this predicate and only one transaction can win.
+ * Locking the account row applies the same guard across distinct opportunities
+ * for one account, preventing either a replay or a race from creating two tenants.
+ * Because the reservation and provisioning share the platform transaction, a
+ * later provisioning failure restores both claims.
+ */
+async function claimOpportunityForConversion(
+  db: PrismaClient,
+  opportunityId: string
+): Promise<ClaimedConversionOpportunity> {
+  const opportunity = await db.platformOpportunity.findUnique({
+    where: { id: opportunityId },
+    select: { id: true, accountId: true, stage: true, convertedOrganizationId: true },
+  });
+  // A deal can be marked won before onboarding creates its organization.
+  const eligibleStages = ['DISCOVERY', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'WON'] as const;
+  if (
+    !opportunity ||
+    opportunity.convertedOrganizationId !== null ||
+    !eligibleStages.includes(opportunity.stage as (typeof eligibleStages)[number])
+  ) {
+    throw new PlatformSecurityError('Opportunity is not eligible for conversion.', 409);
+  }
+
+  const fromStage = opportunity.stage as ClaimedConversionOpportunity['fromStage'];
+  const wonAt = new Date();
+  const claimed = await db.platformOpportunity.updateMany({
+    where: {
+      id: opportunity.id,
+      stage: fromStage,
+      convertedOrganizationId: null,
+    },
+    data: { stage: 'WON', wonAt },
+  });
+  if (claimed.count !== 1) {
+    throw new PlatformSecurityError('Opportunity is not eligible for conversion.', 409);
+  }
+  const [account] = await db.$queryRaw<Array<{ organizationId: string | null }>>(Prisma.sql`
+    SELECT "organizationId"
+    FROM "platform_accounts"
+    WHERE "id" = ${opportunity.accountId}
+    FOR UPDATE
+  `);
+  if (!account || account.organizationId !== null) {
+    throw new PlatformSecurityError('Account is already linked to an organization.', 409);
+  }
+  return { id: opportunity.id, accountId: opportunity.accountId, fromStage };
+}
+
 async function bootstrapOrganization(
   db: PrismaClient,
   actor: PlatformIdentity | null,
   input: z.infer<typeof organizationInput>,
-  demo?: DemoOrganizationBootstrap
+  demo?: DemoOrganizationBootstrap,
+  conversionOpportunity?: ClaimedConversionOpportunity
 ) {
+  // Both CRM conversion and organization onboarding can link an opportunity.
+  // Hold its row lock through provisioning and commit so retries cannot create
+  // another tenant or overwrite the original conversion and account links.
+  if (input.opportunityId) {
+    const [lockedOpportunity] = await db.$queryRaw<
+      Array<{ id: string; convertedOrganizationId: string | null }>
+    >`SELECT id, "convertedOrganizationId"
+      FROM platform_opportunities
+      WHERE id = ${input.opportunityId}
+      FOR UPDATE`;
+    if (!lockedOpportunity) {
+      throw new PlatformSecurityError('Opportunity not found.', 400);
+    }
+    if (lockedOpportunity.convertedOrganizationId) {
+      throw new PlatformSecurityError('Opportunity has already been converted.', 409);
+    }
+  }
   if (input.deploymentMode === 'DEDICATED' && !isDedicatedProvisioningConfigured()) {
     throw new PlatformSecurityError(
       'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
@@ -1181,34 +1285,24 @@ async function bootstrapOrganization(
       ...(demo ? { createdAt: demo.now } : {}),
     },
   });
-  if (input.opportunityId && actor) {
-    const opportunity = await db.platformOpportunity.findUnique({
-      where: { id: input.opportunityId },
-      select: { id: true, accountId: true, stage: true },
+  if (conversionOpportunity && actor) {
+    await db.platformOpportunity.update({
+      where: { id: conversionOpportunity.id },
+      data: { convertedOrganizationId: organization.id },
     });
-    if (opportunity) {
-      await db.platformOpportunity.update({
-        where: { id: opportunity.id },
-        data: {
-          stage: 'WON',
-          wonAt: new Date(),
-          convertedOrganizationId: organization.id,
-        },
-      });
-      await db.platformOpportunityStageEvent.create({
-        data: {
-          opportunityId: opportunity.id,
-          fromStage: opportunity.stage,
-          toStage: 'WON',
-          changedById: actor.id,
-          reason: 'Converted into an organization',
-        },
-      });
-      await db.platformAccount.update({
-        where: { id: opportunity.accountId },
-        data: { organizationId: organization.id, status: 'CUSTOMER' },
-      });
-    }
+    await db.platformOpportunityStageEvent.create({
+      data: {
+        opportunityId: conversionOpportunity.id,
+        fromStage: conversionOpportunity.fromStage,
+        toStage: 'WON',
+        changedById: actor.id,
+        reason: 'Converted into an organization',
+      },
+    });
+    await db.platformAccount.update({
+      where: { id: conversionOpportunity.accountId },
+      data: { organizationId: organization.id, status: 'CUSTOMER' },
+    });
   }
   return organization;
 }
@@ -1497,6 +1591,37 @@ export async function activateDemoRestaurantOrganizationInTransaction(
   });
 }
 
+async function assertFreshPlaceholderMfa(
+  db: PrismaClient,
+  actor: PlatformIdentity,
+  authenticationCode: string
+) {
+  const code = authenticationCode.trim();
+  const operator = await db.platformUser.findUnique({
+    where: { id: actor.id },
+    select: { active: true, encryptedTotpSecret: true, mfaEnabledAt: true },
+  });
+  let valid = false;
+  if (
+    operator?.active &&
+    operator.mfaEnabledAt &&
+    operator.encryptedTotpSecret &&
+    /^\d{6}$/.test(code)
+  ) {
+    try {
+      valid = verifyTotp(decryptSecret(operator.encryptedTotpSecret), code);
+    } catch {
+      valid = false;
+    }
+  }
+  if (!valid) {
+    throw new PlatformSecurityError(
+      'A fresh MFA authentication code is required for this command.',
+      403
+    );
+  }
+}
+
 async function runCommand(
   db: PrismaClient,
   actor: PlatformIdentity,
@@ -1504,9 +1629,208 @@ async function runCommand(
   payload: unknown
 ): Promise<CommandResult> {
   switch (action) {
+    case 'organization.pharmacy.placeholder.apply': {
+      if (actor.role !== 'SUPER_ADMIN')
+        throw new PlatformSecurityError('Only a SuperAdmin may apply a placeholder rule set.', 403);
+      const input = z
+        .object({ organizationId: id, reason: sensitiveReason, authenticationCode: z.string() })
+        .parse(payload);
+      await assertFreshPlaceholderMfa(db, actor, input.authenticationCode);
+      await db.$queryRawUnsafe(
+        'SELECT id FROM organizations WHERE id = $1 FOR UPDATE',
+        input.organizationId
+      );
+      const organization = await db.organization.findUnique({
+        where: { id: input.organizationId },
+        select: { id: true, vertical: true, status: true },
+      });
+      if (!organization || organization.vertical !== 'PHARMACY')
+        throw new PlatformSecurityError('A Pharmacy organization is required.', 400);
+
+      const label = 'PLACEHOLDER – not a real licence';
+      const effectiveFrom = new Date();
+      const ruleSet = await db.jurisdictionRuleSet.upsert({
+        where: { id: 'pk_pb_placeholder_v1' },
+        update: {},
+        create: {
+          id: 'pk_pb_placeholder_v1',
+          code: 'PK-PB-PLACEHOLDER',
+          version: 1,
+          effectiveFrom: new Date('1970-01-01T00:00:00.000Z'),
+          isPlaceholder: true,
+          licenceCategories: { values: ['*'], provisional: false, label },
+          permittedSchedules: { values: ['*'], provisional: false, label },
+          prescriptionOnlyClasses: { values: ['*'], provisional: false, label },
+          prescriptionRetentionDays: { values: {}, provisional: false, label },
+          controlledRegisterFlags: { values: { recordEverySale: true }, provisional: false, label },
+          pharmacistCoverageRule: {
+            values: { dispenseGrantRequired: true },
+            provisional: false,
+            label,
+          },
+          recordRetentionByClass: { values: {}, provisional: false, label },
+        },
+      });
+      const branches = await db.pharmacyBranch.findMany({
+        where: { organizationId: input.organizationId, active: true },
+      });
+      let created = 0;
+      for (const branch of branches) {
+        const existing = await db.branchRegulatoryProfile.findFirst({
+          where: {
+            organizationId: input.organizationId,
+            branchId: branch.id,
+            isPlaceholder: true,
+            effectiveTo: null,
+          },
+        });
+        if (existing) continue;
+        created += 1;
+        const latest = await db.branchRegulatoryProfile.findFirst({
+          where: { organizationId: input.organizationId, branchId: branch.id },
+          orderBy: { version: 'desc' },
+        });
+        const branchEffectiveFrom =
+          latest && effectiveFrom <= latest.effectiveFrom
+            ? new Date(latest.effectiveFrom.getTime() + 1)
+            : effectiveFrom;
+        if (latest?.effectiveTo === null) {
+          await db.branchRegulatoryProfile.update({
+            where: { id: latest.id },
+            data: { effectiveTo: branchEffectiveFrom },
+          });
+        }
+        await db.branchRegulatoryProfile.create({
+          data: {
+            organizationId: input.organizationId,
+            branchId: branch.id,
+            version: (latest?.version ?? 0) + 1,
+            effectiveFrom: branchEffectiveFrom,
+            provinceCode: branch.provinceCode,
+            jurisdictionRuleSetId: ruleSet.id,
+            premises: { label },
+            licenceCategory: '*',
+            licenceNumber: label,
+            licenceIssuingAuthority: label,
+            licenceValidFrom: new Date('1970-01-01T00:00:00.000Z'),
+            licenceValidTo: new Date('9999-12-31T00:00:00.000Z'),
+            licenceExpiryLabel: label,
+            licenceEvidenceFileRef: label,
+            permittedSchedules: ['OTC', 'RX', 'CONTROLLED'],
+            qualifiedPersonRegistration: label,
+            qualifiedPersonValidFrom: new Date('1970-01-01T00:00:00.000Z'),
+            qualifiedPersonValidTo: new Date('9999-12-31T00:00:00.000Z'),
+            qualifiedPersonCoverageRosterRef: label,
+            fiscalStatus: label,
+            retentionPolicy: { label },
+            isPlaceholder: true,
+          },
+        });
+      }
+      if (created > 0) {
+        await db.organizationLifecycleEvent.create({
+          data: {
+            organizationId: input.organizationId,
+            action: 'CREATED',
+            fromStatus: organization.status,
+            toStatus: organization.status,
+            reason: input.reason,
+            actorId: actor.id,
+            metadata: { placeholder: true, operation: 'APPLIED', ruleSetId: ruleSet.id },
+          },
+        });
+      }
+      return {
+        targetType: 'Organization',
+        targetId: input.organizationId,
+        organizationId: input.organizationId,
+        data: { applied: true },
+        audit: { placeholder: true, ruleSetId: ruleSet.id, reason: input.reason },
+      };
+    }
+    case 'organization.pharmacy.placeholder.lock': {
+      if (actor.role !== 'SUPER_ADMIN')
+        throw new PlatformSecurityError('Only a SuperAdmin may lock a placeholder rule set.', 403);
+      const input = z
+        .object({ organizationId: id, reason: sensitiveReason, authenticationCode: z.string() })
+        .parse(payload);
+      await assertFreshPlaceholderMfa(db, actor, input.authenticationCode);
+      await db.$queryRawUnsafe(
+        'SELECT id FROM organizations WHERE id = $1 FOR UPDATE',
+        input.organizationId
+      );
+      const organization = await db.organization.findUnique({
+        where: { id: input.organizationId },
+      });
+      if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
+      if (organization.vertical !== 'PHARMACY')
+        throw new PlatformSecurityError('A Pharmacy organization is required.', 400);
+      const effectiveTo = new Date();
+      const openPlaceholders = await db.branchRegulatoryProfile.findMany({
+        where: {
+          organizationId: input.organizationId,
+          isPlaceholder: true,
+          effectiveTo: null,
+        },
+        select: { id: true, effectiveFrom: true },
+      });
+      if (openPlaceholders.length === 0 && organization.status !== 'ACTIVE') {
+        // Idempotent re-lock: nothing open and nothing to transition.
+        return {
+          targetType: 'Organization',
+          targetId: input.organizationId,
+          organizationId: input.organizationId,
+          data: { locked: true, closed: 0 },
+          audit: { placeholder: true, locked: true, closed: 0, reason: input.reason },
+        };
+      }
+      for (const profile of openPlaceholders) {
+        await db.branchRegulatoryProfile.update({
+          where: { id: profile.id },
+          data: {
+            effectiveTo:
+              effectiveTo > profile.effectiveFrom
+                ? effectiveTo
+                : new Date(profile.effectiveFrom.getTime() + 1),
+          },
+        });
+      }
+      if (organization.status === 'ACTIVE') {
+        await db.organization.update({
+          where: { id: input.organizationId },
+          data: { status: 'ONBOARDING', activatedAt: null },
+        });
+      }
+      await db.organizationLifecycleEvent.create({
+        data: {
+          organizationId: input.organizationId,
+          action: lifecycleAction(organization.status, 'ONBOARDING'),
+          fromStatus: organization.status,
+          toStatus: organization.status === 'ACTIVE' ? 'ONBOARDING' : organization.status,
+          reason: input.reason,
+          actorId: actor.id,
+          metadata: { placeholder: true, operation: 'LOCKED', closed: openPlaceholders.length },
+        },
+      });
+      return {
+        targetType: 'Organization',
+        targetId: input.organizationId,
+        organizationId: input.organizationId,
+        data: { locked: true, closed: openPlaceholders.length },
+        audit: {
+          placeholder: true,
+          locked: true,
+          closed: openPlaceholders.length,
+          reason: input.reason,
+        },
+      };
+    }
     case 'organization.create': {
       const input = organizationInput.parse(payload);
-      const organization = await bootstrapOrganization(db, actor, input);
+      const opportunity = input.opportunityId
+        ? await claimOpportunityForConversion(db, input.opportunityId)
+        : undefined;
+      const organization = await bootstrapOrganization(db, actor, input, undefined, opportunity);
       return {
         targetType: 'Organization',
         targetId: organization.id,
@@ -1632,8 +1956,25 @@ async function runCommand(
         .parse(payload);
       const { id: organizationId, ...data } = input;
       let correctionReason: string | undefined;
+      // Deployment-mode decisions must use the current value at the point of
+      // the write. Without this lock, an unchanged DEDICATED request can read
+      // a stale value, race a transition to SHARED, and silently restore
+      // DEDICATED without creating its provisioning job.
+      if (data.deploymentMode !== undefined) {
+        await db.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`;
+      }
       const before = await db.organization.findUnique({ where: { id: organizationId } });
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
+      if (
+        data.deploymentMode === 'DEDICATED' &&
+        data.deploymentMode !== before.deploymentMode &&
+        !isDedicatedProvisioningConfigured()
+      ) {
+        throw new PlatformSecurityError(
+          'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
+          400
+        );
+      }
       const changesVertical = data.vertical !== undefined && data.vertical !== before.vertical;
       // A vertical correction is deliberately narrower than ordinary onboarding
       // edits: it is an early correction only, before activation or any
@@ -1931,7 +2272,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: input.organizationId,
         data: saved,
-        audit: saved,
+        audit: { ...saved, reason: input.reason },
       };
     }
     case 'organization.module.reset': {
@@ -2353,21 +2694,21 @@ async function runCommand(
             .regex(/^[a-z0-9._-]+$/),
           name: requiredText,
           description: optionalText.optional(),
-          permissions: z
-            .array(
-              z.object({
-                capability: z.string().trim().min(1).max(150),
-                effect: z.enum(['ALLOW', 'DENY']),
-              })
-            )
-            .max(250)
-            .default([]),
+          permissions: organizationRolePermissionsSchema.default([]),
         })
         .parse(payload);
       const { id: roleId, permissions, ...role } = input;
+      // The platform command already runs inside withPlatformDb's transaction.
+      // Locking the tenant row also serializes concurrent permission replacements.
+      await db.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${input.organizationId} FOR UPDATE`;
       const existing = roleId
-        ? await db.organizationRole.findUnique({ where: { id: roleId } })
+        ? await db.organizationRole.findFirst({
+            where: { id: roleId, organizationId: input.organizationId },
+          })
         : null;
+      if (roleId && !existing) {
+        throw new PlatformSecurityError('Organization role not found.', 400);
+      }
       if (existing?.isSystem) {
         throw new PlatformSecurityError('System roles cannot be modified.', 400);
       }
@@ -2805,7 +3146,7 @@ async function runCommand(
         targetId: saved.id,
         auditBefore: before,
         data: saved,
-        audit: saved,
+        audit: { ...saved, reason: input.reason },
       };
     }
     case 'crm.opportunity.convert': {
@@ -2813,7 +3154,8 @@ async function runCommand(
       if (!input.opportunityId) {
         throw new PlatformSecurityError('An opportunity is required for conversion.', 400);
       }
-      const organization = await bootstrapOrganization(db, actor, input);
+      const opportunity = await claimOpportunityForConversion(db, input.opportunityId);
+      const organization = await bootstrapOrganization(db, actor, input, undefined, opportunity);
       return {
         targetType: 'Organization',
         targetId: organization.id,
@@ -2988,7 +3330,6 @@ async function runCommand(
         organizationId: before.organizationId,
         number: before.number,
         status: input.status,
-        seatLimit: before.seatLimit,
         endDate: before.endDate,
         graceUntil: before.graceUntil,
         moduleIds: before.modules.map((module) => module.moduleId),
@@ -3012,7 +3353,7 @@ async function runCommand(
         organizationId: saved.organizationId,
         auditBefore: before,
         data: saved,
-        audit: saved,
+        audit: { ...saved, reason: input.reason },
       };
     }
     case 'commercial.invoice.create': {
@@ -3085,7 +3426,7 @@ async function runCommand(
         organizationId: saved.organizationId,
         auditBefore: before,
         data: saved,
-        audit: saved,
+        audit: { ...saved, reason: input.reason },
       };
     }
     case 'commercial.payment.record': {
@@ -3868,6 +4209,13 @@ export async function executePlatformCommand(
       .regex(/^[a-z]+(?:\.[a-z]+)+$/)
       .parse(actionInput);
     assertPlatformCapability(actor, capabilityFor(action));
+    // Converting an opportunity is more than a CRM write: it provisions a
+    // tenant and creates its wildcard administrator. Keep the CRM permission
+    // for the sales-side transition, but require the organization security
+    // boundary before any provisioning work can begin.
+    if (action === 'crm.opportunity.convert') {
+      assertPlatformCapability(actor, 'organizations:security:write');
+    }
 
     return await withPlatformDb(async (db) => {
       const reason = sensitiveCommand(action)
@@ -3878,6 +4226,22 @@ export async function executePlatformCommand(
       // The audit row is built from the command's declared projection only.
       // `result.data` is the reveal channel and never reaches this table.
       const { before, after } = auditProjection(result);
+      const declaredPlaceholder =
+        result.audit !== null &&
+        typeof result.audit === 'object' &&
+        'placeholder' in result.audit &&
+        result.audit.placeholder === true;
+      const placeholder =
+        result.organizationId && db.branchRegulatoryProfile
+          ? await db.branchRegulatoryProfile.findFirst({
+              where: {
+                organizationId: result.organizationId,
+                isPlaceholder: true,
+                effectiveTo: null,
+              },
+              select: { id: true },
+            })
+          : null;
       await db.platformAuditLog.create({
         data: {
           organizationId: result.organizationId,
@@ -3887,6 +4251,9 @@ export async function executePlatformCommand(
           targetId: result.targetId,
           before,
           after,
+          reason: auditReason(result),
+          success: true,
+          metadata: placeholder || declaredPlaceholder ? { placeholder: true } : undefined,
           requestId: request.headers.get('x-devfathom-request-id'),
           ip:
             request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
@@ -3901,3 +4268,41 @@ export async function executePlatformCommand(
     throw error;
   }
 }
+
+/** Owner-approved emergency entry points. Both run through the normal platform
+ * command transaction and immutable platform audit trail. */
+export function applyPlaceholderRuleSet(
+  organizationId: string,
+  actor: PlatformIdentity,
+  reason: string,
+  authenticationCode: string,
+  request = new Request('http://platform.internal/commands/pharmacy-placeholder', {
+    method: 'POST',
+  })
+) {
+  return executePlatformCommand(
+    actor,
+    'organization.pharmacy.placeholder.apply',
+    { organizationId, reason, authenticationCode },
+    request
+  );
+}
+
+export function lockPlaceholderRuleSet(
+  organizationId: string,
+  actor: PlatformIdentity,
+  reason: string,
+  authenticationCode: string,
+  request = new Request('http://platform.internal/commands/pharmacy-placeholder', {
+    method: 'POST',
+  })
+) {
+  return executePlatformCommand(
+    actor,
+    'organization.pharmacy.placeholder.lock',
+    { organizationId, reason, authenticationCode },
+    request
+  );
+}
+
+export const revertToPending = lockPlaceholderRuleSet;
