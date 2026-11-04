@@ -20,7 +20,8 @@ export const CONTROLLED_MEDICINES_KEEP_SUPPLIER_CHECKS = true;
 
 /**
  * The warning the owner acknowledges before turning the checks off. The version is
- * stored with the acknowledgement, so changing any of this text needs a new version.
+ * stored with the acknowledgement, so once this ships, changing any of this text needs a new
+ * version. (@1 is unreleased; its text changed during DEV-753 review, before any tenant used it.)
  */
 export const SUPPLIER_COMPLIANCE_WARNING = Object.freeze({
   version: 'supplier-compliance-off@1',
