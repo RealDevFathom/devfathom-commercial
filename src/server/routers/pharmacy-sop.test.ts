@@ -956,7 +956,13 @@ describe('startOnDemand', () => {
           assigneeTarget: { type: 'person', staffProfileId: ACTOR.staffProfileId },
         })
       );
-      expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledOnce();
+      // Only the new one-off assignment is materialised: never the branch's
+      // other schedules (automatic scheduling may be OFF for this branch).
+      expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledExactlyOnceWith(db, {
+        now: expect.any(Date),
+        branchIds: [SITE.sopBranchId],
+        assignmentIds: ['asg_new'],
+      });
       expect(mocks.engine.setAssignmentActive).toHaveBeenCalledWith(db, 'asg_new', false);
     });
 

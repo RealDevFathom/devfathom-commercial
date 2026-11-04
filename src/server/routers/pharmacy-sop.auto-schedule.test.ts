@@ -228,10 +228,16 @@ describe('setAutoSchedule ON', () => {
       generated: 4,
       nextRunAt: new Date('2026-11-04T07:00:00.000Z'),
     });
+    // From the current business date only: never back-dated to days it was OFF.
     expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledExactlyOnceWith(db, {
       now: NOW,
       branchIds: [SITE.sopBranchId],
+      lookbackDays: 0,
     });
+    // The slot lock names the session's organization explicitly.
+    expect(
+      db.$queryRaw.mock.calls.map(([query]) => (query as { values: unknown[] }).values)
+    ).toContainEqual(['pharmacy.sop.autoGenerate:org_1:2026-11-04T07:00:00.000Z']);
     expect(jobRows).toEqual([
       expect.objectContaining({
         type: PHARMACY_SOP_AUTO_GENERATE_JOB,
@@ -271,7 +277,7 @@ describe('setAutoSchedule ON', () => {
     // Every ON call (four) re-ensured the job and created this branch's work.
     expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledTimes(4);
     for (const [, options] of mocks.engine.generateDueSopOccurrences.mock.calls) {
-      expect(options).toEqual({ now: NOW, branchIds: [SITE.sopBranchId] });
+      expect(options).toEqual({ now: NOW, branchIds: [SITE.sopBranchId], lookbackDays: 0 });
     }
   });
 

@@ -2,9 +2,12 @@
  * DEV-751 — the hourly pharmacy SOP automatic-scheduling job. Runs the real
  * scheduler `enqueue` (idempotency-key dedupe, DUPLICATE_ENQUEUE race) and the
  * real `generateAutoPharmacySopOccurrences` over an in-memory org-scoped db;
- * only the engine generator is mocked. Pins: deterministic slot keys, strict
- * payload, re-enqueue only while a branch is ON, no job in an organization with
- * no SOP site (a restaurant), and idempotence when a slot runs twice.
+ * only the engine generator is mocked. Pins: deterministic slot keys, a
+ * per-organization slot lock that fails closed, strict payload, re-enqueue only
+ * while a branch is ON and BEFORE generation (on an independent client, so a
+ * failing branch cannot drop the chain), per-branch failure isolation that
+ * still fails the job, no back-dating, no job in an organization with no SOP
+ * site (a restaurant), and idempotence when a slot runs twice.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,14 +25,18 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   PHARMACY_SOP_AUTO_GENERATE_CADENCE_MS,
   PHARMACY_SOP_AUTO_GENERATE_JOB,
+  PharmacySopAutoGenerateError,
+  createPharmacySopAutoGenerateHandler,
   ensurePharmacySopAutoScheduleJob,
   nextPharmacySopAutoGenerateSlot,
   parsePharmacySopAutoGeneratePayload,
-  pharmacySopAutoGenerateHandler,
   pharmacySopAutoGenerateJobKey,
+  pharmacySopAutoGenerateLockKey,
   pharmacySopAutoGenerateSlot,
   startPharmacySopAutoSchedule,
 } from './sop-auto-schedule-job';
+
+const ORG = 'org_a';
 
 type JobRow = {
   id: string;
@@ -106,6 +113,9 @@ function makeDb(opts: { sites?: Site[]; settings?: Setting[] } = {}) {
 }
 
 const at = (iso: string) => new Date(iso);
+/** The first raw query a mocked client ran (the slot lock). */
+const firstQuery = (raw: { $queryRaw: { mock: { calls: unknown[][] } } }) =>
+  raw.$queryRaw.mock.calls[0]![0];
 const setting = (id: string, pharmacyBranchId: string, on: boolean, iso: string): Setting => ({
   id,
   pharmacyBranchId,
@@ -168,10 +178,35 @@ describe('slots and keys', () => {
   });
 });
 
+describe('pharmacySopAutoGenerateLockKey', () => {
+  it('names the organization explicitly, so tenants never share a slot lock', () => {
+    const slot = at('2026-11-04T07:00:00Z');
+    expect(pharmacySopAutoGenerateLockKey('org_a', slot)).toBe(
+      'pharmacy.sop.autoGenerate:org_a:2026-11-04T07:00:00.000Z'
+    );
+    expect(pharmacySopAutoGenerateLockKey('org_b', slot)).not.toBe(
+      pharmacySopAutoGenerateLockKey('org_a', slot)
+    );
+    // Floored to the slot like the job key.
+    expect(pharmacySopAutoGenerateLockKey('org_a', at('2026-11-04T07:42:00Z'))).toBe(
+      pharmacySopAutoGenerateLockKey('org_a', slot)
+    );
+  });
+
+  it('fails closed on a missing or malformed organization', () => {
+    for (const bad of ['', 'ab', 'org a', 'org:a', `o${'x'.repeat(128)}`, undefined, null, 7]) {
+      expect(() =>
+        pharmacySopAutoGenerateLockKey(bad as unknown as string, at('2026-11-04T07:00:00Z'))
+      ).toThrow(TypeError);
+    }
+  });
+});
+
 describe('ensurePharmacySopAutoScheduleJob', () => {
   it('enqueues the next slot, due at the slot, under a serializing lock', async () => {
     const { db, raw, jobs } = makeDb();
     const result = await ensurePharmacySopAutoScheduleJob(db, {
+      organizationId: ORG,
       now: at('2026-11-04T06:30:00Z'),
     });
     expect(result.deduplicated).toBe(false);
@@ -187,15 +222,37 @@ describe('ensurePharmacySopAutoScheduleJob', () => {
       }),
     ]);
     expect(raw.$queryRaw).toHaveBeenCalledTimes(1);
+    // The lock is per organization and slot; the idempotency key is not.
+    expect(firstQuery(raw)).toMatchObject({
+      values: ['pharmacy.sop.autoGenerate:org_a:2026-11-04T07:00:00.000Z'],
+    });
+  });
+
+  it('fails closed without an organization, before any lock or job', async () => {
+    const { db, raw, jobs } = makeDb();
+    for (const organizationId of ['', '   ', 'a', 'org a', 'org;drop', undefined, null]) {
+      await expect(
+        ensurePharmacySopAutoScheduleJob(db, {
+          organizationId: organizationId as unknown as string,
+          now: at('2026-11-04T06:30:00Z'),
+        })
+      ).rejects.toThrow(TypeError);
+    }
+    expect(raw.$queryRaw).not.toHaveBeenCalled();
+    expect(raw.$transaction).not.toHaveBeenCalled();
+    expect(jobs).toHaveLength(0);
   });
 
   it('never creates a second job for the same slot (repeated toggles)', async () => {
     const { db, jobs } = makeDb();
     for (const iso of ['2026-11-04T06:01:00Z', '2026-11-04T06:20:00Z', '2026-11-04T06:59:00Z']) {
-      await ensurePharmacySopAutoScheduleJob(db, { now: at(iso) });
+      await ensurePharmacySopAutoScheduleJob(db, { organizationId: ORG, now: at(iso) });
     }
     expect(jobs).toHaveLength(1);
-    const again = await ensurePharmacySopAutoScheduleJob(db, { now: at('2026-11-04T06:45:00Z') });
+    const again = await ensurePharmacySopAutoScheduleJob(db, {
+      organizationId: ORG,
+      now: at('2026-11-04T06:45:00Z'),
+    });
     expect(again.deduplicated).toBe(true);
     expect(again.job.id).toBe(jobs[0]!.id);
   });
@@ -213,6 +270,7 @@ describe('ensurePharmacySopAutoScheduleJob', () => {
     };
     loseNextRace(winner);
     const result = await ensurePharmacySopAutoScheduleJob(db, {
+      organizationId: ORG,
       now: at('2026-11-04T06:30:00Z'),
     });
     expect(result).toMatchObject({ deduplicated: true, job: { id: 'job_winner' } });
@@ -225,10 +283,16 @@ describe('startPharmacySopAutoSchedule', () => {
   it('ensures the chain, then generates for that branch only', async () => {
     const { db, jobs } = makeDb({ sites: SITES });
     const now = at('2026-11-04T06:30:00Z');
-    const result = await startPharmacySopAutoSchedule(db, { sopBranchId: 'sop_1', now });
+    const result = await startPharmacySopAutoSchedule(db, {
+      organizationId: ORG,
+      sopBranchId: 'sop_1',
+      now,
+    });
+    // From the current business date only: never back-dated to days it was OFF.
     expect(engine.generateDueSopOccurrences).toHaveBeenCalledExactlyOnceWith(db, {
       now,
       branchIds: ['sop_1'],
+      lookbackDays: 0,
     });
     expect(result.generated.created).toBe(4);
     expect(jobs).toHaveLength(1);
@@ -239,7 +303,11 @@ describe('startPharmacySopAutoSchedule', () => {
     const { db, jobs } = makeDb({ sites: SITES });
     engine.generateDueSopOccurrences.mockRejectedValueOnce(new Error('engine down'));
     await expect(
-      startPharmacySopAutoSchedule(db, { sopBranchId: 'sop_1', now: at('2026-11-04T06:30:00Z') })
+      startPharmacySopAutoSchedule(db, {
+        organizationId: ORG,
+        sopBranchId: 'sop_1',
+        now: at('2026-11-04T06:30:00Z'),
+      })
     ).rejects.toThrow('engine down');
     expect(jobs).toHaveLength(1);
   });
@@ -264,24 +332,40 @@ describe('payload', () => {
   });
 
   it('a bad payload fails the job before any work', async () => {
-    const { db, jobs } = makeDb({
+    const { db } = makeDb({
       sites: SITES,
       settings: [setting('s1', 'pb_1', true, '2026-11-01T00:00:00Z')],
     });
+    const { handler, independent } = withIndependent();
     await expect(
-      pharmacySopAutoGenerateHandler({
+      handler({
         db,
         job: claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z', { slot: 'x', extra: 1 }),
       })
     ).rejects.toThrow();
     expect(engine.generateDueSopOccurrences).not.toHaveBeenCalled();
-    expect(jobs).toHaveLength(0);
+    expect(independent.jobs).toHaveLength(0);
   });
 });
 
+/**
+ * The handler under test: `db` is the worker's handler transaction (settings
+ * are read there); the next slot and generation go to a separate in-memory
+ * "independent" client, standing in for `createTenantDb(job.organizationId)`.
+ */
+function withIndependent() {
+  const independent = makeDb();
+  const independentTenantDb = vi.fn((organizationId: string) => {
+    expect(organizationId).toBe(ORG);
+    return independent.db;
+  });
+  const handler = createPharmacySopAutoGenerateHandler({ independentTenantDb });
+  return { handler, independent, independentTenantDb };
+}
+
 describe('pharmacySopAutoGenerateHandler', () => {
   it('generates for ON branches as of the claim instant and ensures exactly the next slot', async () => {
-    const { db, jobs } = makeDb({
+    const { db, raw } = makeDb({
       sites: SITES,
       settings: [
         setting('s1', 'pb_1', true, '2026-11-01T00:00:00Z'),
@@ -289,96 +373,183 @@ describe('pharmacySopAutoGenerateHandler', () => {
         setting('s3', 'pb_2', false, '2026-11-02T00:00:00Z'),
       ],
     });
+    const { handler, independent, independentTenantDb } = withIndependent();
     const job = claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z');
-    await pharmacySopAutoGenerateHandler({ db, job });
-    expect(engine.generateDueSopOccurrences).toHaveBeenCalledExactlyOnceWith(db, {
+    await handler({ db, job });
+    // On the independent client of the job's own organization, never back-dated.
+    expect(independentTenantDb).toHaveBeenCalledWith('org_a');
+    expect(engine.generateDueSopOccurrences).toHaveBeenCalledExactlyOnceWith(independent.db, {
       now: job.startedAt,
       branchIds: ['sop_1'],
+      lookbackDays: 0,
     });
-    expect(jobs.map((row) => row.idempotencyKey)).toEqual([
+    expect(independent.jobs.map((row) => row.idempotencyKey)).toEqual([
       'pharmacy.sop.autoGenerate:2026-11-04T08:00:00.000Z',
     ]);
+    expect(firstQuery(independent.raw)).toMatchObject({
+      values: ['pharmacy.sop.autoGenerate:org_a:2026-11-04T08:00:00.000Z'],
+    });
+    // The worker transaction only read the settings.
+    expect(raw.restaurantJob.create).not.toHaveBeenCalled();
+    expect(raw.$queryRaw).not.toHaveBeenCalled();
   });
 
-  it('is safe to run twice for the same slot', async () => {
-    const { db, jobs } = makeDb({
+  it('reads the settings first, then ensures the next slot, then generates', async () => {
+    const { db, raw } = makeDb({
       sites: SITES,
       settings: [setting('s1', 'pb_1', true, '2026-11-01T00:00:00Z')],
     });
+    const { handler, independent } = withIndependent();
+    await handler({ db, job: claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z') });
+    const read = raw.pharmacySopSiteSetting.findMany.mock.invocationCallOrder[0]!;
+    const ensured = independent.raw.restaurantJob.create.mock.invocationCallOrder[0]!;
+    const generated = engine.generateDueSopOccurrences.mock.invocationCallOrder[0]!;
+    expect(read).toBeLessThan(ensured);
+    expect(ensured).toBeLessThan(generated);
+  });
+
+  it('a failing generation still leaves the next slot, and fails the job visibly', async () => {
+    const { db } = makeDb({
+      sites: SITES,
+      settings: [setting('s1', 'pb_1', true, '2026-11-01T00:00:00Z')],
+    });
+    const { handler, independent } = withIndependent();
+    engine.generateDueSopOccurrences.mockRejectedValueOnce(new Error('statement timeout'));
     const job = claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z');
-    await pharmacySopAutoGenerateHandler({ db, job });
+    const failure = await handler({ db, job }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(PharmacySopAutoGenerateError);
+    expect((failure as Error).message).toBe(
+      'Automatic SOP scheduling failed for 1 branch(es): pb_1 (Error: statement timeout).'
+    );
+    expect((failure as PharmacySopAutoGenerateError).failures).toEqual([
+      { pharmacyBranchId: 'pb_1', error: expect.any(Error) },
+    ]);
+    // The chain survives: the next slot was committed before generation ran.
+    expect(independent.jobs.map((row) => row.idempotencyKey)).toEqual([
+      'pharmacy.sop.autoGenerate:2026-11-04T08:00:00.000Z',
+    ]);
+
+    // The retry re-ensures the same slot (deduplicated) and succeeds.
+    await handler({ db, job: { ...job, attempts: 2 } });
+    expect(independent.jobs).toHaveLength(1);
+  });
+
+  it('one bad branch cannot stop the other ON branches', async () => {
+    const { db } = makeDb({
+      sites: SITES,
+      settings: [
+        setting('s1', 'pb_1', true, '2026-11-01T00:00:00Z'),
+        setting('s2', 'pb_2', true, '2026-11-01T00:00:00Z'),
+      ],
+    });
+    const { handler, independent } = withIndependent();
+    engine.generateDueSopOccurrences.mockImplementation(
+      async (_db: unknown, opts: { branchIds: string[] }) => {
+        if (opts.branchIds[0] === 'sop_1') throw new TypeError('bad recurrence');
+        return { assignmentsProcessed: 1, created: 2, skipped: 0 };
+      }
+    );
+    await expect(
+      handler({ db, job: claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z') })
+    ).rejects.toThrow(
+      'Automatic SOP scheduling failed for 1 branch(es): pb_1 (TypeError: bad recurrence).'
+    );
+    expect(engine.generateDueSopOccurrences.mock.calls.map(([, opts]) => opts.branchIds)).toEqual([
+      ['sop_1'],
+      ['sop_2'],
+    ]);
+    expect(independent.jobs).toHaveLength(1);
+  });
+
+  it('a failing ensure fails the job before any generation', async () => {
+    const { db } = makeDb({
+      sites: SITES,
+      settings: [setting('s1', 'pb_1', true, '2026-11-01T00:00:00Z')],
+    });
+    const { handler, independent } = withIndependent();
+    independent.raw.$transaction.mockRejectedValueOnce(new Error('pool exhausted'));
+    await expect(
+      handler({ db, job: claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z') })
+    ).rejects.toThrow('pool exhausted');
+    expect(engine.generateDueSopOccurrences).not.toHaveBeenCalled();
+  });
+
+  it('is safe to run twice for the same slot', async () => {
+    const { db } = makeDb({
+      sites: SITES,
+      settings: [setting('s1', 'pb_1', true, '2026-11-01T00:00:00Z')],
+    });
+    const { handler, independent } = withIndependent();
+    const job = claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z');
+    await handler({ db, job });
     engine.generateDueSopOccurrences.mockResolvedValueOnce({
       assignmentsProcessed: 2,
       created: 0,
       skipped: 0,
     });
-    await pharmacySopAutoGenerateHandler({ db, job: { ...job, attempts: 2 } });
-    expect(jobs).toHaveLength(1);
+    await handler({ db, job: { ...job, attempts: 2 } });
+    expect(independent.jobs).toHaveLength(1);
   });
 
   it('a late worker schedules the slot after now, not every missed hour', async () => {
-    const { db, jobs } = makeDb({
+    const { db } = makeDb({
       sites: SITES,
       settings: [setting('s1', 'pb_1', true, '2026-11-01T00:00:00Z')],
     });
-    await pharmacySopAutoGenerateHandler({
-      db,
-      job: claimed('2026-11-04T07:00:00.000Z', '2026-11-05T13:17:00Z'),
-    });
-    expect(jobs.map((row) => row.idempotencyKey)).toEqual([
+    const { handler, independent } = withIndependent();
+    await handler({ db, job: claimed('2026-11-04T07:00:00.000Z', '2026-11-05T13:17:00Z') });
+    expect(independent.jobs.map((row) => row.idempotencyKey)).toEqual([
       'pharmacy.sop.autoGenerate:2026-11-05T14:00:00.000Z',
     ]);
   });
 
-  it('stops the chain when no branch is ON', async () => {
-    const { db, jobs } = makeDb({
+  it('stops the chain when no branch is ON: no ensure and no generation', async () => {
+    const { db } = makeDb({
       sites: SITES,
       settings: [
         setting('s1', 'pb_1', true, '2026-11-01T00:00:00Z'),
         setting('s2', 'pb_1', false, '2026-11-04T06:40:00Z'),
       ],
     });
-    await pharmacySopAutoGenerateHandler({
-      db,
-      job: claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z'),
-    });
+    const { handler, independent } = withIndependent();
+    await handler({ db, job: claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z') });
     expect(engine.generateDueSopOccurrences).not.toHaveBeenCalled();
-    expect(jobs).toHaveLength(0);
+    expect(independent.raw.$transaction).not.toHaveBeenCalled();
+    expect(independent.jobs).toHaveLength(0);
   });
 
   it('stops the chain for a branch that was never turned on (the default)', async () => {
-    const { db, jobs } = makeDb({ sites: SITES });
-    await pharmacySopAutoGenerateHandler({
-      db,
-      job: claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z'),
-    });
+    const { db } = makeDb({ sites: SITES });
+    const { handler, independent } = withIndependent();
+    await handler({ db, job: claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z') });
     expect(engine.generateDueSopOccurrences).not.toHaveBeenCalled();
-    expect(jobs).toHaveLength(0);
+    expect(independent.jobs).toHaveLength(0);
   });
 
   it('is a no-op in an organization with no pharmacy SOP site (a restaurant)', async () => {
-    const { db, raw, jobs } = makeDb({ sites: [] });
-    await pharmacySopAutoGenerateHandler({
-      db,
-      job: claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z'),
-    });
+    const { db, raw } = makeDb({ sites: [] });
+    const { handler, independent } = withIndependent();
+    await handler({ db, job: claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z') });
     expect(raw.pharmacySopSiteSetting.findMany).not.toHaveBeenCalled();
     expect(engine.generateDueSopOccurrences).not.toHaveBeenCalled();
-    expect(raw.restaurantJob.findFirst).not.toHaveBeenCalled();
-    expect(jobs).toHaveLength(0);
+    expect(independent.raw.restaurantJob.findFirst).not.toHaveBeenCalled();
+    expect(independent.raw.$transaction).not.toHaveBeenCalled();
+    expect(independent.jobs).toHaveLength(0);
   });
 
   it('creates no escalation and enqueues no other job type', async () => {
-    const { db, raw, jobs } = makeDb({
+    const { db, raw } = makeDb({
       sites: SITES,
       settings: [setting('s1', 'pb_1', true, '2026-11-01T00:00:00Z')],
     });
-    await pharmacySopAutoGenerateHandler({
-      db,
-      job: claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z'),
-    });
-    expect(raw.restaurantSopEscalationPolicy.create).not.toHaveBeenCalled();
-    expect(raw.restaurantSopEscalationPolicy.upsert).not.toHaveBeenCalled();
-    expect(new Set(jobs.map((row) => row.type))).toEqual(new Set([PHARMACY_SOP_AUTO_GENERATE_JOB]));
+    const { handler, independent } = withIndependent();
+    await handler({ db, job: claimed('2026-11-04T07:00:00.000Z', '2026-11-04T07:00:05Z') });
+    for (const client of [raw, independent.raw]) {
+      expect(client.restaurantSopEscalationPolicy.create).not.toHaveBeenCalled();
+      expect(client.restaurantSopEscalationPolicy.upsert).not.toHaveBeenCalled();
+    }
+    expect(new Set(independent.jobs.map((row) => row.type))).toEqual(
+      new Set([PHARMACY_SOP_AUTO_GENERATE_JOB])
+    );
   });
 });

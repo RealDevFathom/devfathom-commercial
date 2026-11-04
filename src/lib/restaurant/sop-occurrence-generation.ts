@@ -59,6 +59,12 @@ export type GenerateOptions = {
    * list generates nothing — it never widens to the whole tenant.
    */
   branchIds?: readonly string[];
+  /**
+   * Restrict generation to these assignments (combined with `branchIds` when
+   * both are given). Absent = unchanged. An EMPTY list generates nothing — it
+   * never widens to every assignment.
+   */
+  assignmentIds?: readonly string[];
 };
 
 export type GenerateResult = {
@@ -107,13 +113,17 @@ export async function generateDueSopOccurrences(
   if (!Number.isInteger(horizonDays) || horizonDays < 0) {
     throw new TypeError('horizonDays must be a non-negative integer.');
   }
-  const branchIds = opts.branchIds;
-  if (branchIds && branchIds.length === 0) {
+  const { branchIds, assignmentIds } = opts;
+  if ((branchIds && branchIds.length === 0) || (assignmentIds && assignmentIds.length === 0)) {
     return { assignmentsProcessed: 0, created: 0, skipped: 0 };
   }
 
   const assignments = await db.restaurantSopAssignment.findMany({
-    where: branchIds ? { active: true, branchId: { in: [...branchIds] } } : { active: true },
+    where: {
+      active: true,
+      ...(branchIds ? { branchId: { in: [...branchIds] } } : {}),
+      ...(assignmentIds ? { id: { in: [...assignmentIds] } } : {}),
+    },
     include: {
       branch: { select: { id: true, timezone: true, businessDayCutoff: true } },
     },

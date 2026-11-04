@@ -271,9 +271,11 @@ describe('startOnDemand', () => {
     await expect(
       caller().startOnDemand({ ...BRANCH_INPUT, templateId: 'tpl_recv' })
     ).resolves.toEqual({ occurrenceId: 'occ_new', created: true });
-    expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledWith(db, {
+    // Only the new one-off assignment: never the branch's other schedules.
+    expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledExactlyOnceWith(db, {
       now: expect.any(Date),
       branchIds: [SITE.sopBranchId],
+      assignmentIds: ['asg_new'],
     });
     noEscalationWrites();
   });
@@ -433,6 +435,7 @@ describe('generateAutoPharmacySopOccurrences', () => {
     expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledWith(db, {
       now,
       branchIds: ['sopbranch_2'],
+      lookbackDays: 0,
     });
     noEscalationWrites();
   });

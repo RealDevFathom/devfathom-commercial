@@ -10,8 +10,17 @@
  *
  *   org A branch 1: automatic scheduling ON (daily 09:00 + every 4h 09:00–17:00)
  *   org A branch 2: ON then OFF (latest wins → OFF)
- *   org B         : never changed (default OFF)
+ *   org B         : never changed (default OFF), with an active daily schedule
+ *                   and an event (receiving) procedure started on demand
  *   org R         : restaurant, no pharmacy SOP site
+ *
+ * Turning a branch ON and every hourly run never back-date: they create the
+ * branch's current business date and the next one only.
+ *
+ * The on-demand start drives the REAL `pharmacySop.startOnDemand` router
+ * procedure on the real database (engine assignment + generation + pause);
+ * only the session gates (ABAC `can`, the adapter's branch/actor/role lookups)
+ * and audit writes are stubbed. The worker path uses none of them.
  *
  * Discovery is the worker's own privileged read scan, restricted to these
  * fixture organizations so jobs of other tenants in a shared scratch database
@@ -26,7 +35,33 @@
 import { randomBytes } from 'node:crypto';
 
 import { Client } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  granted: new Set<string>(),
+  adapter: {
+    resolvePharmacySopSite: vi.fn(),
+    resolvePharmacySopActor: vi.fn(),
+    pharmacySopRolesAt: vi.fn(),
+  },
+}));
+
+// Router gates only (startOnDemand); the worker path never reaches these.
+vi.mock('@/server/audit', async () => ({
+  ...(await vi.importActual<typeof import('@/server/audit')>('@/server/audit')),
+  recordTrpcAudit: vi.fn(),
+  annotateAudit: vi.fn(),
+}));
+vi.mock('@/lib/abac', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
+  can: vi.fn(async (_subject: unknown, action: string) => mocks.granted.has(action)),
+}));
+vi.mock('@/lib/pharmacy/sop-adapter', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/pharmacy/sop-adapter')>(
+    '@/lib/pharmacy/sop-adapter'
+  )),
+  ...mocks.adapter,
+}));
 
 const runtimeUrl = process.env.PHARMACY_SOP_TEST_RUNTIME_DATABASE_URL;
 const ownerUrl = process.env.PHARMACY_SOP_TEST_OWNER_DATABASE_URL;
@@ -45,6 +80,9 @@ type Deps = {
   settings: typeof import('@/lib/pharmacy/sop-settings');
   autoJob: typeof import('@/lib/pharmacy/sop-auto-schedule-job');
   prisma: typeof import('@/generated/prisma/client');
+  trpc: typeof import('@/server/trpc');
+  sopRouter: typeof import('@/server/routers/pharmacy-sop');
+  library: typeof import('@/lib/pharmacy/sop-library');
 };
 let deps: Deps;
 
@@ -69,6 +107,8 @@ const contexts: Array<{ organizationId: string; guc: string; platform: string }>
 async function sql<T extends Record<string, unknown>>(query: string, params: unknown[] = []) {
   return (await su.query<T>(query, params)).rows;
 }
+
+let receivingName = '';
 
 async function seed(runtime: Client) {
   const q = (query: string, params: unknown[]) => runtime.query(query, params);
@@ -144,6 +184,24 @@ async function seed(runtime: Client) {
   await daily(A, '2', 'asg_daily', 9 * 60);
   await daily(B, '1', 'asg_daily', 9 * 60);
   await daily(R, '1', 'asg_daily', 10 * 60);
+
+  // Org B: an event-triggered pack template (receiving), published, for the
+  // on-demand start. Its name is what maps it to the pharmacy pack.
+  await q(
+    `INSERT INTO "restaurant_sop_templates" ("id","organizationId","name","updatedAt")
+     VALUES ($1,$2,$3,now())`,
+    [`${B}_tpl_recv`, B, receivingName]
+  );
+  await q(
+    `INSERT INTO "restaurant_sop_template_versions" ("id","organizationId","templateId","versionNumber","status","updatedAt")
+     VALUES ($1,$2,$3,1,'PUBLISHED',now())`,
+    [`${B}_ver_recv`, B, `${B}_tpl_recv`]
+  );
+  await q(
+    `INSERT INTO "restaurant_sop_template_steps" ("id","organizationId","templateVersionId","stepOrder","title","updatedAt")
+     VALUES ($1,$2,$3,1,'Check delivery',now())`,
+    [`${B}_tstep_recv`, B, `${B}_ver_recv`]
+  );
 
   // Org A branch 2: turned ON, then OFF later; the latest row wins.
   await q(
@@ -266,15 +324,22 @@ const iso = (rows: Array<{ dueAt: Date }>) => rows.map((row) => new Date(row.due
 
 describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker', () => {
   beforeAll(async () => {
-    const [scoped, runner, scheduler, settings, autoJob, prisma] = await Promise.all([
-      import('@/lib/tenancy/scoped-db'),
-      import('@/lib/restaurant/job-runner'),
-      import('@/lib/restaurant/scheduler'),
-      import('@/lib/pharmacy/sop-settings'),
-      import('@/lib/pharmacy/sop-auto-schedule-job'),
-      import('@/generated/prisma/client'),
-    ]);
-    deps = { scoped, runner, scheduler, settings, autoJob, prisma };
+    const [scoped, runner, scheduler, settings, autoJob, prisma, trpc, sopRouter, library] =
+      await Promise.all([
+        import('@/lib/tenancy/scoped-db'),
+        import('@/lib/restaurant/job-runner'),
+        import('@/lib/restaurant/scheduler'),
+        import('@/lib/pharmacy/sop-settings'),
+        import('@/lib/pharmacy/sop-auto-schedule-job'),
+        import('@/generated/prisma/client'),
+        import('@/server/trpc'),
+        import('@/server/routers/pharmacy-sop'),
+        import('@/lib/pharmacy/sop-library'),
+      ]);
+    deps = { scoped, runner, scheduler, settings, autoJob, prisma, trpc, sopRouter, library };
+    const receiving = library.findPharmacySopPack('receiving');
+    expect(receiving?.pharmacy.trigger).toBe('EVENT');
+    receivingName = receiving!.name;
 
     su = new Client({ connectionString: superuserUrl });
     await su.connect();
@@ -326,27 +391,37 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     // per-operation tenant client); repeated toggles reuse the same slot job.
     const db = createTenantDb(A, USER);
     const first = await deps.autoJob.startPharmacySopAutoSchedule(db, {
+      organizationId: A,
       sopBranchId: `${A}_rb1`,
       now: T0,
     });
     const again = await deps.autoJob.startPharmacySopAutoSchedule(db, {
+      organizationId: A,
       sopBranchId: `${A}_rb1`,
       now: new Date(T0.getTime() + 60_000),
     });
-    expect(first.generated).toEqual({ assignmentsProcessed: 2, created: 12, skipped: 0 });
+    expect(first.generated).toEqual({ assignmentsProcessed: 2, created: 8, skipped: 0 });
     expect(again.generated.created).toBe(0);
     expect(first.job.deduplicated).toBe(false);
     expect(again.job).toMatchObject({ deduplicated: true, job: { id: first.job.job.id } });
 
-    // Configured times in Asia/Karachi (UTC+5) for business dates 3–5 Nov:
+    // Configured times in Asia/Karachi (UTC+5) for business dates 4–5 Nov (the
+    // current one and the next; never 3 Nov, when the branch was OFF):
     // daily 09:00 → 04:00Z; every 4h 09:00, 13:00, 17:00 → 04:00Z, 08:00Z, 12:00Z.
-    const expected = ['2026-11-03', '2026-11-04', '2026-11-05'].flatMap((day) => [
+    const expected = ['2026-11-04', '2026-11-05'].flatMap((day) => [
       `${day}T04:00:00.000Z`,
       `${day}T04:00:00.000Z`,
       `${day}T08:00:00.000Z`,
       `${day}T12:00:00.000Z`,
     ]);
     expect(iso(await occurrences(A, '1'))).toEqual(expected);
+    // Nothing before the business date the branch was turned ON.
+    const [backdated] = await sql<{ n: string }>(
+      `SELECT count(*)::text AS n FROM "restaurant_sop_occurrences"
+        WHERE "organizationId" = $1 AND "businessDate" < DATE '2026-11-04'`,
+      [A]
+    );
+    expect(backdated!.n).toBe('0');
     expect(await occurrences(A, '2')).toEqual([]);
     expect(await occurrences(B)).toEqual([]);
     expect(await occurrences(R)).toEqual([]);
@@ -368,7 +443,7 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     // A stray pharmacy job in the restaurant org (no product path enqueues one)
     // must be a no-op there.
     const stray = await deps.scoped.withTenantDb(R, (db) =>
-      deps.autoJob.ensurePharmacySopAutoScheduleJob(db, { now: T0 })
+      deps.autoJob.ensurePharmacySopAutoScheduleJob(db, { organizationId: R, now: T0 })
     );
     expect(stray.job.organizationId).toBe(R);
     expect(await discover()).toEqual([A, R].sort());
@@ -380,7 +455,7 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     expect(left.jobs.retried + right.jobs.retried + left.jobs.dead + right.jobs.dead).toBe(0);
 
     // No duplicates: the slot ran once and created nothing new.
-    expect(await occurrences(A, '1')).toHaveLength(12);
+    expect(await occurrences(A, '1')).toHaveLength(8);
     expect(await occurrences(A, '2')).toEqual([]);
     expect(await occurrences(B)).toEqual([]);
     expect(await occurrences(R)).toEqual([]);
@@ -414,7 +489,7 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     const repeat = await tick(T1, 'worker-repeat');
     expect(repeat.jobs.claimed).toBe(0);
     expect(await jobs(A)).toHaveLength(2);
-    expect(await occurrences(A, '1')).toHaveLength(12);
+    expect(await occurrences(A, '1')).toHaveLength(8);
   });
 
   it('a late worker creates the next day at the configured times; restaurant jobs are unaffected', async () => {
@@ -431,18 +506,18 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     const result = await tick(T2, 'worker-late');
     expect(result.jobs).toMatchObject({ claimed: 2, succeeded: 2, retried: 0, dead: 0, failed: 0 });
 
-    // Window moved to 4–6 Nov: only 6 Nov is new for org A branch 1 (4 rows).
+    // Window moved to 5–6 Nov: only 6 Nov is new for org A branch 1 (4 rows).
     const a1 = iso(await occurrences(A, '1'));
-    expect(a1).toHaveLength(16);
-    expect(a1.slice(12)).toEqual([
+    expect(a1).toHaveLength(12);
+    expect(a1.slice(8)).toEqual([
       '2026-11-06T04:00:00.000Z',
       '2026-11-06T04:00:00.000Z',
       '2026-11-06T08:00:00.000Z',
       '2026-11-06T12:00:00.000Z',
     ]);
-    // 4 days × 3 distinct times; both assignments are due at 04:00Z, as distinct rows.
-    expect(new Set(a1).size).toBe(12);
-    expect(new Set((await occurrences(A, '1')).map((row) => row.id)).size).toBe(16);
+    // 3 days × 3 distinct times; both assignments are due at 04:00Z, as distinct rows.
+    expect(new Set(a1).size).toBe(9);
+    expect(new Set((await occurrences(A, '1')).map((row) => row.id)).size).toBe(12);
     expect(await occurrences(A, '2')).toEqual([]);
     expect(await occurrences(B)).toEqual([]);
 
@@ -479,7 +554,7 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
 
     const result = await tick(T3, 'worker-off');
     expect(result.jobs).toMatchObject({ claimed: 1, succeeded: 1 });
-    expect(await occurrences(A, '1')).toHaveLength(16);
+    expect(await occurrences(A, '1')).toHaveLength(12);
     expect(await occurrences(A, '2')).toEqual([]);
     const aJobs = await jobs(A);
     expect(aJobs).toHaveLength(3);
@@ -493,6 +568,92 @@ describeIfDatabase('DEV-751 pharmacy SOP automatic scheduling on the real worker
     expect(later).toMatchObject({ organizations: 0, jobs: { claimed: 0 } });
     expect(await jobs(B)).toEqual([]);
     expect(await occurrences(B)).toEqual([]);
+  });
+
+  it('an on-demand start where automatic scheduling is OFF creates exactly that one occurrence', async () => {
+    // Org B branch 1: never turned on, with an active daily 09:00 schedule that
+    // has never been generated.
+    const setting = await deps.scoped.withTenantDb(B, (db) =>
+      deps.settings.pharmacySopAutoSchedule(db, { pharmacyBranchId: `${B}_pb1` })
+    );
+    expect(setting.autoScheduleEnabled).toBe(false);
+    const [active] = await sql<{ n: string }>(
+      `SELECT count(*)::text AS n FROM "restaurant_sop_assignments"
+        WHERE "organizationId" = $1 AND "branchId" = $2 AND "active"`,
+      [B, `${B}_rb1`]
+    );
+    expect(active!.n).toBe('1');
+    expect(await occurrences(B)).toEqual([]);
+
+    const receiving = deps.library.findPharmacySopPack('receiving')!;
+    mocks.granted.add('sop:complete');
+    mocks.adapter.resolvePharmacySopSite.mockResolvedValue({
+      pharmacyBranchId: `${B}_pb1`,
+      sopBranchId: `${B}_rb1`,
+      timezone: 'Asia/Karachi',
+      businessDayCutoff: '00:00',
+    });
+    mocks.adapter.resolvePharmacySopActor.mockResolvedValue({
+      staffProfileId: `${B}_sp`,
+      displayName: 'Staff',
+      userId: USER,
+    });
+    mocks.adapter.pharmacySopRolesAt.mockResolvedValue([receiving.pharmacy.roleKey]);
+
+    const app = deps.trpc.router({ pharmacySop: deps.sopRouter.pharmacySopRouter });
+    const caller = app.createCaller({
+      db: deps.scoped.createTenantDb(B, USER),
+      entitlements: {
+        organizationId: B,
+        enabledModules: ['pharmacy-core', 'pharmacy-safety'],
+        modules: [],
+        limits: {},
+        activeSeats: 1,
+        seatLimit: 10,
+      },
+      session: {
+        expires: 'later',
+        user: {
+          id: USER,
+          organizationId: B,
+          role: 'EMPLOYEE',
+          department: 'OPERATIONS',
+          status: 'ACTIVE',
+        },
+      },
+      organization: null,
+      support: null,
+      requestMeta: { ip: null, userAgent: null },
+      audit: { detail: {} },
+    } as never).pharmacySop;
+    const input = { pharmacyBranchId: `${B}_pb1`, templateId: `${B}_tpl_recv` };
+
+    const started = await caller.startOnDemand(input);
+    expect(started.created).toBe(true);
+
+    // Exactly one occurrence: the one-off run. The daily schedule was not swept.
+    const rows = await occurrences(B);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: started.occurrenceId, branchId: `${B}_rb1` });
+    const [oneOff] = await sql<{ frequency: string; active: boolean; templateId: string }>(
+      `SELECT "frequency","active","templateId" FROM "restaurant_sop_assignments" WHERE "id" = $1`,
+      [rows[0]!.assignmentId]
+    );
+    expect(oneOff).toEqual({ frequency: 'ONCE', active: false, templateId: `${B}_tpl_recv` });
+    const [daily] = await sql<{ n: string }>(
+      `SELECT count(*)::text AS n FROM "restaurant_sop_occurrences" WHERE "assignmentId" = $1`,
+      [`${B}_asg_daily1`]
+    );
+    expect(daily!.n).toBe('0');
+
+    // Starting again returns the open run; still one occurrence, no job, still OFF.
+    await expect(caller.startOnDemand(input)).resolves.toEqual({
+      occurrenceId: started.occurrenceId,
+      created: false,
+    });
+    expect(await occurrences(B)).toHaveLength(1);
+    expect(await jobs(B)).toEqual([]);
+    expect(await discover()).toEqual([]);
   });
 
   it('pharmacy automatic scheduling created no escalation policy or sweep job', async () => {

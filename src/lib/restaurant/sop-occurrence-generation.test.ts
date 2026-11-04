@@ -367,6 +367,81 @@ describe('generateDueSopOccurrences branchIds scope', () => {
   });
 });
 
+describe('generateDueSopOccurrences assignmentIds scope', () => {
+  const now = at('2026-06-15T12:00:00.000Z');
+  const window = { now, lookbackDays: 0, horizonDays: 0 };
+  const b2 = { id: 'b2', timezone: 'America/New_York', businessDayCutoff: '00:00' };
+  const assignments = () => [
+    assignment(),
+    assignment({ id: 'a2' }),
+    assignment({ id: 'a3', branchId: 'b2', branch: b2 }),
+  ];
+
+  function scopedDb(rows: AssignmentFixture[]) {
+    const made = makeDb({ assignments: rows });
+    made.raw.restaurantSopAssignment.findMany.mockImplementation((async (args: {
+      where: { active: boolean; branchId?: { in: string[] }; id?: { in: string[] } };
+    }) =>
+      rows.filter(
+        (row) =>
+          row.active &&
+          (!args.where.branchId || args.where.branchId.in.includes(row.branchId)) &&
+          (!args.where.id || args.where.id.in.includes(row.id))
+      )) as never);
+    return made;
+  }
+
+  it('restricts generation to the given assignment on its branch, leaving siblings alone', async () => {
+    const { db, raw, store } = scopedDb(assignments());
+    const result = await generateDueSopOccurrences(db, {
+      ...window,
+      branchIds: ['b1'],
+      assignmentIds: ['a2'],
+    });
+    expect(raw.restaurantSopAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { active: true, branchId: { in: ['b1'] }, id: { in: ['a2'] } },
+      })
+    );
+    expect(result).toEqual({ assignmentsProcessed: 1, created: 1, skipped: 0 });
+    expect(store.map((row) => row.assignmentId)).toEqual(['a2']);
+  });
+
+  it('restricts by assignment alone when no branch is given', async () => {
+    const { db, raw, store } = scopedDb(assignments());
+    await generateDueSopOccurrences(db, { ...window, assignmentIds: ['a3'] });
+    expect(raw.restaurantSopAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { active: true, id: { in: ['a3'] } } })
+    );
+    expect(store.map((row) => row.assignmentId)).toEqual(['a3']);
+  });
+
+  it('an assignment on another branch than the one given creates nothing', async () => {
+    const { db, store } = scopedDb(assignments());
+    const result = await generateDueSopOccurrences(db, {
+      ...window,
+      branchIds: ['b1'],
+      assignmentIds: ['a3'],
+    });
+    expect(result).toEqual({ assignmentsProcessed: 0, created: 0, skipped: 0 });
+    expect(store).toEqual([]);
+  });
+
+  it('generates nothing and never queries when assignmentIds is empty (never widens)', async () => {
+    const { db, raw, store } = scopedDb(assignments());
+    for (const branchIds of [undefined, ['b1']]) {
+      const result = await generateDueSopOccurrences(db, {
+        ...window,
+        branchIds,
+        assignmentIds: [],
+      });
+      expect(result).toEqual({ assignmentsProcessed: 0, created: 0, skipped: 0 });
+    }
+    expect(raw.restaurantSopAssignment.findMany).not.toHaveBeenCalled();
+    expect(store).toEqual([]);
+  });
+});
+
 describe('generateSopOccurrencesHandler', () => {
   it('rejects an unknown payload key (strict boundary)', async () => {
     const { db } = makeDb({ assignments: [] });

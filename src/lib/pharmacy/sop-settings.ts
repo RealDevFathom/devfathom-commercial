@@ -143,30 +143,63 @@ export async function setPharmacySopAutoSchedule(
   });
 }
 
+/**
+ * The automatic paths (turning a branch ON and every hourly run) never
+ * back-date: they materialise the branch's CURRENT business date and the
+ * engine's default horizon (tomorrow) only. The engine's default one-day
+ * lookback exists to backfill a missed restaurant run for its late/missed
+ * sweep; here it would create yesterday's already-overdue procedures for a day
+ * the branch was OFF. The explicit manager action ("Create today's work now")
+ * keeps the engine default.
+ */
+export const PHARMACY_SOP_AUTO_LOOKBACK_DAYS = 0;
+
+export type AutoGenerationFailure = {
+  pharmacyBranchId: string;
+  error: unknown;
+};
+
 export type AutoGenerationResult = GenerateResult & {
-  /** Pharmacy branches whose latest setting is ON and were generated for. */
+  /** Pharmacy branches whose latest setting is ON (each was attempted). */
   pharmacyBranchIds: string[];
+  /** ON branches whose generation threw; the other branches still ran. */
+  failures: AutoGenerationFailure[];
 };
 
 /**
  * Generate due occurrences only at SOP sites whose latest setting is ON, via
- * the engine restricted to those sites' engine branches. With no site ON the
- * engine is not called at all. The `db` is already org-scoped.
+ * the engine restricted to ONE site's engine branch per call. With no site ON
+ * the engine is not called at all and `beforeGenerate` does not run. The `db`
+ * is already org-scoped and is used to read the settings.
+ *
+ * Each ON branch is generated separately and its error is captured rather than
+ * thrown, so one bad branch (a broken assignment, a timeout) cannot stop the
+ * others; the caller decides whether failures fail the run. The isolation holds
+ * for database errors only when `generationDb` commits each operation on its
+ * own (a per-operation tenant client): inside one interactive transaction a
+ * failed statement aborts the whole transaction.
  */
 export async function generateAutoPharmacySopOccurrences(
   db: ScopedDb,
-  input: { now?: Date } = {}
+  input: {
+    now?: Date;
+    /** The client generation runs on; defaults to `db`. */
+    generationDb?: ScopedDb;
+    /** Runs once, only when at least one branch is ON, before any generation. */
+    beforeGenerate?: () => Promise<unknown>;
+  } = {}
 ): Promise<AutoGenerationResult> {
-  const sites = await db.pharmacySopSite.findMany({
-    where: { pharmacyBranch: { active: true } },
-    select: { pharmacyBranchId: true, sopBranchId: true },
-  });
   const empty: AutoGenerationResult = {
     assignmentsProcessed: 0,
     created: 0,
     skipped: 0,
     pharmacyBranchIds: [],
+    failures: [],
   };
+  const sites = await db.pharmacySopSite.findMany({
+    where: { pharmacyBranch: { active: true } },
+    select: { pharmacyBranchId: true, sopBranchId: true },
+  });
   if (sites.length === 0) return empty;
 
   const rows = await db.pharmacySopSiteSetting.findMany({
@@ -185,11 +218,31 @@ export async function generateAutoPharmacySopOccurrences(
   );
   if (on.length === 0) return empty;
 
-  const result = await generateDueSopOccurrences(db, {
-    now: input.now,
-    branchIds: on.map((site) => site.sopBranchId),
-  });
-  return { ...result, pharmacyBranchIds: on.map((site) => site.pharmacyBranchId) };
+  await input.beforeGenerate?.();
+
+  // One instant for every branch in this run.
+  const now = input.now ?? new Date();
+  const target = input.generationDb ?? db;
+  const result: AutoGenerationResult = {
+    ...empty,
+    pharmacyBranchIds: on.map((site) => site.pharmacyBranchId),
+    failures: [],
+  };
+  for (const site of on) {
+    try {
+      const generated = await generateDueSopOccurrences(target, {
+        now,
+        branchIds: [site.sopBranchId],
+        lookbackDays: PHARMACY_SOP_AUTO_LOOKBACK_DAYS,
+      });
+      result.assignmentsProcessed += generated.assignmentsProcessed;
+      result.created += generated.created;
+      result.skipped += generated.skipped;
+    } catch (error) {
+      result.failures.push({ pharmacyBranchId: site.pharmacyBranchId, error });
+    }
+  }
+  return result;
 }
 
 function runInTransaction<T>(db: ScopedDb, work: (tx: ScopedDb) => Promise<T>): Promise<T> {

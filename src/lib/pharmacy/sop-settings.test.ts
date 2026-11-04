@@ -3,7 +3,8 @@
  * in-memory append-only table (newest row per branch wins, no row = OFF) and the
  * engine generator is mocked, so this suite pins: default OFF, idempotent
  * appends, and that automatic generation reaches the engine only for the engine
- * branches of sites whose latest setting is ON.
+ * branches of sites whose latest setting is ON, one branch per call, never
+ * back-dated, with per-branch failure isolation.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -194,8 +195,75 @@ describe('generateAutoPharmacySopOccurrences', () => {
       created: 0,
       skipped: 0,
       pharmacyBranchIds: [],
+      failures: [],
     });
     expect(engine.generateDueSopOccurrences).not.toHaveBeenCalled();
+  });
+
+  it('runs beforeGenerate only when a site is ON, and before any generation', async () => {
+    const beforeGenerate = vi.fn(async () => undefined);
+    const off = makeDb({ sites, rows: [row('b', 'pb_off', false, '2026-11-01T00:00:00.000Z')] });
+    await generateAutoPharmacySopOccurrences(off.db, { now, beforeGenerate });
+    expect(beforeGenerate).not.toHaveBeenCalled();
+
+    const on = makeDb({ sites, rows: [row('a', 'pb_on', true, '2026-11-01T00:00:00.000Z')] });
+    await generateAutoPharmacySopOccurrences(on.db, { now, beforeGenerate });
+    expect(beforeGenerate).toHaveBeenCalledOnce();
+    expect(beforeGenerate.mock.invocationCallOrder[0]!).toBeLessThan(
+      engine.generateDueSopOccurrences.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('a failing beforeGenerate stops before any generation', async () => {
+    const { db } = makeDb({ sites, rows: [row('a', 'pb_on', true, '2026-11-01T00:00:00.000Z')] });
+    await expect(
+      generateAutoPharmacySopOccurrences(db, {
+        now,
+        beforeGenerate: async () => {
+          throw new Error('no slot');
+        },
+      })
+    ).rejects.toThrow('no slot');
+    expect(engine.generateDueSopOccurrences).not.toHaveBeenCalled();
+  });
+
+  it('generates on generationDb when given, reading the settings on db', async () => {
+    const { db, raw } = makeDb({
+      sites,
+      rows: [row('a', 'pb_on', true, '2026-11-01T00:00:00.000Z')],
+    });
+    const generationDb = {} as ScopedDb;
+    await generateAutoPharmacySopOccurrences(db, { now, generationDb });
+    expect(raw.pharmacySopSiteSetting.findMany).toHaveBeenCalledOnce();
+    expect(engine.generateDueSopOccurrences).toHaveBeenCalledExactlyOnceWith(generationDb, {
+      now,
+      branchIds: ['sop_on'],
+      lookbackDays: 0,
+    });
+  });
+
+  it('isolates a failing branch: the others still run and the failure is returned', async () => {
+    const { db } = makeDb({
+      sites,
+      rows: sites.map((site, index) =>
+        row(`r${index}`, site.pharmacyBranchId, true, '2026-11-01T00:00:00.000Z')
+      ),
+    });
+    const boom = new Error('bad assignment');
+    engine.generateDueSopOccurrences.mockImplementation(
+      async (_db: unknown, opts: { branchIds: string[] }) => {
+        if (opts.branchIds[0] === 'sop_off') throw boom;
+        return { assignmentsProcessed: 1, created: 2, skipped: 1 };
+      }
+    );
+    await expect(generateAutoPharmacySopOccurrences(db, { now })).resolves.toEqual({
+      assignmentsProcessed: 3,
+      created: 6,
+      skipped: 3,
+      pharmacyBranchIds: ['pb_on', 'pb_off', 'pb_never', 'pb_reoff'],
+      failures: [{ pharmacyBranchId: 'pb_off', error: boom }],
+    });
+    expect(engine.generateDueSopOccurrences).toHaveBeenCalledTimes(4);
   });
 
   it('does not call the engine when there are no SOP sites', async () => {
@@ -220,12 +288,14 @@ describe('generateAutoPharmacySopOccurrences', () => {
     expect(engine.generateDueSopOccurrences).toHaveBeenCalledWith(db, {
       now,
       branchIds: ['sop_on'],
+      lookbackDays: 0,
     });
     expect(result).toEqual({
       assignmentsProcessed: 2,
       created: 3,
       skipped: 0,
       pharmacyBranchIds: ['pb_on'],
+      failures: [],
     });
     // Only active pharmacy branches are considered.
     expect(raw.pharmacySopSite.findMany).toHaveBeenCalledWith(
@@ -241,7 +311,14 @@ describe('generateAutoPharmacySopOccurrences', () => {
       ),
     });
     await generateAutoPharmacySopOccurrences(db, { now });
-    const [, options] = engine.generateDueSopOccurrences.mock.calls[0]!;
-    expect(options.branchIds).toEqual(['sop_on', 'sop_off', 'sop_never', 'sop_reoff']);
+    // One engine call per ON site, each restricted to exactly that branch, all
+    // at one instant and never back-dated.
+    expect(engine.generateDueSopOccurrences.mock.calls.map(([, options]) => options)).toEqual(
+      ['sop_on', 'sop_off', 'sop_never', 'sop_reoff'].map((branch) => ({
+        now,
+        branchIds: [branch],
+        lookbackDays: 0,
+      }))
+    );
   });
 });

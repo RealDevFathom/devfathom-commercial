@@ -1426,7 +1426,10 @@ export const pharmacySopRouter = router({
    * only (the engine is restricted to the site's engine branch, so no other
    * site, pharmacy or restaurant, is touched). Idempotent through
    * `unique(assignmentId, dueAt)`. An explicit manager action, so it stays
-   * available whether automatic scheduling is on or off.
+   * available whether automatic scheduling is on or off, and it keeps the
+   * engine's default window (yesterday to tomorrow): the manager is choosing
+   * to create that work now, unlike the automatic paths, which never back-date
+   * (`PHARMACY_SOP_AUTO_LOOKBACK_DAYS`).
    */
   generate: manageProcedure.input(z.object(BRANCH).strict()).mutation(({ ctx, input }) =>
     guarded(async () => {
@@ -1491,6 +1494,7 @@ export const pharmacySopRouter = router({
         // whose last job failed for good.
         const started = result.setting.autoScheduleEnabled
           ? await startPharmacySopAutoSchedule(ctx.db, {
+              organizationId: sessionScope(ctx).organizationId,
               sopBranchId: site.sopBranchId,
               now: new Date(),
             })
@@ -1601,8 +1605,15 @@ export const pharmacySopRouter = router({
             windowMinutes: pack.pharmacy.suggestedRecurrence.windowMinutes,
             graceMinutes: pack.pharmacy.suggestedRecurrence.graceMinutes,
           });
-          // Branch-scoped: only this site's assignments are swept.
-          await generateDueSopOccurrences(tx, { now, branchIds: [site.sopBranchId] });
+          // Only this one-off assignment (on this site's engine branch) is
+          // materialised: a non-manager starting an event procedure must never
+          // generate the branch's other schedules, which run only when a manager
+          // creates them or turns automatic scheduling on.
+          await generateDueSopOccurrences(tx, {
+            now,
+            branchIds: [site.sopBranchId],
+            assignmentIds: [assignment.id],
+          });
           const occurrence = await tx.restaurantSopOccurrence.findFirst({
             where: { assignmentId: assignment.id },
             select: { id: true },
