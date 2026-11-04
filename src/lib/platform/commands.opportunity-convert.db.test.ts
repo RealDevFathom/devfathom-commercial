@@ -19,6 +19,7 @@ import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 
 import { executePlatformCommand } from './commands';
 import { PlatformSecurityError } from './security';
+import { assertDisposableRlsDatabase } from '../../../tests/disposable-rls-database';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -80,6 +81,9 @@ describeIfDatabase('opportunity conversion on PostgreSQL', () => {
   };
 
   beforeAll(async () => {
+    // This suite commits real ONBOARDING tenants and provisioning jobs and leaves
+    // them behind; run it only against a local or explicitly disposable database.
+    assertDisposableRlsDatabase(TEST_DATABASE_URL!);
     await withPlatformDb(async (tx) => {
       await tx.platformPackage.create({
         data: {

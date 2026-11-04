@@ -21,6 +21,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 }));
 
 import { sendClaimedMessage } from './message-log';
+import { assertDisposableRlsDatabase } from '../../../../tests/disposable-rls-database';
 
 // Setup creates a restricted login role, grants it table access and seeds both
 // tenants, which needs the schema owner with CREATEROLE. In the QA gate
@@ -76,6 +77,8 @@ async function drain(logId: string, customerId: string, send: () => Promise<neve
 
 describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
   beforeAll(async () => {
+    // Creates a LOGIN role and commits tenants: local or explicitly disposable only.
+    assertDisposableRlsDatabase(databaseUrl!);
     await admin!.connect();
     await admin!.query(
       `CREATE ROLE "${role}" LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${password}'`
@@ -128,10 +131,14 @@ describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
     await Promise.all([stop.connect(), sender.connect()]);
     for (const client of [stop!, sender!]) {
       const posture = await client.query(
-        `SELECT rolcanlogin, rolsuper, rolbypassrls
+        `SELECT rolcanlogin, rolsuper, rolbypassrls,
+                EXISTS (SELECT 1 FROM pg_auth_members WHERE member = current_user::regrole)
+                  AS member_of_any_role
          FROM pg_roles WHERE rolname = current_user`
       );
-      expect(posture.rows).toEqual([{ rolcanlogin: true, rolsuper: false, rolbypassrls: false }]);
+      expect(posture.rows).toEqual([
+        { rolcanlogin: true, rolsuper: false, rolbypassrls: false, member_of_any_role: false },
+      ]);
     }
   }, 60_000);
 

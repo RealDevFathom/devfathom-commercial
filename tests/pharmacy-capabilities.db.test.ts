@@ -14,6 +14,7 @@ const suffix = randomUUID().replaceAll('-', '');
 const org = `qa130_${suffix}`;
 const other = `${org}_other`;
 const third = `${org}_third`;
+const restaurant = `${org}_restaurant`;
 const runtimeRole = `qa130_${suffix}`;
 const id = (key: string) => `${org}_${key}`;
 const migration = readFileSync(
@@ -165,9 +166,15 @@ const legacy: Record<string, string[]> = {
     );
     // #654 backfill: a system Pharmacist's explicit close DENY survives, and a
     // tenant-authored 'pharmacist' lookalike is not widened.
+    // A system role keyed 'pharmacist' outside the PHARMACY vertical is not widened.
+    await client.query(
+      `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','RESTAURANT',now(),now())`,
+      [restaurant]
+    );
     for (const [key, isSystem, roleOrg] of [
       ['denied_pharmacist', true, other],
       ['custom_pharmacist', false, third],
+      ['restaurant_pharmacist', true, restaurant],
     ] as const) {
       await client.query(
         `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,'pharmacist','pharmacist',$3,now())`,
@@ -269,6 +276,7 @@ const legacy: Record<string, string[]> = {
         ],
       ],
       ['custom_pharmacist', [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]],
+      ['restaurant_pharmacist', [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]],
     ] as const) {
       const pharmacist = await client.query(
         `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 ORDER BY capability`,

@@ -211,7 +211,10 @@ describe('reachable pharmacy basket workflow', () => {
     ],
   ])('refuses an ADMIN %s before reading any receipt', async (_label, grants) => {
     const { caller, db } = setup('ADMIN', grants as unknown as typeof reportGrants);
-    await expect(caller.generateBaskets(generate)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller.generateBaskets(generate)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Financial report permission is required.',
+    });
     expect(db.pharmacySale.findMany).not.toHaveBeenCalled();
     expect(db.$executeRaw).not.toHaveBeenCalled();
   });

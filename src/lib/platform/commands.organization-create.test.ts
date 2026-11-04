@@ -216,7 +216,9 @@ describe('crm.opportunity.convert eligibility', () => {
     expect(platformDb.organization.create).not.toHaveBeenCalled();
   });
 
-  it.each(['PROPOSAL', 'WON'])('loses a concurrent %s conversion claim before provisioning', async (stage) => {
+  // Under the opportunity row lock the conditional claim cannot lose a race, so this
+  // models a defence-in-depth path: if the claim still matches no row, fail closed.
+  it.each(['PROPOSAL', 'WON'])('fails closed when the %s conversion claim matches no row', async (stage) => {
     givenOpportunity({
       id: 'opp_1', accountId: 'account_1', stage, convertedOrganizationId: null,
     });
@@ -226,7 +228,10 @@ describe('crm.opportunity.convert eligibility', () => {
       { ...payload('admin@acme.com'), opportunityId: 'opp_1' }, request
     ).catch((caught: unknown) => caught);
 
-    expect(error).toMatchObject({ status: 409 });
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'Opportunity is not eligible for conversion.',
+    });
     expect(mocks.opportunityUpdateMany).toHaveBeenCalledWith({
       where: { id: 'opp_1', stage, convertedOrganizationId: null },
       data: { stage: 'WON', wonAt: expect.any(Date) },

@@ -948,6 +948,11 @@ async function bootstrapOrganization(
   // Both CRM conversion and organization onboarding can link an opportunity.
   // Claim it here, before any provisioning work, so no entry point can create a
   // tenant for a missing, ineligible or already converted opportunity.
+  // The claim is linked (and its stage event attributed) only for an operator, so
+  // never claim an opportunity without one.
+  if (input.opportunityId && !actor) {
+    throw new PlatformSecurityError('An operator is required to convert an opportunity.', 400);
+  }
   const conversionOpportunity = input.opportunityId
     ? await claimOpportunityForConversion(db, input.opportunityId)
     : undefined;
