@@ -239,6 +239,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacyMarketing: 'pharmacy-crm',
   pharmacyFinance: 'pharmacy-finance',
   pharmacyOffline: 'pharmacy-counter',
+  pharmacyPrinting: 'pharmacy-counter',
   pharmacyOrdering: 'pharmacy-counter',
   hotelProperty: 'hotel-core',
   // H1-07 (MEAL-01): the meal plans a property sells are commercial

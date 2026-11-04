@@ -7,6 +7,7 @@ import { restaurantPromotionsRouter } from './restaurant-promotions';
 import { platformHealthRouter } from './platform-health';
 import { platformAIUsageRouter } from './platform-ai-usage';
 import { pharmacyOfflineRouter } from './pharmacy-offline';
+import { pharmacyPrintingRouter } from './pharmacy-printing';
 import { dashboardRouter } from './dashboard';
 import { projectsRouter } from './projects';
 import { financeRouter } from './finance';
@@ -80,6 +81,7 @@ export const appRouter = router({
   platformHealth: platformHealthRouter,
   platformAIUsage: platformAIUsageRouter,
   pharmacyOffline: pharmacyOfflineRouter,
+  pharmacyPrinting: pharmacyPrintingRouter,
   dashboard: dashboardRouter,
   projects: projectsRouter,
   finance: financeRouter,

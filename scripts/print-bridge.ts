@@ -19,7 +19,25 @@ const QUEUE_TIMEOUT_MS = 15_000;
 const MAX_BYTES = 1_048_576;
 
 const TOKEN_FILE_LIMIT = 1024;
-const FILE_TOKEN = /^rdk_[A-Za-z0-9_-]{1,512}$/;
+const RESTAURANT_TOKEN = /^rdk_[A-Za-z0-9_-]{1,512}$/;
+/** DEV-741: `ppb_<secret>.<base64url organization>` from the Pharmacy admin enrollment. */
+const PHARMACY_TOKEN = /^ppb_[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{1,172}$/;
+const FILE_TOKEN = {
+  test: (value: string) => RESTAURANT_TOKEN.test(value) || PHARMACY_TOKEN.test(value),
+};
+
+export type BridgeVertical = 'restaurant' | 'pharmacy';
+
+/**
+ * The credential decides the queue; there is no separate, mismatchable setting.
+ * Anything not shaped as a Pharmacy credential keeps the existing Restaurant
+ * behaviour unchanged.
+ */
+export function bridgeVertical(token: string): BridgeVertical {
+  if (!token.startsWith('ppb_')) return 'restaurant';
+  if (PHARMACY_TOKEN.test(token)) return 'pharmacy';
+  throw new BridgeError('Malformed Pharmacy print bridge credential.');
+}
 
 function requirePosixTokenFiles() {
   if (
@@ -195,7 +213,7 @@ export async function enrollPrintBridge(input: {
       typeof body !== 'object' ||
       !('token' in body) ||
       typeof body.token !== 'string' ||
-      !FILE_TOKEN.test(body.token) ||
+      !RESTAURANT_TOKEN.test(body.token) ||
       body.token !== body.token.trim() ||
       !('deviceId' in body) ||
       typeof body.deviceId !== 'string' ||
@@ -421,14 +439,21 @@ function safeError(error: unknown): string {
     : 'Bridge operation failed; inspect host configuration and connectivity. No automatic job retry.';
 }
 
-function bridgeEndpoint(baseUrl: string, wait?: number): URL {
+function bridgeEndpoint(
+  baseUrl: string,
+  wait?: number,
+  vertical: BridgeVertical = 'restaurant'
+): URL {
   const base = new URL(baseUrl);
   if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash) {
     throw new BridgeError(
       'PRINT_BRIDGE_BASE_URL must be HTTPS without credentials, query or fragment.'
     );
   }
-  const endpoint = new URL('/api/restaurant/print-bridge', base);
+  const endpoint = new URL(
+    vertical === 'pharmacy' ? '/api/pharmacy/print-bridge' : '/api/restaurant/print-bridge',
+    base
+  );
   if (wait !== undefined) endpoint.searchParams.set('wait', String(wait));
   return endpoint;
 }
@@ -477,9 +502,11 @@ export async function runPrintBridge(input: {
   stateDir: string;
   signal?: AbortSignal;
 }): Promise<void> {
-  const claimUrl = bridgeEndpoint(input.baseUrl, 20);
   if (!input.token || !isAbsolute(input.stateDir))
     throw new BridgeError('Set device token and absolute PRINT_BRIDGE_STATE_DIR.');
+  const vertical = bridgeVertical(input.token);
+  const claimUrl = bridgeEndpoint(input.baseUrl, 20, vertical);
+  const ackUrl = bridgeEndpoint(input.baseUrl, undefined, vertical);
   printerAllowlist(JSON.stringify(input.allowedPrinterIds));
   await mkdir(input.stateDir, { recursive: true, mode: 0o700 });
   const headers = { Authorization: `Bearer ${input.token}` };
@@ -494,7 +521,13 @@ export async function runPrintBridge(input: {
     if (!response.ok)
       throw new BridgeError(`Claim failed with HTTP ${response.status}; bridge stopped.`);
     const payload = (await response.json()) as {
-      job?: { id?: unknown; printerId?: unknown; bytes?: unknown; claimToken?: unknown };
+      job?: {
+        id?: unknown;
+        printerId?: unknown;
+        bytes?: unknown;
+        claimToken?: unknown;
+        attempt?: unknown;
+      };
     };
     const job = payload?.job;
     if (typeof job?.claimToken !== 'string' || !/^[a-f0-9]{64}$/.test(job.claimToken)) {
@@ -515,17 +548,55 @@ export async function runPrintBridge(input: {
     const bytes = Buffer.from(job.bytes, 'base64');
     if (!bytes.length || bytes.length > MAX_BYTES || bytes.toString('base64') !== job.bytes)
       throw new BridgeError('Invalid receipt encoding; bridge stopped.');
-    if (!input.allowedPrinterIds.includes(job.printerId))
+    // Pharmacy jobs can be resent by an operator as a NEW attempt of the same
+    // job; the host marker is per attempt so attempt 1 can never replay.
+    let markerId = job.id;
+    if (vertical === 'pharmacy') {
+      if (typeof job.attempt !== 'number' || !Number.isInteger(job.attempt) || job.attempt < 1)
+        throw new BridgeError('Invalid claimed attempt; bridge stopped.');
+      if (job.attempt > 1) markerId = `${job.id}#${job.attempt}`;
+    }
+    const claimed = { id: job.id, claimToken: job.claimToken };
+    // Pharmacy delivery status is visible to the counter, so report a failure
+    // before stopping. Best effort: the server shows UNCONFIRMED if this is lost.
+    const reportFailure = async (failureCode: 'TRANSPORT_FAILED' | 'PRINTER_NOT_ALLOWED') => {
+      if (vertical !== 'pharmacy') return;
+      await fetch(ackUrl, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobId: claimed.id,
+          claimToken: claimed.claimToken,
+          status: 'FAILED',
+          failureCode,
+        }),
+        signal: AbortSignal.timeout(5_000),
+        redirect: 'error',
+      }).catch(() => undefined);
+    };
+    if (!input.allowedPrinterIds.includes(job.printerId)) {
+      await reportFailure('PRINTER_NOT_ALLOWED');
       throw new BridgeError('Claimed printer is not in the host allowlist; bridge stopped.');
+    }
     resolveTransport(job.printerId);
     if (input.signal?.aborted) return;
-    await reserveAttempt(input.stateDir, input.baseUrl, job.id);
-    await writeToPrinter(job.printerId, bytes, input.allowedPrinterIds);
-    // Existing server vocabulary: PRINTED means transport accepted, not physical confirmation.
-    const acknowledgement = await fetch(bridgeEndpoint(input.baseUrl), {
+    await reserveAttempt(input.stateDir, input.baseUrl, markerId);
+    try {
+      await writeToPrinter(job.printerId, bytes, input.allowedPrinterIds);
+    } catch (error) {
+      await reportFailure('TRANSPORT_FAILED');
+      throw error;
+    }
+    // Transport acceptance only, never physical confirmation. Restaurant keeps
+    // its existing PRINTED vocabulary; Pharmacy names it TRANSPORT_ACCEPTED.
+    const acknowledgement = await fetch(ackUrl, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId: job.id, claimToken: job.claimToken, status: 'PRINTED' }),
+      body: JSON.stringify({
+        jobId: job.id,
+        claimToken: job.claimToken,
+        status: vertical === 'pharmacy' ? 'TRANSPORT_ACCEPTED' : 'PRINTED',
+      }),
       signal: AbortSignal.timeout(5_000),
       redirect: 'error',
     });
@@ -559,7 +630,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   void (async () => {
     const args = process.argv.slice(2);
     if (args.some((arg) => arg !== '--dry-run') || args.length > 1)
-      throw new BridgeError('Usage: restaurant:print-bridge [--dry-run].');
+      throw new BridgeError('Usage: restaurant:print-bridge | pharmacy:print-bridge [--dry-run].');
     const allowedPrinterIds = printerAllowlist(process.env.PRINT_BRIDGE_PRINTER_IDS);
     if (args.includes('--dry-run')) {
       console.log(

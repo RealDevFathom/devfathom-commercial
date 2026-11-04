@@ -225,6 +225,8 @@ model PharmacyBranch {
   purchaseOrders                           PharmacyPurchaseOrder[]
   onboardingGates                          PharmacyOnboardingGateState[]
   registeredDevices                        PharmacyRegisteredDevice[]
+  printBridges                             PharmacyPrintBridge[]
+  printJobs                                PharmacyPrintJob[]
   ownerDigestSettings                      PharmacyOwnerDigestSetting[]
   ownerDigestCaptures                      PharmacyOwnerDigestCapture[]
   refillReminderCaptures                   PharmacyRefillReminderCapture[]
@@ -1116,6 +1118,7 @@ model PharmacySale {
   customer                  PharmacyCustomer?            @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   loyaltyEntries            PharmacyLoyaltyPointsEntry[]
   customerOrder             PharmacyCustomerOrder?
+  printJobs                 PharmacyPrintJob[]
   visibilityAnchor          PharmacyBranch               @relation("PharmacySaleVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_sales_visibility_fkey")
 
   @@unique([organizationId, id])
@@ -13754,6 +13757,81 @@ model PharmacyRegisteredDevice {
   @@unique([organizationId, branchId, id], map: "pharmacy_registered_devices_org_branch_id_key")
   @@index([organizationId, branchId, status], map: "pharmacy_registered_devices_org_branch_status_idx")
   @@map("pharmacy_registered_devices")
+}
+
+/// DEV-741 — a branch-bound thermal print bridge. One unattended host process,
+/// one receipt printer. Separate from counters so a bridge credential can never
+/// drive the counter transport and a counter secret can never claim print work.
+/// Only the SHA-256 of the secret is stored; the credential is shown once.
+model PharmacyPrintBridge {
+  id                String               @id @default(cuid())
+  organizationId    String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  name              String
+  /// Opaque host printer target (tcp://, queue:///, /dev/). The host allowlist
+  /// must also contain it; the server never dials it.
+  printerId         String
+  deviceSecretHash  String               @unique(map: "pharmacy_print_bridges_secret_hash_key")
+  status            PharmacyDeviceStatus @default(ACTIVE)
+  revokedAt         DateTime?
+  lastSeenAt        DateTime?
+  enrolledByActorId String
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  branch PharmacyBranch     @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  jobs   PharmacyPrintJob[]
+
+  @@unique([organizationId, id], map: "pharmacy_print_bridges_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_print_bridges_org_branch_id_key")
+  @@index([organizationId, branchId, status], map: "pharmacy_print_bridges_org_branch_status_idx")
+  @@map("pharmacy_print_bridges")
+}
+
+enum PharmacyPrintJobStatus {
+  PENDING
+  FAILED
+  TRANSPORT_ACCEPTED
+}
+
+/// DEV-741 — one receipt print intent. The document is built server-side from
+/// the settled sale and never changes; only delivery bookkeeping advances.
+/// `(organizationId, branchId, idempotencyKey)` is the replay boundary and the
+/// partial unique index allows one original per sale. TRANSPORT_ACCEPTED means
+/// the host transport took the bytes, never that paper came out.
+model PharmacyPrintJob {
+  id                 String                 @id @default(cuid())
+  organizationId     String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  bridgeId           String
+  printerId          String
+  saleId             String
+  receiptNumber      Int
+  reprint            Boolean
+  idempotencyKey     String
+  document           Json
+  byteCount          Int
+  paperWidth         Int
+  status             PharmacyPrintJobStatus @default(PENDING)
+  attemptCount       Int                    @default(0)
+  queuedAt           DateTime               @default(now())
+  lastAttemptAt      DateTime?
+  acceptedAt         DateTime?
+  failureCode        String?
+  requestedByActorId String
+  retriedByActorId   String?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  bridge PharmacyPrintBridge @relation(fields: [organizationId, branchId, bridgeId], references: [organizationId, branchId, id], onDelete: Restrict)
+  sale   PharmacySale        @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  branch PharmacyBranch      @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_print_jobs_org_id_key")
+  @@unique([organizationId, branchId, idempotencyKey], map: "pharmacy_print_jobs_idempotency_key")
+  @@index([organizationId, bridgeId, status, queuedAt], map: "pharmacy_print_jobs_claim_idx")
+  @@index([organizationId, branchId, saleId], map: "pharmacy_print_jobs_sale_idx")
+  @@map("pharmacy_print_jobs")
 }
 
 /// OFF-01 — a signed snapshot issued to one counter. Append-only: a refresh is a
