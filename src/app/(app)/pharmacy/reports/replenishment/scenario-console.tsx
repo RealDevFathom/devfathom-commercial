@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -105,6 +105,15 @@ function ScenarioWorkspace({
   const [medicines, setMedicines] = useState<Medicine[]>([]);
   const [medicineId, setMedicineId] = useState('');
   const [searchState, setSearchState] = useState<State>('idle');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [activeMedicine, setActiveMedicine] = useState(-1);
+  const [searchRetry, setSearchRetry] = useState(0);
+  const searchInput = useRef<HTMLInputElement>(null);
+  const searchId = useId();
+  const resultsId = `${searchId}-medicines`;
+  const searchStatusId = `${searchId}-status`;
+  const listOpen = searchOpen && searchState === 'ready' && medicines.length > 0 && !medicineId;
+  const activeOption = listOpen ? medicines[activeMedicine] : undefined;
   const [state, setState] = useState<State>('idle');
   const [manual, setManual] = useState(false);
   const [report, setReport] = useState<PharmacyReplenishmentReport | null>(null);
@@ -142,26 +151,49 @@ function ScenarioWorkspace({
     edited();
     setDraft((previous) => ({ ...previous, [key]: value }));
   }
-  async function findMedicines(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!branchId || !search.trim() || search.trim().length > 200) return;
+  function chooseMedicine(medicine: Medicine) {
     edited();
-    setMedicineId('');
-    setMedicines([]);
-    const version = ++searchVersion.current;
-    setSearchState('loading');
-    try {
-      const result = await utils.client.pharmacyMedicine.search.query({
-        query: search.trim(),
-        limit: 25,
-      });
-      if (version !== searchVersion.current) return;
-      setMedicines(result.map(({ id, productName }) => ({ id, productName })));
-      setSearchState('ready');
-    } catch (error) {
-      if (version === searchVersion.current) setSearchState(denied(error) ? 'denied' : 'error');
-    }
+    searchVersion.current++;
+    setMedicineId(medicine.id);
+    setSearch(medicine.productName);
+    setSearchState('idle');
+    setSearchOpen(false);
+    setActiveMedicine(-1);
+    searchInput.current?.focus();
   }
+  useEffect(() => {
+    const query = search.trim();
+    if (!branchId || !query || query.length > 200 || medicineId) return;
+
+    const version = ++searchVersion.current;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      try {
+        const result = await utils.client.pharmacyMedicine.search.query(
+          { query, limit: 25 },
+          { signal: controller.signal }
+        );
+        if (controller.signal.aborted || version !== searchVersion.current) return;
+        setMedicines(result.map(({ id, productName }) => ({ id, productName })));
+        setActiveMedicine(-1);
+        setSearchState('ready');
+      } catch (error) {
+        if (!controller.signal.aborted && version === searchVersion.current)
+          setSearchState(denied(error) ? 'denied' : 'error');
+      }
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [branchId, medicineId, search, searchRetry, utils.client.pharmacyMedicine.search]);
+  useEffect(() => {
+    if (listOpen && activeMedicine >= 0)
+      document
+        .getElementById(`${resultsId}-${activeMedicine}`)
+        ?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeMedicine, listOpen, resultsId]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -267,7 +299,9 @@ function ScenarioWorkspace({
     setErrors(invalid);
     if (Object.keys(invalid).length) {
       setState('idle');
-      const control = form.elements.namedItem(Object.keys(invalid)[0]);
+      const firstInvalid = Object.keys(invalid)[0];
+      const control =
+        firstInvalid === 'medicineId' ? searchInput.current : form.elements.namedItem(firstInvalid);
       if (control instanceof HTMLElement) control.focus();
       return;
     }
@@ -364,7 +398,9 @@ function ScenarioWorkspace({
               setBranchId(event.target.value);
               setMedicineId('');
               setMedicines([]);
-              setSearchState('idle');
+              setActiveMedicine(-1);
+              setSearchOpen(false);
+              setSearchState(event.target.value && search.trim() ? 'loading' : 'idle');
             }}
           >
             <option value="">Select an authorized branch</option>
@@ -380,67 +416,131 @@ function ScenarioWorkspace({
             {errors.branchId}
           </p>
         )}
-        <form onSubmit={findMedicines} className="mt-4 flex flex-wrap items-end gap-3">
-          <label className="min-w-0 flex-1 text-sm text-text-body">
+        <div
+          className="relative mt-4"
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) setSearchOpen(false);
+          }}
+        >
+          <label className="block text-sm text-text-body">
             Find medicine
             <Input
               className="mt-1 min-h-11"
+              name="medicineSearch"
+              ref={searchInput}
               value={search}
-              required
               maxLength={200}
               disabled={!branchId}
+              role="combobox"
+              aria-autocomplete="list"
+              aria-controls={listOpen ? resultsId : undefined}
+              aria-expanded={listOpen}
+              aria-activedescendant={activeOption ? `${resultsId}-${activeMedicine}` : undefined}
+              aria-busy={searchState === 'loading'}
+              autoComplete="off"
+              aria-invalid={Boolean(errors.medicineId)}
+              aria-describedby={`${searchStatusId}${errors.medicineId ? ' replenishment-medicine-error' : ''}`}
+              placeholder="Start typing a medicine name"
+              onFocus={() => {
+                if (!medicineId) setSearchOpen(true);
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.nativeEvent.isComposing ||
+                  event.ctrlKey ||
+                  event.metaKey ||
+                  event.altKey ||
+                  event.shiftKey
+                )
+                  return;
+                if (event.key === 'Escape' || event.key === 'Tab') {
+                  if (event.key === 'Escape') event.preventDefault();
+                  setSearchOpen(false);
+                  setActiveMedicine(-1);
+                } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  if (medicineId) return;
+                  setSearchOpen(true);
+                  if (medicines.length)
+                    setActiveMedicine((index) =>
+                      event.key === 'ArrowDown'
+                        ? (index + 1) % medicines.length
+                        : index <= 0
+                          ? medicines.length - 1
+                          : index - 1
+                    );
+                } else if ((event.key === 'Home' || event.key === 'End') && listOpen) {
+                  event.preventDefault();
+                  setActiveMedicine(event.key === 'Home' ? 0 : medicines.length - 1);
+                } else if (event.key === 'Enter') {
+                  event.preventDefault();
+                  if (activeOption) chooseMedicine(activeOption);
+                  else if (
+                    !medicineId &&
+                    search.trim() &&
+                    search.trim().length <= 200 &&
+                    (searchState === 'error' || searchState === 'denied' || searchState === 'idle')
+                  ) {
+                    setSearchOpen(true);
+                    setSearchState('loading');
+                    setSearchRetry((retry) => retry + 1);
+                  }
+                }
+              }}
               onChange={(event) => {
                 edited();
                 searchVersion.current++;
                 setSearch(event.target.value);
                 setMedicineId('');
                 setMedicines([]);
-                setSearchState('idle');
+                setActiveMedicine(-1);
+                setSearchOpen(true);
+                setSearchState(
+                  event.target.value.trim() && event.target.value.trim().length <= 200
+                    ? 'loading'
+                    : 'idle'
+                );
               }}
             />
           </label>
-          <Button
-            type="submit"
-            variant="outline"
-            className="min-h-11"
-            disabled={!branchId || !search.trim() || searchState === 'loading'}
-          >
-            Search medicines
-          </Button>
-        </form>
-        <div className="mt-3 text-sm text-text-muted" role="status">
+          {listOpen && (
+            <div
+              id={resultsId}
+              role="listbox"
+              aria-label="Medicine results"
+              className="absolute z-10 mt-1 max-h-64 w-full overflow-x-hidden overflow-y-auto rounded-md border border-border-default bg-surface-raised p-1 shadow-sm"
+            >
+              {medicines.map((medicine, index) => (
+                <button
+                  key={medicine.id}
+                  id={`${resultsId}-${index}`}
+                  type="button"
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={activeMedicine === index}
+                  className={`block min-h-11 w-full min-w-0 rounded-sm px-3 py-2 text-left text-sm whitespace-normal break-words text-text-strong hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-ring ${activeMedicine === index ? 'bg-surface-sunken' : ''}`}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseEnter={() => setActiveMedicine(index)}
+                  onClick={() => chooseMedicine(medicine)}
+                >
+                  {medicine.productName}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div id={searchStatusId} className="mt-3 text-sm text-text-muted" role="status">
           {searchState === 'loading' && 'Searching permitted medicines…'}
           {searchState === 'ready' &&
             (medicines.length
-              ? `${medicines.length} matches (maximum 25). Refine the search if needed.`
+              ? `${medicines.length} matches (maximum 25). Use arrow keys then Enter to select, or choose a result.`
               : 'No matching medicines. Try another name or alias.')}
-          {searchState === 'error' && 'Medicine search unavailable. Retry the search.'}
+          {searchState === 'error' &&
+            'Medicine search unavailable. Press Enter in the search box to retry.'}
           {searchState === 'denied' &&
             'Medicine search access denied. Ask your workspace administrator to check access.'}
+          {medicineId && `Selected ${search}.`}
         </div>
-        <label className="mt-4 block text-sm text-text-body">
-          Medicine
-          <select
-            name="medicineId"
-            form="replenishment-report-form"
-            value={medicineId}
-            className={selectClass}
-            disabled={!medicines.length}
-            aria-invalid={Boolean(errors.medicineId)}
-            aria-describedby={errors.medicineId ? 'replenishment-medicine-error' : undefined}
-            onChange={(event) => {
-              edited();
-              setMedicineId(event.target.value);
-            }}
-          >
-            <option value="">Search and select a medicine</option>
-            {medicines.map((medicine) => (
-              <option key={medicine.id} value={medicine.id}>
-                {medicine.productName}
-              </option>
-            ))}
-          </select>
-        </label>
         {errors.medicineId && (
           <p id="replenishment-medicine-error" className="text-sm text-destructive">
             {errors.medicineId}
