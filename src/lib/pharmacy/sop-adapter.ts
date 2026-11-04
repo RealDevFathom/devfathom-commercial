@@ -429,6 +429,112 @@ export async function ensurePharmacySopJobRoles(
 }
 
 /**
+ * The one serialized find-or-create of a user's staff profile, used for role
+ * targets and for a person setting up their own profile. Must run inside a
+ * transaction. One profile per user is not a database constraint, so creation
+ * is serialized per (tenant, user); the read after the lock then sees any
+ * concurrent create.
+ *
+ * - exactly one ACTIVE profile → reused (`created: false`);
+ * - several ACTIVE profiles → AMBIGUOUS_STAFF_PROFILE;
+ * - only SUSPENDED/ARCHIVED profiles → NO_STAFF_PROFILE (never re-activated);
+ * - none at all → created and linked when `allowCreate`, else NO_STAFF_PROFILE.
+ */
+async function findOrCreatePharmacySopStaffProfile(
+  tx: ScopedDb,
+  input: {
+    organizationId: string;
+    userId: string;
+    userName: string;
+    sopBranchId: string;
+    allowCreate: boolean;
+    subject: 'self' | 'target';
+  }
+): Promise<{ staffProfileId: string; displayName: string; created: boolean }> {
+  const self = input.subject === 'self';
+  await advisoryLock(tx, `pharmacy-sop-staff:${input.organizationId}:${input.userId}`);
+  const profiles = await tx.restaurantStaffProfile.findMany({
+    where: { organizationId: input.organizationId, userId: input.userId },
+    select: { id: true, status: true, displayName: true },
+    orderBy: { id: 'asc' },
+  });
+  const active = profiles.filter((profile) => profile.status === 'ACTIVE');
+  if (active.length > 1) {
+    refuse(
+      'AMBIGUOUS_STAFF_PROFILE',
+      self
+        ? 'Your account is linked to more than one staff profile. Ask a manager to resolve it.'
+        : 'This person is linked to more than one staff profile. Resolve it before changing roles.'
+    );
+  }
+  const [existing] = active;
+  if (existing) {
+    return { staffProfileId: existing.id, displayName: existing.displayName, created: false };
+  }
+  if (profiles.length > 0 || !input.allowCreate) {
+    refuse(
+      'NO_STAFF_PROFILE',
+      self
+        ? 'Your staff profile is suspended or archived. Ask an administrator to restore it.'
+        : 'This person has no active staff profile.'
+    );
+  }
+  const displayName = input.userName.trim() || 'Pharmacy staff';
+  const created = await tx.restaurantStaffProfile.create({
+    data: {
+      organizationId: input.organizationId,
+      userId: input.userId,
+      displayName,
+      primaryBranchId: input.sopBranchId,
+      status: 'ACTIVE',
+    },
+    select: { id: true },
+  });
+  return { staffProfileId: created.id, displayName, created: true };
+}
+
+/**
+ * Explicit, idempotent self-service: give the session user their own staff
+ * profile so they can take part in procedures at one enabled SOP site. The
+ * user must be ACTIVE and actively assigned to the pharmacy branch (the same
+ * scope check every pharmacy surface uses). An existing ACTIVE profile is
+ * returned unchanged; several ACTIVE profiles, or only SUSPENDED/ARCHIVED
+ * ones, fail closed exactly as {@link resolvePharmacySopActor} does. Grants no
+ * role and writes nothing else.
+ */
+export async function ensurePharmacySopStaffProfile(
+  db: ScopedDb,
+  scope: PharmacySopScope & { pharmacyBranchId: string }
+): Promise<PharmacySopActor & { created: boolean }> {
+  requireScope(scope);
+  const { organizationId, userId, pharmacyBranchId } = scope;
+  return runSopTx(db, async (tx) => {
+    await assertPharmacyBranchInScope(tx, organizationId, userId, pharmacyBranchId);
+    const site = await loadSite(tx, organizationId, pharmacyBranchId);
+    if (!site) refuse('SITE_NOT_ENABLED', 'Procedures are not enabled at this branch yet.');
+    const user = await tx.user.findFirst({
+      where: { id: userId, organizationId, status: 'ACTIVE' },
+      select: { id: true, name: true },
+    });
+    if (!user) refuse('UNAUTHENTICATED', 'Sign in to use pharmacy procedures.');
+    const profile = await findOrCreatePharmacySopStaffProfile(tx, {
+      organizationId,
+      userId,
+      userName: user.name,
+      sopBranchId: site.sopBranchId,
+      allowCreate: true,
+      subject: 'self',
+    });
+    return {
+      staffProfileId: profile.staffProfileId,
+      displayName: profile.displayName,
+      userId,
+      created: profile.created,
+    };
+  });
+}
+
+/**
  * Grant (or revoke) a pharmacy SOP role to a tenant user at one SOP site. The
  * target user must be ACTIVE and actively assigned to the pharmacy branch. If
  * the user has no staff profile one is created and linked; if they have several
@@ -514,38 +620,14 @@ export async function setPharmacySopRoleHolding(
       );
     }
 
-    // One profile per user is not a database constraint, so creation is
-    // serialized per user; the read below then sees any concurrent create.
-    await advisoryLock(tx, `pharmacy-sop-staff:${organizationId}:${targetUserId}`);
-    const profiles = await tx.restaurantStaffProfile.findMany({
-      where: { organizationId, userId: targetUserId },
-      select: { id: true, status: true },
-      orderBy: { id: 'asc' },
+    const { staffProfileId } = await findOrCreatePharmacySopStaffProfile(tx, {
+      organizationId,
+      userId: targetUserId,
+      userName: user.name,
+      sopBranchId: site.sopBranchId,
+      allowCreate: input.held,
+      subject: 'target',
     });
-    const active = profiles.filter((profile) => profile.status === 'ACTIVE');
-    if (active.length > 1) {
-      refuse(
-        'AMBIGUOUS_STAFF_PROFILE',
-        'This person is linked to more than one staff profile. Resolve it before changing roles.'
-      );
-    }
-    let staffProfileId = active[0]?.id;
-    if (!staffProfileId) {
-      if (profiles.length > 0 || !input.held) {
-        refuse('NO_STAFF_PROFILE', 'This person has no active staff profile.');
-      }
-      const created = await tx.restaurantStaffProfile.create({
-        data: {
-          organizationId,
-          userId: targetUserId,
-          displayName: user.name.trim() || 'Pharmacy staff',
-          primaryBranchId: site.sopBranchId,
-          status: 'ACTIVE',
-        },
-        select: { id: true },
-      });
-      staffProfileId = created.id;
-    }
 
     const roles = await ensurePharmacySopJobRoles(tx, organizationId);
     const holding = {

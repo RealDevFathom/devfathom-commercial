@@ -119,7 +119,7 @@ function ReportBody({ report }: { report: SopReport }) {
         className="grid grid-cols-2 gap-4 rounded-lg border border-border-subtle bg-card p-5 sm:grid-cols-3 xl:grid-cols-6"
       >
         <Stat label="Due" value={summary.total} valueClassName="text-[1.75rem]" />
-        <Stat label="On time" value={counts.onTime} valueClassName="text-[1.75rem]" />
+        <Stat label="Handed in on time" value={counts.onTime} valueClassName="text-[1.75rem]" />
         <Stat label="Late" value={counts.late} valueClassName="text-[1.75rem]" />
         <Stat label="Missed" value={counts.missed} valueClassName="text-[1.75rem]" />
         <Stat label="Sent back" value={counts.rejected} valueClassName="text-[1.75rem]" />
@@ -130,9 +130,12 @@ function ReportBody({ report }: { report: SopReport }) {
           {score.overall.score === null ? '—' : `${Math.round(score.overall.score)}%`}
         </p>
         <p className="mt-2 max-w-2xl text-sm text-text-muted">
+          {/* Mirrors classifyOccurrence in src/lib/restaurant/sop-score.ts: an
+              occurrence scores by when it was handed in, whether or not a
+              reviewer has checked it yet; only a send-back changes that. */}
           {score.overall.score === null
-            ? 'Nothing in this period has been checked, missed or sent back yet.'
-            : 'Work checked on time counts fully and late work counts partly. Missed and sent-back work counts as zero. Excused work and work still open are left out.'}
+            ? 'Nothing in this period has been handed in, missed or sent back yet.'
+            : 'Work handed in within its time allowed counts fully, whether or not it has been checked yet. Work handed in late counts half. Missed and sent-back work counts as zero. Excused work, and work not handed in while there is still time, are left out.'}
         </p>
       </SectionCard>
       <SectionCard title="By person">

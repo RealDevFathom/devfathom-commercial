@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     resolvePharmacySopSite: vi.fn(),
     enablePharmacySopSite: vi.fn(),
     resolvePharmacySopActor: vi.fn(),
+    ensurePharmacySopStaffProfile: vi.fn(),
     ensurePharmacySopJobRoles: vi.fn(),
     setPharmacySopRoleHolding: vi.fn(),
     pharmacySopRolesAt: vi.fn(),
@@ -114,9 +115,10 @@ vi.mock('@/lib/restaurant/sop-score', () => ({
 }));
 
 import { router } from '../trpc';
-import { pharmacySopRouter } from './pharmacy-sop';
+import { notOwnedOrClaimedBy, pharmacySopRouter } from './pharmacy-sop';
 import { PharmacySopAccessError } from '@/lib/pharmacy/sop-adapter';
 import { pharmacySopEvidenceFilename } from '@/lib/pharmacy/sop-evidence';
+import { PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE } from '@/lib/pharmacy/sop-shared';
 import { findPharmacySopPack, type PharmacySopPackStep } from '@/lib/pharmacy/sop-library';
 import { SopExecutionError } from '@/lib/restaurant/sop-execution';
 import { SopTemplateError } from '@/lib/restaurant/sop-templates';
@@ -200,6 +202,7 @@ function makeDb() {
     pharmacyTemperatureLog: model(),
     pharmacyGoodsReceipt: model(),
     restaurantSopEvidence: model(),
+    organization: model(),
   };
   const typed = db as Record<keyof typeof db, Delegate> & {
     $transaction: ReturnType<typeof vi.fn>;
@@ -264,6 +267,7 @@ beforeEach(() => {
   };
   mocks.adapter.resolvePharmacySopSite.mockResolvedValue(SITE);
   mocks.adapter.resolvePharmacySopActor.mockResolvedValue(ACTOR);
+  mocks.adapter.ensurePharmacySopStaffProfile.mockResolvedValue({ ...ACTOR, created: false });
   mocks.adapter.assertOccurrenceAtSite.mockImplementation(async () => ({ ...occurrenceRow }));
   mocks.adapter.pharmacySopRolesAt.mockResolvedValue(['pharmacy-assistant']);
   mocks.adapter.assertIndependentPharmacyVerifier.mockResolvedValue(undefined);
@@ -453,7 +457,23 @@ describe('capability gates', () => {
       canManage: false,
       canComplete: true,
       canVerify: false,
+      organizationTimezone: null,
     });
+    expect(db.organization.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('access gives a manager the organization timezone, treating the UTC default as unset', async () => {
+    db.organization.findUnique.mockResolvedValueOnce({ timezone: 'Europe/London' });
+    await expect(caller().access()).resolves.toMatchObject({
+      canManage: true,
+      organizationTimezone: 'Europe/London',
+    });
+    expect(db.organization.findUnique).toHaveBeenCalledWith({
+      where: { id: 'org_1' },
+      select: { timezone: true },
+    });
+    db.organization.findUnique.mockResolvedValueOnce({ timezone: 'UTC' });
+    await expect(caller().access()).resolves.toMatchObject({ organizationTimezone: null });
   });
 });
 
@@ -731,7 +751,7 @@ describe('submit', () => {
     arrangeSubmission({ pack: temperatureLog, notes: { 3: 'None' } });
     await expect(caller().submit(OCC_INPUT)).rejects.toMatchObject({
       code: 'PRECONDITION_FAILED',
-      message: expect.stringContaining('Record refrigerator temperature'),
+      message: expect.stringContaining(temperatureLog.steps[0]!.title),
     });
 
     // A link on another step does not satisfy this one.
@@ -1445,4 +1465,257 @@ describe('coordinator follow-ups', () => {
       );
     }
   );
+});
+
+// ── Visual QA follow-ups ─────────────────────────────────────────────────────
+
+describe('review queue is null-safe', () => {
+  it('excludes only the reviewer’s own work, keeping rows whose owner columns are NULL', async () => {
+    expect(notOwnedOrClaimedBy('staff_me')).toEqual({
+      AND: [
+        {
+          OR: [{ assignedStaffProfileId: null }, { assignedStaffProfileId: { not: 'staff_me' } }],
+        },
+        {
+          OR: [{ claimedByStaffProfileId: null }, { claimedByStaffProfileId: { not: 'staff_me' } }],
+        },
+      ],
+    });
+
+    mocks.adapter.pharmacySopRolesAt.mockResolvedValue(['pharmacy-qualified-person']);
+    mocks.engine.listStaffSopOccurrences.mockResolvedValue([]);
+    mocks.engine.listClaimablePoolOccurrences.mockResolvedValue([]);
+    db.restaurantSopOccurrence.findMany.mockResolvedValue([]);
+    await caller().board(BRANCH_INPUT);
+    const [call] = db.restaurantSopOccurrence.findMany.mock.calls;
+    const where = (call![0] as { where: Record<string, unknown> }).where;
+    expect(where).toEqual({
+      branchId: SITE.sopBranchId,
+      status: { in: ['SUBMITTED', 'LATE'] },
+      ...notOwnedOrClaimedBy(ACTOR.staffProfileId),
+    });
+    // A bare NOT over the nullable columns is the bug this replaces.
+    expect(where).not.toHaveProperty('NOT');
+  });
+});
+
+describe('Setup schedules hide on-demand runs', () => {
+  const assignment = (id: string, name: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    template: { id: `tpl_${id}`, name },
+    assigneeTargetType: 'ROLE',
+    assigneeJobRoleId: null,
+    assigneeStaffProfileId: null,
+    frequency: 'DAILY',
+    interval: 1,
+    daysOfWeek: [],
+    monthDay: null,
+    dueTimeMinutes: 480,
+    intervalEndTimeMinutes: null,
+    windowMinutes: 60,
+    graceMinutes: 0,
+    startDate: new Date(Date.UTC(2026, 10, 4)),
+    endDate: null,
+    active: true,
+    supersededAt: null,
+    ...extra,
+  });
+
+  it('lists schedules but not the paused ONCE PERSON runs startOnDemand creates', async () => {
+    mocks.engine.listAssignments.mockResolvedValue([
+      assignment('a_open', opening.name),
+      assignment('a_run', receiving.name, {
+        frequency: 'ONCE',
+        assigneeTargetType: 'PERSON',
+        assigneeStaffProfileId: ACTOR.staffProfileId,
+        active: false,
+      }),
+      // A named-person ONCE schedule of a non-event pack is a real schedule.
+      assignment('a_training', training.name, {
+        frequency: 'ONCE',
+        assigneeTargetType: 'PERSON',
+        assigneeStaffProfileId: ACTOR.staffProfileId,
+        active: false,
+      }),
+    ]);
+    const rows = await caller().assignments(BRANCH_INPUT);
+    expect(rows.map((row) => row.id)).toEqual(['a_open', 'a_training']);
+  });
+
+  it('refuses to schedule an event pack, and to resume an on-demand run', async () => {
+    db.restaurantSopTemplate.findUnique.mockResolvedValue({
+      id: 'tpl_recv',
+      name: receiving.name,
+      isActive: true,
+    });
+    await expect(
+      caller().createAssignment({
+        ...BRANCH_INPUT,
+        templateId: 'tpl_recv',
+        target: { type: 'ROLE', roleKey: 'pharmacy-assistant' },
+        frequency: 'DAILY',
+        startDate: '2026-11-04',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.engine.createAssignment).not.toHaveBeenCalled();
+
+    db.restaurantSopAssignment.findUnique.mockResolvedValue({
+      id: 'a_run',
+      branchId: SITE.sopBranchId,
+      frequency: 'ONCE',
+      assigneeTargetType: 'PERSON',
+      template: { name: receiving.name },
+    });
+    await expect(
+      caller().setAssignmentActive({ ...BRANCH_INPUT, assignmentId: 'a_run', active: true })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mocks.engine.setAssignmentActive).not.toHaveBeenCalled();
+  });
+});
+
+describe('own staff profile', () => {
+  it('maps NO_STAFF_PROFILE to the fixed wording the workspace recognises', async () => {
+    mocks.adapter.resolvePharmacySopActor.mockRejectedValueOnce(
+      new PharmacySopAccessError('internal detail', 'NO_STAFF_PROFILE')
+    );
+    mocks.granted = new Set(['sop:verify']);
+    await expect(caller().board(BRANCH_INPUT)).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE,
+    });
+  });
+
+  it('joinSite sets up the session user’s own profile, scoped to the branch', async () => {
+    mocks.adapter.ensurePharmacySopStaffProfile.mockResolvedValueOnce({ ...ACTOR, created: true });
+    mocks.granted = new Set(['sop:verify']);
+    await expect(caller().joinSite(BRANCH_INPUT)).resolves.toEqual({
+      staffProfileId: ACTOR.staffProfileId,
+      created: true,
+    });
+    expect(mocks.adapter.resolvePharmacySopSite).toHaveBeenCalledWith(db, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      pharmacyBranchId: SITE.pharmacyBranchId,
+    });
+    expect(mocks.adapter.ensurePharmacySopStaffProfile).toHaveBeenCalledWith(db, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      pharmacyBranchId: SITE.pharmacyBranchId,
+    });
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'pharmacy.sop.joinSite' })
+    );
+  });
+
+  it('joinSite needs an SOP capability, takes no user id, and fails closed', async () => {
+    mocks.granted = new Set();
+    await expect(caller().joinSite(BRANCH_INPUT)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    mocks.granted = new Set(ALL_CAPS);
+    const c = caller() as unknown as { joinSite: (input: unknown) => Promise<unknown> };
+    await expect(c.joinSite({ ...BRANCH_INPUT, userId: 'user_victim' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mocks.adapter.ensurePharmacySopStaffProfile).not.toHaveBeenCalled();
+    mocks.adapter.ensurePharmacySopStaffProfile.mockRejectedValueOnce(
+      new PharmacySopAccessError('x', 'AMBIGUOUS_STAFF_PROFILE')
+    );
+    await expect(caller().joinSite(BRANCH_INPUT)).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+  });
+
+  it('setRoleHolding grants as the session user, setting up their profile if needed', async () => {
+    mocks.adapter.ensurePharmacySopStaffProfile.mockResolvedValueOnce({
+      ...ACTOR,
+      staffProfileId: 'staff_new_mgr',
+      created: true,
+    });
+    mocks.adapter.setPharmacySopRoleHolding.mockResolvedValue({
+      staffProfileId: 'staff_2',
+      changed: true,
+    });
+    await caller().setRoleHolding({
+      ...BRANCH_INPUT,
+      userId: 'user_2',
+      roleKey: 'pharmacy-assistant',
+      held: true,
+    });
+    expect(mocks.adapter.resolvePharmacySopActor).not.toHaveBeenCalled();
+    expect(mocks.adapter.setPharmacySopRoleHolding).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ grantedByStaffProfileId: 'staff_new_mgr', targetUserId: 'user_2' })
+    );
+  });
+
+  it('enableSite also sets up the enabling manager’s profile, best effort', async () => {
+    mocks.adapter.enablePharmacySopSite.mockResolvedValue({ site: SITE, created: true });
+    await expect(
+      caller().enableSite({ ...BRANCH_INPUT, timezone: 'Asia/Karachi' })
+    ).resolves.toMatchObject({ created: true, staffProfileReady: true });
+    expect(mocks.adapter.ensurePharmacySopStaffProfile).toHaveBeenCalledWith(db, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      pharmacyBranchId: SITE.pharmacyBranchId,
+    });
+
+    mocks.adapter.ensurePharmacySopStaffProfile.mockRejectedValueOnce(
+      new PharmacySopAccessError('suspended', 'NO_STAFF_PROFILE')
+    );
+    await expect(
+      caller().enableSite({ ...BRANCH_INPUT, timezone: 'Asia/Karachi' })
+    ).resolves.toMatchObject({ staffProfileReady: false });
+  });
+
+  it('roleHoldings marks the viewer’s own row', async () => {
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([
+      { userId: 'user_1', user: { id: 'user_1', name: 'Me', email: 'me@x' } },
+      { userId: 'user_2', user: { id: 'user_2', name: 'Two', email: 'two@x' } },
+    ]);
+    const rows = await caller().roleHoldings(BRANCH_INPUT);
+    expect(rows.map((row) => [row.userId, row.isViewer])).toEqual([
+      ['user_1', true],
+      ['user_2', false],
+    ]);
+  });
+});
+
+describe('occurrence history inputs', () => {
+  it('returns claim time and the names the History view needs', async () => {
+    const claimedAt = new Date('2026-11-04T08:05:00Z');
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: 'occ_1',
+      status: 'SUBMITTED',
+      businessDate: new Date(Date.UTC(2026, 10, 4)),
+      dueAt: new Date(),
+      windowEndsAt: new Date(Date.now() + 3_600_000),
+      startedAt: new Date('2026-11-04T08:10:00Z'),
+      claimedAt,
+      submittedAt: new Date('2026-11-04T08:30:00Z'),
+      resolvedAt: null,
+      assignedStaffProfileId: null,
+      claimedByStaffProfileId: ACTOR.staffProfileId,
+      poolJobRoleId: 'role_asst',
+      assignedStaff: null,
+      claimedBy: { displayName: 'Claire' },
+      assignment: {
+        graceMinutes: 0,
+        template: { id: 'tpl', name: opening.name, category: 'Opening' },
+      },
+      steps: [],
+      evidence: [],
+      verifications: [],
+    });
+    const result = await caller().occurrence(OCC_INPUT);
+    expect(result).toMatchObject({ claimedAt, ownerName: 'Claire', claimedByName: 'Claire' });
+    expect(db.restaurantSopOccurrence.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          claimedAt: true,
+          assignedStaff: { select: { displayName: true } },
+          claimedBy: { select: { displayName: true } },
+        }),
+      })
+    );
+  });
 });

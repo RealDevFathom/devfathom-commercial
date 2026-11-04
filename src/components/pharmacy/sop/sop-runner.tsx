@@ -15,6 +15,7 @@ import {
   EMPTY_DRAFT,
   errorCode,
   errorMessage,
+  evidencePurposeOf,
   formatWhen,
   isDenied,
   RECORD_LABEL,
@@ -77,7 +78,7 @@ export function SopRunner({
   onBack,
   onNotice,
 }: SopRunnerProps) {
-  const headingRef = useRef<HTMLHeadingElement>(null);
+  const headingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const utils = trpc.useUtils();
   const query = trpc.pharmacySop.occurrence.useQuery(
@@ -199,12 +200,21 @@ export function SopRunner({
       {header}
       <SectionCard className="min-w-0">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
+          {/* Focus lands on the whole title block (not the H2 alone), so the
+              programmatic focus ring frames eyebrow, title and due line
+              together instead of cutting across the eyebrow. It only shows
+              for keyboard focus (focus-visible). */}
+          <div
+            ref={headingRef}
+            tabIndex={-1}
+            aria-labelledby={`${occurrence.id}-title`}
+            role="group"
+            className="-m-2 min-w-0 rounded-sm p-2 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
             <p className="eyebrow">{occurrence.template.category ?? 'Procedure'}</p>
             <h2
-              ref={headingRef}
-              tabIndex={-1}
-              className="mt-1 font-display text-xl font-semibold tracking-tight break-words text-text-strong outline-none"
+              id={`${occurrence.id}-title`}
+              className="mt-1 font-display text-xl font-semibold tracking-tight break-words text-text-strong"
             >
               {occurrence.template.name}
             </h2>
@@ -423,7 +433,9 @@ function StepItem({
           {step.instructions}
         </p>
       ) : null}
-      {needs.length ? (
+      {/* While editing, each control and the "still needed" list say what the
+          step needs; the summary line would only repeat it. */}
+      {needs.length && !(editable && !step.completed) ? (
         <p className="mt-2 text-xs text-text-muted">Needs a {needs.join(', ')}</p>
       ) : null}
       {step.completed ? (
@@ -535,27 +547,121 @@ function StepItem({
   );
 }
 
-function History({ occurrence, timezone }: { occurrence: SopOccurrence; timezone: string | null }) {
-  // The engine trail already folds in verifications; fall back to the
-  // verification rows only when the trail is empty.
-  const trail = occurrence.auditTrail.length
-    ? occurrence.auditTrail.map((row) => ({
-        id: row.id,
-        action: row.action as string,
-        actor: row.actorName,
-        detail: row.detail,
-        at: row.at,
-      }))
+/** Same-origin file links only: a restaurant-attached ref is caller-supplied text. */
+const FILE_REF = /^\/api\/files\/[A-Za-z0-9._-]+$/;
+
+type HistoryEntry = {
+  id: string;
+  label: string;
+  actor: string | null;
+  detail: string | null;
+  at: Date | string;
+  proof: { href: string; image: boolean; alt: string } | null;
+};
+
+/**
+ * One readable history: the engine trail (steps, proof, reminders, review
+ * decisions), plus the claim, start and submit moments the trail does not
+ * carry, taken from the occurrence's own timestamps.
+ */
+export function historyEntries(occurrence: SopOccurrence): HistoryEntry[] {
+  const stepTitle = (stepId: string | null | undefined) => {
+    const step = occurrence.steps.find((candidate) => candidate.id === stepId);
+    return step ? `Step ${step.stepOrder} · ${step.title}` : null;
+  };
+  const decisions: Record<string, string> = HISTORY_LABEL;
+  const fromTrail: HistoryEntry[] = occurrence.auditTrail.length
+    ? occurrence.auditTrail.map((row) => {
+        if (row.action === 'EVIDENCE_CAPTURED') {
+          const evidenceId =
+            row.proofRef && row.proofRef.kind === 'EVIDENCE' ? row.proofRef.evidenceId : row.id;
+          const evidence = occurrence.evidence.find((candidate) => candidate.id === evidenceId);
+          const purpose = evidence ? evidencePurposeOf(evidence.mimeType) : 'photo';
+          const where = stepTitle(evidence?.occurrenceStepId);
+          const ref = evidence?.storageRef ?? null;
+          return {
+            id: row.id,
+            label: purpose === 'signature' ? 'Signature added' : 'Photo added',
+            actor: row.actorName,
+            detail: where,
+            at: row.at,
+            proof:
+              ref && FILE_REF.test(ref)
+                ? {
+                    href: ref,
+                    image: Boolean(
+                      evidence?.capturedInPharmacy && evidence.mimeType.startsWith('image/')
+                    ),
+                    alt: `${purpose === 'signature' ? 'Signature' : 'Photo'}${where ? ` for ${where}` : ''}`,
+                  }
+                : null,
+          };
+        }
+        if (row.action === 'STEP_COMPLETED') {
+          return {
+            id: row.id,
+            label: 'Step done',
+            actor: row.actorName,
+            detail: stepTitle(row.id),
+            at: row.at,
+            proof: null,
+          };
+        }
+        return {
+          id: row.id,
+          label: decisions[row.action] ?? 'Updated',
+          actor: row.actorName,
+          detail: row.detail,
+          at: row.at,
+          proof: null,
+        };
+      })
     : occurrence.verifications.map((row) => ({
         id: row.id,
-        action: row.action as string,
+        label: decisions[row.action] ?? 'Updated',
         actor: row.actorName,
         detail: row.reason,
         at: row.createdAt,
+        proof: null,
       }));
-  const entries = [...trail].sort(
+  const moments: HistoryEntry[] = [];
+  if (occurrence.claimedAt) {
+    moments.push({
+      id: `${occurrence.id}:claimed`,
+      label: 'Claimed from the role pool',
+      actor: occurrence.claimedByName,
+      detail: null,
+      at: occurrence.claimedAt,
+      proof: null,
+    });
+  }
+  if (occurrence.startedAt) {
+    moments.push({
+      id: `${occurrence.id}:started`,
+      label: 'Started',
+      actor: occurrence.ownerName,
+      detail: null,
+      at: occurrence.startedAt,
+      proof: null,
+    });
+  }
+  if (occurrence.submittedAt) {
+    moments.push({
+      id: `${occurrence.id}:submitted`,
+      label: 'Sent for review',
+      actor: occurrence.ownerName,
+      detail: null,
+      at: occurrence.submittedAt,
+      proof: null,
+    });
+  }
+  return [...fromTrail, ...moments].sort(
     (left, right) => new Date(right.at).getTime() - new Date(left.at).getTime()
   );
+}
+
+function History({ occurrence, timezone }: { occurrence: SopOccurrence; timezone: string | null }) {
+  const entries = historyEntries(occurrence);
 
   return (
     <section aria-label="History" className="mt-6 border-t border-border-subtle pt-5">
@@ -563,18 +669,47 @@ function History({ occurrence, timezone }: { occurrence: SopOccurrence; timezone
       {entries.length ? (
         <ul className="mt-3 divide-y divide-border-subtle">
           {entries.map((entry) => (
-            <li key={entry.id} className="py-3 first:pt-0 last:pb-0">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-sm font-medium text-text-strong">
-                  {HISTORY_LABEL[entry.action] ?? 'Updated'}
-                </span>
-                <time className="font-mono text-xs text-text-muted">
-                  {formatWhen(entry.at, timezone)}
-                </time>
+            <li
+              key={entry.id}
+              className="grid gap-3 py-3 first:pt-0 last:pb-0 sm:grid-cols-[minmax(0,1fr)_auto]"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-text-strong">{entry.label}</span>
+                  <time className="font-mono text-xs text-text-muted">
+                    {formatWhen(entry.at, timezone)}
+                  </time>
+                </div>
+                {entry.actor ? <p className="mt-1 text-xs text-text-muted">{entry.actor}</p> : null}
+                {entry.detail ? (
+                  <p className="mt-1 text-sm break-words whitespace-pre-wrap text-text-body">
+                    {entry.detail}
+                  </p>
+                ) : null}
               </div>
-              {entry.actor ? <p className="mt-1 text-xs text-text-muted">{entry.actor}</p> : null}
-              {entry.detail ? (
-                <p className="mt-1 text-sm whitespace-pre-wrap text-text-body">{entry.detail}</p>
+              {entry.proof ? (
+                <a
+                  href={entry.proof.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`View ${entry.proof.alt.charAt(0).toLowerCase()}${entry.proof.alt.slice(1)}`}
+                  className="inline-flex min-h-11 w-fit items-center justify-center rounded-xs border border-border-subtle bg-surface-raised text-sm font-medium text-text-strong hover:bg-surface-sunken focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  {entry.proof.image ? (
+                    // Proof is served by /api/files behind the pharmacy viewer check,
+                    // so next/image's optimiser (which fetches without the session)
+                    // cannot load it.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={entry.proof.href}
+                      alt={entry.proof.alt}
+                      loading="lazy"
+                      className="size-16 rounded-xs object-cover"
+                    />
+                  ) : (
+                    <span className="px-3">View</span>
+                  )}
+                </a>
               ) : null}
             </li>
           ))}

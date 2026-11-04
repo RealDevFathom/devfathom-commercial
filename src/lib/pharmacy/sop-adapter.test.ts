@@ -23,6 +23,7 @@ import {
   assertOccurrenceAtSite,
   enablePharmacySopSite,
   ensurePharmacySopJobRoles,
+  ensurePharmacySopStaffProfile,
   linkPharmacySopRecord,
   listPharmacySopBranches,
   pharmacySopRecordTimeBounds,
@@ -676,6 +677,98 @@ describe('resolvePharmacySopActor', () => {
     expect(
       await reason(resolvePharmacySopActor(db, { organizationId: ORG, userId: 'u_manager' }))
     ).toBe('AMBIGUOUS_STAFF_PROFILE');
+  });
+});
+
+describe('ensurePharmacySopStaffProfile', () => {
+  const scope = { organizationId: ORG, pharmacyBranchId: 'pb_main' };
+
+  it('creates and links the session user’s own profile once, through the serialized path', async () => {
+    const { db, tables, lockKeys } = fixture();
+    const first = await ensurePharmacySopStaffProfile(db, { ...scope, userId: 'u_new' });
+    const repeat = await ensurePharmacySopStaffProfile(db, { ...scope, userId: 'u_new' });
+    expect(first).toMatchObject({ userId: 'u_new', displayName: 'Nadia New', created: true });
+    expect(repeat).toEqual({ ...first, created: false });
+    expect(tables.profiles.filter((profile) => profile.userId === 'u_new')).toEqual([
+      expect.objectContaining({
+        id: first.staffProfileId,
+        primaryBranchId: 'rb_main',
+        status: 'ACTIVE',
+      }),
+    ]);
+    expect(lockKeys).toEqual([
+      `pharmacy-sop-staff:${ORG}:u_new`,
+      `pharmacy-sop-staff:${ORG}:u_new`,
+    ]);
+    // It writes no role holding.
+    expect(tables.holdings).toHaveLength(0);
+    // The actor resolver now finds exactly that profile.
+    await expect(
+      resolvePharmacySopActor(db, { organizationId: ORG, userId: 'u_new' })
+    ).resolves.toMatchObject({ staffProfileId: first.staffProfileId });
+  });
+
+  it('returns an existing ACTIVE profile unchanged', async () => {
+    const { db, tables } = fixture();
+    await expect(
+      ensurePharmacySopStaffProfile(db, { ...scope, userId: 'u_manager' })
+    ).resolves.toEqual({
+      staffProfileId: 'sp_manager',
+      displayName: 'Mona',
+      userId: 'u_manager',
+      created: false,
+    });
+    expect(tables.profiles).toHaveLength(2);
+  });
+
+  it.each(['SUSPENDED', 'ARCHIVED'])('never re-activates a %s profile', async (status) => {
+    const { db, tables } = fixture();
+    tables.profiles.push({
+      id: 'sp_old',
+      organizationId: ORG,
+      userId: 'u_new',
+      status,
+      displayName: 'Nadia',
+    });
+    expect(await reason(ensurePharmacySopStaffProfile(db, { ...scope, userId: 'u_new' }))).toBe(
+      'NO_STAFF_PROFILE'
+    );
+    expect(tables.profiles.filter((profile) => profile.userId === 'u_new')).toHaveLength(1);
+  });
+
+  it('fails closed on several active profiles, an unassigned user and a branch not enabled', async () => {
+    const { db, tables } = fixture();
+    tables.profiles.push({
+      id: 'sp_manager_2',
+      organizationId: ORG,
+      userId: 'u_manager',
+      status: 'ACTIVE',
+      displayName: 'Mona again',
+    });
+    expect(await reason(ensurePharmacySopStaffProfile(db, { ...scope, userId: 'u_manager' }))).toBe(
+      'AMBIGUOUS_STAFF_PROFILE'
+    );
+    expect(
+      await reason(ensurePharmacySopStaffProfile(db, { ...scope, userId: 'u_unassigned' }))
+    ).toBe('BRANCH_OUT_OF_SCOPE');
+    expect(
+      await reason(
+        ensurePharmacySopStaffProfile(db, {
+          ...scope,
+          pharmacyBranchId: 'pb_plain',
+          userId: 'u_manager',
+        })
+      )
+    ).toBe('SITE_NOT_ENABLED');
+    expect(
+      await reason(
+        ensurePharmacySopStaffProfile(db, {
+          organizationId: ORG,
+          pharmacyBranchId: 'pb_other',
+          userId: 'u_other',
+        })
+      )
+    ).toBe('BRANCH_OUT_OF_SCOPE');
   });
 });
 

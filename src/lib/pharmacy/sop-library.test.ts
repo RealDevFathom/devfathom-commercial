@@ -13,6 +13,7 @@ import {
   pharmacySopPackForTemplateName,
   temperatureLogRecurrence,
 } from './sop-library';
+import { PHARMACY_SOP_SCHEDULE_LIMITS } from './sop-shared';
 
 const meta = (key: string) => findPharmacySopPack(key)!.pharmacy;
 
@@ -102,6 +103,26 @@ describe('DEV-751 pharmacy SOP pack metadata', () => {
     }
   });
 
+  it('suggests only schedules the router accepts for every pack a manager schedules', () => {
+    for (const pack of PHARMACY_SOP_PACKS) {
+      // Event packs are started on demand and never go through the schedule form.
+      if (pack.pharmacy.trigger === 'EVENT') continue;
+      const rule = pack.pharmacy.suggestedRecurrence;
+      expect(rule.windowMinutes, pack.key).toBeLessThanOrEqual(
+        PHARMACY_SOP_SCHEDULE_LIMITS.windowMinutes
+      );
+      expect(rule.graceMinutes, pack.key).toBeLessThanOrEqual(
+        PHARMACY_SOP_SCHEDULE_LIMITS.graceMinutes
+      );
+    }
+    expect(meta('training-attestation').suggestedRecurrence).toMatchObject({
+      frequency: 'ONCE',
+      dueTimeMinutes: 15 * 60,
+      windowMinutes: 1440,
+      graceMinutes: 1440,
+    });
+  });
+
   it('marks steps that must link an existing pharmacy record', () => {
     const recordTypes = (key: string) =>
       findPharmacySopPack(key)!
@@ -117,6 +138,38 @@ describe('DEV-751 pharmacy SOP pack metadata', () => {
     expect(findPharmacySopPack('training-attestation')!.steps.at(-1)).toMatchObject({
       requiresSignature: true,
     });
+  });
+
+  it('words every pack as instruction and proof, never as a gate on pharmacy work', () => {
+    const text = JSON.stringify(PHARMACY_SOP_PACKS).toLowerCase();
+    for (const banned of [
+      'before you can',
+      'must be completed before',
+      'must be done before',
+      'blocks',
+      'block ',
+      'required to close',
+      'required to open',
+      'required before',
+      'before opening',
+      'before closing',
+      'before selling',
+      'before dispensing',
+      'before receiving',
+      'cannot open',
+      'cannot close',
+    ]) {
+      expect(text, banned).not.toContain(banned);
+    }
+    // Opening and closing read as follow-up, not as the operation itself.
+    const titles = (key: string) => findPharmacySopPack(key)!.steps.map((step) => step.title);
+    for (const title of [...titles('opening'), ...titles('closing')]) {
+      expect(title, title).not.toMatch(/^(open|close|lock|reconcile|secure)\b/i);
+    }
+    expect(titles('closing')).toContain('Once closed, send a photo of the locked premises');
+    // Names stay the install identity.
+    expect(findPharmacySopPack('opening')!.name).toBe('Pharmacy — opening');
+    expect(findPharmacySopPack('closing')!.name).toBe('Pharmacy — closing');
   });
 
   it('gives no dosing advice and claims no regulatory compliance', () => {

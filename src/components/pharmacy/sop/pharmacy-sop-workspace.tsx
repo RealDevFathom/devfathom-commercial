@@ -12,11 +12,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { trpc } from '@/lib/trpc';
 
-import { SopBoardView } from './sop-board';
+import { JoinSitePrompt, SopBoardView } from './sop-board';
 import {
   EMPTY_DRAFT,
   errorMessage,
   isDenied,
+  isNoStaffProfile,
   type SopAccess,
   type SopBranch,
   type StepDraft,
@@ -31,6 +32,14 @@ type View = 'board' | 'review' | 'setup' | 'reports';
 const VIEWS: readonly View[] = ['board', 'review', 'setup', 'reports'];
 type Place = { branch: string | null; view: View | null; occurrence: string | null };
 type Notice = { tone: 'success' | 'danger'; text: string };
+
+/**
+ * Tab triggers meet the 44px touch-target rule. The shared trigger fills its
+ * list minus padding (37px in an h-11 list), so the list sizes to its
+ * triggers here instead of the shared component changing.
+ */
+const TAB_LIST = 'h-auto group-data-horizontal/tabs:h-auto';
+const TAB_TRIGGER = 'h-11 min-h-11 px-3';
 
 function readPlace(params: URLSearchParams): Place {
   const view = params.get('view');
@@ -189,8 +198,12 @@ function Workspace({ access, branches }: { access: SopAccess; branches: SopBranc
   // its own, they must also hold a reviewer role at this branch.
   const board = trpc.pharmacySop.board.useQuery(
     { pharmacyBranchId: branch.pharmacyBranchId },
-    { enabled: enabled && access.canComplete, retry: false }
+    // A reviewer who only verifies still needs it: it carries their queue.
+    { enabled: enabled && (access.canComplete || access.canVerify), retry: false }
   );
+  // No procedures profile yet: offer to set one up wherever the person is,
+  // except on the board, which shows the same prompt in place of its lists.
+  const needsProfile = isNoStaffProfile(board.error);
   const reviewer = access.canVerify && Boolean(board.data?.canReview);
   const views: View[] = [
     ...(access.canComplete ? (['board'] as const) : []),
@@ -326,6 +339,10 @@ function Workspace({ access, branches }: { access: SopAccess; branches: SopBranc
         </div>
       ) : null}
 
+      {needsProfile && view !== 'board' ? (
+        <JoinSitePrompt pharmacyBranchId={branch.pharmacyBranchId} />
+      ) : null}
+
       <Tabs
         value={view}
         onValueChange={(value) => {
@@ -334,24 +351,24 @@ function Workspace({ access, branches }: { access: SopAccess; branches: SopBranc
         }}
       >
         <div className="max-w-full overflow-x-auto">
-          <TabsList aria-label="Procedure views" className="h-11 group-data-horizontal/tabs:h-11">
+          <TabsList aria-label="Procedure views" className={TAB_LIST}>
             {views.includes('board') ? (
-              <TabsTrigger value="board" className="px-3">
+              <TabsTrigger value="board" className={TAB_TRIGGER}>
                 Today&apos;s work
               </TabsTrigger>
             ) : null}
             {views.includes('review') ? (
-              <TabsTrigger value="review" className="px-3">
+              <TabsTrigger value="review" className={TAB_TRIGGER}>
                 Review
               </TabsTrigger>
             ) : null}
             {views.includes('setup') ? (
-              <TabsTrigger value="setup" className="px-3">
+              <TabsTrigger value="setup" className={TAB_TRIGGER}>
                 Setup
               </TabsTrigger>
             ) : null}
             {views.includes('reports') ? (
-              <TabsTrigger value="reports" className="px-3">
+              <TabsTrigger value="reports" className={TAB_TRIGGER}>
                 Reports
               </TabsTrigger>
             ) : null}
@@ -389,6 +406,7 @@ function Workspace({ access, branches }: { access: SopAccess; branches: SopBranc
           <TabsContent value="setup" className="mt-4">
             <SopSetupView
               branch={branch}
+              defaultTimezone={access.organizationTimezone}
               onChanged={() => void utils.pharmacySop.branches.invalidate()}
               onNotice={setNotice}
             />

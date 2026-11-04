@@ -7,12 +7,14 @@ import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Switch } from '@/components/ui/switch';
+import { PHARMACY_SOP_SCHEDULE_LIMITS } from '@/lib/pharmacy/sop-shared';
 import { ianaTimezoneOptions } from '@/lib/platform/timezones';
-import { workspaceToday } from '@/lib/timezone';
+import { isIanaTimezone, workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
 
 import {
   errorMessage,
+  isValidationError,
   minutesToTime,
   RECORD_LABEL,
   recurrenceLabel,
@@ -26,12 +28,15 @@ import {
   type SopRoleHolder,
   type SopRoleKey,
   type SopTemplate,
+  validationFields,
 } from './sop-model';
 
 type Notify = (notice: { tone: 'success' | 'danger'; text: string }) => void;
 
 export type SopSetupViewProps = {
   branch: SopBranch;
+  /** The organization's own timezone, when it has chosen one; prefills Turn on. */
+  defaultTimezone?: string | null;
   onChanged: () => void;
   onNotice: Notify;
 };
@@ -41,12 +46,23 @@ export type SopSetupViewProps = {
  * procedures creates no schedules, adding the library creates no schedules,
  * and a schedule exists only after a manager confirms it below.
  */
-export function SopSetupView({ branch, onChanged, onNotice }: SopSetupViewProps) {
+export function SopSetupView({ branch, defaultTimezone, onChanged, onNotice }: SopSetupViewProps) {
   if (!branch.sopBranchId) {
-    return <EnableSite branch={branch} onChanged={onChanged} onNotice={onNotice} />;
+    return (
+      <div className="grid min-w-0 gap-6">
+        <SetupIntro />
+        <EnableSite
+          branch={branch}
+          defaultTimezone={defaultTimezone}
+          onChanged={onChanged}
+          onNotice={onNotice}
+        />
+      </div>
+    );
   }
   return (
     <div className="grid min-w-0 gap-6">
+      <SetupIntro />
       <SectionCard title="Branch">
         <div className="flex flex-wrap items-center gap-3">
           <StatusPill status="active" tone="success" label="Procedures on" />
@@ -62,6 +78,14 @@ export function SopSetupView({ branch, onChanged, onNotice }: SopSetupViewProps)
   );
 }
 
+/** What procedures are, said once at the top of Setup. */
+export const SETUP_INTRO =
+  "Procedures are instructions and proof for the people they're assigned to. They never block opening, closing or any other pharmacy work.";
+
+function SetupIntro() {
+  return <p className="max-w-2xl text-sm text-text-body">{SETUP_INTRO}</p>;
+}
+
 function browserZone() {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -70,7 +94,18 @@ function browserZone() {
   }
 }
 
-function EnableSite({ branch, onChanged, onNotice }: SopSetupViewProps) {
+/**
+ * The zone "Turn on" starts from: the branch's own, else the organization's,
+ * else this browser's. Never a guessed fixed zone.
+ */
+export function initialSiteTimezone(branchZone: string | null, organizationZone?: string | null) {
+  if (branchZone) return branchZone;
+  if (organizationZone && isIanaTimezone(organizationZone)) return organizationZone;
+  return browserZone();
+}
+
+function EnableSite({ branch, defaultTimezone, onChanged, onNotice }: SopSetupViewProps) {
+  const utils = trpc.useUtils();
   const zones = useMemo(() => {
     try {
       return ianaTimezoneOptions().map((option) => option.value);
@@ -78,13 +113,17 @@ function EnableSite({ branch, onChanged, onNotice }: SopSetupViewProps) {
       return ['UTC'];
     }
   }, []);
-  const [timezone, setTimezone] = useState(branch.timezone ?? browserZone());
+  const [timezone, setTimezone] = useState(() =>
+    initialSiteTimezone(branch.timezone, defaultTimezone)
+  );
   const [cutoff, setCutoff] = useState('');
   const [error, setError] = useState<string | null>(null);
   const enable = trpc.pharmacySop.enableSite.useMutation({
     onSuccess: () => {
       setError(null);
       onNotice({ tone: 'success', text: `Procedures are now on at ${branch.name}.` });
+      // Turning on also set up this manager's own procedures profile.
+      void utils.pharmacySop.board.invalidate({ pharmacyBranchId: branch.pharmacyBranchId });
       onChanged();
     },
     onError: (cause) => setError(errorMessage(cause, 'Procedures could not be turned on. Retry.')),
@@ -97,7 +136,7 @@ function EnableSite({ branch, onChanged, onNotice }: SopSetupViewProps) {
         runs and when in the next steps.
       </p>
       <form
-        className="grid max-w-2xl gap-4 sm:grid-cols-2"
+        className="grid max-w-2xl items-start gap-4 sm:grid-cols-2"
         onSubmit={(event) => {
           event.preventDefault();
           if (cutoff && timeToMinutes(cutoff) === null) {
@@ -150,14 +189,23 @@ function EnableSite({ branch, onChanged, onNotice }: SopSetupViewProps) {
   );
 }
 
+/** Reviewing roles nobody may grant themselves (the adapter refuses it). */
+const SELF_GRANT_BLOCKED = new Set<SopRoleKey>(['pharmacy-manager', 'pharmacy-qualified-person']);
+
 function RoleHoldings({ pharmacyBranchId }: { pharmacyBranchId: string }) {
+  const hintId = useId();
   const utils = trpc.useUtils();
   const holdings = trpc.pharmacySop.roleHoldings.useQuery({ pharmacyBranchId }, { retry: false });
   const [error, setError] = useState<string | null>(null);
   const setHolding = trpc.pharmacySop.setRoleHolding.useMutation({
     onSuccess: async () => {
       setError(null);
-      await utils.pharmacySop.roleHoldings.invalidate({ pharmacyBranchId });
+      // A first grant may also have set up the manager's own profile, and
+      // roles decide the pool and the review queue.
+      await Promise.all([
+        utils.pharmacySop.roleHoldings.invalidate({ pharmacyBranchId }),
+        utils.pharmacySop.board.invalidate({ pharmacyBranchId }),
+      ]);
     },
     onError: (cause) => setError(errorMessage(cause, 'That role could not be changed. Retry.')),
   });
@@ -194,6 +242,7 @@ function RoleHoldings({ pharmacyBranchId }: { pharmacyBranchId: string }) {
         <ul className="divide-y divide-border-subtle">
           {holdings.data.map((person: SopRoleHolder) => {
             const ambiguous = person.staffProfile === 'AMBIGUOUS';
+            const selfHintId = `${hintId}-${person.userId}`;
             return (
               <li key={person.userId} className="py-3 first:pt-0 last:pb-0">
                 <fieldset
@@ -204,7 +253,16 @@ function RoleHoldings({ pharmacyBranchId }: { pharmacyBranchId: string }) {
                   <span aria-hidden className="min-w-0">
                     <span className="block font-medium break-words text-text-strong">
                       {person.displayName}
+                      {person.isViewer ? (
+                        <span className="font-normal text-text-muted"> (you)</span>
+                      ) : null}
                     </span>
+                    {person.isViewer && !ambiguous ? (
+                      <span id={selfHintId} className="mt-1 block text-xs text-text-muted">
+                        You cannot give yourself the manager or qualified-person role, because those
+                        roles review work. Ask another manager.
+                      </span>
+                    ) : null}
                     {ambiguous ? (
                       <span className="mt-1 block text-xs text-warning">
                         This account is linked to more than one staff profile. Ask an administrator
@@ -215,6 +273,10 @@ function RoleHoldings({ pharmacyBranchId }: { pharmacyBranchId: string }) {
                   <div className="flex flex-wrap gap-x-5 gap-y-2">
                     {ROLE_KEYS.map((roleKey) => {
                       const held = person.roleKeys.includes(roleKey);
+                      // The server refuses a self-grant of a reviewing role;
+                      // removing one you hold stays allowed.
+                      const selfGrantBlocked =
+                        person.isViewer && !held && SELF_GRANT_BLOCKED.has(roleKey);
                       return (
                         <label
                           key={roleKey}
@@ -224,7 +286,8 @@ function RoleHoldings({ pharmacyBranchId }: { pharmacyBranchId: string }) {
                             type="checkbox"
                             className="size-4 accent-primary"
                             checked={held}
-                            disabled={setHolding.isPending}
+                            disabled={setHolding.isPending || selfGrantBlocked}
+                            aria-describedby={selfGrantBlocked ? selfHintId : undefined}
                             aria-label={`${ROLE_LABEL[roleKey]} for ${person.displayName}`}
                             onChange={(event) =>
                               setHolding.mutate({
@@ -410,6 +473,134 @@ const FREQUENCIES: { value: SopFrequency; label: string }[] = [
 ];
 const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+/** One input class for every schedule field, so time, date and text inputs share a height. */
+const INPUT = `${fieldClass} h-11 aria-invalid:border-destructive`;
+
+type ScheduleFieldKey =
+  | 'userId'
+  | 'interval'
+  | 'daysOfWeek'
+  | 'monthDay'
+  | 'dueTime'
+  | 'endTime'
+  | 'windowMinutes'
+  | 'graceMinutes'
+  | 'startDate'
+  | 'endDate';
+type ScheduleErrors = Partial<Record<ScheduleFieldKey, string>>;
+
+const FIELD_ORDER: ScheduleFieldKey[] = [
+  'userId',
+  'interval',
+  'daysOfWeek',
+  'monthDay',
+  'dueTime',
+  'endTime',
+  'windowMinutes',
+  'graceMinutes',
+  'startDate',
+  'endDate',
+];
+
+const MAX_WINDOW = PHARMACY_SOP_SCHEDULE_LIMITS.windowMinutes;
+const MAX_GRACE = PHARMACY_SOP_SCHEDULE_LIMITS.graceMinutes;
+
+/**
+ * Plain wording per field for a refusal the server reports as an input
+ * validation error. The server's own validation text is never shown.
+ */
+const PLAIN_FIELD_ERROR: Record<ScheduleFieldKey, string> = {
+  userId: 'Choose someone assigned to this branch.',
+  interval: 'Enter how often it repeats as a whole number.',
+  daysOfWeek: 'Choose at least one day of the week.',
+  monthDay: 'Choose a day of the month from 1 to 31.',
+  dueTime: 'Enter a time, for example 08:30.',
+  endTime: 'Enter an end time later than the first one.',
+  windowMinutes: `Enter whole minutes from 0 to ${MAX_WINDOW} (one day).`,
+  graceMinutes: `Enter whole minutes from 0 to ${MAX_GRACE} (one day).`,
+  startDate: 'Choose a start date.',
+  endDate: 'The end date must be on or after the start date.',
+};
+
+/** Server input paths → the form field that owns them. */
+const SERVER_FIELD: Record<string, ScheduleFieldKey> = {
+  target: 'userId',
+  interval: 'interval',
+  daysOfWeek: 'daysOfWeek',
+  monthDay: 'monthDay',
+  dueTimeMinutes: 'dueTime',
+  intervalEndTimeMinutes: 'endTime',
+  windowMinutes: 'windowMinutes',
+  graceMinutes: 'graceMinutes',
+  startDate: 'startDate',
+  endDate: 'endDate',
+};
+
+/** Field errors for a refused createAssignment, or null when it was not a validation refusal. */
+export function scheduleErrorsFromServer(error: unknown): ScheduleErrors | null {
+  if (!isValidationError(error)) return null;
+  const errors: ScheduleErrors = {};
+  for (const [path, messages] of Object.entries(validationFields(error))) {
+    const key = SERVER_FIELD[path];
+    if (key && messages?.length) errors[key] = PLAIN_FIELD_ERROR[key];
+  }
+  return errors;
+}
+
+/** A whole number of minutes in [0, max], or null. */
+function wholeMinutes(value: string, max: number): number | null {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const minutes = Number(trimmed);
+  return minutes <= max ? minutes : null;
+}
+
+function ScheduleField({
+  id,
+  label,
+  hint,
+  error,
+  children,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  error?: string;
+  children: (control: {
+    id: string;
+    'aria-invalid'?: true;
+    'aria-describedby'?: string;
+  }) => React.ReactNode;
+}) {
+  const hintId = hint ? `${id}-hint` : undefined;
+  const errorId = error ? `${id}-error` : undefined;
+  const describedBy = [errorId, hintId].filter(Boolean).join(' ') || undefined;
+  return (
+    // content-start keeps label, control and hint packed at the top of the
+    // grid cell, so a hint on one field never pushes its neighbour's control.
+    <div className="grid min-w-0 content-start gap-1.5">
+      <label htmlFor={id} className="text-sm font-medium text-text-strong">
+        {label}
+      </label>
+      {children({
+        id,
+        ...(error ? { 'aria-invalid': true as const } : {}),
+        ...(describedBy ? { 'aria-describedby': describedBy } : {}),
+      })}
+      {error ? (
+        <p id={errorId} className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
+      {hint ? (
+        <p id={hintId} className="text-xs text-text-muted">
+          {hint}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function ScheduleForm({
   template,
   branch,
@@ -420,6 +611,7 @@ function ScheduleForm({
   onDone: () => void;
 }) {
   const id = useId();
+  const fieldId = (key: ScheduleFieldKey) => `${id}-${key}`;
   const utils = trpc.useUtils();
   const suggestion = template.pack.suggestedRecurrence;
   const people = trpc.pharmacySop.roleHoldings.useQuery(
@@ -439,67 +631,120 @@ function ScheduleForm({
       ? minutesToTime(suggestion.intervalEndTimeMinutes)
       : ''
   );
-  const [windowMinutes, setWindowMinutes] = useState(String(suggestion.windowMinutes));
-  const [graceMinutes, setGraceMinutes] = useState(String(suggestion.graceMinutes));
+  // A suggestion is clamped into the bounds the server accepts, so the
+  // prefilled form always saves as offered.
+  const [windowMinutes, setWindowMinutes] = useState(
+    String(Math.min(suggestion.windowMinutes, MAX_WINDOW))
+  );
+  const [graceMinutes, setGraceMinutes] = useState(
+    String(Math.min(suggestion.graceMinutes, MAX_GRACE))
+  );
   const [startDate, setStartDate] = useState(workspaceToday(branch.timezone));
   const [endDate, setEndDate] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<ScheduleErrors>({});
   const [error, setError] = useState<string | null>(null);
+
+  function showErrors(errors: ScheduleErrors, summary: string) {
+    setFieldErrors(errors);
+    setError(summary);
+    const first = FIELD_ORDER.find((key) => errors[key]);
+    if (first) {
+      // Days are a group of checkboxes; focus the first one.
+      const element = document.getElementById(fieldId(first));
+      const target = first === 'daysOfWeek' ? element?.querySelector('input') : element;
+      target?.focus();
+    }
+  }
+
   const create = trpc.pharmacySop.createAssignment.useMutation({
     onSuccess: async () => {
       setError(null);
+      setFieldErrors({});
       await utils.pharmacySop.assignments.invalidate({ pharmacyBranchId: branch.pharmacyBranchId });
       onDone();
     },
-    onError: (cause) => setError(errorMessage(cause, 'The schedule could not be created. Retry.')),
+    onError: (cause) => {
+      const errors = scheduleErrorsFromServer(cause);
+      if (errors) {
+        showErrors(
+          errors,
+          Object.keys(errors).length
+            ? 'Some values were not accepted. Check the highlighted fields.'
+            : 'The schedule could not be created. Check the values and retry.'
+        );
+        return;
+      }
+      setFieldErrors({});
+      setError(errorMessage(cause, 'The schedule could not be created. Retry.'));
+    },
   });
 
-  function validate(): string | null {
+  function validate(): ScheduleErrors {
+    const errors: ScheduleErrors = {};
     const due = timeToMinutes(dueTime);
-    if (due === null) return 'Enter a valid due time.';
-    if (targetType === 'PERSON' && !userId) return 'Choose the person who will do it.';
-    const every = Number(interval);
-    if (!Number.isInteger(every) || every < 1)
-      return 'Enter how often it repeats as a whole number.';
-    if (frequency === 'INTERVAL') {
-      if (every < 15) return 'Repeat at least 15 minutes apart.';
-      if (days.length === 0) return 'Choose at least one day of the week.';
-      const end = timeToMinutes(endTime);
-      if (end === null || end <= due) return 'Enter an end time later than the start time.';
+    if (due === null) errors.dueTime = PLAIN_FIELD_ERROR.dueTime;
+    if (targetType === 'PERSON' && !userId) errors.userId = 'Choose the person who will do it.';
+    if (frequency !== 'ONCE') {
+      const every = /^\d+$/.test(interval.trim()) ? Number(interval.trim()) : NaN;
+      if (!Number.isInteger(every) || every < 1 || every > 1440) {
+        errors.interval =
+          frequency === 'INTERVAL'
+            ? 'Enter the minutes between each, from 15 to 1440.'
+            : 'Enter how often it repeats as a whole number from 1.';
+      } else if (frequency === 'INTERVAL' && every < 15) {
+        errors.interval = 'Repeat at least 15 minutes apart.';
+      }
     }
-    if (frequency === 'WEEKLY' && days.length === 0) return 'Choose at least one day of the week.';
+    if ((frequency === 'WEEKLY' || frequency === 'INTERVAL') && days.length === 0) {
+      errors.daysOfWeek = PLAIN_FIELD_ERROR.daysOfWeek;
+    }
+    if (frequency === 'INTERVAL') {
+      const end = timeToMinutes(endTime);
+      if (end === null || (due !== null && end <= due)) errors.endTime = PLAIN_FIELD_ERROR.endTime;
+    }
     if (frequency === 'MONTHLY') {
       const day = Number(monthDay);
-      if (!Number.isInteger(day) || day < 1 || day > 31)
-        return 'Choose a day of the month from 1 to 31.';
+      if (!Number.isInteger(day) || day < 1 || day > 31) {
+        errors.monthDay = PLAIN_FIELD_ERROR.monthDay;
+      }
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return 'Choose a start date.';
-    if (endDate && endDate < startDate) return 'The end date must be on or after the start date.';
-    return null;
+    if (wholeMinutes(windowMinutes, MAX_WINDOW) === null) {
+      errors.windowMinutes = PLAIN_FIELD_ERROR.windowMinutes;
+    }
+    if (wholeMinutes(graceMinutes, MAX_GRACE) === null) {
+      errors.graceMinutes = PLAIN_FIELD_ERROR.graceMinutes;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) errors.startDate = PLAIN_FIELD_ERROR.startDate;
+    if (endDate && endDate < startDate) errors.endDate = PLAIN_FIELD_ERROR.endDate;
+    return errors;
   }
 
   return (
     <form
       aria-label={`Schedule for ${template.name}`}
-      className="mt-4 grid gap-4 rounded-md border border-border-subtle bg-surface-sunken p-4 md:grid-cols-2"
+      noValidate
+      className="mt-4 grid items-start gap-4 rounded-md border border-border-subtle bg-surface-sunken p-4 md:grid-cols-2"
       onSubmit={(event) => {
         event.preventDefault();
-        const problem = validate();
-        if (problem) {
-          setError(problem);
+        const errors = validate();
+        if (Object.keys(errors).length) {
+          showErrors(errors, 'Check the highlighted fields.');
           return;
         }
+        setFieldErrors({});
+        setError(null);
         create.mutate({
           pharmacyBranchId: branch.pharmacyBranchId,
           templateId: template.id,
           target: targetType === 'ROLE' ? { type: 'ROLE', roleKey } : { type: 'PERSON', userId },
           frequency,
-          interval: Number(interval),
+          interval: frequency === 'ONCE' ? 1 : Number(interval),
           daysOfWeek: frequency === 'WEEKLY' || frequency === 'INTERVAL' ? days : [],
           monthDay: frequency === 'MONTHLY' ? Number(monthDay) : null,
           dueTimeMinutes: timeToMinutes(dueTime) ?? 0,
           intervalEndTimeMinutes: frequency === 'INTERVAL' ? timeToMinutes(endTime) : null,
-          windowMinutes: Number(windowMinutes) || 0,
-          graceMinutes: Number(graceMinutes) || 0,
+          windowMinutes: wholeMinutes(windowMinutes, MAX_WINDOW) ?? 0,
+          graceMinutes: wholeMinutes(graceMinutes, MAX_GRACE) ?? 0,
           startDate,
           endDate: endDate || null,
         });
@@ -526,52 +771,67 @@ function ScheduleForm({
         </div>
       </fieldset>
       {targetType === 'ROLE' ? (
-        <Field label="Role">
+        <ScheduleField id={`${id}-role`} label="Role">
+          {(control) => (
+            <select
+              {...control}
+              className={INPUT}
+              value={roleKey}
+              onChange={(event) => setRoleKey(event.target.value as SopRoleKey)}
+            >
+              {ROLE_KEYS.map((key) => (
+                <option key={key} value={key}>
+                  {ROLE_LABEL[key]}
+                </option>
+              ))}
+            </select>
+          )}
+        </ScheduleField>
+      ) : (
+        <ScheduleField
+          id={fieldId('userId')}
+          label="Person"
+          hint="Only people assigned to this branch are listed."
+          error={fieldErrors.userId}
+        >
+          {(control) => (
+            <select
+              {...control}
+              className={INPUT}
+              value={userId}
+              onChange={(event) => setUserId(event.target.value)}
+            >
+              <option value="">Select…</option>
+              {(people.data ?? [])
+                .filter((person: SopRoleHolder) => person.staffProfile !== 'AMBIGUOUS')
+                .map((person: SopRoleHolder) => (
+                  <option key={person.userId} value={person.userId}>
+                    {person.displayName}
+                  </option>
+                ))}
+            </select>
+          )}
+        </ScheduleField>
+      )}
+      <ScheduleField id={`${id}-frequency`} label="How often">
+        {(control) => (
           <select
-            className={fieldClass}
-            value={roleKey}
-            onChange={(event) => setRoleKey(event.target.value as SopRoleKey)}
+            {...control}
+            className={INPUT}
+            value={frequency}
+            onChange={(event) => setFrequency(event.target.value as SopFrequency)}
           >
-            {ROLE_KEYS.map((key) => (
-              <option key={key} value={key}>
-                {ROLE_LABEL[key]}
+            {FREQUENCIES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </select>
-        </Field>
-      ) : (
-        <Field label="Person" hint="Only people assigned to this branch are listed.">
-          <select
-            className={fieldClass}
-            value={userId}
-            onChange={(event) => setUserId(event.target.value)}
-          >
-            <option value="">Select…</option>
-            {(people.data ?? [])
-              .filter((person: SopRoleHolder) => person.staffProfile !== 'AMBIGUOUS')
-              .map((person: SopRoleHolder) => (
-                <option key={person.userId} value={person.userId}>
-                  {person.displayName}
-                </option>
-              ))}
-          </select>
-        </Field>
-      )}
-      <Field label="How often">
-        <select
-          className={fieldClass}
-          value={frequency}
-          onChange={(event) => setFrequency(event.target.value as SopFrequency)}
-        >
-          {FREQUENCIES.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </Field>
+        )}
+      </ScheduleField>
       {frequency !== 'ONCE' ? (
-        <Field
+        <ScheduleField
+          id={fieldId('interval')}
           label={frequency === 'INTERVAL' ? 'Minutes between each' : 'Repeat every'}
           hint={
             frequency === 'INTERVAL'
@@ -582,17 +842,25 @@ function ScheduleForm({
                   ? 'Weeks. 1 means every week.'
                   : 'Months. 1 means every month.'
           }
+          error={fieldErrors.interval}
         >
-          <input
-            className={fieldClass}
-            inputMode="numeric"
-            value={interval}
-            onChange={(event) => setRepeat(event.target.value)}
-          />
-        </Field>
+          {(control) => (
+            <input
+              {...control}
+              className={INPUT}
+              inputMode="numeric"
+              value={interval}
+              onChange={(event) => setRepeat(event.target.value)}
+            />
+          )}
+        </ScheduleField>
       ) : null}
       {frequency === 'WEEKLY' || frequency === 'INTERVAL' ? (
-        <fieldset className="grid gap-2 md:col-span-2">
+        <fieldset
+          id={fieldId('daysOfWeek')}
+          className="grid gap-2 md:col-span-2"
+          aria-describedby={fieldErrors.daysOfWeek ? `${fieldId('daysOfWeek')}-error` : undefined}
+        >
           <legend className="text-sm font-medium text-text-strong">Days of the week</legend>
           <div className="flex flex-wrap gap-x-4 gap-y-1">
             {WEEKDAY_NAMES.map((name, day) => (
@@ -604,6 +872,7 @@ function ScheduleForm({
                   type="checkbox"
                   className="size-4 accent-primary"
                   checked={days.includes(day)}
+                  aria-invalid={fieldErrors.daysOfWeek ? true : undefined}
                   onChange={(event) =>
                     setDays((current) =>
                       event.target.checked
@@ -616,71 +885,112 @@ function ScheduleForm({
               </label>
             ))}
           </div>
+          {fieldErrors.daysOfWeek ? (
+            <p id={`${fieldId('daysOfWeek')}-error`} className="text-xs text-destructive">
+              {fieldErrors.daysOfWeek}
+            </p>
+          ) : null}
         </fieldset>
       ) : null}
       {frequency === 'MONTHLY' ? (
-        <Field label="Day of the month">
-          <input
-            className={fieldClass}
-            inputMode="numeric"
-            value={monthDay}
-            onChange={(event) => setMonthDay(event.target.value)}
-          />
-        </Field>
+        <ScheduleField
+          id={fieldId('monthDay')}
+          label="Day of the month"
+          error={fieldErrors.monthDay}
+        >
+          {(control) => (
+            <input
+              {...control}
+              className={INPUT}
+              inputMode="numeric"
+              value={monthDay}
+              onChange={(event) => setMonthDay(event.target.value)}
+            />
+          )}
+        </ScheduleField>
       ) : null}
-      <Field label={frequency === 'INTERVAL' ? 'First one at' : 'Due at'}>
-        <input
-          type="time"
-          className={fieldClass}
-          value={dueTime}
-          onChange={(event) => setDueTime(event.target.value)}
-        />
-      </Field>
-      {frequency === 'INTERVAL' ? (
-        <Field label="Last one by">
-          <input
-            type="time"
-            className={fieldClass}
-            value={endTime}
-            onChange={(event) => setEndTime(event.target.value)}
-          />
-        </Field>
-      ) : null}
-      <Field
-        label="Time allowed (minutes)"
-        hint="How long after the due time it can still be done."
+      <ScheduleField
+        id={fieldId('dueTime')}
+        label={frequency === 'INTERVAL' ? 'First one at' : 'Due at'}
+        error={fieldErrors.dueTime}
       >
-        <input
-          className={fieldClass}
-          inputMode="numeric"
-          value={windowMinutes}
-          onChange={(event) => setWindowMinutes(event.target.value)}
-        />
-      </Field>
-      <Field label="Grace before it counts as late (minutes)">
-        <input
-          className={fieldClass}
-          inputMode="numeric"
-          value={graceMinutes}
-          onChange={(event) => setGraceMinutes(event.target.value)}
-        />
-      </Field>
-      <Field label="Starts on">
-        <input
-          type="date"
-          className={fieldClass}
-          value={startDate}
-          onChange={(event) => setStartDate(event.target.value)}
-        />
-      </Field>
-      <Field label="Ends on · optional">
-        <input
-          type="date"
-          className={fieldClass}
-          value={endDate}
-          onChange={(event) => setEndDate(event.target.value)}
-        />
-      </Field>
+        {(control) => (
+          <input
+            {...control}
+            type="time"
+            className={INPUT}
+            value={dueTime}
+            onChange={(event) => setDueTime(event.target.value)}
+          />
+        )}
+      </ScheduleField>
+      {frequency === 'INTERVAL' ? (
+        <ScheduleField id={fieldId('endTime')} label="Last one by" error={fieldErrors.endTime}>
+          {(control) => (
+            <input
+              {...control}
+              type="time"
+              className={INPUT}
+              value={endTime}
+              onChange={(event) => setEndTime(event.target.value)}
+            />
+          )}
+        </ScheduleField>
+      ) : null}
+      <ScheduleField
+        id={fieldId('windowMinutes')}
+        label="Time allowed (minutes)"
+        hint={`How long after the due time it counts as on time. Up to ${MAX_WINDOW} (one day).`}
+        error={fieldErrors.windowMinutes}
+      >
+        {(control) => (
+          <input
+            {...control}
+            className={INPUT}
+            inputMode="numeric"
+            value={windowMinutes}
+            onChange={(event) => setWindowMinutes(event.target.value)}
+          />
+        )}
+      </ScheduleField>
+      <ScheduleField
+        id={fieldId('graceMinutes')}
+        label="Extra time before it is missed (minutes)"
+        hint={`After the time allowed it can still be handed in, as late, for this long. Up to ${MAX_GRACE}.`}
+        error={fieldErrors.graceMinutes}
+      >
+        {(control) => (
+          <input
+            {...control}
+            className={INPUT}
+            inputMode="numeric"
+            value={graceMinutes}
+            onChange={(event) => setGraceMinutes(event.target.value)}
+          />
+        )}
+      </ScheduleField>
+      <ScheduleField id={fieldId('startDate')} label="Starts on" error={fieldErrors.startDate}>
+        {(control) => (
+          <input
+            {...control}
+            type="date"
+            className={INPUT}
+            value={startDate}
+            onChange={(event) => setStartDate(event.target.value)}
+          />
+        )}
+      </ScheduleField>
+      <ScheduleField id={fieldId('endDate')} label="Ends on · optional" error={fieldErrors.endDate}>
+        {(control) => (
+          <input
+            {...control}
+            type="date"
+            className={INPUT}
+            value={endDate}
+            onChange={(event) => setEndDate(event.target.value)}
+          />
+        )}
+      </ScheduleField>
       {error ? (
         <p className="text-sm text-destructive md:col-span-2" role="alert">
           {error}
@@ -758,9 +1068,11 @@ function Schedules({ pharmacyBranchId, onNotice }: { pharmacyBranchId: string; o
       ) : (
         <ul className="divide-y divide-border-subtle">
           {list.map((row) => (
+            // One grid for every row, so the toggle sits at the same place on
+            // a phone whether or not the details wrap.
             <li
               key={row.id}
-              className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-3 first:pt-0 last:pb-0"
             >
               <div className="min-w-0">
                 <p className="font-medium break-words text-text-strong">{row.templateName}</p>
@@ -773,7 +1085,7 @@ function Schedules({ pharmacyBranchId, onNotice }: { pharmacyBranchId: string; o
                     : (row.target.displayName ?? 'A named person')}
                 </p>
               </div>
-              <label className="inline-flex min-h-11 items-center gap-2 text-sm text-text-body">
+              <label className="inline-flex min-h-11 items-center gap-2 justify-self-end text-sm text-text-body">
                 <Switch
                   checked={row.active}
                   disabled={setActive.isPending}

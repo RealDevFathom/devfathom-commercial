@@ -31,6 +31,8 @@ export const routeLabels: Record<string, string> = {
   '/hotel/settings/spaces': 'Function spaces',
   '/hotel/settings/extras': 'Extras',
   '/hotel/settings/journey': 'Guest messages',
+  // DEV-751: the pharmacy SOP workspace is named "Procedures" in the UI.
+  '/pharmacy/sop': 'Procedures',
 };
 
 const linkableDetailRoute = /^\/(projects|clients|notes|team|meetings)\/[^/]+$/;

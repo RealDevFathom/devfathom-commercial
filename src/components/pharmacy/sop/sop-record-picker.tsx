@@ -78,10 +78,8 @@ export function SopRecordPicker({
 
   return (
     <div className="grid gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
-      <p className="text-sm font-medium text-text-strong">
-        Linked {label}
-        {linked.length ? '' : ' · required'}
-      </p>
+      {/* The requirement itself is stated once, in the step's "still needed" list. */}
+      <p className="text-sm font-medium text-text-strong">Linked {label}</p>
       {linked.length ? (
         <ul className="grid gap-1 text-sm text-text-body">
           {linked.map((row) => {

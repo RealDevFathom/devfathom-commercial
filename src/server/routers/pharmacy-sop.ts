@@ -12,6 +12,7 @@ import {
   assertOccurrenceAtSite,
   enablePharmacySopSite,
   ensurePharmacySopJobRoles,
+  ensurePharmacySopStaffProfile,
   linkPharmacySopRecord,
   listPharmacySopBranches,
   pharmacySopRolesAt,
@@ -23,6 +24,10 @@ import {
   type PharmacySopSiteRef,
 } from '@/lib/pharmacy/sop-adapter';
 import { isPharmacySopCapturedEvidence } from '@/lib/pharmacy/sop-evidence';
+import {
+  PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE,
+  PHARMACY_SOP_SCHEDULE_LIMITS,
+} from '@/lib/pharmacy/sop-shared';
 import {
   PHARMACY_SOP_PACKS,
   PharmacySopLibraryScopeError,
@@ -129,9 +134,10 @@ function mapAccessError(err: PharmacySopAccessError): never {
         message: 'SOPs are not enabled at this pharmacy branch yet.',
       });
     case 'NO_STAFF_PROFILE':
+      // Fixed wording the workspace recognises, to offer `joinSite`.
       throw new TRPCError({
         code: 'PRECONDITION_FAILED',
-        message: 'An active staff profile linked to this account is required for SOP work.',
+        message: PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE,
       });
     case 'AMBIGUOUS_STAFF_PROFILE':
       throw new TRPCError({
@@ -742,8 +748,13 @@ const CreateAssignmentInput = z
     monthDay: z.number().int().min(1).max(31).nullable().default(null),
     dueTimeMinutes: MINUTES_OF_DAY.default(0),
     intervalEndTimeMinutes: MINUTES_OF_DAY.nullable().default(null),
-    windowMinutes: z.number().int().min(0).max(1440).default(1440),
-    graceMinutes: z.number().int().min(0).max(1440).default(0),
+    windowMinutes: z
+      .number()
+      .int()
+      .min(0)
+      .max(PHARMACY_SOP_SCHEDULE_LIMITS.windowMinutes)
+      .default(PHARMACY_SOP_SCHEDULE_LIMITS.windowMinutes),
+    graceMinutes: z.number().int().min(0).max(PHARMACY_SOP_SCHEDULE_LIMITS.graceMinutes).default(0),
     startDate: DATE_ISO,
     endDate: DATE_ISO.nullable().default(null),
   })
@@ -829,6 +840,48 @@ function boardItem(row: BoardRow, now: Date, roleById: Map<string, PharmacySopRo
   };
 }
 
+/**
+ * Occurrences this staff profile neither is assigned nor claimed. Null-safe on
+ * purpose: SQL `<>` (Prisma `not` / `NOT`) is never true for a NULL column, so
+ * `NOT: [{ assignedStaffProfileId: me }, { claimedByStaffProfileId: me }]`
+ * would drop every pool row (no assignee) and every direct row (no claimer) —
+ * an always-empty review queue. Each nullable column is therefore matched as
+ * "NULL or someone else".
+ */
+export function notOwnedOrClaimedBy(staffProfileId: string) {
+  return {
+    AND: [
+      {
+        OR: [{ assignedStaffProfileId: null }, { assignedStaffProfileId: { not: staffProfileId } }],
+      },
+      {
+        OR: [
+          { claimedByStaffProfileId: null },
+          { claimedByStaffProfileId: { not: staffProfileId } },
+        ],
+      },
+    ],
+  } satisfies Prisma.RestaurantSopOccurrenceWhereInput;
+}
+
+/**
+ * An `assignments` row that `startOnDemand` created to run one event procedure
+ * now, not a schedule a manager set up. `createAssignment` refuses EVENT packs,
+ * so every assignment of an EVENT pack is one of these; the ONCE + PERSON shape
+ * is checked too so the rule never hides a real schedule if that ever changes.
+ */
+function isOnDemandRun(row: {
+  frequency: string;
+  assigneeTargetType: string;
+  template: { name: string };
+}): boolean {
+  return (
+    pharmacySopPackForTemplateName(row.template.name)?.pharmacy.trigger === 'EVENT' &&
+    row.frequency === 'ONCE' &&
+    row.assigneeTargetType === 'PERSON'
+  );
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 export const pharmacySopRouter = router({
@@ -838,7 +891,18 @@ export const pharmacySopRouter = router({
       allowed(ctx, 'sop:complete'),
       allowed(ctx, 'sop:verify'),
     ]);
-    return { canManage, canComplete, canVerify };
+    // Setup prefills the branch timezone from the organization's own zone. The
+    // column defaults to UTC, so UTC reads as "not chosen" and the workspace
+    // falls back to the browser's zone.
+    const organizationTimezone = canManage
+      ? await ctx.db.organization
+          .findUnique({
+            where: { id: sessionScope(ctx).organizationId },
+            select: { timezone: true },
+          })
+          .then((row) => (row?.timezone && row.timezone !== 'UTC' ? row.timezone : null))
+      : null;
+    return { canManage, canComplete, canVerify, organizationTimezone };
   }),
 
   branches: auditedProtectedProcedure.query(async ({ ctx }) => {
@@ -866,6 +930,25 @@ export const pharmacySopRouter = router({
         // The site does not exist yet, so branch assignment is checked by the
         // adapter itself rather than by `resolvePharmacySopSite`.
         const result = await enablePharmacySopSite(ctx.db, { ...sessionScope(ctx), ...input });
+        // The manager who turns procedures on can take part straight away
+        // (grant roles, review). Best effort: an ambiguous or suspended
+        // profile does not undo the enable; the workspace then offers joinSite
+        // and shows its refusal.
+        const staffProfileReady = await ensurePharmacySopStaffProfile(ctx.db, {
+          ...sessionScope(ctx),
+          pharmacyBranchId: result.site.pharmacyBranchId,
+        }).then(
+          () => true,
+          (err: unknown) => {
+            if (
+              err instanceof PharmacySopAccessError &&
+              (err.reason === 'NO_STAFF_PROFILE' || err.reason === 'AMBIGUOUS_STAFF_PROFILE')
+            ) {
+              return false;
+            }
+            throw err;
+          }
+        );
         audit(ctx, result.site, {
           action: 'pharmacy.sop.enableSite',
           targetType: 'PharmacySopSite',
@@ -873,9 +956,13 @@ export const pharmacySopRouter = router({
           description: result.created
             ? 'Enabled SOPs at pharmacy branch'
             : 'SOPs already enabled at pharmacy branch',
-          metadata: { created: result.created, timezone: result.site.timezone },
+          metadata: {
+            created: result.created,
+            timezone: result.site.timezone,
+            staffProfileReady,
+          },
         });
-        return result;
+        return { ...result, staffProfileReady };
       })
     ),
 
@@ -960,7 +1047,11 @@ export const pharmacySopRouter = router({
         listAssignments(ctx.db, { branchId: site.sopBranchId }),
         pharmacyJobRoleIds(ctx),
       ]);
-      const pharmacyRows = rows.filter((row) => pharmacySopPackForTemplateName(row.template.name));
+      // On-demand runs are internal plumbing (created paused by startOnDemand);
+      // listing them here would show each event procedure as a paused schedule.
+      const pharmacyRows = rows.filter(
+        (row) => pharmacySopPackForTemplateName(row.template.name) && !isOnDemandRun(row)
+      );
       const staffIds = [
         ...new Set(pharmacyRows.flatMap((row) => row.assigneeStaffProfileId ?? [])),
       ];
@@ -1011,6 +1102,12 @@ export const pharmacySopRouter = router({
     guarded(async () => {
       const site = await siteFor(ctx, input.pharmacyBranchId);
       const { template, pack } = await pharmacyTemplate(ctx, input.templateId);
+      if (pack.pharmacy.trigger === 'EVENT') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This procedure is started when it happens, so it does not take a schedule.',
+        });
+      }
       let assigneeTarget:
         { type: 'role'; jobRoleId: string } | { type: 'person'; staffProfileId: string };
       if (input.target.type === 'ROLE') {
@@ -1091,12 +1188,19 @@ export const pharmacySopRouter = router({
         const site = await siteFor(ctx, input.pharmacyBranchId);
         const existing = await ctx.db.restaurantSopAssignment.findUnique({
           where: { id: input.assignmentId },
-          select: { id: true, branchId: true, template: { select: { name: true } } },
+          select: {
+            id: true,
+            branchId: true,
+            frequency: true,
+            assigneeTargetType: true,
+            template: { select: { name: true } },
+          },
         });
         if (
           !existing ||
           existing.branchId !== site.sopBranchId ||
-          !pharmacySopPackForTemplateName(existing.template.name)
+          !pharmacySopPackForTemplateName(existing.template.name) ||
+          isOnDemandRun(existing)
         ) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Assignment not found.' });
         }
@@ -1116,6 +1220,7 @@ export const pharmacySopRouter = router({
   roleHoldings: manageProcedure.input(z.object(BRANCH).strict()).query(({ ctx, input }) =>
     guarded(async () => {
       const site = await siteFor(ctx, input.pharmacyBranchId);
+      const viewerUserId = sessionScope(ctx).userId;
       const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
         where: { branchId: site.pharmacyBranchId, active: true, user: { status: 'ACTIVE' } },
         select: { userId: true, user: { select: { id: true, name: true, email: true } } },
@@ -1145,6 +1250,9 @@ export const pharmacySopRouter = router({
           const profile = mine.length === 1 ? mine[0]! : null;
           return {
             userId: row.userId,
+            // The session user's own row: the adapter refuses a self-grant of
+            // a verifier role, so the workspace disables those two boxes here.
+            isViewer: row.userId === viewerUserId,
             name: row.user.name,
             email: row.user.email,
             staffProfile: mine.length === 0 ? 'NONE' : mine.length === 1 ? 'ONE' : 'AMBIGUOUS',
@@ -1164,7 +1272,14 @@ export const pharmacySopRouter = router({
     .mutation(({ ctx, input }) =>
       guarded(async () => {
         const site = await siteFor(ctx, input.pharmacyBranchId);
-        const actor = await actorFor(ctx);
+        // The grantor is always the session user. A manager assigned to this
+        // branch who has no staff profile yet gets one here (the same
+        // serialized find-or-create used for targets), instead of a dead end;
+        // ambiguous, suspended or archived profiles still fail closed.
+        const actor = await ensurePharmacySopStaffProfile(ctx.db, {
+          ...sessionScope(ctx),
+          pharmacyBranchId: site.pharmacyBranchId,
+        });
         const result = await setPharmacySopRoleHolding(ctx.db, {
           organizationId: sessionScope(ctx).organizationId,
           site,
@@ -1195,6 +1310,36 @@ export const pharmacySopRouter = router({
         return result;
       })
     ),
+
+  /**
+   * "Set up my procedures profile": idempotently give the session user their
+   * own staff profile at this branch, so a person who was assigned to the
+   * branch but never given a profile can open their work or review queue.
+   * Branch-scoped through the adapter, open to any SOP capability, grants no
+   * role and takes no actor or user id from the input.
+   */
+  joinSite: auditedProtectedProcedure
+    .input(z.object(BRANCH).strict())
+    .mutation(async ({ ctx, input }) => {
+      await requireAnyCapability(ctx, ['sop:complete', 'sop:verify', 'sop:manage']);
+      return guarded(async () => {
+        const site = await siteFor(ctx, input.pharmacyBranchId);
+        const actor = await ensurePharmacySopStaffProfile(ctx.db, {
+          ...sessionScope(ctx),
+          pharmacyBranchId: site.pharmacyBranchId,
+        });
+        audit(ctx, site, {
+          action: 'pharmacy.sop.joinSite',
+          targetType: 'RestaurantStaffProfile',
+          targetId: actor.staffProfileId,
+          description: actor.created
+            ? 'Created own staff profile for pharmacy procedures'
+            : 'Staff profile for pharmacy procedures already set up',
+          metadata: { created: actor.created },
+        });
+        return { staffProfileId: actor.staffProfileId, created: actor.created };
+      });
+    }),
 
   /**
    * Materialise due occurrences. The engine generator is tenant-wide and
@@ -1376,10 +1521,7 @@ export const pharmacySopRouter = router({
                 where: {
                   branchId: site.sopBranchId,
                   status: { in: [...REVIEW_STATUSES] },
-                  NOT: [
-                    { assignedStaffProfileId: actor.staffProfileId },
-                    { claimedByStaffProfileId: actor.staffProfileId },
-                  ],
+                  ...notOwnedOrClaimedBy(actor.staffProfileId),
                 },
                 orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
                 take: 100,
@@ -1446,11 +1588,14 @@ export const pharmacySopRouter = router({
               dueAt: true,
               windowEndsAt: true,
               startedAt: true,
+              claimedAt: true,
               submittedAt: true,
               resolvedAt: true,
               assignedStaffProfileId: true,
               claimedByStaffProfileId: true,
               poolJobRoleId: true,
+              assignedStaff: { select: { displayName: true } },
+              claimedBy: { select: { displayName: true } },
               assignment: {
                 select: {
                   graceMinutes: true,
@@ -1537,8 +1682,17 @@ export const pharmacySopRouter = router({
           dueAt: detail.dueAt,
           windowEndsAt: detail.windowEndsAt,
           startedAt: detail.startedAt,
+          claimedAt: detail.claimedAt,
           submittedAt: detail.submittedAt,
           resolvedAt: detail.resolvedAt,
+          // Who did the work: the assignee, else the claimer. The engine trail
+          // has no start, claim or submit entry, so the History view builds
+          // those from these timestamps and names.
+          ownerName:
+            (detail.assignedStaffProfileId
+              ? detail.assignedStaff?.displayName
+              : detail.claimedBy?.displayName) ?? null,
+          claimedByName: detail.claimedBy?.displayName ?? null,
           overdue: isOverdue(detail, new Date()),
           template: detail.assignment.template,
           pack: pack ? packSummary(pack) : null,

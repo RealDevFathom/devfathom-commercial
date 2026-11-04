@@ -10,9 +10,11 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { trpc } from '@/lib/trpc';
 
 import {
+  businessDay,
   errorCode,
   errorMessage,
   formatWhen,
+  isNoStaffProfile,
   ROLE_LABEL,
   statusCopy,
   type SopAccess,
@@ -56,6 +58,9 @@ export function SopBoardView({
 
   if (board.isLoading) {
     return <WorkspaceState title="Loading today's work">Reading this branch.</WorkspaceState>;
+  }
+  if (isNoStaffProfile(board.error)) {
+    return <JoinSitePrompt pharmacyBranchId={pharmacyBranchId} />;
   }
   if (board.error || !board.data) {
     return (
@@ -117,6 +122,7 @@ export function SopBoardView({
             title="My work"
             empty="Nothing is assigned to you right now."
             items={data.mine}
+            today={data.businessDate}
             timezone={timezone}
             action={(item) => (
               <Button
@@ -124,6 +130,7 @@ export function SopBoardView({
                 type="button"
                 variant="outline"
                 size="touch"
+                className={ROW_ACTION}
                 aria-label={`Open ${item.templateName}`}
                 onClick={() => onOpen(item.occurrenceId)}
               >
@@ -136,12 +143,14 @@ export function SopBoardView({
             description="Anyone holding the role can take these. Claim one to make it yours."
             empty="Nothing is waiting in your role's pool."
             items={data.pool}
+            today={data.businessDate}
             timezone={timezone}
             action={(item) =>
               access.canComplete && !item.claimed ? (
                 <Button
                   type="button"
                   size="touch"
+                  className={ROW_ACTION}
                   disabled={claim.isPending}
                   aria-label={`Claim ${item.templateName}`}
                   onClick={() =>
@@ -178,11 +187,23 @@ function DueState({ item }: { item: SopBoardItem }) {
   );
 }
 
+/**
+ * Row and form actions share one width rule: full width on a phone, their own
+ * width from `sm` up, so Open, Claim and Start line up at 375px.
+ */
+const ROW_ACTION = 'w-full sm:w-auto';
+
+/**
+ * Board items arrive ordered by due time over a window that reaches into
+ * tomorrow, so tomorrow's work is grouped under its own label instead of
+ * reading as due today.
+ */
 function WorkList({
   title,
   description,
   empty,
   items,
+  today,
   timezone,
   action,
 }: {
@@ -190,9 +211,34 @@ function WorkList({
   description?: string;
   empty: string;
   items: SopBoardItem[];
+  /** The branch business date (YYYY-MM-DD) the board was read for. */
+  today: string;
   timezone: string | null;
   action: (item: SopBoardItem) => React.ReactNode;
 }) {
+  const later = items.filter((item) => businessDay(item.businessDate) > today);
+  const current = items.filter((item) => businessDay(item.businessDate) <= today);
+  const row = (item: SopBoardItem) => (
+    <li
+      key={item.occurrenceId}
+      className={`grid gap-3 rounded-md border p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center ${
+        item.overdue ? 'border-destructive/40' : 'border-border-subtle'
+      }`}
+    >
+      <div className="min-w-0">
+        <p className="font-medium break-words text-text-strong">{item.templateName}</p>
+        <p className="mt-1 text-xs text-text-muted">
+          Due {formatWhen(item.dueAt, timezone)} · {item.stepsCompleted} of {item.stepsTotal} steps
+          done
+          {item.poolRoleKey ? ` · ${ROLE_LABEL[item.poolRoleKey]}` : ''}
+        </p>
+        <div className="mt-2">
+          <DueState item={item} />
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">{action(item)}</div>
+    </li>
+  );
   return (
     <SectionCard
       className="min-w-0"
@@ -205,29 +251,23 @@ function WorkList({
       {items.length === 0 ? (
         <p className="text-sm text-text-muted">{empty}</p>
       ) : (
-        <ul className="grid gap-2" aria-label={title}>
-          {items.map((item) => (
-            <li
-              key={item.occurrenceId}
-              className={`grid gap-3 rounded-md border p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center ${
-                item.overdue ? 'border-destructive/40' : 'border-border-subtle'
-              }`}
-            >
-              <div className="min-w-0">
-                <p className="font-medium break-words text-text-strong">{item.templateName}</p>
-                <p className="mt-1 text-xs text-text-muted">
-                  Due {formatWhen(item.dueAt, timezone)} · {item.stepsCompleted} of{' '}
-                  {item.stepsTotal} steps done
-                  {item.poolRoleKey ? ` · ${ROLE_LABEL[item.poolRoleKey]}` : ''}
-                </p>
-                <div className="mt-2">
-                  <DueState item={item} />
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">{action(item)}</div>
-            </li>
-          ))}
-        </ul>
+        <div className="grid gap-4">
+          {current.length ? (
+            <ul className="grid gap-2" aria-label={title}>
+              {current.map(row)}
+            </ul>
+          ) : null}
+          {later.length ? (
+            <div className="grid gap-2">
+              <p className="eyebrow" aria-hidden>
+                Tomorrow
+              </p>
+              <ul className="grid gap-2" aria-label={`${title}, tomorrow`}>
+                {later.map(row)}
+              </ul>
+            </div>
+          ) : null}
+        </div>
       )}
     </SectionCard>
   );
@@ -302,7 +342,12 @@ function StartOnDemand({
             ))}
           </select>
         </label>
-        <Button type="submit" size="touch" disabled={startOnDemand.isPending}>
+        <Button
+          type="submit"
+          size="touch"
+          className={ROW_ACTION}
+          disabled={startOnDemand.isPending}
+        >
           {startOnDemand.isPending ? 'Starting…' : 'Start'}
         </Button>
       </form>
@@ -311,6 +356,52 @@ function StartOnDemand({
           {error}
         </p>
       ) : null}
+    </SectionCard>
+  );
+}
+
+/**
+ * Shown when the board refuses because this person has no procedures profile
+ * at the branch yet. Setting it up is explicit and idempotent (joinSite); it
+ * gives no role — a manager still decides those in Setup.
+ */
+export function JoinSitePrompt({ pharmacyBranchId }: { pharmacyBranchId: string }) {
+  const utils = trpc.useUtils();
+  const [error, setError] = useState<string | null>(null);
+  const join = trpc.pharmacySop.joinSite.useMutation({
+    onSuccess: async () => {
+      setError(null);
+      await Promise.all([
+        utils.pharmacySop.board.invalidate({ pharmacyBranchId }),
+        utils.pharmacySop.roleHoldings.invalidate({ pharmacyBranchId }),
+      ]);
+    },
+    onError: (cause) =>
+      setError(errorMessage(cause, 'Your procedures profile could not be set up. Retry.')),
+  });
+  return (
+    <SectionCard title="Set up your procedures profile">
+      <div className="grid gap-3">
+        <p className="max-w-2xl text-sm text-text-body">
+          You are assigned to this branch but do not have a procedures profile here yet. Set it up
+          to see your work and anything waiting for your review. It gives you no new roles — your
+          pharmacy manager still decides those.
+        </p>
+        {error ? (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <Button
+          type="button"
+          size="touch"
+          className={ROW_ACTION}
+          disabled={join.isPending}
+          onClick={() => join.mutate({ pharmacyBranchId })}
+        >
+          {join.isPending ? 'Setting up…' : 'Set up my procedures profile'}
+        </Button>
+      </div>
     </SectionCard>
   );
 }

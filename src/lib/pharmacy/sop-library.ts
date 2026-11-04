@@ -22,6 +22,19 @@ import type { PharmacySopRoleKey } from './sop-adapter';
  * branch's own records; they give no clinical or dosing advice and they do not
  * claim that completing them satisfies any regulation.
  *
+ * A procedure is an instruction to the person it is assigned to, plus the
+ * proof they send back ("Once closed, send a photo of the locked premises").
+ * It never performs, blocks, gates or changes opening, closing, selling,
+ * dispensing, receiving or any other pharmacy workflow, exactly as in
+ * restaurants. A step's photo, note, signature or linked record gates only
+ * that procedure's own submission. Step wording is phrased as follow-up
+ * ("after…", "once…", "confirm…", "note…", "send…"), never as the operation.
+ *
+ * Template names are the install identity and stay fixed. An organization that
+ * installed an earlier wording keeps it (install is idempotent by name); the
+ * router maps installed steps to pack metadata by title, then by position, and
+ * every step keeps its position and linked-record type.
+ *
  * Install creates templates only. It never creates an assignment, a schedule or
  * a role holding; a manager does that per branch after enabling SOPs there.
  */
@@ -114,6 +127,9 @@ const once = (dueTimeMinutes: number, windowMinutes: number) => ({
   graceMinutes: 0,
 });
 
+/** Training attestation: due at 15:00, a day to do it, a day's grace before it is missed. */
+const attestation = { ...once(15 * 60, 24 * 60), graceMinutes: 24 * 60 };
+
 const withoutInterval = <T extends Omit<PharmacySopRecurrence, 'intervalEndTimeMinutes'>>(
   rule: T
 ): PharmacySopRecurrence => ({ ...rule, intervalEndTimeMinutes: null });
@@ -188,7 +204,8 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     key: 'opening',
     name: 'Pharmacy — opening',
     category: 'Opening',
-    description: 'Open the branch with a named person in charge and storage checked.',
+    description:
+      'After the branch opens: confirm who is in charge and send proof that storage was checked.',
     engineRecurrence: daily(OPENING_MINUTES, 2 * 60, 30),
     pharmacy: {
       roleKey: 'pharmacy-qualified-person',
@@ -198,22 +215,26 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
       suggestedRecurrence: withoutInterval(daily(OPENING_MINUTES, 2 * 60, 30)),
     },
     steps: [
-      { title: 'Sign in as the person in charge of this branch', requiresSignature: true },
       {
-        title: 'Record the refrigerator temperature reading',
-        instructions: 'Link the reading you logged in the temperature log for this branch.',
+        title: 'Once the counter is open, sign to confirm you are the person in charge today',
+        requiresSignature: true,
+      },
+      {
+        title: 'Once the counter is open, confirm the opening temperatures were recorded',
+        instructions: 'Link the reading already recorded in the temperature log for this branch.',
         requiredRecordType: 'TEMPERATURE_LOG',
       },
-      { title: 'Confirm the controlled register handover balance', requiresNote: true },
-      { title: 'Inspect premises, security and counter readiness' },
-      { title: 'Note anything not ready for opening', requiresNote: true },
+      { title: 'Note the controlled register balance you took over', requiresNote: true },
+      { title: 'After opening, confirm the premises, security and counter look right' },
+      { title: 'Note anything that was not right at opening, or confirm none', requiresNote: true },
     ],
   }),
   pack({
     key: 'closing',
     name: 'Pharmacy — closing',
     category: 'Closing',
-    description: 'Close the branch with records reconciled and stock secured.',
+    description:
+      'After the day close: send proof that records were checked and stock was put away securely.',
     engineRecurrence: daily(CLOSING_MINUTES, 2 * 60, 30),
     pharmacy: {
       roleKey: 'pharmacy-qualified-person',
@@ -223,13 +244,20 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
       suggestedRecurrence: withoutInterval(daily(CLOSING_MINUTES, 2 * 60, 30)),
     },
     steps: [
-      { title: 'Reconcile the controlled register and tills', requiresNote: true },
-      { title: 'Secure prescriptions and controlled medicines' },
       {
-        title: 'Record the closing refrigerator temperature reading',
+        title: 'After the day close, note the controlled register and till balances you checked',
+        requiresNote: true,
+      },
+      { title: 'Confirm prescriptions and controlled medicines were put away securely' },
+      {
+        title: 'After closing, confirm the last refrigerator temperature was recorded',
+        instructions: 'Link the reading already recorded in the temperature log for this branch.',
         requiredRecordType: 'TEMPERATURE_LOG',
       },
-      { title: 'Lock premises and set security', requiresSignature: true },
+      {
+        title: 'Once closed, send a photo of the locked premises',
+        requiresPhoto: true,
+      },
     ],
   }),
   pack({
@@ -246,8 +274,16 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
       suggestedRecurrence: temperatureRound,
     },
     steps: [
-      { title: 'Record refrigerator temperature', requiredRecordType: 'TEMPERATURE_LOG' },
-      { title: 'Record ambient storage temperature', requiredRecordType: 'TEMPERATURE_LOG' },
+      {
+        title: 'Confirm the refrigerator temperature was recorded',
+        instructions: 'Link the reading from the temperature log.',
+        requiredRecordType: 'TEMPERATURE_LOG',
+      },
+      {
+        title: 'Confirm the ambient storage temperature was recorded',
+        instructions: 'Link the reading from the temperature log.',
+        requiredRecordType: 'TEMPERATURE_LOG',
+      },
       {
         title: 'Record any excursion and the corrective action taken, or confirm none',
         instructions:
@@ -260,7 +296,8 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     key: 'controlled-counts',
     name: 'Pharmacy — controlled counts',
     category: 'Controlled medicines',
-    description: 'Weekly physical count of controlled medicines against the register.',
+    description:
+      'Weekly count of controlled medicines, with the result noted against the register.',
     engineRecurrence: weekly([1], 10 * 60, 8 * 60, 60),
     pharmacy: {
       roleKey: 'pharmacy-qualified-person',
@@ -270,14 +307,14 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
       suggestedRecurrence: withoutInterval(weekly([1], 10 * 60, 8 * 60, 60)),
     },
     steps: [
-      { title: 'Count controlled medicine stock on hand', requiresNote: true },
+      { title: 'Count the controlled medicines on hand and note the totals', requiresNote: true },
       {
-        title: 'Reconcile the count to the register running balance',
+        title: 'Compare your count with the register running balance',
         instructions: 'Link the register entry whose running balance you checked.',
         requiresNote: true,
         requiredRecordType: 'CONTROLLED_REGISTER_ENTRY',
       },
-      { title: 'Record and escalate any variance', requiresNote: true },
+      { title: 'Note any difference and who you told, or confirm none', requiresNote: true },
       { title: 'Sign the count', requiresSignature: true },
     ],
   }),
@@ -285,7 +322,7 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     key: 'expiry-pull',
     name: 'Pharmacy — expiry pull',
     category: 'Inventory',
-    description: 'Weekly review that removes expired or damaged stock from sale.',
+    description: 'Weekly check for expired or damaged stock, with a note of what was set aside.',
     engineRecurrence: weekly([1], 11 * 60, 8 * 60, 60),
     pharmacy: {
       roleKey: 'pharmacy-assistant',
@@ -295,21 +332,21 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
       suggestedRecurrence: withoutInterval(weekly([1], 11 * 60, 8 * 60, 60)),
     },
     steps: [
-      { title: 'Review stock nearing expiry' },
+      { title: 'Look over stock nearing expiry' },
       {
-        title: 'Quarantine expired or damaged stock',
-        instructions: 'Link the batch you quarantined.',
+        title: 'Note expired or damaged stock you set aside',
+        instructions: 'Link the batch you set aside.',
         requiresNote: true,
         requiredRecordType: 'MANUFACTURING_BATCH',
       },
-      { title: 'Record the disposal or supplier-return action', requiresNote: true },
+      { title: 'Note what happens to it next (disposal or supplier return)', requiresNote: true },
     ],
   }),
   pack({
     key: 'receiving',
     name: 'Pharmacy — receiving',
     category: 'Receiving',
-    description: 'Check a delivery against its goods receipt when it arrives.',
+    description: 'After a delivery is received, confirm it matched its goods receipt.',
     engineRecurrence: once(12 * 60, 24 * 60),
     pharmacy: {
       roleKey: 'pharmacy-assistant',
@@ -320,12 +357,12 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     },
     steps: [
       {
-        title: 'Match the delivery to its goods receipt',
+        title: 'Confirm the delivery matched its goods receipt',
         requiredRecordType: 'GOODS_RECEIPT',
       },
-      { title: 'Check batch numbers, expiry dates and supplier warranty evidence' },
-      { title: 'Check cold-chain items on arrival', requiresNote: true },
-      { title: 'Record shortages, damage or rejections', requiresNote: true },
+      { title: 'Confirm batch numbers, expiry dates and supplier warranty evidence were checked' },
+      { title: 'Note how cold-chain items arrived', requiresNote: true },
+      { title: 'Note any shortages, damage or rejections, or confirm none', requiresNote: true },
     ],
   }),
   pack({
@@ -372,13 +409,16 @@ export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
     name: 'Pharmacy — training attestation',
     category: 'Training',
     description: 'A named person confirms they have read an assigned procedure.',
-    engineRecurrence: once(15 * 60, 7 * 24 * 60),
+    // A manager schedules this one through the schedule form, so it must fit
+    // the router's bounds (window and grace each at most a day): a day to do
+    // it on time, and a further day before it counts as missed.
+    engineRecurrence: attestation,
     pharmacy: {
       roleKey: 'pharmacy-assistant',
       assigneeTarget: 'PERSON',
       verifierRoleKeys: STANDARD_VERIFIERS,
       trigger: 'ASSIGNED',
-      suggestedRecurrence: withoutInterval(once(15 * 60, 7 * 24 * 60)),
+      suggestedRecurrence: withoutInterval(attestation),
     },
     steps: [
       { title: 'Read the assigned policy or procedure' },

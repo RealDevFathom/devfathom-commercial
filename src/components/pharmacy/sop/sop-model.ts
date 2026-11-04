@@ -1,6 +1,7 @@
 import type { inferRouterOutputs } from '@trpc/server';
 
 import type { StatusTone } from '@/components/ui/status-pill';
+import { PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE } from '@/lib/pharmacy/sop-shared';
 import { workspaceTimezone } from '@/lib/timezone';
 import type { AppRouter } from '@/server/routers/_app';
 
@@ -69,7 +70,7 @@ export const RECORD_LABEL: Record<SopRecordType, string> = {
 export const TRIGGER_COPY: Record<SopTrigger, { label: string; detail: string }> = {
   SHIFT: {
     label: 'Every shift',
-    detail: 'Runs at a set time each day, such as opening or closing.',
+    detail: 'Comes due at a set time each day, such as after opening or after closing.',
   },
   INTERVAL: {
     label: 'Repeats during the day',
@@ -235,4 +236,34 @@ export function errorCode(error: unknown) {
 export function isDenied(error: unknown) {
   const code = errorCode(error);
   return code === 'FORBIDDEN' || code === 'UNAUTHORIZED';
+}
+
+/**
+ * The board or a procedure refused because this person has no procedures
+ * profile at the branch yet; the workspace offers to set one up (joinSite).
+ */
+export function isNoStaffProfile(error: unknown) {
+  if (errorCode(error) !== 'PRECONDITION_FAILED') return false;
+  const message =
+    error && typeof error === 'object' && 'message' in error ? String(error.message) : '';
+  return message === PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE;
+}
+
+/** Field-level validation messages from a tRPC input refusal (`data.validation`). */
+export function validationFields(error: unknown): Record<string, string[] | undefined> {
+  const validation = (error as { data?: { validation?: unknown } } | null)?.data?.validation;
+  return validation && typeof validation === 'object'
+    ? (validation as Record<string, string[] | undefined>)
+    : {};
+}
+
+/** Whether a tRPC error is an input-validation refusal (never shown raw). */
+export function isValidationError(error: unknown) {
+  return errorCode(error) === 'BAD_REQUEST' && Object.keys(validationFields(error)).length > 0;
+}
+
+/** Calendar date (YYYY-MM-DD) of a business-date value, as the server stores it (UTC midnight). */
+export function businessDay(value: When) {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
 }

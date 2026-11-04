@@ -76,7 +76,10 @@ vi.mock('@/lib/trpc', () => {
   };
 });
 
+import { PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE } from '@/lib/pharmacy/sop-shared';
+
 import { PharmacySopWorkspace } from './pharmacy-sop-workspace';
+import { initialSiteTimezone, SETUP_INTRO } from './sop-setup';
 
 const BRANCH = 'branch-1';
 const due = new Date('2026-11-04T04:00:00Z');
@@ -453,5 +456,333 @@ describe('pharmacy procedures workspace', () => {
         reason: 'Photo of the fridge display is missing',
       },
     ]);
+  });
+
+  // ── Visual QA follow-ups ──────────────────────────────────────────────────
+
+  it('gives every tab trigger a 44px touch target', () => {
+    setup({ access: { canComplete: true, canVerify: false, canManage: true } });
+    render(<PharmacySopWorkspace />);
+    for (const tab of screen.getAllByRole('tab')) {
+      expect(tab.className).toMatch(/(^|\s)h-11(\s|$)/);
+      expect(tab.className).not.toContain('h-[calc(100%-1px)]');
+    }
+  });
+
+  it('offers to set up a procedures profile when the board has none for this person', () => {
+    setup();
+    h.queries.board = {
+      error: {
+        message: PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE,
+        data: { code: 'PRECONDITION_FAILED' },
+      },
+    };
+    render(<PharmacySopWorkspace />);
+    expect(screen.getByRole('heading', { name: 'Set up your procedures profile' })).toBeVisible();
+    expect(screen.queryByText("Today's work could not be loaded")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Set up my procedures profile' }));
+    expect(h.calls.joinSite).toEqual([{ pharmacyBranchId: BRANCH }]);
+  });
+
+  it('groups tomorrow’s work under its own label', () => {
+    setup({
+      board: {
+        mine: [
+          boardItem({ occurrenceId: 'occ-today', templateName: 'Pharmacy — opening' }),
+          boardItem({
+            occurrenceId: 'occ-tomorrow',
+            templateName: 'Pharmacy — closing',
+            businessDate: new Date('2026-11-05T00:00:00Z'),
+          }),
+        ],
+        pool: [],
+      },
+    });
+    render(<PharmacySopWorkspace />);
+    expect(
+      within(screen.getByRole('list', { name: 'My work' })).getByText('Pharmacy — opening')
+    ).toBeVisible();
+    const tomorrow = screen.getByRole('list', { name: 'My work, tomorrow' });
+    expect(within(tomorrow).getByText('Pharmacy — closing')).toBeVisible();
+    expect(
+      within(screen.getByRole('list', { name: 'My work' })).queryByText('Pharmacy — closing')
+    ).not.toBeInTheDocument();
+    expect(screen.getByText('Tomorrow')).toBeVisible();
+  });
+
+  it('does not let a manager tick their own reviewing roles, and says why', () => {
+    setup({ access: { canComplete: true, canVerify: false, canManage: true } });
+    h.queries.roleHoldings = {
+      data: [
+        {
+          userId: 'me',
+          isViewer: true,
+          name: 'Mona',
+          email: 'm@x',
+          staffProfile: 'ONE',
+          staffProfileId: 'sp_me',
+          displayName: 'Mona',
+          roleKeys: ['pharmacy-manager'],
+        },
+        {
+          userId: 'other',
+          isViewer: false,
+          name: 'Paul',
+          email: 'p@x',
+          staffProfile: 'NONE',
+          staffProfileId: null,
+          displayName: 'Paul',
+          roleKeys: [],
+        },
+      ],
+    };
+    h.queries.assignments = { data: [] };
+    window.history.replaceState(null, '', '/pharmacy/sop?view=setup');
+    render(<PharmacySopWorkspace />);
+    // Setup says once that procedures never gate pharmacy work.
+    expect(screen.getByText(SETUP_INTRO)).toBeVisible();
+    expect(SETUP_INTRO).toContain('They never block opening, closing or any other pharmacy work.');
+    const qp = screen.getByLabelText('Qualified person (pharmacist) for Mona');
+    expect(qp).toBeDisabled();
+    expect(qp).toHaveAccessibleDescription(/cannot give yourself the manager or qualified-person/);
+    // Holding it already: removing your own reviewing role stays possible.
+    expect(screen.getByLabelText('Pharmacy manager for Mona')).toBeEnabled();
+    expect(screen.getByLabelText('Pharmacy assistant for Mona')).toBeEnabled();
+    expect(screen.getByLabelText('Pharmacy manager for Paul')).toBeEnabled();
+    expect(screen.getByLabelText('Qualified person (pharmacist) for Paul')).toBeEnabled();
+  });
+
+  describe('schedule form', () => {
+    const template = {
+      id: 'tpl-train',
+      name: 'Pharmacy — training attestation',
+      category: 'Training',
+      isActive: true,
+      publishedVersion: { id: 'v1', versionNumber: 1 },
+      steps: [],
+      pack: {
+        key: 'training-attestation',
+        name: 'Pharmacy — training attestation',
+        category: 'Training',
+        description: '',
+        roleKey: 'pharmacy-assistant',
+        assigneeTarget: 'ROLE',
+        verifierRoleKeys: ['pharmacy-manager'],
+        trigger: 'ASSIGNED',
+        suggestedRecurrence: {
+          frequency: 'ONCE',
+          interval: 1,
+          daysOfWeek: [],
+          monthDay: null,
+          dueTimeMinutes: 900,
+          intervalEndTimeMinutes: null,
+          windowMinutes: 1440,
+          graceMinutes: 1440,
+        },
+      },
+    };
+
+    function openForm() {
+      setup({ access: { canComplete: true, canVerify: false, canManage: true } });
+      h.queries.templates = { data: [template] };
+      h.queries.roleHoldings = { data: [] };
+      h.queries.assignments = { data: [] };
+      window.history.replaceState(null, '', '/pharmacy/sop?view=setup');
+      render(<PharmacySopWorkspace />);
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Create schedule for Pharmacy — training attestation' })
+      );
+      return screen.getByRole('form', { name: 'Schedule for Pharmacy — training attestation' });
+    }
+
+    it('saves the suggested schedule as offered', () => {
+      const form = openForm();
+      fireEvent.click(within(form).getByRole('button', { name: 'Create schedule' }));
+      expect(h.calls.createAssignment).toEqual([
+        expect.objectContaining({ frequency: 'ONCE', windowMinutes: 1440, graceMinutes: 1440 }),
+      ]);
+    });
+
+    it('checks window and grace bounds before sending, field by field', () => {
+      const form = openForm();
+      const window = within(form).getByLabelText('Time allowed (minutes)');
+      const grace = within(form).getByLabelText('Extra time before it is missed (minutes)');
+      fireEvent.change(window, { target: { value: '10080' } });
+      fireEvent.change(grace, { target: { value: '-5' } });
+      fireEvent.click(within(form).getByRole('button', { name: 'Create schedule' }));
+      expect(h.calls.createAssignment).toBeUndefined();
+      expect(window).toHaveAttribute('aria-invalid', 'true');
+      expect(window).toHaveAccessibleDescription(/Enter whole minutes from 0 to 1440/);
+      expect(grace).toHaveAttribute('aria-invalid', 'true');
+      expect(window).toHaveFocus();
+      expect(within(form).getByRole('alert')).toHaveTextContent('Check the highlighted fields.');
+    });
+
+    it('maps a server validation refusal to plain field messages, never raw validation text', () => {
+      h.outcomes.createAssignment = () =>
+        Object.assign(new Error('Window minutes: Number must be less than or equal to 1440'), {
+          data: {
+            code: 'BAD_REQUEST',
+            validation: { windowMinutes: ['Number must be less than or equal to 1440'] },
+          },
+        });
+      const form = openForm();
+      fireEvent.click(within(form).getByRole('button', { name: 'Create schedule' }));
+      const window = within(form).getByLabelText('Time allowed (minutes)');
+      expect(window).toHaveAttribute('aria-invalid', 'true');
+      expect(window).toHaveAccessibleDescription(/Enter whole minutes from 0 to 1440/);
+      expect(form).not.toHaveTextContent('Number must be less than');
+      expect(within(form).getByRole('alert')).toHaveTextContent(
+        'Some values were not accepted. Check the highlighted fields.'
+      );
+    });
+  });
+
+  it('starts "Turn on" from the organization timezone, else the browser’s, never a guess', () => {
+    expect(initialSiteTimezone('Asia/Dubai', 'Europe/London')).toBe('Asia/Dubai');
+    expect(initialSiteTimezone(null, 'Europe/London')).toBe('Europe/London');
+    expect(initialSiteTimezone(null, 'Not/AZone')).toBe(
+      Intl.DateTimeFormat().resolvedOptions().timeZone
+    );
+    expect(initialSiteTimezone(null, null)).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  });
+
+  it('describes the on-time score by what it counts', () => {
+    setup({ access: { canComplete: false, canVerify: false, canManage: true } });
+    h.queries.report = {
+      data: {
+        score: {
+          overall: {
+            score: 75,
+            counts: { onTime: 1, late: 1, missed: 0, rejected: 0, waived: 0, pending: 0 },
+          },
+          staff: [],
+        },
+        summary: { total: 2, withProof: 0, attribution: [] },
+      },
+    };
+    window.history.replaceState(null, '', '/pharmacy/sop?view=reports');
+    render(<PharmacySopWorkspace />);
+    expect(screen.getByText(/whether or not it has been checked yet/)).toBeVisible();
+    expect(screen.queryByText(/Work checked on time counts fully/)).not.toBeInTheDocument();
+  });
+
+  it('shows history in plain words, with start, claim and submit, and links proof', () => {
+    const photoRef = '/api/files/pharmacy-sop-1-abc.png';
+    setup({
+      occ: occurrence({
+        status: 'SUBMITTED',
+        claimedAt: new Date('2026-11-04T04:05:00Z'),
+        startedAt: new Date('2026-11-04T04:10:00Z'),
+        submittedAt: new Date('2026-11-04T04:40:00Z'),
+        ownerName: 'Asma',
+        claimedByName: 'Asma',
+        steps: [step({ completed: true, completedAt: due, requiresPhoto: true })],
+        evidence: [
+          {
+            id: 'ev-1',
+            occurrenceStepId: 'step-1',
+            mimeType: 'image/png; evidence=photo',
+            sizeBytes: 10,
+            storageRef: photoRef,
+            capturedAt: new Date('2026-11-04T04:20:00Z'),
+            uploaderName: 'Asma',
+            capturedInPharmacy: true,
+          },
+          {
+            id: 'ev-2',
+            occurrenceStepId: 'step-1',
+            mimeType: 'image/png; evidence=signature',
+            sizeBytes: 10,
+            storageRef: 'javascript:alert(1)',
+            capturedAt: new Date('2026-11-04T04:25:00Z'),
+            uploaderName: 'Asma',
+            capturedInPharmacy: false,
+          },
+        ],
+        auditTrail: [
+          {
+            id: 'ev-1',
+            occurrenceId: 'occ-mine',
+            action: 'EVIDENCE_CAPTURED',
+            at: new Date('2026-11-04T04:20:00Z'),
+            actorStaffProfileId: 'sp',
+            actorName: 'Asma',
+            proofRef: {
+              kind: 'EVIDENCE',
+              evidenceId: 'ev-1',
+              contentHash: 'h',
+              storageRef: photoRef,
+            },
+            claimRef: null,
+            detail: 'Captured image/png; evidence=photo evidence',
+          },
+          {
+            id: 'ev-2',
+            occurrenceId: 'occ-mine',
+            action: 'EVIDENCE_CAPTURED',
+            at: new Date('2026-11-04T04:25:00Z'),
+            actorStaffProfileId: 'sp',
+            actorName: 'Asma',
+            proofRef: {
+              kind: 'EVIDENCE',
+              evidenceId: 'ev-2',
+              contentHash: 'h',
+              storageRef: 'javascript:alert(1)',
+            },
+            claimRef: null,
+            detail: 'Captured image/png; evidence=signature evidence',
+          },
+          {
+            id: 'step-1',
+            occurrenceId: 'occ-mine',
+            action: 'STEP_COMPLETED',
+            at: new Date('2026-11-04T04:30:00Z'),
+            actorStaffProfileId: 'sp',
+            actorName: 'Asma',
+            proofRef: null,
+            claimRef: null,
+            detail: 'Completed step: Record fridge temperature',
+          },
+        ],
+      }),
+    });
+    render(<PharmacySopWorkspace />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Pharmacy — opening' }));
+    const history = screen.getByRole('region', { name: 'History' });
+    expect(history).not.toHaveTextContent('Captured');
+    expect(history).not.toHaveTextContent('evidence=');
+    const labels = within(history)
+      .getAllByRole('listitem')
+      .map((item) => item.querySelector('span')?.textContent);
+    expect(labels).toEqual([
+      'Sent for review',
+      'Step done',
+      'Signature added',
+      'Photo added',
+      'Started',
+      'Claimed from the role pool',
+    ]);
+    expect(history).toHaveTextContent('Step 1 · Record fridge temperature');
+    const link = within(history).getByRole('link', {
+      name: 'View photo for Step 1 · Record fridge temperature',
+    });
+    expect(link).toHaveAttribute('href', photoRef);
+    expect(within(link).getByRole('img')).toHaveAttribute('src', photoRef);
+    // A ref that is not a same-origin file path is never turned into a link.
+    expect(history.querySelector('a[href^="javascript"]')).toBeNull();
+  });
+
+  it('states a linked-record requirement once in a step being worked on', () => {
+    setup({
+      occ: occurrence({
+        steps: [step({ title: 'Match the delivery', requiredRecordType: 'GOODS_RECEIPT' })],
+      }),
+    });
+    render(<PharmacySopWorkspace />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Pharmacy — opening' }));
+    expect(screen.queryByText(/Needs a linked goods receipt/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/· required/, { selector: 'p' })).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Link the goods receipt this step checked/)).toHaveLength(1);
   });
 });
