@@ -41,7 +41,14 @@ const NOT_IN_WORKSPACE: Refusal = {
 /** The same refusal, as the counter's receipt-access path words it. */
 const OUTSIDE: Refusal = { code: 'FORBIDDEN', message: 'Branch is outside your scope.' };
 
-const memberWithoutCustomRules = { organizationRole: null, permissionOverrides: [] };
+/** The stored row of the session user (an active ADMIN of org-1) with no custom rules. */
+const memberWithoutCustomRules = {
+  role: 'ADMIN',
+  status: 'ACTIVE',
+  organizationId: 'org-1',
+  organizationRole: null,
+  permissionOverrides: [],
+};
 
 const procedures: Array<[string, (caller: Caller) => Promise<unknown>, Refusal]> = [
   ['manualPaymentSettings', (c) => c.manualPaymentSettings({ branchId: BRANCH }), OUTSIDE],
@@ -330,13 +337,16 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
   };
   const member = (
     rules: Array<{ capability: string; effect: string }>,
-    overrides: Array<{ capability: string; effect: string }> = []
+    overrides: Array<{ capability: string; effect: string }> = [],
+    stored: { role?: string; status?: string; organizationId?: string } = {}
   ) => ({
-    status: 'ACTIVE',
-    organizationId: 'org-1',
+    role: stored.role ?? 'EMPLOYEE',
+    status: stored.status ?? 'ACTIVE',
+    organizationId: stored.organizationId ?? 'org-1',
     organizationRole: { permissions: rules },
     permissionOverrides: overrides,
   });
+  const ADMIN_ROW = { role: 'ADMIN' };
   const template = (key: string) =>
     PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!.capabilities.map((capability) => ({
       capability,
@@ -401,9 +411,15 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
     closeProcedures.flatMap(([name, run]) =>
       (
         [
-          ['an explicit role DENY', member([{ capability: 'pharmacy:close', effect: 'DENY' }])],
-          ['a user pharmacy:* DENY', member([], [{ capability: 'pharmacy:*', effect: 'DENY' }])],
-          ['a role * DENY', member([{ capability: '*', effect: 'DENY' }])],
+          [
+            'an explicit role DENY',
+            member([{ capability: 'pharmacy:close', effect: 'DENY' }], [], ADMIN_ROW),
+          ],
+          [
+            'a user pharmacy:* DENY',
+            member([], [{ capability: 'pharmacy:*', effect: 'DENY' }], ADMIN_ROW),
+          ],
+          ['a role * DENY', member([{ capability: '*', effect: 'DENY' }], [], ADMIN_ROW)],
         ] as const
       ).map(([label, rules]) => [name, label, rules, run] as const)
     )
@@ -431,11 +447,74 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
     async (_name, run) => {
       db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
       db.user.findUnique.mockResolvedValue(
-        member([], [{ capability: 'pharmacy:counter', effect: 'DENY' }])
+        member([], [{ capability: 'pharmacy:counter', effect: 'DENY' }], ADMIN_ROW)
       );
       await run(caller('ADMIN')).catch((error: unknown) =>
         expect(error).not.toMatchObject(NO_CLOSE)
       );
+      expect(db.$transaction).toHaveBeenCalledOnce();
+    }
+  );
+
+  // Active identity: the session says ADMIN, the stored row decides.
+  it.each(
+    closeProcedures.flatMap(([name, run]) =>
+      (
+        [
+          ['suspended', { ...ADMIN_ROW, status: 'SUSPENDED' }],
+          ['moved to another organization', { ...ADMIN_ROW, organizationId: 'org-2' }],
+        ] as const
+      ).map(([label, stored]) => [name, label, stored, run] as const)
+    )
+  )('%s refuses a session ADMIN whose stored row is %s', async (_name, _label, stored, run) => {
+    db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+    db.user.findUnique.mockResolvedValue(member([], [], stored));
+    await expect(run(caller('ADMIN'))).rejects.toMatchObject(NO_CLOSE);
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(closeProcedures)(
+    '%s treats a session ADMIN demoted to a plain employee as that employee (no close)',
+    async (_name, run) => {
+      db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+      db.user.findUnique.mockResolvedValue(member(template('pharmacist')));
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
+      await expect(run(caller('ADMIN'))).rejects.toMatchObject(NO_CLOSE);
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(closeProcedures)(
+    '%s treats a session ADMIN demoted to Manager as a manager: assigned branches only',
+    async (_name, run) => {
+      db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+      db.user.findUnique.mockResolvedValue(member(template('manager')));
+      await expect(run(caller('ADMIN'))).rejects.toMatchObject(OUTSIDE);
+      expect(db.$transaction).not.toHaveBeenCalled();
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
+      await run(caller('ADMIN')).catch((error: unknown) => {
+        expect(error).not.toMatchObject(NO_CLOSE);
+        expect(error).not.toMatchObject(OUTSIDE);
+      });
+      expect(db.$transaction).toHaveBeenCalledOnce();
+    }
+  );
+
+  // A pharmacist is not barred by profession: one a tenant has given a role that
+  // grants pharmacy:close (Manager, or a custom closing role) closes as that role.
+  it.each(closeProcedures)(
+    '%s admits a pharmacist given a custom role that grants pharmacy:close, on an assigned branch',
+    async (_name, run) => {
+      db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+      db.user.findUnique.mockResolvedValue(
+        member([...template('pharmacist'), { capability: 'pharmacy:close', effect: 'ALLOW' }])
+      );
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
+      await run(caller('EMPLOYEE')).catch((error: unknown) => {
+        expect(error).not.toMatchObject(NO_CLOSE);
+        expect(error).not.toMatchObject(OUTSIDE);
+      });
       expect(db.$transaction).toHaveBeenCalledOnce();
     }
   );

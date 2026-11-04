@@ -79,7 +79,13 @@ function fixture() {
       findMany: vi.fn().mockResolvedValue([{ id: 'actor-1', name: 'Ayesha Karim' }]),
       // The close gate reads the ADMIN's own rules for an explicit pharmacy:close
       // DENY (DEV-739); this owner has no custom rules.
-      findUnique: vi.fn().mockResolvedValue({ organizationRole: null, permissionOverrides: [] }),
+      findUnique: vi.fn().mockResolvedValue({
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: null,
+        permissionOverrides: [],
+      }),
     },
   };
   const caller = app.createCaller({

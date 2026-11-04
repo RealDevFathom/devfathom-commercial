@@ -16,6 +16,7 @@ const other = `${org}_other`;
 const third = `${org}_third`;
 const restaurant = `${org}_restaurant`;
 const lookalike = `${org}_lookalike`;
+const late = `${org}_late`;
 const runtimeRole = `qa130_${suffix}`;
 const id = (key: string) => `${org}_${key}`;
 const migration = readFileSync(
@@ -40,6 +41,11 @@ const dayCloseMigration = readFileSync(
   'prisma/migrations/20261104120000_pharmacy_pharmacist_day_close_revoke/migration.sql',
   'utf8'
 )
+  .replace(/^BEGIN;$/m, '')
+  .replace(/^COMMIT;$/m, '');
+// Rollout phase 2 (not a migration in this release; see the runbook). Tested here so
+// the SQL that will ship as the phase 2 migration is the SQL that was tested.
+const dayClosePhase2 = readFileSync('docs/operations/sql/pharmacy-day-close-phase2.sql', 'utf8')
   .replace(/^BEGIN;$/m, '')
   .replace(/^COMMIT;$/m, '');
 const expiry = new Date('2035-01-02T00:00:00.000Z');
@@ -427,6 +433,115 @@ const legacy: Record<string, string[]> = {
     );
     expect(forced.rows).toHaveLength(2);
     expect(forced.rows.every((r) => r.relforcerowsecurity)).toBe(true);
+    await client.query('RESET ROLE');
+  });
+
+  it('rollout phase 2 grants installed Managers, removes late Pharmacist grants, keeps DENYs', async () => {
+    const closeRows = (role: string) =>
+      client
+        .query(
+          `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 AND capability='pharmacy:close'`,
+          [id(role)]
+        )
+        .then((result) => result.rows);
+    await client.query(`SELECT set_config('app.is_platform_admin','true',true)`);
+    // A previous revision provisioned a Pharmacist from the old template during phase 1.
+    await client.query(
+      `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY',now(),now())`,
+      [late]
+    );
+    await client.query(
+      `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,'pharmacist','Pharmacist',true,now())`,
+      [id('late_pharmacist'), late]
+    );
+    await client.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:close','ALLOW')`,
+      [id('late_pharmacist_close'), late, id('late_pharmacist')]
+    );
+    await client.query(dayClosePhase2);
+    expect(await closeRows('late_pharmacist')).toEqual([]);
+    expect(await closeRows('templated_pharmacist')).toEqual([]);
+    expect(await closeRows('denied_pharmacist')).toEqual([
+      { capability: 'pharmacy:close', effect: 'DENY' },
+    ]);
+    expect(await closeRows('manager')).toEqual([{ capability: 'pharmacy:close', effect: 'ALLOW' }]);
+    expect(await closeRows('other_manager')).toEqual([
+      { capability: 'pharmacy:close', effect: 'ALLOW' },
+    ]);
+    expect(await closeRows('denied_manager')).toEqual([
+      { capability: 'pharmacy:close', effect: 'DENY' },
+    ]);
+    expect(await closeRows('custom_manager')).toEqual([]);
+    expect(await closeRows('restaurant_manager')).toEqual([]);
+    expect(await closeRows('custom_pharmacist')).toEqual([
+      { capability: 'pharmacy:close', effect: 'ALLOW' },
+    ]);
+    expect(await closeRows('restaurant_pharmacist')).toEqual([
+      { capability: 'pharmacy:close', effect: 'ALLOW' },
+    ]);
+    // An installed Manager now matches its template exactly.
+    const managerTemplate = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'manager')!;
+    expect(
+      (
+        await client.query(
+          `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1 ORDER BY capability`,
+          [id('manager')]
+        )
+      ).rows.map((row) => row.capability)
+    ).toEqual([...managerTemplate.capabilities].sort());
+    const orgs = [org, other, third, restaurant, lookalike, late];
+    const snapshot = () =>
+      client
+        .query(
+          `SELECT * FROM organization_role_permissions WHERE "organizationId" = ANY($1) ORDER BY id`,
+          [orgs]
+        )
+        .then((result) => result.rows);
+    const once = await snapshot();
+    await client.query(dayClosePhase2);
+    expect(await snapshot()).toEqual(once);
+
+    // The real can(), as the restricted runtime role: an installed Manager now closes.
+    await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
+    await client.query(
+      `SELECT set_config('app.is_platform_admin','false',true),set_config('app.current_organization_id',$1,true)`,
+      [org]
+    );
+    const db = {
+      user: {
+        findUnique: async ({ where }: { where: { id: string } }) => ({
+          organizationRole: {
+            permissions: (
+              await client.query(
+                `SELECT p.capability,p.effect FROM users u JOIN organization_role_permissions p ON p."organizationRoleId"=u."organizationRoleId" WHERE u.id=$1`,
+                [where.id]
+              )
+            ).rows,
+          },
+          permissionOverrides: (
+            await client.query(
+              `SELECT capability,effect FROM user_permission_overrides WHERE "userId"=$1 AND ("expiresAt" IS NULL OR "expiresAt">now())`,
+              [where.id]
+            )
+          ).rows,
+        }),
+      },
+    } as unknown as AuthzDb;
+    for (const [key, allowed] of [
+      ['manager', true],
+      ['pharmacist', false],
+      ['cashier', false],
+    ] as const) {
+      expect({
+        key,
+        allowed: await can(
+          { id: id(`user_${key}`), role: 'EMPLOYEE', department: 'Pharmacy', status: 'ACTIVE' },
+          'pharmacy:close',
+          undefined,
+          { db }
+        ),
+      }).toEqual({ key, allowed });
+    }
     await client.query('RESET ROLE');
   });
 });
