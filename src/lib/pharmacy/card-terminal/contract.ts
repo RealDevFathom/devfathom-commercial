@@ -101,7 +101,7 @@ export interface CardTerminalProvider {
  * may not reuse them, so tenders, refunds and reconciliation can always tell an
  * integrated terminal charge from a manual or sandbox one.
  */
-export const RESERVED_PROVIDER_NAMES: ReadonlySet<string> = new Set([
+export const RESERVED_PROVIDER_NAMES: readonly string[] = Object.freeze([
   'MOCK',
   'MANUAL_TERMINAL',
   'MANUAL_MERCHANT',
@@ -134,14 +134,20 @@ export type TerminalAdmissionRefusal =
 /**
  * Whether the provider may move real money. A self-declared certification claim is
  * necessary but never sufficient; the name must also be on the admission list.
+ *
+ * In a production process the built-in list and the real environment always apply,
+ * whatever admission or environment a caller passes. Injection exists for tests only.
  */
 export function terminalAdmissionRefusal(
   provider: Pick<CardTerminalProvider, 'name' | 'certification' | 'simulated'>,
-  admission: TerminalAdmission = PRODUCTION_TERMINAL_ADMISSION,
-  environment: string | undefined = process.env.NODE_ENV
+  requestedAdmission: TerminalAdmission = PRODUCTION_TERMINAL_ADMISSION,
+  requestedEnvironment: string | undefined = process.env.NODE_ENV
 ): TerminalAdmissionRefusal | null {
+  const production = process.env.NODE_ENV === 'production';
+  const admission = production ? PRODUCTION_TERMINAL_ADMISSION : requestedAdmission;
+  const environment = production ? 'production' : requestedEnvironment;
   if (!/^[A-Z][A-Z0-9_]{1,47}$/.test(provider.name)) return 'INVALID_PROVIDER_NAME';
-  if (RESERVED_PROVIDER_NAMES.has(provider.name)) return 'RESERVED_PROVIDER_NAME';
+  if (RESERVED_PROVIDER_NAMES.includes(provider.name)) return 'RESERVED_PROVIDER_NAME';
   if (provider.simulated && environment === 'production') return 'SIMULATED_PROVIDER_IN_PRODUCTION';
   if (provider.certification.status !== 'CLAIMED_CERTIFIED') return 'NO_CERTIFICATION_CLAIM';
   if (!admission.admittedProviders.includes(provider.name)) return 'NOT_ADMITTED';

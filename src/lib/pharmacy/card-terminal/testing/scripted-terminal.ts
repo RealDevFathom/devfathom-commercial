@@ -13,6 +13,10 @@ import type {
  * Each dispatch or status call takes the next scripted step for that operation:
  * a response, 'HANG' (never resolves; exercises the timeout) or 'THROW'.
  */
+// Refuse to load in a production process at all.
+if (process.env.NODE_ENV === 'production')
+  throw new Error('The scripted card terminal is test-only and cannot load in production.');
+
 export type ScriptStep = TerminalResponse | 'HANG' | 'THROW';
 
 export function createScriptedTerminal(options: {

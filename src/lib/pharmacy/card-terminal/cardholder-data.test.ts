@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { FORBIDDEN_PAYLOAD_KEYS } from '@/lib/restaurant/payment-adapter';
+import { CARDHOLDER_PAYLOAD_KEYS } from '@/lib/restaurant/payment-adapter';
 
 import {
   assertNoCardholderData,
-  CARDHOLDER_DATA_KEYS,
+  CARDHOLDER_DATA_KEY_LIST,
   CardholderDataError,
   containsPanLikeValue,
   redactForLog,
@@ -16,8 +16,10 @@ const TEST_PAN_SPACED = '4111 1111 1111 1111';
 
 describe('card-terminal cardholder-data guard (DEV-743)', () => {
   it('extends the restaurant C6 key list instead of keeping a second one', () => {
-    for (const key of FORBIDDEN_PAYLOAD_KEYS) expect(CARDHOLDER_DATA_KEYS.has(key)).toBe(true);
-    expect(CARDHOLDER_DATA_KEYS.has('expiry')).toBe(true);
+    for (const key of CARDHOLDER_PAYLOAD_KEYS) expect(CARDHOLDER_DATA_KEY_LIST).toContain(key);
+    expect(CARDHOLDER_DATA_KEY_LIST).toContain('expiry');
+    expect(Object.isFrozen(CARDHOLDER_DATA_KEY_LIST)).toBe(true);
+    expect(Object.isFrozen(CARDHOLDER_PAYLOAD_KEYS)).toBe(true);
   });
 
   it('detects Luhn-valid 13–19 digit runs, spaced or dashed', () => {

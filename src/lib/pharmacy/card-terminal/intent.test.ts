@@ -146,14 +146,30 @@ describe('terminal intent state machine (DEV-743)', () => {
     expect(done.history.at(-1)).toMatchObject({ actorId: 'actor-2' });
   });
 
-  it('settles only an approved intent', () => {
-    expect(() => markSettled(intent({ state: 'UNKNOWN' }), T0, 'tender-1')).toThrow(
+  it('settles only an approved intent, and only for the hand-off claim holder', () => {
+    const claim = { claimId: 'claim-1', at: T0 };
+    expect(() =>
+      markSettled(intent({ state: 'UNKNOWN', handoffClaim: claim }), T0, 'tender-1', 'claim-1')
+    ).toThrow(TerminalIntentError);
+    expect(() => markSettled(intent({ state: 'APPROVED' }), T0, 'tender-1', 'claim-1')).toThrow(
       TerminalIntentError
     );
-    expect(markSettled(intent({ state: 'APPROVED' }), T0, 'tender-1')).toMatchObject({
-      state: 'SETTLED',
-      ledgerRef: 'tender-1',
-    });
+    expect(() =>
+      markSettled(intent({ state: 'APPROVED', handoffClaim: claim }), T0, 'tender-1', 'other')
+    ).toThrow(TerminalIntentError);
+    expect(
+      markSettled(intent({ state: 'APPROVED', handoffClaim: claim }), T0, 'tender-1', 'claim-1')
+    ).toMatchObject({ state: 'SETTLED', ledgerRef: 'tender-1' });
+  });
+
+  it('never lets a charged intent be closed as "not charged"', () => {
+    const charged = intent({ state: 'MANUAL_REVIEW', chargeEvidence: true });
+    expect(() =>
+      resolveManually(charged, { outcome: 'NOT_CHARGED' }, T0, 'actor-2', 'looks unpaid')
+    ).toThrow(TerminalIntentError);
+    expect(
+      resolveManually(charged, { outcome: 'REVERSED_EXTERNALLY' }, T0, 'actor-2', 'voided')
+    ).toMatchObject({ state: 'FAILED', failureCode: 'CHARGED_AND_REVERSED_EXTERNALLY' });
   });
 
   it('turns malformed provider responses into uncertainty, never approval', () => {

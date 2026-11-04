@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { FORBIDDEN_PAYLOAD_KEYS } from '@/lib/restaurant/payment-adapter';
+import { CARDHOLDER_PAYLOAD_KEYS } from '@/lib/restaurant/payment-adapter';
 
 /**
  * DEV-743 — cardholder-data and secret guard for the pharmacy card-terminal seam.
@@ -28,14 +28,15 @@ const TERMINAL_EXTRA_CARD_KEYS = [
   'iccdata',
 ] as const;
 
-export const CARDHOLDER_DATA_KEYS: ReadonlySet<string> = new Set([
-  ...FORBIDDEN_PAYLOAD_KEYS,
+/** Frozen lists. The lookup Sets below are private so no module can change them. */
+export const CARDHOLDER_DATA_KEY_LIST: readonly string[] = Object.freeze([
+  ...CARDHOLDER_PAYLOAD_KEYS,
   ...TERMINAL_EXTRA_CARD_KEYS,
 ]);
 
 /** Field names that hold provider or device secrets. Redacted from logs, refused in
  * persisted terminal records. */
-export const SECRET_KEYS: ReadonlySet<string> = new Set([
+export const SECRET_KEY_LIST: readonly string[] = Object.freeze([
   'apikey',
   'secret',
   'clientsecret',
@@ -52,6 +53,9 @@ export const SECRET_KEYS: ReadonlySet<string> = new Set([
   'sessionkey',
   'signingkey',
 ]);
+
+const CARDHOLDER_DATA_KEYS = new Set(CARDHOLDER_DATA_KEY_LIST);
+const SECRET_KEYS = new Set(SECRET_KEY_LIST);
 
 export class CardholderDataError extends Error {
   constructor(

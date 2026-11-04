@@ -34,6 +34,11 @@ export function planTerminalReversal(input: {
   /** Every VOID/REFUND intent that reverses `saleIntent`. */
   reversals: readonly TerminalIntent[];
   requestedMinor: number;
+  /**
+   * Refunds settlement already recorded against the sale's tender, by ANY route
+   * (terminal, or the manual cash fallback). Read from `pharmacy_refunds`.
+   */
+  ledgerRefundedMinor: number;
   batchOpen: boolean;
   supportsVoid: boolean;
   supportsRefund: boolean;
@@ -48,11 +53,17 @@ export function planTerminalReversal(input: {
     return { kind: 'BLOCKED', reason: 'INVALID_AMOUNT' };
 
   const own = reversals.filter((row) => row.reversesIntentRef === saleIntent.intentRef);
-  if (own.some((row) => TERMINAL_UNRESOLVED_STATES.has(row.state)))
+  // An approved reversal not yet recorded as a refund counts as unresolved here too.
+  if (own.some((row) => TERMINAL_UNRESOLVED_STATES.has(row.state) || row.state === 'APPROVED'))
     return { kind: 'BLOCKED', reason: 'PRIOR_REVERSAL_UNRESOLVED' };
-  const reversedMinor = own
-    .filter((row) => row.state === 'APPROVED' || row.state === 'SETTLED')
+  if (!Number.isSafeInteger(input.ledgerRefundedMinor) || input.ledgerRefundedMinor < 0)
+    return { kind: 'BLOCKED', reason: 'INVALID_AMOUNT' };
+  const terminalReversedMinor = own
+    .filter((row) => row.state === 'SETTLED')
     .reduce((sum, row) => sum + row.amountMinor, 0);
+  // Settled terminal reversals are also ledger refunds, so take the larger figure
+  // rather than the sum: it covers manual refunds without double counting.
+  const reversedMinor = Math.max(terminalReversedMinor, input.ledgerRefundedMinor);
   const remaining = saleIntent.amountMinor - reversedMinor;
   if (requestedMinor > remaining) return { kind: 'BLOCKED', reason: 'EXCEEDS_REMAINING' };
 

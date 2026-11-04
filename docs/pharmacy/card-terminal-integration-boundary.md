@@ -34,10 +34,15 @@ The production admission list (`PRODUCTION_TERMINAL_ADMISSION` in `contract.ts`)
 frozen. Adding a provider name to it is the binding step. That change must be made separately and
 reviewed, with the certification evidence linked.
 
+Tests inject an admission list and environment. In a production process
+(`NODE_ENV=production`) both are ignored and the built-in empty list always applies. Simulated
+providers are refused, and the test-only scripted terminal throws if it is loaded.
+
 ## Reuse of existing infrastructure
 
-- **Restaurant `payment-adapter.ts`**: reused the C6 cardholder-data key list. It is now exported,
-  and the pharmacy guard extends it so there is one list. The restaurant `execute` contract is
+- **Restaurant `payment-adapter.ts`**: reused the C6 cardholder-data key list. A frozen copy,
+  `CARDHOLDER_PAYLOAD_KEYS`, is now exported and the pharmacy guard extends it, so there is one
+  list. The restaurant lookup Set itself stays private. The restaurant `execute` contract is
   synchronous and pure, which does not fit a terminal that can hang or answer later, so it is not
   reused as the provider interface.
 - **Pharmacy `settlement.ts`**: reused unchanged. `requireReleaseSafeAdapter` is still the final
@@ -75,7 +80,17 @@ CREATED ─dispatch─▶ SENT ─▶ PENDING ─▶ APPROVED ─ledger─▶ SE
 - `NOT_FOUND` counts as not charged only from a status query, and only after `notFoundGraceMs`
   since dispatch.
 - A partial or over approval goes to `MANUAL_REVIEW` and is never settled automatically.
-- A manual resolution requires a reason, records the actor, and must match the intent amount.
+- If a dispatch call answers APPROVED after recovery has already closed the intent as FAILED or
+  DECLINED, the intent is reopened as `MANUAL_REVIEW` (`LATE_DISPATCH_APPROVAL`). A late charge
+  never disappears. `notFoundGraceMs` must be at least twice `timeoutMs`, and recovery leaves a
+  `SENT` intent alone for two timeouts.
+- `chargeEvidence` is set once the provider has reported any approval, even a malformed or
+  mismatched one. Such an intent cannot be closed as `NOT_CHARGED`. The operator must either
+  record it as approved, with a matching amount and reference, or as `REVERSED_EXTERNALLY` after
+  reversing it in the provider portal.
+- A manual resolution requires a reason, records the actor, and is scoped to the branch.
+- A `CREATED` intent older than one timeout was left by a crash. It is closed, never dispatched
+  late, whether the cashier retries or a recovery sweep finds it.
 
 ## Duplicate-charge protection (`service.ts`, `store.ts`)
 
@@ -87,8 +102,26 @@ CREATED ─dispatch─▶ SENT ─▶ PENDING ─▶ APPROVED ─ledger─▶ SE
    Split tenders are allowed once the earlier one is settled; settlement's `OVER_TENDER` still caps
    the total.
 3. Settlement binds the tender to `${intentRef}:tender`. The hand-off adapter replays the approved
-   outcome only for that key, the exact amount and the right capability, and never calls the
-   provider.
+   outcome only for that key, the exact amount, the right capability and the original sale
+   reference. It never calls the provider.
+4. **Single hand-off claim.** The adapter claims the approval once (compare-and-set on the
+   intent). A second device, a second sale, or a replay with a fresh key is refused, so one charge
+   becomes at most one tender. Only the claim holder can mark the intent `SETTLED`. A failed
+   settlement gives back only its own claim. A claim older than `handoffLeaseMs` (default 10
+   minutes) may be taken over.
+5. `settlement-handoff.ts` (`settleApprovedTerminalSale`, `settleApprovedTerminalReversal`,
+   `startTerminalReversal`) is the intended caller. It runs inside the money transaction, takes
+   the sale lock (and the tender lock for refunds) in settlement's order, and takes the sale,
+   tender and amount from the stored intent, never from the request.
+6. **Ledger-first repair** (`reconcileWithLedger`). Under the lock, the helper first looks for the
+   tender or refund carrying this approval's provider reference:
+   - if one exists, it is adopted and the intent is marked SETTLED, from any device. This covers a
+     crash after commit;
+   - if none exists but the intent holds a claim or is marked SETTLED, the intent is reopened to
+     APPROVED. This covers a lost claim, or a transaction that failed to commit after the intent
+     was marked.
+
+   A lost claim or failed commit therefore cannot wedge a charge.
 
 ## Recovery
 
@@ -101,6 +134,13 @@ refuse to close while this list is not empty. That gate is not wired yet; see th
 - **VOID**: the full amount, nothing reversed yet, the batch still open, and the provider supports
   void.
 - **REFUND**: any amount within the remaining captured value, if the provider supports refunds.
+  The remaining value counts refunds settlement already recorded by any route, including the
+  manual cash fallback. `startTerminalReversal` reads them from `pharmacy_refunds` under the sale
+  and tender locks, the same locks `refundPharmacyTender` takes, so a concurrent manual refund
+  cannot slip in. Those locks are held while the terminal answers, so keep `timeoutMs` short.
+- A reversal is re-planned after it takes the sale's single open slot, so a reversal that settled
+  in between cannot push the total past the capture.
+- The same attempt key reused against a different sale tender is `IDEMPOTENCY_CONFLICT`.
 - **BLOCKED** otherwise. The reason is one of `SALE_NOT_SETTLED`, `PRIOR_REVERSAL_UNRESOLVED`,
   `EXCEEDS_REMAINING`, `REVERSAL_UNSUPPORTED`, and so on. The seam never falls back to cash.
 - An approved reversal is recorded through `refundPharmacyTender` with
@@ -116,7 +156,7 @@ report. Each issue maps to a recommended action:
 | `APPROVED_NOT_SETTLED` (including a late charge after FAILED) | `REVIEW_VOID_OR_REFUND` |
 | `UNRESOLVED_INTENT` | `RECOVER_STATUS` |
 | `MISSING_FROM_PROVIDER_REPORT` | `RECHECK_AFTER_BATCH` |
-| `PROVIDER_RECORD_WITHOUT_INTENT`, `LEDGER_ROW_WITHOUT_INTENT`, `AMOUNT_MISMATCH`, `DUPLICATE_PROVIDER_REF` | `INVESTIGATE` |
+| `PROVIDER_RECORD_WITHOUT_INTENT`, `LEDGER_ROW_WITHOUT_INTENT`, `AMOUNT_MISMATCH`, `DUPLICATE_PROVIDER_REF` (report, ledger or two intents), `LEDGER_LINK_MISMATCH` | `INVESTIGATE` |
 
 Manual `MANUAL_TERMINAL` tenders are excluded by provider name.
 
@@ -126,11 +166,15 @@ Manual `MANUAL_TERMINAL` tenders are excluded by provider name.
   tokens, are refused before any intent is written.
 - Any string with a Luhn-valid run of 13 to 19 digits is refused, including in provider references
   and operator notes.
+- Provider-supplied decline codes, error codes and brands that could hold a card number are
+  replaced or dropped before storage, so they can never block a save.
+- The key lists are frozen arrays. The lookup Sets are private to their modules.
 - Logs are structured and pass through `redactForLog`.
 - The seam's own hashes are rendered as letters (a to p), so the PAN scan cannot fire on them.
-- Known limitation: a provider whose genuine references are Luhn-valid 13 to 19 digit numbers would
-  see those approvals go to recovery and then manual review. Revisit this once a provider's
-  reference format is known.
+- Known limitation: about one in ten numeric 13 to 19 digit references passes the Luhn check. Such
+  an approval cannot be stored. It goes to manual review with charge evidence, where the operator
+  must reverse it externally. Decide how to store references once a provider's format is known,
+  for example with a digest plus suffix or a declared format.
 
 ## Proposed persistence (not migrated)
 
@@ -170,6 +214,9 @@ Before binding a provider, someone must confirm and document:
 - A router or command that wires the counter to `startSale` and `recover`, and a counter UI for
   pending, unknown and manual-review states (DevFathom Studio rules apply).
 - A day-close gate on `unresolved()` and reconciliation lines.
+- A unique index on terminal tender `providerRef`, as a second line of defence behind the claim.
+- A database `TerminalIntentStore` that joins the money transaction, so claims and SETTLED marks
+  commit or roll back with the tender. The ledger-first repair covers the gap until then.
 - A background recovery sweep.
 - The actual provider adapter, after authorization.
 

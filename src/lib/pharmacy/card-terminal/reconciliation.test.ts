@@ -106,6 +106,28 @@ describe('card-terminal reconciliation (DEV-743)', () => {
     expect(report.balanced).toBe(false);
   });
 
+  it('flags two intents sharing a provider ref and a ledger link that disagrees', () => {
+    const report = reconcileTerminalDay({
+      providerName: P,
+      intents: [
+        intent('twin-1', { providerRef: 'p-twin', ledgerRef: 't-twin' }),
+        intent('twin-2', { providerRef: 'p-twin', ledgerRef: 't-twin' }),
+        intent('linked', { providerRef: 'p-link', ledgerRef: 't-other' }),
+      ],
+      ledger: [tender('t-twin', 'p-twin'), tender('t-link', 'p-link'), tender('t-other', 'p-x')],
+      providerRecords: [
+        { providerRef: 'p-twin', kind: 'SALE', amountMinor: 1_000 },
+        { providerRef: 'p-link', kind: 'SALE', amountMinor: 1_000 },
+      ],
+    });
+    const issues = report.lines.map(
+      (line) => `${line.issue}:${line.intentRef ?? line.providerRef}`
+    );
+    expect(issues).toContain('DUPLICATE_PROVIDER_REF:p-twin');
+    expect(issues).toContain('LEDGER_LINK_MISMATCH:linked');
+    expect(report.balanced).toBe(false);
+  });
+
   it('is deterministic regardless of input order', () => {
     const intents = [
       intent('a', { providerRef: 'pa', ledgerRef: 'ta' }),

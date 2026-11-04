@@ -73,6 +73,14 @@ export type TerminalIntent = {
   reviewReason?: string;
   /** The settlement row this intent was recorded as: tender id (SALE) or refund id. */
   ledgerRef?: string;
+  /**
+   * Set once the provider ever reported an approval for this operation, even a
+   * malformed or mismatched one. An intent with charge evidence can never be closed
+   * as "not charged".
+   */
+  chargeEvidence?: true;
+  /** The single settlement hand-off allowed to record this approval (see service.ts). */
+  handoffClaim?: { claimId: string; at: string };
   history: TerminalIntentHistoryEntry[];
 };
 
@@ -182,6 +190,13 @@ export function refundIdempotencyKeyFor(intent: Pick<TerminalIntent, 'intentRef'
   return `${intent.intentRef}:refund`;
 }
 
+/** A provider-supplied code, or the fallback if it is malformed or could hold a PAN. */
+function safeCode(value: unknown, fallback: string) {
+  return typeof value === 'string' && DECLINE_CODE.test(value) && !containsPanLikeValue(value)
+    ? value
+    : fallback;
+}
+
 /** A provider response, validated and narrowed. Anything malformed becomes UNKNOWN. */
 export type NormalizedResponse =
   | {
@@ -217,8 +232,6 @@ export function normalizeTerminalResponse(response: unknown): NormalizedResponse
         (r.amountMinor as number) > 0 &&
         (r.approvalCode === undefined ||
           (typeof r.approvalCode === 'string' && APPROVAL_CODE.test(r.approvalCode))) &&
-        (r.cardBrand === undefined ||
-          (typeof r.cardBrand === 'string' && CARD_BRAND.test(r.cardBrand))) &&
         (r.last4 === undefined || (typeof r.last4 === 'string' && LAST4.test(r.last4)));
       if (!ok) return { kind: 'UNKNOWN', code: 'MALFORMED_APPROVAL' };
       return {
@@ -226,25 +239,26 @@ export function normalizeTerminalResponse(response: unknown): NormalizedResponse
         providerRef: r.providerRef as string,
         amountMinor: r.amountMinor as number,
         ...(r.approvalCode ? { approvalCode: r.approvalCode as string } : {}),
-        ...(r.cardBrand ? { cardBrand: r.cardBrand as string } : {}),
+        // An unusable brand is dropped, never stored; it is not needed to settle.
+        ...(typeof r.cardBrand === 'string' &&
+        CARD_BRAND.test(r.cardBrand) &&
+        !containsPanLikeValue(r.cardBrand)
+          ? { cardBrand: r.cardBrand }
+          : {}),
         ...(r.last4 ? { last4: r.last4 as string } : {}),
       };
     }
     case 'DECLINED':
       return {
         kind: 'DECLINED',
-        declineCode:
-          typeof r.declineCode === 'string' && DECLINE_CODE.test(r.declineCode)
-            ? r.declineCode
-            : 'UNSPECIFIED',
+        declineCode: safeCode(r.declineCode, 'UNSPECIFIED'),
       };
     case 'PENDING':
       return { kind: 'PENDING' };
     case 'NOT_FOUND':
       return { kind: 'NOT_FOUND' };
     case 'ERROR': {
-      const code =
-        typeof r.code === 'string' && DECLINE_CODE.test(r.code) ? r.code : 'PROVIDER_ERROR';
+      const code = safeCode(r.code, 'PROVIDER_ERROR');
       return r.reachedTerminal === false ? { kind: 'NOT_SENT', code } : { kind: 'UNKNOWN', code };
     }
     default:
@@ -314,10 +328,12 @@ export function applyTerminalResponse(
       if (response.amountMinor !== intent.amountMinor)
         return transition(intent, 'MANUAL_REVIEW', at, 'AMOUNT_MISMATCH', {
           providerRef: response.providerRef,
+          chargeEvidence: true,
           reviewReason: `Provider approved ${response.amountMinor} for an intent of ${intent.amountMinor}.`,
         });
       return transition(intent, 'APPROVED', at, `${options.source}_APPROVED`, {
         providerRef: response.providerRef,
+        chargeEvidence: true,
         approvalCode: response.approvalCode,
         cardBrand: response.cardBrand,
         last4: response.last4,
@@ -352,8 +368,33 @@ export function applyTerminalResponse(
     case 'UNKNOWN':
       return transition(intent, 'UNKNOWN', at, `${options.source}_UNKNOWN`, {
         failureCode: response.code,
+        // The provider said "approved" in a form we cannot store: money was likely taken.
+        ...(response.code === 'MALFORMED_APPROVAL' ? { chargeEvidence: true as const } : {}),
       });
   }
+}
+
+/**
+ * FAILED/DECLINED → MANUAL_REVIEW when the provider later reports an approval for an
+ * operation we had closed (for example a dispatch that answered after recovery saw
+ * NOT_FOUND). The sale is blocked again until a person resolves it.
+ */
+export function escalateLateApproval(
+  intent: TerminalIntent,
+  at: string,
+  cause: string,
+  providerRef?: string
+): TerminalIntent {
+  if (intent.state !== 'FAILED' && intent.state !== 'DECLINED' && intent.state !== 'MANUAL_REVIEW')
+    invalid(intent, 'late approval');
+  return transition(intent, 'MANUAL_REVIEW', at, cause, {
+    chargeEvidence: true,
+    ...(providerRef && !intent.providerRef ? { providerRef } : {}),
+    reviewReason:
+      intent.state === 'MANUAL_REVIEW'
+        ? (intent.reviewReason ?? 'Under review.') + ' The provider later reported an approval.'
+        : 'The provider reported an approval after this operation was closed.',
+  });
 }
 
 /** SENT/PENDING → UNKNOWN on a timeout, abort or thrown provider error. */
@@ -388,7 +429,13 @@ export function countRecoveryAttempt(
 
 export type ManualResolution =
   | { outcome: 'APPROVED'; providerRef: string; amountMinor: number; approvalCode?: string }
-  | { outcome: 'NOT_CHARGED' };
+  /** No money was taken. Refused once there is any evidence of a charge. */
+  | { outcome: 'NOT_CHARGED' }
+  /**
+   * Money was taken but cannot be settled as this intent (wrong amount, or a reference
+   * that cannot be stored), and the operator reversed it in the provider portal.
+   */
+  | { outcome: 'REVERSED_EXTERNALLY' };
 
 /**
  * MANUAL_REVIEW → APPROVED | FAILED by an operator who checked the terminal or the
@@ -421,6 +468,20 @@ export function resolveManually(
       actorId
     );
   }
+  if (resolution.outcome === 'REVERSED_EXTERNALLY')
+    return transition(
+      intent,
+      'FAILED',
+      at,
+      `MANUAL_REVERSED_EXTERNALLY: ${reason}`,
+      { failureCode: 'CHARGED_AND_REVERSED_EXTERNALLY' },
+      actorId
+    );
+  if (intent.chargeEvidence || intent.providerRef)
+    throw new TerminalIntentError(
+      'INVALID_INPUT',
+      'The provider reported a charge for this operation. Record it as approved or as reversed externally.'
+    );
   return transition(
     intent,
     'FAILED',
@@ -431,9 +492,77 @@ export function resolveManually(
   );
 }
 
+/** Claim the single settlement hand-off for an APPROVED intent. */
+/**
+ * Claim the single settlement hand-off for an APPROVED intent. A claim older than
+ * `leaseMs` was lost (its settlement crashed or rolled back) and may be taken over;
+ * settlement-handoff.ts first proves under the sale lock that no tender exists.
+ */
+export function claimHandoff(
+  intent: TerminalIntent,
+  at: string,
+  token: string,
+  leaseMs: number
+): TerminalIntent {
+  const held =
+    intent.handoffClaim !== undefined &&
+    Date.parse(at) - Date.parse(intent.handoffClaim.at) < leaseMs;
+  if (intent.state !== 'APPROVED' || held) invalid(intent, 'hand-off claim');
+  return transition(
+    intent,
+    'APPROVED',
+    at,
+    intent.handoffClaim ? 'HANDOFF_TAKEN_OVER' : 'HANDOFF_CLAIMED',
+    {
+      handoffClaim: { claimId: token, at },
+    }
+  );
+}
+
+/** Release a hand-off claim whose settlement command failed. Only its owner may. */
+export function releaseHandoff(intent: TerminalIntent, at: string, token: string): TerminalIntent {
+  if (intent.state !== 'APPROVED' || intent.handoffClaim?.claimId !== token)
+    invalid(intent, 'hand-off release');
+  return transition(intent, 'APPROVED', at, 'HANDOFF_RELEASED', { handoffClaim: undefined });
+}
+
+/**
+ * SETTLED/APPROVED → APPROVED with no claim, when the ledger proves (under the sale
+ * lock) that no tender or refund exists for this intent: a settlement that marked the
+ * intent and then failed to commit, or a hand-off claim that was lost.
+ */
+export function reopenForSettlement(intent: TerminalIntent, at: string): TerminalIntent {
+  if (intent.state !== 'SETTLED' && intent.state !== 'APPROVED') invalid(intent, 'reopen');
+  return transition(intent, 'APPROVED', at, 'LEDGER_ROW_MISSING', {
+    ledgerRef: undefined,
+    handoffClaim: undefined,
+  });
+}
+
+/**
+ * APPROVED (claimed or not) → SETTLED when the ledger already holds the row this
+ * approval produced, found by provider reference under the sale lock.
+ */
+export function adoptLedgerRow(
+  intent: TerminalIntent,
+  at: string,
+  ledgerRef: string
+): TerminalIntent {
+  if (intent.state !== 'APPROVED') invalid(intent, 'adopt');
+  assertSafeId(ledgerRef, 'ledgerRef');
+  return transition(intent, 'SETTLED', at, 'LEDGER_ROW_ADOPTED', { ledgerRef });
+}
+
 /** APPROVED → SETTLED once settlement recorded the tender (SALE) or refund (VOID/REFUND). */
-export function markSettled(intent: TerminalIntent, at: string, ledgerRef: string): TerminalIntent {
-  if (intent.state !== 'APPROVED') invalid(intent, 'settle');
+export function markSettled(
+  intent: TerminalIntent,
+  at: string,
+  ledgerRef: string,
+  claimToken: string
+): TerminalIntent {
+  // Only the hand-off that settlement actually ran may record the ledger row.
+  if (intent.state !== 'APPROVED' || intent.handoffClaim?.claimId !== claimToken)
+    invalid(intent, 'settle');
   assertSafeId(ledgerRef, 'ledgerRef');
   return transition(
     intent,

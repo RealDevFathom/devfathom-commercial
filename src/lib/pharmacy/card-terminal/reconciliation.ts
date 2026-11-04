@@ -36,6 +36,8 @@ export type ReconciliationIssue =
   | 'LEDGER_ROW_WITHOUT_INTENT'
   | 'AMOUNT_MISMATCH'
   | 'DUPLICATE_PROVIDER_REF'
+  /** The intent's recorded ledger row and the row carrying its provider ref disagree. */
+  | 'LEDGER_LINK_MISMATCH'
   /** The outcome is still unknown. Recover before closing the day. */
   | 'UNRESOLVED_INTENT';
 
@@ -73,6 +75,7 @@ const ACTION: Record<ReconciliationIssue, ReconciliationAction> = {
   LEDGER_ROW_WITHOUT_INTENT: 'INVESTIGATE',
   AMOUNT_MISMATCH: 'INVESTIGATE',
   DUPLICATE_PROVIDER_REF: 'INVESTIGATE',
+  LEDGER_LINK_MISMATCH: 'INVESTIGATE',
   UNRESOLVED_INTENT: 'RECOVER_STATUS',
 };
 
@@ -139,6 +142,26 @@ export function reconcileTerminalDay(input: {
       );
   }
 
+  // Two open or settled intents claiming one provider reference is never normal.
+  const intentsByRef = new Map<string, TerminalIntent[]>();
+  for (const intent of intents) {
+    if (!intent.providerRef || intent.state === 'DECLINED' || intent.state === 'FAILED') continue;
+    intentsByRef.set(intent.providerRef, [...(intentsByRef.get(intent.providerRef) ?? []), intent]);
+  }
+  const duplicateIntentRefs = new Set<string>();
+  for (const [ref, rows] of intentsByRef) {
+    if (rows.length < 2) continue;
+    duplicateIntentRefs.add(ref);
+    if ((recordsByRef.get(ref)?.length ?? 0) > 1 || (ledgerByRef.get(ref)?.length ?? 0) > 1)
+      continue; // already flagged for this ref
+    lines.push(
+      line('DUPLICATE_PROVIDER_REF', {
+        providerRef: ref,
+        intentAmountMinor: rows.reduce((sum, row) => sum + row.amountMinor, 0),
+      })
+    );
+  }
+
   const seenRefs = new Set<string>();
   const seenLedger = new Set<string>();
   for (const intent of intents) {
@@ -156,13 +179,12 @@ export function reconcileTerminalDay(input: {
     if (ref) seenRefs.add(ref);
     const record = uniqueRecord(ref ?? undefined);
     const ledgerRows = ref ? (ledgerByRef.get(ref) ?? []) : [];
-    const ledgerRow =
-      ledgerRows.length === 1
-        ? ledgerRows[0]
-        : intent.ledgerRef
-          ? ledger.find((row) => row.id === intent.ledgerRef)
-          : undefined;
-    if (ledgerRow) seenLedger.add(ledgerRow.id);
+    const byRef = ledgerRows.length === 1 ? ledgerRows[0] : undefined;
+    const byLink = intent.ledgerRef ? ledger.find((row) => row.id === intent.ledgerRef) : undefined;
+    const ledgerRow = byRef ?? byLink;
+    if (byRef) seenLedger.add(byRef.id);
+    if (byLink) seenLedger.add(byLink.id);
+    if (ref && duplicateIntentRefs.has(ref)) continue; // already flagged
     const fields = {
       ...base,
       providerRef: ref,
@@ -172,6 +194,10 @@ export function reconcileTerminalDay(input: {
     };
     if (ref && (recordsByRef.get(ref)?.length ?? 0) > 1) continue; // already flagged
     if (ref && ledgerRows.length > 1) continue; // already flagged
+    if (byRef && byLink && byRef.id !== byLink.id) {
+      lines.push(line('LEDGER_LINK_MISMATCH', fields));
+      continue;
+    }
     if (intent.state === 'APPROVED' || !ledgerRow) {
       lines.push(line('APPROVED_NOT_SETTLED', fields));
       continue;
