@@ -859,6 +859,8 @@ describe('manual quarantine resolution authorization', () => {
   it.each(['release', 'write-off'])(
     'refuses regulatory stock through inventory-only %s before posting movements',
     async (operation) => {
+      // A valid witness lets this test reach the regulatory stock exclusion.
+      if (operation === 'write-off') db.user.findFirst.mockResolvedValue({ id: 'witness' });
       db.pharmacyRecallQuarantineAction.findMany.mockResolvedValue([
         { quantityUnits: 20, heldMovementId: 'recall-held-1' },
       ]);

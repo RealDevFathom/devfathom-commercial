@@ -1,7 +1,13 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ExpiryBoard, type ExpiryBoardProps, type ExpiryBoardRow } from './expiry-board';
+import {
+  ExpiryBoard,
+  expiryRiskBand,
+  groupExpiryRows,
+  type ExpiryBoardProps,
+  type ExpiryBoardRow,
+} from './expiry-board';
 
 afterEach(cleanup);
 
@@ -59,6 +65,118 @@ const props: ExpiryBoardProps = {
 };
 
 describe('ExpiryBoard recovery facts', () => {
+  it('groups the action list by distributor and links into an expiry-claim draft', () => {
+    const secondDistributor = {
+      ...row,
+      key: 'lot_2:location_1',
+      inventoryLotId: 'lot_2',
+      supplierName: 'Another distributor',
+      suggestedSupplierId: 'supplier_2',
+    };
+    const sameDistributor = {
+      ...row,
+      key: 'lot_3:location_1',
+      inventoryLotId: 'lot_3',
+    };
+
+    render(<ExpiryBoard {...props} rows={[row, secondDistributor, sameDistributor]} />);
+
+    expect(groupExpiryRows([row, secondDistributor, sameDistributor])).toHaveLength(2);
+    expect(screen.getByRole('region', { name: 'Branch distributor' })).toHaveTextContent(
+      '2 stock positions'
+    );
+    expect(screen.getByRole('region', { name: 'Another distributor' })).toHaveTextContent(
+      '1 stock position'
+    );
+    expect(screen.getAllByRole('link', { name: 'Draft return claim' })).toEqual([
+      expect.objectContaining({
+        href: expect.stringContaining(
+          '/returns?branch=branch_1&supplier=supplier_2&kind=EXPIRY_CLAIM#draft-return'
+        ),
+      }),
+      expect.objectContaining({
+        href: expect.stringContaining(
+          '/returns?branch=branch_1&supplier=supplier_1&kind=EXPIRY_CLAIM#draft-return'
+        ),
+      }),
+    ]);
+  });
+
+  it('uses amber 90/60/30 steps and reserves the danger state for expired stock', () => {
+    expect(expiryRiskBand({ expired: false, daysLeft: 90 })).toBe('90');
+    expect(expiryRiskBand({ expired: false, daysLeft: 60 })).toBe('60');
+    expect(expiryRiskBand({ expired: false, daysLeft: 30 })).toBe('30');
+    expect(expiryRiskBand({ expired: true, daysLeft: -1 })).toBe('expired');
+
+    render(
+      <ExpiryBoard
+        {...props}
+        rows={[
+          { ...row, key: '90', daysLeft: 90 },
+          { ...row, key: '60', daysLeft: 60 },
+          { ...row, key: '30', daysLeft: 30 },
+          { ...row, key: 'expired', daysLeft: -1, expired: true },
+        ]}
+      />
+    );
+
+    for (const label of ['Within 90 days', 'Within 60 days', 'Within 30 days']) {
+      expect(screen.getByText(new RegExp(`^${label}`))).toHaveAttribute('data-tone', 'warning');
+    }
+    expect(screen.getByText(/^Expired ·/)).toHaveAttribute('data-tone', 'danger');
+  });
+
+  it('keeps different supplier IDs separate even when their names match', () => {
+    expect(
+      groupExpiryRows([row, { ...row, key: 'other', suggestedSupplierId: 'other' }])
+    ).toHaveLength(2);
+    expect(
+      groupExpiryRows([row, { ...row, key: 'other', supplierName: 'Old spelling' }])
+    ).toHaveLength(1);
+  });
+
+  it('links unmatched distributors to the claim form without inventing a supplier', () => {
+    render(
+      <ExpiryBoard
+        {...props}
+        rows={[{ ...row, suggestedSupplierId: null, supplierName: 'Unmatched' }]}
+      />
+    );
+    const link = screen.getByRole('link', { name: 'Draft return claim' });
+    expect(link).toHaveAttribute('href', '/returns?branch=branch_1&kind=EXPIRY_CLAIM#draft-return');
+    expect(screen.getByText(/Match this lot distributor/)).toBeVisible();
+  });
+
+  it('encodes supplier identifiers and removes an old selected return from the draft link', () => {
+    render(
+      <ExpiryBoard
+        {...props}
+        returnsHref="/returns?branch=branch_1&return=old"
+        rows={[{ ...row, suggestedSupplierId: 'supplier&kind=PURCHASE_RETURN#bad' }]}
+      />
+    );
+    const url = new URL(
+      screen.getByRole('link', { name: 'Draft return claim' }).getAttribute('href')!,
+      'https://app.invalid'
+    );
+    expect(url.searchParams.get('supplier')).toBe('supplier&kind=PURCHASE_RETURN#bad');
+    expect(url.searchParams.get('kind')).toBe('EXPIRY_CLAIM');
+    expect(url.searchParams.has('return')).toBe(false);
+    expect(url.hash).toBe('#draft-return');
+  });
+
+  it.each([
+    [0, '30'],
+    [30, '30'],
+    [31, '60'],
+    [60, '60'],
+    [61, '90'],
+    [90, '90'],
+    [91, 'later'],
+  ] as const)('keeps the %i-day nonexpired boundary in %s', (daysLeft, band) => {
+    expect(expiryRiskBand({ expired: false, daysLeft })).toBe(band);
+  });
+
   it('renders cumulative 30/60/90 PKR risk and the distributor calendar', () => {
     render(<ExpiryBoard {...props} />);
 

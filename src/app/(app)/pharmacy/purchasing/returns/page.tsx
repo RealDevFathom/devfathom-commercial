@@ -470,7 +470,12 @@ export default async function PharmacyReturnsPage({
             </SectionCard>
           )}
 
-          <SectionCard eyebrow="PUR-06" title="Raise a return or expiry claim" titleLevel={2}>
+          <SectionCard
+            eyebrow="PUR-06"
+            id="draft-return"
+            title="Raise a return or expiry claim"
+            titleLevel={2}
+          >
             {lots.length === 0 ? (
               <EmptyState
                 title="No available stock to return"
@@ -489,6 +494,13 @@ export default async function PharmacyReturnsPage({
                 <div className="grid gap-4 sm:grid-cols-3">
                   <TextField label="Reference" name="reference" notice={notice} required />
                   <SelectField
+                    defaultValue={
+                      workspace.suppliers.some(
+                        (supplier) => supplier.id === param(query, 'supplier')
+                      )
+                        ? param(query, 'supplier')
+                        : undefined
+                    }
                     emptyHint="No suppliers yet — add one on the supplier page."
                     label="Supplier"
                     name="supplierId"
@@ -500,7 +512,9 @@ export default async function PharmacyReturnsPage({
                     required
                   />
                   <SelectField
-                    defaultValue="PURCHASE_RETURN"
+                    defaultValue={
+                      param(query, 'kind') === 'EXPIRY_CLAIM' ? 'EXPIRY_CLAIM' : 'PURCHASE_RETURN'
+                    }
                     emptyHint="—"
                     label="Kind"
                     name="kind"

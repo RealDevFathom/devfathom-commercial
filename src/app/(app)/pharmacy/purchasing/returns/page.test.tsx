@@ -71,6 +71,42 @@ it('loads the queue from the existing authorized branch reads', async () => {
   expect(screen.getByRole('heading', { name: 'Supplier-credit follow-up' })).toBeVisible();
   expect(screen.getByText('No open issued debit notes in validated loaded records.')).toBeVisible();
 });
+it('preselects the distributor and expiry-claim kind from an expiry-board link', async () => {
+  reads.workspace.mockResolvedValue({
+    branches: [{ id: 'branch', name: 'Branch', stockLocations: [] }],
+    suppliers: [{ id: 'supplier', name: 'Distributor' }],
+    medicines: [],
+    approvers: [],
+  });
+  reads.returnableLots.mockResolvedValue([
+    {
+      lot: {
+        id: 'lot',
+        batch: {
+          medicine: { productName: 'Medicine' },
+          batchNumber: 'B-1',
+          expiresAt: new Date('2026-12-31T00:00:00.000Z'),
+        },
+      },
+      location: { id: 'location', name: 'Shelf' },
+      onHandUnits: 10,
+    },
+  ]);
+
+  render(
+    await ReturnsPage({
+      searchParams: Promise.resolve({
+        branch: 'branch',
+        supplier: 'supplier',
+        kind: 'EXPIRY_CLAIM',
+      }),
+    })
+  );
+
+  expect(screen.getByLabelText('Supplier')).toHaveValue('supplier');
+  expect(screen.getByLabelText('Kind')).toHaveValue('EXPIRY_CLAIM');
+  expect(screen.getByRole('button', { name: 'Draft return' })).toBeVisible();
+});
 it('retains the descriptive route loading state', () => {
   render(<Loading />);
   expect(screen.getByRole('status', { name: 'Loading Returns & claims' })).toBeVisible();

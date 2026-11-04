@@ -94,6 +94,48 @@ const expiryText = (row: Pick<ExpiryBoardRow, 'expired' | 'daysLeft'>) =>
     ? `Expired ${Math.abs(row.daysLeft)} day${Math.abs(row.daysLeft) === 1 ? '' : 's'} ago`
     : `${row.daysLeft} day${row.daysLeft === 1 ? '' : 's'} left`;
 
+type ExpiryRiskBand = 'expired' | '30' | '60' | '90' | 'later';
+
+export function expiryRiskBand(row: Pick<ExpiryBoardRow, 'expired' | 'daysLeft'>): ExpiryRiskBand {
+  if (row.expired) return 'expired';
+  if (row.daysLeft <= 30) return '30';
+  if (row.daysLeft <= 60) return '60';
+  if (row.daysLeft <= 90) return '90';
+  return 'later';
+}
+
+const riskPresentation: Record<
+  ExpiryRiskBand,
+  { label: string; tone: 'danger' | 'warning' | 'neutral'; className: string }
+> = {
+  expired: { label: 'Expired', tone: 'danger', className: '' },
+  '30': { label: 'Within 30 days', tone: 'warning', className: 'bg-warning/20' },
+  '60': { label: 'Within 60 days', tone: 'warning', className: 'bg-warning/15' },
+  '90': { label: 'Within 90 days', tone: 'warning', className: 'bg-warning/10' },
+  later: { label: 'Beyond 90 days', tone: 'neutral', className: '' },
+};
+
+export function groupExpiryRows(rows: readonly ExpiryBoardRow[]) {
+  const groups = new Map<
+    string,
+    { key: string; supplierId: string | null; supplierName: string; rows: ExpiryBoardRow[] }
+  >();
+  for (const row of rows) {
+    const key = row.suggestedSupplierId ?? `name:${row.supplierName.trim().toLowerCase()}`;
+    const group = groups.get(key) ?? {
+      key,
+      supplierId: row.suggestedSupplierId,
+      supplierName: row.supplierName,
+      rows: [],
+    };
+    group.rows.push(row);
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((left, right) =>
+    left.supplierName.localeCompare(right.supplierName)
+  );
+}
+
 /** A leading `=`, `+`, `-` or `@` would run as a formula when the file is opened. */
 function csvCell(value: string | number): string {
   const text = String(value);
@@ -266,6 +308,7 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
   const returnable = Math.max(0, Math.min(row.onHandUnits, row.onHandUnits - row.reservedUnits));
   const canMarkDown = row.markdownEligible && !row.expired && row.batchState === 'ACTIVE';
   const heading = `${row.medicineName} · batch ${row.batchNumber} · ${row.locationName}`;
+  const risk = riskPresentation[expiryRiskBand(row)];
   return (
     <article
       aria-label={heading}
@@ -295,8 +338,10 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
           )}
         </div>
         <StatusPill
-          status={expiryText(row)}
-          tone={row.expired ? 'danger' : row.daysLeft <= 30 ? 'warning' : 'neutral'}
+          className={risk.className}
+          label={`${risk.label} · ${expiryText(row)}`}
+          status={risk.label}
+          tone={risk.tone}
         />
       </div>
 
@@ -467,6 +512,7 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
 
 export function ExpiryBoard(props: ExpiryBoardProps) {
   if (props.view === 'print') return <PrintableList {...props} />;
+  const distributorGroups = groupExpiryRows(props.rows);
   return (
     <div className="space-y-6">
       <Totals riskBuckets={props.riskBuckets} rows={props.rows} withinDays={props.withinDays} />
@@ -493,10 +539,51 @@ export function ExpiryBoard(props: ExpiryBoardProps) {
             Nothing saleable expires within {props.withinDays} days at this branch.
           </p>
         ) : (
-          <div className="space-y-3">
-            {props.rows.map((row) => (
-              <LotCard key={row.key} props={props} row={row} />
-            ))}
+          <div className="space-y-5">
+            {distributorGroups.map((group, groupIndex) => {
+              const draftUrl = new URL(props.returnsHref, 'https://app.invalid');
+              draftUrl.searchParams.delete('return');
+              if (group.supplierId) draftUrl.searchParams.set('supplier', group.supplierId);
+              else draftUrl.searchParams.delete('supplier');
+              draftUrl.searchParams.set('kind', 'EXPIRY_CLAIM');
+              const draftHref = `${draftUrl.pathname}${draftUrl.search}#draft-return`;
+              const headingId = `expiry-distributor-${groupIndex}`;
+              return (
+                <section
+                  aria-labelledby={headingId}
+                  className="space-y-3 rounded-[var(--radius-md)] border border-border-default bg-surface-raised p-4"
+                  key={group.key}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-semibold text-text-strong" id={headingId}>
+                        {group.supplierName}
+                      </h3>
+                      <p className="mt-1 text-xs text-text-muted">
+                        {group.rows.length} stock position{group.rows.length === 1 ? '' : 's'}
+                      </p>
+                    </div>
+                    <Link
+                      className={buttonVariants({ size: 'sm', variant: 'secondary' })}
+                      href={draftHref}
+                    >
+                      Draft return claim
+                    </Link>
+                  </div>
+                  {!group.supplierId ? (
+                    <p className="text-xs text-warning" role="note">
+                      Match this lot distributor to a supplier record before the claim can be
+                      preselected.
+                    </p>
+                  ) : null}
+                  <div className="space-y-3">
+                    {group.rows.map((row) => (
+                      <LotCard key={row.key} props={props} row={row} />
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
           </div>
         )}
       </SectionCard>
