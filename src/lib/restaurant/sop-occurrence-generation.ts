@@ -53,6 +53,12 @@ export type GenerateOptions = {
   now?: Date;
   lookbackDays?: number;
   horizonDays?: number;
+  /**
+   * Restrict generation to assignments on these branches. Absent = every active
+   * assignment in the tenant (the scheduler job's behaviour, unchanged). An EMPTY
+   * list generates nothing — it never widens to the whole tenant.
+   */
+  branchIds?: readonly string[];
 };
 
 export type GenerateResult = {
@@ -101,9 +107,13 @@ export async function generateDueSopOccurrences(
   if (!Number.isInteger(horizonDays) || horizonDays < 0) {
     throw new TypeError('horizonDays must be a non-negative integer.');
   }
+  const branchIds = opts.branchIds;
+  if (branchIds && branchIds.length === 0) {
+    return { assignmentsProcessed: 0, created: 0, skipped: 0 };
+  }
 
   const assignments = await db.restaurantSopAssignment.findMany({
-    where: { active: true },
+    where: branchIds ? { active: true, branchId: { in: [...branchIds] } } : { active: true },
     include: {
       branch: { select: { id: true, timezone: true, businessDayCutoff: true } },
     },

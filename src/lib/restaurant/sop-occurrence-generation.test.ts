@@ -325,6 +325,47 @@ describe('generateDueSopOccurrences', () => {
   });
 });
 
+describe('generateDueSopOccurrences branchIds scope', () => {
+  const now = at('2026-06-15T12:00:00.000Z');
+  const window = { now, lookbackDays: 0, horizonDays: 0 };
+  const b2 = { id: 'b2', timezone: 'America/New_York', businessDayCutoff: '00:00' };
+
+  it('queries every active assignment when branchIds is absent (unchanged behaviour)', async () => {
+    const { db, raw, store } = makeDb({
+      assignments: [assignment(), assignment({ id: 'a2', branchId: 'b2', branch: b2 })],
+    });
+    await generateDueSopOccurrences(db, window);
+    expect(raw.restaurantSopAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { active: true } })
+    );
+    expect(store.map((row) => row.assignmentId).sort()).toEqual(['a1', 'a2']);
+  });
+
+  it('restricts the assignment query to the given branches', async () => {
+    const assignments = [assignment(), assignment({ id: 'a2', branchId: 'b2', branch: b2 })];
+    const { db, raw, store } = makeDb({ assignments });
+    raw.restaurantSopAssignment.findMany.mockImplementation((async (args: {
+      where: { active: boolean; branchId?: { in: string[] } };
+    }) =>
+      assignments.filter(
+        (row) => row.active && (!args.where.branchId || args.where.branchId.in.includes(row.branchId))
+      )) as never);
+    const result = await generateDueSopOccurrences(db, { ...window, branchIds: ['b2'] });
+    expect(raw.restaurantSopAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { active: true, branchId: { in: ['b2'] } } })
+    );
+    expect(result).toEqual({ assignmentsProcessed: 1, created: 1, skipped: 0 });
+    expect(store.map((row) => row.assignmentId)).toEqual(['a2']);
+  });
+
+  it('generates nothing and never queries when branchIds is empty', async () => {
+    const { db, raw } = makeDb({ assignments: [assignment()] });
+    const result = await generateDueSopOccurrences(db, { ...window, branchIds: [] });
+    expect(result).toEqual({ assignmentsProcessed: 0, created: 0, skipped: 0 });
+    expect(raw.restaurantSopAssignment.findMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('generateSopOccurrencesHandler', () => {
   it('rejects an unknown payload key (strict boundary)', async () => {
     const { db } = makeDb({ assignments: [] });
