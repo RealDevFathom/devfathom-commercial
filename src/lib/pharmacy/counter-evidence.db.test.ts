@@ -13,7 +13,7 @@
  * role is neither SUPERUSER nor BYPASSRLS. Without the URL it reports skipped.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -60,10 +60,17 @@ beforeAll(async () => {
   vi.stubEnv('AZURE_STORAGE_ACCOUNT_NAME', '');
   // Integrated tip: storage fails closed unless an adapter is named explicitly.
   vi.stubEnv('STORAGE_ADAPTER', 'local');
-  // storage.ts fixes its local root from cwd at import: point it at scratch.
-  const cwd = vi.spyOn(process, 'cwd').mockReturnValue(directory);
+  // storage.ts resolves its local root on every call (9fdee3b8), from
+  // LOCAL_UPLOADS_DIR or else `<cwd>/private-uploads`. Name the scratch root
+  // explicitly so stills never land in the checkout and `uploadCount` reads the
+  // directory the job actually writes.
+  vi.stubEnv('LOCAL_UPLOADS_DIR', join(directory, 'private-uploads'));
   storage = await import('@/lib/storage');
-  cwd.mockRestore();
+  expect(storage.getStorageAvailability()).toEqual({
+    available: true,
+    adapter: 'local',
+    root: join(await realpath(directory), 'private-uploads'),
+  });
 
   ({ withTenantDb, withPlatformDb } = await import('@/lib/tenancy/scoped-db'));
   ({ processPlatformJobs } = await import('@/lib/platform/jobs'));
