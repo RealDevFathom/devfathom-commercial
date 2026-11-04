@@ -211,6 +211,17 @@ const denyWins: { name: string; role: Rule[]; overrides: Rule[] }[] = [
     role: [{ capability: 'pharmacy:receipt', effect: 'DENY' }],
     overrides: [COUNTER],
   },
+  {
+    name: 'a user DENY on the legacy pharmacy.* wildcard beats a role ALLOW',
+    role: [COUNTER],
+    overrides: [{ capability: 'pharmacy.*', effect: 'DENY' }],
+  },
+  {
+    // The counter family includes dispensing, as cash tender already does.
+    name: 'a user DENY on pharmacy:dispense beats a role ALLOW on pharmacy:counter',
+    role: [COUNTER],
+    overrides: [{ capability: 'pharmacy:dispense', effect: 'DENY' }],
+  },
 ];
 
 beforeEach(() => {
@@ -228,6 +239,28 @@ describe('cash drawer authorization (DEV-279, DEV-659)', () => {
       { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
       expect.objectContaining({ branchId: 'branch-a' })
     );
+  });
+
+  it.each(
+    drawerPaths.flatMap((path) =>
+      ['*', 'pharmacy:*'].map((capability) => ({ ...path, capability }))
+    )
+  )('$name accepts the canonical $capability grant', async ({ run, capability }) => {
+    const f = fixture([{ capability, effect: 'ALLOW' }], { assigned: ['branch-a'] });
+    await expect(run(f.caller())).resolves.toBeDefined();
+    expect(f.db.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(drawerPaths)('$name reads only unexpired permission overrides', async (path) => {
+    const f = fixture([COUNTER], { assigned: ['branch-a'] });
+    await path.run(f.caller());
+    const unexpired = { OR: [{ expiresAt: null }, { expiresAt: { gt: expect.any(Date) } }] };
+    // Both reads, the canonical can() and the counter family check, filter expiry.
+    expect(f.db.user.findUnique).toHaveBeenCalledTimes(2);
+    for (const [args] of f.db.user.findUnique.mock.calls as unknown as [
+      { select: { permissionOverrides: { where: unknown } } },
+    ][])
+      expect(args.select.permissionOverrides.where).toEqual(unexpired);
   });
 
   it.each(drawerPaths)(
@@ -340,6 +373,18 @@ describe('cash drawer authorization (DEV-279, DEV-659)', () => {
           branchId: 'branch-a',
           reason: 'org-admin-receipt-access-without-branch-assignment',
         },
+      });
+    }
+  );
+
+  it.each(drawerPaths)(
+    '$name lets a counter-capable ADMIN assigned elsewhere use this branch, audited',
+    async (path) => {
+      const f = fixture([COUNTER], { role: 'ADMIN', assigned: ['branch-b'] });
+      await expect(path.run(f.caller())).resolves.toBeDefined();
+      expect(f.context.audit.detail).toMatchObject({
+        targetId: 'branch-a',
+        metadata: { reason: 'org-admin-receipt-access' },
       });
     }
   );

@@ -359,9 +359,10 @@ beforeAll(async () => {
       })
     );
   for (const userId of [ids.cashier, ids.pharmacist]) await openDrawer(userId);
-  // DEV-279 / DEV-659: a drawer takes the cash-tender gate, so an explicit DENY on
-  // either layer beats the ALLOW on the other. Neither can open a drawer, just as
-  // neither can tender cash below.
+  // DEV-279 / DEV-659: a drawer takes the cash-tender gate. Its counter family
+  // check includes pharmacy:dispense, and an explicit DENY there (user over a role
+  // ALLOW, or role over a user ALLOW) revokes the family. So neither user can open
+  // a drawer, just as neither can tender cash below.
   for (const userId of [ids.userDenied, ids.roleDenied])
     await expect(openDrawer(userId)).rejects.toMatchObject({
       code: 'FORBIDDEN',
