@@ -12819,6 +12819,9 @@ model PharmacyGoodsReceiptLine {
   discountBps               Int                     @default(0)
   taxBps                    Int                     @default(0)
   taxCreditable             Boolean                 @default(false)
+  /// This line's share of PO freight and other charges, stamped when the
+  /// receipt is created. Cancelled or reversed receipts release exactly this.
+  allocatedChargeMinor      Int                     @default(0)
   /// Landed cost of one canonical unit, carried onto the lot. Bonus units
   /// divide the same money over more units and never add any (PUR-03).
   unitCostMinor             Int

@@ -235,14 +235,19 @@ export type ReceiptLineCostInput = {
   canonicalUnitsPerPack: number;
   invoicedPricePerPackMinor: number;
   discountBps?: number;
+  /** Supplier rebate off the discounted invoice value, inherited from the PO. */
+  rebateBps?: number;
   taxBps?: number;
   /** A creditable input tax is recovered from the authority, so it is not cost. */
   taxCreditable?: boolean;
+  /** This receipt line's allocated share of PO freight and other charges. */
+  allocatedChargeMinor?: number;
 };
 
 /**
  * PUR-03 on the receiving side: the cost of one canonical unit, as it is
- * stamped onto the inventory lot.
+ * stamped onto the inventory lot. PO receipts carry the order's rebate and
+ * allocated freight/other charges into this calculation.
  *
  * Bonus packs appear only in the divisor, so free goods always lower the unit
  * cost and never add money — an all-bonus line costs nothing per unit rather
@@ -255,8 +260,10 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
     canonicalUnitsPerPack,
     invoicedPricePerPackMinor,
     discountBps = 0,
+    rebateBps = 0,
     taxBps = 0,
     taxCreditable = false,
+    allocatedChargeMinor = 0,
   } = input;
 
   assertUnits(receivedPacks);
@@ -266,12 +273,16 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
     !Number.isSafeInteger(discountBps) ||
     discountBps < 0 ||
     discountBps > BPS ||
+    !Number.isSafeInteger(rebateBps) ||
+    rebateBps < 0 ||
+    rebateBps > BPS ||
     !Number.isSafeInteger(taxBps) ||
     taxBps < 0 ||
     taxBps > BPS
   ) {
     throw new PharmacyReceivingError('INVALID_MONEY');
   }
+  assertMoney(allocatedChargeMinor);
   if (!Number.isSafeInteger(canonicalUnitsPerPack) || canonicalUnitsPerPack <= 0) {
     throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
   }
@@ -285,8 +296,63 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
   const grossMinor = receivedPacks * invoicedPricePerPackMinor;
   assertMoney(grossMinor);
   const netMinor = grossMinor - divideRoundHalfUp(grossMinor * discountBps, BPS);
-  const taxMinor = divideRoundHalfUp(netMinor * taxBps, BPS);
-  return divideRoundHalfUp(netMinor + (taxCreditable ? 0 : taxMinor), canonicalUnits);
+  const rebateMinor = divideRoundHalfUp(netMinor * rebateBps, BPS);
+  const taxableMinor = netMinor - rebateMinor;
+  const taxMinor = divideRoundHalfUp(taxableMinor * taxBps, BPS);
+  return divideRoundHalfUp(
+    taxableMinor + (taxCreditable ? 0 : taxMinor) + allocatedChargeMinor,
+    canonicalUnits
+  );
+}
+
+/**
+ * Allocate the next receipt's residual share of an order-line charge.
+ *
+ * The residual is computed from what active (draft or posted) receipts
+ * actually hold, not from their pack counts, so a cancelled or reversed
+ * receipt releases exactly the charge it carried and a replacement delivery
+ * recovers it. A receipt that covers every remaining ordered pack takes the
+ * whole remaining charge; otherwise it takes the proportional share of the
+ * remaining charge over the remaining packs. Active receipts can never hold
+ * more than the order-line charge, and over-receipts cannot duplicate it.
+ * BigInt is intentional: two individually safe integer operands can have an
+ * unsafe product in JS.
+ */
+export function residualAllocatedChargeMinor(input: {
+  orderLineChargeMinor: number;
+  orderedPacks: number;
+  activeReceivedPacks: number;
+  activeAllocatedChargeMinor: number;
+  receivedPacks: number;
+}): number {
+  const {
+    orderLineChargeMinor,
+    orderedPacks,
+    activeReceivedPacks,
+    activeAllocatedChargeMinor,
+    receivedPacks,
+  } = input;
+  assertMoney(orderLineChargeMinor);
+  assertMoney(activeAllocatedChargeMinor);
+  assertUnits(orderedPacks);
+  assertUnits(activeReceivedPacks);
+  assertUnits(receivedPacks);
+  if (orderedPacks === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
+
+  const remainingCharge =
+    orderLineChargeMinor > activeAllocatedChargeMinor
+      ? BigInt(orderLineChargeMinor - activeAllocatedChargeMinor)
+      : BigInt(0);
+  if (remainingCharge === BigInt(0) || receivedPacks === 0) return 0;
+  const remainingPacks = BigInt(orderedPacks) - BigInt(activeReceivedPacks);
+  const received = BigInt(receivedPacks);
+  const share =
+    remainingPacks <= received
+      ? remainingCharge
+      : (remainingCharge * received + remainingPacks / BigInt(2)) / remainingPacks;
+  const value = Number(share);
+  assertMoney(value);
+  return value;
 }
 
 // ---------------------------------------------------------------------------

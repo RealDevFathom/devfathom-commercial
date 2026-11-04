@@ -16,6 +16,7 @@ import {
   PharmacyReceivingError,
   receiptLineQuantities,
   receiptLineUnitCostMinor,
+  residualAllocatedChargeMinor,
   type SaleableEvidence,
 } from './receiving';
 
@@ -242,6 +243,23 @@ describe('PUR-02/PUR-03 — canonical units and landed unit cost', () => {
     expect(receiptLineUnitCostMinor({ ...terms, taxCreditable: false })).toBe(1_170);
   });
 
+  it('includes allocated PO charges and subtracts its rebate from receipt lot cost', () => {
+    expect(
+      receiptLineUnitCostMinor({
+        receivedPacks: 10,
+        bonusPacks: 0,
+        canonicalUnitsPerPack: 10,
+        invoicedPricePerPackMinor: 10_000,
+        discountBps: 1_000,
+        rebateBps: 500,
+        taxBps: 1_000,
+        taxCreditable: false,
+        allocatedChargeMinor: 5_950,
+      })
+    ).toBe(1_000);
+    // 100,000 - 10,000 discount - 4,500 rebate + 8,550 tax + 5,950 charges.
+  });
+
   it('costs an entirely free delivery at nothing per unit', () => {
     expect(
       receiptLineUnitCostMinor({
@@ -251,6 +269,79 @@ describe('PUR-02/PUR-03 — canonical units and landed unit cost', () => {
         invoicedPricePerPackMinor: 10_000,
       })
     ).toBe(0);
+  });
+});
+
+describe('residual PO charge allocation', () => {
+  const allocate = (input: {
+    activeReceivedPacks: number;
+    activeAllocatedChargeMinor: number;
+    receivedPacks: number;
+    orderLineChargeMinor?: number;
+    orderedPacks?: number;
+  }) =>
+    residualAllocatedChargeMinor({
+      orderLineChargeMinor: input.orderLineChargeMinor ?? 30_000,
+      orderedPacks: input.orderedPacks ?? 10,
+      activeReceivedPacks: input.activeReceivedPacks,
+      activeAllocatedChargeMinor: input.activeAllocatedChargeMinor,
+      receivedPacks: input.receivedPacks,
+    });
+
+  it('assigns a rounding residual only once across partial receipts', () => {
+    const first = allocate({
+      orderLineChargeMinor: 1,
+      orderedPacks: 2,
+      activeReceivedPacks: 0,
+      activeAllocatedChargeMinor: 0,
+      receivedPacks: 1,
+    });
+    const second = allocate({
+      orderLineChargeMinor: 1,
+      orderedPacks: 2,
+      activeReceivedPacks: 1,
+      activeAllocatedChargeMinor: first,
+      receivedPacks: 1,
+    });
+    expect(first + second).toBe(1);
+  });
+
+  it('recovers the full charge when a replacement follows a released receipt', () => {
+    // Two six-pack drafts against ten ordered packs; the first is cancelled.
+    const first = allocate({
+      activeReceivedPacks: 0,
+      activeAllocatedChargeMinor: 0,
+      receivedPacks: 6,
+    });
+    const second = allocate({
+      activeReceivedPacks: 6,
+      activeAllocatedChargeMinor: first,
+      receivedPacks: 6,
+    });
+    expect([first, second]).toEqual([18_000, 12_000]);
+    // Only the second survives; four replacement packs complete the order.
+    const replacement = allocate({
+      activeReceivedPacks: 6,
+      activeAllocatedChargeMinor: second,
+      receivedPacks: 4,
+    });
+    expect(replacement).toBe(18_000);
+    expect(second + replacement).toBe(30_000);
+  });
+
+  it('never duplicates the charge on over-receipt and uses exact integer arithmetic', () => {
+    expect(
+      allocate({ activeReceivedPacks: 10, activeAllocatedChargeMinor: 30_000, receivedPacks: 5 })
+    ).toBe(0);
+    expect(
+      allocate({
+        orderLineChargeMinor: Number.MAX_SAFE_INTEGER,
+        orderedPacks: Number.MAX_SAFE_INTEGER,
+        activeReceivedPacks: 0,
+        activeAllocatedChargeMinor: 0,
+        receivedPacks: Number.MAX_SAFE_INTEGER - 1,
+      })
+    ).toBe(Number.MAX_SAFE_INTEGER - 1);
   });
 });
 

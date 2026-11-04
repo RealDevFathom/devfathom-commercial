@@ -43,6 +43,9 @@ function model() {
 
 function makeDb() {
   const db = {
+    $queryRaw: vi
+      .fn<(sql: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>>()
+      .mockResolvedValue([]),
     medicine: model(),
     packLevel: model(),
     pharmacySupplier: model(),
@@ -765,9 +768,24 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       supplierId: 'supplier_a',
       branchId: 'branch_a',
       status: 'SENT',
+      freightMinor: 0,
+      otherChargesMinor: 0,
     });
     db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
-      { id: 'poline_a', medicineId: 'medicine_a', packLevelId: 'pack_a' },
+      {
+        id: 'poline_a',
+        medicineId: 'medicine_a',
+        packLevelId: 'pack_a',
+        lineNumber: 1,
+        orderedPacks: 10,
+        bonusPacks: 2,
+        canonicalUnitsPerPack: 10,
+        listPricePerPackMinor: 10_000,
+        discountBps: 0,
+        rebateBps: 0,
+        taxBps: 0,
+        taxCreditable: false,
+      },
     ]);
   }
 
@@ -835,6 +853,109 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     // The tenant and branch are not repeated on the nested line: they travel in
     // the composite key of the header.
     expect(line).not.toHaveProperty('organizationId');
+  });
+
+  /** One order line with landed-cost terms, and the PO header charges. */
+  function costedOrder(
+    header: { freightMinor: number; otherChargesMinor: number },
+    line: Partial<{
+      orderedPacks: number;
+      bonusPacks: number;
+      listPricePerPackMinor: number;
+      discountBps: number;
+      rebateBps: number;
+      taxBps: number;
+    }>
+  ) {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_a',
+      status: 'SENT',
+      ...header,
+    });
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
+      {
+        id: 'poline_a',
+        medicineId: 'medicine_a',
+        packLevelId: 'pack_a',
+        lineNumber: 1,
+        orderedPacks: 10,
+        bonusPacks: 0,
+        canonicalUnitsPerPack: 10,
+        listPricePerPackMinor: 10_000,
+        discountBps: 0,
+        rebateBps: 0,
+        taxBps: 0,
+        taxCreditable: false,
+        ...line,
+      },
+    ]);
+  }
+
+  it('carries PO freight, other charges and rebate into the receipt lot unit cost', async () => {
+    costedOrder(
+      { freightMinor: 4_000, otherChargesMinor: 1_950 },
+      { discountBps: 1_000, rebateBps: 500, taxBps: 1_000 }
+    );
+
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [{ ...RECEIPT_LINE, bonusPacks: 0, discountBps: 1_000, taxBps: 1_000 }],
+    });
+
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    expect(line.unitCostMinor).toBe(1_000);
+    expect(line.allocatedChargeMinor).toBe(5_950);
+  });
+
+  it('allocates only the residual rounded PO charge after a prior partial receipt', async () => {
+    costedOrder(
+      { freightMinor: 1, otherChargesMinor: 0 },
+      { orderedPacks: 2, listPricePerPackMinor: 0 }
+    );
+    db.pharmacyGoodsReceiptLine.findMany.mockResolvedValue([
+      { purchaseOrderLineId: 'poline_a', receivedPacks: 1, allocatedChargeMinor: 1 },
+    ]);
+
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [{ ...RECEIPT_LINE, receivedPacks: 1, bonusPacks: 2, invoicedPricePerPackMinor: 0 }],
+    });
+
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    expect(line.allocatedChargeMinor).toBe(0);
+    expect(line.unitCostMinor).toBe(0);
+    expect(db.pharmacyGoodsReceiptLine.findMany).toHaveBeenCalledWith({
+      where: {
+        purchaseOrderLineId: { in: ['poline_a'] },
+        goodsReceipt: { status: { in: ['DRAFT', 'POSTED'] } },
+      },
+      select: { purchaseOrderLineId: true, receivedPacks: true, allocatedChargeMinor: true },
+    });
+    // Allocation reads prior receipts only after the order row is locked.
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacyGoodsReceiptLine.findMany.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('recovers the charge a cancelled receipt released for a replacement delivery', async () => {
+    // Ten ordered packs carry 30,000 of freight. Of two six-pack receipts the
+    // first was cancelled; only the second (holding 12,000) is still active.
+    costedOrder({ freightMinor: 30_000, otherChargesMinor: 0 }, { listPricePerPackMinor: 10_000 });
+    db.pharmacyGoodsReceiptLine.findMany.mockResolvedValue([
+      { purchaseOrderLineId: 'poline_a', receivedPacks: 6, allocatedChargeMinor: 12_000 },
+    ]);
+
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [{ ...RECEIPT_LINE, receivedPacks: 4, bonusPacks: 0 }],
+    });
+
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    expect(line.allocatedChargeMinor).toBe(18_000);
+    // (4 × 10,000 + 18,000) / 40 units.
+    expect(line.unitCostMinor).toBe(1_450);
   });
 
   it('locks the purchase order in the receipt transaction until the draft is created', async () => {
@@ -948,7 +1069,28 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   it('refuses an ordered line borrowed from another purchase order', async () => {
     // Matching the goods against a line they were never ordered on would make
     // the PUR-04 three-way match compare two unrelated things.
-    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([{ id: 'poline_other' }]);
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      freightMinor: 0,
+      otherChargesMinor: 0,
+      lines: [
+        {
+          id: 'poline_other',
+          medicineId: 'medicine_a',
+          packLevelId: 'pack_a',
+          lineNumber: 1,
+          orderedPacks: 10,
+          bonusPacks: 2,
+          canonicalUnitsPerPack: 10,
+          listPricePerPackMinor: 10_000,
+          discountBps: 0,
+          rebateBps: 0,
+          taxBps: 0,
+          taxCreditable: false,
+        },
+      ],
+    });
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });

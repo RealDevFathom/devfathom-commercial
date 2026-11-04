@@ -22,9 +22,20 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { TRPCContext } from '@/server/trpc';
+
+// Costing regressions exercise the real router and tenant transactions; actor
+// authorization and audit persistence have their own suites.
+vi.mock('@/lib/pharmacy/procurement-access', () => ({ actorCanProcure: async () => true }));
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
+vi.mock('@/server/audit', () => ({
+  ipFromHeaders: vi.fn(),
+  isAuditExcludedPath: () => true,
+  recordTrpcAudit: vi.fn(),
+}));
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -48,6 +59,7 @@ type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
   receipts: typeof import('./goods-receipt');
   ledger: typeof import('./stock-ledger');
+  purchasing: (typeof import('@/server/routers/pharmacy-purchasing'))['pharmacyPurchasingRouter'];
 };
 let deps: Deps;
 
@@ -114,13 +126,16 @@ async function fixture(
   organizationId: string,
   branchId: string,
   label: string,
-  organizationWide = false
+  options: { freightMinor?: number; organizationWide?: boolean; saleable?: boolean } = {}
 ): Promise<Fixture> {
+  const { freightMinor = 0, organizationWide = false, saleable = false } = options;
   return inOrg(organizationId, async (db) => {
     await ensureBranch(db, organizationId, branchId);
     const medicine = await db.medicine.create({
       data: {
         organizationId,
+        // The receiving router only accepts saleable medicines.
+        saleable,
         productName: `Amoxicillin 500mg ${tag(label)}`,
         productFamily: 'PHARMACEUTICAL',
         presentations: { create: { organizationId, presentation: 'Capsule, 10 per strip' } },
@@ -183,6 +198,7 @@ async function fixture(
         branchId: organizationWide ? null : branchId,
         reference: `PO-${tag(label)}`,
         supplierId: supplier.id,
+        freightMinor,
         createdByUserId: 'user_buyer',
         lines: {
           create: {
@@ -319,15 +335,191 @@ async function balancesFor(db: ScopedDb, organizationId: string, inventoryLotId:
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, receipts, ledger, roleGuard] = await Promise.all([
+  const [scopedDb, receipts, ledger, roleGuard, purchasing] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('./goods-receipt'),
     import('./stock-ledger'),
     import('@/lib/testing/rls-role-guard'),
+    import('@/server/routers/pharmacy-purchasing'),
   ]);
-  deps = { withTenantDb: scopedDb.withTenantDb, receipts, ledger };
+  deps = {
+    withTenantDb: scopedDb.withTenantDb,
+    receipts,
+    ledger,
+    purchasing: purchasing.pharmacyPurchasingRouter,
+  };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
 }, 120_000);
+
+function draftCostedReceipt(db: ScopedDb, f: Fixture, receivedPacks = 10) {
+  const caller = deps.purchasing.createCaller({
+    db,
+    entitlements: { organizationId: f.organizationId, enabledModules: ['pharmacy-procurement'] },
+    session: { expires: 'later', user: { id: RECEIVER, status: 'ACTIVE' } },
+    organization: null,
+    support: null,
+    requestMeta: { ip: null, userAgent: null },
+    audit: { detail: {} },
+  } as unknown as TRPCContext);
+  return caller.createGoodsReceipt({
+    branchId: f.branchId,
+    reference: `GRN-${tag('cost')}`,
+    supplierId: f.supplierId,
+    purchaseOrderId: f.purchaseOrderId,
+    supplierInvoiceRef: `INV-${tag('cost')}`,
+    supplierInvoiceDate: RECEIVED_AT,
+    warrantyEvidenceRef: `WARRANTY-${tag('cost')}`,
+    receivedAt: RECEIVED_AT,
+    lines: [
+      {
+        purchaseOrderLineId: f.purchaseOrderLineId,
+        medicineId: f.medicineId,
+        packLevelId: f.packLevelId,
+        batchNumber: `B-${tag('cost')}`,
+        printedExpiry: EXPIRY,
+        expiryPrecision: 'DAY',
+        printedMrpMinor: 25_000,
+        canonicalUnitsPerPack: 10,
+        receivedPacks,
+        invoicedPricePerPackMinor: 10_000,
+        stockLocationId: f.storeId,
+      },
+    ],
+  });
+}
+
+describeIfDatabase('PH-PUR receipt charge allocation', () => {
+  it('caps concurrent receipts under the outer READ COMMITTED tenant transaction', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'concurrent-cost', {
+      freightMinor: 30_000,
+      saleable: true,
+    });
+    let firstCreated!: () => void;
+    const created = new Promise<void>((resolve) => {
+      firstCreated = resolve;
+    });
+    let releaseFirst!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const first = inOrg(ORG_A, async (db) => {
+      const receipt = await draftCostedReceipt(db, f, 6);
+      firstCreated();
+      await release;
+      return receipt;
+    });
+    // Start the second request while the first receipt remains uncommitted.
+    // A nested Serializable option cannot protect this READ COMMITTED scope.
+    try {
+      await Promise.race([created, first]);
+      const second = inOrg(ORG_A, (db) => draftCostedReceipt(db, f, 6));
+      setTimeout(releaseFirst, 150);
+      const receipts = await Promise.all([first, second]);
+      expect(receipts.map((receipt) => receipt.lines[0]!.unitCostMinor).sort()).toEqual([
+        1_200, 1_300,
+      ]);
+      expect(receipts.reduce((sum, receipt) => sum + receipt.lines[0]!.unitCostMinor * 60, 0)).toBe(
+        150_000
+      ); // 120_000 invoice + exactly 30_000 freight.
+    } finally {
+      releaseFirst();
+      await first;
+    }
+  });
+
+  it.each(['CANCELLED', 'REVERSED'] as const)(
+    'restores freight on the replacement receipt and posted lot after %s',
+    async (status) => {
+      const f = await fixture(ORG_A, BRANCH_A, `replacement-${status}`, {
+        freightMinor: 10_000,
+        saleable: true,
+      });
+      const original = await inOrg(ORG_A, (db) => draftCostedReceipt(db, f));
+      await inOrg(ORG_A, async (db) => {
+        if (status === 'REVERSED') {
+          await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+            goodsReceiptId: original.id,
+            at: RECEIVED_AT,
+          });
+          await deps.receipts.reverseGoodsReceipt(db, scopeOf(f), {
+            goodsReceiptId: original.id,
+            reason: 'Replace delivery paperwork',
+            at: RECEIVED_AT,
+          });
+        } else {
+          await db.pharmacyGoodsReceipt.update({ where: { id: original.id }, data: { status } });
+        }
+      });
+      const replacement = await inOrg(ORG_A, (db) => draftCostedReceipt(db, f));
+      expect(replacement.lines[0]!.unitCostMinor).toBe(1_100);
+      await inOrg(ORG_A, async (db) => {
+        await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+          goodsReceiptId: replacement.id,
+          at: RECEIVED_AT,
+        });
+        const line = await db.pharmacyGoodsReceiptLine.findUniqueOrThrow({
+          where: { id: replacement.lines[0]!.id },
+        });
+        const lot = await db.pharmacyInventoryLot.findUniqueOrThrow({
+          where: { id: line.inventoryLotId! },
+        });
+        expect(lot.unitCostMinor).toBe(1_100);
+      });
+    }
+  );
+
+  it.each(['CANCELLED', 'REVERSED'] as const)(
+    'keeps the full freight when a partial receipt is %s after a later one was drafted',
+    async (status) => {
+      // Ten ordered packs carry 30,000 of freight. Two six-pack receipts are
+      // drafted, the first is released, and four replacement packs arrive.
+      const f = await fixture(ORG_A, BRANCH_A, `partial-replacement-${status}`, {
+        freightMinor: 30_000,
+        saleable: true,
+      });
+      const first = await inOrg(ORG_A, (db) => draftCostedReceipt(db, f, 6));
+      const second = await inOrg(ORG_A, (db) => draftCostedReceipt(db, f, 6));
+      await inOrg(ORG_A, async (db) => {
+        if (status === 'REVERSED') {
+          await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+            goodsReceiptId: first.id,
+            at: RECEIVED_AT,
+          });
+          await deps.receipts.reverseGoodsReceipt(db, scopeOf(f), {
+            goodsReceiptId: first.id,
+            reason: 'Replace delivery paperwork',
+            at: RECEIVED_AT,
+          });
+        } else {
+          await db.pharmacyGoodsReceipt.update({ where: { id: first.id }, data: { status } });
+        }
+      });
+      const replacement = await inOrg(ORG_A, (db) => draftCostedReceipt(db, f, 4));
+      expect(second.lines[0]!.allocatedChargeMinor).toBe(12_000);
+      expect(replacement.lines[0]!.allocatedChargeMinor).toBe(18_000);
+
+      const stockValue = await inOrg(ORG_A, async (db) => {
+        let total = 0;
+        for (const receipt of [second, replacement]) {
+          await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+            goodsReceiptId: receipt.id,
+            at: RECEIVED_AT,
+          });
+          const line = await db.pharmacyGoodsReceiptLine.findUniqueOrThrow({
+            where: { id: receipt.lines[0]!.id },
+          });
+          const lot = await db.pharmacyInventoryLot.findUniqueOrThrow({
+            where: { id: line.inventoryLotId! },
+          });
+          total += lot.unitCostMinor * line.acceptedCanonicalUnits;
+        }
+        return total;
+      });
+      // 100,000 of invoiced goods plus exactly the 30,000 of freight.
+      expect(stockValue).toBe(130_000);
+    }
+  );
+});
 
 // ── Row level security ──────────────────────────────────────────────────────
 
@@ -476,7 +668,7 @@ describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
   });
 
   it('drafts and posts branch receipts against SENT and RECEIVING organization-wide orders', async () => {
-    const f = await fixture(ORG_A, BRANCH_A, 'org-wide', true);
+    const f = await fixture(ORG_A, BRANCH_A, 'org-wide', { organizationWide: true });
     const result = await inOrg(ORG_A, async (db) => {
       const balances = [];
       for (const delivery of ['first', 'second']) {
