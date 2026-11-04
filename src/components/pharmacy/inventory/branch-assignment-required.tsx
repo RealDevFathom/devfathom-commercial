@@ -5,9 +5,10 @@ import { SectionCard } from '@/components/ui/section-card';
 
 /**
  * DEV-660 — the inventory surfaces read stock only for a branch the session
- * actor holds an active assignment to. When the tenant has active branches but
- * none is assigned to this person, say so and point to the next step instead
- * of letting a refused read become an error page.
+ * actor holds an active assignment to (a verified tenant ADMIN reaches every
+ * active branch). When the tenant has active branches but this person is
+ * admitted to none, say so and point to the next step instead of letting a
+ * refused read become an error page.
  *
  * `canAssign` is the session ADMIN role: only an administrator can open the
  * branch-assignment page, so everyone else is told whom to ask.

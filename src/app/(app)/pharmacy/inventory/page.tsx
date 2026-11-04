@@ -25,7 +25,7 @@ import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/iso
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
-  assignedInventoryBranchIds,
+  admittedInventoryBranchIds,
   pharmacyInventoryRouter,
 } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
@@ -134,10 +134,11 @@ export default async function PharmacyInventoryPage({
     orderBy: { name: 'asc' },
     select: { id: true, name: true, city: true },
   });
-  // DEV-660: the gated stock reads admit only a branch the actor is assigned to, so
-  // only those branches are offered. `branches` still names the other side of a transfer.
-  const assigned = await assignedInventoryBranchIds(ctx);
-  const workingBranches = branches.filter((item) => assigned.has(item.id));
+  // DEV-660: the gated stock reads admit only a branch the actor is assigned to (or
+  // any branch, for a verified tenant ADMIN), so only those branches are offered.
+  // `branches` still names the other side of a transfer.
+  const admitted = await admittedInventoryBranchIds(ctx);
+  const workingBranches = branches.filter((item) => admitted.has(item.id));
   const branch =
     workingBranches.find((item) => item.id === query.branch) ?? workingBranches[0] ?? null;
   if (!branch && branches.length > 0) {

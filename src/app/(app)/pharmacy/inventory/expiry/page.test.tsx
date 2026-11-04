@@ -14,7 +14,7 @@ vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: () => true }));
 vi.mock('@/server/routers/pharmacy-inventory', () => ({
-  assignedInventoryBranchIds: mocks.assigned,
+  admittedInventoryBranchIds: mocks.assigned,
   EXPIRY_BOARD_WINDOWS: [30, 60, 90, 180],
   pharmacyInventoryRouter: { createCaller: () => ({ expiryBoardLots: mocks.lots }) },
 }));

@@ -77,12 +77,9 @@ import {
   ManualTemperatureReadingSource,
 } from '@/lib/pharmacy/temperature-log';
 
-import {
-  auditedProtectedProcedure,
-  capabilityProcedure,
-  protectedProcedure,
-  router,
-} from '../trpc';
+import { annotateAudit } from '@/server/audit';
+
+import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 import { assertInOrganization } from '../org-refs';
 import type { TRPCContext } from '../trpc';
 
@@ -167,10 +164,8 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 }
 
 /**
- * DEV-211 / DEV-660: the one admission rule for branch-scoped inventory — an
- * active assignment of the session actor on an active branch of the session
- * tenant. Both the procedure check and the pages' branch list are built from
- * it, so they cannot drift apart.
+ * DEV-211 / DEV-660: an active assignment of the session actor on an active
+ * branch of the session tenant — the ordinary way into a branch's stock.
  */
 function activeAssignmentOf(organizationId: string, userId: string) {
   return {
@@ -182,38 +177,75 @@ function activeAssignmentOf(organizationId: string, userId: string) {
 }
 
 /**
- * DEV-211 / DEV-660: besides being an active branch of the session tenant, the
- * requested branch must carry an active assignment for the session actor. It
- * guards the stock-creating and stock-removing mutations (createLocation,
- * receiveLot, createCount, writeOff), the branch stock reads, allocateForSale
- * and every transfer step.
- *
- * Nobody is exempt: not a session ADMIN, a `*` grant or the Owner role template,
- * all of which a tenant administrator can hand out. An owner exemption waits for
- * a durable, platform-recorded owner identity (DEV-660); until then this fails
- * closed. The other branch-scoped mutations still use the tenant-only scopeFor;
- * that remaining gap is tracked on DEV-660 rather than widened here.
+ * DEV-660 (Saad: "ADMIN = Owner", for inventory branch access only): an ADMIN of
+ * the session tenant reaches every active branch of that tenant without an
+ * individual assignment. The session's role is only a pre-filter; the user
+ * record decides, and it must belong to this tenant, be ADMIN and be ACTIVE. An
+ * Owner role template, a `*` grant or any other label does not qualify, and a
+ * demoted, deactivated or other-tenant user is refused. This grants branch scope
+ * only — capability checks (and an explicit DENY) still run first.
  */
-async function assignedScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+async function isActiveTenantAdmin(
+  ctx: TRPCContext,
+  organizationId: string,
+  userId: string
+): Promise<boolean> {
+  if (ctx.session?.user?.role !== 'ADMIN') return false;
+  const admin = await ctx.db.user.findFirst({
+    where: { id: userId, organizationId, role: 'ADMIN', status: 'ACTIVE' },
+    select: { id: true },
+  });
+  return admin !== null;
+}
+
+/**
+ * DEV-211 / DEV-660: besides being an active branch of the session tenant, the
+ * requested branch must carry an active assignment for the session actor, or the
+ * actor must be a verified active ADMIN of the tenant — that exception is
+ * written to the request's audit record. It guards the stock-creating and
+ * stock-removing mutations (createLocation, receiveLot, createCount, writeOff),
+ * the branch stock reads, allocateForSale and every transfer step.
+ *
+ * The other branch-scoped mutations still use the tenant-only scopeFor; that
+ * remaining gap is tracked on DEV-660 rather than widened here.
+ */
+async function admittedScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const scope = await scopeFor(ctx, branch);
   const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
     where: { ...activeAssignmentOf(scope.organizationId, scope.actorId), branchId: branch },
     select: { id: true },
   });
-  if (!assignment) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  if (assignment) return scope;
+  if (await isActiveTenantAdmin(ctx, scope.organizationId, scope.actorId)) {
+    annotateAudit(ctx, {
+      targetType: 'PharmacyBranch',
+      targetId: branch,
+      metadata: {
+        branchId: branch,
+        reason: 'tenant-admin-inventory-access-without-branch-assignment',
+      },
+    });
+    return scope;
   }
-  return scope;
+  throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
 }
 
 /**
- * The active branches of the session tenant the session actor is assigned to —
- * the same rule as assignedScopeFor, as a set. The inventory pages offer only
- * these branches, so the default branch and a `?branch=` value are both ones
- * the gated reads will admit.
+ * The active branches of the session tenant the session actor is admitted to —
+ * the same rule as admittedScopeFor, as a set: every active branch for a
+ * verified active tenant ADMIN, otherwise the assigned ones. The inventory pages
+ * offer only these, so the default branch and a `?branch=` value are both ones
+ * the gated reads admit.
  */
-export async function assignedInventoryBranchIds(ctx: TRPCContext): Promise<Set<string>> {
+export async function admittedInventoryBranchIds(ctx: TRPCContext): Promise<Set<string>> {
   const { organizationId, actorId } = actorFor(ctx);
+  if (await isActiveTenantAdmin(ctx, organizationId, actorId)) {
+    const branches = await ctx.db.pharmacyBranch.findMany({
+      where: { organizationId, active: true },
+      select: { id: true },
+    });
+    return new Set(branches.map((branch) => branch.id));
+  }
   const rows = await ctx.db.pharmacyBranchAssignment.findMany({
     where: activeAssignmentOf(organizationId, actorId),
     select: { branchId: true },
@@ -721,7 +753,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await assignedScopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       return ctx.db.pharmacyStockLocation.create({
         data: { ...input, organizationId: scope.organizationId },
       });
@@ -779,7 +811,7 @@ export const pharmacyInventoryRouter = router({
   temperatureZoneStatuses: auditedProtectedProcedure
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await assignedScopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       return loadTemperatureZoneStatuses(ctx.db, scope, new Date());
     }),
 
@@ -903,7 +935,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await assignedScopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       if (!(await ctx.db.packLevel.findFirst({ where: { id: input.packLevelId } }))) {
         throw new TRPCError({
           code: 'FORBIDDEN',
@@ -959,7 +991,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await assignedScopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       try {
         // One transaction: the FOR UPDATE locks the allocator takes over the
         // candidate balances are what stop two counters overselling the same
@@ -1026,7 +1058,7 @@ export const pharmacyInventoryRouter = router({
         // Both legs and the source lock commit together, so the units are never
         // AVAILABLE at the origin and IN_TRANSIT at the destination at once.
         return await ctx.db.$transaction(async (tx) =>
-          transferStock(txDb(tx), await assignedScopeFor(ctx, input.branchId), {
+          transferStock(txDb(tx), await admittedScopeFor(ctx, input.branchId), {
             inventoryLotId: input.inventoryLotId,
             fromStockLocationId: input.fromStockLocationId,
             toStockLocationId: input.toStockLocationId,
@@ -1064,7 +1096,7 @@ export const pharmacyInventoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          createCount(txDb(tx), await assignedScopeFor(ctx, input.branchId), input)
+          createCount(txDb(tx), await admittedScopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         domainError(error);
@@ -1116,7 +1148,7 @@ export const pharmacyInventoryRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await assignedScopeFor(ctx, input.branchId);
+          const scope = await admittedScopeFor(ctx, input.branchId);
           const written = await writeOff(db, scope, input);
           await postWriteOffEntry(db, scope, {
             stockMovementId: written.movement.id,
@@ -1199,7 +1231,7 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await allocateTransfer(ctx.db, await assignedScopeFor(ctx, input.branchId), input);
+        return await allocateTransfer(ctx.db, await admittedScopeFor(ctx, input.branchId), input);
       } catch (error) {
         domainError(error);
       }
@@ -1211,7 +1243,7 @@ export const pharmacyInventoryRouter = router({
       try {
         return await approveTransfer(
           ctx.db,
-          await assignedScopeFor(ctx, input.branchId),
+          await admittedScopeFor(ctx, input.branchId),
           input.transferId
         );
       } catch (error) {
@@ -1234,7 +1266,7 @@ export const pharmacyInventoryRouter = router({
         return await ctx.db.$transaction(async (tx) =>
           dispatchTransfer(
             txDb(tx),
-            await assignedScopeFor(ctx, input.branchId),
+            await admittedScopeFor(ctx, input.branchId),
             input.transferId,
             input.idempotencyKeyPrefix
           )
@@ -1259,7 +1291,7 @@ export const pharmacyInventoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          receiveTransferLine(txDb(tx), await assignedScopeFor(ctx, input.branchId), input)
+          receiveTransferLine(txDb(tx), await admittedScopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         domainError(error);
@@ -1349,13 +1381,13 @@ export const pharmacyInventoryRouter = router({
   nearExpiryBoard: auditedProtectedProcedure
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) =>
-      nearExpiryBoard(ctx.db, await assignedScopeFor(ctx, input.branchId), new Date())
+      nearExpiryBoard(ctx.db, await admittedScopeFor(ctx, input.branchId), new Date())
     ),
 
   onHand: auditedProtectedProcedure
     .input(z.object({ branchId, medicineId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await assignedScopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       return onHand(
         ctx.db,
         { organizationId: scope.organizationId, branchId: scope.branchId },
@@ -1569,11 +1601,15 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  /** PUR-07 role dashboards: live signals per kind and accountable owner. */
-  stockSignalDashboard: protectedProcedure
+  /**
+   * PUR-07 role dashboards: live signals per kind and accountable owner.
+   * DEV-660: audited like the other branch stock reads, so a tenant ADMIN's
+   * branch-assignment exception is recorded. Same session and module checks.
+   */
+  stockSignalDashboard: auditedProtectedProcedure
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await assignedScopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       return roleDashboard(
         ctx.db,
         { organizationId: scope.organizationId, branchId: scope.branchId },
@@ -1581,11 +1617,11 @@ export const pharmacyInventoryRouter = router({
       );
     }),
 
-  /** PUR-07 owner digest payload. */
-  stockSignalDigest: protectedProcedure
+  /** PUR-07 owner digest payload. DEV-660: audited, as stockSignalDashboard. */
+  stockSignalDigest: auditedProtectedProcedure
     .input(z.object({ branchId, ownerUserId: z.string().trim().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await assignedScopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       return ownerDigest(
         ctx.db,
         { organizationId: scope.organizationId, branchId: scope.branchId },
@@ -1613,7 +1649,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const scope = await assignedScopeFor(ctx, input.branchId);
+      const scope = await admittedScopeFor(ctx, input.branchId);
       await assertBranch(ctx.db, scope);
       const at = new Date();
       const { withinDays } = input;
@@ -2116,7 +2152,7 @@ export const pharmacyInventoryRouter = router({
   transferBoard: auditedProtectedProcedure
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) =>
-      transferBoard(ctx.db, await assignedScopeFor(ctx, input.branchId))
+      transferBoard(ctx.db, await admittedScopeFor(ctx, input.branchId))
     ),
 
   /** WHA-1603 INV-07: close a transfer, posting any shortfall as a custody write-off. */
@@ -2152,7 +2188,7 @@ export const pharmacyInventoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          receiveTransferWithVariance(txDb(tx), await assignedScopeFor(ctx, input.branchId), input)
+          receiveTransferWithVariance(txDb(tx), await admittedScopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         domainError(error);

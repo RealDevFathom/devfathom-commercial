@@ -14,7 +14,8 @@ const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
   const postWriteOffEntry = vi.fn();
-  return { hasModule, postWriteOffEntry };
+  const annotateAudit = vi.fn();
+  return { hasModule, postWriteOffEntry, annotateAudit };
 });
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -24,6 +25,7 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/server/audit', () => ({
+  annotateAudit: mocks.annotateAudit,
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
@@ -34,7 +36,7 @@ vi.mock('@/lib/pharmacy/finance-postings', () => ({
 
 import { moduleForProcedure } from '@/lib/module-catalog';
 
-import { assignedInventoryBranchIds, pharmacyInventoryRouter } from './pharmacy-inventory';
+import { admittedInventoryBranchIds, pharmacyInventoryRouter } from './pharmacy-inventory';
 import type { TRPCContext } from '../trpc';
 
 function model() {
@@ -113,6 +115,8 @@ function makeDb() {
 }
 
 let db = makeDb();
+/** The session role every caller() carries; reset to ADMIN before each test. */
+let sessionRole: 'ADMIN' | 'EMPLOYEE' = 'ADMIN';
 function caller(overrides: { enabledModules?: string[]; userId?: string | null } = {}) {
   return pharmacyInventoryRouter.createCaller({
     db,
@@ -129,7 +133,7 @@ function caller(overrides: { enabledModules?: string[]; userId?: string | null }
         ? null
         : {
             expires: 'later',
-            user: { id: overrides.userId ?? 'user_a', role: 'ADMIN', status: 'ACTIVE' },
+            user: { id: overrides.userId ?? 'user_a', role: sessionRole, status: 'ACTIVE' },
           },
     organization: null,
     support: null,
@@ -158,6 +162,8 @@ const CAPABILITY_REFUSAL = {
 
 beforeEach(() => {
   db = makeDb();
+  sessionRole = 'ADMIN';
+  mocks.annotateAudit.mockReset();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
   mocks.postWriteOffEntry.mockReset();
 });
@@ -938,42 +944,126 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
   },
 ];
 
-describe('DEV-211 — inventory needs an active assignment to the branch', () => {
+/** The user-record lookup that confirms a session ADMIN is a live ADMIN of this tenant. */
+const ADMIN_RECORD_QUERY = {
+  where: { id: 'user_a', organizationId: 'org_a', role: 'ADMIN', status: 'ACTIVE' },
+  select: { id: true },
+};
+
+const ADMIN_EXCEPTION_AUDIT = {
+  targetType: 'PharmacyBranch',
+  targetId: 'branch_a',
+  metadata: {
+    branchId: 'branch_a',
+    reason: 'tenant-admin-inventory-access-without-branch-assignment',
+  },
+};
+
+/**
+ * The user record the database holds for user_a. `confirmAdmin()` makes it an
+ * ACTIVE ADMIN of `tenant`; any lookup asking for something else finds nothing.
+ */
+function confirmAdmin(tenant = 'org_a') {
+  db.user.findFirst.mockImplementation(
+    async ({
+      where,
+    }: {
+      where: { id?: string; organizationId?: string; role?: string; status?: string };
+    }) =>
+      where.id === 'user_a' &&
+      where.organizationId === tenant &&
+      where.role === 'ADMIN' &&
+      where.status === 'ACTIVE'
+        ? { id: 'user_a' }
+        : null
+  );
+}
+
+const asksForAdminRecord = () =>
+  db.user.findFirst.mock.calls.some(
+    ([args]: [{ where?: { role?: string } }]) => args?.where?.role === 'ADMIN'
+  );
+
+/** The branch stock reads carry no capability of their own on develop. */
+const READS = new Set([
+  'nearExpiryBoard',
+  'onHand',
+  'temperatureZoneStatuses',
+  'expiryBoardLots',
+  'stockSignalDashboard',
+  'stockSignalDigest',
+  'transferBoard',
+]);
+
+describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', () => {
   it.each(ASSIGNMENT_GATED)(
-    'refuses $name for an unassigned user before any stock access',
+    'refuses $name for an unassigned non-admin before any stock access',
     async ({ capability, invoke }) => {
-      // The capability is held, so the refusal can only be the branch assignment.
-      // The session role is ADMIN: a workspace administrator is not exempt.
+      // The capability is held, so the refusal can only be the branch rule.
+      sessionRole = 'EMPLOYEE';
       grant([allow(capability)]);
       db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
 
       await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
       expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith(ASSIGNMENT_QUERY);
+      expect(asksForAdminRecord()).toBe(false);
+      expect(mocks.annotateAudit).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
     }
   );
 
   it.each(ASSIGNMENT_GATED)(
-    'checks the tenant branch before the assignment for $name',
+    'admits a verified active tenant ADMIN to $name without an assignment, and audits it',
     async ({ capability, invoke }) => {
       grant([allow(capability)]);
-      db.pharmacyBranch.findMany.mockResolvedValue([]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
 
-      await expect(invoke()).rejects.toMatchObject({
-        code: 'BAD_REQUEST',
-        message: 'That record is not in this workspace.',
-      });
-      expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+      const outcome = await invoke().then(
+        () => null,
+        (error: { message?: string }) => error
+      );
+
+      // Past the branch rule; whatever the mocked ledger answers next is not a refusal of scope.
+      expect(outcome?.message).not.toBe(OUTSIDE_SCOPE.message);
+      expect(db.user.findFirst).toHaveBeenCalledWith(ADMIN_RECORD_QUERY);
+      expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), ADMIN_EXCEPTION_AUDIT);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
+    'refuses $name for an ADMIN session the user record does not confirm',
+    async ({ capability, invoke }) => {
+      // Demoted, deactivated or deleted since the session was issued: the record
+      // lookup (ADMIN + ACTIVE + this tenant) finds nothing, so no exception applies.
+      grant([allow(capability)]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+
+      await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(db.user.findFirst).toHaveBeenCalledWith(ADMIN_RECORD_QUERY);
+      expect(mocks.annotateAudit).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
     }
   );
 
   it.each(ASSIGNMENT_GATED)(
-    'refuses $name for an unassigned ADMIN holding the system Owner role and a * grant',
+    'refuses $name for an ADMIN of another tenant',
+    async ({ capability, invoke }) => {
+      grant([allow(capability)]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin('org_b');
+
+      await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(mocks.annotateAudit).not.toHaveBeenCalled();
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
+    'refuses $name for a non-admin holding the system Owner role and a * grant',
     async ({ invoke }) => {
-      // No owner exemption exists yet: a tenant administrator can hand anyone the
-      // Owner role template, so neither it nor `*` nor the ADMIN role is proof of
-      // ownership. Until a durable owner identity exists, they all need an assignment.
+      // Role labels and wildcard grants are not the ADMIN role.
+      sessionRole = 'EMPLOYEE';
       db.user.findUnique.mockResolvedValue({
         organizationRole: { key: 'owner', isSystem: true, permissions: [allow('*')] },
         permissionOverrides: [],
@@ -981,6 +1071,38 @@ describe('DEV-211 — inventory needs an active assignment to the branch', () =>
       db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
 
       await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(asksForAdminRecord()).toBe(false);
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED.filter((gated) => !READS.has(gated.name)))(
+    'still refuses $name for a verified ADMIN whose capability is explicitly denied',
+    async ({ capability, invoke }) => {
+      grant([allow(capability)], [deny(capability)]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+
+      await expect(invoke()).rejects.toMatchObject(CAPABILITY_REFUSAL);
+      expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+      expect(mocks.annotateAudit).not.toHaveBeenCalled();
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
+    'checks the tenant branch before the assignment for $name, even for an ADMIN',
+    async ({ capability, invoke }) => {
+      grant([allow(capability)]);
+      db.pharmacyBranch.findMany.mockResolvedValue([]);
+      confirmAdmin();
+
+      await expect(invoke()).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'That record is not in this workspace.',
+      });
+      expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+      expect(asksForAdminRecord()).toBe(false);
       expect(dataAccess()).toEqual([]);
     }
   );
@@ -988,6 +1110,7 @@ describe('DEV-211 — inventory needs an active assignment to the branch', () =>
   it.each(ASSIGNMENT_GATED)(
     'does not let an assignment to a sibling branch admit $name',
     async ({ capability, invoke }) => {
+      sessionRole = 'EMPLOYEE';
       grant([allow(capability)]);
       // The user's only assignment is to branch_b, so any lookup that is not pinned
       // to the requested branch_a finds it. A check that asked "is this user
@@ -1003,7 +1126,18 @@ describe('DEV-211 — inventory needs an active assignment to the branch', () =>
     }
   );
 
-  it('lists only the active, assigned branches for the inventory pages', async () => {
+  it('uses the assignment, not the exception, for an assigned ADMIN', async () => {
+    grant([allow('pharmacy:inventory')]);
+    confirmAdmin();
+
+    await expect(
+      caller().createLocation({ branchId: 'branch_a', code: 'MAIN', name: 'Main', kind: 'STORE' })
+    ).resolves.toMatchObject({ organizationId: 'org_a', branchId: 'branch_a' });
+    expect(asksForAdminRecord()).toBe(false);
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
+  it('lists only the active, assigned branches for a non-admin', async () => {
     db.pharmacyBranchAssignment.findMany.mockResolvedValue([
       { branchId: 'branch_a' },
       { branchId: 'branch_c' },
@@ -1011,10 +1145,10 @@ describe('DEV-211 — inventory needs an active assignment to the branch', () =>
     const ctx = {
       db,
       entitlements: { organizationId: 'org_a' },
-      session: { user: { id: 'user_a', role: 'ADMIN', status: 'ACTIVE' } },
+      session: { user: { id: 'user_a', role: 'EMPLOYEE', status: 'ACTIVE' } },
     } as unknown as TRPCContext;
 
-    await expect(assignedInventoryBranchIds(ctx)).resolves.toEqual(
+    await expect(admittedInventoryBranchIds(ctx)).resolves.toEqual(
       new Set(['branch_a', 'branch_c'])
     );
     expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
@@ -1028,6 +1162,38 @@ describe('DEV-211 — inventory needs an active assignment to the branch', () =>
     });
   });
 
+  it('lists every active branch of the tenant for a verified ADMIN', async () => {
+    confirmAdmin();
+    db.pharmacyBranch.findMany.mockResolvedValue([{ id: 'branch_a' }, { id: 'branch_b' }]);
+    const ctx = {
+      db,
+      entitlements: { organizationId: 'org_a' },
+      session: { user: { id: 'user_a', role: 'ADMIN', status: 'ACTIVE' } },
+    } as unknown as TRPCContext;
+
+    await expect(admittedInventoryBranchIds(ctx)).resolves.toEqual(
+      new Set(['branch_a', 'branch_b'])
+    );
+    expect(db.user.findFirst).toHaveBeenCalledWith(ADMIN_RECORD_QUERY);
+    expect(db.pharmacyBranch.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_a', active: true },
+      select: { id: true },
+    });
+    expect(db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+  });
+
+  it('lists only assigned branches for an ADMIN session the record does not confirm', async () => {
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+    const ctx = {
+      db,
+      entitlements: { organizationId: 'org_a' },
+      session: { user: { id: 'user_a', role: 'ADMIN', status: 'ACTIVE' } },
+    } as unknown as TRPCContext;
+
+    await expect(admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set(['branch_a']));
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+  });
+
   it('refuses to list branches without a tenant actor', async () => {
     const ctx = {
       db,
@@ -1035,11 +1201,12 @@ describe('DEV-211 — inventory needs an active assignment to the branch', () =>
       session: null,
     } as unknown as TRPCContext;
 
-    await expect(assignedInventoryBranchIds(ctx)).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await expect(admittedInventoryBranchIds(ctx)).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
   });
 
   it('lets an assigned user create a location at that branch', async () => {
+    sessionRole = 'EMPLOYEE';
     grant([allow('pharmacy:inventory')]);
 
     await expect(
@@ -1056,7 +1223,7 @@ describe('DEV-211 — inventory needs an active assignment to the branch', () =>
 
 /**
  * DEV-660 residual: branch-scoped procedures still on the tenant-only branch
- * check. Each is a known gap tracked on DEV-660; moving one to assignedScopeFor
+ * check. Each is a known gap tracked on DEV-660; moving one to admittedScopeFor
  * moves it from here into ASSIGNMENT_GATED. A new procedure that takes a
  * branchId must be placed in one of the two lists, so none skips the decision.
  */

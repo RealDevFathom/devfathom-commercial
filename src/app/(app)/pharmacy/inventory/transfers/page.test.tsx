@@ -17,7 +17,7 @@ vi.mock('@/lib/abac', () => ({
   subjectFromSession: (user: unknown) => user,
 }));
 vi.mock('@/server/routers/pharmacy-inventory', () => ({
-  assignedInventoryBranchIds: mocks.assigned,
+  admittedInventoryBranchIds: mocks.assigned,
   pharmacyInventoryRouter: { createCaller: () => ({ transferBoard: mocks.board }) },
 }));
 

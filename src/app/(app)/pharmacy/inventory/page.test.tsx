@@ -17,7 +17,7 @@ vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.module }));
 vi.mock('@/server/routers/pharmacy-inventory', () => ({
-  assignedInventoryBranchIds: mocks.assigned,
+  admittedInventoryBranchIds: mocks.assigned,
   pharmacyInventoryRouter: { createCaller: mocks.caller },
 }));
 vi.mock('./break-pack-form', () => ({
@@ -305,7 +305,7 @@ describe('DEV-660 — only assigned branches are offered', () => {
     expect(lots).not.toHaveBeenCalled();
   });
 
-  it('gives an unassigned administrator the way to assign themselves', async () => {
+  it('links an ADMIN session that is admitted to no branch to the assignment page', async () => {
     mocks.assigned.mockResolvedValue(new Set());
     Object.assign(ctx.session.user, { role: 'ADMIN' });
     await show();

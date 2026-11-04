@@ -1,12 +1,15 @@
 /**
- * DEV-211 / DEV-660 — inventory branch assignment against PostgreSQL as a
- * NOSUPERUSER NOBYPASSRLS role, through the tenant-scoped client. The router
- * unit tests pin the query shape; this proves its meaning on real rows: an
- * inactive assignment, a sibling-branch assignment, an inactive branch, an
- * unassigned session ADMIN, a member holding the system Owner role template and
- * an ADMIN with a `*` grant are all refused, and another tenant's branch never
- * resolves. There is no durable owner identity to exempt yet (DEV-660), so no
- * one reaches a branch without an active assignment. Skipped unless
+ * DEV-211 / DEV-660 — inventory branch access against PostgreSQL as a NOSUPERUSER
+ * NOBYPASSRLS role, through the tenant-scoped client. The router unit tests pin
+ * the query shapes; this proves their meaning on real rows.
+ *
+ * Rule (Saad, "ADMIN = Owner" for inventory branch access only): an active
+ * assignment to an active branch of the tenant, or a user record that is an
+ * ACTIVE ADMIN of the same tenant, which reaches every active branch and is
+ * audited. Refused: an inactive or sibling-only assignment, a deactivated or
+ * demoted ADMIN still holding an ADMIN session, another tenant's ADMIN, an
+ * Owner-role or `*`-role non-admin, an inactive branch and another tenant's
+ * branch. An explicit capability DENY still wins for an ADMIN. Skipped unless
  * TEST_DATABASE_URL names that role on a migrated disposable database.
  */
 import { randomUUID } from 'node:crypto';
@@ -35,7 +38,11 @@ const ids = {
   roleOwner: `role_invasg_own_${suffix}`,
   roleWildcard: `role_invasg_all_${suffix}`,
   ownerRoleHolder: `user_invasg_own_${suffix}`,
-  wildcardAdmin: `user_invasg_all_${suffix}`,
+  wildcardEmployee: `user_invasg_all_${suffix}`,
+  inactiveAdmin: `user_invasg_iadm_${suffix}`,
+  demotedAdmin: `user_invasg_dadm_${suffix}`,
+  deniedAdmin: `user_invasg_xadm_${suffix}`,
+  outsiderAdmin: `user_invasg_oadm_${suffix}`,
   assigned: `user_invasg_ok_${suffix}`,
   inactive: `user_invasg_off_${suffix}`,
   sibling: `user_invasg_sib_${suffix}`,
@@ -244,6 +251,35 @@ async function expectRefusedEverywhere(api: InventoryCaller, branchId: string, r
   }
 }
 
+const CAPABILITY_REFUSAL = {
+  code: 'FORBIDDEN',
+  message: 'You do not have permission for this action.',
+};
+/** The branch stock reads carry no capability of their own. */
+const READS = new Set([
+  'nearExpiryBoard',
+  'onHand',
+  'temperatureZoneStatuses',
+  'expiryBoardLots',
+  'stockSignalDashboard',
+  'stockSignalDigest',
+  'transferBoard',
+]);
+
+/** Every one of the 18 gets past the branch rule: whatever follows is not a scope refusal. */
+async function expectAdmittedEverywhere(api: InventoryCaller, branchId: string) {
+  const calls = gatedCalls(api, branchId);
+  expect(calls).toHaveLength(18);
+  for (const [name, call] of calls) {
+    const message = await call().then(
+      () => null,
+      (error: { message?: string }) => error.message ?? null
+    );
+    expect({ name, message }).not.toMatchObject({ message: OUTSIDE_SCOPE.message });
+    expect({ name, message }).not.toMatchObject({ message: NOT_IN_WORKSPACE.message });
+  }
+}
+
 beforeAll(async () => {
   if (!databaseUrl) return;
   const scoped = await import('@/lib/tenancy/scoped-db');
@@ -316,7 +352,16 @@ beforeAll(async () => {
       { id: ids.closed, role: 'EMPLOYEE' as const, roleId: ids.roleA },
       { id: ids.admin, role: 'ADMIN' as const, roleId: ids.roleA },
       { id: ids.ownerRoleHolder, role: 'EMPLOYEE' as const, roleId: ids.roleOwner },
-      { id: ids.wildcardAdmin, role: 'ADMIN' as const, roleId: ids.roleWildcard },
+      { id: ids.wildcardEmployee, role: 'EMPLOYEE' as const, roleId: ids.roleWildcard },
+      {
+        id: ids.inactiveAdmin,
+        role: 'ADMIN' as const,
+        roleId: ids.roleA,
+        status: 'INACTIVE' as const,
+      },
+      // The record says EMPLOYEE; the test session will still claim ADMIN.
+      { id: ids.demotedAdmin, role: 'EMPLOYEE' as const, roleId: ids.roleA },
+      { id: ids.deniedAdmin, role: 'ADMIN' as const, roleId: ids.roleA },
     ];
     for (const person of people) {
       await tx.user.create({
@@ -327,10 +372,19 @@ beforeAll(async () => {
           department: 'LEADERSHIP',
           title: 'Inventory',
           role: person.role,
+          status: person.status ?? 'ACTIVE',
           organizationRoleId: person.roleId,
         },
       });
     }
+    await tx.userPermissionOverride.create({
+      data: {
+        userId: ids.deniedAdmin,
+        capability: 'pharmacy:inventory',
+        effect: 'DENY',
+        reason: 'DEV-660 explicit deny regression',
+      },
+    });
     await tx.pharmacyBranchAssignment.createMany({
       data: [
         { userId: ids.assigned, branchId: ids.branchA },
@@ -367,6 +421,17 @@ beforeAll(async () => {
     await tx.pharmacyBranchAssignment.create({
       data: { userId: ids.outsider, branchId: ids.branchOther },
     });
+    await tx.user.create({
+      data: {
+        id: ids.outsiderAdmin,
+        name: 'Outsider admin',
+        email: `${ids.outsiderAdmin}@example.test`,
+        department: 'LEADERSHIP',
+        title: 'Administrator',
+        role: 'ADMIN',
+        organizationRoleId: ids.roleB,
+      },
+    });
   });
 });
 
@@ -390,7 +455,7 @@ describeIfDatabase('inventory branch assignment against Postgres', () => {
         api.approveTransfer({ branchId: ids.branchA, transferId: 'missing' })
       ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'CROSS_BRANCH_REFERENCE' });
       await expectRefusedEverywhere(api, ids.branchB, OUTSIDE_SCOPE);
-      await expect(inventory.assignedInventoryBranchIds(ctx)).resolves.toEqual(
+      await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(
         new Set([ids.branchA])
       );
     });
@@ -399,46 +464,120 @@ describeIfDatabase('inventory branch assignment against Postgres', () => {
   it('refuses an inactive assignment', async () => {
     await act(person(ids.inactive), async (api, ctx) => {
       await expectRefusedEverywhere(api, ids.branchA, OUTSIDE_SCOPE);
-      await expect(inventory.assignedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
+      await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
     });
   });
 
   it('refuses an assignment that belongs to a sibling branch', async () => {
     await act(person(ids.sibling), async (api, ctx) => {
       await expectRefusedEverywhere(api, ids.branchA, OUTSIDE_SCOPE);
-      await expect(inventory.assignedInventoryBranchIds(ctx)).resolves.toEqual(
+      await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(
         new Set([ids.branchB])
       );
     });
   });
 
-  it('refuses an unassigned session ADMIN: administrators are not exempt', async () => {
+  it('admits a verified active tenant ADMIN to every active branch, and audits it', async () => {
     await act(person(ids.admin, 'ADMIN'), async (api, ctx) => {
-      await expectRefusedEverywhere(api, ids.branchA, OUTSIDE_SCOPE);
-      await expect(inventory.assignedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
+      await expectAdmittedEverywhere(api, ids.branchA);
+      await expectAdmittedEverywhere(api, ids.branchB);
+      await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(
+        new Set([ids.branchA, ids.branchB])
+      );
+    });
+    await act(person(ids.admin, 'ADMIN'), async (api, ctx) => {
+      await expect(api.transferBoard({ branchId: ids.branchB })).resolves.toEqual([]);
+      expect((ctx as { audit: { detail: unknown } }).audit.detail).toMatchObject({
+        targetType: 'PharmacyBranch',
+        targetId: ids.branchB,
+        metadata: {
+          branchId: ids.branchB,
+          reason: 'tenant-admin-inventory-access-without-branch-assignment',
+        },
+      });
     });
   });
 
-  it('refuses a member holding the system Owner role template without an assignment', async () => {
-    // The Owner template is assignable by any tenant administrator, so it is not
-    // proof of ownership and grants no cross-branch scope.
+  it("still refuses that ADMIN an inactive branch and another tenant's branch", async () => {
+    await act(person(ids.admin, 'ADMIN'), async (api) => {
+      await expectRefusedEverywhere(api, ids.closedBranch, NOT_IN_WORKSPACE);
+      await expectRefusedEverywhere(api, ids.branchOther, NOT_IN_WORKSPACE);
+    });
+  });
+
+  it('refuses a deactivated ADMIN whose session still says ACTIVE ADMIN', async () => {
+    await act(person(ids.inactiveAdmin, 'ADMIN'), async (api, ctx) => {
+      await expectRefusedEverywhere(api, ids.branchA, OUTSIDE_SCOPE);
+      await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
+    });
+  });
+
+  it('refuses a demoted user whose session still claims ADMIN', async () => {
+    await act(person(ids.demotedAdmin, 'ADMIN'), async (api, ctx) => {
+      await expectRefusedEverywhere(api, ids.branchA, OUTSIDE_SCOPE);
+      await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
+    });
+  });
+
+  it("refuses another tenant's ADMIN presented as this tenant's", async () => {
+    await act(person(ids.outsiderAdmin, 'ADMIN'), async (api, ctx) => {
+      // RLS hides the foreign user row, so capability-gated procedures refuse at
+      // the capability check and the capability-free reads at the branch rule.
+      for (const [name, call] of gatedCalls(api, ids.branchA)) {
+        const outcome = await call().then(
+          () => ({ name, admitted: true }),
+          (error: { code?: string; message?: string }) => ({
+            name,
+            code: error.code,
+            message: error.message,
+          })
+        );
+        expect(outcome).toEqual({
+          name,
+          code: 'FORBIDDEN',
+          message: READS.has(name) ? OUTSIDE_SCOPE.message : CAPABILITY_REFUSAL.message,
+        });
+      }
+      await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
+    });
+  });
+
+  it('refuses a non-admin holding the system Owner role template without an assignment', async () => {
+    // A role label is not the ADMIN role.
     await act(person(ids.ownerRoleHolder), async (api, ctx) => {
       await expectRefusedEverywhere(api, ids.branchA, OUTSIDE_SCOPE);
-      await expect(inventory.assignedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
+      await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
     });
   });
 
-  it('refuses an unassigned ADMIN whose role grants *', async () => {
-    await act(person(ids.wildcardAdmin, 'ADMIN'), async (api, ctx) => {
+  it('refuses a non-admin whose role grants * without an assignment', async () => {
+    await act(person(ids.wildcardEmployee), async (api, ctx) => {
       await expectRefusedEverywhere(api, ids.branchA, OUTSIDE_SCOPE);
-      await expect(inventory.assignedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
+      await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
+    });
+  });
+
+  it('keeps an explicit capability DENY authoritative for an ADMIN', async () => {
+    await act(person(ids.deniedAdmin, 'ADMIN'), async (api) => {
+      for (const [name, call] of gatedCalls(api, ids.branchA)) {
+        const message = await call().then(
+          () => null,
+          (error: { message?: string }) => error.message ?? null
+        );
+        if (READS.has(name)) {
+          // The reads carry no capability; the branch exception still applies.
+          expect({ name, message }).not.toMatchObject({ message: OUTSIDE_SCOPE.message });
+        } else {
+          expect({ name, message }).toEqual({ name, message: CAPABILITY_REFUSAL.message });
+        }
+      }
     });
   });
 
   it('refuses an inactive branch even with an assignment to it', async () => {
     await act(person(ids.closed), async (api, ctx) => {
       await expectRefusedEverywhere(api, ids.closedBranch, NOT_IN_WORKSPACE);
-      await expect(inventory.assignedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
+      await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
     });
   });
 
