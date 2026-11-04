@@ -366,8 +366,61 @@ function counterCapabilityDecision(
  * organization may use every active branch, including when they also have an
  * explicit assignment elsewhere. That exception is recorded on the audit.
  */
+/**
+ * PH-A7 / DEV-741 — the one place a raw-printable receipt is built. Authorizes
+ * the caller for this branch's receipts, re-reads the SETTLED sale and derives
+ * every printed fact from it (never from the caller), so neither the download
+ * path nor the print queue can fabricate or renumber a receipt (DEV-168).
+ * Text the raw baseline cannot print returns the browser/OS fallback.
+ */
+export async function buildSettledCounterReceiptPrintJob(
+  ctx: TRPCContext,
+  input: { branchId: string; saleId: string; locale: 'en' | 'ur'; reprint: boolean }
+) {
+  const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+  try {
+    const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
+    if (receipt.receiptNumber === null || !receipt.completedAt) {
+      throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
+    }
+    const [format, taxIdentity] = await Promise.all([
+      readPharmacyReceiptFormat(ctx.db, scope),
+      readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt)),
+    ]);
+    return {
+      status: 'READY' as const,
+      scope,
+      receiptNumber: receipt.receiptNumber,
+      job: buildPharmacyReceiptEscPosJob(receipt, input.locale, {
+        layout: format.layout,
+        taxIdentity,
+        reprint: input.reprint,
+      }),
+    };
+  } catch (error) {
+    if (error instanceof RawPrintValidationError) {
+      return {
+        status: 'FALLBACK' as const,
+        code: error.code,
+        fallback: error.fallback,
+        message: error.message,
+      };
+    }
+    if (error instanceof PharmacyReceiptPrintError) {
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message: 'This bill is not settled, so it has no receipt to print.',
+      });
+    }
+    fail(error);
+  }
+}
+
 /** A branch outside the session organization is a scope denial, not a bad request. */
-async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+export async function branchScopeOrForbidden(
+  ctx: TRPCContext,
+  branch: string
+): Promise<LedgerScope> {
   try {
     return await scopeFor(ctx, branch);
   } catch (error) {
@@ -378,7 +431,7 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
   }
 }
 
-async function requireCounterReceiptAccess(
+export async function requireCounterReceiptAccess(
   ctx: TRPCContext,
   branch: string,
   requireCanonicalCounter = false,
@@ -1871,41 +1924,8 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
-      try {
-        const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
-        if (receipt.receiptNumber === null || !receipt.completedAt) {
-          throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
-        }
-        const [format, taxIdentity] = await Promise.all([
-          readPharmacyReceiptFormat(ctx.db, scope),
-          readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt)),
-        ]);
-        return {
-          status: 'READY' as const,
-          ...buildPharmacyReceiptEscPosJob(receipt, input.locale, {
-            layout: format.layout,
-            taxIdentity,
-            reprint: input.reprint,
-          }),
-        };
-      } catch (error) {
-        if (error instanceof RawPrintValidationError) {
-          return {
-            status: 'FALLBACK' as const,
-            code: error.code,
-            fallback: error.fallback,
-            message: error.message,
-          };
-        }
-        if (error instanceof PharmacyReceiptPrintError) {
-          throw new TRPCError({
-            code: 'CONFLICT',
-            message: 'This bill is not settled, so it has no receipt to print.',
-          });
-        }
-        fail(error);
-      }
+      const built = await buildSettledCounterReceiptPrintJob(ctx, input);
+      return built.status === 'READY' ? { status: 'READY' as const, ...built.job } : built;
     }),
 
   /** PH-A7: this branch's saved receipt format (shared layout), for the counter. */
