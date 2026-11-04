@@ -249,8 +249,9 @@ export function getPaymentProvider(name: PaymentProviderName): PaymentProvider {
 
 /** Payload keys that would carry cardholder data — forbidden anywhere in a payment
  * event (C6). Compared after stripping non-alphanumerics and lower-casing, so
- * `card_number`, `cardNumber` and `CardNo` all match. */
-const FORBIDDEN_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
+ * `card_number`, `cardNumber` and `CardNo` all match. Exported so the pharmacy
+ * card-terminal seam (DEV-743) extends this list instead of keeping a second one. */
+export const FORBIDDEN_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
   'pan',
   'primaryaccountnumber',
   'cardnumber',
