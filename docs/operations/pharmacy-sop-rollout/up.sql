@@ -67,6 +67,11 @@ BEGIN
       'migrations (rollout phases 0 and 1) before granting SOP access.';
   END IF;
 
+  IF to_regclass('public.pharmacy_sop_site_settings') IS NULL THEN
+    RAISE EXCEPTION 'DEV-751: pharmacy_sop_site_settings is missing; deploy the DEV-751 code and '
+      'migrations (rollout phases 0 and 1) before granting SOP access.';
+  END IF;
+
   SELECT string_agg(DISTINCT c.capability, ', ') INTO v_bad
   FROM jsonb_each(grant_map) AS e(role_key, capabilities)
   CROSS JOIN LATERAL jsonb_array_elements_text(e.capabilities) AS c(capability)

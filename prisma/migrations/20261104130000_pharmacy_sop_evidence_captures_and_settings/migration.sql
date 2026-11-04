@@ -45,7 +45,8 @@ CREATE TABLE "pharmacy_sop_evidence_captures" (
   "capturedByUserId" TEXT,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "pharmacy_sop_evidence_captures_pkey" PRIMARY KEY ("id"),
-  CONSTRAINT "pharmacy_sop_evidence_captures_organizationId_pharmacyBranchId_fkey"
+  -- Named explicitly: the Prisma-style default exceeds the 63-byte identifier limit.
+  CONSTRAINT "pharmacy_sop_evidence_captures_pharmacy_branch_fkey"
     FOREIGN KEY ("organizationId", "pharmacyBranchId")
     REFERENCES "pharmacy_branches" ("organizationId", "id") ON DELETE RESTRICT ON UPDATE CASCADE,
   -- SQL-only composite keys onto the shared engine tables: the evidence row,

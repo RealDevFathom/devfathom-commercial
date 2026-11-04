@@ -149,7 +149,7 @@ function makeDb() {
       }),
     },
   };
-  const typed = db as Record<keyof typeof db, Delegate> & {
+  const typed = db as unknown as Record<keyof typeof db, Delegate> & {
     $transaction: ReturnType<typeof vi.fn>;
     $queryRaw: ReturnType<typeof vi.fn>;
   };
@@ -187,6 +187,10 @@ function caller() {
     audit: { detail: {} },
   } as never).pharmacySop;
 }
+
+type Refusal = { code: string; message: string };
+const noRefusal = (): Refusal => ({ code: 'RESOLVED', message: '' });
+const asRefusal = (err: unknown): Refusal => err as Refusal;
 
 function audited(action: string) {
   return mocks.annotateAudit.mock.calls
@@ -459,7 +463,7 @@ describe('createAssignment times', () => {
       for (const dueTimeMinutes of [undefined, null]) {
         const refusal = await caller()
           .createAssignment({ ...base, frequency, ...extra, dueTimeMinutes })
-          .catch((err: unknown) => err as { code: string; message: string });
+          .then(noRefusal, asRefusal);
         expect(refusal).toMatchObject({ code: 'BAD_REQUEST' });
         expect(refusal.message).toContain('Choose the time this procedure is due.');
       }
@@ -483,13 +487,13 @@ describe('createAssignment times', () => {
     };
     const noStart = await caller()
       .createAssignment({ ...interval, intervalEndTimeMinutes: 17 * 60 })
-      .catch((err: unknown) => err as { code: string; message: string });
+      .then(noRefusal, asRefusal);
     expect(noStart).toMatchObject({ code: 'BAD_REQUEST' });
     expect(noStart.message).toContain('Choose the time the first check is due.');
 
     const noEnd = await caller()
       .createAssignment({ ...interval, dueTimeMinutes: 9 * 60 })
-      .catch((err: unknown) => err as { code: string; message: string });
+      .then(noRefusal, asRefusal);
     expect(noEnd).toMatchObject({ code: 'BAD_REQUEST' });
     expect(noEnd.message).toContain('Choose the time the last check is due.');
     expect(mocks.engine.createAssignment).not.toHaveBeenCalled();
@@ -545,7 +549,9 @@ describe('no default escalation', () => {
     for (const path of PHARMACY_SOP_SOURCES) {
       const source = read(path);
       expect(source, path).not.toMatch(/createEscalationPolicy|sop-escalation/);
-      expect(source, path).not.toMatch(/restaurantSopEscalation(Policy|Step)\s*\.\s*(create|upsert)/);
+      expect(source, path).not.toMatch(
+        /restaurantSopEscalation(Policy|Step)\s*\.\s*(create|upsert)/
+      );
     }
   });
 });

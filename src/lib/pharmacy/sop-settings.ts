@@ -59,7 +59,10 @@ type SettingRow = {
   createdAt: Date;
 };
 
-function toSetting(pharmacyBranchId: string, row: SettingRow | null): PharmacySopAutoScheduleSetting {
+function toSetting(
+  pharmacyBranchId: string,
+  row: SettingRow | null
+): PharmacySopAutoScheduleSetting {
   if (!row) {
     return {
       pharmacyBranchId,

@@ -348,7 +348,8 @@ describe('generateDueSopOccurrences branchIds scope', () => {
       where: { active: boolean; branchId?: { in: string[] } };
     }) =>
       assignments.filter(
-        (row) => row.active && (!args.where.branchId || args.where.branchId.in.includes(row.branchId))
+        (row) =>
+          row.active && (!args.where.branchId || args.where.branchId.in.includes(row.branchId))
       )) as never);
     const result = await generateDueSopOccurrences(db, { ...window, branchIds: ['b2'] });
     expect(raw.restaurantSopAssignment.findMany).toHaveBeenCalledWith(

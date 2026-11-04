@@ -47,7 +47,9 @@ function makeDb(opts: {
         return match.sort(newestFirst)[0] ?? null;
       }),
       findMany: vi.fn(async ({ where }: { where: { pharmacyBranchId: { in: string[] } } }) =>
-        rows.filter((row) => where.pharmacyBranchId.in.includes(row.pharmacyBranchId)).sort(newestFirst)
+        rows
+          .filter((row) => where.pharmacyBranchId.in.includes(row.pharmacyBranchId))
+          .sort(newestFirst)
       ),
       create: vi.fn(async ({ data }: { data: Omit<Row, 'id' | 'createdAt'> }) => {
         clock += 1000;

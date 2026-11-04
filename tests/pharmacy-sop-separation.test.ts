@@ -145,10 +145,7 @@ describe('pharmacy SOPs never gate pharmacy operations (DEV-751)', () => {
   });
 
   it('SOP code never enqueues a scheduler, engine or restaurant job', () => {
-    const sopSources = [
-      ...SOP_FILES,
-      ...SOP_DIRS.flatMap((dir) => walk(dir.replace(/\/$/, ''))),
-    ];
+    const sopSources = [...SOP_FILES, ...SOP_DIRS.flatMap((dir) => walk(dir.replace(/\/$/, '')))];
     expect(sopSources).toContain('src/lib/pharmacy/sop-settings.ts');
     expect(sopSources).toContain('src/components/pharmacy/sop/sop-setup.tsx');
     const ENQUEUE =

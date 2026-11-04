@@ -592,7 +592,9 @@ describe('pharmacy procedures workspace', () => {
       fireEvent.click(
         screen.getByRole('button', { name: 'Create schedule for Pharmacy — training attestation' })
       );
-      const form = screen.getByRole('form', { name: 'Schedule for Pharmacy — training attestation' });
+      const form = screen.getByRole('form', {
+        name: 'Schedule for Pharmacy — training attestation',
+      });
       // No time is prefilled; the manager always chooses one.
       fireEvent.change(within(form).getByLabelText('Due at'), { target: { value: '15:00' } });
       return form;
