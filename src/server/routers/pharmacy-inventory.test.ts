@@ -992,6 +992,18 @@ const asksForAdminRecord = () =>
   );
 
 /** The branch stock reads carry no capability of their own on develop. */
+/**
+ * A reads procedure refuses at the branch rule today; PR #994 puts transferBoard
+ * behind pharmacy:inventory, after which it refuses at the capability check.
+ * Either is a refusal, so the read-side assertions accept both.
+ */
+const READ_REFUSAL = {
+  code: 'FORBIDDEN',
+  message: expect.stringMatching(
+    /^(Branch is outside your scope\.|You do not have permission for this action\.)$/
+  ),
+};
+
 const READS = new Set([
   'nearExpiryBoard',
   'onHand',
@@ -1094,7 +1106,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       confirmAdmin();
 
       await expect(invoke()).rejects.toMatchObject(
-        READS.has(name) ? OUTSIDE_SCOPE : CAPABILITY_REFUSAL
+        READS.has(name) ? READ_REFUSAL : CAPABILITY_REFUSAL
       );
       expect(mocks.recordAudit).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
@@ -1108,7 +1120,7 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
       db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
       confirmAdmin();
 
-      await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      await expect(invoke()).rejects.toMatchObject(READ_REFUSAL);
       expect(mocks.recordAudit).not.toHaveBeenCalled();
       expect(dataAccess()).toEqual([]);
     }

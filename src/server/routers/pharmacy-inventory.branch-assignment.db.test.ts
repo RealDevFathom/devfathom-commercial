@@ -260,6 +260,10 @@ const CAPABILITY_REFUSAL = {
   message: 'You do not have permission for this action.',
 };
 /** The branch stock reads carry no capability of their own. */
+/** Reads refuse at the branch rule; once PR #994 gates transferBoard, at the capability. */
+const READ_REFUSAL_MESSAGE = expect.stringMatching(
+  /^(Branch is outside your scope\.|You do not have permission for this action\.)$/
+);
 const READS = new Set([
   'nearExpiryBoard',
   'onHand',
@@ -563,7 +567,7 @@ describeIfDatabase('inventory branch assignment against Postgres', () => {
         expect(outcome).toEqual({
           name,
           code: 'FORBIDDEN',
-          message: READS.has(name) ? OUTSIDE_SCOPE.message : CAPABILITY_REFUSAL.message,
+          message: READS.has(name) ? READ_REFUSAL_MESSAGE : CAPABILITY_REFUSAL.message,
         });
       }
       await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
@@ -599,7 +603,7 @@ describeIfDatabase('inventory branch assignment against Postgres', () => {
         // which carry no capability of their own, refuse at the branch rule.
         expect({ name, message }).toEqual({
           name,
-          message: READS.has(name) ? OUTSIDE_SCOPE.message : CAPABILITY_REFUSAL.message,
+          message: READS.has(name) ? READ_REFUSAL_MESSAGE : CAPABILITY_REFUSAL.message,
         });
       }
       await expect(inventory.admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set());
