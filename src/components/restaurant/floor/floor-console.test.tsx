@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   floors: { data: [] as unknown[], error: null as unknown, isLoading: false },
   sections: { data: [] as unknown[], error: null as unknown, isLoading: false },
   stations: { data: [] as unknown[], error: null as unknown, isLoading: false },
+  access: { data: { canManage: true }, error: null as unknown, isLoading: false },
   floorCalls: [] as Array<{ input: unknown; enabled: boolean }>,
   sectionCalls: [] as Array<{ input: unknown; enabled: boolean }>,
   stationCalls: [] as Array<{ input: unknown; enabled: boolean }>,
@@ -51,6 +52,9 @@ vi.mock('@/lib/trpc', () => ({
     }),
     restaurantFloor: new Proxy(
       {
+        access: {
+          useQuery: () => mocks.access,
+        },
         listFloors: {
           useQuery: (input: unknown, options: { enabled: boolean }) => {
             mocks.floorCalls.push({ input, enabled: options.enabled });
@@ -121,6 +125,7 @@ describe('FloorConsole', () => {
     vi.clearAllMocks();
     mocks.floors.data = [];
     mocks.stations.data = [];
+    mocks.access.data = { canManage: true };
     mocks.floorCalls.length = 0;
     mocks.sectionCalls.length = 0;
     mocks.stationCalls.length = 0;
@@ -190,6 +195,36 @@ describe('FloorConsole', () => {
       name: 'Patio',
       sortOrder: 3,
     });
+  });
+
+  it('renders an authoritative read-only view without mutation controls', () => {
+    mocks.access.data = { canManage: false };
+    mocks.floors.data = [
+      { id: 'floor_1', name: 'Dining room', sortOrder: 0, active: true, tables: [] },
+    ];
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+
+    expect(screen.getByText('Read-only floor')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Add floor' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add table' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+  });
+
+  it('does not offer Make default for an inactive station', () => {
+    mocks.stations.data = [
+      {
+        id: 'station_1',
+        name: 'Old pass',
+        active: false,
+        isDefault: false,
+        routingRules: [],
+      },
+    ];
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    expect(screen.queryByRole('button', { name: 'Make default' })).not.toBeInTheDocument();
   });
 
   it('searches active catalog labels and submits the selected product invisibly', () => {

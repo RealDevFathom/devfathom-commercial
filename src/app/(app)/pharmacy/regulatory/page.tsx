@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 
 import { PharmacyRegulatoryProfileForm } from '@/components/pharmacy/regulatory-profile-form';
+import { FbrTier1Summary } from '@/components/pharmacy/fbr-tier1-summary';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { pharmacyOnboardingRouter } from '@/server/routers/pharmacy-onboarding';
@@ -49,6 +50,10 @@ export default async function PharmacyRegulatoryPage({
     );
   }
 
+  // #709 — the Tier-1 self-check prompt is additive: if it cannot be read,
+  // the rest of the page still renders.
+  const fbrTier1 = await caller.fbrTier1Status().catch(() => null);
+
   return (
     <main className="min-w-0 space-y-6">
       <PageHeader
@@ -57,6 +62,7 @@ export default async function PharmacyRegulatoryPage({
         description="Province, premises, licence, permitted schedules, qualified person, tax and retention. Every version is kept, so what was true on any past day survives."
       />
       <PharmacyRegulatoryProfileForm initial={initial} />
+      {fbrTier1 ? <FbrTier1Summary status={fbrTier1} /> : null}
     </main>
   );
 }

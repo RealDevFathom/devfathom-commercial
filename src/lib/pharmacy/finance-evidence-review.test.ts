@@ -204,11 +204,10 @@ describe('metric contract (reports.ts PHARMACY_METRIC_CONTRACT)', () => {
     expect(byKey.refundsMinor?.source).toBe('pharmacy_refunds');
   });
 
-  it('marks exactly four metrics as having no source', () => {
+  it('marks exactly three metrics as having no source', () => {
     expect(PHARMACY_METRIC_CONTRACT.filter((m) => m.source === null).map((m) => m.key)).toEqual([
       'accountsPayableMinor',
       'accountsReceivableMinor',
-      'khataAgingMinor',
       'deviceFiscalOfflineExceptions',
     ]);
   });
@@ -217,13 +216,18 @@ describe('metric contract (reports.ts PHARMACY_METRIC_CONTRACT)', () => {
 describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () => {
   type Counts = { recalls: number; claims: number; receiving: number; coverage: number };
 
-  function makeDb(rawResults: unknown[][], counts: Counts) {
+  function makeDb(rawResults: unknown[][], counts: Counts, khataValue = BigInt(4250)) {
     const calls: CapturedSql[] = [];
     const coverageArgs: unknown[] = [];
     let index = 0;
     const db = {
       $queryRaw: vi.fn(async (query: CapturedSql) => {
         calls.push({ sql: query.sql, values: query.values });
+        if (query.sql.includes("current_setting('app.current_branch_id'"))
+          return [{ branchId: null }];
+        if (query.sql.includes('FROM "pharmacy_khata_events" charge'))
+          return [{ value: khataValue }];
+        if (query.sql.includes("set_config('app.current_branch_id'")) return [];
         return rawResults[index++] ?? [];
       }),
       pharmacyRecallNotice: { count: vi.fn(async () => counts.recalls) },
@@ -290,7 +294,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
       rejectedFiscalDocuments: 2,
       accountsPayableMinor: null,
       accountsReceivableMinor: null,
-      khataAgingMinor: null,
+      khataAgingMinor: 4_250,
       deviceFiscalOfflineExceptions: null,
     });
   });
@@ -309,10 +313,10 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     expect(where.effectiveFrom.lte.toISOString()).toBe('2026-03-10T12:00:00.000Z');
   });
 
-  it('issues five raw reads; sales use businessDate while margin uses UTC occurredAt in the same statement', async () => {
+  it('issues branch-context Khata reads in addition to five aggregate reads', async () => {
     const { db, calls } = makeDb(populated, populatedCounts);
     await readPharmacyOwnerCommandCentre(db, filters);
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(9);
     const money = calls[0];
     expect(money?.sql).toContain('s."businessDate">=');
     expect(money?.sql).toContain('entry."occurredAt" >=');
@@ -323,6 +327,10 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     // Expiry and fiscal aging use the database clock, not the JS clock used for freshness.
     expect(calls[2]?.sql).toContain('CURRENT_TIMESTAMP');
     expect(calls[4]?.sql).toContain('CURRENT_TIMESTAMP');
+    expect(calls[5]?.sql).toContain("current_setting('app.current_branch_id'");
+    expect(calls[6]?.sql).toContain("set_config('app.current_branch_id'");
+    expect(calls[7]?.sql).toContain('FROM "pharmacy_khata_events" charge');
+    expect(calls[8]?.sql).toContain("set_config('app.current_branch_id'");
   });
 
   it('salesMinor is gross of returns: no return-line or refund term in the sales expression', async () => {
@@ -369,7 +377,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
 });
 
 describe('financial statements (financial-statements.ts financialStatements)', () => {
-  it('derives closing and net cashflow as exact bigint strings and pages by 25', async () => {
+  it('preserves balanced debit and credit totals, derives exact bigint strings, and pages by 25', async () => {
     const raw = [
       [
         {
@@ -383,8 +391,8 @@ describe('financial statements (financial-statements.ts financialStatements)', (
           accountCode: 'SALES_REVENUE',
           currency: 'PKR',
           opening: BigInt(0),
-          debit: BigInt(700),
-          credit: BigInt(700),
+          debit: BigInt(0),
+          credit: BigInt(300),
         },
       ],
       [
@@ -422,9 +430,9 @@ describe('financial statements (financial-statements.ts financialStatements)', (
         accountCode: 'SALES_REVENUE',
         currency: 'PKR',
         openingMinor: '0',
-        debitMinor: '700',
-        creditMinor: '700',
-        closingMinor: '0',
+        debitMinor: '0',
+        creditMinor: '300',
+        closingMinor: '-300',
       },
     ]);
     expect(result.cashflow).toEqual([
@@ -436,6 +444,9 @@ describe('financial statements (financial-statements.ts financialStatements)', (
         netMinor: '300',
       },
     ]);
+    expect(
+      result.accounts.reduce((sum, account) => sum + BigInt(account.debitMinor), BigInt(0))
+    ).toBe(result.accounts.reduce((sum, account) => sum + BigInt(account.creditMinor), BigInt(0)));
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 25, skip: 25 }));
   });
 });
@@ -525,9 +536,11 @@ describe('growth sandbox diagnostic (growth-evidence.ts)', () => {
     expect(calls[1]?.values).toContain('insight-1');
   });
 
-  it('growthReceiptMoney binds the cutoff to all four time predicates', () => {
+  it('growthReceiptMoney includes posted unidentified holds and verifies their completeness', () => {
     const query = growthReceiptMoney(cutoff) as unknown as CapturedSql;
-    expect(query.values).toEqual([cutoff, cutoff, cutoff, cutoff]);
+    expect(query.values).toEqual([cutoff, cutoff, cutoff, cutoff, cutoff, cutoff, cutoff]);
     expect(query.sql).toContain(`e."sourceKind"='PHARMACY_SALE_RETURN_LINE'`);
+    expect(query.sql).toContain(`e."sourceKind"='PHARMACY_UNIDENTIFIED_RETURN_HOLD'`);
+    expect(query.sql).toContain('pharmacy_unidentified_return_holds');
   });
 });

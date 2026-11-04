@@ -1,0 +1,22 @@
+[
+  { "goto": "/pharmacy/marketing" },
+  { "wait": 1500 },
+  {
+    "eval": "[...document.querySelectorAll('main input')].filter(i=>/date|number/.test(i.type)||/UTC/.test(i.labels?.[0]?.innerText||'')).map(i=>(i.labels?.[0]?.innerText||i.name)+'='+i.value).join(' | ')",
+    "max": 1500
+  },
+  { "click": { "role": "button", "name": "Generate insights" } },
+  { "wait": 4000, "text": "main", "max": 200, "log": "after generate insights" },
+  {
+    "eval": "[...document.querySelectorAll('[role=alert],[role=status]')].map(e=>e.innerText.trim()).filter(Boolean).join(' || ')",
+    "max": 1200
+  },
+  { "click": { "role": "button", "name": "Find bundle proposals" } },
+  { "wait": 4000 },
+  {
+    "eval": "[...document.querySelectorAll('[role=alert],[role=status]')].map(e=>e.innerText.trim()).filter(Boolean).join(' || ')",
+    "max": 1500,
+    "shot": "own-marketing-generate",
+    "full": true
+  }
+]

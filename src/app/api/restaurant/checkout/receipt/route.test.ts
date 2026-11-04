@@ -30,7 +30,17 @@ function bill() {
     fractionNumerator: null,
     fractionDenominator: null,
     branch: { name: 'Main', timezone: 'UTC' },
-    order: { orderNumber: 42, channel: 'DINE_IN' },
+    order: {
+      orderNumber: 42,
+      channel: 'DINE_IN',
+      customer: {
+        loyaltyAccount: {
+          id: 'loyalty-1',
+          active: true,
+          walletPasses: [{ platform: 'APPLE' }],
+        },
+      },
+    },
     subtotal: decimal('24'),
     taxTotal: decimal('2'),
     serviceChargeTotal: decimal('1'),
@@ -100,7 +110,9 @@ beforeEach(() => {
       : null
   );
   findBill.mockImplementation(async ({ where }) =>
-    where.id === receipt?.id && where.branchId === receipt?.branchId && where.status === 'SETTLED'
+    where.id === receipt?.id &&
+    where.branchId === receipt?.branchId &&
+    (where.status === undefined || where.status === 'SETTLED')
       ? receipt
       : null
   );
@@ -117,9 +129,16 @@ beforeEach(() => {
     db: {
       $executeRawUnsafe: lock,
       restaurantBill: { findFirst: findBill, findFirstOrThrow: findBill },
+      loyaltyPointsEntry: {
+        aggregate: async () => ({ _sum: { points: 640 } }),
+      },
       restaurantBranch: { findFirst: findLayout },
       restaurantStaffProfile: {
         findUnique: async () => ({
+          status: 'ACTIVE',
+          primaryBranchId: 'branch-1',
+          jobRoles: [],
+          directCapabilityGrants: [],
           user: {
             permissionOverrides: [],
             organizationRole: {
@@ -128,6 +147,8 @@ beforeEach(() => {
           },
         }),
       },
+      restaurantStaffJobRole: { findMany: async () => [] },
+      restaurantStaffCapabilityGrant: { findMany: async () => [] },
       restaurantPrintRoute: {
         findFirst: async () => (configured ? { printerId: 'queue:///Receipt' } : null),
       },
@@ -201,6 +222,7 @@ describe('Restaurant receipt dispatch', () => {
       'Discount 0.50',
       'Line tax 2.00',
       'Cash received 30.00',
+      'Loyalty wallet 640 points / Apple Wallet',
     ])
       expect(footer.replaceAll('\n', ' ')).toContain(fact);
     expect(createJob.mock.calls[0][0].data).toMatchObject({
@@ -245,16 +267,87 @@ describe('Restaurant receipt dispatch', () => {
       },
     });
   });
-  it('carries fractional split and every saved line/tender amount without recalculation', async () => {
+  it('prints and previews a fractional bill with no persisted bill lines', async () => {
     Object.assign(receipt!, {
-      splitKind: 'FRACTION',
+      splitKind: 'FRACTIONAL',
+      fractionNumerator: 1,
+      fractionDenominator: 3,
+      lines: [],
+    });
+    const previewResponse = await GET(
+      new Request('https://tenant.test/api/restaurant/checkout/receipt?billId=bill-1')
+    );
+    expect(previewResponse.status).toBe(200);
+    const preview = await previewResponse.json();
+    expect(preview.lines).toEqual([]);
+    expect(preview.totals.grandTotal).toBe('26.05');
+    expect(preview.printing.preview).toMatchObject({
+      source: 'saved',
+      text: expect.stringContaining('Fractional share 1/3: 26.05'),
+      validation: null,
+    });
+
+    const response = await post();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ latestJob: { status: 'PENDING' } });
+    expect(jobs).toHaveLength(1);
+    const facts = PrintDocumentSchema.parse(jobs[0].document).receiptSnapshot!.facts;
+    expect(facts.lines).toEqual(['Fractional share 1/3: 26.05']);
+    expect(facts.totals).toContain('Split FRACTIONAL 1/3');
+    expect(facts.payments).toEqual(['CASH 26.05 / Tip 1.50 / Change 3.95 / Cash received 30.00']);
+
+    const replay = await (await post()).json();
+    expect(replay).toMatchObject({ latestJob: { status: 'PENDING' }, replayed: true });
+    expect(replay.preview).toMatchObject({
+      source: 'queued',
+      text: expect.stringContaining('Fractional share 1/3: 26.05'),
+      validation: null,
+    });
+    expect(jobs).toHaveLength(1);
+
+    jobs[0].status = 'PRINTED';
+    expect((await post(copy)).status).toBe(200);
+    expect(jobs).toHaveLength(2);
+    const reprintFacts = PrintDocumentSchema.parse(jobs[1].document).receiptSnapshot!.facts;
+    expect(reprintFacts.lines).toEqual(['Fractional share 1/3: 26.05']);
+    expect(reprintFacts.totals).toContain(`Reprint: ${copy.reason}`);
+  });
+  it('preserves persisted lines on a fractional bill', async () => {
+    Object.assign(receipt!, {
+      splitKind: 'FRACTIONAL',
       fractionNumerator: 1,
       fractionDenominator: 3,
     });
+
     await post();
+
     const facts = PrintDocumentSchema.parse(jobs[0].document).receiptSnapshot!.facts;
-    expect(facts.totals).toContain('Split FRACTION 1/3');
-    expect(facts.payments).toEqual(['CASH 26.05 / Tip 1.50 / Change 3.95 / Cash received 30.00']);
+    expect(facts.lines).toEqual([
+      '2 x Meal @ 12.00\nLine subtotal 24.00 / Comp 4.00 / Line total 20.00\nLine tax 2.00 / Line service 1.00',
+    ]);
+  });
+  it('does not synthesize a receipt line for a non-fractional bill', async () => {
+    Object.assign(receipt!, { lines: [] });
+
+    const response = await post();
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ code: 'INVALID_PRINT_DOCUMENT' });
+    expect(jobs).toHaveLength(0);
+  });
+  it('fails closed when an empty fractional bill has incomplete fraction metadata', async () => {
+    Object.assign(receipt!, {
+      splitKind: 'FRACTIONAL',
+      fractionNumerator: 1,
+      fractionDenominator: null,
+      lines: [],
+    });
+
+    const response = await post();
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ code: 'INVALID_PRINT_DOCUMENT' });
+    expect(jobs).toHaveLength(0);
   });
   it('preserves saved tax currency, rate buckets and discount allocations', async () => {
     findBill.mockResolvedValue({
@@ -383,12 +476,29 @@ describe('Restaurant receipt dispatch', () => {
     expect(mocks.event).not.toHaveBeenCalled();
   });
   it('rejects cross-branch and missing/unsettled bills before queue access', async () => {
-    mocks.ctx.device.branchId = 'other-branch';
+    receipt!.branchId = 'other-branch';
     expect((await post()).status).toBe(404);
     receipt = null;
     expect((await post()).status).toBe(404);
     expect(lock).not.toHaveBeenCalled();
     expect(createJob).not.toHaveBeenCalled();
+  });
+  it('does not disclose bill existence before the payment capability gate', async () => {
+    allowed = false;
+    const existing = await post({ billId: 'bill-1', action: 'print' });
+    const missing = await post({ billId: 'missing-bill', action: 'print' }, 'missing-key');
+    expect(existing.status).toBe(403);
+    expect(missing.status).toBe(403);
+    expect(await existing.json()).toEqual(await missing.json());
+    expect(findBill).not.toHaveBeenCalled();
+  });
+  it('returns the same not-found response for foreign and nonexistent bills after authorization', async () => {
+    receipt!.branchId = 'other-branch';
+    const foreign = await post({ billId: 'bill-1', action: 'print' });
+    const missing = await post({ billId: 'missing-bill', action: 'print' }, 'missing-key');
+    expect(foreign.status).toBe(404);
+    expect(missing.status).toBe(404);
+    expect(await foreign.json()).toEqual(await missing.json());
   });
   it('requires an unlocked operator, payment capability, and POS register', async () => {
     mocks.ctx.state = 'LOCKED';

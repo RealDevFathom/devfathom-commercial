@@ -1,5 +1,5 @@
 import 'server-only';
-import { lockCustomerConsent } from '../consent-writer';
+import { lockCustomerConsent, writePatientConsent } from '../consent-writer';
 
 import {
   listStorefrontCatalog,
@@ -25,6 +25,10 @@ import {
 } from './messages';
 import type { WhatsAppInboundMessage, WhatsAppProvider } from './provider';
 
+/** Promotional purposes a WhatsApp STOP withdraws; service purposes are kept. */
+const STOP_REVOKED_PURPOSES = ['MARKETING', 'LOYALTY'] as const;
+const CONSENT_CHANNELS = ['WHATSAPP', 'SMS', 'EMAIL', 'PHONE', 'IN_PERSON'] as const;
+
 export type InboundOutcome =
   | 'DUPLICATE'
   | 'UNKNOWN_SENDER'
@@ -39,6 +43,7 @@ export type InboundOutcome =
 type KnownCustomer = {
   id: string;
   userId: string | null;
+  patientId: string;
   active: boolean;
   whatsappOptIn: boolean | null;
 };
@@ -59,6 +64,7 @@ export async function findCustomerByWhatsApp(
     select: {
       id: true,
       userId: true,
+      patientId: true,
       active: true,
       whatsappOptIn: true,
       patient: { select: { phone: true } },
@@ -73,6 +79,7 @@ export async function findCustomerByWhatsApp(
   return {
     id: match.id,
     userId: match.userId,
+    patientId: match.patientId,
     active: match.active,
     whatsappOptIn: match.whatsappOptIn,
   };
@@ -102,7 +109,8 @@ async function orderBranch(db: ScopedDb, organizationId: string, customerId: str
 async function placeWhatsAppOrder(
   organizationId: string,
   customer: KnownCustomer,
-  parsed: ParsedOrderMessage
+  parsed: ParsedOrderMessage,
+  claim: Parameters<typeof claimMessageLogInTransaction>[1]
 ) {
   const userId = customer.userId;
   if (!userId) return null;
@@ -110,6 +118,8 @@ async function placeWhatsAppOrder(
     return await withTenantDb(
       organizationId,
       async (db) => {
+        const inboundId = await claimMessageLogInTransaction(db, claim);
+        if (!inboundId) return { duplicate: true as const };
         const branch = await orderBranch(db, organizationId, customer.id);
         if (!branch) return null;
         const scope = { organizationId, branchId: branch.id, actorId: userId };
@@ -132,6 +142,10 @@ async function placeWhatsAppOrder(
           ],
         });
         if (!order) return null;
+        await db.pharmacyMessageLog.update({
+          where: { id: inboundId },
+          data: { orderId: order.id, branchId: branch.id },
+        });
         return { orderId: order.id, branch, medicine: item.productName };
       },
       { userId }
@@ -152,20 +166,25 @@ export async function handleInboundWhatsAppMessage(
   const kind: MessageLogKind =
     keyword === 'STOP' ? 'OPT_OUT' : keyword === 'START' ? 'OPT_IN' : 'ORDER_REQUEST';
   const last4 = phoneLast4(message.from);
+  const inboundClaim = {
+    organizationId,
+    direction: 'INBOUND' as const,
+    status: 'RECEIVED' as const,
+    kind,
+    dedupeKey: `in:${message.providerMessageId}`,
+    phoneLast4: last4,
+    providerMessageId: message.providerMessageId,
+  };
   // Commit the consent effect with its replay claim. A failed transaction must
   // leave the webhook retryable; no provider call occurs inside this transaction.
   const { customer, inboundId, staleConsent } = await withTenantDb(organizationId, async (db) => {
     const customer = await findCustomerByWhatsApp(db, organizationId, message.from);
-    const inboundId = await claimMessageLogInTransaction(db, {
-      organizationId,
-      direction: 'INBOUND',
-      status: 'RECEIVED',
-      kind,
-      dedupeKey: `in:${message.providerMessageId}`,
-      customerId: customer?.id ?? null,
-      phoneLast4: last4,
-      providerMessageId: message.providerMessageId,
-    });
+    const inboundId = keyword
+      ? await claimMessageLogInTransaction(db, {
+          ...inboundClaim,
+          customerId: customer?.id ?? null,
+        })
+      : null;
     let staleConsent = false;
     if (inboundId && customer && keyword) {
       if (!Number.isFinite(message.receivedAt.getTime()) || message.receivedAt > now)
@@ -186,18 +205,68 @@ export async function handleInboundWhatsAppMessage(
         data: { whatsappOptIn: optIn, whatsappOptInChangedAt: message.receivedAt },
       });
       staleConsent = changed.count === 0;
+      let revoked = 0;
+      // START enables utility replies only. Marketing grants require their own
+      // explicit counter/QR consent; STOP revokes promotional consent on every
+      // channel, while service purposes (dispensing, reminders) are untouched.
+      // Each purpose/channel is judged against its own history, not the utility
+      // flag: a STOP delivered after a newer START still withdraws older grants.
+      if (!optIn) {
+        for (const purpose of STOP_REVOKED_PURPOSES)
+          for (const channel of CONSENT_CHANNELS) {
+            const latest = await db.patientConsent.findFirst({
+              where: { organizationId, patientId: customer.patientId, purpose, channel },
+              orderBy: [{ version: 'desc' }, { id: 'asc' }],
+              select: { granted: true, revokedAt: true, recordedAt: true },
+            });
+            // The patient lock also serializes counter/QR writes. A delayed reply
+            // must not supersede a newer purpose-specific event; STOP wins ties.
+            if (latest && latest.recordedAt > message.receivedAt) continue;
+            // Already revoked: another version would only clutter the history.
+            if (latest && (!latest.granted || latest.revokedAt)) continue;
+            // WhatsApp marketing always gets an explicit refusal row; other
+            // channels/purposes only need one when there is a grant to revoke.
+            if (!latest && (purpose !== 'MARKETING' || channel !== 'WHATSAPP')) continue;
+            await writePatientConsent(
+              db,
+              organizationId,
+              customer.userId ?? `whatsapp:${last4}`,
+              {
+                patientId: customer.patientId,
+                purpose,
+                channel,
+                granted: false,
+                source: 'REPLY',
+              },
+              message.receivedAt
+            );
+            revoked += 1;
+          }
+      }
       if (staleConsent)
         await db.pharmacyMessageLog.update({
           where: { id: inboundId },
-          data: { status: 'IGNORED', error: 'STALE_CONSENT' },
+          data:
+            revoked > 0
+              ? { error: 'STALE_UTILITY_CONSENT' }
+              : { status: 'IGNORED', error: 'STALE_CONSENT' },
         });
     }
     return { customer, inboundId, staleConsent };
   });
-  if (!inboundId) return 'DUPLICATE';
+  if (keyword && !inboundId) return 'DUPLICATE';
   if (staleConsent) return 'STALE_CONSENT';
+  const claimInbound = () =>
+    withTenantDb(organizationId, (db) =>
+      claimMessageLogInTransaction(db, {
+        ...inboundClaim,
+        customerId: customer?.id ?? null,
+      })
+    );
   if (!customer) {
-    await updateMessageLog(organizationId, inboundId, { status: 'IGNORED' });
+    const unknownInboundId = await claimInbound();
+    if (!unknownInboundId) return 'DUPLICATE';
+    await updateMessageLog(organizationId, unknownInboundId, { status: 'IGNORED' });
     return 'UNKNOWN_SENDER';
   }
   const age = now.getTime() - message.receivedAt.getTime();
@@ -230,6 +299,8 @@ export async function handleInboundWhatsAppMessage(
   }
 
   if (!inReplyWindow) {
+    const inboundId = await claimInbound();
+    if (!inboundId) return 'DUPLICATE';
     await updateMessageLog(organizationId, inboundId, {
       status: 'IGNORED',
       error: 'EXPIRED_MESSAGE',
@@ -238,26 +309,35 @@ export async function handleInboundWhatsAppMessage(
   }
 
   if (!canMessageCustomer(customer)) {
+    const inboundId = await claimInbound();
+    if (!inboundId) return 'DUPLICATE';
     await updateMessageLog(organizationId, inboundId, { status: 'IGNORED' });
     return 'NO_CONSENT';
   }
 
   const parsed = parseOrderMessage(message.text);
-  const placed = parsed ? await placeWhatsAppOrder(organizationId, customer, parsed) : null;
+  const placed = parsed
+    ? customer.userId
+      ? await placeWhatsAppOrder(organizationId, customer, parsed, {
+          ...inboundClaim,
+          customerId: customer.id,
+        })
+      : null
+    : null;
+  if (placed && 'duplicate' in placed) return 'DUPLICATE';
   if (!placed || !parsed) {
+    if (!parsed || !customer.userId) {
+      const inboundId = await claimInbound();
+      if (!inboundId) return 'DUPLICATE';
+    }
     await reply('ORDER_FALLBACK', WHATSAPP_REPLIES.fallback);
     return 'PHARMACIST_CALLBACK';
   }
-  await updateMessageLog(organizationId, inboundId, {
-    orderId: placed.orderId,
-    branchId: placed.branch.id,
-  });
   await reply(
     'ORDER_CONFIRMATION',
     WHATSAPP_REPLIES.confirmation({
       reference: placed.orderId.slice(-6).toUpperCase(),
       quantity: parsed.quantity,
-      medicine: placed.medicine,
       branch: placed.branch.name,
     }),
     { orderId: placed.orderId, branchId: placed.branch.id }

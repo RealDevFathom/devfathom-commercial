@@ -8,6 +8,7 @@ import {
   LOYALTY_HISTORY_MAX_PAGE,
   PharmacyLoyaltyError,
 } from '@/lib/pharmacy/customer-loyalty';
+import { annotateAudit } from '@/server/audit';
 import { adminProcedure, router, type TRPCContext } from '@/server/trpc';
 
 function scopeFor(ctx: TRPCContext, branchId = '') {
@@ -66,4 +67,43 @@ export const pharmacyLoyaltyRouter = router({
         readLoyaltyHistory(ctx.db, scopeFor(ctx, input.branchId), input.customerId, input.page)
       )
     ),
+  setReminderLanguage: adminProcedure
+    .input(
+      branchInput
+        .extend({
+          customerId: z.string().trim().min(1).max(128),
+          preferredLanguage: z.enum(['en', 'ur']),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      const branch = await ctx.db.pharmacyBranch.findFirst({
+        where: { id: input.branchId, organizationId: scope.organizationId, active: true },
+        select: { id: true },
+      });
+      if (!branch) throw new TRPCError({ code: 'NOT_FOUND' });
+      const current = await ctx.db.pharmacyCustomer.findFirst({
+        where: { id: input.customerId, organizationId: scope.organizationId, active: true },
+        select: { id: true, preferredLanguage: true },
+      });
+      if (!current) throw new TRPCError({ code: 'NOT_FOUND' });
+      const updated = await ctx.db.pharmacyCustomer.updateMany({
+        where: { id: input.customerId, organizationId: scope.organizationId, active: true },
+        data: { preferredLanguage: input.preferredLanguage },
+      });
+      if (updated.count !== 1) throw new TRPCError({ code: 'NOT_FOUND' });
+      annotateAudit(ctx, {
+        category: 'PHARMACY',
+        operation: 'UPDATE',
+        action: 'pharmacyCustomer.setReminderLanguage',
+        targetType: 'PharmacyCustomer',
+        targetId: current.id,
+        changes: {
+          preferredLanguage: { before: current.preferredLanguage, after: input.preferredLanguage },
+        },
+        metadata: { branchId: input.branchId },
+      });
+      return { preferredLanguage: input.preferredLanguage };
+    }),
 });

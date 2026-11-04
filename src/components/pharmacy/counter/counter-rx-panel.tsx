@@ -13,11 +13,13 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
+import { CounterDuplicateSaltAcknowledge } from './counter-duplicate-salt-acknowledge';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import type { CounterPatientPanel } from '@/lib/pharmacy/counter-prescriptions';
 import { formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
 import type { RxOcrPrefill } from '@/lib/pharmacy/rx-ocr';
 import { trpc } from '@/lib/trpc';
+import { cn } from '@/lib/utils';
 
 const selectClass =
   'h-11 w-full rounded-md border border-border-subtle bg-surface px-3 text-sm text-text-strong focus-visible:ring-3 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-60';
@@ -518,6 +520,11 @@ export type CounterRxPanelProps = {
     ) => void;
   };
   alerts: readonly CounterAlert[];
+  /**
+   * #724: the bill an acknowledgeable advice alert belongs to. Without it the
+   * advice still renders; only the Acknowledge control is withheld.
+   */
+  acknowledgementScope?: { branchId: string; saleId: string } | null;
   patient: CounterPatientPanel | null;
   candidates: ReadonlyArray<{ patientId: string; displayName: string; phone: string | null }>;
   query: string;
@@ -552,6 +559,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
     {
       controlled,
       alerts,
+      acknowledgementScope = null,
       patient,
       candidates,
       query,
@@ -571,158 +579,18 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
     const commercial = alerts.filter((alert) => alert.severity === 'COMMERCIAL');
 
     return (
-      <div ref={ref} tabIndex={-1} className="space-y-5 focus-visible:outline-none">
-        {controlled ? (
-          <section
-            aria-label="Controlled medicine authorization"
-            className="space-y-3 rounded-md border border-border-subtle p-3"
-          >
-            <h4 className="font-semibold text-text-strong">Controlled medicine authorization</h4>
-            <p className="text-xs text-text-muted">
-              Patient address and a pharmacist PIN are required. Use a prescription, or record an
-              emergency supply. Online only.
-            </p>
-            <Label className="text-xs text-text-muted" htmlFor="controlled-address">
-              Patient address
-            </Label>
-            <Input
-              id="controlled-address"
-              className="h-9"
-              disabled={disabled || !patient}
-              value={controlled.patientAddress}
-              onChange={(event) => controlled.onChange('patientAddress', event.target.value)}
-            />
-            <label
-              className="flex items-center gap-2 text-xs text-text-muted"
-              htmlFor="controlled-emergency"
-            >
-              <input
-                id="controlled-emergency"
-                type="checkbox"
-                checked={controlled.emergency}
-                disabled={disabled}
-                onChange={(event) => controlled.onChange('emergency', event.target.checked)}
-              />
-              Emergency supply, no prescription
-            </label>
-            {controlled.emergency ? (
-              <>
-                <Label className="text-xs text-text-muted" htmlFor="controlled-prescriber-name">
-                  Prescriber name
-                </Label>
-                <Input
-                  id="controlled-prescriber-name"
-                  className="h-9"
-                  disabled={disabled}
-                  value={controlled.prescriberName}
-                  onChange={(event) => controlled.onChange('prescriberName', event.target.value)}
-                />
-                <Label className="text-xs text-text-muted" htmlFor="controlled-prescriber-reg">
-                  Prescriber registration
-                </Label>
-                <Input
-                  id="controlled-prescriber-reg"
-                  className="h-9"
-                  disabled={disabled}
-                  value={controlled.prescriberRegNo}
-                  onChange={(event) => controlled.onChange('prescriberRegNo', event.target.value)}
-                />
-              </>
-            ) : null}
-            <Label htmlFor="controlled-prescription">Prescription line</Label>
-            <select
-              id="controlled-prescription"
-              className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
-              disabled={disabled || !patient}
-              value={controlled.prescriptionLineId}
-              onChange={(event) => controlled.onChange('prescriptionLineId', event.target.value)}
-            >
-              <option value="">Select prescription</option>
-              {patient?.prescriptions
-                .filter((rx) => rx.inDate)
-                .flatMap((rx) =>
-                  rx.lines.map((line) => (
-                    <option key={line.prescriptionLineId} value={line.prescriptionLineId}>
-                      {line.medicineName} · {rx.prescriberName} · {line.remainingAuthorizedUnits}{' '}
-                      units
-                    </option>
-                  ))
-                )}
-            </select>
-            <Label htmlFor="controlled-pharmacist">Approving pharmacist</Label>
-            <select
-              id="controlled-pharmacist"
-              className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
-              disabled={disabled || controlled.loading || controlled.error}
-              value={controlled.staffProfileId}
-              onChange={(event) => controlled.onChange('staffProfileId', event.target.value)}
-            >
-              <option value="">Select pharmacist</option>
-              {controlled.pharmacists.map((staff) => (
-                <option key={staff.id} value={staff.id}>
-                  {staff.name}
-                </option>
-              ))}
-            </select>
-            {controlled.loading ? (
-              <p role="status">Loading pharmacists…</p>
-            ) : controlled.error ? (
-              <p role="alert">Pharmacists could not be loaded. Retry by refreshing the counter.</p>
-            ) : controlled.pharmacists.length === 0 ? (
-              <p role="status">
-                No independent pharmacist with an active staff PIN is available. Ask your
-                administrator to configure one.
-              </p>
-            ) : null}
-            <Label htmlFor="controlled-pin">Pharmacist PIN</Label>
-            <Input
-              id="controlled-pin"
-              type="password"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={8}
-              className="h-11"
-              disabled={disabled || !controlled.staffProfileId}
-              value={controlled.pin}
-              onChange={(event) => controlled.onChange('pin', event.target.value)}
-            />
-            <label
-              className="flex items-center gap-2 text-xs text-text-muted"
-              htmlFor="controlled-rx-serial"
-            >
-              <input
-                id="controlled-rx-serial"
-                type="checkbox"
-                checked={controlled.rxSerialWritten}
-                disabled={disabled}
-                onChange={(event) => controlled.onChange('rxSerialWritten', event.target.checked)}
-              />
-              Register serial written on the prescription
-            </label>
-            <Label className="text-xs text-text-muted" htmlFor="controlled-ref-serial">
-              Earlier register serial
-            </Label>
-            <Input
-              id="controlled-ref-serial"
-              className="h-9"
-              inputMode="numeric"
-              disabled={disabled}
-              value={controlled.refSerial}
-              onChange={(event) => controlled.onChange('refSerial', event.target.value)}
-            />
-            <p className="text-xs text-text-muted">
-              Leave the earlier serial blank unless this repeats a previous entry. PIN is cleared
-              after each attempt.
-            </p>
-          </section>
-        ) : null}
-        <section aria-label="Safety blocks" className="space-y-2">
+      <div
+        ref={ref}
+        tabIndex={-1}
+        className="min-w-0 space-y-5 rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
+      >
+        <section aria-label="Safety blocks" className="space-y-3">
           <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
             Safety blocks
           </h4>
           {blocks.length === 0 ? (
             <p className="text-sm text-text-muted">
-              No safety block on this bill. Lines may still carry advice below.
+              Safety checks run before payment. Any reported blocks appear here.
             </p>
           ) : (
             <ul className="space-y-2">
@@ -730,10 +598,10 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 <li
                   key={alert.key}
                   role="alert"
-                  className="rounded-md border-l-4 border-destructive border-y border-r border-y-destructive/30 border-r-destructive/30 bg-destructive/10 p-3"
+                  className="space-y-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3"
                 >
-                  <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-text-strong">
-                    <StatusPill status="blocked" tone="danger" label="Blocked" />
+                  <StatusPill status="blocked" tone="danger" label="Blocked" />
+                  <p className="text-sm font-semibold leading-relaxed text-text-strong">
                     {alert.message}
                   </p>
                   {alert.remedy ? (
@@ -745,47 +613,64 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
           )}
         </section>
 
-        {advice.length > 0 ? (
-          <section aria-label="Clinical advice" className="space-y-2">
+        {advice.length > 0 || commercial.length > 0 ? (
+          <section
+            aria-label="Counselling and notices"
+            className="space-y-3 border-t border-border-subtle pt-5"
+          >
             <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-              Counselling
+              Counselling and notices
             </h4>
-            <ul className="space-y-2">
-              {advice.map((alert) => (
-                <li
-                  key={alert.key}
-                  role="status"
-                  className="rounded-md border border-border-subtle bg-surface-sunken p-3 text-sm text-text-body"
-                >
-                  <StatusPill status="advice" tone="info" label="Advice" />
-                  <span className="ml-2">{alert.message}</span>
-                </li>
-              ))}
-            </ul>
+            {advice.length > 0 ? (
+              <ul aria-label="Clinical advice" className="space-y-2">
+                {advice.map((alert) => (
+                  <li
+                    key={alert.key}
+                    role="status"
+                    className="space-y-2 rounded-xl border border-border-subtle bg-surface-card p-3 text-sm text-text-body"
+                  >
+                    <StatusPill status="advice" tone="neutral" label="Advice" />
+                    <p className="font-medium leading-relaxed">{alert.message}</p>
+                    {alert.remedy ? (
+                      <p className="text-sm text-text-muted">{alert.remedy}</p>
+                    ) : null}
+                    {alert.acknowledgement && acknowledgementScope ? (
+                      <CounterDuplicateSaltAcknowledge
+                        branchId={acknowledgementScope.branchId}
+                        saleId={acknowledgementScope.saleId}
+                        ingredientKey={alert.acknowledgement.ingredientKey}
+                        medicines={alert.acknowledgement.medicines}
+                        disabled={disabled}
+                      />
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {commercial.length > 0 ? (
+              <ul aria-label="Commercial notices" className="space-y-2">
+                {commercial.map((alert) => (
+                  <li
+                    key={alert.key}
+                    role="status"
+                    className="space-y-2 rounded-xl bg-surface-sunken p-3 text-sm text-text-body"
+                  >
+                    <StatusPill status="commercial" tone="neutral" label="Commercial" />
+                    <p className="font-medium leading-relaxed">{alert.message}</p>
+                    {alert.remedy ? (
+                      <p className="text-sm text-text-muted">{alert.remedy}</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </section>
         ) : null}
 
-        {commercial.length > 0 ? (
-          <section aria-label="Commercial notices" className="space-y-2">
-            <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-              Commercial
-            </h4>
-            <ul className="space-y-2">
-              {commercial.map((alert) => (
-                <li
-                  key={alert.key}
-                  role="status"
-                  className="rounded-md border border-dashed border-border-subtle p-3 text-sm text-text-muted"
-                >
-                  <StatusPill status="commercial" tone="neutral" label="Commercial" />
-                  <span className="ml-2">{alert.message}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-
-        <section aria-label="Patient and prescriptions" className="space-y-3">
+        <section
+          aria-label="Patient and prescriptions"
+          className="space-y-3 border-t border-border-subtle pt-5"
+        >
           <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
             Patient
           </h4>
@@ -810,57 +695,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   ) : (
                     <StatusPill status="no-consent" tone="warning" label="No consent on file" />
                   )}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-11"
-                    disabled={disabled}
-                    onClick={onClearPatient}
-                  >
-                    Detach
-                  </Button>
                 </div>
-              </div>
-
-              <div className="space-y-2">
-                {onCapturePrescription ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-11"
-                    disabled={disabled || state === 'loading' || state === 'error'}
-                    onClick={() => onCapturePrescription({ patientId: patient.patientId })}
-                  >
-                    Capture prescription
-                  </Button>
-                ) : disabled || state === 'loading' || state === 'error' ? (
-                  <Button type="button" variant="outline" className="h-11" disabled>
-                    Capture prescription
-                  </Button>
-                ) : (
-                  <Link
-                    className={buttonVariants({ variant: 'outline', className: 'h-11' })}
-                    href={`/pharmacy/prescriptions#patientId=${encodeURIComponent(patient.patientId)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    prefetch={false}
-                  >
-                    Capture prescription
-                    <span className="sr-only"> for {patient.displayName} (opens in a new tab)</span>
-                  </Link>
-                )}
-                <p className="text-xs text-text-muted">
-                  {onCapturePrescription
-                    ? `Capture evidence for ${patient.displayName}.`
-                    : `Opens capture for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
-                  Capture does not replace pharmacist review or dispensing consent.
-                </p>
-                <CounterRxPhotoCapture
-                  key={patient.patientId}
-                  patientId={patient.patientId}
-                  patientName={patient.displayName}
-                  disabled={disabled || state === 'loading' || state === 'error'}
-                />
               </div>
 
               {patient.prescriptions.length === 0 ? (
@@ -872,7 +707,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   {patient.prescriptions.map((prescription) => (
                     <li
                       key={prescription.prescriptionId}
-                      className="rounded-md border border-border-subtle p-3"
+                      className="space-y-2 rounded-xl border border-border-subtle bg-surface-card p-3"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-3">
@@ -890,16 +725,17 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                           <StatusPill status="expired" tone="danger" label="Outside validity" />
                         )}
                       </div>
-                      <p className="font-mono text-xs text-text-muted">
+                      <p className="break-words font-mono text-xs leading-relaxed text-text-muted">
                         {formatReceiptDate(prescription.validFrom)} →{' '}
                         {formatReceiptDate(prescription.validUntil)} · repeats{' '}
-                        {prescription.authorizedRepeats} · {prescription.custodyState.toLowerCase()}
+                        {prescription.authorizedRepeats} ·{' '}
+                        {prescription.custodyState.toLowerCase().replaceAll('_', ' ')}
                       </p>
                       <ul className="mt-2 space-y-1">
                         {prescription.lines.map((line) => (
                           <li
                             key={line.prescriptionLineId}
-                            className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"
+                            className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-sm"
                           >
                             <span className="text-text-strong">{line.medicineName}</span>
                             <span className="font-mono tabular-nums text-text-muted">
@@ -930,6 +766,60 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   ))}
                 </ul>
               )}
+              <div className="space-y-2">
+                <div className="flex flex-wrap gap-2">
+                  {onCapturePrescription ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-11"
+                      disabled={disabled || state === 'loading' || state === 'error'}
+                      onClick={() => onCapturePrescription({ patientId: patient.patientId })}
+                    >
+                      Capture prescription
+                    </Button>
+                  ) : disabled || state === 'loading' || state === 'error' ? (
+                    <Button type="button" variant="outline" className="h-11" disabled>
+                      Capture prescription
+                    </Button>
+                  ) : (
+                    <Link
+                      className={cn(buttonVariants({ variant: 'outline' }), 'h-11 rounded-sm')}
+                      href={`/pharmacy/prescriptions#patientId=${encodeURIComponent(patient.patientId)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      prefetch={false}
+                    >
+                      Capture prescription
+                      <span className="sr-only">
+                        {' '}
+                        for {patient.displayName} (opens in a new tab)
+                      </span>
+                    </Link>
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11"
+                    disabled={disabled}
+                    onClick={onClearPatient}
+                  >
+                    Detach patient
+                  </Button>
+                </div>
+                <p className="text-xs text-text-muted">
+                  {onCapturePrescription
+                    ? `Capture evidence for ${patient.displayName}.`
+                    : `Opens capture for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
+                  Capture does not replace pharmacist review or dispensing consent.
+                </p>
+                <CounterRxPhotoCapture
+                  key={patient.patientId}
+                  patientId={patient.patientId}
+                  patientName={patient.displayName}
+                  disabled={disabled || state === 'loading' || state === 'error'}
+                />
+              </div>
             </div>
           ) : (
             <div className="space-y-2">
@@ -995,6 +885,150 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
             </div>
           )}
         </section>
+        {controlled ? (
+          <section
+            aria-label="Controlled medicine authorization"
+            className="space-y-3 border-t border-border-subtle pt-5"
+          >
+            <h4 className="font-semibold text-text-strong">Controlled medicine authorization</h4>
+            <p className="text-xs text-text-muted">
+              Patient address and a pharmacist PIN are required. Use a prescription, or record an
+              emergency supply. Online only.
+            </p>
+            <Label className="text-xs text-text-muted" htmlFor="controlled-address">
+              Patient address
+            </Label>
+            <Input
+              id="controlled-address"
+              className="h-11"
+              disabled={disabled || !patient}
+              value={controlled.patientAddress}
+              onChange={(event) => controlled.onChange('patientAddress', event.target.value)}
+            />
+            <label
+              className="flex min-h-11 items-center gap-2 text-sm text-text-body"
+              htmlFor="controlled-emergency"
+            >
+              <input
+                id="controlled-emergency"
+                type="checkbox"
+                checked={controlled.emergency}
+                disabled={disabled}
+                onChange={(event) => controlled.onChange('emergency', event.target.checked)}
+              />
+              Emergency supply, no prescription
+            </label>
+            {controlled.emergency ? (
+              <>
+                <Label className="text-xs text-text-muted" htmlFor="controlled-prescriber-name">
+                  Prescriber name
+                </Label>
+                <Input
+                  id="controlled-prescriber-name"
+                  className="h-11"
+                  disabled={disabled}
+                  value={controlled.prescriberName}
+                  onChange={(event) => controlled.onChange('prescriberName', event.target.value)}
+                />
+                <Label className="text-xs text-text-muted" htmlFor="controlled-prescriber-reg">
+                  Prescriber registration
+                </Label>
+                <Input
+                  id="controlled-prescriber-reg"
+                  className="h-11"
+                  disabled={disabled}
+                  value={controlled.prescriberRegNo}
+                  onChange={(event) => controlled.onChange('prescriberRegNo', event.target.value)}
+                />
+              </>
+            ) : null}
+            <Label htmlFor="controlled-prescription">Prescription line</Label>
+            <select
+              id="controlled-prescription"
+              className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+              disabled={disabled || !patient}
+              value={controlled.prescriptionLineId}
+              onChange={(event) => controlled.onChange('prescriptionLineId', event.target.value)}
+            >
+              <option value="">Select prescription</option>
+              {patient?.prescriptions
+                .filter((rx) => rx.inDate)
+                .flatMap((rx) =>
+                  rx.lines.map((line) => (
+                    <option key={line.prescriptionLineId} value={line.prescriptionLineId}>
+                      {line.medicineName} · {rx.prescriberName} · {line.remainingAuthorizedUnits}{' '}
+                      units
+                    </option>
+                  ))
+                )}
+            </select>
+            <Label htmlFor="controlled-pharmacist">Approving pharmacist</Label>
+            <select
+              id="controlled-pharmacist"
+              className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+              disabled={disabled || controlled.loading || controlled.error}
+              value={controlled.staffProfileId}
+              onChange={(event) => controlled.onChange('staffProfileId', event.target.value)}
+            >
+              <option value="">Select pharmacist</option>
+              {controlled.pharmacists.map((staff) => (
+                <option key={staff.id} value={staff.id}>
+                  {staff.name}
+                </option>
+              ))}
+            </select>
+            {controlled.loading ? (
+              <p role="status">Loading pharmacists…</p>
+            ) : controlled.error ? (
+              <p role="alert">Pharmacists could not be loaded. Retry by refreshing the counter.</p>
+            ) : controlled.pharmacists.length === 0 ? (
+              <p role="status">
+                No independent pharmacist with an active staff PIN is available. Ask your
+                administrator to configure one.
+              </p>
+            ) : null}
+            <Label htmlFor="controlled-pin">Pharmacist PIN</Label>
+            <Input
+              id="controlled-pin"
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={8}
+              className="h-11"
+              disabled={disabled || !controlled.staffProfileId}
+              value={controlled.pin}
+              onChange={(event) => controlled.onChange('pin', event.target.value)}
+            />
+            <label
+              className="flex min-h-11 items-center gap-2 text-sm text-text-body"
+              htmlFor="controlled-rx-serial"
+            >
+              <input
+                id="controlled-rx-serial"
+                type="checkbox"
+                checked={controlled.rxSerialWritten}
+                disabled={disabled}
+                onChange={(event) => controlled.onChange('rxSerialWritten', event.target.checked)}
+              />
+              Register serial written on the prescription
+            </label>
+            <Label className="text-xs text-text-muted" htmlFor="controlled-ref-serial">
+              Earlier register serial
+            </Label>
+            <Input
+              id="controlled-ref-serial"
+              className="h-11"
+              inputMode="numeric"
+              disabled={disabled}
+              value={controlled.refSerial}
+              onChange={(event) => controlled.onChange('refSerial', event.target.value)}
+            />
+            <p className="text-xs text-text-muted">
+              Leave the earlier serial blank unless this repeats a previous entry. PIN is cleared
+              after each attempt.
+            </p>
+          </section>
+        ) : null}
       </div>
     );
   }

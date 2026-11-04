@@ -8,11 +8,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import { allowedInvoiceStatuses, type InvoiceStatusValue } from '@/lib/finance/invoice-status';
+import { invoiceTotalLabel, type InvoiceTotal } from '@/lib/finance/invoice-display';
 import { format } from 'date-fns';
-
-type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
-
-const INVOICE_STATUSES: InvoiceStatus[] = ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'];
 
 const statusConfig: Record<string, { bg: string; label: string }> = {
   DRAFT: { bg: 'bg-muted text-muted-foreground', label: 'Draft' },
@@ -22,11 +20,10 @@ const statusConfig: Record<string, { bg: string; label: string }> = {
   CANCELLED: { bg: 'bg-muted text-muted-foreground line-through', label: 'Cancelled' },
 };
 
-type InvoiceRowData = {
+type InvoiceRowData = InvoiceTotal & {
   id: string;
   invoiceNumber: string;
-  status: string;
-  total: unknown;
+  status: InvoiceStatusValue;
   dueDate: Date | string;
   client: { name: string };
   project: { name: string } | null;
@@ -58,7 +55,7 @@ export function InvoicesTab() {
   });
 
   const handleUpdateStatus = useCallback(
-    (id: string, status: InvoiceStatus) => mutateStatus({ id, status }),
+    (id: string, status: InvoiceStatusValue) => mutateStatus({ id, status }),
     [mutateStatus]
   );
 
@@ -172,7 +169,7 @@ const InvoiceRow = memo(function InvoiceRow({
   onUpdateStatus,
 }: {
   inv: InvoiceRowData;
-  onUpdateStatus: (id: string, status: InvoiceStatus) => void;
+  onUpdateStatus: (id: string, status: InvoiceStatusValue) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -185,11 +182,8 @@ const InvoiceRow = memo(function InvoiceRow({
   const openMenu = useCallback(() => {
     const rect = btnRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const MENU_HEIGHT = 160; // ~5 status rows
-    const below = rect.bottom + 4;
-    const openUp = below + MENU_HEIGHT > window.innerHeight;
     setMenuPos({
-      top: openUp ? rect.top - MENU_HEIGHT - 4 : below,
+      top: rect.bottom + 4,
       left: rect.left + rect.width / 2,
     });
     setMenuOpen(true);
@@ -221,7 +215,7 @@ const InvoiceRow = memo(function InvoiceRow({
       </div>
       <div className="col-span-1 text-right">
         <p className="text-sm font-semibold text-foreground tabular-nums">
-          ${Number(inv.total).toLocaleString()}
+          {invoiceTotalLabel(inv)}
         </p>
       </div>
       <div className="col-span-2 flex justify-center">
@@ -242,10 +236,18 @@ const InvoiceRow = memo(function InvoiceRow({
             <>
               <div className="fixed inset-0 z-[60]" onClick={() => setMenuOpen(false)} />
               <div
+                ref={(menu) => {
+                  const rect = btnRef.current?.getBoundingClientRect();
+                  if (!menu || !rect) return;
+                  // Measure the rendered choices before paint; each status has a different height.
+                  const height = menu.getBoundingClientRect().height;
+                  const below = rect.bottom + 4;
+                  menu.style.top = `${below + height > window.innerHeight ? rect.top - height - 4 : below}px`;
+                }}
                 className="fixed z-[61] w-32 -translate-x-1/2 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10"
                 style={{ top: menuPos.top, left: menuPos.left }}
               >
-                {INVOICE_STATUSES.map((s) => (
+                {allowedInvoiceStatuses(inv.status).map((s) => (
                   <button
                     key={s}
                     onClick={() => {
@@ -294,7 +296,7 @@ const InvoiceRow = memo(function InvoiceRow({
 /* ============================================
    Create Invoice Form
    ============================================ */
-function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
+export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   const utils = trpc.useUtils();
   const { data: clients } = trpc.clients.getAll.useQuery();
   const { data: projects } = trpc.projects.getAll.useQuery();
@@ -324,7 +326,7 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   const total = subtotal;
 
   const handleSubmit = () => {
-    if (!clientId || !dueDate || items.some((i) => !i.description)) return;
+    if (!clientId || !dueDate || items.length === 0 || items.some((i) => !i.description)) return;
     createInvoice.mutate({
       clientId,
       projectId: projectId || undefined,
@@ -421,7 +423,14 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
                 </span>
                 <button
                   onClick={() => removeItem(i)}
-                  className="col-span-1 flex justify-center text-muted-foreground hover:text-red-500"
+                  disabled={items.length === 1}
+                  aria-label="Remove line item"
+                  title={
+                    items.length === 1
+                      ? 'An invoice needs at least one line item'
+                      : 'Remove line item'
+                  }
+                  className="col-span-1 flex justify-center text-muted-foreground hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:text-muted-foreground"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -466,7 +475,7 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!clientId || !dueDate || createInvoice.isPending}
+            disabled={!clientId || !dueDate || items.length === 0 || createInvoice.isPending}
             className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {createInvoice.isPending ? (

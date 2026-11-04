@@ -305,7 +305,29 @@ describe('DELETE /api/login', () => {
     );
 
     expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
     expect(mocks.discardLoginIntent).toHaveBeenCalledWith('t'.repeat(43));
+    expect(response.headers.get('set-cookie')).toContain('df_login_intent=;');
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
+    expect(response.headers.get('set-cookie')).not.toContain('Domain=');
   });
+
+  it.each(['acme.devfathom.com', 'admin.devfathom.com', 'unrelated.example.com'])(
+    'is a successful no-op on the non-shared host %s',
+    async (host) => {
+      const response = await DELETE(
+        new Request(`https://${host}/api/login`, {
+          method: 'DELETE',
+          headers: { host, cookie: `df_login_intent=${'t'.repeat(43)}` },
+        })
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true });
+      expect(mocks.discardLoginIntent).not.toHaveBeenCalled();
+      expect(response.headers.get('set-cookie')).toContain('df_login_intent=;');
+      expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
+      expect(response.headers.get('set-cookie')).not.toContain('Domain=');
+    }
+  );
 });

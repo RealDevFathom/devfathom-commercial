@@ -424,6 +424,7 @@ describe('guest message draft editing', () => {
     );
     click('Retry refresh');
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retire' })).toBeEnabled());
     click('Retire');
     expect(mocks.retire).toHaveBeenCalledExactlyOnceWith({
       branchId: 'branch',

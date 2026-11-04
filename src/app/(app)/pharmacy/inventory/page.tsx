@@ -21,6 +21,7 @@ import {
 import { hasModule } from '@/lib/entitlements';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
+import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
@@ -239,6 +240,13 @@ export default async function PharmacyInventoryPage({
       .filter((balance) => balance.disposition === 'AVAILABLE' && balance.onHandUnits > 0)
       .map((balance) => ({ lot, balance }))
   );
+  const quarantined = lots.flatMap((lot) =>
+    lot.balances
+      .filter((balance) => balance.disposition === 'QUARANTINE' && balance.onHandUnits > 0)
+      .map((balance) => ({ lot, balance }))
+  );
+  const releasableQuarantined = quarantined.filter(({ lot }) => lot.batch.state === 'ACTIVE');
+  const writeOffPositions = [...available, ...quarantined];
   const totalUnits = available.reduce((sum, row) => sum + row.balance.onHandUnits, 0);
   const draftLotByMedicine = new Map(
     available.map(({ lot }) => [lot.batch.medicineId, lot] as const)
@@ -307,6 +315,16 @@ export default async function PharmacyInventoryPage({
           reason: field(data, 'reason'),
           evidenceRef: field(data, 'evidenceRef'),
           idempotencyKey: `ui-writeoff:${browserUuid()}`,
+          disposition: field(data, 'position').split(':')[2] as 'AVAILABLE' | 'QUARANTINE',
+        });
+      else if (action === 'release-quarantine')
+        await actionCaller.releaseQuarantinedPart({
+          branchId,
+          inventoryLotId: field(data, 'position').split(':')[0]!,
+          stockLocationId: field(data, 'position').split(':')[1]!,
+          units: number(data, 'units'),
+          reason: field(data, 'reason'),
+          idempotencyKeyPrefix: `ui-quarantine-release:${browserUuid()}`,
         });
       else if (action === 'allocate-transfer')
         await actionCaller.allocateTransfer({
@@ -382,11 +400,10 @@ export default async function PharmacyInventoryPage({
       else throw new Error('Choose a supported inventory action.');
       destination = url(branchId, 'Inventory action completed.');
     } catch (error) {
-      destination = url(
-        branchId,
-        error instanceof Error ? error.message : 'The inventory action could not be completed.',
-        'error'
-      );
+      // Keep the thrown value out of the URL entirely: it can contain database, provider,
+      // authorization, or validation details that are not safe to return to the browser.
+      void error;
+      destination = url(branchId, pharmacyActionErrorMessage('inventory'), 'error');
     }
     redirect(destination);
   }
@@ -398,12 +415,20 @@ export default async function PharmacyInventoryPage({
         heading="Inventory"
         description="FEFO lots, controlled stock movements, chain operations, and the ranked work queue."
         actions={
-          <Link
-            href="/pharmacy/inventory/imports"
-            className={buttonVariants({ variant: 'secondary' })}
-          >
-            Imported stock / Awaiting verification
-          </Link>
+          <>
+            <Link
+              href="/pharmacy/inventory/import"
+              className={buttonVariants({ variant: 'secondary' })}
+            >
+              Import opening stock
+            </Link>
+            <Link
+              href="/pharmacy/inventory/imports"
+              className={buttonVariants({ variant: 'secondary' })}
+            >
+              Imported stock / Awaiting verification
+            </Link>
+          </>
         }
       />
       {query.notice ? (
@@ -466,7 +491,12 @@ export default async function PharmacyInventoryPage({
             </span>
           </Empty>
         ) : (
-          <div className="overflow-x-auto">
+          <div
+            role="region"
+            aria-label="Pharmacy inventory batches"
+            tabIndex={0}
+            className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
             <Table>
               <TableHeader>
                 <TableRow>
@@ -757,20 +787,20 @@ export default async function PharmacyInventoryPage({
       </div>
 
       <SectionCard title="Adjustments and write-off custody" eyebrow="INV-06">
-        {available.length && users.length ? (
+        {writeOffPositions.length && users.length ? (
           <form action={perform} className="grid gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="write-off" />
             <input name="branchId" type="hidden" value={branch.id} />
             <label className="text-sm md:col-span-2">
               Lot
               <select className={inputClass} name="position">
-                {available.map(({ lot, balance }) => (
+                {writeOffPositions.map(({ lot, balance }) => (
                   <option
-                    key={`${lot.id}:${balance.stockLocationId}`}
-                    value={`${lot.id}:${balance.stockLocationId}`}
+                    key={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
+                    value={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
                   >
                     {lot.batch.medicine.productName} · {lot.batch.batchNumber} ·{' '}
-                    {balance.location.name}
+                    {balance.location.name} · {label(balance.disposition)}
                   </option>
                 ))}
               </select>
@@ -808,9 +838,44 @@ export default async function PharmacyInventoryPage({
           </form>
         ) : (
           <Empty>
-            A write-off needs available stock and a different active organization member as witness.
+            A write-off needs available or quarantined stock and a different active organization
+            member as witness.
           </Empty>
         )}
+        {releasableQuarantined.length ? (
+          <form action={perform} className="mt-6 grid gap-3 md:grid-cols-3">
+            <input name="action" type="hidden" value="release-quarantine" />
+            <input name="branchId" type="hidden" value={branch.id} />
+            <label className="text-sm md:col-span-2">
+              Manually held stock
+              <select className={inputClass} name="position">
+                {releasableQuarantined.map(({ lot, balance }) => (
+                  <option
+                    key={`${lot.id}:${balance.stockLocationId}`}
+                    value={`${lot.id}:${balance.stockLocationId}`}
+                  >
+                    {lot.batch.medicine.productName} · {lot.batch.batchNumber} ·{' '}
+                    {balance.location.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm">
+              Units
+              <Input className="mt-1" min="1" name="units" required type="number" />
+            </label>
+            <label className="text-sm md:col-span-2">
+              Clearance reason
+              <Input className="mt-1" name="reason" required />
+            </label>
+            <Button className="self-end" type="submit" variant="secondary">
+              Release manual hold
+            </Button>
+            <p className="text-xs text-text-muted md:col-span-3">
+              Regulatory recall units remain reserved for the safety-authorized recall reversal.
+            </p>
+          </form>
+        ) : null}
       </SectionCard>
 
       <SectionCard

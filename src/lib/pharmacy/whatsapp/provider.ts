@@ -8,6 +8,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  */
 
 export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder';
+export type WhatsAppTemplateLanguage = 'en' | 'ur';
 
 export type WhatsAppConfig = {
   provider: 'meta' | 'mock';
@@ -19,7 +20,14 @@ export type WhatsAppConfig = {
   verifyToken: string | null;
   graphVersion: string;
   templateLanguage: string;
+  /** Owner approval for live Meta sends; credentials alone never enable sending. */
+  liveSendApproved: boolean;
   templates: Record<WhatsAppTemplateKey, string | null>;
+  khataTemplates: Record<WhatsAppTemplateLanguage, string | null>;
+  khataParameterOrder: Record<
+    WhatsAppTemplateLanguage,
+    readonly ['name', 'balance'] | readonly ['balance', 'name'] | null
+  >;
   reminderLeadDays: number;
 };
 
@@ -43,6 +51,7 @@ export interface WhatsAppProvider {
   sendTemplate(input: {
     to: string;
     template: WhatsAppTemplateKey;
+    language?: WhatsAppTemplateLanguage;
     parameters: string[];
   }): Promise<WhatsAppSendResult>;
   sendText(input: { to: string; body: string }): Promise<WhatsAppSendResult>;
@@ -69,6 +78,36 @@ function envValue(env: Env, key: string): string | null {
   return value ? value : null;
 }
 
+function parameterOrder(
+  value: string | null
+): readonly ['name', 'balance'] | readonly ['balance', 'name'] | null {
+  if (value === 'name,balance') return ['name', 'balance'];
+  if (value === 'balance,name') return ['balance', 'name'];
+  return null;
+}
+
+function englishKhataParameterOrder(
+  value: string | null
+): readonly ['name', 'balance'] | readonly ['balance', 'name'] | null {
+  // An omitted value keeps the established English contract, but an explicitly
+  // invalid value must fail closed rather than silently selecting an order.
+  return value === null ? ['name', 'balance'] : parameterOrder(value);
+}
+
+/**
+ * Meta language code for a template send. English keeps the deployment's configured
+ * English locale (e.g. `en_US`) so existing approved templates still resolve.
+ */
+export function templateLanguageCode(
+  config: Pick<WhatsAppConfig, 'templateLanguage'>,
+  language?: WhatsAppTemplateLanguage
+): string {
+  if (language === 'ur') return 'ur';
+  if (language === 'en')
+    return /^en(_|$)/.test(config.templateLanguage) ? config.templateLanguage : 'en';
+  return config.templateLanguage;
+}
+
 export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
   const leadDays = Number(envValue(env, 'PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS') ?? 3);
   return {
@@ -80,9 +119,26 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     verifyToken: envValue(env, 'PHARMACY_WHATSAPP_VERIFY_TOKEN'),
     graphVersion: envValue(env, 'PHARMACY_WHATSAPP_GRAPH_VERSION') ?? 'v21.0',
     templateLanguage: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_LANGUAGE') ?? 'en',
+    liveSendApproved: envValue(env, 'PHARMACY_WHATSAPP_LIVE_SEND') === 'approved',
     templates: {
       refillReminder: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_REFILL_REMINDER'),
-      khataReminder: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER'),
+      khataReminder:
+        envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN') ??
+        envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER'),
+    },
+    khataTemplates: {
+      en:
+        envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN') ??
+        envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER'),
+      ur: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR'),
+    },
+    khataParameterOrder: {
+      // Preserve the established English template contract.
+      en: englishKhataParameterOrder(
+        envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS')
+      ),
+      // Urdu has no safe implicit contract: both approval name and placeholder order are explicit.
+      ur: parameterOrder(envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS')),
     },
     reminderLeadDays:
       Number.isSafeInteger(leadDays) && leadDays >= 0 && leadDays <= 30 ? leadDays : 3,
@@ -190,15 +246,24 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
     return { providerMessageId: id, acceptedByProvider: true };
   }
 
-  sendTemplate(input: { to: string; template: WhatsAppTemplateKey; parameters: string[] }) {
-    const name = this.config.templates[input.template];
+  sendTemplate(input: {
+    to: string;
+    template: WhatsAppTemplateKey;
+    language?: WhatsAppTemplateLanguage;
+    parameters: string[];
+  }) {
+    const language = templateLanguageCode(this.config, input.language);
+    const name =
+      input.template === 'khataReminder' && input.language
+        ? this.config.khataTemplates[input.language]
+        : this.config.templates[input.template];
     if (!name) return Promise.reject(new WhatsAppProviderError('TEMPLATE_NOT_CONFIGURED'));
     return this.post({
       to: input.to,
       type: 'template',
       template: {
         name,
-        language: { code: this.config.templateLanguage },
+        language: { code: language },
         components: [
           {
             type: 'body',
@@ -232,6 +297,7 @@ export type MockWhatsAppCall =
       to: string;
       template: WhatsAppTemplateKey;
       templateName: string;
+      language: string;
       parameters: string[];
     }
   | { kind: 'text'; to: string; body: string };
@@ -249,14 +315,24 @@ export class MockWhatsAppProvider implements WhatsAppProvider {
     return { providerMessageId: `mock-wamid-${this.sequence}`, acceptedByProvider: false };
   }
 
-  async sendTemplate(input: { to: string; template: WhatsAppTemplateKey; parameters: string[] }) {
-    const templateName = this.config.templates[input.template];
+  async sendTemplate(input: {
+    to: string;
+    template: WhatsAppTemplateKey;
+    language?: WhatsAppTemplateLanguage;
+    parameters: string[];
+  }) {
+    const language = templateLanguageCode(this.config, input.language);
+    const templateName =
+      input.template === 'khataReminder' && input.language
+        ? this.config.khataTemplates[input.language]
+        : this.config.templates[input.template];
     if (!templateName) throw new WhatsAppProviderError('TEMPLATE_NOT_CONFIGURED');
     this.calls.push({
       kind: 'template',
       ...input,
       parameters: [...input.parameters],
       templateName,
+      language,
     });
     return this.nextId();
   }
@@ -281,7 +357,9 @@ export function createWhatsAppProvider(
 ): WhatsAppProvider {
   if (config.provider !== 'meta') return new MockWhatsAppProvider(config);
   const provider = new MetaWhatsAppProvider(config);
-  // Owner sender/template approval remains pending. Environment alone cannot enable sending.
+  if (config.liveSendApproved) return provider;
+  // Without explicit owner approval (PHARMACY_WHATSAPP_LIVE_SEND=approved), Meta credentials
+  // alone cannot enable sending for any caller.
   const disabled = async (): Promise<WhatsAppSendResult> => {
     throw new WhatsAppProviderError(
       'NOT_CONFIGURED',

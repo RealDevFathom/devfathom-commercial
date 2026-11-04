@@ -178,8 +178,129 @@ describe('staff CRUD', () => {
     );
 
     await caller().listEligibleUsers();
+    expect(mocks.staffFindMany).toHaveBeenLastCalledWith({
+      where: { userId: 'user_gm', status: 'ACTIVE' },
+      select: {
+        id: true,
+        primaryBranchId: true,
+        jobRoles: { select: { branchId: true } },
+        directCapabilityGrants: { select: { branchId: true } },
+      },
+      orderBy: { id: 'asc' },
+      take: 2,
+    });
+    expect(mocks.branchFindMany).toHaveBeenLastCalledWith({
+      where: { organizationId: 'org_workspace', active: true },
+      select: { id: true },
+    });
     expect(mocks.userFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { organizationId: 'org_workspace' } })
+      expect.objectContaining({
+        where: { organizationId: 'org_workspace' },
+        select: expect.objectContaining({
+          restaurantStaffProfiles: {
+            select: { id: true, displayName: true },
+            orderBy: { id: 'asc' },
+            take: 1,
+          },
+        }),
+      })
+    );
+  });
+
+  it('limits users and multi-profile results to all eligible manager linkage paths', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValue(false);
+    mocks.staffFindMany.mockResolvedValueOnce([
+      {
+        id: 'staff_manager',
+        primaryBranchId: 'branch_1',
+        jobRoles: [{ branchId: 'branch_1' }],
+        directCapabilityGrants: [{ branchId: 'branch_2' }],
+      },
+    ]);
+
+    await caller().listEligibleUsers();
+
+    const eligibleProfileWhere = {
+      organizationId: 'org_workspace',
+      OR: [
+        { primaryBranchId: { in: ['branch_1', 'branch_2'] } },
+        { jobRoles: { some: { branchId: { in: ['branch_1', 'branch_2'] } } } },
+        { directCapabilityGrants: { some: { branchId: { in: ['branch_1', 'branch_2'] } } } },
+      ],
+    };
+    expect(mocks.userFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_workspace',
+          restaurantStaffProfiles: { some: eligibleProfileWhere },
+        },
+        select: expect.objectContaining({
+          restaurantStaffProfiles: expect.objectContaining({
+            where: eligibleProfileWhere,
+            orderBy: { id: 'asc' },
+            take: 1,
+          }),
+        }),
+      })
+    );
+  });
+
+  it('does not query users when a manager has no active authorized branch', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValue(false);
+    mocks.staffFindMany.mockResolvedValueOnce([
+      {
+        id: 'staff_manager',
+        primaryBranchId: 'branch_1',
+        jobRoles: [{ branchId: 'branch_1' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+    mocks.branchFindMany.mockResolvedValueOnce([]);
+
+    await expect(caller().listEligibleUsers()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userFindMany).not.toHaveBeenCalled();
+  });
+
+  it('does not expose users linked only to an inactive authorized branch', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValue(false);
+    mocks.staffFindMany.mockResolvedValueOnce([
+      {
+        id: 'staff_manager',
+        primaryBranchId: 'branch_inactive',
+        jobRoles: [{ branchId: 'branch_inactive' }, { branchId: 'branch_active' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+    mocks.branchFindMany.mockResolvedValueOnce([{ id: 'branch_active' }]);
+
+    await caller().listEligibleUsers();
+
+    expect(mocks.branchFindMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_workspace',
+        active: true,
+        id: { in: ['branch_inactive', 'branch_active'] },
+      },
+      select: { id: true },
+    });
+    const eligibleProfileWhere = {
+      organizationId: 'org_workspace',
+      OR: [
+        { primaryBranchId: { in: ['branch_active'] } },
+        { jobRoles: { some: { branchId: { in: ['branch_active'] } } } },
+        { directCapabilityGrants: { some: { branchId: { in: ['branch_active'] } } } },
+      ],
+    };
+    expect(mocks.userFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_workspace',
+          restaurantStaffProfiles: { some: eligibleProfileWhere },
+        },
+        select: expect.objectContaining({
+          restaurantStaffProfiles: expect.objectContaining({ where: eligibleProfileWhere }),
+        }),
+      })
     );
   });
 
@@ -217,6 +338,128 @@ describe('staff CRUD', () => {
     const result = await caller().setStatus({ id: 'staff_1', status: 'SUSPENDED' });
     expect(result).toMatchObject({ status: 'SUSPENDED' });
   });
+});
+
+describe('branch-authorized account enrollment by exact email', () => {
+  beforeEach(() => {
+    mocks.can.mockImplementation(async (...args) => args[1] === 'staff:manage');
+    mocks.staffFindMany.mockResolvedValue([
+      {
+        id: 'staff_manager',
+        primaryBranchId: 'branch_1',
+        jobRoles: [{ branchId: 'branch_1' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+    mocks.staffFindUnique.mockResolvedValue({
+      id: 'staff_1',
+      primaryBranchId: 'branch_1',
+      jobRoles: [],
+      directCapabilityGrants: [],
+    });
+  });
+
+  it('creates and links an unlisted account without disclosing the user directory', async () => {
+    const result = await caller().create({
+      displayName: 'Dana',
+      primaryBranchId: 'branch_1',
+      userEmail: ' Dana@R.com ',
+    });
+
+    expect(result).toMatchObject({ userId: 'user_1', primaryBranchId: 'branch_1' });
+    expect(result).not.toHaveProperty('userEmail');
+    expect(mocks.userFindFirst).toHaveBeenNthCalledWith(1, {
+      where: {
+        organizationId: 'org_workspace',
+        email: 'dana@r.com',
+        status: 'ACTIVE',
+        restaurantStaffProfiles: { none: {} },
+      },
+      select: { id: true },
+    });
+    // The existing lifecycle path must still validate account availability.
+    expect(mocks.userFindFirst).toHaveBeenNthCalledWith(2, {
+      where: { id: 'user_1', status: 'ACTIVE', restaurantStaffProfiles: { none: {} } },
+      select: { id: true },
+    });
+    expect(mocks.userFindMany).not.toHaveBeenCalled();
+  });
+
+  it('links an existing authorized profile while preserving lifecycle validation', async () => {
+    await caller().update({ id: 'staff_1', userEmail: 'dana@r.com' });
+
+    expect(mocks.userFindFirst).toHaveBeenNthCalledWith(1, {
+      where: {
+        organizationId: 'org_workspace',
+        email: 'dana@r.com',
+        status: 'ACTIVE',
+        restaurantStaffProfiles: { every: { id: 'staff_1' } },
+      },
+      select: { id: true },
+    });
+    expect(mocks.staffUpdate).toHaveBeenCalledWith({
+      where: { id: 'staff_1' },
+      data: { userId: 'user_1' },
+    });
+    expect(mocks.userFindMany).not.toHaveBeenCalled();
+  });
+
+  it.each(['create', 'update'] as const)(
+    'rejects an unavailable account on %s',
+    async (operation) => {
+      mocks.userFindFirst.mockResolvedValueOnce(null);
+      const call =
+        operation === 'create'
+          ? caller().create({
+              displayName: 'Dana',
+              primaryBranchId: 'branch_1',
+              userEmail: 'missing@r.com',
+            })
+          : caller().update({ id: 'staff_1', userEmail: 'missing@r.com' });
+      await expect(call).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'The selected organization user is unavailable.',
+      });
+      expect(mocks.staffCreate).not.toHaveBeenCalled();
+      expect(mocks.staffUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['create', 'update'] as const)(
+    'authorizes the branch before resolving an account on %s',
+    async (operation) => {
+      mocks.staffFindUnique.mockResolvedValue({
+        primaryBranchId: 'branch_other',
+        jobRoles: [],
+        directCapabilityGrants: [],
+      });
+      const call =
+        operation === 'create'
+          ? caller().create({
+              displayName: 'Dana',
+              primaryBranchId: 'branch_other',
+              userEmail: 'dana@r.com',
+            })
+          : caller().update({ id: 'staff_other', userEmail: 'dana@r.com' });
+      await expect(call).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.userFindFirst).not.toHaveBeenCalled();
+      expect(mocks.staffCreate).not.toHaveBeenCalled();
+      expect(mocks.staffUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['create', 'update'] as const)(
+    'rejects conflicting account selectors on %s',
+    async (operation) => {
+      const selectors = { userId: 'user_1', userEmail: 'other@r.com' };
+      const call =
+        operation === 'create'
+          ? caller().create({ displayName: 'Dana', primaryBranchId: 'branch_1', ...selectors })
+          : caller().update({ id: 'staff_1', ...selectors });
+      await expect(call).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mocks.userFindFirst).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('credential mutations suppress the plaintext secret (C4)', () => {

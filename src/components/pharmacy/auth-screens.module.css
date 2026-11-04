@@ -1,0 +1,182 @@
+/* Screens 1–2: retain the shared Studio shell, tokens and accessible controls. */
+.pharmacy :global(.studio-auth-main) {
+  padding: 48px 20px;
+}
+
+.pharmacy h1 {
+  font-size: clamp(2rem, 4vw, 2.7rem);
+  line-height: 1.2;
+  letter-spacing: -0.05em;
+}
+
+.pharmacy label {
+  font-size: 14px;
+}
+
+.registration :global(.studio-auth-main) {
+  padding: 56px 20px 72px;
+}
+
+.registration legend {
+  float: inline-start;
+  inline-size: 100%;
+  margin-block-end: 20px;
+  font-size: 18px;
+  line-height: 1.375;
+  letter-spacing: -0.025em;
+}
+
+.registration fieldset > legend + * {
+  clear: both;
+}
+
+.registration fieldset:not(:first-of-type) {
+  padding-block-start: 28px;
+}
+
+.registrationHeroInner {
+  position: sticky;
+  inset-block-start: 48px;
+}
+
+.introduction {
+  margin-block: 0;
+  max-width: 36rem;
+}
+
+.introduction > p:first-child {
+  font-size: clamp(3rem, 5vw, 5.5rem);
+  line-height: 0.91;
+}
+
+.introduction > p:last-child:not(:first-child) {
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--text-faint);
+}
+
+.registration .introduction {
+  margin-block-start: 56px;
+}
+
+.registration .introduction > p:first-child {
+  max-width: 30rem;
+  font-size: clamp(2.5rem, 3.6vw, 3.6rem);
+  line-height: 0.95;
+  letter-spacing: -0.055em;
+}
+
+.setupGuide {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.setupGuide > * {
+  margin-block: 0;
+}
+
+.setupGuide > p {
+  color: var(--text-faint);
+}
+
+.setupGuide > div {
+  position: relative;
+  border: 0;
+  padding-inline-start: 22px;
+}
+
+.setupGuide > div::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 7px;
+  width: 8px;
+  height: 8px;
+  background: var(--accent-brand);
+}
+
+.setupGuide > div[data-after-activation]::before {
+  background: transparent;
+  border: 1px solid var(--text-faint);
+}
+
+.setupGuide > div > p:first-child {
+  font-size: 15px;
+}
+
+.setupGuide > div > p:last-child {
+  margin-block-start: 2px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+.sample {
+  max-width: 26rem;
+  margin-block-start: 0;
+  padding-block-start: 0;
+}
+
+.sample > div {
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+}
+
+.sampleRow {
+  margin-block-start: 12px;
+  padding-block-start: 12px;
+  gap: 16px;
+  font-size: 14px;
+}
+
+.sampleRow > div > p:last-child {
+  margin-block-start: 3px;
+  font-size: 11px;
+}
+
+.sampleRow > span {
+  font-size: 12px;
+}
+
+.upload {
+  position: relative;
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  gap: 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  padding: 14px 16px;
+  cursor: pointer;
+}
+
+.upload:hover {
+  border-color: var(--accent-brand);
+  background: var(--surface-sunken);
+}
+
+.upload:focus-within {
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+
+.upload:has(input:disabled) {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+@media (min-width: 1024px) {
+  .pharmacy :global(.studio-auth-hero) {
+    justify-content: space-between;
+    gap: 48px;
+    padding: 48px 56px;
+  }
+
+  .registration :global(.studio-auth-hero) {
+    display: block;
+    position: relative;
+    align-self: stretch;
+  }
+}

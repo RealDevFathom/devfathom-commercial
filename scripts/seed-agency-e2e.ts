@@ -12,15 +12,16 @@ const FIXED_AT = new Date('2026-08-30T00:00:00.000Z');
 const MEETING_START = new Date('2030-09-03T10:00:00.000Z');
 const MEETING_END = new Date('2030-09-03T10:30:00.000Z');
 const MODULES = [
-  ['dashboard', 'Dashboard', 'Core', '/dashboard'],
-  ['projects', 'Projects', 'Delivery', '/projects'],
-  ['clients', 'Clients', 'Delivery', '/clients'],
-  ['finance', 'Finance', 'Operations', '/finance'],
-  ['meetings', 'Meetings', 'Collaboration', '/meetings'],
-  ['hr', 'HR', 'People', '/hr'],
-  ['reviews', 'Performance reviews', 'People', '/reviews'],
-  ['api', 'API access', 'Developer', '/organization/api'],
-  ['webhooks', 'Webhooks', 'Developer', '/organization/webhooks'],
+  ['dashboard', 'Dashboard', 'Core', '/dashboard', true],
+  ['projects', 'Projects', 'Delivery', '/projects', true],
+  ['clients', 'Clients', 'Delivery', '/clients', true],
+  ['finance', 'Finance', 'Operations', '/finance', true],
+  ['meetings', 'Meetings', 'Collaboration', '/meetings', true],
+  ['notes', 'Notes', 'Knowledge', '/notes', true],
+  ['hr', 'HR', 'People', '/hr', true],
+  ['reviews', 'Performance reviews', 'People', '/reviews', true],
+  ['api', 'API access', 'Developer', '/organization/api', false],
+  ['webhooks', 'Webhooks', 'Developer', '/organization/webhooks', false],
 ] as const;
 
 const databaseUrl = resolveAgencyE2eDatabaseUrl();
@@ -70,6 +71,12 @@ async function seedOrganization(
         createdAt: FIXED_AT,
         updatedAt: FIXED_AT,
       },
+    });
+    // This owned fixture exercises package licensing. Remove a stale tenant
+    // override so a previous run cannot continue to mask the package's Notes
+    // grant (including an expired override, which is an explicit disable).
+    await tx.organizationModule.deleteMany({
+      where: { organizationId, module: { key: 'notes' } },
     });
     await tx.organizationDepartment.upsert({
       where: { organizationId_key: { organizationId, key: 'LEADERSHIP' } },
@@ -168,7 +175,7 @@ async function main() {
         },
       });
       packageId = suite.id;
-      for (const [key, name, category, routePrefix] of MODULES) {
+      for (const [key, name, category, routePrefix, enabled] of MODULES) {
         // `band` and the owning vertical are required registry facts, read from
         // the module catalog so this fixture cannot register a row the catalog
         // disagrees with.
@@ -192,14 +199,22 @@ async function main() {
         });
         await tx.platformPackageModule.upsert({
           where: { packageId_moduleId: { packageId, moduleId: catalogModule.id } },
-          update: { enabled: key !== 'api' && key !== 'webhooks' },
+          update: { enabled },
           create: {
             id: `package_module_agency_e2e_${key}`,
             packageId,
             moduleId: catalogModule.id,
-            enabled: key !== 'api' && key !== 'webhooks',
+            enabled,
           },
         });
+      }
+
+      const notesLicense = await tx.platformPackageModule.findFirst({
+        where: { packageId, module: { key: 'notes' } },
+        select: { enabled: true },
+      });
+      if (!notesLicense?.enabled) {
+        throw new Error('Agency E2E package must license Notes.');
       }
     });
 

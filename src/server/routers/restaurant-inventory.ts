@@ -4,7 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import { router, capabilityProcedure } from '../trpc';
 import type { TRPCContext } from '../trpc';
-import { resolveRestaurantActor } from '../restaurant-actor';
+import { resolveRestaurantActor, resolveRestaurantReadBranchIds } from '../restaurant-actor';
 import {
   InventoryError,
   createStockItem,
@@ -46,7 +46,11 @@ import { INVENTORY_STOCK_LOCATIONS_LIMIT, resolveEntitlementLimit } from '@/lib/
  */
 
 const ID = z.string().min(1);
-const QTY = z.string().min(1); // Decimal string — caller must pass a valid number string
+const DECIMAL_QTY = /^(?:0|\d+(?:\.\d+)?|\.\d+)$/;
+const NON_NEGATIVE_QTY = z.string().regex(DECIMAL_QTY, 'Quantity must be a non-negative decimal.');
+const POSITIVE_QTY = NON_NEGATIVE_QTY.refine((value) => new Prisma.Decimal(value).greaterThan(0), {
+  message: 'Quantity must be greater than zero.',
+});
 const WASTAGE_REASON = z.enum(['WASTAGE', 'SPOILAGE', 'STAFF_MEAL']);
 const COUNT_STATUS = z.enum(['DRAFT', 'SUBMITTED', 'POSTED']);
 const TRANSFER_STATUS = z.enum(['DRAFT', 'DISPATCHED', 'RECEIVED', 'CANCELLED']);
@@ -136,6 +140,15 @@ async function requireTransferBranches(ctx: TRPCContext, stockTransferId: string
   });
   if (!transfer) throw new TRPCError({ code: 'NOT_FOUND', message: 'Stock transfer not found.' });
   return [transfer.sourceLocation.branchId, transfer.destinationLocation.branchId];
+}
+
+async function requireLowStockRuleBranch(ctx: TRPCContext, ruleId: string): Promise<string> {
+  const rule = await ctx.db.restaurantLowStockRule.findUnique({
+    where: { id: ruleId },
+    select: { location: { select: { branchId: true } } },
+  });
+  if (!rule) throw new TRPCError({ code: 'NOT_FOUND', message: 'Low-stock rule not found.' });
+  return rule.location.branchId;
 }
 
 function mapInventoryError(err: unknown): never {
@@ -250,7 +263,8 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const rows = await listStockOnHand(ctx.db, input).catch(mapInventoryError);
+      const branchIds = await resolveRestaurantReadBranchIds(ctx);
+      const rows = await listStockOnHand(ctx.db, { ...input, branchIds }).catch(mapInventoryError);
       return rows.map((r) => ({
         stockItemId: r.stockItemId,
         ingredientName: r.ingredientName,
@@ -279,7 +293,10 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const result = await listStockMovements(ctx.db, input).catch(mapInventoryError);
+      const branchIds = await resolveRestaurantReadBranchIds(ctx);
+      const result = await listStockMovements(ctx.db, { ...input, branchIds }).catch(
+        mapInventoryError
+      );
       return {
         items: result.items.map((m) => ({
           ...m,
@@ -315,7 +332,7 @@ export const restaurantInventoryRouter = router({
         .object({
           stockCountId: ID,
           stockItemId: ID,
-          countedQuantity: QTY,
+          countedQuantity: NON_NEGATIVE_QTY,
         })
         .strict()
     )
@@ -358,7 +375,10 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const result = await listStockCounts(ctx.db, input).catch(mapInventoryError);
+      const branchIds = await resolveRestaurantReadBranchIds(ctx);
+      const result = await listStockCounts(ctx.db, { ...input, branchIds }).catch(
+        mapInventoryError
+      );
       return { items: result.items, nextCursor: result.nextCursor };
     }),
 
@@ -388,7 +408,7 @@ export const restaurantInventoryRouter = router({
         .object({
           stockTransferId: ID,
           stockItemId: ID,
-          quantity: QTY,
+          quantity: POSITIVE_QTY,
           unitId: ID.optional(),
         })
         .strict()
@@ -423,7 +443,10 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const result = await listStockTransfers(ctx.db, input).catch(mapInventoryError);
+      const branchIds = await resolveRestaurantReadBranchIds(ctx);
+      const result = await listStockTransfers(ctx.db, { ...input, branchIds }).catch(
+        mapInventoryError
+      );
       return { items: result.items, nextCursor: result.nextCursor };
     }),
 
@@ -436,7 +459,7 @@ export const restaurantInventoryRouter = router({
           stockItemId: ID,
           locationId: ID,
           reason: WASTAGE_REASON,
-          quantity: QTY,
+          quantity: POSITIVE_QTY,
           unitId: ID.optional(),
           occurredAt: z.date().optional(),
         })
@@ -458,7 +481,7 @@ export const restaurantInventoryRouter = router({
         .object({
           stockItemId: ID,
           locationId: ID,
-          quantity: QTY,
+          quantity: POSITIVE_QTY,
           unitId: ID.optional(),
           orderId: ID.optional(),
           occurredAt: z.date().optional(),
@@ -481,11 +504,12 @@ export const restaurantInventoryRouter = router({
         .object({
           stockItemId: ID,
           locationId: ID,
-          threshold: QTY,
+          threshold: NON_NEGATIVE_QTY,
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await resolveRestaurantActor(ctx, [await requireLocationBranch(ctx, input.locationId)]);
       const rule = await createLowStockRule(ctx.db, input).catch(mapInventoryError);
       return { ...rule, threshold: qty(rule.threshold) };
     }),
@@ -495,11 +519,12 @@ export const restaurantInventoryRouter = router({
       z
         .object({
           id: ID,
-          threshold: QTY,
+          threshold: NON_NEGATIVE_QTY,
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await resolveRestaurantActor(ctx, [await requireLowStockRuleBranch(ctx, input.id)]);
       const rule = await updateLowStockRule(ctx.db, input.id, { threshold: input.threshold }).catch(
         mapInventoryError
       );
@@ -509,6 +534,7 @@ export const restaurantInventoryRouter = router({
   deleteLowStockRule: adjustProc
     .input(z.object({ id: ID }).strict())
     .mutation(async ({ ctx, input }) => {
+      await resolveRestaurantActor(ctx, [await requireLowStockRuleBranch(ctx, input.id)]);
       await deleteLowStockRule(ctx.db, input.id).catch(mapInventoryError);
       return { deleted: true };
     }),
@@ -523,7 +549,10 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const flags = await evaluateLowStockRules(ctx.db, input).catch(mapInventoryError);
+      const branchIds = await resolveRestaurantReadBranchIds(ctx);
+      const flags = await evaluateLowStockRules(ctx.db, { ...input, branchIds }).catch(
+        mapInventoryError
+      );
       return flags.map((f) => ({
         ruleId: f.ruleId,
         stockItemId: f.stockItemId,
@@ -547,7 +576,10 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const result = await listStockBatches(ctx.db, input).catch(mapInventoryError);
+      const branchIds = await resolveRestaurantReadBranchIds(ctx);
+      const result = await listStockBatches(ctx.db, { ...input, branchIds }).catch(
+        mapInventoryError
+      );
       return { items: result.items, nextCursor: result.nextCursor };
     }),
 });
