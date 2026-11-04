@@ -157,27 +157,30 @@ describeIfDatabase('M4 schema governance (real PostgreSQL)', () => {
     ).toBe(true);
   });
 
-  it('requires routing rules to target exactly one product or category', async () => {
+  it('requires routing rules to target exactly one product, category, or positive course', async () => {
     const result = await client!.query<{ definition: string }>(
       `SELECT pg_get_constraintdef(constraint_row.oid) AS definition
          FROM pg_catalog.pg_constraint constraint_row
         WHERE constraint_row.conrelid = 'public.restaurant_station_routing_rules'::regclass
           AND constraint_row.contype = 'c'`
     );
-    const exactXorDefinitions = new Set([
-      'num_nonnulls("productId","categoryId")=1',
-      'num_nonnulls("categoryId","productId")=1',
-      '"productId"ISNULL<>"categoryId"ISNULL',
-      '"categoryId"ISNULL<>"productId"ISNULL',
-      '"productId"ISNOTNULL<>"categoryId"ISNOTNULL',
-      '"categoryId"ISNOTNULL<>"productId"ISNOTNULL',
-      '("productId"ISNULLAND"categoryId"ISNOTNULL)OR("productId"ISNOTNULLAND"categoryId"ISNULL)',
-      '("categoryId"ISNULLAND"productId"ISNOTNULL)OR("categoryId"ISNOTNULLAND"productId"ISNULL)',
-      '"productId"ISNULLAND"categoryId"ISNOTNULLOR"productId"ISNOTNULLAND"categoryId"ISNULL',
-      '"categoryId"ISNULLAND"productId"ISNOTNULLOR"categoryId"ISNOTNULLAND"productId"ISNULL',
-    ]);
+    // Course routing (20261022120000_restaurant_course_station_routing) widened the
+    // product/category XOR to exactly one of three targets; a course must be positive.
+    const targets = ['"productId"', '"categoryId"', 'course'];
+    const exactOneTargetDefinitions = new Set(
+      targets.flatMap((first) =>
+        targets
+          .filter((second) => second !== first)
+          .map((second) => {
+            const third = targets.find((target) => target !== first && target !== second)!;
+            return `(num_nonnulls(${first},${second},${third})=1)AND((courseISNULL)OR(course>0))`;
+          })
+      )
+    );
     expect(
-      result.rows.some((row) => exactXorDefinitions.has(normalizeCheckDefinition(row.definition)))
+      result.rows.some((row) =>
+        exactOneTargetDefinitions.has(normalizeCheckDefinition(row.definition))
+      )
     ).toBe(true);
   });
 

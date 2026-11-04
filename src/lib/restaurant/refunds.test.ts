@@ -176,17 +176,38 @@ async function cashTender(device: string): Promise<{ billId: string; tenderId: s
 }
 
 /** Cash tips are stored separately from bill principal, just like card tips. The
- * current terminal cash form does not collect one, so this updates the persisted
- * tender to exercise refunds of historical/imported tipped cash tenders. */
+ * current terminal cash form does not collect one. Tenders are append-only (forced
+ * RLS with no UPDATE policy), so a historical/imported tipped cash tender can only
+ * carry its tip from the INSERT: run the real cash command and supply the tip on its
+ * single tender insert, rather than editing the persisted row afterwards. */
 async function tippedCashTender(
   device: string,
   tipAmount: string
 ): Promise<{ billId: string; tenderId: string }> {
-  const tender = await cashTender(device);
-  await read((tx) =>
-    tx.restaurantTender.update({ where: { id: tender.tenderId }, data: { tipAmount } })
-  );
-  return tender;
+  const billId = await openBill(1);
+  const result = await read((tx) => {
+    const forward = <T extends object>(target: T, prop: string | symbol) => {
+      const value = Reflect.get(target, prop);
+      return typeof value === 'function' ? value.bind(target) : value;
+    };
+    const tenders = new Proxy(tx.restaurantTender, {
+      get: (delegate, prop) =>
+        prop === 'create'
+          ? (args: Parameters<typeof delegate.create>[0]) =>
+              delegate.create({ ...args, data: { ...args.data, tipAmount } })
+          : forward(delegate, prop),
+    });
+    const withTip = new Proxy(tx, {
+      get: (target, prop) => (prop === 'restaurantTender' ? tenders : forward(target, prop)),
+    });
+    return deps.tenders.applyTenderInTransaction(withTip, {
+      billId,
+      tender: { type: 'CASH', amount: '12.50', cashReceived: '12.50' },
+      actor: actor(device),
+      now: AT,
+    });
+  });
+  return { billId, tenderId: result.tenderId };
 }
 
 async function openDrawer(device: string): Promise<void> {

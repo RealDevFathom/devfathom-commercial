@@ -47,6 +47,8 @@ function closeDb() {
       create: vi.fn().mockResolvedValue({ id: 'close-1' }),
     },
     restaurantBill: { findMany: vi.fn().mockResolvedValue([]) },
+    // The close readiness guard (#538) also counts unresolved orders for the day.
+    restaurantOrder: { count: vi.fn().mockResolvedValue(0) },
     restaurantTender: { findMany: vi.fn().mockResolvedValue([]) },
     restaurantRefund: { findMany: vi.fn().mockResolvedValue([]) },
     restaurantDrawerSession: { findMany: vi.fn().mockResolvedValue([]) },

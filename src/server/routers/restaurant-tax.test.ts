@@ -214,14 +214,22 @@ describe('restaurant tax activation router', () => {
       replaceOpenProfile: true,
     });
 
+    // The open profile ends exactly where the successor starts: branch-local midnight
+    // of the selected date (Asia/Karachi 2026-07-01 00:00), not UTC midnight (#540).
+    const successorStart = new Date('2026-06-30T19:00:00.000Z');
     expect(db.restaurantTaxRuleVersion.updateMany).toHaveBeenCalledWith({
       where: { profileVersionId: 'profile_open', effectiveTo: null },
-      data: { effectiveTo: new Date(base.effectiveFrom) },
+      data: { effectiveTo: successorStart },
     });
     expect(db.restaurantTaxProfileVersion.update).toHaveBeenCalledWith({
       where: { id: 'profile_open' },
-      data: { effectiveTo: new Date(base.effectiveFrom) },
+      data: { effectiveTo: successorStart },
     });
+    expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ effectiveFrom: successorStart }),
+      })
+    );
     expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalled();
   });
 
