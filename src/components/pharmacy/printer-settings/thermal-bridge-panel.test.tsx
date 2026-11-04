@@ -547,6 +547,180 @@ describe('ThermalBridgePanel test page', () => {
   });
 });
 
+describe('ThermalBridgePanel review fixes', () => {
+  it('holds Send while an unanswered request is unresolved; Discard allows a new key', async () => {
+    mocks.enqueue.mutateAsync
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValue({
+        status: 'FALLBACK',
+        code: 'NO_BRIDGE',
+        fallback: 'BROWSER_OS',
+        message: '',
+      });
+    render(<ThermalBridgePanel {...props()} />);
+    fireEvent.click(sendButton());
+    const discard = await screen.findByRole('button', { name: 'Discard this request' });
+    expect(sendButton()).toBeDisabled();
+    expect(sendButton()).toHaveAccessibleDescription(
+      /Try the unanswered request again, or discard it/
+    );
+    fireEvent.click(sendButton());
+    expect(mocks.enqueue.mutateAsync).toHaveBeenCalledTimes(1);
+    expect(panelText()).toMatch(/a test page may already have been queued/);
+
+    fireEvent.click(discard);
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(sendButton()).toBeEnabled();
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(mocks.enqueue.mutateAsync).toHaveBeenCalledTimes(2));
+    const [first, second] = mocks.enqueue.mutateAsync.mock.calls.map(
+      (call) => (call[0] as { requestKey: string }).requestKey
+    );
+    expect(second).not.toBe(first);
+  });
+
+  it.each(['FAILED', 'UNCONFIRMED'] as const)(
+    'allows only the guarded retry after a %s job',
+    async (state) => {
+      mocks.enqueue.mutateAsync.mockResolvedValue({
+        status: 'QUEUED',
+        replayed: false,
+        job: jobView({ state, retryable: true, retryRequiresPaperCheck: true }),
+      });
+      render(<ThermalBridgePanel {...props()} />);
+      fireEvent.click(sendButton());
+      await screen.findByRole('button', { name: 'Send the same test page again' });
+      expect(sendButton()).toBeDisabled();
+      fireEvent.click(screen.getByRole('checkbox', { name: /no test page came out/ }));
+      expect(sendButton()).toBeDisabled();
+      fireEvent.click(sendButton());
+      expect(mocks.enqueue.mutateAsync).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('lets a new test page follow an EXPIRED job', async () => {
+    mocks.enqueue.mutateAsync.mockResolvedValue({
+      status: 'QUEUED',
+      replayed: false,
+      job: jobView({ state: 'EXPIRED', retryable: true, retryRequiresPaperCheck: false }),
+    });
+    render(<ThermalBridgePanel {...props()} />);
+    fireEvent.click(sendButton());
+    await screen.findByText('Expired, not sent', { selector: '[data-slot="status-pill"]' });
+    expect(sendButton()).toBeEnabled();
+  });
+
+  it('after a refused retry, a checked paper box unlocks a new test page', async () => {
+    mocks.enqueue.mutateAsync.mockResolvedValue({
+      status: 'QUEUED',
+      replayed: false,
+      job: jobView({ state: 'UNCONFIRMED', retryable: true, retryRequiresPaperCheck: true }),
+    });
+    mocks.retry.mutateAsync.mockRejectedValue(
+      trpcError('PRECONDITION_FAILED', 'The branch’s printer settings changed.')
+    );
+    render(<ThermalBridgePanel {...props()} />);
+    fireEvent.click(sendButton());
+    fireEvent.click(await screen.findByRole('checkbox', { name: /no test page came out/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send the same test page again' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('printer settings changed');
+    expect(sendButton()).toBeEnabled();
+  });
+
+  it('stops polling on a status error and offers a manual check', async () => {
+    mocks.enqueue.mutateAsync.mockResolvedValue({
+      status: 'QUEUED',
+      replayed: false,
+      job: jobView(),
+    });
+    const { rerender } = render(<ThermalBridgePanel {...props()} />);
+    fireEvent.click(sendButton());
+    await screen.findByText('Waiting for bridge', { selector: '[data-slot="status-pill"]' });
+    const interval = mocks.jobCalls.at(-1)!.opts!.refetchInterval as (q: {
+      state: { status?: string; data?: unknown };
+    }) => unknown;
+    expect(interval({ state: { status: 'error', data: jobView() } })).toBe(false);
+    expect(interval({ state: { status: 'success', data: jobView() } })).toBe(2_000);
+
+    mocks.job = query(undefined, { isError: true, error: new TypeError('Failed to fetch') });
+    rerender(<ThermalBridgePanel {...props()} />);
+    expect(screen.getByRole('status')).toHaveTextContent(/DevFathom stopped checking/);
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    expect(mocks.job.refetch).toHaveBeenCalledOnce();
+  });
+
+  it('queues one test page for a fast double click', async () => {
+    let resolve: (value: unknown) => void = () => undefined;
+    mocks.enqueue.mutateAsync.mockReturnValue(new Promise((r) => (resolve = r)));
+    render(<ThermalBridgePanel {...props()} />);
+    fireEvent.click(sendButton());
+    fireEvent.click(sendButton());
+    expect(mocks.enqueue.mutateAsync).toHaveBeenCalledTimes(1);
+    resolve({ status: 'FALLBACK', code: 'NO_BRIDGE', fallback: 'BROWSER_OS', message: '' });
+    await screen.findByText(PRINT_FALLBACK_TEXT.NO_BRIDGE);
+  });
+
+  it('enrolls once for a double submit and never replaces an unshown credential', async () => {
+    let resolve: (value: unknown) => void = () => undefined;
+    mocks.enroll.mutateAsync.mockReturnValue(new Promise((r) => (resolve = r)));
+    render(<ThermalBridgePanel {...props({ canEdit: true })} />);
+    fireEvent.change(screen.getByLabelText('Bridge name'), { target: { value: 'Till' } });
+    fireEvent.change(screen.getByLabelText('Printer target'), {
+      target: { value: '/dev/usb/lp0' },
+    });
+    const enrollButton = screen.getByRole('button', { name: 'Enroll bridge' });
+    fireEvent.click(enrollButton);
+    fireEvent.click(enrollButton);
+    expect(mocks.enroll.mutateAsync).toHaveBeenCalledTimes(1);
+    resolve({
+      bridge: { ...bridge('bridge-9', 'Till', false), printerId: '/dev/usb/lp0' },
+      credential: 'pb_secret_first',
+      notice: 'It is not shown again.',
+    });
+    const heading = await screen.findByRole('heading', {
+      name: /Credential for Till — shown once/,
+    });
+    expect(heading).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Enroll bridge' })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Bridge name'), { target: { value: 'Second' } });
+    fireEvent.change(screen.getByLabelText('Printer target'), {
+      target: { value: '/dev/usb/lp1' },
+    });
+    fireEvent.submit(screen.getByRole('button', { name: 'Enroll bridge' }).closest('form')!);
+    expect(mocks.enroll.mutateAsync).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('Bridge credential')).toHaveValue('pb_secret_first');
+  });
+
+  it('focuses the first invalid enroll field', async () => {
+    mocks.enroll.mutateAsync.mockRejectedValue(
+      trpcError('BAD_REQUEST', 'Use tcp://host:9100, queue:///encoded-name, or a /dev/ path.')
+    );
+    render(<ThermalBridgePanel {...props({ canEdit: true })} />);
+    const enrollButton = screen.getByRole('button', { name: 'Enroll bridge' });
+    fireEvent.click(enrollButton);
+    expect(screen.getByLabelText('Bridge name')).toHaveFocus();
+    fireEvent.change(screen.getByLabelText('Bridge name'), { target: { value: 'Till' } });
+    fireEvent.click(enrollButton);
+    expect(screen.getByLabelText('Printer target')).toHaveFocus();
+    expect(mocks.enroll.mutateAsync).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Printer target'), { target: { value: 'lp0' } });
+    enrollButton.focus();
+    fireEvent.click(enrollButton);
+    await screen.findByText('Use tcp://host:9100, queue:///encoded-name, or a /dev/ path.');
+    expect(screen.getByLabelText('Printer target')).toHaveFocus();
+  });
+
+  it('moves focus into the revoke confirm step and back on cancel', () => {
+    render(<ThermalBridgePanel {...props({ canEdit: true })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke…' }));
+    expect(screen.getByRole('button', { name: 'Revoke bridge' })).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep bridge' }));
+    expect(screen.getByRole('button', { name: 'Revoke…' })).toHaveFocus();
+  });
+});
+
 it('names no printer brand', () => {
   render(<ThermalBridgePanel {...props({ canEdit: true })} />);
   for (const brand of [/epson/i, /canon/i, /\bstar\b/i, /xprinter/i]) {

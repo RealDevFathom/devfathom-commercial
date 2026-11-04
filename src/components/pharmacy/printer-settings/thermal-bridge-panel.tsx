@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -273,6 +273,9 @@ function BridgeTestPage({
   const [choice, setChoice] = useState('');
   const [paperChecked, setPaperChecked] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [retryRefused, setRetryRefused] = useState(false);
+  // Synchronous guard: a fast double click must not queue two test pages.
+  const sendingRef = useRef(false);
 
   const online = bridges.filter((bridge) => bridge.online);
   const many = bridges.length > 1;
@@ -286,6 +289,8 @@ function BridgeTestPage({
       retry: false,
       refetchOnWindowFocus: false,
       refetchInterval: (query) => {
+        // A failed poll stops here; the operator checks again by hand.
+        if (query.state.status === 'error') return false;
         const state = (query.state.data as PrintJobView | undefined)?.state ?? queuedJob?.state;
         return state && !isPrintJobSettled(state) ? PRINT_JOB_POLL_MS : false;
       },
@@ -306,11 +311,23 @@ function BridgeTestPage({
           : online.length === 0
             ? 'No print bridge is online. Start the bridge program on the printer’s computer, then refresh the status.'
             : null;
-  const disabled = !!blocked || enqueue.isPending || retry.isPending || inFlight;
+  // Only the guarded retry may follow a job that may already have printed.
+  const needsPaperCheck = !!job?.retryRequiresPaperCheck && !(retryRefused && paperChecked);
+  const held =
+    run.kind === 'uncertain'
+      ? 'Try the unanswered request again, or discard it, before sending a new test page.'
+      : needsPaperCheck
+        ? 'Check the printer and use “Send the same test page again” below, so a second page is not sent by mistake.'
+        : null;
+  const reason = blocked ?? held;
+  const disabled = !!reason || enqueue.isPending || retry.isPending || inFlight;
   const reasonId = `${ids}-reason`;
 
   async function send(request: TestRequest) {
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     setRetryError(null);
+    setRetryRefused(false);
     setPaperChecked(false);
     try {
       const result = (await enqueue.mutateAsync({ branchId, ...request })) as EnqueueTestResult;
@@ -326,6 +343,8 @@ function BridgeTestPage({
           ? { kind: 'error', message: errorMessage(error, 'The test page was not sent.') }
           : { kind: 'uncertain', request }
       );
+    } finally {
+      sendingRef.current = false;
     }
   }
 
@@ -340,8 +359,10 @@ function BridgeTestPage({
   }
 
   async function retryJob() {
-    if (!job) return;
+    if (!job || sendingRef.current) return;
+    sendingRef.current = true;
     setRetryError(null);
+    setRetryRefused(false);
     try {
       const result = await retry.mutateAsync({
         branchId,
@@ -353,12 +374,18 @@ function BridgeTestPage({
       setPaperChecked(false);
       setRun({ kind: 'queued', job: result as PrintJobView, replayed: false });
     } catch (error) {
+      const code = errorCode(error);
+      // A refused retry (settings changed, bridge revoked…) cannot succeed; once the
+      // operator has confirmed no paper came out, a new test page may be sent instead.
+      setRetryRefused(!!code && DEFINITIVE.has(code));
       setRetryError(
         errorMessage(
           error,
           'The retry did not reach DevFathom. Check your connection and try again.'
         )
       );
+    } finally {
+      sendingRef.current = false;
     }
   }
 
@@ -398,14 +425,14 @@ function BridgeTestPage({
         type="button"
         size="touch"
         disabled={disabled}
-        aria-describedby={blocked ? reasonId : undefined}
+        aria-describedby={reason ? reasonId : undefined}
         onClick={sendNew}
       >
         {enqueue.isPending ? 'Sending…' : 'Send test page to thermal printer'}
       </Button>
-      {blocked ? (
+      {reason ? (
         <p id={reasonId} className="text-sm text-text-muted">
-          {blocked}
+          {reason}
         </p>
       ) : null}
 
@@ -419,15 +446,27 @@ function BridgeTestPage({
                 DevFathom had already received this request, so this is the same job, not a new one.
               </p>
             ) : null}
-            {jobQuery.isError && inFlight ? (
+            {jobQuery.isError ? (
               <p className="text-text-muted">
-                The latest status could not be loaded. DevFathom keeps checking.
+                The latest status could not be loaded, so DevFathom stopped checking. The status
+                above may be out of date.
               </p>
             ) : null}
           </>
         ) : null}
         {run.kind === 'fallback' ? <p>{fallbackText(run.code)}</p> : null}
       </div>
+      {job && jobQuery.isError ? (
+        <Button
+          type="button"
+          size="touch"
+          variant="outline"
+          disabled={jobQuery.isFetching}
+          onClick={() => void jobQuery.refetch()}
+        >
+          {jobQuery.isFetching ? 'Checking…' : 'Check again'}
+        </Button>
+      ) : null}
       {run.kind === 'error' ? (
         <p role="alert" className="text-sm text-destructive">
           {run.message}
@@ -447,6 +486,19 @@ function BridgeTestPage({
             onClick={() => void send(run.request)}
           >
             Try again
+          </Button>
+          <p className="text-sm text-text-body">
+            Discarding does not cancel anything: a test page may already have been queued. Check the
+            printer before sending a new one.
+          </p>
+          <Button
+            type="button"
+            size="touch"
+            variant="ghost"
+            disabled={enqueue.isPending}
+            onClick={() => setRun({ kind: 'idle' })}
+          >
+            Discard this request
           </Button>
         </div>
       ) : null}
@@ -487,6 +539,11 @@ function BridgeTestPage({
   );
 }
 
+/** Stable per bridge, so focus can return to "Revoke…" after the confirm step closes. */
+function revokeButtonId(bridgeId: string): string {
+  return `thermal-bridge-revoke-${bridgeId}`;
+}
+
 function BridgeAdmin({ branchId, branchName }: { branchId: string; branchName: string }) {
   const ids = useId();
   const utils = trpc.useUtils();
@@ -507,9 +564,33 @@ function BridgeAdmin({ branchId, branchName }: { branchId: string; branchName: s
   const [copyNote, setCopyNote] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
+  // Synchronous guards: a double click must not enroll two bridges, and a second enroll
+  // must never replace a credential that has not been dismissed yet.
+  const enrollingRef = useRef(false);
+  const unshownRef = useRef(false);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const targetRef = useRef<HTMLInputElement>(null);
+  const credentialHeadingRef = useRef<HTMLHeadingElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const returnFocusTo = useRef<string | null>(null);
 
   // Unmount (including a branch change, which remounts this panel) drops the credential.
   useEffect(() => () => resetEnroll(), [resetEnroll]);
+
+  // Move focus to the shown-once credential so it is announced and not missed.
+  useEffect(() => {
+    if (revealed) credentialHeadingRef.current?.focus();
+  }, [revealed]);
+
+  // Revoke confirm step: focus its button; on cancel, return focus to "Revoke…".
+  useEffect(() => {
+    if (confirming) {
+      confirmRef.current?.focus();
+    } else if (returnFocusTo.current) {
+      document.getElementById(revokeButtonId(returnFocusTo.current))?.focus();
+      returnFocusTo.current = null;
+    }
+  }, [confirming]);
 
   const preset = CONNECTIONS.find((row) => row.value === connection) ?? CONNECTIONS[0];
 
@@ -519,14 +600,20 @@ function BridgeAdmin({ branchId, branchName }: { branchId: string; branchName: s
   }
 
   async function submit() {
+    if (enrollingRef.current || unshownRef.current) return;
     const trimmed = name.trim();
     const next: typeof errors = {};
     if (!trimmed || trimmed.length > 80) next.name = NAME_ERROR;
     if (!target || target.length > 128) next.target = 'Enter the printer target for this bridge.';
     setErrors(next);
-    if (next.name || next.target) return;
+    if (next.name || next.target) {
+      (next.name ? nameRef : targetRef).current?.focus();
+      return;
+    }
+    enrollingRef.current = true;
     try {
       const result = await enroll.mutateAsync({ branchId, name: trimmed, printerId: target });
+      unshownRef.current = true;
       setRevealed({
         bridgeName: result.bridge.name,
         credential: result.credential,
@@ -542,12 +629,16 @@ function BridgeAdmin({ branchId, branchName }: { branchId: string; branchName: s
       const code = errorCode(error);
       const message = errorMessage(error, 'The bridge was not enrolled. Try again.');
       if (code === 'BAD_REQUEST') {
-        setErrors(message === NAME_ERROR ? { name: message } : { target: message });
+        const onName = message === NAME_ERROR;
+        setErrors(onName ? { name: message } : { target: message });
+        (onName ? nameRef : targetRef).current?.focus();
       } else if (code === 'FORBIDDEN' || code === 'UNAUTHORIZED') {
         setErrors({ form: 'You don’t have permission to enroll a print bridge.' });
       } else {
         setErrors({ form: 'The bridge was not enrolled. Try again.' });
       }
+    } finally {
+      enrollingRef.current = false;
     }
   }
 
@@ -561,6 +652,7 @@ function BridgeAdmin({ branchId, branchName }: { branchId: string; branchName: s
   }
 
   function dismiss() {
+    unshownRef.current = false;
     resetEnroll();
     setRevealed(null);
     setCopyNote(null);
@@ -588,7 +680,12 @@ function BridgeAdmin({ branchId, branchName }: { branchId: string; branchName: s
           aria-labelledby={`${ids}-credential`}
           className="space-y-3 rounded-md border border-border-strong bg-surface-page px-4 py-4"
         >
-          <h3 id={`${ids}-credential`} className="text-sm font-semibold text-text-strong">
+          <h3
+            id={`${ids}-credential`}
+            ref={credentialHeadingRef}
+            tabIndex={-1}
+            className="text-sm font-semibold text-text-strong focus-visible:rounded-xs focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
             Credential for {revealed.bridgeName} — shown once
           </h3>
           <p className="text-sm text-text-body">{revealed.notice}</p>
@@ -692,6 +789,7 @@ function BridgeAdmin({ branchId, branchName }: { branchId: string; branchName: s
                       />
                       {!revoked && confirming !== bridge.id ? (
                         <Button
+                          id={revokeButtonId(bridge.id)}
                           type="button"
                           size="touch"
                           variant="outline"
@@ -720,6 +818,7 @@ function BridgeAdmin({ branchId, branchName }: { branchId: string; branchName: s
                         <Button
                           type="button"
                           size="touch"
+                          ref={confirmRef}
                           variant="destructive"
                           disabled={revoke.isPending}
                           onClick={() => void confirmRevoke(bridge.id)}
@@ -732,6 +831,7 @@ function BridgeAdmin({ branchId, branchName }: { branchId: string; branchName: s
                           variant="outline"
                           disabled={revoke.isPending}
                           onClick={() => {
+                            returnFocusTo.current = bridge.id;
                             setConfirming(null);
                             setRevokeError(null);
                           }}
@@ -771,6 +871,7 @@ function BridgeAdmin({ branchId, branchName }: { branchId: string; branchName: s
             </label>
             <input
               id={`${ids}-name`}
+              ref={nameRef}
               className={FIELD}
               value={name}
               maxLength={80}
@@ -818,6 +919,7 @@ function BridgeAdmin({ branchId, branchName }: { branchId: string; branchName: s
             </label>
             <input
               id={`${ids}-target`}
+              ref={targetRef}
               className={`${FIELD} font-mono`}
               value={target}
               maxLength={128}
@@ -847,9 +949,20 @@ function BridgeAdmin({ branchId, branchName }: { branchId: string; branchName: s
             </p>
           ) : null}
           <div>
-            <Button type="submit" size="touch" disabled={enroll.isPending}>
+            <Button
+              type="submit"
+              size="touch"
+              disabled={enroll.isPending || !!revealed}
+              aria-describedby={revealed ? `${ids}-enroll-held` : undefined}
+            >
               {enroll.isPending ? 'Enrolling…' : 'Enroll bridge'}
             </Button>
+            {revealed ? (
+              <p id={`${ids}-enroll-held`} className="mt-2 text-sm text-text-muted">
+                Store the credential above and select “I’ve stored it” before enrolling another
+                bridge.
+              </p>
+            ) : null}
           </div>
         </form>
       </section>
