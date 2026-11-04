@@ -490,7 +490,17 @@ const closeDate = z
       date.getUTCMilliseconds() === 0,
     'Choose a date without a time.'
   );
-async function requireCloseAccess(ctx: TRPCContext) {
+/**
+ * The close family (preview, close, re-cut) counts drawers, posts variances and
+ * cuts the branch's day. Order: the day-close capability, then the branch must be
+ * an active branch of the organization, then a non-admin closer must be an
+ * active member assigned to THAT branch (as the counter's receipt access
+ * requires). `pharmacy:close` is an organization-role grant, not a branch grant:
+ * without the assignment check a pharmacist assigned to branch A could count,
+ * close or re-cut branch B (DEV-739). A session ADMIN keeps organization-wide
+ * reach, as before.
+ */
+async function requireCloseAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const user = ctx.session?.user;
   if (
     !user ||
@@ -504,6 +514,34 @@ async function requireCloseAccess(ctx: TRPCContext) {
       code: 'FORBIDDEN',
       message: 'Day-close permission is required to reconcile and close a day.',
     });
+  const scope = await scopeFor(ctx, branch);
+  if (user.role === 'ADMIN') return scope;
+  const outside = () =>
+    new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  if (user.organizationId !== scope.organizationId) throw outside();
+  const member = await ctx.db.user.findUnique({
+    where: { id: user.id },
+    select: { status: true, organizationId: true },
+  });
+  if (
+    !member ||
+    member.organizationId !== scope.organizationId ||
+    !member.status ||
+    !ACTIVE_STATUSES.has(member.status)
+  )
+    throw outside();
+  const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      branchId: branch,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { id: true },
+  });
+  if (!assignment) throw outside();
+  return scope;
 }
 
 export const pharmacySalesRouter = router({
@@ -600,10 +638,10 @@ export const pharmacySalesRouter = router({
   closePreview: protectedProcedure
     .input(z.object({ branchId, businessDate: closeDate }).strict())
     .query(async ({ ctx, input }) => {
-      await requireCloseAccess(ctx);
+      const scope = await requireCloseAccess(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) =>
-          readPharmacyClose(txDb(tx), await scopeFor(ctx, input.branchId), input.businessDate)
+          readPharmacyClose(txDb(tx), scope, input.businessDate)
         );
       } catch (error) {
         fail(error);
@@ -631,11 +669,9 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      await requireCloseAccess(ctx);
+      const scope = await requireCloseAccess(ctx, input.branchId);
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => closePharmacyDay(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
@@ -796,10 +832,10 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      await requireCloseAccess(ctx);
+      const scope = await requireCloseAccess(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) =>
-          cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          cutPharmacyDailyClose(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);

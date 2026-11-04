@@ -145,6 +145,7 @@ let db: {
   pharmacyDrawerMovement: { create: ReturnType<typeof vi.fn> };
   pharmacyTender: { findFirst: ReturnType<typeof vi.fn> };
   user: { findUnique: ReturnType<typeof vi.fn> };
+  pharmacyBranchAssignment: { findFirst: ReturnType<typeof vi.fn> };
 };
 
 function caller(role = 'ADMIN'): Caller {
@@ -177,6 +178,7 @@ beforeEach(() => {
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue(null) },
     user: { findUnique: vi.fn().mockResolvedValue(null) },
+    pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue(null) },
   };
 });
 
@@ -184,9 +186,15 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
   it('refuses non-admin changes to reference-skip policy before accessing the branch', async () => {
     // A real member row, so the refusal is the ADMIN policy, not a missing user.
     db.user.findUnique.mockResolvedValue(memberWithoutCustomRules);
-    await expect(caller('EMPLOYEE').saveManualPaymentSettings({ branchId: BRANCH, revision: 0, settings: {
-      RAAST: { destination: 'Till', allowReferenceSkip: true },
-    } })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller('EMPLOYEE').saveManualPaymentSettings({
+        branchId: BRANCH,
+        revision: 0,
+        settings: {
+          RAAST: { destination: 'Till', allowReferenceSkip: true },
+        },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
   });
   it.each(procedures)(
@@ -231,6 +239,84 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
       });
       await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(refusal);
       expect(db.pharmacyBranch.findMany).toHaveBeenCalledOnce();
+    }
+  );
+
+  // DEV-739: `pharmacy:close` is an organization-role grant, so a non-admin closer
+  // must also be an active member assigned to the branch being counted and cut.
+  const closer = (status = 'ACTIVE') => ({
+    status,
+    organizationId: 'org-1',
+    organizationRole: { permissions: [{ capability: 'pharmacy:close', effect: 'ALLOW' }] },
+    permissionOverrides: [],
+  });
+  const assignmentLookup = {
+    where: {
+      organizationId: 'org-1',
+      userId: 'actor-1',
+      branchId: BRANCH,
+      active: true,
+      branch: { organizationId: 'org-1', active: true },
+    },
+    select: { id: true },
+  };
+
+  it.each(closeProcedures)(
+    '%s refuses a pharmacy:close holder on an active branch they are not assigned to, touching nothing',
+    async (_name, run) => {
+      db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+      db.user.findUnique.mockResolvedValue(closer());
+      await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(OUTSIDE);
+      expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledExactlyOnceWith(
+        assignmentLookup
+      );
+      expect(db.$transaction).not.toHaveBeenCalled();
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+      expect(db.$executeRaw).not.toHaveBeenCalled();
+      expect(db.pharmacyDailyClose.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacyDrawerSession.findFirst).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(closeProcedures)(
+    '%s refuses an assigned pharmacy:close holder whose membership is not active',
+    async (_name, run) => {
+      db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+      db.user.findUnique.mockResolvedValue(closer('SUSPENDED'));
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
+      await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(OUTSIDE);
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(closeProcedures)(
+    '%s admits a pharmacy:close holder assigned to the branch into the close transaction',
+    async (_name, run) => {
+      db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+      db.user.findUnique.mockResolvedValue(closer());
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
+      // The settlement library then runs against this bare mock and may refuse for
+      // its own reasons; access is what is under test, so only the branch refusal
+      // is excluded.
+      await run(caller('EMPLOYEE')).catch((error: unknown) =>
+        expect(error).not.toMatchObject(OUTSIDE)
+      );
+      expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledExactlyOnceWith(
+        assignmentLookup
+      );
+      expect(db.$transaction).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(closeProcedures)(
+    '%s keeps organization-wide reach for a session ADMIN without a branch assignment',
+    async (_name, run) => {
+      db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+      await run(caller('ADMIN')).catch((error: unknown) =>
+        expect(error).not.toMatchObject(OUTSIDE)
+      );
+      expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+      expect(db.$transaction).toHaveBeenCalledOnce();
     }
   );
 
