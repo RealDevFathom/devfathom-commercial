@@ -79,5 +79,119 @@ export async function createInspectionPack(
         : await db.$queryRawUnsafe<JsonRecord[]>(query, input.from, input.to, input.branchId);
     sections.push({ name, records: records.map((row) => row.record as JsonRecord) });
   }
+  sections.push({
+    name: INSPECTION_PACK_SOP_SECTION,
+    records: await sopOccurrenceInspectionRecords(db, input),
+  });
   return buildInspectionManifest({ ...input, sections });
+}
+
+/** DEV-751: SOP occurrences run at the pharmacy branch's SOP site. */
+export const INSPECTION_PACK_SOP_SECTION = 'sop-occurrences';
+
+/**
+ * One record per SOP occurrence due in range at this pharmacy branch's SOP site,
+ * with its steps, evidence references, verification decisions and pharmacy
+ * record links. People appear by display name, not id. Evidence carries its
+ * content hash, type, size and capture time only — never the storage location.
+ * A branch without an SOP site yields no rows. Nested arrays are ordered so the
+ * section hash is reproducible.
+ */
+export const SOP_OCCURRENCE_INSPECTION_QUERY = `SELECT jsonb_build_object(
+  'occurrenceId', o."id",
+  'template', tpl."name",
+  'templateVersion', v."versionNumber",
+  'businessDate', o."businessDate",
+  'status', o."status",
+  'dueAt', o."dueAt",
+  'windowEndsAt', o."windowEndsAt",
+  'startedAt', o."startedAt",
+  'submittedAt', o."submittedAt",
+  'resolvedAt', o."resolvedAt",
+  'assignedTo', assignee."displayName",
+  'claimedBy', claimer."displayName",
+  'steps', COALESCE((
+    SELECT jsonb_agg(jsonb_build_object(
+      'stepOrder', ts."stepOrder",
+      'title', ts."title",
+      'completed', st."completed",
+      'completedAt', st."completedAt",
+      'completedBy', completer."displayName",
+      'note', st."note"
+    ) ORDER BY ts."stepOrder", st."id")
+    FROM "restaurant_sop_occurrence_steps" st
+    JOIN "restaurant_sop_template_steps" ts ON ts."id" = st."templateStepId"
+    LEFT JOIN "restaurant_staff_profiles" completer
+      ON completer."id" = st."completedByStaffProfileId" AND completer."organizationId" = st."organizationId"
+    WHERE st."occurrenceId" = o."id" AND st."organizationId" = o."organizationId"
+  ), '[]'::jsonb),
+  'evidence', COALESCE((
+    SELECT jsonb_agg(jsonb_build_object(
+      'stepOrder', ets."stepOrder",
+      'contentHash', e."contentHash",
+      'mimeType', e."mimeType",
+      'sizeBytes', e."sizeBytes",
+      'capturedAt', e."capturedAt",
+      'uploadedBy', uploader."displayName"
+    ) ORDER BY e."capturedAt", e."id")
+    FROM "restaurant_sop_evidence" e
+    LEFT JOIN "restaurant_sop_occurrence_steps" est ON est."id" = e."occurrenceStepId"
+    LEFT JOIN "restaurant_sop_template_steps" ets ON ets."id" = est."templateStepId"
+    LEFT JOIN "restaurant_staff_profiles" uploader
+      ON uploader."id" = e."uploaderStaffProfileId" AND uploader."organizationId" = e."organizationId"
+    WHERE e."occurrenceId" = o."id" AND e."organizationId" = o."organizationId"
+  ), '[]'::jsonb),
+  'verifications', COALESCE((
+    SELECT jsonb_agg(jsonb_build_object(
+      'action', vf."action",
+      'reason', vf."reason",
+      'createdAt', vf."createdAt",
+      'actor', verifier."displayName"
+    ) ORDER BY vf."createdAt", vf."id")
+    FROM "restaurant_sop_verifications" vf
+    LEFT JOIN "restaurant_staff_profiles" verifier
+      ON verifier."id" = vf."actorStaffProfileId" AND verifier."organizationId" = vf."organizationId"
+    WHERE vf."occurrenceId" = o."id" AND vf."organizationId" = o."organizationId"
+  ), '[]'::jsonb),
+  'recordLinks', COALESCE((
+    SELECT jsonb_agg(jsonb_build_object(
+      'stepOrder', lts."stepOrder",
+      'recordType', l."recordType",
+      'recordId', l."recordId",
+      'note', l."note",
+      'createdAt', l."createdAt",
+      'linkedBy', linker."displayName"
+    ) ORDER BY l."createdAt", l."id")
+    FROM "pharmacy_sop_record_links" l
+    LEFT JOIN "restaurant_sop_occurrence_steps" lst ON lst."id" = l."occurrenceStepId"
+    LEFT JOIN "restaurant_sop_template_steps" lts ON lts."id" = lst."templateStepId"
+    LEFT JOIN "restaurant_staff_profiles" linker
+      ON linker."id" = l."linkedByStaffProfileId" AND linker."organizationId" = l."organizationId"
+    WHERE l."occurrenceId" = o."id" AND l."organizationId" = o."organizationId"
+      AND l."pharmacyBranchId" = site."pharmacyBranchId"
+  ), '[]'::jsonb)
+) AS record
+FROM "pharmacy_sop_sites" site
+JOIN "restaurant_sop_occurrences" o
+  ON o."organizationId" = site."organizationId" AND o."branchId" = site."sopBranchId"
+JOIN "restaurant_sop_template_versions" v ON v."id" = o."templateVersionId"
+JOIN "restaurant_sop_templates" tpl ON tpl."id" = v."templateId"
+LEFT JOIN "restaurant_staff_profiles" assignee
+  ON assignee."id" = o."assignedStaffProfileId" AND assignee."organizationId" = o."organizationId"
+LEFT JOIN "restaurant_staff_profiles" claimer
+  ON claimer."id" = o."claimedByStaffProfileId" AND claimer."organizationId" = o."organizationId"
+WHERE site."pharmacyBranchId" = $3 AND o."dueAt" >= $1 AND o."dueAt" <= $2
+ORDER BY o."dueAt", o."id"`;
+
+export async function sopOccurrenceInspectionRecords(
+  db: ScopedDb,
+  input: { branchId: string; from: Date; to: Date }
+): Promise<JsonRecord[]> {
+  const rows = await db.$queryRawUnsafe<{ record: JsonRecord }[]>(
+    SOP_OCCURRENCE_INSPECTION_QUERY,
+    input.from,
+    input.to,
+    input.branchId
+  );
+  return rows.map((row) => row.record);
 }
