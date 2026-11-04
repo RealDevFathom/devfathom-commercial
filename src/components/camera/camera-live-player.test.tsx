@@ -81,8 +81,34 @@ test('renews before expiry with the previous grant and releases only the latest'
   expect(issue).toHaveBeenLastCalledWith('g1');
   expect(video).toHaveAttribute('src', '/api/pharmacy/cameras/cam_1/stream?grant=g2');
   unmount();
-  expect(onRelease).toHaveBeenCalledTimes(1);
+  // The renewed grant would otherwise stay usable for up to 15 s after close.
+  expect(onRelease).toHaveBeenCalledTimes(2);
+  expect(onRelease).toHaveBeenCalledWith('g1');
   expect(onRelease).toHaveBeenCalledWith('g2');
+});
+
+test('a grant that arrives after the view closed is revoked, not left live', async () => {
+  let resolveIssue: (grant: { grantId: string; expiresAt: Date }) => void = () => {};
+  const issue = vi.fn(
+    () => new Promise<{ grantId: string; expiresAt: Date }>((resolve) => (resolveIssue = resolve))
+  );
+  const onRelease = vi.fn();
+  const view = render(
+    <CameraLivePlayer
+      cameraId="cam_1"
+      name="Counter"
+      issue={issue}
+      streamUrl={streamUrl}
+      onRelease={onRelease}
+    />
+  );
+  view.unmount();
+  await act(async () => {
+    resolveIssue({ grantId: 'late', expiresAt: new Date(Date.now() + 60_000) });
+    await vi.advanceTimersByTimeAsync(1);
+  });
+  expect(onRelease).toHaveBeenCalledTimes(1);
+  expect(onRelease).toHaveBeenCalledWith('late');
 });
 
 test('a denied renewal stops playback, clears media and releases the held grant', async () => {

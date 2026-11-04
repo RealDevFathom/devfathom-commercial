@@ -43,11 +43,15 @@ export function CameraLivePlayer({
     let revision = 0;
     let hls: Hls | undefined;
     let loadingTimer: ReturnType<typeof setTimeout>;
-    let heldGrant: string | undefined;
+    // The current grant and the one it renewed (which lapses within 15 s).
+    // Both are revoked when the view ends, so neither URL outlives the view.
+    let held: string[] = [];
+    let ended = false;
     const release = () => {
-      const grantId = heldGrant;
-      heldGrant = undefined;
-      if (grantId) releaseRef.current?.(grantId);
+      ended = true;
+      const grants = held;
+      held = [];
+      for (const grantId of grants) releaseRef.current?.(grantId);
     };
     const session: { current?: ReturnType<typeof startCameraLiveSession> } = {};
     const clearMedia = () => {
@@ -88,11 +92,17 @@ export function CameraLivePlayer({
     media.addEventListener('error', mediaError);
 
     session.current = startCameraLiveSession({
-      issue: (previous) => issueRef.current(previous),
+      issue: async (previous) => {
+        const grant = await issueRef.current(previous);
+        // Closed while the request was in flight: the session discards this
+        // grant, so revoke it here rather than leave it live until expiry.
+        if (ended && grant?.grantId) releaseRef.current?.(grant.grantId);
+        return grant;
+      },
       onStop: stop,
       onGrant: (grant) => {
         clearMedia();
-        heldGrant = grant.grantId;
+        held = [held.at(-1), grant.grantId].filter((id): id is string => Boolean(id));
         const current = revision;
         waiting();
         const url = urlRef.current(cameraId, grant.grantId);

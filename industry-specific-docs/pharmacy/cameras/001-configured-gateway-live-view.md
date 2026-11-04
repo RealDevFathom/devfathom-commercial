@@ -84,10 +84,16 @@ The simulator path (`CAMERA_GATEWAY_MODE=simulated`, development/test only) is u
   every active branch (the existing counter convention). Anyone else needs an active pharmacy
   branch assignment to that branch.
 - **Grants.** Live grants last 60 s. The player renews 15 s before expiry and stops after 30
-  renewals. Renewal requires a live grant the viewer holds for that camera. The prior grant
-  is left to lapse (at most 15 s) so in-flight player requests are not cut off.
-  Closing live view revokes the last grant. Audit input for grant mutations is skipped;
-  `previousGrantId` is also redacted globally.
+  renewals. That cap is client-side only; it is not a security boundary, because every issue
+  and every stream request re-authorizes. Renewal requires a live grant the viewer holds for
+  that camera. The prior grant is left to lapse (at most 15 s) so in-flight player requests
+  are not cut off. Closing live view revokes both the current and the prior grant, and a
+  grant that arrives after the view closed is revoked on arrival. Audit input for grant
+  mutations is skipped; `previousGrantId` and `baseUrl` are also redacted globally, so a
+  rejected gateway URL is never kept in the audit log.
+- **Enabling.** In configured mode, changing camera settings (including **Enabled**) applies
+  the same branch rule. "Enable after the configured check reports `ok`" is operator
+  guidance; the server does not record or enforce the check result.
 - **Fail closed.** Live endpoints return 503 unless the runtime is `mediamtx`. Disabling a
   camera, revoking its gateway, removing branch assignment or capability, or setting
   `CAMERA_GATEWAY_MODE=unavailable` stops subsequent reads.
@@ -160,7 +166,7 @@ non-production environment. Record evidence (screenshots and timestamps), never 
       browser (record browser and OS versions).
 - [ ] The browser network panel shows only `/api/pharmacy/cameras/...` URLs: no gateway
       hostname, private IP, `rtsp://` or credentials. Page source and console are clean.
-- [ ] Closing live view revokes the grant. The old grant URL then returns 401.
+- [ ] Closing live view revokes the current and prior grants. Both URLs then return 401.
 - [ ] Viewing continues across at least two renewals (more than 2 minutes).
 - [ ] Disabling the camera, or removing a non-admin user's branch assignment, stops the next
       segment request (403).

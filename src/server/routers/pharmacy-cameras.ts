@@ -186,18 +186,24 @@ export const pharmacyCamerasRouter = router({
       await ctx.db.$executeRaw(
         Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${organizationId}), hashtext(${`camera-gateway:${input.branchId}:${input.name}`}))`
       );
+      // Idempotent by name, matching the lock key. A configured gateway never
+      // silently returns a same-named gateway that points somewhere else.
       const prior = await ctx.db.cameraGateway.findFirst({
         where: {
           organizationId,
           branchId: input.branchId,
           name: input.name,
-          baseUrl,
           status: 'ACTIVE',
           revokedAt: null,
         },
-        select: { id: true },
+        select: { id: true, baseUrl: true },
       });
-      if (prior) return prior;
+      if (prior && mode === 'mediamtx' && prior.baseUrl !== baseUrl)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'An active gateway with this name already exists in this branch.',
+        });
+      if (prior) return { id: prior.id };
       const gateway = await ctx.db.cameraGateway.create({
         data: {
           branchId: input.branchId,
@@ -326,8 +332,9 @@ export const pharmacyCamerasRouter = router({
           credentialId: credential.id,
           name: input.name,
           sourceRef: input.sourceRef,
-          // A configured camera starts disabled: the owner enables it after the
-          // gateway binding exists and the configured connection check passes.
+          // A configured camera starts disabled. Enabling it is the owner's call
+          // (operator guidance: after the binding exists and the configured check
+          // reports ok); the server does not record or enforce that check.
           enabled: mode === 'mediamtx' ? false : !input.registerAnyway,
         },
         select: { id: true },
@@ -356,6 +363,10 @@ export const pharmacyCamerasRouter = router({
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.session.user.organizationId;
       const row = await camera(ctx.db, organizationId, input.cameraId);
+      // Configured mode: enabling a camera exposes live video, so apply the live
+      // branch rule. The simulator path keeps its existing organization-wide rule.
+      if (cameraGatewayRuntime.available && cameraGatewayRuntime.mode === 'mediamtx')
+        await liveBranch(ctx, organizationId, row.branchId);
       try {
         // setCameraPreset sets counterEvidence exactly when the preset is COUNTER.
         await setCameraPreset(ctx.db, { organizationId, branchId: row.branchId }, input);

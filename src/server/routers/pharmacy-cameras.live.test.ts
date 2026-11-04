@@ -190,6 +190,7 @@ function makeDb() {
       }),
       findMany: vi.fn(async () => []),
       create: vi.fn(async () => ({ id: 'cam_new' })),
+      update: vi.fn(async () => ({ id: 'cam_1' })),
     },
     cameraCredential: { create: vi.fn(async () => ({ id: 'cred_1' })) },
     cameraStreamGrant: {
@@ -315,6 +316,30 @@ describe('configured gateway registration', () => {
       caller().enrollGateway({ branchId: 'branch_a', name: 'Main', retentionDays: 7, baseUrl })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.cameraGateway.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a same-named gateway that points at another URL', async () => {
+    gateways = [
+      gateway({ name: 'Main', baseUrl: 'https://other-gateway.example.internal/' } as never),
+    ];
+    await expect(
+      caller().enrollGateway({
+        branchId: 'branch_a',
+        name: 'Main',
+        retentionDays: 7,
+        baseUrl: BASE,
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(db.cameraGateway.create).not.toHaveBeenCalled();
+    gateways = [gateway({ name: 'Main' } as never)];
+    await expect(
+      caller().enrollGateway({
+        branchId: 'branch_a',
+        name: 'Main',
+        retentionDays: 7,
+        baseUrl: BASE,
+      })
+    ).resolves.toEqual({ id: 'gw_1' });
   });
 
   it.each(['branch_x', 'branch_closed'])('refuses %s', async (branchId) => {
@@ -670,5 +695,21 @@ describe('live view grants', () => {
     await expect(
       caller().revokeViewerGrant({ cameraId: 'cam_1', grantId: 'grant_prev' })
     ).resolves.toEqual({ revoked: 1 });
+  });
+});
+
+describe('configured camera settings', () => {
+  it('applies the live branch rule before a non-ADMIN can enable a camera', async () => {
+    const manager = caller({ userId: 'manager_1', role: 'MANAGER' });
+    const input = { cameraId: 'cam_1', preset: null, enabled: true };
+    await expect(manager.configure(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.camera.update).not.toHaveBeenCalled();
+    assignments.push({
+      organizationId: 'org_a',
+      branchId: 'branch_a',
+      userId: 'manager_1',
+      active: true,
+    });
+    await expect(manager.configure(input)).resolves.toEqual({ id: 'cam_1' });
   });
 });
