@@ -118,6 +118,19 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+it.each([
+  [0, '0 of 10 licensed seats are currently occupied.'],
+  [1, '1 of 10 licensed seats is currently occupied.'],
+  [3, '3 of 10 licensed seats are currently occupied.'],
+])('uses correct seat-occupancy agreement for %i occupied seats', (count, description) => {
+  const data = overviewData.current as { entitlements: { activeSeats: number } };
+  data.entitlements.activeSeats = count;
+  render(<OrganizationAdminContent />);
+
+  const people = screen.getByRole('heading', { name: 'People and access' }).closest('section')!;
+  expect(within(people).getByText(description)).toBeInTheDocument();
+});
+
 describe('organization people and access — staff onboarding', () => {
   it('uses singular seat copy when the license limit is one', () => {
     const data = overviewData.current as { entitlements: { seatLimit: number } };

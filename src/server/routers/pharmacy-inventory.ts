@@ -8,6 +8,7 @@
  * payload, and maps the domain error onto a tRPC code.
  */
 import { TRPCError } from '@trpc/server';
+import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
@@ -32,10 +33,12 @@ import {
   dispatchTransfer,
   nearExpiryBoard,
   OpenRecallConflictError,
+  prepareTransferTransitRemoval,
   quarantinePart,
   releaseQuarantinedPart,
   recallTrace,
   receiveTransferLine,
+  transferReceiptReference,
   reserveSupplierClaim,
   setManufacturingBatchState,
   writeOff,
@@ -164,6 +167,42 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
     active: true,
   });
   return { ...actor, branchId: branch };
+}
+
+/** Receipt destinations require active tenant membership and an authorized pharmacy branch. */
+async function receiptScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await scopeFor(ctx, branch);
+  const user = ctx.session!.user;
+  if (user.organizationId !== scope.organizationId) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  const member = await ctx.db.user.findFirst({
+    where: { id: scope.actorId, organizationId: scope.organizationId },
+    select: { organizationId: true, status: true },
+  });
+  if (
+    !member ||
+    member.organizationId !== scope.organizationId ||
+    !ACTIVE_STATUSES.has(member.status)
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  // Canonical pharmacy branch exception: trusted session ADMIN only.
+  // HR and editable organization-role keys/names do not grant branch authority.
+  if (user.role === 'ADMIN') return scope;
+  const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: scope.actorId,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  if (!assignments.some((assignment) => assignment.branchId === branch)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  return scope;
 }
 
 // ── PH-A5 — expiry board actions ────────────────────────────────────────────
@@ -319,6 +358,45 @@ function transferVarianceKey(transferId: string, lineId: string): string {
   return `transfer-variance:${transferId}:${lineId}`;
 }
 
+function transferVarianceReason(
+  transferId: string,
+  lineId: string,
+  receiptKey: string,
+  reason: string
+): string {
+  return JSON.stringify({
+    type: 'TRANSFER_RECEIPT_VARIANCE',
+    transferId,
+    lineId,
+    receiptKey,
+    reason,
+  });
+}
+
+function varianceReceiptKey(reason: string | null): string | null {
+  if (!reason) return null;
+  try {
+    const value = JSON.parse(reason) as { type?: unknown; receiptKey?: unknown };
+    return value.type === 'TRANSFER_RECEIPT_VARIANCE' && typeof value.receiptKey === 'string'
+      ? value.receiptKey
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function varianceDisplayReason(reason: string | null): string | null {
+  if (!reason) return null;
+  try {
+    const value = JSON.parse(reason) as { type?: unknown; reason?: unknown };
+    return value.type === 'TRANSFER_RECEIPT_VARIANCE' && typeof value.reason === 'string'
+      ? value.reason
+      : reason;
+  } catch {
+    return reason;
+  }
+}
+
 async function transferBoard(db: ScopedDb, scope: LedgerScope) {
   const transfers = await db.pharmacyInterbranchTransfer.findMany({
     where: {
@@ -427,7 +505,7 @@ async function transferBoard(db: ScopedDb, scope: LedgerScope) {
         quantityUnits: line.quantityUnits,
         receivedUnits: line.receivedUnits,
         varianceUnits: variance ? Math.abs(variance.quantityUnits) : 0,
-        varianceReason: variance?.reason ?? null,
+        varianceReason: varianceDisplayReason(variance?.reason ?? null),
       };
     }),
   }));
@@ -441,11 +519,9 @@ type VarianceReceiptInput = {
 };
 
 /**
- * The closing receipt of a transfer. Every open line is answered with what
- * physically arrived; what did not is written off out of IN_TRANSIT at the
- * source branch, where dispatch left it. The transfer then closes RECEIVED, so
- * the line-by-line receipt path can never draw written-off units back out of
- * transit. Runs inside the caller's transaction.
+ * Receive all or part of a delivery. Without explicit variance evidence, the
+ * remainder stays in transit. Evidence closes a witnessed permanent shortfall.
+ * Every open line is accounted for, inside the caller's transaction.
  */
 async function receiveTransferWithVariance(
   db: ScopedDb,
@@ -467,7 +543,91 @@ async function receiveTransferWithVariance(
         include: { lines: true },
       })
     : null;
-  if (!transfer) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  if (
+    !transfer ||
+    transfer.organizationId !== scope.organizationId ||
+    transfer.toBranchId !== scope.branchId
+  )
+    throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  const prior = await db.pharmacyStockMovement.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      reason: { in: transfer.lines.map((line) => transferReceiptReference(transfer.id, line.id)) },
+      kind: 'TRANSFER_IN',
+      idempotencyKey: { startsWith: `${input.idempotencyKeyPrefix}:` },
+    },
+  });
+  const varianceKeys = new Map(
+    input.lines.map((line) => [transferVarianceKey(transfer.id, line.lineId), line.lineId])
+  );
+  const priorVarianceMovements = await db.pharmacyStockMovement.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      kind: 'WRITE_OFF',
+      idempotencyKey: { in: [...varianceKeys.keys()] },
+    },
+  });
+  const priorCustody = priorVarianceMovements.length
+    ? await db.pharmacyCustodyRecord.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          movementId: { in: priorVarianceMovements.map((movement) => movement.id) },
+        },
+      })
+    : [];
+  const matchingVariances = priorVarianceMovements.filter(
+    (movement) => varianceReceiptKey(movement.reason) === input.idempotencyKeyPrefix
+  );
+  if (prior.length || matchingVariances.length) {
+    const positive = input.lines.filter((line) => line.receivedUnits > 0);
+    const expectedVarianceLines = input.variance
+      ? input.lines.filter((answer) => {
+          const line = transfer.lines.find((candidate) => candidate.id === answer.lineId);
+          return line !== undefined && line.quantityUnits > line.receivedUnits;
+        })
+      : [];
+    const expectedVarianceKeys = new Set(
+      expectedVarianceLines.map((line) => transferVarianceKey(transfer.id, line.lineId))
+    );
+    if (
+      prior.length !== positive.length ||
+      positive.some(
+        (line) =>
+          !prior.some(
+            (movement) =>
+              movement.reason === transferReceiptReference(transfer.id, line.lineId) &&
+              movement.idempotencyKey === `${input.idempotencyKeyPrefix}:${line.lineId}:in` &&
+              movement.quantityUnits === line.receivedUnits
+          )
+      ) ||
+      matchingVariances.length !== expectedVarianceLines.length ||
+      matchingVariances.some((movement) => {
+        const lineId = varianceKeys.get(movement.idempotencyKey);
+        const line = transfer.lines.find((candidate) => candidate.id === lineId);
+        const custody = priorCustody.find((record) => record.movementId === movement.id);
+        return (
+          !line ||
+          !expectedVarianceKeys.has(movement.idempotencyKey) ||
+          movement.quantityUnits !== -(line.quantityUnits - line.receivedUnits) ||
+          !custody ||
+          custody.witnessId !== input.variance!.witnessId ||
+          custody.reason !== input.variance!.reason ||
+          custody.evidenceRef !== input.variance!.evidenceRef
+        );
+      })
+    )
+      throw new PharmacyInventoryError('INVALID_STATE');
+    return {
+      transfer,
+      variances: matchingVariances.map((movement) => ({
+        lineId: varianceKeys.get(movement.idempotencyKey)!,
+        units: Math.abs(movement.quantityUnits),
+        movement,
+        custody: priorCustody.find((record) => record.movementId === movement.id)!,
+      })),
+    };
+  }
   if (!RECEIVABLE_TRANSFER_STATUSES.includes(transfer.status))
     throw new PharmacyInventoryError('INVALID_STATE');
 
@@ -500,33 +660,19 @@ async function receiveTransferWithVariance(
     const transit = balances[0];
     if (!transit || Number(transit.onHandUnits) < outstanding)
       throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
-    const unitsPerPack = Number(transit.unitsPerPack);
-    // The receipt leg removes a normalised arrangement; the variance takes loose
-    // units first. Both have to fit what transit physically holds, or the
-    // projection would go negative mid-transaction.
-    const receipt =
-      receivedUnits > 0
-        ? arrangementFor(receivedUnits, unitsPerPack)
-        : { sealedPacks: 0, looseUnits: 0 };
-    let sealedLeft = Number(transit.sealedPacks) - receipt.sealedPacks;
-    let looseLeft = Number(transit.looseUnits) - receipt.looseUnits;
-    const varianceUnits = outstanding - receivedUnits;
-    const varianceLoose = Math.min(Math.max(looseLeft, 0), varianceUnits);
-    const varianceSealedUnits = varianceUnits - varianceLoose;
-    sealedLeft -= varianceSealedUnits / unitsPerPack;
-    looseLeft -= varianceLoose;
-    if (varianceSealedUnits % unitsPerPack !== 0 || sealedLeft < 0 || looseLeft < 0)
-      throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
     plan.push({
       line,
       receivedUnits,
-      varianceUnits,
-      variance: { sealedPacks: varianceSealedUnits / unitsPerPack, looseUnits: varianceLoose },
+      varianceUnits: outstanding - receivedUnits,
+      unitsPerPack: Number(transit.unitsPerPack),
     });
   }
 
   const short = plan.some((step) => step.varianceUnits > 0);
-  if (short) {
+  const closingWithVariance = short && input.variance !== undefined;
+  if (!closingWithVariance && !plan.some((step) => step.receivedUnits > 0))
+    throw new PharmacyInventoryError('INVALID_UNITS');
+  if (closingWithVariance) {
     const evidence = input.variance;
     if (!evidence || evidence.witnessId === scope.actorId)
       throw new PharmacyInventoryError('COAUTH_REQUIRED');
@@ -547,7 +693,20 @@ async function receiveTransferWithVariance(
         idempotencyKeyPrefix: `${input.idempotencyKeyPrefix}:${step.line.id}`,
       });
     }
-    if (step.varianceUnits === 0) continue;
+    if (step.varianceUnits === 0 || !closingWithVariance) continue;
+    const variance = await prepareTransferTransitRemoval(
+      db,
+      { ...scope, branchId: transfer.fromBranchId },
+      {
+        inventoryLotId: step.line.sourceLotId,
+        stockLocationId: step.line.sourceStockLocationId,
+        units: step.varianceUnits,
+        unitsPerPack: step.unitsPerPack,
+        transferId: transfer.id,
+        lineId: step.line.id,
+        idempotencyKeyPrefix: `${input.idempotencyKeyPrefix}:${step.line.id}:variance`,
+      }
+    );
     const evidence = input.variance!;
     const movement = await db.pharmacyStockMovement.create({
       data: {
@@ -558,10 +717,15 @@ async function receiveTransferWithVariance(
         kind: 'WRITE_OFF',
         disposition: 'IN_TRANSIT',
         quantityUnits: -step.varianceUnits,
-        sealedPackDelta: -step.variance.sealedPacks,
-        looseUnitDelta: -step.variance.looseUnits,
+        sealedPackDelta: -variance.sealedPacks,
+        looseUnitDelta: -variance.looseUnits,
         actorId: scope.actorId,
-        reason: `Transfer ${transfer.id} receipt variance: ${evidence.reason}`,
+        reason: transferVarianceReason(
+          transfer.id,
+          step.line.id,
+          input.idempotencyKeyPrefix,
+          evidence.reason
+        ),
         idempotencyKey: transferVarianceKey(transfer.id, step.line.id),
       },
     });
@@ -580,8 +744,11 @@ async function receiveTransferWithVariance(
   }
 
   const closed = await db.pharmacyInterbranchTransfer.update({
-    where: { id: transfer.id },
-    data: { status: 'RECEIVED', receivedAt: new Date() },
+    where: { organizationId_id: { organizationId: scope.organizationId, id: transfer.id } },
+    data:
+      short && !closingWithVariance
+        ? { status: 'PARTIALLY_RECEIVED', receivedAt: null }
+        : { status: 'RECEIVED', receivedAt: new Date() },
   });
   return { transfer: closed, variances: postedVariances };
 }
@@ -1199,9 +1366,8 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          receiveTransferLine(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        const scope = await receiptScopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => receiveTransferLine(txDb(tx), scope, input));
       } catch (error) {
         domainError(error);
       }
@@ -2058,7 +2224,7 @@ export const pharmacyInventoryRouter = router({
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => transferBoard(ctx.db, await scopeFor(ctx, input.branchId))),
 
-  /** WHA-1603 INV-07: close a transfer, posting any shortfall as a custody write-off. */
+  /** WHA-1603 INV-07: receive a delivery; explicit evidence closes a shortfall. */
   receiveTransferWithVariance: inventoryControl
     .input(
       z
@@ -2090,8 +2256,9 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await receiptScopeFor(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>
-          receiveTransferWithVariance(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          receiveTransferWithVariance(txDb(tx), scope, input)
         );
       } catch (error) {
         domainError(error);

@@ -33,6 +33,7 @@ vi.mock('@/lib/pharmacy/finance-postings', () => ({
 }));
 
 import { moduleForProcedure } from '@/lib/module-catalog';
+import type { PharmacyStockMovement } from '@/generated/prisma/client';
 
 import { pharmacyInventoryRouter } from './pharmacy-inventory';
 import type { TRPCContext } from '../trpc';
@@ -41,10 +42,12 @@ function model() {
   return {
     findFirst: vi.fn().mockResolvedValue(null),
     findMany: vi.fn().mockResolvedValue([]),
+    findFirstOrThrow: vi.fn().mockRejectedValue(new Error('Test record not configured')),
     create: vi
       .fn()
       .mockImplementation(async ({ data }: { data: object }) => ({ id: 'new', ...data })),
     update: vi.fn(),
+    updateMany: vi.fn(),
     count: vi.fn(),
   };
 }
@@ -52,7 +55,10 @@ function model() {
 function makeDb() {
   const db = {
     user: {
+      findFirst: vi.fn().mockResolvedValue(null),
       findUnique: vi.fn().mockResolvedValue({
+        organizationId: 'org_a',
+        status: 'ACTIVE',
         organizationRole: { permissions: [] },
         permissionOverrides: [],
       }),
@@ -93,8 +99,10 @@ function makeDb() {
     pharmacyRequisition: model(),
     pharmacyRequisitionLine: model(),
     pharmacyInterbranchTransfer: model(),
+    pharmacyInterbranchTransferLine: model(),
     pharmacyPurchaseReturn: model(),
     pharmacyPurchaseReturnLine: model(),
+    pharmacyBranchAssignment: model(),
     pharmacyBranch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch_a' }),
       findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
@@ -104,12 +112,19 @@ function makeDb() {
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn().mockResolvedValue([]),
   });
 }
 
 let db = makeDb();
-function caller(overrides: { enabledModules?: string[]; userId?: string | null } = {}) {
+function caller(
+  overrides: {
+    enabledModules?: string[];
+    userId?: string | null;
+    role?: 'ADMIN' | 'EMPLOYEE' | 'HR';
+    userOrganizationId?: string;
+  } = {}
+) {
   return pharmacyInventoryRouter.createCaller({
     db,
     entitlements: {
@@ -125,7 +140,12 @@ function caller(overrides: { enabledModules?: string[]; userId?: string | null }
         ? null
         : {
             expires: 'later',
-            user: { id: overrides.userId ?? 'user_a', role: 'ADMIN', status: 'ACTIVE' },
+            user: {
+              id: overrides.userId ?? 'user_a',
+              role: overrides.role ?? 'ADMIN',
+              status: 'ACTIVE',
+              organizationId: overrides.userOrganizationId ?? 'org_a',
+            },
           },
     organization: null,
     support: null,
@@ -141,6 +161,8 @@ const deny = (capability: string): Rule => ({ capability, effect: 'DENY' });
 /** What `can()` reads: the member's role rules and their own overrides. */
 function grant(role: Rule[], overrides: Rule[] = []) {
   db.user.findUnique.mockResolvedValue({
+    organizationId: 'org_a',
+    status: 'ACTIVE',
     organizationRole: { permissions: role },
     permissionOverrides: overrides,
   });
@@ -1128,5 +1150,696 @@ describe('PUR-07 — the stock action centre transport', () => {
       })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
+  });
+});
+
+/** #357 regression: real router + service + projection-checking in-memory ledger.
+ * PostgreSQL trigger/RLS acceptance is separately exercised by the DB suite.
+ */
+describe('#357 partial transfer receipts', () => {
+  function scenario(units = 10) {
+    db.user.findFirst.mockResolvedValue({ organizationId: 'org_a', status: 'ACTIVE' });
+    grant([allow('pharmacy:inventory')]);
+    const transfer = {
+      id: 'transfer_357',
+      organizationId: 'org_a',
+      fromBranchId: 'branch_source',
+      toBranchId: 'branch_a',
+      status: 'DISPATCHED',
+      receivedAt: null as Date | null,
+      lines: [
+        {
+          id: 'line_1',
+          sourceLotId: 'lot_source',
+          sourceStockLocationId: 'source_location',
+          destinationStockLocationId: 'destination_location',
+          quantityUnits: units,
+          receivedUnits: 0,
+        },
+      ],
+    };
+    const transit = {
+      onHandUnits: units,
+      sealedPacks: Math.floor(units / 10),
+      looseUnits: units % 10,
+    };
+    const destination = { onHandUnits: 0, sealedPacks: 0, looseUnits: 0 };
+    type Movement = Pick<
+      PharmacyStockMovement,
+      | 'organizationId'
+      | 'branchId'
+      | 'kind'
+      | 'disposition'
+      | 'quantityUnits'
+      | 'sealedPackDelta'
+      | 'looseUnitDelta'
+      | 'idempotencyKey'
+      | 'stockLocationId'
+      | 'reason'
+    > & { id?: string };
+    const movements: Movement[] = [];
+    const custodyRecords: Array<{
+      id: string;
+      movementId: string;
+      witnessId: string;
+      reason: string;
+      evidenceRef: string;
+    }> = [];
+    db.pharmacyStockBalance.findFirst.mockImplementation(async () => structuredClone(transit));
+    db.$queryRaw.mockImplementation(async (query: { strings: readonly string[] }) =>
+      query.strings.join('').includes('pharmacy_stock_balances')
+        ? [{ ...structuredClone(transit), unitsPerPack: 10 }]
+        : [{ id: transfer.id }]
+    );
+    db.pharmacyInterbranchTransfer.findFirst.mockImplementation(async () =>
+      structuredClone(transfer)
+    );
+    db.pharmacyInterbranchTransfer.update.mockImplementation(async ({ data }) => {
+      Object.assign(transfer, data);
+      return structuredClone(transfer);
+    });
+    db.pharmacyInterbranchTransferLine.updateMany = vi.fn(async ({ data }) => {
+      transfer.lines[0].receivedUnits += (
+        data as { receivedUnits: { increment: number } }
+      ).receivedUnits.increment;
+      return { count: 1 };
+    });
+    db.pharmacyInventoryLot.findFirstOrThrow.mockResolvedValue({
+      id: 'lot_source',
+      manufacturingBatchId: 'batch_1',
+      packLevelId: 'pack_1',
+      unitsPerPack: 10,
+      supplierName: 'Supplier',
+      supplierInvoiceRef: 'invoice',
+      unitCostMinor: 100,
+      printedMrpMinor: 150,
+      receivedExpiresAt: new Date('2027-01-01'),
+      receivedExpiryPrecision: 'DAY',
+      batch: {},
+    });
+    db.pharmacyStockMovement.findFirst.mockImplementation(
+      async ({ where }) =>
+        movements.find(
+          (m) =>
+            m.organizationId === where.organizationId &&
+            m.branchId === where.branchId &&
+            m.idempotencyKey === where.idempotencyKey &&
+            m.kind === where.kind
+        ) ?? null
+    );
+    db.pharmacyStockMovement.findMany.mockImplementation(async ({ where }) =>
+      movements.filter((m) => {
+        if (m.organizationId !== where.organizationId || m.kind !== where.kind) return false;
+        if (where.branchId !== undefined && m.branchId !== where.branchId) return false;
+        if (where.reason?.in && !where.reason.in.includes(m.reason)) return false;
+        if (
+          where.idempotencyKey?.startsWith &&
+          !m.idempotencyKey.startsWith(where.idempotencyKey.startsWith)
+        )
+          return false;
+        if (where.idempotencyKey?.in && !where.idempotencyKey.in.includes(m.idempotencyKey))
+          return false;
+        return true;
+      })
+    );
+    db.pharmacyStockMovement.create.mockImplementation(async ({ data }: { data: object }) => {
+      const m = data as Movement;
+      if (
+        movements.some(
+          (old) => old.branchId === m.branchId && old.idempotencyKey === m.idempotencyKey
+        )
+      )
+        throw new Error('duplicate movement key');
+      const bucket = m.disposition === 'IN_TRANSIT' ? transit : destination;
+      const next = {
+        onHandUnits: bucket.onHandUnits + m.quantityUnits,
+        sealedPacks: bucket.sealedPacks + m.sealedPackDelta,
+        looseUnits: bucket.looseUnits + m.looseUnitDelta,
+      };
+      if (
+        Object.values(next).some((n) => n < 0) ||
+        next.onHandUnits !== next.sealedPacks * 10 + next.looseUnits
+      )
+        throw new Error('INVALID_ARRANGEMENT');
+      Object.assign(bucket, next);
+      const created = { id: `m_${movements.length + 1}`, ...m };
+      movements.push(created);
+      return created;
+    });
+    db.pharmacyCustodyRecord.create.mockImplementation(async ({ data }) => {
+      const created = {
+        id: `c_${custodyRecords.length + 1}`,
+        ...data,
+      } as (typeof custodyRecords)[number];
+      custodyRecords.push(created);
+      return created;
+    });
+    db.pharmacyCustodyRecord.findMany.mockImplementation(async ({ where }) =>
+      custodyRecords.filter((record) => where.movementId.in.includes(record.movementId))
+    );
+    const receive = (receivedUnits: number, key = 'receipt-1') =>
+      caller().receiveTransferWithVariance({
+        branchId: 'branch_a',
+        transferId: transfer.id,
+        lines: [{ lineId: 'line_1', receivedUnits }],
+        idempotencyKeyPrefix: key,
+      });
+    return { transfer, transit, destination, movements, receive };
+  }
+
+  it('opens sealed10, receives4, leaves6 in transit, then finishes6 with a new receipt key', async () => {
+    const s = scenario();
+    const first = await s.receive(4);
+    expect(first.transfer).toMatchObject({ status: 'PARTIALLY_RECEIVED', receivedAt: null });
+    expect(first.variances).toEqual([]);
+    expect(s.transit).toEqual({ onHandUnits: 6, sealedPacks: 0, looseUnits: 6 });
+    expect(s.destination.onHandUnits).toBe(4);
+    expect(s.movements.map((m) => m.kind)).toEqual(['BREAK_PACK', 'TRANSFER_OUT', 'TRANSFER_IN']);
+    const second = await s.receive(6, 'receipt-2');
+    expect(second.transfer).toMatchObject({ status: 'RECEIVED', receivedAt: expect.any(Date) });
+    expect(s.transfer.lines[0].receivedUnits).toBe(10);
+    expect(s.transit.onHandUnits).toBe(0);
+    expect(s.destination.onHandUnits).toBe(10);
+    expect(s.movements).toHaveLength(5);
+    expect(s.movements.some((m) => m.kind === 'WRITE_OFF')).toBe(false);
+  });
+
+  it('is exactly-once on first receipt retry and retry after final completion', async () => {
+    const s = scenario();
+    await s.receive(4);
+    await s.receive(4);
+    expect(s.movements).toHaveLength(3);
+    await s.receive(6, 'receipt-2');
+    await s.receive(6, 'receipt-2');
+    await s.receive(4);
+    expect(s.movements).toHaveLength(5);
+    expect(s.destination.onHandUnits).toBe(10);
+    expect(s.transfer.lines[0].receivedUnits).toBe(10);
+  });
+
+  it('rejects changed quantity on a consumed receipt key without writes', async () => {
+    const s = scenario();
+    await s.receive(4);
+    await expect(s.receive(3)).rejects.toMatchObject({ message: 'INVALID_STATE' });
+    expect(s.movements).toHaveLength(3);
+  });
+
+  it('rejects cumulative over-receipt before any additional movement', async () => {
+    const s = scenario();
+    await s.receive(4);
+    await expect(s.receive(7, 'receipt-2')).rejects.toMatchObject({ message: 'INVALID_UNITS' });
+    expect(s.movements).toHaveLength(3);
+    expect(s.transit.onHandUnits).toBe(6);
+  });
+
+  it('receives an intact whole pack without an unnecessary break', async () => {
+    const s = scenario();
+    await s.receive(10);
+    expect(s.movements.map((m) => m.kind)).toEqual(['TRANSFER_OUT', 'TRANSFER_IN']);
+    expect(s.destination).toEqual({ onHandUnits: 10, sealedPacks: 1, looseUnits: 0 });
+  });
+
+  it('never reseals a pack-sized quantity taken from loose transit stock', async () => {
+    const s = scenario(20);
+    Object.assign(s.transit, { sealedPacks: 0, looseUnits: 20 });
+    await s.receive(10);
+    expect(s.transit).toEqual({ onHandUnits: 10, sealedPacks: 0, looseUnits: 10 });
+    expect(s.destination).toEqual({ onHandUnits: 10, sealedPacks: 0, looseUnits: 10 });
+    expect(s.movements.map((m) => m.kind)).toEqual(['TRANSFER_OUT', 'TRANSFER_IN']);
+  });
+
+  it('conserves a mixed whole/fractional receipt14 out of sealed20', async () => {
+    const s = scenario(20);
+    await s.receive(14);
+    expect(s.transit).toEqual({ onHandUnits: 6, sealedPacks: 0, looseUnits: 6 });
+    expect(s.destination).toEqual({ onHandUnits: 14, sealedPacks: 1, looseUnits: 4 });
+  });
+
+  it.each(['receiveTransferLine', 'receiveTransferWithVariance'] as const)(
+    '%s preserves the physical arrangement across deliveries of 4, 10 and 6',
+    async (procedure) => {
+      const s = scenario(20);
+      for (const [index, units] of [4, 10, 6].entries()) {
+        const common = {
+          branchId: 'branch_a',
+          transferId: s.transfer.id,
+          idempotencyKeyPrefix: `arrangement-${index}`,
+        };
+        if (procedure === 'receiveTransferLine') {
+          await caller().receiveTransferLine({ ...common, lineId: 'line_1', receivedUnits: units });
+        } else {
+          await caller().receiveTransferWithVariance({
+            ...common,
+            lines: [{ lineId: 'line_1', receivedUnits: units }],
+          });
+        }
+        const outgoing = s.movements.find(
+          (m) =>
+            m.idempotencyKey.startsWith(common.idempotencyKeyPrefix) && m.kind === 'TRANSFER_OUT'
+        )!;
+        const incoming = s.movements.find(
+          (m) =>
+            m.idempotencyKey.startsWith(common.idempotencyKeyPrefix) && m.kind === 'TRANSFER_IN'
+        )!;
+        expect(incoming.sealedPackDelta + outgoing.sealedPackDelta).toBe(0);
+        expect(incoming.looseUnitDelta + outgoing.looseUnitDelta).toBe(0);
+        if (index === 1) {
+          expect(incoming).toMatchObject({ sealedPackDelta: 1, looseUnitDelta: 0 });
+          expect(s.transit).toEqual({ onHandUnits: 6, sealedPacks: 0, looseUnits: 6 });
+        }
+      }
+      expect(s.movements.filter((m) => m.kind === 'BREAK_PACK')).toHaveLength(1);
+      expect(s.destination).toEqual({ onHandUnits: 20, sealedPacks: 1, looseUnits: 10 });
+      expect(s.transit).toEqual({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 });
+      expect(s.transfer.status).toBe('RECEIVED');
+    }
+  );
+
+  it('keeps the legacy single-line endpoint partial rather than EXCEPTION', async () => {
+    const s = scenario();
+    await caller().receiveTransferLine({
+      branchId: 'branch_a',
+      transferId: s.transfer.id,
+      lineId: 'line_1',
+      receivedUnits: 4,
+      idempotencyKeyPrefix: 'legacy-1',
+    });
+    expect(s.transfer.status).toBe('PARTIALLY_RECEIVED');
+    await caller().receiveTransferLine({
+      branchId: 'branch_a',
+      transferId: s.transfer.id,
+      lineId: 'line_1',
+      receivedUnits: 6,
+      idempotencyKeyPrefix: 'legacy-2',
+    });
+    expect(s.transfer.status).toBe('RECEIVED');
+  });
+
+  it('preserves witnessed permanent-shortfall write-off with a valid arrangement', async () => {
+    const s = scenario();
+    db.user.findFirst.mockImplementation(async ({ where }) =>
+      where.id === 'witness'
+        ? { id: 'witness' }
+        : { id: where.id, organizationId: 'org_a', status: 'ACTIVE' }
+    );
+    const result = await caller().receiveTransferWithVariance({
+      branchId: 'branch_a',
+      transferId: s.transfer.id,
+      lines: [{ lineId: 'line_1', receivedUnits: 4 }],
+      idempotencyKeyPrefix: 'variance-1',
+      variance: {
+        reason: 'Missing carton confirmed by courier',
+        witnessId: 'witness',
+        evidenceRef: 'courier:1',
+      },
+    });
+    expect(result.transfer.status).toBe('RECEIVED');
+    expect(s.movements.map((m) => m.kind)).toEqual([
+      'BREAK_PACK',
+      'TRANSFER_OUT',
+      'TRANSFER_IN',
+      'WRITE_OFF',
+    ]);
+    expect(s.transit.onHandUnits).toBe(0);
+    expect(s.destination.onHandUnits).toBe(4);
+    expect(s.movements.find((m) => m.kind === 'WRITE_OFF')).toMatchObject({
+      quantityUnits: -6,
+      disposition: 'IN_TRANSIT',
+      looseUnitDelta: -6,
+    });
+    expect(Math.abs(s.movements.find((m) => m.kind === 'WRITE_OFF')!.sealedPackDelta)).toBe(0);
+  });
+
+  it('replays an identical variance receipt, including a variance-only receipt', async () => {
+    const s = scenario();
+    db.user.findFirst.mockImplementation(async ({ where }) =>
+      where.id === 'witness'
+        ? { id: 'witness' }
+        : { id: where.id, organizationId: 'org_a', status: 'ACTIVE' }
+    );
+    const input = {
+      branchId: 'branch_a',
+      transferId: s.transfer.id,
+      lines: [{ lineId: 'line_1', receivedUnits: 0 }],
+      idempotencyKeyPrefix: 'variance-only',
+      variance: {
+        reason: 'Entire carton missing',
+        witnessId: 'witness',
+        evidenceRef: 'courier:missing',
+      },
+    };
+    const first = await caller().receiveTransferWithVariance(input);
+    const replay = await caller().receiveTransferWithVariance(input);
+    expect(replay).toEqual(first);
+    expect(s.movements.filter((movement) => movement.kind === 'WRITE_OFF')).toHaveLength(1);
+    expect(s.transit.onHandUnits).toBe(0);
+  });
+
+  it('rejects changed variance evidence on a consumed receipt key', async () => {
+    const s = scenario();
+    db.user.findFirst.mockImplementation(async ({ where }) =>
+      where.id === 'witness'
+        ? { id: 'witness' }
+        : { id: where.id, organizationId: 'org_a', status: 'ACTIVE' }
+    );
+    const input = {
+      branchId: 'branch_a',
+      transferId: s.transfer.id,
+      lines: [{ lineId: 'line_1', receivedUnits: 0 }],
+      idempotencyKeyPrefix: 'variance-only',
+      variance: {
+        reason: 'Entire carton missing',
+        witnessId: 'witness',
+        evidenceRef: 'courier:missing',
+      },
+    };
+    await caller().receiveTransferWithVariance(input);
+    await expect(
+      caller().receiveTransferWithVariance({
+        ...input,
+        variance: { ...input.variance, evidenceRef: 'courier:changed' },
+      })
+    ).rejects.toMatchObject({ message: 'INVALID_STATE' });
+    expect(s.movements.filter((movement) => movement.kind === 'WRITE_OFF')).toHaveLength(1);
+  });
+
+  it('gives receipt and variance pack openings distinct keys in a pooled transit balance', async () => {
+    const s = scenario(16);
+    // Transfer T owns16, another same-lot dispatched transfer owns7 units.
+    // Receipt8 and writeoff8 each need their own physical pack opening.
+    Object.assign(s.transit, { onHandUnits: 23, sealedPacks: 2, looseUnits: 3 });
+    db.user.findFirst.mockImplementation(async ({ where }) =>
+      where.id === 'witness'
+        ? { id: 'witness' }
+        : { id: where.id, organizationId: 'org_a', status: 'ACTIVE' }
+    );
+    const result = await caller().receiveTransferWithVariance({
+      branchId: 'branch_a',
+      transferId: s.transfer.id,
+      lines: [{ lineId: 'line_1', receivedUnits: 8 }],
+      idempotencyKeyPrefix: 'pooled-variance',
+      variance: {
+        reason: 'Confirmed permanent shortfall',
+        witnessId: 'witness',
+        evidenceRef: 'courier:pooled',
+      },
+    });
+    expect(result.transfer.status).toBe('RECEIVED');
+    const openings = s.movements.filter((m) => m.kind === 'BREAK_PACK');
+    expect(openings).toHaveLength(2);
+    expect(new Set(openings.map((m) => m.idempotencyKey)).size).toBe(2);
+    expect(s.transit).toEqual({ onHandUnits: 7, sealedPacks: 0, looseUnits: 7 });
+    expect(s.destination.onHandUnits).toBe(8);
+    expect(s.movements.find((m) => m.kind === 'WRITE_OFF')?.quantityUnits).toBe(-8);
+  });
+
+  it('requires a distinct active witness before closing a permanent shortfall', async () => {
+    const s = scenario();
+    await expect(
+      caller().receiveTransferWithVariance({
+        branchId: 'branch_a',
+        transferId: s.transfer.id,
+        lines: [{ lineId: 'line_1', receivedUnits: 4 }],
+        idempotencyKeyPrefix: 'bad-witness',
+        variance: {
+          reason: 'Missing carton confirmed',
+          witnessId: 'user_a',
+          evidenceRef: 'courier:2',
+        },
+      })
+    ).rejects.toMatchObject({ message: 'COAUTH_REQUIRED' });
+    expect(s.movements).toHaveLength(0);
+  });
+
+  it.each([
+    { name: 'no capability', role: [] as Rule[], overrides: [] as Rule[] },
+    { name: 'safety capability alone', role: [allow('pharmacy:safety')], overrides: [] as Rule[] },
+    {
+      name: 'explicit inventory denial',
+      role: [allow('pharmacy:inventory')],
+      overrides: [deny('pharmacy:inventory')],
+    },
+  ])(
+    'refuses a partial receipt with $name before locking or posting',
+    async ({ role, overrides }) => {
+      const s = scenario();
+      grant(role, overrides);
+      await expect(s.receive(4)).rejects.toMatchObject(CAPABILITY_REFUSAL);
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+      expect(s.movements).toHaveLength(0);
+      expect(s.transit.onHandUnits).toBe(10);
+    }
+  );
+
+  it('refuses a transfer from another tenant without creating a destination lot', async () => {
+    const s = scenario();
+    s.transfer.organizationId = 'org_b';
+    await expect(s.receive(4)).rejects.toMatchObject({ message: 'CROSS_BRANCH_REFERENCE' });
+    expect(db.pharmacyInventoryLot.create).not.toHaveBeenCalled();
+    expect(s.movements).toHaveLength(0);
+  });
+
+  const receiptProcedures = ['receiveTransferLine', 'receiveTransferWithVariance'] as const;
+  function branchReceiptInput(procedure: (typeof receiptProcedures)[number], transferId: string) {
+    const common = { branchId: 'branch_b', transferId, idempotencyKeyPrefix: 'branch-receipt-357' };
+    return procedure === 'receiveTransferLine'
+      ? { ...common, lineId: 'line_1', receivedUnits: 4 }
+      : { ...common, lines: [{ lineId: 'line_1', receivedUnits: 4 }] };
+  }
+  function expectNoReceiptEffects(s: ReturnType<typeof scenario>) {
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    for (const model of [
+      db.pharmacyInventoryLot,
+      db.pharmacyStockMovement,
+      db.pharmacyStockBalance,
+      db.pharmacyStockDiscrepancy,
+      db.pharmacyInterbranchTransferLine,
+      db.pharmacyInterbranchTransfer,
+    ]) {
+      expect(model.create).not.toHaveBeenCalled();
+      expect(model.update).not.toHaveBeenCalled();
+    }
+    expect(s.movements).toEqual([]);
+    expect(s.transit).toEqual({ onHandUnits: 10, sealedPacks: 1, looseUnits: 0 });
+    expect(s.destination).toEqual({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 });
+    expect(s.transfer).toMatchObject({
+      status: 'DISPATCHED',
+      receivedAt: null,
+      lines: [{ id: 'line_1', quantityUnits: 10, receivedUnits: 0 }],
+    });
+  }
+
+  describe.each(receiptProcedures)(
+    '%s SEC-384-01 canonical receipt branch authority',
+    (procedure) => {
+      const nonAdminRoles = [
+        { role: 'EMPLOYEE' as const, name: 'org:admin' },
+        { role: 'EMPLOYEE' as const, name: 'org:superadmin' },
+        { role: 'HR' as const, name: 'stock-clerk' },
+      ];
+      const unassignedActors = nonAdminRoles.flatMap((actor) => [
+        { ...actor, assignment: 'none', branches: [] as { branchId: string }[] },
+        { ...actor, assignment: 'sibling only', branches: [{ branchId: 'branch_a' }] },
+      ]);
+
+      it.each(unassignedActors)(
+        'refuses $role / display name $name / $assignment with no stock effects',
+        async ({ role, name, branches }) => {
+          const s = scenario();
+          s.transfer.toBranchId = 'branch_b';
+          // The role KEY is nonprivileged. Display names are editable, not admin grants.
+          db.user.findUnique.mockResolvedValue({
+            organizationId: 'org_a',
+            status: 'ACTIVE',
+            organizationRole: {
+              key: 'stock-clerk',
+              name,
+              permissions: [allow('pharmacy:inventory')],
+            },
+            permissionOverrides: [],
+          });
+          db.pharmacyBranchAssignment.findMany.mockResolvedValue(branches);
+          await expect(
+            caller({ role })[procedure](branchReceiptInput(procedure, s.transfer.id) as never)
+          ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+          expectNoReceiptEffects(s);
+        }
+      );
+
+      it.each(nonAdminRoles)(
+        'allows $role / display name $name only with the active destination assignment',
+        async ({ role, name }) => {
+          const s = scenario();
+          s.transfer.toBranchId = 'branch_b';
+          db.user.findUnique.mockResolvedValue({
+            organizationId: 'org_a',
+            status: 'ACTIVE',
+            organizationRole: {
+              key: 'stock-clerk',
+              name,
+              permissions: [allow('pharmacy:inventory')],
+            },
+            permissionOverrides: [],
+          });
+          db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_b' }]);
+          await caller({ role })[procedure](branchReceiptInput(procedure, s.transfer.id) as never);
+          expect(s.transit.onHandUnits).toBe(6);
+          expect(s.destination.onHandUnits).toBe(4);
+          expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
+            where: {
+              organizationId: 'org_a',
+              userId: 'user_a',
+              active: true,
+              branch: { organizationId: 'org_a', active: true },
+            },
+            select: { branchId: true },
+          });
+        }
+      );
+
+      it.each([
+        { member: 'missing', value: null },
+        { member: 'foreign', value: { organizationId: 'org_b', status: 'ACTIVE' } },
+        { member: 'inactive', value: { organizationId: 'org_a', status: 'SUSPENDED' } },
+      ])(
+        'refuses even session ADMIN with $member persisted membership before stock effects',
+        async ({ value }) => {
+          const s = scenario();
+          s.transfer.toBranchId = 'branch_b';
+          // Capability lookup remains granted; the second lookup is persisted membership.
+          db.user.findFirst.mockResolvedValue(value);
+          await expect(
+            caller({ role: 'ADMIN' })[procedure](
+              branchReceiptInput(procedure, s.transfer.id) as never
+            )
+          ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+          expectNoReceiptEffects(s);
+        }
+      );
+
+      it('refuses an inactive or foreign destination even for session ADMIN before stock effects', async () => {
+        const s = scenario();
+        s.transfer.toBranchId = 'branch_b';
+        db.pharmacyBranch.findMany.mockResolvedValue([]);
+        await expect(
+          caller({ role: 'ADMIN' })[procedure](
+            branchReceiptInput(procedure, s.transfer.id) as never
+          )
+        ).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: 'That record is not in this workspace.',
+        });
+        expectNoReceiptEffects(s);
+        expect(db.pharmacyBranch.findMany).toHaveBeenCalledWith({
+          where: { organizationId: 'org_a', id: { in: ['branch_b'] }, active: true },
+          select: { id: true },
+        });
+      });
+    }
+  );
+
+  it.each(receiptProcedures)(
+    '%s refuses a valid transfer TO an unassigned same-tenant branch',
+    async (procedure) => {
+      const s = scenario();
+      s.transfer.toBranchId = 'branch_b';
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+      await expect(
+        caller({ role: 'EMPLOYEE' })[procedure](
+          branchReceiptInput(procedure, s.transfer.id) as never
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.$transaction).not.toHaveBeenCalled();
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+      expect(s.movements).toHaveLength(0);
+      expect(s.transit.onHandUnits).toBe(10);
+      expect(s.destination.onHandUnits).toBe(0);
+    }
+  );
+  it.each(receiptProcedures)(
+    '%s refuses an actor with no active pharmacy assignment',
+    async (procedure) => {
+      const s = scenario();
+      s.transfer.toBranchId = 'branch_b';
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+      await expect(
+        caller({ role: 'EMPLOYEE' })[procedure](
+          branchReceiptInput(procedure, s.transfer.id) as never
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+      expect(s.movements).toHaveLength(0);
+      expect(s.transit.onHandUnits).toBe(10);
+    }
+  );
+  it.each(receiptProcedures)(
+    '%s allows an actively assigned employee at the actual destination',
+    async (procedure) => {
+      const s = scenario();
+      s.transfer.toBranchId = 'branch_b';
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_b' }]);
+      await caller({ role: 'EMPLOYEE' })[procedure](
+        branchReceiptInput(procedure, s.transfer.id) as never
+      );
+      expect(s.transit.onHandUnits).toBe(6);
+      expect(s.destination.onHandUnits).toBe(4);
+      expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org_a',
+          userId: 'user_a',
+          active: true,
+          branch: { organizationId: 'org_a', active: true },
+        },
+        select: { branchId: true },
+      });
+    }
+  );
+  it.each(receiptProcedures)(
+    '%s preserves the same-tenant session ADMIN exception',
+    async (procedure) => {
+      const s = scenario();
+      s.transfer.toBranchId = 'branch_b';
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+      await caller({ role: 'ADMIN' })[procedure](
+        branchReceiptInput(procedure, s.transfer.id) as never
+      );
+      expect(s.transit.onHandUnits).toBe(6);
+      expect(s.destination.onHandUnits).toBe(4);
+    }
+  );
+  it.each(receiptProcedures)(
+    '%s refuses a session from a different tenant even when ADMIN',
+    async (procedure) => {
+      const s = scenario();
+      s.transfer.toBranchId = 'branch_b';
+      await expect(
+        caller({ role: 'ADMIN', userOrganizationId: 'org_b' })[procedure](
+          branchReceiptInput(procedure, s.transfer.id) as never
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+      expect(s.movements).toHaveLength(0);
+    }
+  );
+
+  it('refuses a foreign destination branch before touching its stock', async () => {
+    const s = scenario();
+    s.transfer.toBranchId = 'foreign_branch';
+    await expect(s.receive(4)).rejects.toMatchObject({ message: 'CROSS_BRANCH_REFERENCE' });
+    expect(s.movements).toHaveLength(0);
+  });
+
+  it('refuses an unknown line rather than implicitly closing the transfer', async () => {
+    const s = scenario();
+    await expect(
+      caller().receiveTransferWithVariance({
+        branchId: 'branch_a',
+        transferId: s.transfer.id,
+        lines: [{ lineId: 'foreign_line', receivedUnits: 4 }],
+        idempotencyKeyPrefix: 'bad-line',
+      })
+    ).rejects.toMatchObject({ message: 'CROSS_BRANCH_REFERENCE' });
+    expect(s.movements).toHaveLength(0);
   });
 });

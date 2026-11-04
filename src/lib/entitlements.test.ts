@@ -80,6 +80,69 @@ describe('baseline entitlement resolution', () => {
     ]);
   });
 
+  it('CTO-P1 keeps a contract-shaped manual denial above an optional package grant', async () => {
+    const now = new Date('2026-10-25T00:00:00.000Z');
+    const db = {
+      organization: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'org_1',
+          seatLimit: 5,
+          packageId: 'pkg_1',
+          vertical: 'PHARMACY',
+        }),
+      },
+      organizationModule: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            moduleId: 'mod_optional',
+            status: 'DISABLED',
+            seatLimit: null,
+            startsAt: now,
+            expiresAt: null,
+            overrides: null,
+            reason: 'Contract CON-304',
+          },
+        ]),
+      },
+      organizationLimit: { findMany: vi.fn().mockResolvedValue([]) },
+      user: { count: vi.fn().mockResolvedValue(1) },
+    };
+    const platformDb = {
+      platformModule: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'mod_optional',
+            key: 'optional',
+            name: 'Optional',
+            band: 'VERTICAL_OPTIONAL',
+          },
+        ]),
+      },
+      platformPackage: {
+        findUnique: vi.fn().mockResolvedValue({
+          moduleLinks: [{ limits: null, module: { id: 'mod_optional', active: true } }],
+        }),
+      },
+      platformContract: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    mocks.withPlatformDb.mockImplementation((run: (client: typeof platformDb) => unknown) =>
+      run(platformDb)
+    );
+
+    const result = await resolveOrganizationEntitlements('org_1', db as never, now);
+
+    expect(result.enabledModules).not.toContain('optional');
+    expect(result.modules).toEqual([
+      expect.objectContaining({
+        key: 'optional',
+        enabled: false,
+        source: 'OVERRIDE',
+        seatLimit: null,
+        expiresAt: null,
+      }),
+    ]);
+  });
+
   it('uses the package from an organization visible only inside the supplied transaction', async () => {
     const now = new Date('2026-09-04T00:00:00.000Z');
     const db = {

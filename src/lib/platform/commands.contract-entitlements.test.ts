@@ -88,3 +88,54 @@ describe('contract seat entitlements', () => {
     expect(db.organizationModule.updateMany).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('commercial contract entitlement synchronization', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('creates overrides only for modules included in the contract', async () => {
+    const endDate = '2027-10-21T00:00:00.000Z';
+
+    await executePlatformCommand(
+      actor,
+      'commercial.contract.create',
+      {
+        organizationId: 'org_1',
+        number: 'CON-304',
+        title: 'Package-safe contract',
+        status: 'ACTIVE',
+        currency: 'USD',
+        value: 1200,
+        billingInterval: 'ANNUAL',
+        seatLimit: 10,
+        startDate: '2026-10-21T00:00:00.000Z',
+        endDate,
+        moduleIds: ['mod_contract'],
+      },
+      request
+    );
+
+    expect(db.organizationModule.upsert).toHaveBeenCalledTimes(1);
+    expect(db.organizationModule.upsert).toHaveBeenCalledWith({
+      where: {
+        organizationId_moduleId: {
+          organizationId: 'org_1',
+          moduleId: 'mod_contract',
+        },
+      },
+      update: {
+        status: 'ENABLED',
+        expiresAt: new Date(endDate),
+        reason: 'Contract CON-304',
+        changedById: 'operator_1',
+      },
+      create: {
+        organizationId: 'org_1',
+        moduleId: 'mod_contract',
+        status: 'ENABLED',
+        expiresAt: new Date(endDate),
+        reason: 'Contract CON-304',
+        changedById: 'operator_1',
+      },
+    });
+  });
+});

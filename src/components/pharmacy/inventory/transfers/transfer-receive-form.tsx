@@ -10,9 +10,8 @@ export const selectClass =
   'mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
 
 /**
- * The closing receipt. Each open line is pre-filled with what is outstanding;
- * lowering a count turns the difference into a witnessed variance write-off, so
- * the evidence fields only matter when something arrived short.
+ * Receive all or part of the remaining delivery. Without variance evidence,
+ * unreceived units stay in transit. Explicit evidence closes a real shortfall.
  */
 export function TransferReceiveForm({
   transfer,
@@ -37,6 +36,7 @@ export function TransferReceiveForm({
       <input name="action" type="hidden" value="receive" />
       <input name="branchId" type="hidden" value={branchId} />
       <input name="transferId" type="hidden" value={transfer.id} />
+      <input name="receiptKey" type="hidden" value={crypto.randomUUID()} />
       {open.map((line) => (
         <label className="text-sm" key={line.id}>
           Received units — {line.medicineName} · batch {line.batchNumber}
@@ -57,7 +57,7 @@ export function TransferReceiveForm({
       ))}
       <fieldset className="grid gap-3 rounded-[var(--radius-sm)] bg-surface-sunken p-3 md:col-span-3 md:grid-cols-3">
         <legend className="px-1 text-xs text-text-muted">
-          Shortfall evidence — required only when a line arrived short
+          Close a permanent shortfall — leave blank for a partial delivery
         </legend>
         <label className="text-sm md:col-span-3">
           Variance reason
@@ -66,7 +66,7 @@ export function TransferReceiveForm({
         <label className="text-sm">
           Witness
           <select className={selectClass} defaultValue="" name="witnessId">
-            <option value="">No shortfall</option>
+            <option value="">Still in transit</option>
             {witnesses.map((witness) => (
               <option key={witness.id} value={witness.id}>
                 {witness.name ?? 'Unnamed colleague'}

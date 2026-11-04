@@ -2,7 +2,7 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { arrangementFor, PharmacyInventoryError } from './inventory';
+import { arrangementFor, assertArrangementReconciles, PharmacyInventoryError } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 
 /** Serialize recall-authority decisions that can overlap at batch or medicine scope. */
@@ -645,12 +645,78 @@ export async function dispatchTransfer(
   });
 }
 
+/** Schema-backed receipt provenance; stock movements have no transfer/note columns. */
+export function transferReceiptReference(transferId: string, lineId: string): string {
+  return `Transfer receipt ${JSON.stringify([transferId, lineId])}`;
+}
+
+/** Keep the physical arrangement valid when debiting a fraction of a transit pack. */
+export async function prepareTransferTransitRemoval(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    inventoryLotId: string;
+    stockLocationId: string;
+    units: number;
+    unitsPerPack: number;
+    transferId: string;
+    lineId: string;
+    idempotencyKeyPrefix: string;
+  }
+) {
+  const [balance] = await db.$queryRaw<
+    Array<{
+      onHandUnits: number;
+      sealedPacks: number;
+      looseUnits: number;
+    }>
+  >(Prisma.sql`SELECT "onHandUnits", "sealedPacks", "looseUnits" FROM "pharmacy_stock_balances"
+    WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId}
+      AND "inventoryLotId"=${input.inventoryLotId} AND "stockLocationId"=${input.stockLocationId}
+      AND "disposition"='IN_TRANSIT'::"PharmacyStockDisposition" FOR UPDATE`);
+  if (!balance || balance.onHandUnits < input.units)
+    throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+  assertArrangementReconciles({ ...balance, unitsPerPack: input.unitsPerPack });
+  const removedSealed = Math.min(balance.sealedPacks, Math.floor(input.units / input.unitsPerPack));
+  const removedLoose = input.units - removedSealed * input.unitsPerPack;
+  // Open only the pack needed for a fractional receipt, in the SAME transit
+  // bucket. Quantity stays unchanged; the append-only projection stays valid.
+  if (removedLoose > balance.looseUnits) {
+    await db.pharmacyStockMovement.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        inventoryLotId: input.inventoryLotId,
+        stockLocationId: input.stockLocationId,
+        kind: 'BREAK_PACK',
+        disposition: 'IN_TRANSIT',
+        quantityUnits: 0,
+        sealedPackDelta: -1,
+        looseUnitDelta: input.unitsPerPack,
+        actorId: scope.actorId,
+        reason: transferReceiptReference(input.transferId, input.lineId),
+        idempotencyKey: `${input.idempotencyKeyPrefix}:transit-break`,
+      },
+    });
+  }
+  return { sealedPacks: removedSealed, looseUnits: removedLoose };
+}
+
+/** A retry uses the same receipt key; a later delivery must use a new key. */
+export async function lockTransferReceipt(db: ScopedDb, scope: LedgerScope, transferId: string) {
+  await db.$queryRaw(Prisma.sql`SELECT "id" FROM "pharmacy_interbranch_transfers"
+    WHERE "organizationId"=${scope.organizationId} AND "id"=${transferId}
+      AND "toBranchId"=${scope.branchId} FOR UPDATE`);
+}
+
 export async function receiveTransferLine(
   db: ScopedDb,
   scope: LedgerScope,
   input: { transferId: string; lineId: string; receivedUnits: number; idempotencyKeyPrefix: string }
 ) {
   assertPositive(input.receivedUnits);
+  // Both receipt entry points use this lock before reading cumulative units.
+  await lockTransferReceipt(db, scope, input.transferId);
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: {
       id: input.transferId,
@@ -660,19 +726,49 @@ export async function receiveTransferLine(
     include: { lines: true },
   });
   const line = transfer?.lines.find((one) => one.id === input.lineId);
-  if (
-    !transfer ||
-    !line ||
-    !['DISPATCHED', 'PARTIALLY_RECEIVED', 'EXCEPTION'].includes(transfer.status)
-  )
-    throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  if (!transfer || !line) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  const existing = await db.pharmacyStockMovement.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      idempotencyKey: `${input.idempotencyKeyPrefix}:in`,
+      kind: 'TRANSFER_IN',
+    },
+  });
+  if (existing) {
+    if (
+      existing.reason !== transferReceiptReference(transfer.id, line.id) ||
+      existing.quantityUnits !== input.receivedUnits ||
+      existing.stockLocationId !== line.destinationStockLocationId
+    )
+      throw new PharmacyInventoryError('INVALID_STATE');
+    return transfer;
+  }
+  if (!['DISPATCHED', 'PARTIALLY_RECEIVED', 'EXCEPTION'].includes(transfer.status))
+    throw new PharmacyInventoryError('INVALID_STATE');
   if (line.receivedUnits + input.receivedUnits > line.quantityUnits)
     throw new PharmacyInventoryError('INVALID_UNITS');
   const source = await db.pharmacyInventoryLot.findFirstOrThrow({
-    where: { id: line.sourceLotId },
+    where: {
+      id: line.sourceLotId,
+      organizationId: scope.organizationId,
+      branchId: transfer.fromBranchId,
+    },
     include: { batch: true },
   });
-  const a = arrangementFor(input.receivedUnits, source.unitsPerPack);
+  const removed = await prepareTransferTransitRemoval(
+    db,
+    { ...scope, branchId: transfer.fromBranchId },
+    {
+      inventoryLotId: source.id,
+      stockLocationId: line.sourceStockLocationId,
+      units: input.receivedUnits,
+      unitsPerPack: source.unitsPerPack,
+      transferId: transfer.id,
+      lineId: line.id,
+      idempotencyKeyPrefix: input.idempotencyKeyPrefix,
+    }
+  );
   await db.pharmacyStockMovement.create({
     data: {
       organizationId: scope.organizationId,
@@ -682,9 +778,10 @@ export async function receiveTransferLine(
       kind: 'TRANSFER_OUT',
       disposition: 'IN_TRANSIT',
       quantityUnits: -input.receivedUnits,
-      sealedPackDelta: -a.sealedPacks,
-      looseUnitDelta: -a.looseUnits,
+      sealedPackDelta: -removed.sealedPacks,
+      looseUnitDelta: -removed.looseUnits,
       actorId: scope.actorId,
+      reason: transferReceiptReference(transfer.id, line.id),
       idempotencyKey: `${input.idempotencyKeyPrefix}:transit-out`,
     },
   });
@@ -713,28 +810,25 @@ export async function receiveTransferLine(
       kind: 'TRANSFER_IN',
       disposition: 'AVAILABLE',
       quantityUnits: input.receivedUnits,
-      sealedPackDelta: a.sealedPacks,
-      looseUnitDelta: a.looseUnits,
+      sealedPackDelta: removed.sealedPacks,
+      looseUnitDelta: removed.looseUnits,
       actorId: scope.actorId,
-      idempotencyKey: `${input.idempotencyKeyPrefix}:received`,
+      reason: transferReceiptReference(transfer.id, line.id),
+      idempotencyKey: `${input.idempotencyKeyPrefix}:in`,
     },
   });
-  await db.pharmacyInterbranchTransferLine.update({
-    where: { id: line.id },
+  const updatedLine = await db.pharmacyInterbranchTransferLine.updateMany({
+    where: { id: line.id, organizationId: scope.organizationId, transferId: transfer.id },
     data: { receivedUnits: { increment: input.receivedUnits } },
   });
+  if (updatedLine.count !== 1) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
   const totalReceived =
-    transfer.lines.reduce((n, one) => n + one.receivedUnits, 0) + input.receivedUnits;
-  const totalExpected = transfer.lines.reduce((n, one) => n + one.quantityUnits, 0);
+    transfer.lines.reduce((n, l) => n + l.receivedUnits, 0) + input.receivedUnits;
+  const totalExpected = transfer.lines.reduce((n, l) => n + l.quantityUnits, 0);
   return db.pharmacyInterbranchTransfer.update({
-    where: { id: transfer.id },
+    where: { organizationId_id: { organizationId: scope.organizationId, id: transfer.id } },
     data: {
-      status:
-        totalReceived === totalExpected
-          ? 'RECEIVED'
-          : input.receivedUnits + line.receivedUnits === line.quantityUnits
-            ? 'PARTIALLY_RECEIVED'
-            : 'EXCEPTION',
+      status: totalReceived === totalExpected ? 'RECEIVED' : 'PARTIALLY_RECEIVED',
       receivedAt: totalReceived === totalExpected ? new Date() : null,
     },
   });

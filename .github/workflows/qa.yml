@@ -106,6 +106,8 @@ jobs:
       OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       PHARMACY_ORDERING_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       PHARMACY_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      # Trusted pg_trgm functions are superuser-owned; only fixture ACL setup uses this URL.
+      PG_TRGM_TEST_OWNER_DATABASE_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/devfathom_gate_test
       RESTAURANT_ACTOR_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       WHA1168_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       WHA1198_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
@@ -307,7 +309,8 @@ jobs:
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
           run lint bun run lint
 
-          git diff --name-only -z b20b577f..HEAD -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist
+          prettier_base='${{ github.event.pull_request.base.sha || github.event.before || github.sha }}'
+          git diff --name-only -z "$prettier_base"..HEAD -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist
           record prettier-file-list "$?"
           if [ -s gate/prettier-files.zlist ]; then
             xargs -0 bunx prettier --check < gate/prettier-files.zlist >gate/prettier-check.stdout.log 2>gate/prettier-check.stderr.log
@@ -428,6 +431,15 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
+      - name: Verify Restaurant integrated environment contract
+        env:
+          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/restaurant_e2e_gate
+          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/restaurant_e2e_gate
+          RESTAURANT_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/restaurant_e2e_gate
+          RESTAURANT_INTEGRATED_E2E: '1'
+        run: >-
+          bun -e "import { restaurantE2eEnvironment } from
+          './scripts/restaurant-e2e-database.ts'; restaurantE2eEnvironment();"
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
       - name: 00-clean-build

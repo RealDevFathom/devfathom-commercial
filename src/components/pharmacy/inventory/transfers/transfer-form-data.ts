@@ -55,6 +55,11 @@ export function receiveInput(data: FormData) {
       receivedUnits: wholeUnits(text(data, key), 0),
     }));
   if (lines.length === 0) throw new Error('INVALID_UNITS');
+  const receiptKey = text(data, 'receiptKey');
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(receiptKey)
+  )
+    throw new Error('Reload the transfer form before receiving stock.');
   const reason = text(data, 'varianceReason');
   const witnessId = text(data, 'witnessId');
   const evidenceRef = text(data, 'evidenceRef');
@@ -64,6 +69,6 @@ export function receiveInput(data: FormData) {
     lines,
     // Partial evidence is no evidence: the router refuses a shortfall without all three.
     variance: reason && witnessId && evidenceRef ? { reason, witnessId, evidenceRef } : undefined,
-    idempotencyKeyPrefix: `ui-receive-close:${transferId}`,
+    idempotencyKeyPrefix: `ui-receive-close:${transferId}:${receiptKey}`,
   };
 }

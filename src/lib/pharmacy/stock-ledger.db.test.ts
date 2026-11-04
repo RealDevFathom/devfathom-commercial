@@ -992,81 +992,143 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     }
   );
 
-  it('dispatches into transit, records a batch receipt discrepancy, and enforces destination branch scope', async () => {
-    const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-workflow');
-    const destinationBranch = `branch_transfer_destination_${suffix}`;
-    const setup = await inOrg(ORG_A, async (db) => {
-      await ensureBranch(db, ORG_A, destinationBranch);
-      const destination = await db.pharmacyStockLocation.create({
-        data: {
-          organizationId: ORG_A,
-          branchId: destinationBranch,
-          code: `DEST-${tag('transfer')}`,
-          name: 'Destination branch',
-          kind: 'STORE',
-        },
-      });
-      const { lot } = await stockLot(db, fixture, {
-        expiresAt: LATER,
-        units: 40,
-        label: 'transfer-workflow',
-      });
-      const transfer = await deps.operations.allocateTransfer(db, scopeOf(fixture), {
-        toBranchId: destinationBranch,
-        lines: [
-          {
-            sourceLotId: lot.id,
-            sourceStockLocationId: fixture.locationId,
-            destinationStockLocationId: destination.id,
-            quantityUnits: 30,
+  it.each([
+    { sent: 10, first: 4, middle: 0 },
+    { sent: 30, first: 20, middle: 0 },
+    { sent: 20, first: 4, middle: 10 },
+  ])(
+    'keeps $sent dispatched units conserved across receipt$first, retries and completion (#357)',
+    async ({ sent, first, middle }) => {
+      const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-workflow');
+      const destinationBranch = `destination_${tag('357')}`;
+      const setup = await inOrg(ORG_A, async (db) => {
+        await ensureBranch(db, ORG_A, destinationBranch);
+        const destination = await db.pharmacyStockLocation.create({
+          data: {
+            organizationId: ORG_A,
+            branchId: destinationBranch,
+            code: tag('DEST357'),
+            name: 'Destination branch',
+            kind: 'STORE',
           },
-        ],
-      });
-      await deps.operations.approveTransfer(
-        db,
-        { ...scopeOf(fixture), actorId: 'transfer_approver' },
-        transfer.id
-      );
-      await deps.operations.dispatchTransfer(db, scopeOf(fixture), transfer.id, tag('dispatch'));
-      return { transferId: transfer.id, lineId: transfer.lines[0]!.id, lotId: lot.id };
-    });
-    const dispatched = await inOrg(ORG_A, (db) =>
-      db.pharmacyStockBalance.findMany({ where: { inventoryLotId: setup.lotId } })
-    );
-    expect(dispatched).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ disposition: 'AVAILABLE', onHandUnits: 10 }),
-        expect.objectContaining({ disposition: 'IN_TRANSIT', onHandUnits: 30 }),
-      ])
-    );
-    const received = await inOrg(ORG_A, (db) =>
-      deps.operations.receiveTransferLine(
-        db,
-        { organizationId: ORG_A, branchId: destinationBranch, actorId: 'receiver' },
-        {
-          transferId: setup.transferId,
-          lineId: setup.lineId,
-          receivedUnits: 20,
-          idempotencyKeyPrefix: tag('receive'),
-        }
-      )
-    );
-    expect(received.status).toBe('EXCEPTION');
-    await expect(
-      inOrg(ORG_A, (db) =>
-        deps.operations.receiveTransferLine(
+        });
+        const { lot } = await stockLot(db, fixture, {
+          expiresAt: LATER,
+          units: 40,
+          label: 'transfer357',
+        });
+        const transfer = await deps.operations.allocateTransfer(db, scopeOf(fixture), {
+          toBranchId: destinationBranch,
+          lines: [
+            {
+              sourceLotId: lot.id,
+              sourceStockLocationId: fixture.locationId,
+              destinationStockLocationId: destination.id,
+              quantityUnits: sent,
+            },
+          ],
+        });
+        await deps.operations.approveTransfer(
           db,
-          { organizationId: ORG_A, branchId: 'wrong_destination', actorId: 'receiver' },
-          {
-            transferId: setup.transferId,
-            lineId: setup.lineId,
-            receivedUnits: 10,
-            idempotencyKeyPrefix: tag('wrong-branch'),
-          }
-        )
-      )
-    ).rejects.toMatchObject({ reason: 'CROSS_BRANCH_REFERENCE' });
-  });
+          { ...scopeOf(fixture), actorId: 'transfer_approver' },
+          transfer.id
+        );
+        await deps.operations.dispatchTransfer(db, scopeOf(fixture), transfer.id, tag('dispatch'));
+        return { transferId: transfer.id, lineId: transfer.lines[0]!.id, lotId: lot.id };
+      });
+      const firstKey = tag('receipt1');
+      const finalKey = tag('receipt2');
+      const receive = (units: number, key: string, branchId = destinationBranch) =>
+        inOrg(ORG_A, (db) =>
+          deps.operations.receiveTransferLine(
+            db,
+            { organizationId: ORG_A, branchId, actorId: 'receiver' },
+            {
+              transferId: setup.transferId,
+              lineId: setup.lineId,
+              receivedUnits: units,
+              idempotencyKeyPrefix: key,
+            }
+          )
+        );
+      const firstReceipt = await receive(first, firstKey);
+      expect(firstReceipt).toMatchObject({ status: 'PARTIALLY_RECEIVED', receivedAt: null });
+      const partial = await inOrg(ORG_A, async (db) => ({
+        transit: await db.pharmacyStockBalance.findFirst({
+          where: { inventoryLotId: setup.lotId, disposition: 'IN_TRANSIT' },
+        }),
+        received: await db.pharmacyStockMovement.aggregate({
+          where: {
+            reason: deps.operations.transferReceiptReference(setup.transferId, setup.lineId),
+            branchId: destinationBranch,
+            kind: 'TRANSFER_IN',
+          },
+          _sum: { quantityUnits: true },
+        }),
+      }));
+      expect(partial.transit?.onHandUnits).toBe(sent - first);
+      expect(partial.transit!.sealedPacks * 10 + partial.transit!.looseUnits).toBe(sent - first);
+      expect(partial.received._sum?.quantityUnits).toBe(first);
+      // Concurrent duplicate transport retries must not append movements or lots.
+      await Promise.all([receive(first, firstKey), receive(first, firstKey)]);
+      await expect(receive(first + 1, firstKey)).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+      await expect(receive(sent - first + 1, tag('over'))).rejects.toMatchObject({
+        reason: 'INVALID_UNITS',
+      });
+      await expect(
+        receive(sent - first, tag('foreign'), 'wrong_destination')
+      ).rejects.toMatchObject({ reason: 'CROSS_BRANCH_REFERENCE' });
+      if (middle) await receive(middle, tag('middle'));
+      const finished = await Promise.all([
+        receive(sent - first - middle, finalKey),
+        receive(sent - first - middle, finalKey),
+      ]);
+      expect(finished[0]).toMatchObject({ status: 'RECEIVED', receivedAt: expect.any(Date) });
+      await receive(first, firstKey); // An old retry after final completion is also a no-op.
+      const final = await inOrg(ORG_A, async (db) => ({
+        line: await db.pharmacyInterbranchTransferLine.findFirstOrThrow({
+          where: { id: setup.lineId },
+        }),
+        movements: await db.pharmacyStockMovement.findMany({
+          where: {
+            reason: deps.operations.transferReceiptReference(setup.transferId, setup.lineId),
+          },
+        }),
+        transit: await db.pharmacyStockBalance.findFirst({
+          where: { inventoryLotId: setup.lotId, disposition: 'IN_TRANSIT' },
+        }),
+        destination: await db.pharmacyStockBalance.findMany({
+          where: { branchId: destinationBranch, disposition: 'AVAILABLE' },
+        }),
+      }));
+      const incoming = final.movements.filter(
+        (m) => m.kind === 'TRANSFER_IN' && m.branchId === destinationBranch
+      );
+      const outgoing = final.movements.filter(
+        (m) => m.kind === 'TRANSFER_OUT' && m.branchId === BRANCH_A
+      );
+      const deliveries = middle ? 3 : 2;
+      expect(incoming).toHaveLength(deliveries);
+      expect(new Set(incoming.map((m) => m.inventoryLotId)).size).toBe(deliveries);
+      for (const receipt of incoming) {
+        const debit = outgoing.find(
+          (m) => m.idempotencyKey === receipt.idempotencyKey.replace(/:in$/, ':transit-out')
+        )!;
+        expect(debit).toBeDefined();
+        expect(receipt.sealedPackDelta + debit.sealedPackDelta).toBe(0);
+        expect(receipt.looseUnitDelta + debit.looseUnitDelta).toBe(0);
+      }
+      expect(incoming.reduce((n, m) => n + m.quantityUnits, 0)).toBe(sent);
+      expect(outgoing.reduce((n, m) => n + m.quantityUnits, 0)).toBe(-sent);
+      expect(final.destination.reduce((n, lot) => n + lot.onHandUnits, 0)).toBe(sent);
+      expect(final.transit?.onHandUnits).toBe(0);
+      expect(final.line.receivedUnits).toBe(sent);
+      expect(final.movements.some((m) => m.kind === 'WRITE_OFF')).toBe(false);
+      expect(final.movements.filter((m) => m.kind === 'BREAK_PACK')).toHaveLength(
+        first % 10 ? 1 : 0
+      );
+    }
+  );
 
   it('serializes competing dispatches so the same units cannot leave twice', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-race');
