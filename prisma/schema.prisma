@@ -246,6 +246,7 @@ model PharmacyBranch {
   sopRecordLinks                           PharmacySopRecordLink[]
   sopEvidenceCaptures                      PharmacySopEvidenceCapture[]
   sopSiteSettings                          PharmacySopSiteSetting[]
+  sopReworkNotes                           PharmacySopReworkNote[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -389,6 +390,32 @@ model PharmacySopSiteSetting {
   @@unique([organizationId, id], map: "pharmacy_sop_site_settings_org_id_key")
   @@index([organizationId, pharmacyBranchId, createdAt], map: "pharmacy_sop_site_settings_branch_time_idx")
   @@map("pharmacy_sop_site_settings")
+}
+
+/// DEV-751: APPEND-ONLY rework note. After a reviewer sends a procedure back,
+/// the engine keeps its steps completed (re-completing is a no-op), so what the
+/// worker changed in response is recorded here: one or more notes, optionally
+/// per step, written after the latest send-back. Resubmission requires at least
+/// one. `occurrenceId`, `occurrenceStepId` and `rejectionVerificationId`
+/// reference the shared engine tables through SQL-only foreign keys; the author
+/// is server-derived. Never gates any pharmacy workflow.
+model PharmacySopReworkNote {
+  id                      String   @id @default(cuid())
+  organizationId          String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  pharmacyBranchId        String
+  occurrenceId            String
+  occurrenceStepId        String?
+  rejectionVerificationId String
+  note                    String
+  authorStaffProfileId    String
+  authorUserId            String
+  createdAt               DateTime @default(now())
+
+  pharmacyBranch PharmacyBranch @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_sop_rework_notes_org_id_key")
+  @@index([organizationId, pharmacyBranchId, occurrenceId], map: "pharmacy_sop_rework_notes_occurrence_idx")
+  @@map("pharmacy_sop_rework_notes")
 }
 
 /// INV-10 — the deliberately narrow doorway into the chain purchasing view.
