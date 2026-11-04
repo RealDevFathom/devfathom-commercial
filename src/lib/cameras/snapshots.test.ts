@@ -20,7 +20,11 @@ vi.mock('node:fs/promises', () => ({
 vi.mock('@azure/identity', () => ({ DefaultAzureCredential: vi.fn() }));
 vi.mock('@azure/storage-blob', () => ({ BlobServiceClient: vi.fn() }));
 import * as storage from '@/lib/storage';
-import { storeCameraSnapshot } from './snapshots';
+import {
+  CAMERA_SNAPSHOT_MAX_BYTES,
+  isAcceptableCameraSnapshot,
+  storeCameraSnapshot,
+} from './snapshots';
 
 beforeEach(() => {
   files.clear();
@@ -99,6 +103,41 @@ test('empty snapshots fail before storage', async () => {
     )
   ).rejects.toThrow('Camera snapshot unavailable.');
   expect(write).not.toHaveBeenCalled();
+});
+
+const png = (size: number) => {
+  const bytes = new Uint8Array(size);
+  bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
+  return bytes;
+};
+
+test.each([
+  ['JPEG bytes', new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46])],
+  ['HTML error page', new TextEncoder().encode('<html>401 rtsp://user:secret@cam</html>')],
+  ['HLS manifest', new TextEncoder().encode('#EXTM3U\n#EXTINF:2,\nsegment-1.ts\n')],
+  ['signature only', png(8)],
+  ['oversized PNG', png(CAMERA_SNAPSHOT_MAX_BYTES + 1)],
+  ['non-byte value', 'iVBORw0KGgo=' as unknown as Uint8Array],
+])('%s is refused before storage with a fixed message', async (_label, bytes) => {
+  const write = vi.spyOn(storage, 'putUpload');
+  const failure = storeCameraSnapshot(
+    { getSnapshot: async () => bytes },
+    { organizationId: 'tenant-a', cameraId: 'sim-camera-1' }
+  );
+  await expect(failure).rejects.toThrow(/^Camera snapshot unavailable\.$/);
+  await failure.catch((error: Error) => expect(error.message).not.toContain('secret'));
+  expect(write).not.toHaveBeenCalled();
+  expect(files.size).toBe(0);
+});
+
+test('a PNG at the size bound is accepted', async () => {
+  const bytes = png(CAMERA_SNAPSHOT_MAX_BYTES);
+  expect(isAcceptableCameraSnapshot(bytes)).toBe(true);
+  const saved = await storeCameraSnapshot(
+    { getSnapshot: async () => bytes },
+    { organizationId: 'tenant-a', cameraId: 'sim-camera-1' }
+  );
+  expect(saved.byteLength).toBe(CAMERA_SNAPSHOT_MAX_BYTES);
 });
 
 test('storage errors propagate without reporting a successful capture', async () => {
