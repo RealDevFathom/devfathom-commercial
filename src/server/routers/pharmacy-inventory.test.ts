@@ -981,7 +981,7 @@ function confirmAdmin(tenant = 'org_a') {
 
 const asksForAdminRecord = () =>
   db.user.findFirst.mock.calls.some(
-    ([args]: [{ where?: { role?: string } }]) => args?.where?.role === 'ADMIN'
+    (call) => (call[0] as { where?: { role?: string } } | undefined)?.where?.role === 'ADMIN'
   );
 
 /** The branch stock reads carry no capability of their own on develop. */
