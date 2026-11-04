@@ -24,6 +24,7 @@ function fixture(camera: { id: string } | null) {
       // No prior close for the day; the evidence subject lookup finds the new one.
       findFirst: vi.fn(async ({ where }) => (where.id === 'close-1' ? { id: 'close-1' } : null)),
       create: vi.fn(async ({ data }) => ({ id: 'close-1', ...data })),
+      update: vi.fn().mockRejectedValue(new Error('pharmacy_daily_closes is append-only')),
     },
     pharmacySale: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
@@ -39,10 +40,22 @@ function fixture(camera: { id: string } | null) {
   return db;
 }
 
-const run = (db: ReturnType<typeof fixture>) =>
-  cutPharmacyDailyClose(db as unknown as ScopedDb, scope, input);
+const run = (db: ReturnType<typeof fixture>, varianceNote?: string) =>
+  cutPharmacyDailyClose(db as unknown as ScopedDb, scope, { ...input, varianceNote });
 
 describe('DAILY_CLOSE counter evidence wiring (service-level, integrated tip)', () => {
+  it('writes a variance note while inserting the append-only close row', async () => {
+    const db = fixture(null);
+    await expect(run(db, '  Counted one rupee short  ')).resolves.toMatchObject({
+      id: 'close-1',
+      reason: 'Counted one rupee short',
+    });
+    expect(db.pharmacyDailyClose.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ reason: 'Counted one rupee short' }),
+    });
+    expect(db.pharmacyDailyClose.update).not.toHaveBeenCalled();
+  });
+
   it('writes the evidence outbox row on the close client, after the close row', async () => {
     const db = fixture({ id: 'camera-1' });
     await expect(run(db)).resolves.toMatchObject({ id: 'close-1', sequence: 1, isFinal: true });
