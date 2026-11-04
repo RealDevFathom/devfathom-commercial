@@ -1,55 +1,71 @@
 # HANDOFF — claude-labelled Linear batch
 
-Last updated: 2026-11-02 22:10 UTC · Branch: `saad/nice-thompson-99m17p` · PR:
+Last updated: 2026-11-04 03:06 UTC · Branch: `saad/nice-thompson-99m17p` · PR:
 [RealDevFathom/devfathom-commercial#1223](https://github.com/RealDevFathom/devfathom-commercial/pull/1223)
-(into `develop`, open, not merged)
+(into `develop`, open, not merged, mergeable) · Head: `b135a982`
 
 ## Resume here
 
-DEV-576 is done and deployed to develop. It lives on PR #1238, branch
-`feat/dev-576-ai-providers`, with its own HANDOFF. This batch resumed at 21:47 UTC.
+DEV-576 is done: #1238 merged into develop at about 01:00 UTC on 2026-11-03 (not by me). Its log is
+the "HANDOFF — DEV-576" section below.
 
-- **Integrated and pushed (21:48 UTC, head `3a578a60`):** the 14 finished agent commits, with
-  trailers stripped; 184/184 touched tests pass.
+- **Since 2026-11-04 02:15 UTC:**
+  - **`ef2719d5` (DEV-249):** the meetings form fields are 44px tall. The Studio visual QA matrix
+    is done; screenshots and `matrix.md` are in scratchpad `visual-qa-meetings/`. Every cell
+    passed except touch targets (34–38px), which this fixes.
+  - **`eb31d46f`:** merges develop (#1238, #1279, #1240, #1224, #1390). Two conflicts:
+    - `src/app/api/assistant/route.ts`: both import sets kept;
+    - `HANDOFF.md`: this section first, develop's sections after it, unchanged.
 
-  | Group     | Commits                                                                | Issues                                                           |
-  | --------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------- |
-  | reports   | `6e86f60e`, `93c08770`, `de24163b`                                     | DEV-595, DEV-601 work pack, DEV-596                              |
-  | marketing | `4e8c2cec`, `c07c8605`, `64ff270c`, `bdc8081a`, `33a76c92`             | DEV-606, DEV-591, DEV-597, DEV-601 marketing                     |
-  | panel     | `e2a76920`, `116f2830`, `6b43e67d`, `90894229`, `28c932c0`, `3a578a60` | DEV-584/605, DEV-599, DEV-598, DEV-603, DEV-600/592/593, DEV-604 |
+    `tsc --noEmit` has 0 errors; `vitest src/app/api/assistant` is 109/109.
 
-- **Linear:** a ✅ Finished comment is posted on all 17 issues: DEV-595, 601, 596, 606, 591,
-  597, 584, 605, 599, 598, 603, 600, 592, 593, 604, 602 and 594. No status was changed.
-- **Fixes integrated and pushed (22:05 UTC, head `bc50cd65`):**
-  - `9bf8e9a0`: the migrations.
-    - Security finding 2 (explicit `BEGIN`/`COMMIT`) and finding 3 (idempotent re-runs). Every
-      changed file re-runs cleanly; there are 171 + 125 DB tests.
-    - Honest custody and audit-trigger comments.
-  - `f80590a9` (DEV-249): the meeting forms gain an End date and judge full instants. A meeting
-    that crosses midnight is allowed. **The Studio visual QA matrix for the new End date field
-    is not done yet.**
-  - `8089090f` (DEV-347): the seed's P2002 hint lists the documented rebuild.
-  - `bc50cd65` (DEV-582): Ask Fathom pharmacy tools answer in the workspace locale. The growth
-    cards and marketing assist remain, so a progress comment was posted, not Finished.
-  - Tests: 197 + 417 related tests pass. A full tsc run is in progress (scratchpad
-    `pr1223-tsc.txt`).
-- **#1223:** a reply to the security review is posted
-  (https://github.com/RealDevFathom/devfathom-commercial/pull/1223#issuecomment-6589646259),
-  with a re-run requested.
-- **Full tsc at `bc50cd65`:** only the 4 baseline errors develop also has.
-- **PR #1223 body:** rewritten at 22:10 UTC with both batches, the fixes, the open decision and
-  the follow-ups.
-- **Remaining on this PR:**
-  - Security finding 1 (needs the user's decision).
-  - The Studio visual QA for the meetings End date field.
-  - The QA/Security re-run.
-- **Waiting on the user:** security finding 1. The append-only trigger on `audit_logs`
-  conflicts with #1165's retention DELETE. Proposal: a narrow carve-out under
-  `app.retention_purge_organization_id`.
+  - **`efe660e5` and `b135a982` (DEV-155): security finding 1 is fixed.** Migration
+    `20261102150000_audit_logs_retention_purge_exception` lets the append-only trigger allow
+    DELETE only when all four hold:
+    1. `app.retention_purge_organization_id` names the row's tenant;
+    2. `app.current_organization_id` is that same tenant;
+    3. the tenant's vertical is PHARMACY;
+    4. #1165's `public.pharmacy_record_retention_deadline()` exists and returns a finite
+       deadline that has passed.
+
+    UPDATE stays refused. `search_path` puts `pg_temp` last and the tables are
+    schema-qualified. Suite `tests/tenant-audit-retention-purge.db.test.ts` has 12 cases and
+    never skips, because the QA gate counts a skip as a failure.
+
+  - **Review:** an independent adversarial review (3 lenses, 2 skeptics per finding) confirmed
+    two test gaps and a `search_path` gap. All are fixed in `b135a982`.
+  - **Posted:**
+    - #1165, the one-line flag change and two interplay notes:
+      https://github.com/RealDevFathom/devfathom-commercial/pull/1165#issuecomment-6621378839
+    - #1223, the security reply:
+      https://github.com/RealDevFathom/devfathom-commercial/pull/1223#issuecomment-6621380681
+    - The PR body is rewritten.
+    - Linear progress comments on DEV-155, DEV-249 and DEV-576 (no status changes).
+- **Next step:** wait for the Security and QA re-run on #1223 at `b135a982`. Then fix whatever
+  they find, or answer it.
+- **Waiting on others:**
+  - #1165's owner: apply the one-line flag change, and decide the orphaned-audit-row conflict.
+    #1165's guard refuses deleting the audit rows of a deleted organization, which breaks
+    `tests/tenant-audit-append-only.db.test.ts` teardown once both merge.
+  - The Security and QA re-run on #1223.
 - **Follow-ups to propose, not in this PR:**
   - The pharmacy purge is blocked by `pharmacy_reject_append_only_change`.
   - Invoice numbers collide across tenants.
+  - The rest of DEV-582: growth cards and marketing assist.
 - **Uncommitted / half-written:** nothing in this checkout.
+
+**Local DBs for the retention suite** (Postgres 16; start it with `pg_ctlcluster 16 main start`):
+
+| Database          | Owner                                                                           | Use                                        |
+| ----------------- | ------------------------------------------------------------------------------- | ------------------------------------------ |
+| `audit_ret_test`  | postgres, a superuser                                                           | runtime role `audit_ret_app`               |
+| `audit_gate_test` | `audit_gate_owner` (NOSUPERUSER NOBYPASSRLS CREATEROLE, like CI's `gate_owner`) | runtime role `audit_gate_runtime`          |
+| `audit_gate_1165` | `audit_gate_owner`                                                              | the same, plus #1165's retention migration |
+
+```bash
+OWNER_DATABASE_URL=postgresql://audit_gate_owner:audit-gate-owner-local@localhost:5432/audit_gate_test \
+  bunx vitest run tests/tenant-audit-retention-purge.db.test.ts
+```
 
 ## Rules in force
 
@@ -134,40 +150,25 @@ Then:
 
 ## Reviews
 
-PR #1223 at head `6b20958a` (mergeable, clean):
+PR #1223 at head `b135a982` (mergeable, clean):
 
-| Check                                              | Verdict                          | Notes                                                                 |
-| -------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------- |
-| Machine checks (GitHub check runs)                 | none reported                    | No check runs are attached to this PR. `qa.yml` did not run on it.    |
-| Codex code review                                  | ✅ no findings                   | At `8fabfc81`. Re-runs on each push.                                  |
-| Codex security review                              | ✅ completed, no findings posted | At `8fabfc81`.                                                        |
-| Security review comment (19:16 UTC, at `b5e29ad0`) | ⚠️ 3 findings + 1 note           | See the list below the table. Not a merge verdict.                    |
-| QA (human)                                         | not started                      | —                                                                     |
-| Internal adversarial review (first 10 commits)     | done                             | 3 confirmed low findings plus 1 disputed. Queued under "Resume here". |
+| Check                                                  | Verdict                          | Notes                                                                                                                                               |
+| ------------------------------------------------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Machine checks (GitHub check runs)                     | none reported                    | No check runs are attached to this PR. `qa.yml` did not run on it.                                                                                  |
+| Codex code review                                      | ✅ no findings                   | At `8fabfc81`.                                                                                                                                      |
+| Codex security review                                  | ✅ completed, no findings posted | At `8fabfc81`.                                                                                                                                      |
+| Security review (WhatTheStack1), at `b5e29ad0`         | ⚠️ 3 findings + 1 note           | Findings 2 and 3 were fixed in `9bf8e9a0`.                                                                                                          |
+| Security re-run, at `754101c2`                         | ⚠️ finding 1 still open          | Findings 2 and 3 were confirmed fixed.                                                                                                              |
+| Finding 1 fix (`efe660e5`, `b135a982`)                 | re-run requested                 | Reply: issuecomment-6621380681.                                                                                                                     |
+| Internal adversarial review of the retention exception | done                             | 6 findings. 2 confirmed (test gaps): fixed. 4 refuted: 1 hardening fixed anyway, 2 are #1165-side (posted there), 1 was integration with no defect. |
+| QA (human)                                             | not started on #1223             | —                                                                                                                                                   |
 
-Security review findings, verified against the files on 2026-11-02:
-
-1. **Retention vs append-only, blocking a merge of either PR.**
-   - Draft #1165 (DEV-96) expects a plain `DELETE` of expired audit rows of a live tenant to
-     succeed. Its fixture also expects it for non-pharmacy audit rows.
-   - Our `audit_logs_append_only` trigger (`090000`) refuses that.
-   - **Proposed carve-out, waiting on the user's decision:** allow `DELETE` (never `UPDATE`)
-     only when `app.is_platform_admin` is set and `app.retention_purge_organization_id`
-     equals `OLD."organizationId"`. #1165's coordinator sets that flag inside its
-     transaction, and its own guard still enforces the deadline and legal holds, so both
-     triggers must pass.
-2. **Transactions.** Wrap `090200` (and `090100`) in `BEGIN;`/`COMMIT;` like `090300`, since
-   they use `set_config(..., true)` before writing to FORCE-RLS tables. Develop is mixed
-   (6 of 19 such migrations are wrapped), but the fix is cheap. Queued after DEV-576.
-3. **Idempotency.**
-   - `090000`: `CREATE OR REPLACE FUNCTION`, `DROP TRIGGER IF EXISTS`.
-   - `090100` / `090200`: `pg_constraint` guards, `CREATE INDEX IF NOT EXISTS`.
-   - `090300`: `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`.
-
-   Queued after DEV-576.
-
-4. **Note:** `scripts/verify-pharmacy-demo.ts` disables the trigger for a demo cleanup. It
-   is not a runtime path. No change.
+Security finding 1, as decided by the user ("Narrow exception"): allow DELETE, never UPDATE,
+only with the purge flag, a matching tenant context, a pharmacy tenant, and #1165's deadline
+function saying the row is past retention. It is implemented in `20261102150000`. #1165 needs
+one line, `set_config('app.retention_purge_organization_id', <org>, true)` in
+`runPharmacyRecordRetentionJob`'s tenant transaction, which is posted on #1165. I won't push to
+its branch.
 
 ## Checks: how to rerun, latest result
 
@@ -248,10 +249,17 @@ exceed 5s under heavy parallel load. 9/9 pass when run alone.
 
 # HANDOFF — DEV-576 (top priority)
 
-Last updated: 2026-11-02 21:47 UTC
+Last updated: 2026-11-04 03:06 UTC
 
+- **MERGED:** #1238 merged into develop as `47ea6c8d` at about 01:00 UTC on 2026-11-03. QA and
+  Security were both PASS at head `f8177f10`.
+- **Still open:**
+  - The Bedrock live test, waiting on AWS approval of the Anthropic use-case form. It's wired;
+    re-run the smoke script once approval clears.
+  - Saad's browser check of Ask Fathom on develop. Develop runs release `96d372bd`, which has
+    the same app code as the merged head.
 - **Branch:** `feat/dev-576-ai-providers`, from `develop` @ `47518cbf`.
-- **PR:** [RealDevFathom/devfathom-commercial#1238](https://github.com/RealDevFathom/devfathom-commercial/pull/1238). Open into develop, not merged; this session watches it.
+- **PR:** [RealDevFathom/devfathom-commercial#1238](https://github.com/RealDevFathom/devfathom-commercial/pull/1238). Merged; no longer watched.
 - **Linear:** https://linear.app/devfathom/issue/DEV-576. The PR link and live results are posted there.
 - **Other work:** the claude-label batch lives on branch `saad/nice-thompson-99m17p`, PR
   https://github.com/RealDevFathom/devfathom-commercial/pull/1223, which has its own `HANDOFF.md`.
