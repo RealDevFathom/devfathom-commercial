@@ -246,7 +246,30 @@ describe('PharmacyPrinterSettings', () => {
     for (const leak of [/kitchen/i, /KOT/, /KDS/, /print routing/i, /enrol/i, /station/i]) {
       expect(text).not.toMatch(leak);
     }
-    expect(screen.getByText(/is not available for the pharmacy yet/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/without the print dialog, is not\s+available here yet/)
+    ).toBeInTheDocument();
+  });
+
+  it('puts USB first, keeps network, Bluetooth and A4, and names no printer brand', () => {
+    render(<PharmacyPrinterSettings canEdit={false} />);
+    const guide = screen
+      .getByRole('heading', { name: 'How your printer connects' })
+      .closest('[data-slot="section-card"]') as HTMLElement;
+    const titles = within(guide)
+      .getAllByRole('listitem')
+      .map((item) => item.querySelector('p')?.textContent);
+    expect(titles).toEqual([
+      'USB thermal printer (set up first)',
+      'Network thermal printer (Wi-Fi or Ethernet)',
+      'Bluetooth thermal printer',
+      'A4 office printer',
+    ]);
+    expect(guide).toHaveTextContent(/Bluetooth Low Energy only cannot be used/);
+    expect(guide).toHaveTextContent(/No printer model or connection is listed as supported/);
+    for (const brand of [/epson/i, /canon/i, /pixma/i, /star micronics/i, /xprinter/i]) {
+      expect(document.body.textContent).not.toMatch(brand);
+    }
   });
 
   it('resets the test result when switching branch', () => {

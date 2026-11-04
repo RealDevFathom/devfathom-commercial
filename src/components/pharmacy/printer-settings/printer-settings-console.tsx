@@ -492,13 +492,7 @@ export function PharmacyPrinterSettings({ canEdit }: { canEdit: boolean }) {
         </div>
       )}
 
-      <SectionCard title="Direct thermal printing" titleLevel={2}>
-        <p className="text-sm text-text-body">
-          Sending receipts straight to a thermal printer, without the browser dialog, is not
-          available for the pharmacy yet. Until it is, receipts and test pages print through this
-          computer’s print dialog, so the printer must be installed on this computer.
-        </p>
-      </SectionCard>
+      <PrinterConnectionGuide />
     </div>
   );
 }
@@ -566,6 +560,18 @@ function TestResult({
               For thermal printers: the roll is loaded with the printable side facing the head.
             </li>
             <li>
+              USB: the cable is firmly connected and the printer appears in this computer’s printer
+              list.
+            </li>
+            <li>
+              Network: the printer and this computer are on the same network, and the printer still
+              has the address it was added with.
+            </li>
+            <li>
+              Bluetooth: the printer is paired with this computer and added as a printer, not only
+              paired.
+            </li>
+            <li>
               If the Urdu line shows boxes, this computer has no Urdu font for printing; use a
               computer that has one.
             </li>
@@ -573,5 +579,60 @@ function TestResult({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * DEV-742: USB thermal first, with network and Bluetooth kept for other pharmacies. Wording
+ * stays connection-level and brand-neutral: nothing is marked compatible until the actual
+ * printer, driver and computer pass an authorized real-device test (DEV-744). Direct
+ * printing without the dialog (DEV-741) is not offered here until its API is on develop.
+ */
+const CONNECTIONS: ReadonlyArray<{ title: string; body: string }> = [
+  {
+    title: 'USB thermal printer (set up first)',
+    body: 'Connect the cable, install the printer’s driver so it appears in this computer’s printer list, then print a test page above on 58 mm or 80 mm.',
+  },
+  {
+    title: 'Network thermal printer (Wi-Fi or Ethernet)',
+    body: 'Give the printer a fixed address, add it to this computer’s printer list, and keep both on the same network.',
+  },
+  {
+    title: 'Bluetooth thermal printer',
+    body: 'Pair it in this computer’s settings and add it as a printer. Some Bluetooth thermal printers have no driver for computers, and printers that use Bluetooth Low Energy only cannot be used from the print dialog.',
+  },
+  {
+    title: 'A4 office printer',
+    body: 'Any printer installed on this computer with its own driver. Choose A4 above and print a test page.',
+  },
+];
+
+function PrinterConnectionGuide() {
+  return (
+    <SectionCard title="How your printer connects" titleLevel={2}>
+      <div className="space-y-4">
+        <p className="text-sm text-text-body">
+          Receipts and test pages print through this computer’s print dialog, so the printer must be
+          installed on this computer. Whether a connection works depends on the printer, its driver
+          and the computer’s operating system, not on DevFathom.
+        </p>
+        <ul className="grid gap-3 md:grid-cols-2">
+          {CONNECTIONS.map((connection) => (
+            <li
+              key={connection.title}
+              className="rounded-md border border-border-subtle bg-surface-page px-4 py-3"
+            >
+              <p className="text-sm font-semibold text-text-strong">{connection.title}</p>
+              <p className="mt-1 text-sm text-text-body">{connection.body}</p>
+            </li>
+          ))}
+        </ul>
+        <p className="text-xs text-text-muted">
+          Sending receipts straight to a thermal printer, without the print dialog, is not available
+          here yet. No printer model or connection is listed as supported until it has been tested
+          on real hardware.
+        </p>
+      </div>
+    </SectionCard>
   );
 }
