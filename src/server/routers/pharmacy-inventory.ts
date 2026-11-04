@@ -167,9 +167,14 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 }
 
 /**
- * DEV-211: the stock-creating and stock-removing mutations (createLocation,
- * receiveLot, createCount, writeOff) also need the actor to hold an active
- * assignment to the requested branch. Reads and other mutations keep scopeFor.
+ * DEV-211 / DEV-660: besides being an active branch of the session tenant, the
+ * requested branch must carry an active assignment for the session actor. It
+ * guards the stock-creating and stock-removing mutations (createLocation,
+ * receiveLot, createCount, writeOff), the branch stock reads, allocateForSale
+ * and every transfer step. A session ADMIN is not exempt.
+ *
+ * The other branch-scoped mutations still use the tenant-only scopeFor; that
+ * remaining gap is tracked on DEV-660 rather than widened here.
  */
 async function assignedScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const scope = await scopeFor(ctx, branch);
@@ -187,6 +192,26 @@ async function assignedScopeFor(ctx: TRPCContext, branch: string): Promise<Ledge
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
   return scope;
+}
+
+/**
+ * The active branches of the session tenant the session actor is assigned to —
+ * the same rule as assignedScopeFor, as a set. The inventory pages offer only
+ * these branches, so the default branch and a `?branch=` value are both ones
+ * the gated reads will admit.
+ */
+export async function assignedInventoryBranchIds(ctx: TRPCContext): Promise<Set<string>> {
+  const { organizationId, actorId } = actorFor(ctx);
+  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId,
+      userId: actorId,
+      active: true,
+      branch: { organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  return new Set(rows.map((row) => row.branchId));
 }
 
 // ── PH-A5 — expiry board actions ────────────────────────────────────────────
@@ -747,7 +772,7 @@ export const pharmacyInventoryRouter = router({
   temperatureZoneStatuses: auditedProtectedProcedure
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedScopeFor(ctx, input.branchId);
       return loadTemperatureZoneStatuses(ctx.db, scope, new Date());
     }),
 
@@ -927,7 +952,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedScopeFor(ctx, input.branchId);
       try {
         // One transaction: the FOR UPDATE locks the allocator takes over the
         // candidate balances are what stop two counters overselling the same
@@ -994,7 +1019,7 @@ export const pharmacyInventoryRouter = router({
         // Both legs and the source lock commit together, so the units are never
         // AVAILABLE at the origin and IN_TRANSIT at the destination at once.
         return await ctx.db.$transaction(async (tx) =>
-          transferStock(txDb(tx), await scopeFor(ctx, input.branchId), {
+          transferStock(txDb(tx), await assignedScopeFor(ctx, input.branchId), {
             inventoryLotId: input.inventoryLotId,
             fromStockLocationId: input.fromStockLocationId,
             toStockLocationId: input.toStockLocationId,
@@ -1167,7 +1192,7 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await allocateTransfer(ctx.db, await scopeFor(ctx, input.branchId), input);
+        return await allocateTransfer(ctx.db, await assignedScopeFor(ctx, input.branchId), input);
       } catch (error) {
         domainError(error);
       }
@@ -1177,7 +1202,11 @@ export const pharmacyInventoryRouter = router({
     .input(z.object({ branchId, transferId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await approveTransfer(ctx.db, await scopeFor(ctx, input.branchId), input.transferId);
+        return await approveTransfer(
+          ctx.db,
+          await assignedScopeFor(ctx, input.branchId),
+          input.transferId
+        );
       } catch (error) {
         domainError(error);
       }
@@ -1198,7 +1227,7 @@ export const pharmacyInventoryRouter = router({
         return await ctx.db.$transaction(async (tx) =>
           dispatchTransfer(
             txDb(tx),
-            await scopeFor(ctx, input.branchId),
+            await assignedScopeFor(ctx, input.branchId),
             input.transferId,
             input.idempotencyKeyPrefix
           )
@@ -1223,7 +1252,7 @@ export const pharmacyInventoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          receiveTransferLine(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          receiveTransferLine(txDb(tx), await assignedScopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         domainError(error);
@@ -1313,13 +1342,13 @@ export const pharmacyInventoryRouter = router({
   nearExpiryBoard: auditedProtectedProcedure
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) =>
-      nearExpiryBoard(ctx.db, await scopeFor(ctx, input.branchId), new Date())
+      nearExpiryBoard(ctx.db, await assignedScopeFor(ctx, input.branchId), new Date())
     ),
 
   onHand: auditedProtectedProcedure
     .input(z.object({ branchId, medicineId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedScopeFor(ctx, input.branchId);
       return onHand(
         ctx.db,
         { organizationId: scope.organizationId, branchId: scope.branchId },
@@ -1537,7 +1566,7 @@ export const pharmacyInventoryRouter = router({
   stockSignalDashboard: protectedProcedure
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedScopeFor(ctx, input.branchId);
       return roleDashboard(
         ctx.db,
         { organizationId: scope.organizationId, branchId: scope.branchId },
@@ -1549,7 +1578,7 @@ export const pharmacyInventoryRouter = router({
   stockSignalDigest: protectedProcedure
     .input(z.object({ branchId, ownerUserId: z.string().trim().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedScopeFor(ctx, input.branchId);
       return ownerDigest(
         ctx.db,
         { organizationId: scope.organizationId, branchId: scope.branchId },
@@ -1577,7 +1606,7 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedScopeFor(ctx, input.branchId);
       await assertBranch(ctx.db, scope);
       const at = new Date();
       const { withinDays } = input;
@@ -2079,7 +2108,9 @@ export const pharmacyInventoryRouter = router({
   /** WHA-1603 INV-07 console: both directions for one branch, slip-ready. */
   transferBoard: auditedProtectedProcedure
     .input(z.object({ branchId }).strict())
-    .query(async ({ ctx, input }) => transferBoard(ctx.db, await scopeFor(ctx, input.branchId))),
+    .query(async ({ ctx, input }) =>
+      transferBoard(ctx.db, await assignedScopeFor(ctx, input.branchId))
+    ),
 
   /** WHA-1603 INV-07: close a transfer, posting any shortfall as a custody write-off. */
   receiveTransferWithVariance: inventoryControl
@@ -2114,7 +2145,7 @@ export const pharmacyInventoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          receiveTransferWithVariance(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          receiveTransferWithVariance(txDb(tx), await assignedScopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         domainError(error);

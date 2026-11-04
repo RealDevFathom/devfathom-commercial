@@ -34,7 +34,7 @@ vi.mock('@/lib/pharmacy/finance-postings', () => ({
 
 import { moduleForProcedure } from '@/lib/module-catalog';
 
-import { pharmacyInventoryRouter } from './pharmacy-inventory';
+import { assignedInventoryBranchIds, pharmacyInventoryRouter } from './pharmacy-inventory';
 import type { TRPCContext } from '../trpc';
 
 function model() {
@@ -97,6 +97,7 @@ function makeDb() {
     pharmacyPurchaseReturnLine: model(),
     pharmacyBranchAssignment: {
       findFirst: vi.fn().mockResolvedValue({ id: 'assignment_a' }),
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'branch_a' }]),
     },
     pharmacyBranch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch_a' }),
@@ -818,6 +819,123 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
         idempotencyKey: 'write-off-1',
       }),
   },
+  // DEV-660 — the branch stock reads.
+  {
+    name: 'nearExpiryBoard',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().nearExpiryBoard({ branchId: 'branch_a' }),
+  },
+  {
+    name: 'onHand',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().onHand({ branchId: 'branch_a', medicineId: 'medicine_1' }),
+  },
+  {
+    name: 'temperatureZoneStatuses',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().temperatureZoneStatuses({ branchId: 'branch_a' }),
+  },
+  {
+    name: 'expiryBoardLots',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 90 }),
+  },
+  {
+    name: 'stockSignalDashboard',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().stockSignalDashboard({ branchId: 'branch_a' }),
+  },
+  {
+    name: 'stockSignalDigest',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().stockSignalDigest({ branchId: 'branch_a', ownerUserId: 'user_a' }),
+  },
+  {
+    name: 'transferBoard',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().transferBoard({ branchId: 'branch_a' }),
+  },
+  // DEV-660 — allocating stock for a sale.
+  {
+    name: 'allocateForSale',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().allocateForSale({
+        branchId: 'branch_a',
+        medicineId: 'medicine_1',
+        requiredUnits: 1,
+        idempotencyKeyPrefix: 'sale-1',
+      }),
+  },
+  // DEV-660 — every transfer step, at the branch the step acts for.
+  {
+    name: 'transfer',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().transfer({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        fromStockLocationId: 'location_1',
+        toStockLocationId: 'location_2',
+        units: 1,
+        idempotencyKeyPrefix: 'move-1',
+      }),
+  },
+  {
+    name: 'allocateTransfer',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().allocateTransfer({
+        branchId: 'branch_a',
+        toBranchId: 'branch_b',
+        lines: [
+          {
+            sourceLotId: 'lot_1',
+            sourceStockLocationId: 'location_1',
+            destinationStockLocationId: 'location_b',
+            quantityUnits: 1,
+          },
+        ],
+      }),
+  },
+  {
+    name: 'approveTransfer',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().approveTransfer({ branchId: 'branch_a', transferId: 'transfer_1' }),
+  },
+  {
+    name: 'dispatchTransfer',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().dispatchTransfer({
+        branchId: 'branch_a',
+        transferId: 'transfer_1',
+        idempotencyKeyPrefix: 'dispatch-1',
+      }),
+  },
+  {
+    name: 'receiveTransferLine',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().receiveTransferLine({
+        branchId: 'branch_a',
+        transferId: 'transfer_1',
+        lineId: 'line_1',
+        receivedUnits: 1,
+        idempotencyKeyPrefix: 'receive-1',
+      }),
+  },
+  {
+    name: 'receiveTransferWithVariance',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().receiveTransferWithVariance({
+        branchId: 'branch_a',
+        transferId: 'transfer_1',
+        lines: [{ lineId: 'line_1', receivedUnits: 1 }],
+        idempotencyKeyPrefix: 'receive-1',
+      }),
+  },
 ];
 
 describe('DEV-211 — inventory needs an active assignment to the branch', () => {
@@ -849,6 +967,56 @@ describe('DEV-211 — inventory needs an active assignment to the branch', () =>
       expect(dataAccess()).toEqual([]);
     }
   );
+
+  it.each(ASSIGNMENT_GATED)(
+    'does not let an assignment to a sibling branch admit $name',
+    async ({ capability, invoke }) => {
+      grant([allow(capability)]);
+      db.pharmacyBranchAssignment.findFirst.mockImplementation(
+        async ({ where }: { where: { branchId: string } }) =>
+          where.branchId === 'branch_b' ? { id: 'assignment_b' } : null
+      );
+
+      await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it('lists only the active, assigned branches for the inventory pages', async () => {
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([
+      { branchId: 'branch_a' },
+      { branchId: 'branch_c' },
+    ]);
+    const ctx = {
+      db,
+      entitlements: { organizationId: 'org_a' },
+      session: { user: { id: 'user_a', role: 'ADMIN', status: 'ACTIVE' } },
+    } as unknown as TRPCContext;
+
+    await expect(assignedInventoryBranchIds(ctx)).resolves.toEqual(
+      new Set(['branch_a', 'branch_c'])
+    );
+    expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        userId: 'user_a',
+        active: true,
+        branch: { organizationId: 'org_a', active: true },
+      },
+      select: { branchId: true },
+    });
+  });
+
+  it('refuses to list branches without a tenant actor', async () => {
+    const ctx = {
+      db,
+      entitlements: { organizationId: 'org_a' },
+      session: null,
+    } as unknown as TRPCContext;
+
+    await expect(assignedInventoryBranchIds(ctx)).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    expect(db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+  });
 
   it('lets an assigned user create a location at that branch', async () => {
     grant([allow('pharmacy:inventory')]);

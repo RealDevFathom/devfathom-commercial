@@ -10,12 +10,14 @@ const mocks = vi.hoisted(() => ({
   writeOff: vi.fn(),
   release: vi.fn(),
   redirect: vi.fn(),
+  assigned: vi.fn(),
 }));
 vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.module }));
 vi.mock('@/server/routers/pharmacy-inventory', () => ({
+  assignedInventoryBranchIds: mocks.assigned,
   pharmacyInventoryRouter: { createCaller: mocks.caller },
 }));
 vi.mock('./break-pack-form', () => ({
@@ -97,6 +99,7 @@ beforeEach(() => {
   mocks.actor.mockResolvedValue(ctx);
   mocks.context.mockResolvedValue(ctx);
   mocks.module.mockReturnValue(true);
+  mocks.assigned.mockResolvedValue(new Set([branch.id]));
   mocks.caller.mockReturnValue({
     nearExpiryBoard: nearExpiry,
     temperatureZoneStatuses: vi.fn().mockResolvedValue([]),
@@ -287,5 +290,38 @@ describe('Inventory pack-action integration', () => {
     expect(screen.getByText('Inventory module unavailable')).toBeVisible();
     expect(mocks.form).not.toHaveBeenCalled();
     expect(lots).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-660 — only assigned branches are offered', () => {
+  const other = { id: 'branch-other', name: 'Other', city: 'Lahore' };
+
+  it('explains a missing assignment and reads no stock', async () => {
+    mocks.assigned.mockResolvedValue(new Set());
+    await show();
+    expect(screen.getByText('Branch assignment required')).toBeVisible();
+    expect(screen.queryByRole('link', { name: 'Open branch assignments' })).toBeNull();
+    expect(nearExpiry).not.toHaveBeenCalled();
+    expect(lots).not.toHaveBeenCalled();
+  });
+
+  it('gives an unassigned administrator the way to assign themselves', async () => {
+    mocks.assigned.mockResolvedValue(new Set());
+    Object.assign(ctx.session.user, { role: 'ADMIN' });
+    await show();
+    expect(screen.getByRole('link', { name: 'Open branch assignments' })).toHaveAttribute(
+      'href',
+      '/pharmacy/settings/branches'
+    );
+    expect(nearExpiry).not.toHaveBeenCalled();
+  });
+
+  it('opens an assigned branch instead of an unassigned one named in the URL', async () => {
+    ctx.db.pharmacyBranch.findMany.mockResolvedValue([branch, other]);
+    render(await PharmacyInventoryPage({ searchParams: Promise.resolve({ branch: other.id }) }));
+    expect(nearExpiry).toHaveBeenCalledExactlyOnceWith({ branchId: branch.id });
+    const branchSelect = screen.getByRole('combobox', { name: 'Branch' });
+    expect(within(branchSelect).queryByRole('option', { name: /Other/ })).toBeNull();
+    expect(within(branchSelect).getByRole('option', { name: /Main/ })).toBeInTheDocument();
   });
 });

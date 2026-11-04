@@ -3,13 +3,18 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { BranchAssignmentRequired } from '@/components/pharmacy/inventory/branch-assignment-required';
 import { ExpiryBoard, type ExpiryBoardRow } from '@/components/pharmacy/inventory/expiry-board';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { hasModule } from '@/lib/entitlements';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { EXPIRY_BOARD_WINDOWS, pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
+import {
+  assignedInventoryBranchIds,
+  EXPIRY_BOARD_WINDOWS,
+  pharmacyInventoryRouter,
+} from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
 
 export const metadata: Metadata = { title: 'Pharmacy expiry board' };
@@ -99,7 +104,20 @@ export default async function PharmacyExpiryBoardPage({
     orderBy: { name: 'asc' },
     select: { id: true, name: true, city: true },
   });
-  const branch = branches.find((item) => item.id === query.branch) ?? branches[0] ?? null;
+  // DEV-660: the gated stock reads admit only a branch the actor is assigned to, so
+  // only those branches are offered. `branches` still names the other side of a transfer.
+  const assigned = await assignedInventoryBranchIds(ctx);
+  const workingBranches = branches.filter((item) => assigned.has(item.id));
+  const branch =
+    workingBranches.find((item) => item.id === query.branch) ?? workingBranches[0] ?? null;
+  if (!branch && branches.length > 0) {
+    return (
+      <main className="min-w-0 space-y-6">
+        {header}
+        <BranchAssignmentRequired canAssign={ctx.session.user.role === 'ADMIN'} />
+      </main>
+    );
+  }
   if (!branch) {
     return (
       <main className="min-w-0 space-y-6">
@@ -207,7 +225,7 @@ export default async function PharmacyExpiryBoardPage({
           <label className="min-w-64 flex-1 text-sm text-text-body">
             Branch
             <select className={inputClass} defaultValue={branch.id} name="branch">
-              {branches.map((item) => (
+              {workingBranches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name} · {item.city}
                 </option>

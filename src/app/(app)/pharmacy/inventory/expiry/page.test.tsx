@@ -8,11 +8,13 @@ const mocks = vi.hoisted(() => ({
   context: vi.fn(),
   lots: vi.fn(),
   board: vi.fn(),
+  assigned: vi.fn(async () => new Set(['branch_a'])),
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: () => true }));
 vi.mock('@/server/routers/pharmacy-inventory', () => ({
+  assignedInventoryBranchIds: mocks.assigned,
   EXPIRY_BOARD_WINDOWS: [30, 60, 90, 180],
   pharmacyInventoryRouter: { createCaller: () => ({ expiryBoardLots: mocks.lots }) },
 }));
@@ -80,4 +82,26 @@ it('passes serialized return calendars and cumulative risk from the server page 
       ],
     })
   );
+});
+
+it('DEV-660: explains a missing branch assignment instead of reading the board', async () => {
+  const context = {
+    session: { user: { id: 'user_a' } },
+    organization: { id: 'org_a' },
+    entitlements: {},
+    db: {
+      pharmacyBranch: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'branch_a', name: 'Main', city: 'Karachi' }]),
+      },
+    },
+  };
+  mocks.actor.mockResolvedValue(context);
+  mocks.context.mockResolvedValue(context);
+  mocks.assigned.mockResolvedValueOnce(new Set());
+
+  const view = render(await Page({ searchParams: Promise.resolve({ branch: 'branch_a' }) }));
+
+  expect(view.getByText('Branch assignment required')).toBeVisible();
+  expect(mocks.lots).not.toHaveBeenCalled();
+  expect(mocks.board).not.toHaveBeenCalled();
 });
