@@ -211,7 +211,9 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
           }),
         NOT_IN_WORKSPACE,
       ],
-      // The tender and the refund move cash through the same drawer.
+      // The tender and the refund move cash through the same drawer, so both pass the
+      // counter receipt-access guard (capability, member, branch assignment) first
+      // and refuse an out-of-scope branch the way it words it (#578).
       [
         'tender',
         (c) =>
@@ -239,7 +241,7 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
             reason: 'Returned medicine',
             idempotencyKey: `refund-${branchId}`,
           }),
-        NOT_IN_WORKSPACE,
+        OUTSIDE,
       ],
     ] as Array<[string, (c: Awaited<ReturnType<typeof sales>>) => Promise<unknown>, Refusal]>;
 

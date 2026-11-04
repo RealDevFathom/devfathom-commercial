@@ -209,6 +209,18 @@ beforeAll(async () => {
   ]);
   deps = { withTenantDb: scopedDb.withTenantDb, ledger, returns };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  // Submitting a return posts the claim to the finance journal (#618), and
+  // 20261012120000_visibility_context_anchors makes every journal entry reference an
+  // existing organization. Anchor this suite's synthetic tenants the way the other
+  // journal-writing suites do, before any test runs.
+  await scopedDb.withPlatformDb((db) =>
+    db.$executeRawUnsafe(
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
+       SELECT id, id, id, id, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now() FROM unnest($1::text[]) AS id
+       ON CONFLICT (id) DO NOTHING`,
+      [ORG_A, ORG_B]
+    )
+  );
 }, 120_000);
 
 // ── PUR-06 acceptance: a claimed quantity cannot be sold ────────────────────
