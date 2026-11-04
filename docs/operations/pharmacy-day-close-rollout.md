@@ -15,10 +15,10 @@ received `pharmacy:close` in the same deploy, then from the migration until the 
 revision serves everywhere, a manager could preview, close or re-cut any active branch
 of their organization. Phase 1 grants nothing, so that window cannot occur.
 
-| Phase | Ships | Effect while the previous revision still serves |
-| --- | --- | --- |
-| 1: DEV-739 (#1413) | New close gate (deny-wins for ADMIN too; non-admins need an active assignment to the branch). Templates: Pharmacist without `pharmacy:close`, Manager with it. Migration `20261104120000_pharmacy_pharmacist_day_close_revoke`: removes the template ALLOW from system Pharmacist roles. | Only removes access. |
-| 2: follow-up, after phase 1 serves everywhere | One migration: the SQL below. | Not applicable: the new gate is live. |
+| Phase                                         | Ships                                                                                                                                                                                                                                                                                    | Effect while the previous revision still serves |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| 1: DEV-739 (#1413)                            | New close gate (deny-wins for ADMIN too; non-admins need an active assignment to the branch). Templates: Pharmacist without `pharmacy:close`, Manager with it. Migration `20261104120000_pharmacy_pharmacist_day_close_revoke`: removes the template ALLOW from system Pharmacist roles. | Only removes access.                            |
+| 2: follow-up, after phase 1 serves everywhere | One migration: the SQL below.                                                                                                                                                                                                                                                            | Not applicable: the new gate is live.           |
 
 Existing Manager roles cannot close on develop today either, so phase 1 takes nothing
 away from them. Managers in organizations provisioned after phase 1 get close from the
