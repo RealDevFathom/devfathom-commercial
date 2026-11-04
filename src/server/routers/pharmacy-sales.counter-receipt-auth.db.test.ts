@@ -8,6 +8,8 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+
 import { runMigrationSql } from '../../../tests/split-sql-statements';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -29,6 +31,8 @@ const ids = {
   roleDispense: `role_rcpt_d_${suffix}`,
   roleReceipt: `role_rcpt_r_${suffix}`,
   roleCashier: `role_rcpt_c_${suffix}`,
+  roleCanonicalCashier: `role_rcpt_cc_${suffix}`,
+  canonicalCashier: `user_rcpt_cc_${suffix}`,
   dispenser: `user_rcpt_d_${suffix}`,
   receiptClerk: `user_rcpt_r_${suffix}`,
   cashier: `user_rcpt_c_${suffix}`,
@@ -43,6 +47,15 @@ const ids = {
 };
 
 type SalesCaller = {
+  tender: (input: {
+    branchId: string;
+    saleId: string;
+    deviceId: string;
+    businessDate: Date;
+    type: 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT' | 'KHATA';
+    amountMinor: number;
+    idempotencyKey: string;
+  }) => Promise<unknown>;
   counterReceipt: (input: { branchId: string; saleId: string }) => Promise<unknown>;
   counterReceiptPrintJob: (input: {
     branchId: string;
@@ -144,17 +157,28 @@ beforeAll(async () => {
         { id: ids.branchB, code: 'B', name: 'Counter B', ...branch },
       ],
     });
+    const cashierTemplate = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'cashier')!;
     for (const role of [
-      { id: ids.roleDispense, key: `dispense-${suffix}`, capability: 'pharmacy:dispense' },
-      { id: ids.roleReceipt, key: `receipt-${suffix}`, capability: 'pharmacy:receipt' },
-      { id: ids.roleCashier, key: `cashier-${suffix}`, capability: 'pharmacy.counter' },
+      { id: ids.roleDispense, key: `dispense-${suffix}`, capabilities: ['pharmacy:dispense'] },
+      { id: ids.roleReceipt, key: `receipt-${suffix}`, capabilities: ['pharmacy:receipt'] },
+      { id: ids.roleCashier, key: `cashier-${suffix}`, capabilities: ['pharmacy.counter'] },
+      {
+        id: ids.roleCanonicalCashier,
+        key: `canonical-cashier-${suffix}`,
+        capabilities: cashierTemplate.capabilities,
+      },
     ]) {
       await tx.organizationRole.create({
         data: {
           id: role.id,
           key: role.key,
           name: role.key,
-          permissions: { create: [{ capability: role.capability, effect: 'ALLOW' }] },
+          permissions: {
+            create: role.capabilities.map((capability) => ({
+              capability,
+              effect: 'ALLOW' as const,
+            })),
+          },
         },
       });
     }
@@ -162,6 +186,7 @@ beforeAll(async () => {
       { id: ids.dispenser, roleId: ids.roleDispense, name: 'Dispenser' },
       { id: ids.receiptClerk, roleId: ids.roleReceipt, name: 'Receipt' },
       { id: ids.cashier, roleId: ids.roleCashier, name: 'Cashier' },
+      { id: ids.canonicalCashier, roleId: ids.roleCanonicalCashier, name: 'Canonical cashier' },
       { id: ids.unassigned, roleId: ids.roleDispense, name: 'Unassigned' },
       { id: ids.admin, roleId: ids.roleDispense, name: 'Admin', role: 'ADMIN' as const },
     ];
@@ -183,6 +208,7 @@ beforeAll(async () => {
         { userId: ids.dispenser, branchId: ids.branchA },
         { userId: ids.receiptClerk, branchId: ids.branchA },
         { userId: ids.cashier, branchId: ids.branchA },
+        { userId: ids.canonicalCashier, branchId: ids.branchA },
       ],
     });
     await tx.pharmacySale.createMany({
@@ -248,6 +274,105 @@ const dispenser = { id: ids.dispenser, role: 'EMPLOYEE' as const, organizationId
 const receiptUser = { id: ids.receiptClerk, role: 'EMPLOYEE' as const, organizationId: ids.orgA };
 
 describeIfDatabase('counter receipt authorization against Postgres', () => {
+  it('accepts the persisted canonical Cashier template on its assigned branch (#299)', async () => {
+    const template = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'cashier')!;
+    expect(template.capabilities).toContain('pharmacy:counter');
+    expect(template.capabilities).not.toContain('pharmacy.counter');
+    await act(
+      ids.orgA,
+      { id: ids.canonicalCashier, role: 'EMPLOYEE', organizationId: ids.orgA },
+      async (api) => {
+        await expect(
+          api.lookupReceiptByNumber({ branchId: ids.branchA, receiptNumber: 7 })
+        ).resolves.toEqual([expect.objectContaining({ id: ids.saleA })]);
+        await expect(
+          api.counterCart({ branchId: ids.branchA, saleId: ids.saleA })
+        ).resolves.toMatchObject({ saleId: ids.saleA, lines: [] });
+        await expect(
+          api.returnHistory({ branchId: ids.branchA, saleId: ids.saleA })
+        ).resolves.toMatchObject({ saleId: ids.saleA, lines: [] });
+        await expect(
+          api.lookupReceiptByNumber({ branchId: ids.branchB, receiptNumber: 7 })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(
+          api.lookupReceiptByNumber({ branchId: ids.branchOther, receiptNumber: 7 })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+    );
+  });
+
+  it.each(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET'] as const)(
+    'does not turn persisted dispense access into %s tender authority',
+    async (type) => {
+      await act(ids.orgA, dispenser, async (api) => {
+        await expect(
+          api.tender({
+            branchId: ids.branchA,
+            saleId: ids.saleA,
+            deviceId: 'device-a',
+            businessDate: new Date('2026-10-01T00:00:00.000Z'),
+            type,
+            amountMinor: 100,
+            idempotencyKey: `no-dispense-tender-${suffix}-${type}`,
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      });
+      await withTenantDb(ids.orgA, async (tx) => {
+        expect(await tx.pharmacyTender.count({ where: { saleId: ids.saleA } })).toBe(0);
+      });
+    }
+  );
+
+  it.each(['CREDIT', 'KHATA'] as const)(
+    'keeps persisted canonical-Cashier %s in the dispense/family-account lane',
+    async (type) => {
+      await act(
+        ids.orgA,
+        { id: ids.canonicalCashier, role: 'EMPLOYEE', organizationId: ids.orgA },
+        async (api) => {
+          await expect(
+            api.tender({
+              branchId: ids.branchA,
+              saleId: ids.saleA,
+              deviceId: 'device-a',
+              businessDate: new Date('2026-10-01T00:00:00.000Z'),
+              type,
+              amountMinor: 100,
+              idempotencyKey: `cashier-account-denied-${suffix}-${type}`,
+            })
+          ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        }
+      );
+      await withTenantDb(ids.orgA, async (tx) => {
+        expect(await tx.pharmacyTender.count({ where: { saleId: ids.saleA } })).toBe(0);
+        expect(await tx.pharmacyKhataEvent.count({ where: { organizationId: ids.orgA } })).toBe(0);
+      });
+    }
+  );
+
+  it.each(['CREDIT', 'KHATA'] as const)(
+    'requires an account for persisted dispense-authorized %s, without settlement effects',
+    async (type) => {
+      await act(ids.orgA, dispenser, async (api) => {
+        await expect(
+          api.tender({
+            branchId: ids.branchA,
+            saleId: ids.saleA,
+            deviceId: 'device-a',
+            businessDate: new Date('2026-10-01T00:00:00.000Z'),
+            type,
+            amountMinor: 100,
+            idempotencyKey: `dispense-account-required-${suffix}-${type}`,
+          })
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'ACCOUNT_NOT_FOUND' });
+      });
+      await withTenantDb(ids.orgA, async (tx) => {
+        expect(await tx.pharmacyTender.count({ where: { saleId: ids.saleA } })).toBe(0);
+        expect(await tx.pharmacyKhataEvent.count({ where: { organizationId: ids.orgA } })).toBe(0);
+      });
+    }
+  );
+
   it('allows the assigned branch and denies the sibling sale, an empty assignment, and another organization', async () => {
     await act(ids.orgA, dispenser, async (api) => {
       await expect(
