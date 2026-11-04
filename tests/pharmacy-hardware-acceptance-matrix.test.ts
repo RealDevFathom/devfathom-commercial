@@ -89,9 +89,18 @@ describe('hardware acceptance matrix document', () => {
     expect(doc).not.toMatch(/\b(verified|certified|accepted) (compatible|compatibility)\b/i);
   });
 
-  it('keeps the unconfirmed DVR brand unconfirmed', () => {
-    expect(doc).toContain('"Al Hua" is unconfirmed');
-    expect(doc).not.toMatch(/Al Hua[^.\n]{0,60}(is|are) (a )?(Dahua|compatible)/i);
+  it('treats the DVR label photo as identification, not compatibility', () => {
+    expect(doc).toContain('DH-XVR1B16-I');
+    expect(doc).toContain('a datasheet is not proof');
+    expect(doc).not.toMatch(/DH-XVR1B16-I[^.\n]{0,80}(is|are) (verified|certified|compatible)/i);
+  });
+
+  it('plans the iPhone stand-in camera without claiming any test happened', () => {
+    const rows = tableRows(doc).filter((row) => row.startsWith('| HW-PHN-'));
+    expect(rows.length).toBeGreaterThanOrEqual(8);
+    expect(doc).toContain('iPhone');
+    expect(doc).toContain('No test\nhas been run');
+    expect(doc).toContain('must never write to the DVR or its\nrecordings');
   });
 
   it('separates every evidence class and keeps manual tender out of integration', () => {

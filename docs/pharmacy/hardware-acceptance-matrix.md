@@ -62,10 +62,16 @@ real card or wallet, or put credentials into chat, a ticket or a file until the 
 - Brand presets are form-fill hints, explicitly "not verified facts"
   (`src/lib/cameras/presets.ts`, `contract.ts`). Families: Hikvision/EZVIZ, Dahua/IMOU,
   CP Plus, Uniview, TP-Link Tapo/VIGI, Manual.
-- **"Al Hua" is unconfirmed.** It may be a rendering of Dahua, which has a preset, or it may
-  be a different OEM or a relabelled product. The preset path template is a hint; it proves
-  nothing about this unit. First action is to read the model, firmware and channel count from
-  the device label or its own web UI (section 4.1).
+- **DVR identification.** The user first described the DVR as "Al Hua". DEV-744 now records
+  that Saad's label photo identifies it as a **Dahua Technology DH-XVR1B16-I, V2** DVR. That is
+  an identification from a photo, nothing more. Dahua's published V2 specifications list RTSP,
+  ONVIF and H.264/H.265, but a datasheet is not proof that this unit, its firmware and its
+  settings work with DevFathom. Firmware, enabled protocols, channel streams and codec must be
+  read from the actual device (section 4.1) before any compatibility is claimed. The repository's
+  `dahua-imou` preset is a form-fill hint only. No serial number or credential is recorded.
+- **Current test situation.** The DVR holds old recordings and has **no camera connected**.
+  Those recordings must not be modified or deleted by any test. A temporary iPhone is the
+  planned stand-in camera (section 5.1b); the planning is confirmed, no test has happened.
 - Gateway modes: `unavailable` (default), `simulated` (refused unless `NODE_ENV` is
   development or test), `mediamtx` (`src/lib/cameras/camera-gateway-runtime.ts`).
   In `mediamtx` mode every legacy adapter method deliberately throws "unsupported"
@@ -209,8 +215,8 @@ with credentials, card numbers, or public IP addresses.
 
 | Item | Value | Source |
 | --- | --- | --- |
-| Brand and exact model as printed on the unit | _unknown_ | label / device web UI |
-| Whether "Al Hua" means Dahua, an OEM relabel or other | _unconfirmed_ | label, box, vendor |
+| Exact model suffix and hardware version on the unit | _from photo, to confirm_ | label / device web UI |
+| Brand and model | Dahua Technology DH-XVR1B16-I, V2 (from label photo; unverified on device) | label photo |
 | Firmware version and build date | _unknown_ | device web UI |
 | Channel count and which channel is counter / fridge | _unknown_ | operator |
 | Video codec (H.264 / H.265 / other) | _unknown_ | device web UI |
@@ -273,6 +279,29 @@ delivered and deployed to the test environment.
 | HW-CAM-10 | Still snapshot for a tender or cold-chain event | Trigger evidence capture | Image stored privately; failure shows `SNAPSHOT_UNAVAILABLE`, not a fake image | Stored object metadata, no pixels in ticket | [BLOCKED: DEV-745] | UNTESTED |
 | HW-CAM-11 | Retention purge of evidence stills | Wait for or simulate retention | Removed per policy | Purge record | [BLOCKED: DEV-745] | UNTESTED |
 | HW-CAM-12 | Privacy: consent / signage / who may view | Policy check | Documented per branch | Policy note | Owner | UNTESTED |
+
+### 5.1b Optional iPhone stand-in camera (planned, not performed)
+
+The test phone is an **iPhone** (user-confirmed). This confirms the planned device only. No test
+has been run, no app has been installed, no camera permission granted and no network touched.
+This is a separate test from the DVR: it needs no DVR and must never write to the DVR or its
+recordings. Whether an iPhone app can publish RTSP to an owner-controlled gateway, and whether
+any such app is compatible with the gateway or with ONVIF on the DVR, is **unverified**.
+
+| ID | Check | Method | Expected | Evidence | Prerequisite | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| HW-PHN-01 | Approve the test plan | Owner written approval naming the iPhone, the app, the gateway host and the network | Approval recorded before anything else | Approval note | Owner | UNTESTED |
+| HW-PHN-02 | Pick a publisher app and record name and version | Owner chooses; review its permissions and data handling | App identity recorded; no account credentials in chat | Sheet | Owner approval; no install without approval | UNTESTED |
+| HW-PHN-03 | Owner-controlled gateway accepts a publish on a private network | Publisher to gateway; no ports opened to the internet | Stream appears at the gateway only | Gateway-side status, no URLs with credentials | Owner gateway; HW-PHN-01 | UNTESTED |
+| HW-PHN-04 | Live view through the app's gateway path | Open the Pharmacy camera view | Plays, with no RTSP URL or credential in page, network tab or logs | Capture | [BLOCKED: DEV-740] | UNTESTED |
+| HW-PHN-05 | Codec and orientation | Record codec and rotation used by the app | Plays or fails honestly | Capture | HW-PHN-03 | UNTESTED |
+| HW-PHN-06 | Interruption and recovery | Lock the phone, switch app, drop Wi-Fi, restore | Honest status; resumes or fails clearly | Timestamps | HW-PHN-03 | UNTESTED |
+| HW-PHN-07 | Privacy | Point only at an agreed, non-patient scene | No patient or customer in frame | Test note | Owner | UNTESTED |
+| HW-PHN-08 | Phone to DVR via ONVIF (optional, separate) | Only if the owner approves and the app supports it | Treated as unverified until shown | Device list screenshot | Owner approval; no DVR change without it | UNTESTED |
+| HW-PHN-09 | Teardown | Stop publishing, revoke camera permission, remove any temporary gateway binding | Nothing left running or exposed | Checklist | HW-PHN-01 | UNTESTED |
+
+A pass here would show only that this phone, app and gateway work together in this setup. It would
+not show that a CCTV camera, the DVR or its firmware work.
 
 ### 5.2 Thermal printers (58 / 80 mm) and A4 — raw and browser
 
@@ -385,7 +414,7 @@ claim a retry is safe without a test showing it.
 | P1 | Real DVR stills unsupported | Transaction and cold-chain evidence cannot use real cameras | DEV-745 |
 | P2 | Saved paper format has no Pharmacy UI | Operators re-pick format every session | DEV-742 |
 | P2 | Urdu thermal output depends on host fonts | Possible wrong glyphs on paper | DEV-742 / acceptance |
-| P2 | "Al Hua" model, firmware and codec unknown | Cannot select a preset or predict playback | Operator |
+| P2 | DVR identified from a label photo only; firmware, protocols, codec and any connected camera models unknown | Cannot predict playback; DVR currently has no connected camera | Operator |
 | P2 | Goods-in search only on Enter | Slower scanning workflow | DEV-734 |
 | P3 | Supported-browser policy for hardware features not documented | Support ambiguity | Product |
 | P3 | Sensor ingest absent | Out of scope here | DEV-82 |
