@@ -42,7 +42,10 @@ function recordingClient(candidates: Array<Record<string, unknown>> = []) {
     async query(sql: string, params: unknown[] = []) {
       statements.push({ sql: sql.replace(/\s+/g, ' ').trim(), params });
       if (sql.includes('SELECT DISTINCT "organizationId"')) {
-        return { rows: [{ organizationId: 'org_1' }, { organizationId: 'org_2' }], rowCount: 2 };
+        return {
+          rows: [{ organizationId: 'org_1' }, { organizationId: 'org_2' }],
+          rowCount: 2,
+        } as never;
       }
       if (sql.includes('FROM "restaurant_sop_evidence" evidence')) {
         return { rows: candidates, rowCount: candidates.length } as never;
@@ -66,8 +69,16 @@ function legacyCandidate(organizationId: string, secret: string) {
   };
   const name = pharmacySopEvidenceFilename(identity, 'png');
   process.env.AUTH_SECRET = previous;
-  const { organizationId: _org, ...row } = identity;
-  return { id: `ev_${secret}`, ...row, storageRef: `/api/files/${name}`, pharmacyBranchId: 'pb_1' };
+  return {
+    id: `ev_${secret}`,
+    occurrenceId: identity.occurrenceId,
+    occurrenceStepId: identity.occurrenceStepId,
+    contentHash: identity.contentHash,
+    mimeType: identity.mimeType,
+    uploaderStaffProfileId: identity.uploaderStaffProfileId,
+    storageRef: `/api/files/${name}`,
+    pharmacyBranchId: 'pb_1',
+  };
 }
 
 describe('legacy capture backfill choreography', () => {
