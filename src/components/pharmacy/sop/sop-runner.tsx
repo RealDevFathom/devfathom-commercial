@@ -22,6 +22,7 @@ import {
   isDenied,
   isReworking,
   latestRejection,
+  linksInStepOrder,
   PROVENANCE_LABEL,
   provenanceTone,
   RECORD_LABEL,
@@ -91,6 +92,19 @@ const OWNER_STATE: Partial<Record<SopStatus, string>> = {
 export const REWORK_GUIDANCE =
   'Steps stay done; add what you changed. On any step you can add a new photo or signature, link another record, or write a note. Then say what you changed below and send it for review again.';
 
+/** What the overall rework note asks for: any rework note, here or on a step, meets it. */
+export const REWORK_NOTE_HINT =
+  'Add at least one note — here or on a step — saying what you changed before sending it for review again.';
+
+/** Whether the person asked the browser for less motion (no smooth scrolling then). */
+export function prefersReducedMotion() {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+}
+
 export function SopRunner({
   pharmacyBranchId,
   timezone,
@@ -104,7 +118,10 @@ export function SopRunner({
   onNotice,
 }: SopRunnerProps) {
   const headingRef = useRef<HTMLDivElement>(null);
+  const errorRef = useRef<HTMLParagraphElement>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Bumped after a refused change has been re-read, to bring its message into view. */
+  const [conflictSeen, setConflictSeen] = useState(0);
   /** Which rework note was just saved (its draft key), for a short confirmation. */
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const utils = trpc.useUtils();
@@ -120,6 +137,21 @@ export function SopRunner({
     if (ready) headingRef.current?.focus();
   }, [occurrenceId, ready]);
 
+  useEffect(() => {
+    // The procedure changed underneath this person and has been re-read. The
+    // message sits at the top of the procedure, which may be far above the
+    // control they used, so move focus to it and scroll it into view (no
+    // smooth travel under reduced motion).
+    if (!conflictSeen) return;
+    const alert = errorRef.current;
+    if (!alert) return;
+    alert.focus({ preventScroll: true });
+    alert.scrollIntoView?.({
+      block: 'nearest',
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    });
+  }, [conflictSeen]);
+
   async function refresh() {
     await Promise.all([
       utils.pharmacySop.occurrence.invalidate({ pharmacyBranchId, occurrenceId }),
@@ -133,10 +165,18 @@ export function SopRunner({
    * server's plain words are shown and the procedure and board are re-read, so
    * the screen shows where it stands now.
    */
+  const conflicted = (message: string) => {
+    setError(message);
+    void refresh()
+      .catch(() => undefined)
+      .then(() => setConflictSeen((count) => count + 1));
+  };
   const fail = (fallback: string) => (cause: unknown) => {
-    const conflict = errorCode(cause) === 'CONFLICT';
-    setError(errorMessage(cause, conflict ? CONFLICT_MESSAGE : fallback));
-    if (conflict) void refresh();
+    if (errorCode(cause) === 'CONFLICT') {
+      conflicted(errorMessage(cause, CONFLICT_MESSAGE));
+      return;
+    }
+    setError(errorMessage(cause, fallback));
   };
   const claim = trpc.pharmacySop.claim.useMutation({
     onSuccess: async () => {
@@ -305,7 +345,12 @@ export function SopRunner({
         </div>
 
         {error ? (
-          <p className="mt-4 text-sm text-destructive" role="alert">
+          <p
+            ref={errorRef}
+            tabIndex={-1}
+            className="mt-4 rounded-xs text-sm text-destructive outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            role="alert"
+          >
             {error}
           </p>
         ) : null}
@@ -344,11 +389,13 @@ export function SopRunner({
                 : 'mt-5 border-t border-border-subtle pt-5'
             }`}
           >
-            <p className="min-w-0 text-sm text-text-body">
-              {occurrence.status === 'REJECTED'
-                ? 'This was sent back. Start again to fix it.'
-                : 'Start when you are ready to work through the steps.'}
-            </p>
+            {/* A sent-back procedure already says what starting again does,
+                in the notice above; it is not said twice. */}
+            {occurrence.status === 'REJECTED' ? null : (
+              <p className="min-w-0 text-sm text-text-body">
+                Start when you are ready to work through the steps.
+              </p>
+            )}
             <Button
               type="button"
               size="touch"
@@ -422,7 +469,7 @@ export function SopRunner({
                   }}
                   recount={(purpose) => recount(step, purpose)}
                   onChanged={() => void refresh()}
-                  onConflict={() => void refresh()}
+                  onConflict={conflicted}
                 />
               );
             })}
@@ -493,7 +540,7 @@ export function SopRunner({
             pharmacyBranchId={pharmacyBranchId}
             occurrenceId={occurrenceId}
             evidence={occurrence.evidence}
-            links={occurrence.recordLinks}
+            links={linksInStepOrder(occurrence)}
             rejection={rejection}
             reworkNotes={notes}
             stepName={stepName}
@@ -503,10 +550,7 @@ export function SopRunner({
               void refresh();
               onBack();
             }}
-            onConflict={(message) => {
-              setError(message);
-              void refresh();
-            }}
+            onConflict={conflicted}
           />
         ) : null}
 
@@ -543,8 +587,7 @@ function OverallReworkNote({
         What did you change?
       </h3>
       <p id={`${id}-hint`} className="text-sm text-text-muted">
-        Tell the reviewer what you fixed after it was sent back. It is needed before you send it for
-        review again.
+        {REWORK_NOTE_HINT}
       </p>
       <ReworkNoteList notes={notes} timezone={timezone} label="What you changed" />
       <label className="grid gap-1.5 text-sm font-medium text-text-strong" htmlFor={`${id}-note`}>
@@ -617,7 +660,8 @@ function StepItem({
   onComplete: (draft: StepDraft) => void;
   recount: (purpose: EvidencePurpose) => Promise<number>;
   onChanged: () => void;
-  onConflict: () => void;
+  /** The procedure changed underneath this person: show the words and re-read it. */
+  onConflict: (message: string) => void;
 }) {
   const id = useId();
   const [changing, setChanging] = useState(false);

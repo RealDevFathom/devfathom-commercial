@@ -41,12 +41,18 @@ describe('linked records in the runner', () => {
       )
     ).toBe('Delivery GR-1042 · Received');
     expect(recordOptionLabel(option({ label: 'Vaccine fridge reading' }))).toBe(
-      'Vaccine fridge reading · out of range'
+      'Vaccine fridge reading · Out of range'
     );
-    // A state that only repeats "out of range" is said once.
+    // A state that only repeats "out of range" is said once, capitalised like
+    // the server's own states.
     expect(
       recordOptionLabel(option({ label: 'QA Fridge · 11.5 °C', statusLabel: 'Out of range' }))
-    ).toBe('QA Fridge · 11.5 °C · out of range');
+    ).toBe('QA Fridge · 11.5 °C · Out of range');
+    expect(
+      recordOptionLabel(
+        option({ label: 'QA Fridge · 5.0 °C', statusLabel: 'In range', outOfRange: false })
+      )
+    ).toBe('QA Fridge · 5.0 °C · In range');
 
     h.queries.occurrence = {
       data: occurrence({

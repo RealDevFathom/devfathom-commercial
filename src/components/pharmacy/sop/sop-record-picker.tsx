@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc';
 
 import {
+  CONFLICT_MESSAGE,
   errorCode,
   errorMessage,
   RECORD_LABEL,
@@ -46,8 +47,12 @@ export type SopRecordPickerProps = {
   variant?: 'step' | 'another';
   /** The step that records an out-of-range reading and what was done, when the procedure has one. */
   excursionStep?: { stepOrder: number; title: string } | null;
-  /** The procedure changed underneath this person; re-read it. */
-  onConflict?: () => void;
+  /**
+   * The procedure changed underneath this person: the procedure shows the
+   * server's words where they will be seen and re-reads it (this step may no
+   * longer be open for linking once it does).
+   */
+  onConflict?: (message: string) => void;
 };
 
 /** A record in the list, in plain words: what it is, its state, and whether it was out of range. */
@@ -56,7 +61,8 @@ export function recordOptionLabel(record: Pick<SopLinkableRecord, 'detail'>) {
   return [
     detail?.label ?? 'Record',
     recordStatusLabel(detail),
-    detail?.outOfRange ? 'out of range' : null,
+    // Capitalised like the server's own states ("In range", "Received").
+    detail?.outOfRange ? 'Out of range' : null,
   ]
     .filter((part): part is string => Boolean(part))
     .join(' · ');
@@ -107,8 +113,12 @@ export function SopRecordPicker({
       onLinked();
     },
     onError: (cause) => {
+      if (errorCode(cause) === 'CONFLICT' && onConflict) {
+        setError(null);
+        onConflict(errorMessage(cause, CONFLICT_MESSAGE));
+        return;
+      }
       setError(errorMessage(cause, `The ${label} could not be linked. Retry.`));
-      if (errorCode(cause) === 'CONFLICT') onConflict?.();
     },
   });
   const linkedIds = new Set(linked.map((row) => row.recordId));

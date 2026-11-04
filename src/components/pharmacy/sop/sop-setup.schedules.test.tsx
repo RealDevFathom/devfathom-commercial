@@ -166,7 +166,7 @@ describe('Automatic scheduling switch', () => {
     expect(h.calls.setAutoSchedule).toEqual([{ pharmacyBranchId: 'pb_1', enabled: true }]);
     // Asia/Karachi is UTC+5.
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Turned on. 3 procedures were created for today; next automatic run at 12:00.'
+      'Turned on. 3 procedures were created from your schedules; next automatic run at 12:00.'
     );
   });
 

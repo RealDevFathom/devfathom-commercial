@@ -247,6 +247,22 @@ export function stepLinks(
   return occurrence.recordLinks.filter((row) => row.occurrenceStepId === step.id);
 }
 
+/**
+ * Every linked record, as a reviewer reads them: by step order, then by when
+ * each was linked. Links not tied to a step come last.
+ */
+export function linksInStepOrder(occurrence: Pick<SopOccurrence, 'recordLinks' | 'steps'>) {
+  const order = new Map(occurrence.steps.map((step) => [step.id, step.stepOrder]));
+  const stepOrder = (link: SopRecordLink) =>
+    (link.occurrenceStepId ? order.get(link.occurrenceStepId) : undefined) ??
+    Number.POSITIVE_INFINITY;
+  return [...occurrence.recordLinks].sort(
+    (left, right) =>
+      stepOrder(left) - stepOrder(right) ||
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+  );
+}
+
 /** Why one step cannot be marked done yet, in the order a person would fix them. */
 export function stepBlockers(
   occurrence: SopOccurrence,

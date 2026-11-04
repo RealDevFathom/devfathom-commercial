@@ -1031,6 +1031,16 @@ function ScheduleForm({
 export const SWITCH_CONTRAST =
   'data-unchecked:border-text-muted data-unchecked:bg-surface-sunken dark:data-unchecked:bg-surface-sunken [&[data-unchecked]_[data-slot=switch-thumb]]:bg-text-muted dark:[&[data-unchecked]_[data-slot=switch-thumb]]:bg-text-muted';
 
+/**
+ * A 44px hit area for the shared Switch, applied locally. The shared switch
+ * widens its hit area with an `after:` overlay to 56×34px; this makes the
+ * overlay at least 44px tall (18.4px track + 2×14px), so a finger on the row
+ * reaches it, while the control itself, its name and its keyboard behaviour
+ * stay the shared ones. Remove once src/components/ui/switch.tsx gives the
+ * switch a 44px hit area of its own.
+ */
+export const SWITCH_HIT_AREA = 'after:-inset-y-3.5';
+
 /** Who a schedule's work goes to, in words. */
 function scheduleTarget(row: SopAssignment) {
   return row.target.type === 'ROLE'
@@ -1038,6 +1048,37 @@ function scheduleTarget(row: SopAssignment) {
       ? ROLE_LABEL[row.target.roleKey]
       : 'a role'
     : (row.target.displayName ?? 'a named person');
+}
+
+/**
+ * Each schedule switch's name: what it controls, so "checked" reads as
+ * "active" ("Schedule active: Pharmacy — hygiene for Pharmacy assistant").
+ * Two schedules for the same procedure and people are told apart by when they
+ * run ("…, every day at 15:00"), and by number if even that is the same.
+ */
+export function scheduleSwitchNames(rows: readonly SopAssignment[]) {
+  const base = rows.map((row) => `Schedule active: ${row.templateName} for ${scheduleTarget(row)}`);
+  const count = (names: string[], name: string) => names.filter((other) => other === name).length;
+  const timed = base.map((name, index) => {
+    if (count(base, name) < 2) return name;
+    const when = recurrenceLabel(rows[index]!);
+    return `${name}, ${when.charAt(0).toLowerCase()}${when.slice(1)}`;
+  });
+  const seen = new Map<string, number>();
+  return timed.map((name) => {
+    if (count(timed, name) < 2) return name;
+    const nth = (seen.get(name) ?? 0) + 1;
+    seen.set(name, nth);
+    return `${name} (${nth})`;
+  });
+}
+
+/** What creating work from the schedules did, in words. */
+export function generateNotice(result: { created?: number | null } | null | undefined) {
+  const created = result?.created;
+  if (created == null) return 'Work is up to date with your schedules.';
+  if (created === 0) return 'Nothing new to create from your schedules right now.';
+  return `Created ${created} ${created === 1 ? 'procedure' : 'procedures'} from your schedules.`;
 }
 
 /** What pausing a schedule does, said once above the list. */
@@ -1078,14 +1119,16 @@ function Schedules({
     },
   });
   const generate = trpc.pharmacySop.generate.useMutation({
-    onSuccess: async () => {
+    onSuccess: async (result: Parameters<typeof generateNotice>[0]) => {
       setError(null);
-      onNotice({ tone: 'success', text: "Today's work is up to date with your schedules." });
+      onNotice({ tone: 'success', text: generateNotice(result) });
       await utils.pharmacySop.board.invalidate({ pharmacyBranchId });
     },
-    onError: (cause) => setError(errorMessage(cause, "Today's work could not be created. Retry.")),
+    onError: (cause) =>
+      setError(errorMessage(cause, 'Work could not be created from your schedules. Retry.')),
   });
   const list: SopAssignment[] = (assignments.data ?? []).filter((row) => !row.superseded);
+  const switchNames = scheduleSwitchNames(list);
 
   return (
     <SectionCard
@@ -1136,7 +1179,7 @@ function Schedules({
             {changed}
           </p>
           <ul className="divide-y divide-border-subtle">
-            {list.map((row) => (
+            {list.map((row, index) => (
               // One grid for every row, so the toggle sits at the same place on
               // a phone whether or not the details wrap.
               <li
@@ -1159,10 +1202,10 @@ function Schedules({
                     just "Active" or "Paused". */}
                 <div className="inline-flex min-h-11 items-center gap-2 justify-self-end text-sm text-text-body">
                   <Switch
-                    className={SWITCH_CONTRAST}
+                    className={`${SWITCH_CONTRAST} ${SWITCH_HIT_AREA}`}
                     checked={row.active}
                     disabled={setActive.isPending}
-                    aria-label={`${row.active ? 'Pause' : 'Resume'} ${row.templateName} for ${scheduleTarget(row)}`}
+                    aria-label={switchNames[index]}
                     onCheckedChange={(active) => {
                       toggling.current = {
                         name: row.templateName,
@@ -1217,7 +1260,9 @@ export function autoScheduleNotice(
       ? null
       : result.generated === 0
         ? 'No procedures were due to be created yet'
-        : `${result.generated} ${result.generated === 1 ? 'procedure was' : 'procedures were'} created for today`;
+        : // Only a count comes back, and work can be due tomorrow as well as
+          // today, so it is said to come from the schedules, not "for today".
+          `${result.generated} ${result.generated === 1 ? 'procedure was' : 'procedures were'} created from your schedules`;
   const at = result.nextRunAt ? branchTime(result.nextRunAt, timezone) : null;
   const next = at ? `next automatic run at ${at}` : null;
   if (created && next) return `Turned on. ${created}; ${next}.`;
@@ -1277,7 +1322,7 @@ function AutoScheduling({
         </p>
         <label className="inline-flex min-h-11 items-center gap-2 justify-self-end text-sm text-text-body">
           <Switch
-            className={SWITCH_CONTRAST}
+            className={`${SWITCH_CONTRAST} ${SWITCH_HIT_AREA}`}
             checked={enabled}
             disabled={settings.isLoading || !settings.data || setAuto.isPending}
             aria-labelledby={labelId}

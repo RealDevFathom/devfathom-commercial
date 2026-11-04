@@ -195,7 +195,10 @@ beforeEach(() => {
   h.outcomes = {};
   h.calls = {};
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  delete (Element.prototype as { getAnimations?: unknown }).getAnimations;
+});
 
 describe('pharmacy procedures workspace', () => {
   it('shows a forbidden state when the person holds no procedure capability', () => {
@@ -458,6 +461,45 @@ describe('pharmacy procedures workspace', () => {
         reason: 'Photo of the fridge display is missing',
       },
     ]);
+  });
+
+  it('opens a deep-linked review in the Review panel only, even while the board loads', () => {
+    setup({
+      access: { canComplete: true, canVerify: true, canManage: false },
+      board: {
+        canReview: true,
+        review: [boardItem({ occurrenceId: 'occ-review', status: 'SUBMITTED', submittedAt: due })],
+      },
+      occ: occurrence({
+        id: 'occ-review',
+        status: 'SUBMITTED',
+        viewer: { isOwner: false, canClaim: false, canVerify: true },
+        steps: [step({ completed: true, completedAt: due })],
+      }),
+    });
+    const loaded = h.queries.board;
+    // As in a browser, the tabs keep the closing panel mounted until its exit
+    // animations finish (jsdom has none, so it would otherwise unmount at once).
+    Object.defineProperty(Element.prototype, 'getAnimations', {
+      configurable: true,
+      value: () => [],
+    });
+    window.history.replaceState(null, '', '/pharmacy/sop?view=review&occurrence=occ-review');
+    // Until the board says this person reviews here, only Today's work exists.
+    h.queries.board = { loading: true };
+    const { rerender } = render(<PharmacySopWorkspace />);
+    const runners = () =>
+      screen.queryAllByRole('group', { name: 'Pharmacy — opening', hidden: true });
+    expect(runners()).toHaveLength(1);
+
+    h.queries.board = loaded;
+    rerender(<PharmacySopWorkspace />);
+    // The closing panel never holds a second copy of the procedure.
+    expect(screen.getAllByRole('tabpanel', { hidden: true }).length).toBeGreaterThan(1);
+    expect(runners()).toHaveLength(1);
+    const panel = screen.getAllByRole('tabpanel').find((node) => !node.hasAttribute('inert'));
+    expect(within(panel!).getByRole('button', { name: 'Back to review' })).toBeVisible();
+    expect(screen.getAllByRole('button', { name: /^Back to /, hidden: true })).toHaveLength(1);
   });
 
   // ── Visual QA follow-ups ──────────────────────────────────────────────────

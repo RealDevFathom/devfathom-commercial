@@ -339,6 +339,9 @@ function Workspace({ access, branches }: { access: SopAccess; branches: SopBranc
   };
   const back = close;
 
+  // Rendered only in the active tab's panel: a panel the tabs keep mounted
+  // while switching (a deep link to Review settles once the board has loaded)
+  // must not hold a second copy of the procedure.
   const runner = occurrence ? (
     <SopRunner
       key={occurrence}
@@ -415,7 +418,7 @@ function Workspace({ access, branches }: { access: SopAccess; branches: SopBranc
           <TabsContent value="board" className="mt-4">
             {!enabled
               ? notSetUp
-              : (runner ?? (
+              : ((view === 'board' ? runner : null) ?? (
                   <SopBoardView
                     pharmacyBranchId={branch.pharmacyBranchId}
                     timezone={branch.timezone}
@@ -429,7 +432,7 @@ function Workspace({ access, branches }: { access: SopAccess; branches: SopBranc
         ) : null}
         {views.includes('review') ? (
           <TabsContent value="review" className="mt-4">
-            {runner ?? (
+            {(view === 'review' ? runner : null) ?? (
               <ReviewTab
                 pharmacyBranchId={branch.pharmacyBranchId}
                 timezone={branch.timezone}
