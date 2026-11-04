@@ -405,6 +405,35 @@ branch-bound bridge records (`pharmacy_print_bridges`), because pharmacy branche
 aggregate. A Pharmacy bridge credential can never claim Restaurant work, drive the counter
 transport or open a terminal session, and the reverse also holds.
 
+### Connection paths (USB first)
+
+USB thermal printing is the first priority. Network and Bluetooth stay available for other
+pharmacies. Every path below needs a printer that accepts raw ESC/POS. No connection is marked
+compatible until the actual printer, driver and host have passed a real-device test that the
+owner authorized. Nothing here assumes a printer brand or model.
+
+| Connection | Host OS        | Printer ID to enroll                        | What the host needs                                                                                     |
+| ---------- | -------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| USB        | Windows        | `queue:///Receipt%20Printer`                | An installed local queue for the printer that accepts RAW data (vendor driver or a generic/text driver) |
+| USB        | macOS          | `queue:///Receipt_Printer`                  | An installed CUPS destination that accepts `-o raw`                                                     |
+| USB        | Linux or macOS | `/dev/usb/lp0` or `usb:///dev/usb/lp0`      | A writable character device the OS already created                                                      |
+| Network    | Any            | `tcp://192.168.1.50:9100`                   | Raw TCP printing enabled on the printer, at a stable address                                            |
+| Bluetooth  | Windows        | `queue:///Receipt%20Printer`                | The printer paired and an installed RAW queue on its port. The bridge cannot open a COM port directly.  |
+| Bluetooth  | macOS or Linux | `serial:///dev/cu.<name>` or `/dev/rfcomm0` | A paired serial (SPP) device node, with speed and flow control already set by the OS or vendor          |
+
+What is not supported:
+
+- Bluetooth Low Energy (GATT-only) printers.
+- Device discovery or the OS default printer. Every target must be named explicitly.
+- Opening a Windows COM port directly.
+- Thermal printers that do not accept ESC/POS (for example, raster-only or vendor-language models).
+  Print to those, and to every A4 printer, through the browser/OS print dialog with the installed
+  driver. That browser path is unchanged and stays the fallback. DEV-742 owns the A4 and thermal
+  format settings.
+
+Run `npm run pharmacy:print-bridge -- --dry-run` on the host first. It checks the target syntax
+and allowlist without opening the device, queue or network. It is not a hardware test.
+
 ### Enrollment and host setup
 
 An administrator enrolls one bridge per receipt printer through `pharmacyPrinting.enrollBridge`
