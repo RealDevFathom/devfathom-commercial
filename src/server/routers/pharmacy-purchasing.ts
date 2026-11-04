@@ -1625,29 +1625,9 @@ const purchasingRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertProcurement(ctx);
       const scope = await receivingScope(ctx, input.branchId);
-      // The receipt's order carries the branch of the requisition it came from;
-      // posting against it needs reach there too (#979). The order's link to a
-      // receipt and to its requisition does not change once the receipt exists.
-      const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
-        where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
-        select: { purchaseOrderId: true },
-      });
-      if (receipt?.purchaseOrderId) {
-        const order = await ctx.db.pharmacyPurchaseOrder.findFirst({
-          where: { id: receipt.purchaseOrderId, organizationId: scope.organizationId },
-          select: { branchId: true, requisition: { select: { branchId: true } } },
-        });
-        if (order) {
-          await assertOrderBranches(ctx, {
-            branchId: order.branchId,
-            requisitionBranchId: order.requisition?.branchId ?? null,
-          });
-        }
-      }
-      // Lockout counters commit even when the PIN is refused. Stock posting is
-      // a second transaction, so a refused PIN never leaves a half-posted receipt.
-      // Existing drafts also need the referenced order's branch grant before
-      // posting can move that order to RECEIVING.
+      // One read of the receipt, scoped to the tenant and the posting branch. A
+      // receipt held by another branch is not found here, and the posting below
+      // refuses it before any stock moves.
       const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
         where: {
           id: input.goodsReceiptId,
@@ -1660,11 +1640,24 @@ const purchasingRouter = router({
           status: true,
           bypassApprovedByUserId: true,
           receivedByUserId: true,
-          purchaseOrder: { select: { branchId: true } },
+          purchaseOrder: {
+            select: { branchId: true, requisition: { select: { branchId: true } } },
+          },
         },
       });
-      if (receipt?.purchaseOrder?.branchId)
-        await receivingScope(ctx, receipt.purchaseOrder.branchId);
+      // The receipt's order carries its own branch and the branch of the
+      // requisition it came from. Posting moves that order to RECEIVING, so it
+      // needs reach at both (#979) before any PIN transaction or posting runs.
+      // The links from receipt to order and from order to requisition do not
+      // change once the receipt exists.
+      if (receipt?.purchaseOrder) {
+        await assertOrderBranches(ctx, {
+          branchId: receipt.purchaseOrder.branchId,
+          requisitionBranchId: receipt.purchaseOrder.requisition?.branchId ?? null,
+        });
+      }
+      // Lockout counters commit even when the PIN is refused. Stock posting is
+      // a second transaction, so a refused PIN never leaves a half-posted receipt.
       if (receipt?.directPurchase && receipt.status === 'DRAFT') {
         const approverId = receipt.bypassApprovedByUserId;
         if (!approverId) return { blocked: APPROVAL_BLOCKED };

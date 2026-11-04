@@ -222,6 +222,7 @@ describe('procurement write authorization', () => {
             {
               requisitionLineId: 'req_line_a',
               pricePerPackMinor: 100,
+              forecastSellThroughPacks: 8,
               canonicalUnitsPerPack: 10,
             },
           ],
@@ -942,6 +943,10 @@ describe('PUR-02 tenant boundaries', () => {
   it('accepts requisitions and IDs at their limits', async () => {
     const medicineId = 'm'.repeat(200);
     resolvableCatalog();
+    // #979: the caller is assigned to the branch it names, even at the ID limit.
+    db.pharmacyBranchAssignment.findFirst.mockImplementation(async ({ where }) =>
+      where.branchId === 'b'.repeat(200) ? { id: 'assignment_limit' } : null
+    );
     await expect(
       caller().createRequisition({
         reference: 'REQ-AT-LIMIT',
@@ -1199,7 +1204,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     db.user.findUnique.mockResolvedValue({
       organizationRole: {
         permissions: [
-          { capability: 'pharmacy.procurement', effect: 'ALLOW' },
+          { capability: 'pharmacy:procurement', effect: 'ALLOW' },
           { capability: 'pharmacy:procurement-approve', effect: 'ALLOW' },
         ],
       },
@@ -1264,8 +1269,16 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       purchaseOrder: { branchId: 'branch_b' },
     });
     await expect(
-      caller().postGoodsReceipt({ branchId: 'branch_a', goodsReceiptId: 'receipt' })
+      caller().postGoodsReceipt({
+        branchId: 'branch_a',
+        goodsReceiptId: 'receipt',
+        approvalPin: '1234',
+        staffProfileId: 'staff_a',
+        pin: '1234',
+      })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    // Supplied PINs change nothing: the branch refusal comes before the witness
+    // PIN transaction and the posting transaction.
     expect(db.$transaction).not.toHaveBeenCalled();
     expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
     expect(db.pharmacyGoodsReceipt.update).not.toHaveBeenCalled();
@@ -2795,6 +2808,77 @@ it('does not post a historical direct draft on a stored approver ID alone', asyn
   expect(result).toHaveProperty('blocked');
   expect(db.pharmacyGoodsReceipt.update).not.toHaveBeenCalled();
   expect(db.auditLog.create).not.toHaveBeenCalled();
+});
+
+describe('posting a historical direct draft re-verifies its recorded approver (#246)', () => {
+  const legacyDraft = (approverId: string) => ({
+    id: 'legacy',
+    directPurchase: true,
+    status: 'DRAFT',
+    bypassApprovedByUserId: approverId,
+    receivedByUserId: 'user_a',
+    purchaseOrder: null,
+  });
+  const post = (approvalPin?: string) =>
+    caller().postGoodsReceipt({ branchId: 'branch_a', goodsReceiptId: 'legacy', approvalPin });
+
+  it('reads the receipt once, scoped to the tenant and the posting branch', async () => {
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce(legacyDraft('user_manager'));
+    await post();
+    expect(db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledTimes(1);
+    expect(db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'legacy', organizationId: 'org_a', branchId: 'branch_a' },
+      })
+    );
+  });
+
+  it('records PIN-verified solo-owner evidence before the posting transaction', async () => {
+    installedOwner();
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce(legacyDraft('user_a'));
+    const outcome = await post('1234').catch((error: unknown) => error);
+    expect(outcome).not.toHaveProperty('blocked');
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: 'user_a',
+        action: 'pharmacy.directPurchaseApproval',
+        targetType: 'PharmacyGoodsReceipt',
+        targetId: 'legacy',
+        metadata: {
+          approverId: 'user_a',
+          pinVerified: true,
+          policy: 'PHARMACY_SOLO_OWNER_PIN',
+        },
+      }),
+    });
+    const verifiedPin = db.$queryRaw.mock.calls.find(([sql]) =>
+      (sql as TemplateStringsArray).join('?').includes('app.pharmacy_purchase_pin_verified_user_id')
+    );
+    expect(verifiedPin?.slice(1)).toEqual(['user_a']);
+    // Approval evidence, then the controlled-witness check, then the posting.
+    expect(db.$transaction).toHaveBeenCalledTimes(3);
+  });
+
+  it('refuses a wrong PIN without approval evidence or a posting transaction', async () => {
+    installedOwner();
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce(legacyDraft('user_a'));
+    const result = await post('9999');
+    expect(result).toHaveProperty('blocked');
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    expect(db.pharmacyGoodsReceipt.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses solo self-approval when another staff member is active in scope', async () => {
+    installedOwner();
+    db.user.count.mockResolvedValue(1);
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce(legacyDraft('user_a'));
+    const result = await post('1234');
+    expect(result).toHaveProperty('blocked');
+    expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
 });
 
 describe('purchasing list branch boundaries', () => {

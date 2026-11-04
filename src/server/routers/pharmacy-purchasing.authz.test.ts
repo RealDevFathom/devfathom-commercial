@@ -1112,7 +1112,11 @@ describe('workspace names the branches the caller may act at (PUR-06 board)', ()
     await expect(CALLS.workspace(caller('owner'))).resolves.toMatchObject({
       reachableBranchIds: ['branch_a', 'branch_b'],
     });
-    expect(m('pharmacyBranchAssignment').findMany).not.toHaveBeenCalled();
+    // The administrator's own reach never comes from assignments. The approver
+    // picker (#246) still reads other members' assignments.
+    expect(m('pharmacyBranchAssignment').findMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ userId: 'owner' }) })
+    );
   });
 });
 
@@ -1213,16 +1217,39 @@ describe("Goods-in against an organization-wide order checks its requisition's b
   });
 
   it('refuses to post such a receipt before any receipt transaction', async () => {
-    m('pharmacyGoodsReceipt').findFirst.mockResolvedValue({ purchaseOrderId: 'po_a' });
-    m('pharmacyPurchaseOrder').findFirst.mockResolvedValue({
-      branchId: null,
-      requisition: { branchId: 'branch_b' },
+    m('pharmacyGoodsReceipt').findFirst.mockResolvedValue({
+      id: 'gr_a',
+      directPurchase: false,
+      status: 'DRAFT',
+      purchaseOrder: { branchId: null, requisition: { branchId: 'branch_b' } },
     });
     await expect(CALLS.postGoodsReceipt(caller('buyer'))).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: OUTSIDE_BRANCH,
     });
     expect(db.$transaction).not.toHaveBeenCalled();
+    // One receipt read, scoped to the tenant and the posting branch; the order
+    // and requisition branches come with it rather than from a second lookup.
+    expect(m('pharmacyGoodsReceipt').findFirst).toHaveBeenCalledTimes(1);
+    expect(m('pharmacyGoodsReceipt').findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'gr_a', organizationId: 'org_a', branchId: 'branch_a' },
+      })
+    );
+    expect(m('pharmacyPurchaseOrder').findFirst).not.toHaveBeenCalled();
+  });
+
+  it('does not refuse posting by branch once the receiver is assigned to the requisition branch', async () => {
+    assignments({ buyer: ['branch_a', 'branch_b'] });
+    m('pharmacyGoodsReceipt').findFirst.mockResolvedValueOnce({
+      id: 'gr_a',
+      directPurchase: false,
+      status: 'DRAFT',
+      purchaseOrder: { branchId: null, requisition: { branchId: 'branch_b' } },
+    });
+    const outcome = await settle(CALLS.postGoodsReceipt(caller('buyer')));
+    expect(outcome instanceof TRPCError && outcome.message === OUTSIDE_BRANCH).toBe(false);
+    expect(db.$transaction).toHaveBeenCalled();
   });
 });
 
