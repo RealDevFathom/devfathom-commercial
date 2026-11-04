@@ -1,0 +1,27 @@
+# DEV-745 example snippet for mediamtx.yml (owner reviews before applying).
+#
+# The snapshot gateway reads each camera path from MediaMTX's own RTSP output
+# on loopback (rtsp://127.0.0.1:8554/<path>, the default rtspAddress :8554).
+# This grants anonymous `read` on exactly those paths, and only from loopback.
+#
+# IMPORTANT: the stock MediaMTX config ships a catch-all `user: any` entry that
+# allows anonymous `publish`, `read` and `playback` from any IP. Remove that
+# entry (or restrict it the same way); otherwise anyone on the LAN can read
+# every stream. Keep your existing authenticated users (HLS readers, the
+# publisher, api/metrics/pprof on loopback) as they are.
+#
+# This snippet only adds read permissions. It does not set or change `record`
+# (default: false), playback, any path `source`, or the DVR connection.
+
+# Requires the default `authMethod: internal`.
+authInternalUsers:
+  # ...your existing authenticated users stay here...
+
+  # Loopback-only anonymous read for the snapshot gateway.
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1']
+    permissions:
+      - action: read
+        path: pharmacy/branch-1/counter-1
+      # One `read` entry per snapshot path in config.json `paths`.
