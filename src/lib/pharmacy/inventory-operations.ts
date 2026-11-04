@@ -1,5 +1,6 @@
 /** PH-INV INV-06/07/08(manual)/09 workflows layered on the append-only ledger. */
 import { Prisma } from '@/generated/prisma/client';
+import { postWriteOffEntry } from '@/lib/pharmacy/finance-postings';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { arrangementFor, PharmacyInventoryError } from './inventory';
@@ -388,6 +389,10 @@ export async function writeOff(
       reason: input.reason,
       evidenceRef: input.evidenceRef,
     },
+  });
+  await postWriteOffEntry(db, scope, {
+    stockMovementId: movement.id,
+    at: movement.createdAt,
   });
   return { movement, custody };
 }

@@ -438,7 +438,8 @@ export async function postUnidentifiedSaleReturnEntry(
 /**
  * FIN-01 (expiry/damage): the write-off posting, taken straight off the
  * WRITE_OFF stock movement so the money and the units always name the same
- * event.
+ * event. Zero-cost stock has no value to relieve, so it returns null while
+ * retaining the operational movement and custody evidence.
  */
 export async function postWriteOffEntry(
   db: ScopedDb,
@@ -458,6 +459,7 @@ export async function postWriteOffEntry(
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
   const amountMinor = lot.unitCostMinor * Math.abs(movement.quantityUnits);
+  if (amountMinor === 0) return null;
   const dimensions = {
     branchId: movement.branchId,
     productId: lot.medicineId,
