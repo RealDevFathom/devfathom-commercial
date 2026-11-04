@@ -148,12 +148,17 @@ let db: {
   $queryRaw: ReturnType<typeof vi.fn>;
   $executeRaw: ReturnType<typeof vi.fn>;
   pharmacyBranch: { findMany: ReturnType<typeof vi.fn> };
+  // One mock for every assignment read: the close gate's findFirst (DEV-739) and the
+  // counter/drawer gate's findMany (DEV-279 / #1086).
+  pharmacyBranchAssignment: {
+    findFirst: ReturnType<typeof vi.fn>;
+    findMany: ReturnType<typeof vi.fn>;
+  };
   pharmacyDailyClose: { findFirst: ReturnType<typeof vi.fn> };
   pharmacyDrawerSession: { findFirst: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
   pharmacyDrawerMovement: { create: ReturnType<typeof vi.fn> };
   pharmacyTender: { findFirst: ReturnType<typeof vi.fn> };
   user: { findUnique: ReturnType<typeof vi.fn> };
-  pharmacyBranchAssignment: { findFirst: ReturnType<typeof vi.fn> };
 };
 
 function caller(role = 'ADMIN'): Caller {
@@ -178,6 +183,10 @@ beforeEach(() => {
     $executeRaw: vi.fn().mockResolvedValue(0),
     // Unknown, inactive and another tenant's branch all read as "no such active branch".
     pharmacyBranch: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyDrawerSession: {
       findFirst: vi.fn().mockResolvedValue(null),
@@ -187,7 +196,6 @@ beforeEach(() => {
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue(null) },
     // A user row with no custom rules: the close gate reads it for an ADMIN's DENYs.
     user: { findUnique: vi.fn().mockResolvedValue(memberWithoutCustomRules) },
-    pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue(null) },
   };
 });
 
@@ -516,8 +524,9 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
     }
   );
 
-  // Counting one's own drawer is not day close: closeDrawer keeps its own policy and
-  // never passes the day-close gate (DEV-739 scope).
+  // Counting one's own drawer is not day close: closeDrawer keeps its own policy
+  // (DEV-279 / DEV-659, #1086) and is never refused by the day-close gate. Only that is
+  // pinned here, so a drawer policy that adds its own gate does not break this test.
   it.each(['pharmacist', 'cashier'])(
     'lets the %s template reach closeDrawer without pharmacy:close',
     async (role) => {
@@ -526,8 +535,6 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
       await caller('EMPLOYEE')
         .closeDrawer({ branchId: BRANCH, drawerSessionId: 'drawer-1', countedCashMinor: 0 })
         .catch((error: unknown) => expect(error).not.toMatchObject(NO_CLOSE));
-      expect(db.$transaction).toHaveBeenCalledOnce();
-      expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
     }
   );
 

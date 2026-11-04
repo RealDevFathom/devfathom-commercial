@@ -115,7 +115,26 @@ tested SQL cannot drift apart.
 - **Rolling back phase 1 alone** (back to a pre-DEV-739 revision) is safe only if the new
   revision provisioned no pharmacy organization. Managers created from the new template
   hold `pharmacy:close` and would be served by the old gate. If any were created, remove
-  their `pharmacy:close` ALLOW before or together with the rollback.
+  that ALLOW before or together with the rollback. Before phase 2 a system Manager's
+  close ALLOW can only have come from the new template, so this is valid **only before
+  phase 2**:
+
+  ```sql
+  BEGIN;
+  SELECT set_config('app.is_platform_admin', 'true', true);
+  DELETE FROM organization_role_permissions p
+  USING organization_roles r, organizations o
+  WHERE p."organizationRoleId" = r.id
+    AND p."organizationId" = r."organizationId"
+    AND o.id = r."organizationId"
+    AND o.vertical = 'PHARMACY'
+    AND r.key = 'manager'
+    AND r."isSystem" = true
+    AND p.capability = 'pharmacy:close'
+    AND p.effect = 'ALLOW'::"PermissionEffect";
+  COMMIT;
+  ```
+
 - The phase 1 revoke has no rollback. Restoring a default pharmacist grant would
   contradict the decision above.
 
