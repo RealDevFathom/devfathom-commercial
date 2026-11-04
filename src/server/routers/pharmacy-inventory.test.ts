@@ -969,15 +969,36 @@ describe('DEV-211 — inventory needs an active assignment to the branch', () =>
   );
 
   it.each(ASSIGNMENT_GATED)(
+    'refuses $name for an unassigned ADMIN holding the system Owner role and a * grant',
+    async ({ invoke }) => {
+      // No owner exemption exists yet: a tenant administrator can hand anyone the
+      // Owner role template, so neither it nor `*` nor the ADMIN role is proof of
+      // ownership. Until a durable owner identity exists, they all need an assignment.
+      db.user.findUnique.mockResolvedValue({
+        organizationRole: { key: 'owner', isSystem: true, permissions: [allow('*')] },
+        permissionOverrides: [],
+      });
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+
+      await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
     'does not let an assignment to a sibling branch admit $name',
     async ({ capability, invoke }) => {
       grant([allow(capability)]);
+      // The user's only assignment is to branch_b, so any lookup that is not pinned
+      // to the requested branch_a finds it. A check that asked "is this user
+      // assigned anywhere?" would therefore admit the request and fail here.
       db.pharmacyBranchAssignment.findFirst.mockImplementation(
-        async ({ where }: { where: { branchId: string } }) =>
-          where.branchId === 'branch_b' ? { id: 'assignment_b' } : null
+        async ({ where }: { where: { branchId?: string } }) =>
+          where.branchId === 'branch_a' ? null : { id: 'assignment_b' }
       );
 
       await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith(ASSIGNMENT_QUERY);
       expect(dataAccess()).toEqual([]);
     }
   );

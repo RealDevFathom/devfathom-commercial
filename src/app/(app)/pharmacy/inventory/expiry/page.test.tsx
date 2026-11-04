@@ -105,3 +105,32 @@ it('DEV-660: explains a missing branch assignment instead of reading the board',
   expect(mocks.lots).not.toHaveBeenCalled();
   expect(mocks.board).not.toHaveBeenCalled();
 });
+
+it('DEV-660: opens an assigned branch instead of an unassigned one named in the URL', async () => {
+  const context = {
+    session: { user: { id: 'user_a' } },
+    organization: { id: 'org_a' },
+    entitlements: {},
+    db: {
+      pharmacyBranch: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 'branch_a', name: 'Main', city: 'Karachi' },
+          { id: 'branch_b', name: 'Other', city: 'Lahore' },
+        ]),
+      },
+    },
+  };
+  mocks.actor.mockResolvedValue(context);
+  mocks.context.mockResolvedValue(context);
+  mocks.lots.mockResolvedValue({
+    generatedAt: new Date('2026-11-15T00:00:00.000Z'),
+    riskBuckets: [],
+    rows: [],
+    suppliers: [],
+  });
+
+  const view = render(await Page({ searchParams: Promise.resolve({ branch: 'branch_b' }) }));
+
+  expect(mocks.lots).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch_a', withinDays: 90 });
+  expect(view.queryByRole('option', { name: /Other/ })).toBeNull();
+});

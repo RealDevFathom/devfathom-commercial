@@ -167,25 +167,37 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 }
 
 /**
+ * DEV-211 / DEV-660: the one admission rule for branch-scoped inventory — an
+ * active assignment of the session actor on an active branch of the session
+ * tenant. Both the procedure check and the pages' branch list are built from
+ * it, so they cannot drift apart.
+ */
+function activeAssignmentOf(organizationId: string, userId: string) {
+  return {
+    organizationId,
+    userId,
+    active: true,
+    branch: { organizationId, active: true },
+  };
+}
+
+/**
  * DEV-211 / DEV-660: besides being an active branch of the session tenant, the
  * requested branch must carry an active assignment for the session actor. It
  * guards the stock-creating and stock-removing mutations (createLocation,
  * receiveLot, createCount, writeOff), the branch stock reads, allocateForSale
- * and every transfer step. A session ADMIN is not exempt.
+ * and every transfer step.
  *
- * The other branch-scoped mutations still use the tenant-only scopeFor; that
- * remaining gap is tracked on DEV-660 rather than widened here.
+ * Nobody is exempt: not a session ADMIN, a `*` grant or the Owner role template,
+ * all of which a tenant administrator can hand out. An owner exemption waits for
+ * a durable, platform-recorded owner identity (DEV-660); until then this fails
+ * closed. The other branch-scoped mutations still use the tenant-only scopeFor;
+ * that remaining gap is tracked on DEV-660 rather than widened here.
  */
 async function assignedScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const scope = await scopeFor(ctx, branch);
   const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: branch,
-      userId: scope.actorId,
-      active: true,
-      branch: { organizationId: scope.organizationId, active: true },
-    },
+    where: { ...activeAssignmentOf(scope.organizationId, scope.actorId), branchId: branch },
     select: { id: true },
   });
   if (!assignment) {
@@ -203,12 +215,7 @@ async function assignedScopeFor(ctx: TRPCContext, branch: string): Promise<Ledge
 export async function assignedInventoryBranchIds(ctx: TRPCContext): Promise<Set<string>> {
   const { organizationId, actorId } = actorFor(ctx);
   const rows = await ctx.db.pharmacyBranchAssignment.findMany({
-    where: {
-      organizationId,
-      userId: actorId,
-      active: true,
-      branch: { organizationId, active: true },
-    },
+    where: activeAssignmentOf(organizationId, actorId),
     select: { branchId: true },
   });
   return new Set(rows.map((row) => row.branchId));
