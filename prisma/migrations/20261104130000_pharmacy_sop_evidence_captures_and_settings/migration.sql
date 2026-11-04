@@ -15,12 +15,10 @@
 --
 -- Additive only: no data is changed and nothing is backfilled (the legacy
 -- receipt backfill is a separate, manual, dry-run-by-default script:
--- scripts/pharmacy-sop-legacy-capture-backfill.ts). The one change to an
--- existing table is an additional UNIQUE ("organizationId", "id") constraint on
--- restaurant_sop_evidence, the same tenant-key constraint every other engine
--- table already carries; "id" is its primary key, so the constraint always
--- holds and changes no row. It is what lets a receipt reference its evidence
--- row by a tenant-keyed composite foreign key.
+-- scripts/pharmacy-sop-legacy-capture-backfill.ts). No existing table is
+-- altered: a receipt references its engine evidence row by the evidence
+-- primary key, and the BEFORE INSERT trigger below refuses any receipt whose
+-- evidence row is not in the receipt's own organization.
 --
 -- Both new tables carry forced RLS with the pharmacy tenant/branch clause
 -- (app.current_organization_id, optional app.current_branch_id, and the
@@ -28,10 +26,6 @@
 -- only, so the runtime role cannot UPDATE or DELETE a receipt or a setting.
 
 CREATE TYPE "PharmacySopCaptureSource" AS ENUM ('UPLOAD', 'LEGACY_HMAC_BACKFILL');
-
--- Tenant key for the composite receipt foreign key below (see header).
-ALTER TABLE "restaurant_sop_evidence"
-  ADD CONSTRAINT "restaurant_sop_evidence_organizationId_id_key" UNIQUE ("organizationId", "id");
 
 CREATE TABLE "pharmacy_sop_evidence_captures" (
   "id" TEXT NOT NULL,
@@ -49,12 +43,15 @@ CREATE TABLE "pharmacy_sop_evidence_captures" (
   CONSTRAINT "pharmacy_sop_evidence_captures_pharmacy_branch_fkey"
     FOREIGN KEY ("organizationId", "pharmacyBranchId")
     REFERENCES "pharmacy_branches" ("organizationId", "id") ON DELETE RESTRICT ON UPDATE CASCADE,
-  -- SQL-only composite keys onto the shared engine tables: the evidence row,
-  -- its occurrence and the capturing staff profile all belong to the
-  -- receipt's organization. RESTRICT keeps a receipt from being orphaned.
+  -- SQL-only keys onto the shared engine tables: the occurrence and the
+  -- capturing staff profile are tenant-keyed composites; RESTRICT keeps a
+  -- receipt from being orphaned.
+  -- The evidence row by primary key (restaurant_sop_evidence has no tenant
+  -- composite key, and this migration leaves engine tables untouched); the
+  -- trigger enforces that it belongs to the receipt's organization.
   CONSTRAINT "pharmacy_sop_evidence_captures_evidence_fkey"
-    FOREIGN KEY ("organizationId", "evidenceId")
-    REFERENCES "restaurant_sop_evidence" ("organizationId", "id") ON DELETE RESTRICT,
+    FOREIGN KEY ("evidenceId")
+    REFERENCES "restaurant_sop_evidence" ("id") ON DELETE RESTRICT,
   CONSTRAINT "pharmacy_sop_evidence_captures_occurrence_fkey"
     FOREIGN KEY ("organizationId", "occurrenceId")
     REFERENCES "restaurant_sop_occurrences" ("organizationId", "id") ON DELETE RESTRICT,

@@ -38,10 +38,16 @@ describe('DEV-751 capture receipt migration contract', () => {
     }
   });
 
-  it('keys every cross-table reference by organization', () => {
+  it('keys cross-table references by organization; evidence is org-checked by the trigger', () => {
+    // restaurant_sop_evidence has no tenant composite key and is not altered:
+    // the receipt references it by primary key, and the insert trigger refuses
+    // any evidence row outside the receipt's organization.
+    expect(migration).toContain('REFERENCES "restaurant_sop_evidence" ("id")');
+    expect(migration).toMatch(
+      /FROM "restaurant_sop_evidence" evidence\s+WHERE evidence\."organizationId" = NEW\."organizationId"/
+    );
     for (const reference of [
       'REFERENCES "pharmacy_branches" ("organizationId", "id")',
-      'REFERENCES "restaurant_sop_evidence" ("organizationId", "id")',
       'REFERENCES "restaurant_sop_occurrences" ("organizationId", "id")',
       'REFERENCES "restaurant_staff_profiles" ("organizationId", "id")',
     ]) {
@@ -49,18 +55,15 @@ describe('DEV-751 capture receipt migration contract', () => {
     }
   });
 
-  it('backfills nothing and only adds a tenant key to restaurant_sop_evidence', () => {
+  it('backfills nothing and alters no existing table', () => {
     const sql = migration.replace(/--[^\n]*/g, '');
     expect(sql).not.toMatch(/\bUPDATE\s+"/);
     expect(sql).not.toMatch(/INSERT\s+INTO/i);
     expect(sql).not.toMatch(/\bDELETE\s+FROM/i);
     const altered = [...sql.matchAll(/ALTER TABLE "(?!pharmacy_sop_)([a-z_]+)"([^;]*);/g)];
-    expect(altered.map(([, table, rest]) => [table, rest!.replace(/\s+/g, ' ').trim()])).toEqual([
-      [
-        'restaurant_sop_evidence',
-        'ADD CONSTRAINT "restaurant_sop_evidence_organizationId_id_key" UNIQUE ("organizationId", "id")',
-      ],
-    ]);
+    // The shared engine tables are left untouched: the receipt references its
+    // evidence row by primary key and the trigger enforces the organization.
+    expect(altered.map(([, table]) => table)).toEqual([]);
   });
 });
 
