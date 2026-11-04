@@ -198,13 +198,17 @@ export function supplierOptions(suppliers: readonly SupplierPickerOption[]): Sel
   return suppliers.map((supplier) => ({
     value: supplier.id,
     disabled: !supplier.eligibility.orderable,
-    label: !supplier.compliance.checked
-      ? `${supplier.name} — not checked`
-      : supplier.eligibility.orderable
-        ? supplier.name
-        : `${supplier.name} — ${
-            supplier.eligibility.reason === 'NOT_AUTHORIZED' ? 'not authorized' : 'no valid licence'
-          }`,
+    // A summary without `compliance` (an older cached one) reads as checked: fail closed.
+    label:
+      supplier.compliance?.checked === false
+        ? `${supplier.name} — not checked`
+        : supplier.eligibility.orderable
+          ? supplier.name
+          : `${supplier.name} — ${
+              supplier.eligibility.reason === 'NOT_AUTHORIZED'
+                ? 'not authorized'
+                : 'no valid licence'
+            }`,
   }));
 }
 
@@ -258,7 +262,7 @@ export function Derived({ label, value }: { label: string; value: React.ReactNod
 export function LicenceBadge({ supplier }: { supplier: SupplierPickerOption }) {
   // DEV-753: with the owner's checks off nothing was verified, so the badge says so
   // and never reads "Orderable", "Licensed" or "Authorized" on the policy's account.
-  if (!supplier.compliance.checked) {
+  if (supplier.compliance?.checked === false) {
     return <StatusPill status="Not checked" tone="warning" label={SUPPLIER_NOT_CHECKED_LABEL} />;
   }
   if (supplier.eligibility.orderable) {

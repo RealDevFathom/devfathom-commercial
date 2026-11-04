@@ -15,6 +15,26 @@ vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.hasModule }));
+// DEV-753: the owner policy router, at its default (checks on, not the owner).
+vi.mock('@/server/routers/pharmacy-supplier-compliance', () => ({
+  pharmacySupplierComplianceRouter: {
+    createCaller: () => ({
+      policy: async () => ({
+        policy: {
+          checksEnabled: true,
+          version: 0,
+          source: 'DEFAULT',
+          updatedAt: null,
+          updatedByName: null,
+        },
+        canManage: false,
+        warningVersion: 'supplier-compliance-off@1',
+      }),
+      history: async () => [],
+      skips: async () => [],
+    }),
+  },
+}));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/navigation', () => ({ redirect: vi.fn(), useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock('@/server/routers/pharmacy-purchasing', () => ({

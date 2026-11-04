@@ -473,7 +473,8 @@ function SupplierDetail({
   skips: Parameters<typeof SupplierComplianceSkipList>[0]['skips'];
 }) {
   const supersedable = supplier.licences.filter((licence) => !licence.superseded);
-  const checked = supplier.compliance.checked;
+  // A summary without `compliance` reads as checked (fail closed).
+  const checked = supplier.compliance?.checked !== false;
   return (
     <>
       <SectionCard
@@ -501,7 +502,7 @@ function SupplierDetail({
         <div className="mt-5 rounded-[var(--radius-sm)] border border-border-subtle p-4">
           <SupplierPolicyStanding
             checked={checked}
-            licenceStatus={supplier.compliance.licenceStatus}
+            licenceStatus={supplier.compliance?.licenceStatus ?? 'NONE'}
             orderable={supplier.eligibility.orderable}
             reason={supplier.eligibility.reason}
           />

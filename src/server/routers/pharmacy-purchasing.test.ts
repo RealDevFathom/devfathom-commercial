@@ -841,10 +841,15 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     await caller().createGoodsReceipt(RECEIPT);
 
     expect(db.$transaction).toHaveBeenCalledTimes(1);
-    expect(db.$queryRaw).toHaveBeenCalledTimes(1);
+    // The order lock first; then DEV-753's owner policy read, share-locked in the same
+    // transaction. The mocked row is not a policy row, so the checks stay enforced.
+    expect(db.$queryRaw).toHaveBeenCalledTimes(2);
     const lockSql = (db.$queryRaw.mock.calls[0]![0] as TemplateStringsArray).join('?');
     expect(lockSql).toContain('pharmacy_purchase_orders');
     expect(lockSql).toContain('FOR UPDATE');
+    const policySql = (db.$queryRaw.mock.calls[1]![0] as { sql: string }).sql;
+    expect(policySql).toContain('pharmacy_owner_policies');
+    expect(policySql).toContain('FOR SHARE');
     expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
       db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]!
     );
