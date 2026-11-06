@@ -57,6 +57,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   DAY_CLOSED:
     'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
   DRAWER_NOT_OPEN: 'Open the cash drawer for this counter before taking a payment.',
+  DRAWER_NOT_OWNED:
+    'That cash drawer belongs to another cashier. Use the drawer you opened on this counter.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
   SALE_NOT_OPEN: 'This bill is no longer open for payment. Refresh the counter and try again.',
   INVALID_AMOUNT: 'Enter a payment amount greater than zero.',

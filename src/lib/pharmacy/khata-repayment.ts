@@ -55,6 +55,25 @@ export async function recordKhataRepayment(
     if (!stored.success) throw new PharmacySettlementError('IDEMPOTENCY_CONFLICT');
     return stored.data;
   }
+  // For CASH, refuse a foreign open drawer before any khata ledger write so a
+  // rejected ownership check never leaves a settlement that only the outer
+  // transaction would roll back.
+  if (input.tender === 'CASH') {
+    const drawerSessionId = input.drawerSessionId ?? '';
+    const drawer = await db.pharmacyDrawerSession.findFirst({
+      where: {
+        id: drawerSessionId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: 'OPEN',
+      },
+      select: { id: true, openedByActorId: true },
+    });
+    if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+    if (drawer.openedByActorId !== scope.actorId)
+      throw new PharmacySettlementError('DRAWER_NOT_OWNED');
+  }
+
   const occurredAt = new Date();
   const settlement = await settleFamilyKhata(db, scope, {
     familyAccountId: input.familyAccountId,

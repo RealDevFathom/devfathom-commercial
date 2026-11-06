@@ -64,6 +64,7 @@ describe('counterErrorMessage', () => {
       'INVALID_AMOUNT',
       'OVER_TENDER',
       'DRAWER_NOT_OPEN',
+      'DRAWER_NOT_OWNED',
       'REFUND_EXCEEDS_TENDER',
       'IDEMPOTENCY_CONFLICT',
       'UNCERTIFIED_PROVIDER',

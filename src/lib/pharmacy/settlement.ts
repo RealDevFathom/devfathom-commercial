@@ -34,6 +34,7 @@ export class PharmacySettlementError extends Error {
       | 'INVALID_AMOUNT'
       | 'OVER_TENDER'
       | 'DRAWER_NOT_OPEN'
+      | 'DRAWER_NOT_OWNED'
       | 'REFUND_EXCEEDS_TENDER'
       | 'IDEMPOTENCY_CONFLICT'
       | 'UNCERTIFIED_PROVIDER'
@@ -796,6 +797,10 @@ export async function recordPharmacyCashMovement(
     },
   });
   if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+  // Cash must land in the caller's own open drawer — never another cashier's
+  // session at the same branch (client-supplied drawerSessionId is not enough).
+  if (drawer.openedByActorId !== scope.actorId)
+    throw new PharmacySettlementError('DRAWER_NOT_OWNED');
   return db.pharmacyDrawerMovement.create({
     data: {
       organizationId: scope.organizationId,

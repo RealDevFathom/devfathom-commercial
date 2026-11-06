@@ -45,6 +45,7 @@ function database() {
           id: 'drawer-a',
           status: 'OPEN',
           businessDate: new Date('2026-11-03T00:00:00Z'),
+          openedByActorId: 'cashier-a',
         }),
       },
       pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -90,6 +91,28 @@ describe('counter khata repayment', () => {
     });
     expect(movement).not.toHaveBeenCalled();
   });
+});
+
+it('refuses cash into another cashier\'s open drawer with no khata settle and no movement', async () => {
+  const { db, payment, movement } = database();
+  db.pharmacyDrawerSession.findFirst.mockResolvedValue({
+    id: 'drawer-b',
+    status: 'OPEN',
+    businessDate: new Date('2026-11-03T00:00:00Z'),
+    openedByActorId: 'cashier-b',
+  });
+  await expect(
+    recordKhataRepayment(db as never, scope, {
+      familyAccountId: 'family-a',
+      amountMinor: 4_000,
+      tender: 'CASH',
+      drawerSessionId: 'drawer-b',
+      occurredAt: new Date('2026-11-03T10:00:00Z'),
+      idempotencyKey: 'foreign-drawer',
+    })
+  ).rejects.toMatchObject({ reason: 'DRAWER_NOT_OWNED' });
+  expect(payment).not.toHaveBeenCalled();
+  expect(movement).not.toHaveBeenCalled();
 });
 
 it('replays a lost response without duplicating either ledger or drawer entries', async () => {

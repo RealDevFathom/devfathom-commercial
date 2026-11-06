@@ -279,8 +279,14 @@ function fail(error: unknown): never {
   }
   if (error instanceof PharmacySettlementError) {
     // A drawer that is already open is a state conflict, not a malformed request.
+    // A drawer opened by someone else is forbidden — never a validation tip.
     throw new TRPCError({
-      code: error.reason === 'OPEN_DRAWER' ? 'CONFLICT' : 'BAD_REQUEST',
+      code:
+        error.reason === 'OPEN_DRAWER'
+          ? 'CONFLICT'
+          : error.reason === 'DRAWER_NOT_OWNED'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
       message: error.reason,
     });
   }
