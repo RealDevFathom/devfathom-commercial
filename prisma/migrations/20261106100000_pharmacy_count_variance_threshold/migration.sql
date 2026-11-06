@@ -17,6 +17,20 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
+-- Unapproved counts written before this migration carry a caller-chosen threshold
+-- (uncapped before 983f23b5, up to 10 after). Re-snapshot them to the organization
+-- policy (0 for every tenant at this point) BEFORE the immutability trigger exists,
+-- so no pre-deploy count can still be approved under the counter's choice.
+-- Both tables force RLS, including for a NOSUPERUSER/NOBYPASSRLS owner; keep the
+-- administrative scope local to this transaction.
+SELECT set_config('app.is_platform_admin', 'true', true);
+UPDATE pharmacy_inventory_counts c
+   SET "varianceThreshold" = LEAST(c."varianceThreshold", o."pharmacyCountVarianceThresholdUnits")
+  FROM organizations o
+ WHERE o.id = c."organizationId"
+   AND c.status <> 'APPROVED'
+   AND c."varianceThreshold" > o."pharmacyCountVarianceThresholdUnits";
+
 -- Defense in depth: a count always snapshots the tenant setting at creation, and the
 -- snapshot never changes afterwards. A value supplied by any writer is ignored.
 CREATE OR REPLACE FUNCTION pharmacy_count_variance_threshold_guard() RETURNS trigger
