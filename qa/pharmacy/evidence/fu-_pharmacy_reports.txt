@@ -1,0 +1,433 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Reports
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY OPERATIONS
+Reports
+
+Bounded, permission-scoped command centre and report catalog. Values are ledger-derived and freshness-labelled.
+
+Replenishment
+Repeat purchasing
+Supplier-credit follow-up
+RPT-01 / RPT-02
+Report filters
+Branch
+All available
+Clifton Chemist
+Supplier ID
+Ingredient ID
+Batch ID
+From
+To
+Apply filters
+Marketing evidence
+Review campaigns
+
+2026-10-15–2026-10-21 (UTC); evidence cutoff 2026-10-22T00:00:00.000Z. Branch and date filters apply. Supplier, ingredient and batch filters do not scope these figures.
+
+Prepared captures
+0
+Live accepted
+0
+Live delivered
+0
+Live failure evidence
+0
+Unresolved live outcome
+0
+Contradictory evidence
+0
+Branch opt-out logs
+0
+Unassigned opt-out logs
+0
+Observed attributed receipts
+0
+Attributed net sales
+PKR 0.00
+Attributed signed margin
+PKR 0.00
+
+Sandbox only: 0 captures, 0 delivered, 0 failed, 0 unknown. These counts do not prove live delivery.
+
+Excluded unverified links: 0. Competing receipt links excluded: 0. Message cost unavailable.
+
+Definitions and exclusions
+Observed unmet demand
+
+Choose one authorized branch to view recorded customer requests.
+
+READ-ONLY PREPARATION
+Daily work pack
+PARTIAL COVERAGE
+Refresh daily work pack
+
+Requested period: 2026-10-15 to 2026-10-21. Branch scope: Clifton Chemist.
+
+As of: 2026-10-21T02:26:20.030Z. Read at: 2026-10-21T02:26:22.669Z.
+
+Each source keeps its own time basis below. Supplier, ingredient and batch filters do not apply to this pack. Current records are not a historical snapshot.
+
+Review groups are not distinct problems. Signals may overlap across sources. Amounts are source observations or exposure, never additive savings. Empty persisted reads do not prove all clear or detector coverage.
+
+Refresh rereads existing evidence; it does not refresh domain signals or create drafts. No money or time saved is calculated. Amounts use pharmacy integer minor units, displayed to two decimal places. Source currency is unknown; — means unavailable, not zero.
+
+No review evidence returned from available sources. This is not an all-clear result; check source coverage and unavailable inputs below.
+
+Source coverage and freshness
+Stock dashboard · Clifton Chemist
+AVAILABLE
+UNKNOWN COVERAGE
+
+Current live persisted signals across owners; overdue evaluated at as-of. Requested period is not applied.
+
+Returned rows: 0. Row limit: Not established.
+
+Window: Not period-bounded. Evaluated as of: 2026-10-21T02:26:20.030Z. Read at: 2026-10-21T02:26:22.669Z. Freshness: Persisted; freshness unverified.
+
+Detector coverage and current source freshness are not established by a persisted read.
+
+No returned evidence; this is not an all-clear result.
+
+Your stock digest · Clifton Chemist
+AVAILABLE
+UNKNOWN COVERAGE
+
+Current persisted signals for the session actor only; overdue, next 24 hours, stale and resuming at as-of. Requested period is not applied.
+
+Returned rows: 0. Row limit: Not established.
+
+Window: Not period-bounded. Evaluated as of: 2026-10-21T02:26:20.030Z. Read at: 2026-10-21T02:26:22.669Z. Freshness: Persisted; freshness unverified.
+
+Detector coverage and current source freshness are not established by a persisted read.
+
+Digest omits other owners, future-due and still-snoozed signals; dashboard counts overlap this digest.
+
+No returned evidence; this is not an all-clear result.
+
+Recorded anomalies · Clifton Chemist
+AVAILABLE
+UNKNOWN COVERAGE
+
+Persisted live anomaly records matching the exact requested data window; not refreshed or historical as-of reconstruction.
+
+Returned rows: 0. Row limit: 200.
+
+Window: 2026-10-15T00:00:00.000Z to 2026-10-22T00:00:00.000Z (exclusive end). Evaluated as of: Unavailable. Read at: 2026-10-21T02:26:22.669Z. Freshness: Persisted; freshness unverified.
+
+Detector coverage and current source freshness are not established by a persisted read.
+
+Anomaly reader caps at 200 before scope-payload filtering; completeness remains unknown.
+
+No returned evidence; this is not an all-clear result.
+
+Expiry advice · Clifton Chemist
+UNAVAILABLE
+PARTIAL COVERAGE
+
+Current available lot balances with expiry after as-of; trailing 30-day completed-sales history before as-of. Requested period is not applied.
+
+Returned rows: Unavailable. Row limit: Not established.
+
+Window: 2026-09-21T02:26:20.030Z to 2026-10-21T02:26:20.030Z (exclusive end). Evaluated as of: 2026-10-21T02:26:20.030Z. Read at: 2026-10-21T02:26:22.669Z. Freshness: Live inputs; not historical.
+
+Current records are not a historical snapshot at the requested as-of instant.
+
+Source unavailable; review the existing report before acting.
+
+Supplier credit · Clifton Chemist
+AVAILABLE
+UNKNOWN COVERAGE
+
+Current returns, debit notes, credits and allocations; age and recorded dispatch deadlines evaluated at as-of. Requested period is not applied.
+
+Returned rows: 0. Row limit: Not established.
+
+Window: Not period-bounded. Evaluated as of: 2026-10-21T02:26:20.030Z. Read at: 2026-10-21T02:26:22.669Z. Freshness: Live inputs; not historical.
+
+Current records are not a historical snapshot at the requested as-of instant.
+
+No returned evidence; this is not an all-clear result.
+
+CURRENT
+As of 10/21/2026, 2:26:19 AM
+Source: transactional pharmacy ledgers
+OWNER COMMAND CENTRE
+Selected period at a glance
+
+Report period: 2026-10-15 to 2026-10-21 (inclusive business dates). Branch scope: All available branches. Currency basis: current organization setting (PKR); historical transaction currency is not verified. Amounts use the pharmacy minor-unit scale, shown to two decimal places. — means unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the selected period. Stock signals, recommended orders and expiry exposure are current snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross margin uses the same exact posted journal as Finance, including returns and reversals, on UTC posting dates (start inclusive, next-day end exclusive). It may differ from sales grouped by business date. Missing journal evidence is unavailable; posted totals do not establish complete source or cost coverage. Supplier, ingredient and batch filters do not apply to these KPI totals, the daily work pack or observed demand. Those panels use branch/date scope only; current snapshots use branch scope only.
+
+SALES
+PKR 0.00
+All available branches · ledger source
+GROSS MARGIN
+—
+All available branches · ledger source
+CASH
+PKR 0.00
+All available branches · ledger source
+CASH VARIANCE
+PKR 0.00
+All available branches · ledger source
+REFUNDS
+PKR 0.00
+All available branches · ledger source
+OPEN STOCK SIGNALS
+0
+All available branches · ledger source
+RECOMMENDED ORDERS
+0
+All available branches · ledger source
+EXPIRY ≤30D
+PKR 0.00
+All available branches · ledger source
+EXPIRY ≤90D
+PKR 0.00
+All available branches · ledger source
+ORGANIZATION-WIDE SAFETY QUEUE
+0
+Current snapshot · organization-wide
+
+The selected branch does not apply to this queue. Date, supplier, ingredient and batch filters do not apply either. Unsigned pharmacist review items plus open controlled-register incidents, from pharmacist review and controlled-register records at read time.
+
+AI-02 · OWNER ONLY
+Expiry and supplier-return advisor
+
+Financial report and owner permissions are required to view value-at-risk advice.
+
+AI-04 / RPT-03 · REVIEW ONLY
+Anomaly review signals
+Refresh signals
+
+Deterministic event checks only. Signals never rank staff, imply misconduct, or create orders, stock movements, price changes, or finance postings. A human opens and reviews the source evidence.
+
+No anomaly signals match these filters. Refresh to evaluate the current ledger window; no operational data will be changed.
+
+SAFE-05 · ADVISORY
+Pack authentication flags
+
+Receiving and dispensing scans compare GTIN, batch, expiry, and serial evidence with this workspace. An unverifiable pack is never labelled counterfeit and never blocks a sale by itself. Recalled batches remain blocked by the recall path.
+
+No pack authentication flags match these branches.
+
+REPORT CATALOG
+Available reports
+Sales and margin
+
+2 metric contracts · filters: branch, date, ingredient, batch
+
+Selected-period sales
+
+Completed sale line revenue less line discounts.
+
+Source: pharmacy_sales + pharmacy_sale_lines
+Scope: selected branches and business dates
+Permission: reports:financial
+Drill through
+Gross margin
+
+Posted revenue less discounts and exact allocated lot cost, including return and reversal postings. Missing journal evidence is unknown; source completeness is not asserted.
+
+Source: finance_journal_entries + finance_journal_lines
+Scope: selected branches and UTC posting dates
+Permission: reports:financial
+Drill through
+Inventory and expiry
+
+5 metric contracts · filters: branch, ingredient, batch
+
+Expiry value · 30 days
+
+On-hand units in AVAILABLE disposition and ACTIVE batches, expiring after read time and before 30 days, multiplied by frozen unit cost.
+
+Source: pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches
+Scope: selected branches at read time
+Permission: reports:operational
+Drill through
+Expiry value · 60 days
+
+On-hand units in AVAILABLE disposition and ACTIVE batches, expiring after read time and before 60 days, multiplied by frozen unit cost.
+
+Source: pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches
+Scope: selected branches at read time
+Permission: reports:operational
+Drill through
+Expiry value · 90 days
+
+On-hand units in AVAILABLE disposition and ACTIVE batches, expiring after read time and before 90 days, multiplied by frozen unit cost.
+
+Source: pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches
+Scope: selected branches at read time
+Permission: reports:operational
+Drill through
+Expiry value · 180 days
+
+On-hand units in AVAILABLE disposition and ACTIVE batches, expiring after read time and before 180 days, multiplied by frozen unit cost.
+
+Source: pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches
+Scope: selected branches at read time
+Permission: reports:operational
+Drill through
+Open stock signals
+
+Open low-stock, stockout, expiry, recall, quarantine, and related signals.
+
+Source: pharmacy_stock_signals
+Scope: selected branches at read time
+Permission: reports:operational
+Drill through
+Procurement and suppliers
+
+3 metric contracts · filters: branch, date, supplier, ingredient, batch
+
+Recommended orders
+
+Open stock signals with a linked requisition action.
+
+Source: pharmacy_stock_signals + pharmacy_stock_signal_actions
+Scope: selected branches at read time
+Permission: reports:operational
+Drill through
+Open supplier claims
+
+Supplier claims not released or submitted.
+
+Source: pharmacy_supplier_claims
+Scope: selected branches at read time
+Permission: reports:operational
+Drill through
+Open receiving exceptions
+
+Unresolved three-way-match receiving exceptions.
+
+Source: pharmacy_receiving_exceptions
+Scope: selected branches at read time
+Permission: reports:operational
+Drill through
+Dispensing and safety
+
+3 metric contracts · filters: branch, date, ingredient, batch
+
+Organization-wide safety queue
+
+Unsigned pharmacist review items plus open controlled-register incidents.
+
+Source: pharmacy_pharmacist_review_items + pharmacy_pharmacist_review_decisions + pharmacy_register_incidents
+Scope: Organization-wide at read time; selected branch does not apply
+Permission: reports:operational
+Drill through
+Open recalls
+
+Recall notices still open in the tenant.
+
+Source: pharmacy_recall_notices
+Scope: organization
+Permission: reports:operational
+Drill through
+Quarantined units
+
+On-hand units in quarantine disposition or blocked batches.
+
+Source: pharmacy_stock_balances + pharmacy_manufacturing_batches
+Scope: selected branches at read time
+Permission: reports:operational
+Drill through
+Finance and compliance
+
+4 metric contracts · filters: branch, date, supplier
+
+Selected-period cash
+
+Cash tender amounts less change given.
+
+Source: pharmacy_tenders
+Scope: selected branches and business dates
+Permission: reports:financial
+Drill through
+Cash variance
+
+Counted cash less expected cash on final daily closes.
+
+Source: pharmacy_daily_closes
+Scope: selected branches and business dates
+Permission: reports:financial
+Drill through
+Refunds
+
+Refund tender amounts recorded in the selected period.
+
+Source: pharmacy_refunds
+Scope: selected branches and business dates
+Permission: reports:financial
+Drill through
+Pharmacist coverage
+
+Branches with a current regulatory qualified-person coverage record.
+
+Source: pharmacy_branch_regulatory_profiles
+Scope: selected branches at read time
+Permission: reports:operational
+Drill through
+RPT-03 · SCHEDULED DELIVERY
+Daily owner digest
+
+Opt in per branch. Times use your workspace timezone. Capture history is always stored; WhatsApp remains disabled until a provider integration is implemented.
+
+Clifton Chemist
+Digest time
+Turn on digest
+DISABLED
+WhatsApp
+DISABLED
+
+No provider configuration detected. No messages are sent.
+
+CAPTURED DELIVERY
+Digest history
+
+No digests captured yet. Turn on a branch digest; history appears after its scheduled time.

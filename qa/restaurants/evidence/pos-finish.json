@@ -1,0 +1,109 @@
+{
+  "staff": {
+    "created": {
+      "status": 200,
+      "text": "{\"result\":{\"data\":{\"json\":{\"id\":\"cmvhl1tkv005xchjsjecd9zz9\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"userId\":null,\"email\":null,\"displayName\":\"QA Floor Manager\",\"primaryBranchId\":\"cmvhhcldp000m1yjs2sc9obnz\",\"status\":\"ACTIVE\",\"createdAt\":\"2026-10-21T03:59:04.447Z\",\"updatedAt\":\"2026-10-21T03:59:04.447Z\"},\"meta\":{\"values\":{\"createdAt\":[\"Date\"],\"updatedAt\":["
+    },
+    "roles": {
+      "status": 0,
+      "text": "no manager"
+    },
+    "pin": {
+      "status": 0,
+      "text": "no manager"
+    },
+    "managerId": ""
+  },
+  "flow": [
+    {
+      "id": "establish",
+      "status": 201,
+      "note": "{\"sessionToken\":\"[redacted]\",\"session\":{\"id\":\"cmvhl1u080065chjsaba91glh\",\"state\":\"LOCKED\",\"establishedAt\":\"2026-10-21T03:59:04.998Z\"},\"device\":{\"id\":\"cmvhl1toq005zchjsxqvglshf\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"branchId\":\"cmvhhcldp000m1yjs2sc9obnz\",\"name\":\"QA Finish\",\"kind\":\"POS\",\"stationId\":null,\"branchName\":\"Clifton\"}}"
+    },
+    {
+      "id": "unlock",
+      "status": 200,
+      "note": "{\"session\":{\"id\":\"cmvhl1u080065chjsaba91glh\",\"state\":\"UNLOCKED\",\"activeStaffProfileId\":\"cmvhhclfk004o1yjs8ekhf7z5\"}}"
+    },
+    {
+      "id": "drawer",
+      "status": 200,
+      "note": "{\"drawerSessionId\":\"cmvhl1uaj0068chjsp0x8566y\",\"businessDate\":\"2026-10-21\",\"openingFloat\":\"200.00\",\"replayed\":false}"
+    },
+    {
+      "id": "summary-after-partial",
+      "status": 200,
+      "note": "{\"orderId\":\"cmvhkt52y001cchjsuh40tmvw\",\"settled\":false,\"blocker\":\"BILLS_OPEN\",\"derivedOrderTotal\":\"970.00\",\"accountedTotal\":\"970.00\",\"deliveryFeeTotal\":null,\"unbilledItemIds\":[],\"bills\":[{\"id\":\"cmvhkt5ds0027chjsijqnsxuk\",\"status\":\"OPEN\",\"splitKind\":\"NONE\",\"grandTotal\":\"970.00\",\"remainingDue\":\"0.00\",\"deliveryFeeTotal\":\"0.00\",\"compTotal\":\"0.00\",\"receiptNumber\""
+    },
+    {
+      "id": "PAY-03b",
+      "status": 400,
+      "note": "{\"error\":\"A tender amount must be positive.\"}"
+    },
+    {
+      "id": "PAY-02",
+      "status": 404,
+      "note": "{\"error\":\"No settled bill with that id.\"}"
+    },
+    {
+      "id": "PAY-07",
+      "status": 400,
+      "note": "{\"error\":\"Invalid input\",\"details\":[{\"origin\":\"string\",\"code\":\"too_small\",\"minimum\":1,\"inclusive\":true,\"path\":[\"approving\",\"staffProfileId\"],\"message\":\"Too small: expected string to have >=1 characters\"}]}"
+    },
+    {
+      "id": "PAY-08-comp",
+      "status": 400,
+      "note": "{\"error\":\"Invalid input\",\"details\":[{\"origin\":\"string\",\"code\":\"too_small\",\"minimum\":1,\"inclusive\":true,\"path\":[\"approving\",\"staffProfileId\"],\"message\":\"Too small: expected string to have >=1 characters\"}]}"
+    },
+    {
+      "id": "PAY-06-open",
+      "status": 201,
+      "note": "{\"orderId\":\"cmvhl1v3e006dchjsvf5csmjg\",\"orderNumber\":8,\"businessDate\":\"2026-10-21\",\"replayed\":false}"
+    },
+    {
+      "id": "seat-1",
+      "status": 201,
+      "note": "{\"itemId\":\"cmvhl1v61006hchjs6ja1ejpi\",\"replayed\":false}"
+    },
+    {
+      "id": "seat-2",
+      "status": 201,
+      "note": "{\"itemId\":\"cmvhl1v8e006lchjsyc12msgc\",\"replayed\":false}"
+    },
+    {
+      "id": "seat-fire",
+      "status": 200,
+      "note": "{\"orderId\":\"cmvhl1v3e006dchjsvf5csmjg\",\"itemIds\":[\"cmvhl1v61006hchjs6ja1ejpi\",\"cmvhl1v8e006lchjsyc12msgc\"],\"tickets\":[{\"ticketId\":\"cmvhl1vc6006pchjsx6it52dw\",\"stationId\":\"cmvhjughs00gq1yjsrw6ss058\",\"ticketNumber\":5,\"createdAt\":\"2026-10-21T03:59:06.726Z\",\"matchedBy\":\"default\",\"items\":[{\"orderItemId\":\"cmvhl1v61006hchjs6ja1ejpi\",\"quantity\":1},{\"orderItemId\":\"cm"
+    },
+    {
+      "id": "PAY-06",
+      "status": 200,
+      "note": "{\"orderId\":\"cmvhl1v3e006dchjsvf5csmjg\",\"billIds\":[\"cmvhl1vdc006vchjsydwftrhw\",\"cmvhl1vde006xchjsx5ubtcu8\"],\"replayed\":false}"
+    },
+    {
+      "id": "ORD-void-open",
+      "status": 201,
+      "note": "{\"orderId\":\"cmvhl1vek0071chjs658dumf1\",\"orderNumber\":9,\"businessDate\":\"2026-10-21\",\"replayed\":false}"
+    },
+    {
+      "id": "void-item",
+      "status": 201,
+      "note": "{\"itemId\":\"cmvhl1vft0075chjsq0a40ksu\",\"replayed\":false}"
+    },
+    {
+      "id": "ORD-void",
+      "status": 200,
+      "note": "{\"itemId\":\"cmvhl1vft0075chjsq0a40ksu\",\"replayed\":false}"
+    },
+    {
+      "id": "PAY-day-preview",
+      "status": 200,
+      "note": "{\"branchId\":\"cmvhhcldp000m1yjs2sc9obnz\",\"businessDate\":\"2026-10-21\",\"totals\":{\"grossSales\":\"0.00\",\"netSales\":\"0.00\",\"deliveryFeeSales\":\"0.00\",\"deliveryFeeRefunds\":\"0.00\",\"taxTotal\":\"0.00\",\"serviceChargeTotal\":\"0.00\",\"tipTotal\":\"20.00\",\"compTotal\":\"0.00\",\"discountTotal\":\"0.00\",\"refundTotal\":\"0.00\",\"voidTotal\":\"0.00\",\"cashExpected\":\"2170.00\",\"cashCounted\":\"0.0"
+    },
+    {
+      "id": "PAY-day-close",
+      "status": 409,
+      "note": "{\"error\":\"The business day has unsettled bills; settle or void every bill before closing.\"}"
+    }
+  ]
+}
