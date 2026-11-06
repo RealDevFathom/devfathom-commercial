@@ -8,6 +8,8 @@ export const DEMO_UNAVAILABLE_MESSAGE = 'Not available in demo.';
 const BLOCKED_PREFIXES = [
   'apiTokens.',
   'email.',
+  // DEV-752: pack-photo reads spend AI-provider credits.
+  'pharmacyPackLabel.',
   'restaurantCameras.',
   'restaurantMenuImport.',
   'trelloImport.',
