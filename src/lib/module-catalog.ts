@@ -242,6 +242,9 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacyFinance: 'pharmacy-finance',
   pharmacyOffline: 'pharmacy-counter',
   pharmacyOrdering: 'pharmacy-counter',
+  // DEV-753: the owner switch for supplier compliance checks belongs to the
+  // purchasing lane it governs.
+  pharmacySupplierCompliance: 'pharmacy-procurement',
   hotelProperty: 'hotel-core',
   // H1-07 (MEAL-01): the meal plans a property sells are commercial
   // configuration every hospitality tenant holds, so they gate on the mandatory
