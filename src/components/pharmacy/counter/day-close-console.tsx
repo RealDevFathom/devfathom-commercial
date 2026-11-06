@@ -52,12 +52,18 @@ export function PharmacyDayCloseConsole() {
   const access = trpc.pharmacySales.dayCloseAccess.useQuery(undefined, {
     enabled: eligibleSession, retry: false, staleTime: 0, refetchOnMount: 'always',
   });
-  if (!eligibleSession || access.isFetching || access.isError || !access.data?.allowed ||
-      access.data.userId !== user?.id || access.data.organizationId !== user.organizationId) {
+  // Keep an already-allowed console mounted across background access refetches
+  // (Sidebar remount / dayCloseAccess isFetching); only the initial load gate
+  // should wipe reconciliation / drawer-count state.
+  const accessMatches =
+    !!access.data?.allowed &&
+    access.data.userId === user?.id &&
+    access.data.organizationId === user.organizationId;
+  if (!eligibleSession || access.isError || !accessMatches) {
     return (
       <SectionCard title="Day close unavailable">
         <p role="status">
-          {status === 'loading' || (eligibleSession && access.isFetching)
+          {status === 'loading' || (eligibleSession && !access.isError && !access.data)
             ? 'Checking day-close access…'
             : access.isError ? 'Could not check day-close access. Reload to retry.'
             : 'Day close is available to owners and managers with permission.'}
