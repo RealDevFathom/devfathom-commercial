@@ -153,10 +153,20 @@ describe('CounterRxPanel checks', () => {
 
     const safety = screen.getByRole('region', { name: 'Safety blocks' });
     expect(screen.getAllByRole('region')[0]).toBe(safety);
-    expect(within(safety).getByRole('alert')).toHaveTextContent(alerts[0]!.message);
+    expect(within(within(safety).getByRole('listitem')).getByRole('alert')).toHaveTextContent(
+      alerts[0]!.message
+    );
     expect(within(safety).getByText(alerts[0]!.remedy!)).toBeInTheDocument();
     expect(within(safety).queryByRole('button')).not.toBeInTheDocument();
     const notices = screen.getByRole('region', { name: 'Counselling and notices' });
+    expect(
+      within(within(notices).getByRole('list', { name: 'Clinical advice' })).getByRole('listitem')
+    ).toBeInTheDocument();
+    expect(
+      within(within(notices).getByRole('list', { name: 'Commercial notices' })).getByRole(
+        'listitem'
+      )
+    ).toBeInTheDocument();
     expect(within(notices).getByRole('list', { name: 'Clinical advice' })).toHaveTextContent(
       alerts[1]!.remedy!
     );

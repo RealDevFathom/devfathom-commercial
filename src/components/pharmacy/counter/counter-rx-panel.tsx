@@ -611,9 +611,9 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 {attachmentError}
               </p>
             ) : null}
-            <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <h3 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
               Safety blocks
-            </h4>
+            </h3>
             {blocks.length === 0 ? (
               <p className="text-sm text-text-muted">
                 Safety checks run before payment. Any reported blocks appear here.
@@ -623,16 +623,17 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 {blocks.map((alert) => (
                   <li
                     key={alert.key}
-                    role="alert"
-                    className="space-y-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3"
+                    className="rounded-xl border border-destructive/30 bg-destructive/10 p-3"
                   >
-                    <StatusPill status="blocked" tone="danger" label="Blocked" />
-                    <p className="text-sm font-semibold leading-relaxed text-text-strong">
-                      {alert.message}
-                    </p>
-                    {alert.remedy ? (
-                      <p className="mt-1 text-sm text-text-body">{alert.remedy}</p>
-                    ) : null}
+                    <div role="alert" className="space-y-2">
+                      <StatusPill status="blocked" tone="danger" label="Blocked" />
+                      <p className="text-sm font-semibold leading-relaxed text-text-strong">
+                        {alert.message}
+                      </p>
+                      {alert.remedy ? (
+                        <p className="mt-1 text-sm text-text-body">{alert.remedy}</p>
+                      ) : null}
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -645,31 +646,32 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
             aria-label="Counselling and notices"
             className="space-y-3 border-t border-border-subtle pt-5"
           >
-            <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <h3 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
               Counselling and notices
-            </h4>
+            </h3>
             {advice.length > 0 ? (
               <ul aria-label="Clinical advice" className="space-y-2">
                 {advice.map((alert) => (
                   <li
                     key={alert.key}
-                    role="status"
-                    className="space-y-2 rounded-xl border border-border-subtle bg-surface-card p-3 text-sm text-text-body"
+                    className="rounded-xl border border-border-subtle bg-surface-card p-3 text-sm text-text-body"
                   >
-                    <StatusPill status="advice" tone="neutral" label="Advice" />
-                    <p className="font-medium leading-relaxed">{alert.message}</p>
-                    {alert.remedy ? (
-                      <p className="text-sm text-text-muted">{alert.remedy}</p>
-                    ) : null}
-                    {alert.acknowledgement && acknowledgementScope ? (
-                      <CounterDuplicateSaltAcknowledge
-                        branchId={acknowledgementScope.branchId}
-                        saleId={acknowledgementScope.saleId}
-                        ingredientKey={alert.acknowledgement.ingredientKey}
-                        medicines={alert.acknowledgement.medicines}
-                        disabled={disabled}
-                      />
-                    ) : null}
+                    <div role="status" className="space-y-2">
+                      <StatusPill status="advice" tone="neutral" label="Advice" />
+                      <p className="font-medium leading-relaxed">{alert.message}</p>
+                      {alert.remedy ? (
+                        <p className="text-sm text-text-muted">{alert.remedy}</p>
+                      ) : null}
+                      {alert.acknowledgement && acknowledgementScope ? (
+                        <CounterDuplicateSaltAcknowledge
+                          branchId={acknowledgementScope.branchId}
+                          saleId={acknowledgementScope.saleId}
+                          ingredientKey={alert.acknowledgement.ingredientKey}
+                          medicines={alert.acknowledgement.medicines}
+                          disabled={disabled}
+                        />
+                      ) : null}
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -679,14 +681,15 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 {commercial.map((alert) => (
                   <li
                     key={alert.key}
-                    role="status"
-                    className="space-y-2 rounded-xl bg-surface-sunken p-3 text-sm text-text-body"
+                    className="rounded-xl bg-surface-sunken p-3 text-sm text-text-body"
                   >
-                    <StatusPill status="commercial" tone="neutral" label="Commercial" />
-                    <p className="font-medium leading-relaxed">{alert.message}</p>
-                    {alert.remedy ? (
-                      <p className="text-sm text-text-muted">{alert.remedy}</p>
-                    ) : null}
+                    <div role="status" className="space-y-2">
+                      <StatusPill status="commercial" tone="neutral" label="Commercial" />
+                      <p className="font-medium leading-relaxed">{alert.message}</p>
+                      {alert.remedy ? (
+                        <p className="text-sm text-text-muted">{alert.remedy}</p>
+                      ) : null}
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -698,9 +701,9 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
           aria-label="Patient and prescriptions"
           className="space-y-3 border-t border-border-subtle pt-5"
         >
-          <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+          <h3 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
             Patient
-          </h4>
+          </h3>
 
           {state === 'denied' ? (
             <p className="text-sm text-text-muted" role="status">
@@ -976,7 +979,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
             aria-label="Controlled medicine authorization"
             className="space-y-3 border-t border-border-subtle pt-5"
           >
-            <h4 className="font-semibold text-text-strong">Controlled medicine authorization</h4>
+            <h3 className="font-semibold text-text-strong">Controlled medicine authorization</h3>
             <p className="text-xs text-text-muted">
               Patient address and a pharmacist PIN are required. Use a prescription, or record an
               emergency supply. Online only.

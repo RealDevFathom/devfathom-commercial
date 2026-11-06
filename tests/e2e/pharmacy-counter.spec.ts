@@ -342,6 +342,9 @@ test('POS-09 — a safety block is distinct from advice, refuses tender, and is 
   // distinction is semantic and not only visual.
   await expect(blocks.getByRole('status')).toHaveCount(0);
 
+  const accessibility = await new AxeBuilder({ page }).include('[role="dialog"]').analyze();
+  expect(accessibility.violations).toEqual([]);
+
   // Return to the bill before invoking its payment shortcut.
   await page.keyboard.press('Escape');
   await expect(page.getByLabel('Scan or search')).toBeFocused();
