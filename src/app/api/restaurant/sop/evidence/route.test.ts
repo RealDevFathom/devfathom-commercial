@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   createTRPCContext: vi.fn(),
   deleteUpload: vi.fn(),
+  findStaffProfiles: vi.fn(),
   putUpload: vi.fn(),
 }));
 
@@ -66,10 +67,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
   mocks.createTRPCContext.mockResolvedValue({
-    db: {},
+    db: { restaurantStaffProfile: { findMany: mocks.findStaffProfiles } },
     organization: { id: 'org-1' },
     session: { user: { id: 'user-1' } },
   });
+  mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff-for-user-1' }]);
   mocks.deleteUpload.mockResolvedValue(undefined);
   mocks.putUpload.mockResolvedValue(undefined);
   mocks.attachEvidence.mockResolvedValue({ evidenceId: 'evidence-1', created: true });
@@ -97,7 +99,7 @@ describe('POST SOP evidence', () => {
     );
   }
 
-  it('hashes and stores accepted proof with tenant, staff, and purpose attribution', async () => {
+  it('hashes and stores accepted proof with server-derived staff and purpose attribution', async () => {
     const warn = warnings();
     const response = await POST(
       request({
@@ -119,15 +121,34 @@ describe('POST SOP evidence', () => {
       'image/jpeg'
     );
     expect(mocks.attachEvidence).toHaveBeenCalledWith(
-      {},
+      expect.anything(),
       expect.objectContaining({
         occurrenceId: 'occurrence-1',
         occurrenceStepId: 'step-1',
         mimeType: 'image/jpeg; evidence=photo',
-        uploaderStaffProfileId: 'staff-1',
+        uploaderStaffProfileId: 'staff-for-user-1',
       })
     );
+    expect(mocks.findStaffProfiles).toHaveBeenCalledWith({
+      where: { organizationId: 'org-1', userId: 'user-1', status: 'ACTIVE' },
+      select: { id: true },
+      orderBy: { id: 'asc' },
+      take: 2,
+    });
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['no active linked profile', []],
+    ['multiple active linked profiles', [{ id: 'staff-a' }, { id: 'staff-b' }]],
+  ])('fails closed before storage when the user has %s', async (_label, profiles) => {
+    mocks.findStaffProfiles.mockResolvedValueOnce(profiles);
+
+    const response = await POST(request());
+
+    expect(response.headers.get('location')).toContain('Proof+capture+failed');
+    expect(mocks.putUpload).not.toHaveBeenCalled();
+    expect(mocks.attachEvidence).not.toHaveBeenCalled();
   });
 
   it('accepts a genuine parsed multipart file from a different File realm', async () => {
