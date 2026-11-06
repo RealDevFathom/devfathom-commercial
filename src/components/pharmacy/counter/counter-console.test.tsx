@@ -100,7 +100,11 @@ vi.mock('@/lib/trpc', () => {
         cancel: mocks.searchCancel,
         fetch: (...args: unknown[]) => mocks.searchFetch(...args),
       },
-      counterScan: { setData: mocks.scanSetData, cancel: vi.fn(), fetch: (...args: unknown[]) => mocks.searchFetch(...args) },
+      counterScan: {
+        setData: mocks.scanSetData,
+        cancel: vi.fn(),
+        fetch: (...args: unknown[]) => mocks.searchFetch(...args),
+      },
       counterCart: {
         cancel: mocks.cancel,
         invalidate: mocks.cartInvalidate,

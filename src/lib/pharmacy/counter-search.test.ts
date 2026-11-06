@@ -47,6 +47,7 @@ describe('counter catalogue query paths', () => {
     expect(db.medicine.findMany).not.toHaveBeenCalled();
   });
   it('retains substring searches and caps each candidate source at twenty', async () => {
+    // DEV-575: public counterSearch Zod max is 20; library still clamps higher callers.
     const { db, scoped } = fixture();
     await searchCounterCatalog(scoped, scope, { query: 'ceta', limit: 50 });
     expect(db.medicine.findMany).toHaveBeenCalledWith(
