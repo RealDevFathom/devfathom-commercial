@@ -590,5 +590,225 @@
    "verdict": "PASS",
    "details": "16a9147 changes only tests. It seeds a fixture platform user, whose passwordHash 'fixture' is not a usable credential, in a disposable test DB, and reformats two test files. It does not change production code, authorization, queries or migrations, and it adds no secrets. At this commit the PR still enforces audit:read server-side, searches actors through parameterized Prisma filters, and applies the platform-actor FK and the tenant-actor insert trigger. I found no new vulnerability"
   }
+ },
+ "1119": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Fix commit 26c273f33 adds a page test that checks the Classification journal lines list. It asserts the exact ordered items (CASH DEBIT and SALES_CLEARING CREDIT at PKR 9007199254740993.12, above 2^53) and does not use toBeVisible. I ran it at 26c273f33 and 13/13 passed. Against develop's page.tsx the new test fails. Eslint and prettier are clean, no existing test was weakened, and the branch merges cleanly with develop. I did not re-run tsc myself, so that result is the fixer's"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix commit 26c273f33 changes only page.test.tsx, adding one mocked unit test and the within import. It does not touch runtime code, auth, the loader query or the build config. The PR's 7-line JSX change is the same as before. It renders the loader's branch- and organization-scoped journal lines through JSX escaping and uses no raw HTML. Auth and capability handling are unchanged. No vulnerability found"
+  }
+ },
+ "1101": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 776d22334, both USD tests render a CASH tender row and assert '\u00b7 Received 130.00 \u00b7 Refunds 5.00 \u00b7 Net 125.00 USD', one for the open day and one for the recorded close. The failing source-grep test is deleted. vitest gives 12/12, also on develop plus the PR, and putting PKR back fails both USD tests. eslint is clean. The test file passes prettier, and the tsx's prettier failure already exists on develop. A tsc over the changed files' import graph shows 0 errors. The PR merges cleanly. CI is disabled and ran 0 checks, so no check counts as passing"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix commit 776d22334 changes only test code. It adds a fixture row and rendered assertions, and it deletes a test that read a file. The PR as a whole still changes one display expression: the literal PKR becomes {currency}, which comes from counterBranches for the session's own organization and is rendered as escaped JSX text. No server code, queries, auth or scoping checks, raw SQL or Z-report HTML escaping changed. No vulnerability found"
+  }
+ },
+ "1060": {
+  "qa": {
+   "verdict": "FAIL",
+   "details": "0eaf120a4 resolves F1. Cancel now locks the shift row with FOR UPDATE, the same lock clock-in, clock-out and corrections take. cancelShift checks effective attendance via the shared effectiveClockTimes rule. 72/72 shift tests pass, and reverting the guard and lock fails 3. Blocker: a clean merge with develop still breaks tests. f88abb84b and develop's 47ea6c8d0 together remove counterSearch.invalidate from the mock, so 19 counter-console tests fail (0 on develop)"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "0eaf120a4 adds no new exposure. The FOR UPDATE fragment is built with Prisma.sql and Prisma.empty, so shiftId and organizationId stay bound parameters. The lock runs only after server-side staff:manage and branch authorization, on an org-scoped row. It uses the same lock order as the attendance writers, so it cannot deadlock against them. The adjustments read selects only kind, breakId and correctedAt under tenant RLS. No secrets, endpoints or raw SQL interpolation are added"
+  }
+ },
+ "1003": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-checked fix 6538931. The field test now matches /^Prescription image/, passes, and still fails if content-start is removed. Sidebar, its test and the Inventory page and test match the merge base again, the wrap rule is gone from the design doc and the ScrollRail note stays. Eight PR test files, 196 tests: all pass. eslint is clean. Prettier warnings in counter-console were already there before this PR. Merge blocker: counter-console.tsx and its test conflict with develop's DEV-618 (#1240)"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Security: PASS at 6538931. The fix commit changes one test query and returns sidebar.tsx, sidebar.test.tsx, inventory page.tsx and page.test.tsx to their merge-base versions. The section 5 doc bullet is removed. Sidebar capability filtering and the Inventory page's session, org and branch scoping are exactly as on develop. The rest of the PR is layout, CSS classes and copy. No raw SQL, secrets, redirects, unescaped HTML or data exposure were added"
+  }
+ },
+ "1000": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-checked fix commit d61ef18dd on #1000. F1: the member list shown without HR gives each user a base role (Staff/Manager/Admin for pharmacy) plus the role template name, with the job title on its own line. Tests assert both within the list. F2: a successful invite also invalidates organizationAdmin.overview, and this is tested. Team tests 26/26 passed, eslint, prettier and a scoped tsc are clean, and the branch merges cleanly with develop"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix commit d61ef18dd changes only client code: no router, procedure, zod schema or SQL. The member list still reads organizationAdmin.overview (adminProcedure, scoped to the tenant org) and is enabled only for an ADMIN with the admin module. Role and template names render as escaped JSX text. The added overview.invalidate() only refetches a query the admin already holds and widens no access. No security regression found"
+  }
+ },
+ "997": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Fix c91edd89a exactly reverts c89b74bd8. The purchasing returns page.tsx and page.test.tsx now have an empty diff against merge base 47518cbf9, so the PR touches only the 5 DEV-37 files, and it merges cleanly into current develop 1906b5307. At c91edd89a, the 3 PR unit test files pass 88/88 and eslint on all 7 files finds 0 errors. No CI ran. The PR body still has the DEV-38 'QA batch 4' line, which the owner should remove"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "c91edd89a only reverts the DEV-38 purchasing returns UI change and touches no server code. At this head, lookupReceiptByNumber still runs the session, org, active-member, capability and active-branch checks on the server. It returns [] to unassigned non-admins before reading any sale, scopes the query to org and active branch, and records org-admin access in the audit log. A test merge with develop keeps this logic. No new vulnerability found"
+  }
+ },
+ "982": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-verified at 287139077: recall FORBIDDEN refusals now stay generic, and inventory-gated actions keep the access message. The router confirms the split. Unit tests pass (65/65). eslint and prettier are clean. tsc shows 4 errors, all in files this PR does not touch. 287139077 changes only page.tsx and page.test.tsx. Merge blocker: page.tsx and page.test.tsx conflict with develop (from 7aa237342, #1120). The conflict was already there before this fix, and develop keeps the same recall gating"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked 287139077: the posted `action` value only chooses between two fixed messages. It changes no procedure and grants no access. pharmacy:inventory and pharmacy:safety are still enforced server-side by capabilityProcedure. The catch block still reads only TRPCError.code. The thrown message never reaches the URL. For recall actions, can() is now skipped. No raw SQL, secrets, redirect or scoping changes. No vulnerability found"
+  }
+ },
+ "956": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-reviewed 8d7228095. The discount-override anomaly query now has l.\"promotionId\" IS NULL. The migration CHECK ties promotionId to automatic PROMOTION lines, so manual approved discounts still count. The new test fails when the clause is removed. 8 non-DB PR test files pass (100 tests), eslint is clean on PR files, and the prettier edits change only whitespace and commas. I did not re-run full tsc (out of memory here)"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "8d7228095 adds one fixed column predicate to an existing Prisma.sql tagged template, with no new interpolation or input, so injection exposure is unchanged. The rest is one mock-based unit test and formatting-only edits (verified as whitespace and trailing commas only). Access checks, org and branch scoping, and RLS on the promotion paths are unchanged from the earlier passing review. No new security issue found"
+  }
+ },
+ "951": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 3b46d19db, all money on Urdu receipts is formatted with the receipt locale: live view, settled banner, thermal and A4 previews, footer, line label, mixed-lot pricing and the Z-report with tender rows. English and ESC/POS are unchanged. The 4 receipt test files pass 102/102 and 6 related files pass 339/339. eslint and tsc are clean. The 3 prettier misses are in develop code. The PR merges cleanly into current develop"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "3b46d19db only changes how amounts are displayed. formatMinor maps already-computed ASCII digits to a fixed set of Urdu glyphs, and any locale other than 'ur' stays ASCII. Browser and Z-report HTML still go through escapeHtml with an allowlisted locale. React renders the amounts as text. ESC/POS stays 'en'. No server, auth, tenant scoping, query, secret or permission code is touched"
+  }
+ },
+ "946": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 14dd450 the order-ready test pins all three tenant calls and passes, and khata now reads both of this week's keys, so any claim on either channel ends the run unless WhatsApp failed permanently. The 3 new tests fail on the old code and pass now. Apart from F1/F2 the commit only reformats. Checks: vitest related 391 passed (34 skipped, 5 DB files skipped, no DB), tsc 0 errors, eslint clean, prettier clean. Develop merge conflicts predate this fix"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked 14dd450. The new khata log lookup runs inside withTenantDb, after the patient consent lock, and is filtered by organizationId, kind, direction and two exact dedupe keys. It selects only channel and status, so it reads no PII. No raw SQL, endpoints, auth paths, secrets or logging changed. The commit narrows sending (no second reminder in a week across channels), and the unique (organizationId, dedupeKey) index still blocks a concurrent duplicate claim. The other 15 files are formatting-only"
+  }
+ },
+ "915": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Fix commit 7efb3d61 adds only the new test file, on top of 3949ea03 with no force-push. Its 16 cases pass. Forcing UTC in the gates makes exactly the 6 Karachi/LA org-day cases fail, so the tests catch the timezone. All 6 PR-changed unit test files pass (182 tests); eslint, prettier and a targeted tsc are clean. The PR is still not mergeable: GitHub reports it dirty against develop, from an older conflict in src/server/routers/pharmacy-prescriptions.test.ts that 7efb3d61 did not touch"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "7efb3d61 adds only a unit test, with a mocked ScopedDb and made-up IDs. It changes no source code, permission, audit or raw SQL path, and contains no secrets or PII. The test also confirms that the gates read the org timezone server-side, scoped to scope.organizationId, with a timezone-only select. The rest of the PR is unchanged from the earlier security review, and no security issue is introduced"
+  }
+ },
+ "776": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Fix c721b4471 changes only marketing-service.ts. It restores the merge-base version, whose regex matches develop's, so the PR diff is down to the rate card and the cost preview. I re-ran rate-card.test.ts and actions.test.ts at c721b4471: 9/9 pass. No test used the removed terms. Merging into current develop still conflicts in .env.example and actions.test.ts. Both conflicts predate this fix and are adjacent additions; resolve them by keeping both sides"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "c721b4471 only reverts validateMarketingBody to develop's regex, so the shared WhatsApp copy filter works exactly as it does on develop. It adds no inputs, DB access, secrets or new logic. The cost line is still computed only after the server-side owner, CRM and branch checks in caller.preview. It uses the server-derived count and a zod-strict, server-only env rate card. It sends no WhatsApp text"
+  }
+ },
+ "1004": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-reviewed 473ee7d on PR #1004. hoverColor() now moves the fill away from the label when the 16% blend toward it would fall below 4.5:1. Coral #bd3f2a now hovers to #9f3523 (6.82:1), and a sweep of about 636k colours found no hover below 4.5:1 where the rest fill met it. The dark hover:text-primary-hover rule compiles to --text-body. The 24 unit tests pass, and eslint, prettier and tsc on the PR files are clean. The branch merges cleanly with develop"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "473ee7d adds only pure colour maths in tenant-brand.ts, one static CSS custom-property rule, tests, a doc sentence and a rename of an e2e helper. hoverColor() reads only primaryColor, which zod limits to #RRGGBB on both write paths, and it returns hex digits that React sets as a CSS variable, so CSS injection is not possible. No auth, tenant, query, raw SQL or permission code changed. No vulnerabilities found"
+  }
+ },
+ "1001": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Fix d32c754 resolves F1, F2, the date regression and the nine prettier files. At d32c754, all 26 PR test files pass (288 tests), vitest related passes, eslint has 0 errors and tsc on the fix files is clean. 5 PR files fail prettier, also on develop. Merge needed first: the PR conflicts with current develop in 5 inventory files (after #1120); the head before the fix conflicts too"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "d32c754 changes only copy, fixed internal hrefs (/pharmacy/inventory/import, /pharmacy/medicines), date formatting and tests. It adds no data reads, mutations, raw SQL or secrets, and does not change auth or capability gates. The import query term is still URLSearchParams-encoded. The new lib import of OPENING_IMPORT_ROUTE comes from a dependency-free constants module. No blocking issues"
+  }
+ },
+ "998": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-checked d2718192 on #998. The scan field clears before the first await and gets its code back on every exit that adds nothing (F1). Once a pack check or new bill is sent, only a branch switch or unmount cancels the scan (F2). Pharmacists keep the batch map through an exact pharmacy:dispense check (F3). The 10 new tests fail on 97f0b070 and pass here. All 16 counter test files pass, eslint is clean, and there are no new tsc or prettier issues. The branch still conflicts with develop in 4 counter files, as before this fix"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked d2718192. counterBranches adds counterBatchDetail, a read-only display flag: counterManager, or can('pharmacy:dispense') on the request's tenant-scoped db. capabilityMatches never lets a wildcard grant pharmacy:dispense, and the new router test shows that pharmacy:* does not. No procedure, write check, zod input or org/branch scope changed, and counterCart returns the same data as before. The scan-field changes are client-side only. Result: pass"
+  }
+ },
+ "984": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-checked 736ca052: it touches only the 5 files in the spec. The Create location and prescriptions no-access gates now have tests that run the real can() path; mutating the capability string or the gate makes them fail. Nine PR suites, 210 tests, plus the purchasing router test (120) pass. Eslint and prettier are clean and git diff --check shows nothing. I could not run tsc here because it was OOM-killed under shared memory load; the fixer's baseline comparison showed no new type errors"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "736ca052 changes no runtime behaviour: it adds test cases and makes formatting-only edits to page.tsx and two test files. Server-side enforcement is the same as in the earlier review: capabilityProcedure('pharmacy:procurement') guards the purchasing procedures, org scope comes from the session, and the pharmacyAccess nav read returns only the caller's own ABAC decisions. The new tests drive the real can() path instead of mocking it, which makes them stronger. No secrets, no new inputs, no new issues"
+  }
+ },
+ "959": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 93e1114 the e2e spec uses the renamed labels (they match counter-tender-panel.tsx), fills the reason, and checks the consumed approval and decision reasons. It was not run because no Playwright browsers are installed. Khata unit, router, migration and real-PostgreSQL tests pass (260), and 19 new DENY tests fail with the check off. ESLint is clean, prettier finds nothing new, and tsc reports no errors in PR files. Before merging, resolve the existing conflicts with develop in schema.prisma and counter-console"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "At 93e1114, khataApproverCapable runs after the role and branch checks at issuance (ctx.db), and again inside the tender transaction after the FOR SHARE approver read, before the approval is consumed. ADMIN needs can(admin:access), owner and manager need can(pharmacy:manage), and an owner-operator is refused by any unexpired matching DENY. A real-PostgreSQL test shows that a DENY added later rolls the tender back, while an expired DENY does not block. Refusals stay indistinct and are audited"
+  }
+ },
+ "953": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-verified at e16bc56. Both cash-close line selects now read grossMinor, so gross sales, void value and the refund-rate base match the Z-report for mixed-lot lines. The new 3 x 333 / 1001 test checks both selects, the totals and the narrative. The 6 PR test files pass (91 tests). ESLint is clean, both named files pass prettier, a typecheck of the PR files finds no real errors, and the PR merges cleanly onto develop"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "e16bc56 only adds the grossMinor column to two sale-line selects that were already scoped by org and branch, and re-wraps two files. The check still returns aggregate totals only. closeAnomalyCheck is unchanged: it still requires ADMIN plus reports:financial before any read. The Ask Fathom tool is still limited to owners with an explicit request. No raw SQL, no writes and no new data exposure"
+  }
+ },
+ "947": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "e5442618 fixes F1. A supplier renewal saved without a link but with the same type and number now retires the old filing, and an expired filing beside a valid one of its type drops. A different number or type, or an unverified filing, still reminds. Banner, digest and WhatsApp all use one reader. Forced-RLS DB test: 13/13 pass (4 fail on the old code). Unit tests: 102 pass. eslint and prettier are clean. Full tsc ran out of memory, but a narrowed tsc shows no errors in the touched files"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "e5442618 changes only in-memory filtering in readLicenceRenewalSubjects, two UI and checklist strings, test code and formatting. The supplier licence query is unchanged: still organizationId-scoped, on the tenant client under FORCE RLS, with no new raw SQL and parameterized test inserts. The new DB test passed under a NOBYPASSRLS runtime role. The earlier auth, licence and branch checks on the licenceRenewals query, the cron bearer check and template sanitising are untouched. No vulnerabilities found"
+  }
+ },
+ "929": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At b4aa33b both lifecycle e2e profile seeds use the UI branch's address and city, and the binding check accepts them (Playwright not run). The 'expires today' DB test now uses the second branch's own address: it fails at 982fb2a on the PR's address check and passes at b4aa33b, with no assertion weakened. On PostgreSQL, unit and DB tests pass (172/172). Prettier is clean, eslint shows 0 errors, and tsc matches the merge-base baseline. The merge into develop is clean"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "b4aa33b changes only test fixtures and formatting. Production code is the same as 982fb2a, so the BRANCH_INACTIVE and PROFILE_PREMISES_MISMATCH guards, the save-time binding of province, address and city, and the admin and SuperAdmin+MFA checks are unchanged. The e2e SQL changes are constant JSON literals with the same bound parameters, and nothing adds a secret. No guard or assertion was relaxed: the fixtures now satisfy the binding instead of getting around it"
+  }
+ },
+ "805": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-review of c3de4a733: listGoodsReceipts now filters both the stock movement and register lookups on organizationId and branchId only, so actorId no longer leaks in. The new viewer-scope and other-actor tests fail on 95854e025 and pass at c3de4a733. The DB suite URL matches develop again and passes 20/20 as gate_owner. Other checks: 14 PR test files pass (267 tests), eslint and prettier pass, tsc reports 0 errors. Merging into develop will hit conflicts in the 3 router files"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "c3de4a733 only narrows the listGoodsReceipts filters to explicit organizationId and branchId, which keeps tenant and branch scoping on both reads. It also restores the DB test's owner-role URL and reformats code. It does not touch reversal authorization: procurement, pharmacy:safety, the branch assignment check, the fresh PIN from a different pharmacist and lockout counting stay unchanged. No new raw SQL, secrets or permission changes. When resolving the router conflicts, keep develop's capability guards"
+  }
+ },
+ "875": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "First review FAIL (no test covered reversing a comp after a partial tender or reverseCompLine's negative paths, and the new reversal route had no route test), fixed in 15321aa94. Re-review: a DB test reverses a comp after a partial tender under a service-charge policy, checking restored totals, an untouched tender, remaining due, NOT_COMPED, and BILL_NOT_OPEN on settled and voided bills. Route tests cover the 404 before the PIN, approver failure, call args and capability; mutating each guard fails them, and bills.ts changes are formatting only. Owner decision: after merging develop's comp lockdown (#892), /checkout/comp/reverse would stay a live route while comp is off"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "At 15321aa94 the reverse route keeps orders:complimentary enforced server-side by moneyMutationRoute before the body is parsed, checks the bill is in the device branch before resolveApprover, and passes only the authenticated approver id. assertCoAuthorization rejects approver = operator unless sole-owner PIN reauth. New tests pin the order and approver id, and mutations fail them. No new issue"
+  }
  }
 }

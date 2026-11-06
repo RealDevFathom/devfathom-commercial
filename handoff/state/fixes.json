@@ -216,7 +216,7 @@
  "1001": {
   "sha": "d32c75456f1082514774cd61c2542de01bdf9090",
   "initialSha": "63d657e346a3a6224dd7f35902e65efb988c1b18",
-  "what": "one opening-stock entry point, working import next steps and stable report dates (body: what was wrong and how it was verified; ends with the Co-Authored-By / C",
+  "what": "one opening-stock entry point, working import next steps and stable report dates (body: what was wrong and how it was verified; ends with the Co-Authored-By / Claude-Session lines from the session attribution reminder)",
   "initialFailure": "the failures listed in the first review (see QA/Security)"
  },
  "1000": {
@@ -393,6 +393,95 @@
   "initialSha": "e597375dd806fbf4fca024b83441753c5424214a",
   "what": "printed invoice discount row covered by a test; Prettier on finance.invoice-status.test.ts",
   "initialFailure": "no machine run (QA finding and Prettier)",
+  "noInitialRun": true
+ },
+ "1060": {
+  "sha": "0eaf120a45c6906b6d55495bc420b6d036ca32d2",
+  "initialSha": "f88abb84b9bb469f6ece18904e3bf4dceb25cf63",
+  "what": "block shift cancel on correction-derived open attendance",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "982": {
+  "sha": "287139077eff2e761074306b3298cd94fda16c9a",
+  "initialSha": "7b898f0abf19f892f520607b4c804025480cb019",
+  "what": "keep recall refusals generic instead of naming inventory access",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "956": {
+  "sha": "8d7228095c8b2860aafaa5d03ec967489e8045c0",
+  "initialSha": "795276fdcee04856b61316dc8eb047ad46c9621a",
+  "what": "exclude automatic promotion lines from discount-override anomalies",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "951": {
+  "sha": "3b46d19db7bafe201274cd7315d52a6371fde16e",
+  "initialSha": "17ef2d2716273e9d7ff3bdeaaa127c33a6e9d258",
+  "what": "merge develop and localize mixed-lot and tender amounts",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "946": {
+  "sha": "14dd45067dc80f9c8e843d6ca38a9319e47debe7",
+  "initialSha": "cc456c38df1cdaf8a6b85720ed6ef065e8786511",
+  "what": "enforce khata weekly cap across channels and fix order-ready test",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "915": {
+  "sha": "7efb3d610c76772a51eb3e4c159a15cd804da055",
+  "initialSha": "3949ea03e140684cc4bcb6686a041338737bd4b1",
+  "what": "test prescription reference sale gates on the org day",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "776": {
+  "sha": "c721b4471a662fd044430a23e79ec64dd5cb055e",
+  "initialSha": "7d6b7ee3e8643360ddab776751a23e3403e02e56",
+  "what": "revert unrelated marketing-copy block-list change",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "998": {
+  "sha": "d27181929b5c51098f43380519eb7b34d4c4d358",
+  "initialSha": "97f0b070f61a8cef15d119845efa962094f1bf20",
+  "what": "clear the scan field at submission, keep sent scans, batch map for pharmacists",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "959": {
+  "sha": "93e111494879efbec0d6d0e815fff5adb2d48cfe",
+  "initialSha": "4fd5b1615b79ad79f8e56a9ef27e8fdc9ca93476",
+  "what": "honour approver DENY overrides and update Khata e2e",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "953": {
+  "sha": "e16bc56d3e074929756ec390b3b1fbcafcb7a484",
+  "initialSha": "dbf633d12649dfb9aa0f5bb4d67de1d148aaff24",
+  "what": "read stored line gross in cash-close check",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "947": {
+  "sha": "e54426188f0d7ba38cde2858da86418fc7879c89",
+  "initialSha": "0f9ffa373f99ceb2fea6975b3bcb22aef705c20d",
+  "what": "retire supplier licences renewed without a supersession link",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "929": {
+  "sha": "b4aa33ba5b44f426e794a4417c2b0b09848052eb",
+  "initialSha": "982fb2ab3d4ecb458c4f940a7ce5015cef94547a",
+  "what": "bind e2e and DB test profile fixtures to branch premises",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "805": {
+  "sha": "c3de4a7334446096de52b22a86918bd496ec7a02",
+  "initialSha": "95854e025213e12cbf2da0873fb5841c47eff630",
+  "what": "keep actorId out of goods-in reversal lookups",
+  "initialFailure": "no machine run (review findings only)",
   "noInitialRun": true
  }
 }

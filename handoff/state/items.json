@@ -563,13 +563,13 @@
   "dev": "DEV-116",
   "branch": "codex/DEV-116-cash-flow-evidence",
   "head": "26c273f336e76e5852d17a1e6de7121795d3c805",
-  "status": "in progress",
-  "qa": "FAIL",
+  "status": "done",
+  "qa": "PASS",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1119#issuecomment-6697611168",
   "fix": "26c273f336e76e5852d17a1e6de7121795d3c805",
-  "next": "`python3 handoff/scripts/compose.py 1119`, then post comments/1119.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1119#issuecomment-6697611168)"
  },
  {
   "pr": 1118,
@@ -628,13 +628,13 @@
   "dev": "DEV-198",
   "branch": "codex/DEV-198-day-close-currency",
   "head": "776d22334a01496a090f94de2e78d58b7e119ac1",
-  "status": "in progress",
-  "qa": "FAIL",
+  "status": "done",
+  "qa": "PASS",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/1101#issuecomment-6697612300",
   "fix": "776d22334a01496a090f94de2e78d58b7e119ac1",
-  "next": "`python3 handoff/scripts/compose.py 1101`, then post comments/1101.md via the poster workflow"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/1101#issuecomment-6697612300)"
  },
  {
   "pr": 1087,
@@ -705,14 +705,14 @@
   "pr": 1060,
   "dev": "DEV-170",
   "branch": "codex/linear-mention-dev-170-qa]-sev2]-shifts-cancelling-an-in",
-  "head": "f88abb84b9bb469f6ece18904e3bf4dceb25cf63",
+  "head": "0eaf120a45c6906b6d55495bc420b6d036ca32d2",
   "status": "in progress",
   "qa": "FAIL",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "push one fix commit on codex/linear-mention-dev-170-qa]-sev2]-shifts-cancelling-an-in for: F1 src/lib/restaurant/shifts.ts:358 In cancelShift, read the CLOCK_IN/CLOCK_OUT adjustments where breakId is null and compute effective attendance. Lock the shift row first, as workforce commands ; F2 src/components/pharmacy/counter/counter-console.test.tsx:92 Land the four fixture repairs once, under a dedicated develop-typecheck repair issue/PR. Either #1060 or #1061 can carry it under that issue. Once develop typec"
+  "fix": "0eaf120a45c6906b6d55495bc420b6d036ca32d2",
+  "next": "re-check queued for fix 0eaf120a45; then `python3 handoff/scripts/compose.py 1060` and post comments/1060.md"
  },
  {
   "pr": 1056,
@@ -785,7 +785,7 @@
   "branch": "fix/dark-mode-tokens",
   "head": "473ee7d33e360d2c2753470969c18c2457bea9aa",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
@@ -798,7 +798,7 @@
   "branch": "fix/counter-responsive",
   "head": "653893104353bd877fa0a33355c9275e524ac401",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
@@ -824,7 +824,7 @@
   "branch": "fix/reports-ops-screens",
   "head": "d32c75456f1082514774cd61c2542de01bdf9090",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
@@ -837,7 +837,7 @@
   "branch": "fix/team-members-zero",
   "head": "d61ef18dd3d98927a5009f9ccbea97cd8ba983d3",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
@@ -861,14 +861,14 @@
   "pr": 998,
   "dev": "DEV-41 / DEV-42",
   "branch": "fix/counter-cashier-copy",
-  "head": "97f0b070f61a8cef15d119845efa962094f1bf20",
+  "head": "d27181929b5c51098f43380519eb7b34d4c4d358",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "push one fix commit on fix/counter-cashier-copy for: F1 src/components/pharmacy/counter/counter-console.tsx:1001 When an add is sent from the scan field (barcode Enter in addBarcode, or Enter to addToCart), clear the field right away with `setQuery('')` and keep the submit; F2 src/components/pharmacy/counter/counter-console.tsx:925 Once a scan's add or pack authentication has been sent, do not let edits to the scan field cancel it; cancel only on a branch switch or unmount. If it does get ; F3 src/server/routers/pharmacy-sales.ts:1725 Return a separate display flag for the batch map that stays true for dispensing staff, e.g. `counterManager || can(subject, 'pharmacy:dispense', \u2026)`, and pass t"
+  "fix": "d27181929b5c51098f43380519eb7b34d4c4d358",
+  "next": "re-check queued for fix d27181929b; then `python3 handoff/scripts/compose.py 998` and post comments/998.md"
  },
  {
   "pr": 997,
@@ -876,7 +876,7 @@
   "branch": "fix/returns-lookup-scope",
   "head": "c91edd89a0049f095933929d6f039303dc04ee3a",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
@@ -967,7 +967,7 @@
   "branch": "inky/issue-979",
   "head": "736ca0524eeabc2323aa4272ffef83045fca89e9",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
@@ -991,14 +991,14 @@
   "pr": 982,
   "dev": "DEV-12",
   "branch": "inky/issue-976",
-  "head": "7b898f0abf19f892f520607b4c804025480cb019",
+  "head": "287139077eff2e761074306b3298cd94fda16c9a",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 27"
+  "fix": "287139077eff2e761074306b3298cd94fda16c9a",
+  "next": "re-check queued for fix 287139077e; then `python3 handoff/scripts/compose.py 982` and post comments/982.md"
  },
  {
   "pr": 966,
@@ -1011,7 +1011,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 28"
+  "next": "wait for machine checks queued at position 44"
  },
  {
   "pr": 965,
@@ -1037,33 +1037,33 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 29"
+  "next": "wait for machine checks queued at position 45"
  },
  {
   "pr": 959,
   "dev": "DEV-290",
   "branch": "salvage/khata-overlimit-399",
-  "head": "4fd5b1615b79ad79f8e56a9ef27e8fdc9ca93476",
+  "head": "93e111494879efbec0d6d0e815fff5adb2d48cfe",
   "status": "in progress",
-  "qa": "FAIL",
-  "security": "FAIL",
+  "qa": "PASS",
+  "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 30"
+  "fix": "93e111494879efbec0d6d0e815fff5adb2d48cfe",
+  "next": "re-check queued for fix 93e1114948; then `python3 handoff/scripts/compose.py 959` and post comments/959.md"
  },
  {
   "pr": 956,
   "dev": "DEV-85",
   "branch": "inky/issue-727",
-  "head": "795276fdcee04856b61316dc8eb047ad46c9621a",
+  "head": "8d7228095c8b2860aafaa5d03ec967489e8045c0",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 31"
+  "fix": "8d7228095c8b2860aafaa5d03ec967489e8045c0",
+  "next": "re-check queued for fix 8d7228095c; then `python3 handoff/scripts/compose.py 956` and post comments/956.md"
  },
  {
   "pr": 955,
@@ -1089,33 +1089,33 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 32"
+  "next": "wait for machine checks queued at position 46"
  },
  {
   "pr": 953,
   "dev": "DEV-84",
   "branch": "inky/issue-728",
-  "head": "dbf633d12649dfb9aa0f5bb4d67de1d148aaff24",
+  "head": "e16bc56d3e074929756ec390b3b1fbcafcb7a484",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 33"
+  "fix": "e16bc56d3e074929756ec390b3b1fbcafcb7a484",
+  "next": "re-check queued for fix e16bc56d3e; then `python3 handoff/scripts/compose.py 953` and post comments/953.md"
  },
  {
   "pr": 951,
   "dev": "DEV-260 (GitHub #439)",
   "branch": "inky/issue-439",
-  "head": "17ef2d2716273e9d7ff3bdeaaa127c33a6e9d258",
+  "head": "3b46d19db7bafe201274cd7315d52a6371fde16e",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 34"
+  "fix": "3b46d19db7bafe201274cd7315d52a6371fde16e",
+  "next": "re-check queued for fix 3b46d19db7; then `python3 handoff/scripts/compose.py 951` and post comments/951.md"
  },
  {
   "pr": 950,
@@ -1128,7 +1128,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 35"
+  "next": "wait for machine checks queued at position 47"
  },
  {
   "pr": 949,
@@ -1147,27 +1147,27 @@
   "pr": 947,
   "dev": "DEV-89",
   "branch": "inky/issue-720",
-  "head": "0f9ffa373f99ceb2fea6975b3bcb22aef705c20d",
+  "head": "e54426188f0d7ba38cde2858da86418fc7879c89",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 36"
+  "fix": "e54426188f0d7ba38cde2858da86418fc7879c89",
+  "next": "re-check queued for fix e54426188f; then `python3 handoff/scripts/compose.py 947` and post comments/947.md"
  },
  {
   "pr": 946,
   "dev": "DEV-87",
   "branch": "inky/issue-723",
-  "head": "cc456c38df1cdaf8a6b85720ed6ef065e8786511",
+  "head": "14dd45067dc80f9c8e843d6ca38a9319e47debe7",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 37"
+  "fix": "14dd45067dc80f9c8e843d6ca38a9319e47debe7",
+  "next": "re-check queued for fix 14dd45067d; then `python3 handoff/scripts/compose.py 946` and post comments/946.md"
  },
  {
   "pr": 945,
@@ -1180,7 +1180,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 38"
+  "next": "wait for machine checks queued at position 48"
  },
  {
   "pr": 942,
@@ -1206,7 +1206,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 39"
+  "next": "wait for machine checks queued at position 49"
  },
  {
   "pr": 940,
@@ -1219,7 +1219,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 40"
+  "next": "wait for machine checks queued at position 50"
  },
  {
   "pr": 934,
@@ -1232,33 +1232,33 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 41"
+  "next": "wait for machine checks queued at position 51"
  },
  {
   "pr": 929,
   "dev": "DEV-121",
   "branch": "cloud/issue-660",
-  "head": "982fb2ab3d4ecb458c4f940a7ce5015cef94547a",
+  "head": "b4aa33ba5b44f426e794a4417c2b0b09848052eb",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 42"
+  "fix": "b4aa33ba5b44f426e794a4417c2b0b09848052eb",
+  "next": "re-check queued for fix b4aa33ba5b; then `python3 handoff/scripts/compose.py 929` and post comments/929.md"
  },
  {
   "pr": 915,
   "dev": "DEV-197",
   "branch": "cloud/issue-526",
-  "head": "3949ea03e140684cc4bcb6686a041338737bd4b1",
+  "head": "7efb3d610c76772a51eb3e4c159a15cd804da055",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 43"
+  "fix": "7efb3d610c76772a51eb3e4c159a15cd804da055",
+  "next": "re-check queued for fix 7efb3d610c; then `python3 handoff/scripts/compose.py 915` and post comments/915.md"
  },
  {
   "pr": 855,
@@ -1271,7 +1271,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 44"
+  "next": "wait for machine checks queued at position 52"
  },
  {
   "pr": 814,
@@ -1284,7 +1284,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 45"
+  "next": "wait for machine checks queued at position 53"
  },
  {
   "pr": 812,
@@ -1310,33 +1310,33 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 46"
+  "next": "wait for machine checks queued at position 54"
  },
  {
   "pr": 805,
   "dev": "DEV-293",
   "branch": "cloud/issue-395",
-  "head": "95854e025213e12cbf2da0873fb5841c47eff630",
+  "head": "c3de4a7334446096de52b22a86918bd496ec7a02",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 47"
+  "fix": "c3de4a7334446096de52b22a86918bd496ec7a02",
+  "next": "re-check queued for fix c3de4a7334; then `python3 handoff/scripts/compose.py 805` and post comments/805.md"
  },
  {
   "pr": 776,
   "dev": "DEV-23",
   "branch": "cloud/issue-759",
-  "head": "7d6b7ee3e8643360ddab776751a23e3403e02e56",
+  "head": "c721b4471a662fd044430a23e79ec64dd5cb055e",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 48"
+  "fix": "c721b4471a662fd044430a23e79ec64dd5cb055e",
+  "next": "re-check queued for fix c721b4471a; then `python3 handoff/scripts/compose.py 776` and post comments/776.md"
  },
  {
   "pr": 769,
@@ -1349,7 +1349,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 49"
+  "next": "wait for machine checks queued at position 55"
  },
  {
   "pr": 241,
@@ -1362,7 +1362,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 50"
+  "next": "wait for machine checks queued at position 56"
  },
  {
   "pr": 132,
@@ -1427,7 +1427,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 26"
+  "next": "wait for machine checks queued at position 43"
  },
  {
   "pr": 1170,
@@ -1453,7 +1453,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 51"
+  "next": "wait for machine checks queued at position 57"
  },
  {
   "pr": 1067,
@@ -1492,7 +1492,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 52"
+  "next": "wait for machine checks queued at position 58"
  },
  {
   "pr": 1064,
@@ -1557,7 +1557,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 53"
+  "next": "wait for machine checks queued at position 59"
  },
  {
   "pr": 1057,
@@ -1583,7 +1583,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 54"
+  "next": "wait for machine checks queued at position 60"
  },
  {
   "pr": 1054,
@@ -1596,7 +1596,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 55"
+  "next": "wait for machine checks queued at position 61"
  },
  {
   "pr": 1053,
@@ -1609,7 +1609,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 56"
+  "next": "wait for machine checks queued at position 62"
  },
  {
   "pr": 1052,
@@ -1648,7 +1648,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 57"
+  "next": "wait for machine checks queued at position 63"
  },
  {
   "pr": 964,
@@ -1674,7 +1674,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 58"
+  "next": "wait for machine checks queued at position 64"
  },
  {
   "pr": 962,
@@ -1687,7 +1687,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 59"
+  "next": "wait for machine checks queued at position 65"
  },
  {
   "pr": 961,
@@ -1700,7 +1700,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 60"
+  "next": "wait for machine checks queued at position 66"
  },
  {
   "pr": 906,
@@ -1713,7 +1713,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 61"
+  "next": "wait for machine checks queued at position 67"
  },
  {
   "pr": 903,
@@ -1726,7 +1726,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 62"
+  "next": "wait for machine checks queued at position 68"
  },
  {
   "pr": 902,
@@ -1739,7 +1739,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 63"
+  "next": "wait for machine checks queued at position 69"
  },
  {
   "pr": 888,
@@ -1765,7 +1765,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 64"
+  "next": "wait for machine checks queued at position 70"
  },
  {
   "pr": 886,
@@ -1778,7 +1778,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 65"
+  "next": "wait for machine checks queued at position 71"
  },
  {
   "pr": 882,
@@ -1791,7 +1791,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 66"
+  "next": "wait for machine checks queued at position 72"
  },
  {
   "pr": 875,
@@ -1799,7 +1799,7 @@
   "branch": "cloud/issue-371",
   "head": "15321aa94b9d9db1764410c685f9092303c78fe0",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
@@ -1817,7 +1817,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 67"
+  "next": "wait for machine checks queued at position 73"
  },
  {
   "pr": 864,
@@ -1843,7 +1843,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 68"
+  "next": "wait for machine checks queued at position 74"
  },
  {
   "pr": 862,
@@ -1856,7 +1856,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 69"
+  "next": "wait for machine checks queued at position 75"
  },
  {
   "pr": 854,
@@ -1869,7 +1869,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 70"
+  "next": "wait for machine checks queued at position 76"
  },
  {
   "pr": 853,
@@ -1882,7 +1882,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 71"
+  "next": "wait for machine checks queued at position 77"
  },
  {
   "pr": 850,
@@ -1895,7 +1895,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 72"
+  "next": "wait for machine checks queued at position 78"
  },
  {
   "pr": 841,
@@ -1908,7 +1908,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 73"
+  "next": "wait for machine checks queued at position 79"
  },
  {
   "pr": 838,
@@ -1934,7 +1934,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 74"
+  "next": "wait for machine checks queued at position 80"
  },
  {
   "pr": 304,
@@ -1947,7 +1947,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 75"
+  "next": "wait for machine checks queued at position 81"
  },
  {
   "pr": 286,
@@ -1960,7 +1960,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 76"
+  "next": "wait for machine checks queued at position 82"
  },
  {
   "pr": 275,
@@ -1986,7 +1986,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 77"
+  "next": "wait for machine checks queued at position 83"
  },
  {
   "pr": 261,
@@ -2012,7 +2012,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 78"
+  "next": "wait for machine checks queued at position 84"
  },
  {
   "pr": 253,
@@ -2025,7 +2025,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 79"
+  "next": "wait for machine checks queued at position 85"
  },
  {
   "pr": 212,
@@ -2038,7 +2038,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 80"
+  "next": "wait for machine checks queued at position 86"
  },
  {
   "pr": 149,
@@ -2051,7 +2051,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 81"
+  "next": "wait for machine checks queued at position 87"
  },
  {
   "pr": 146,
@@ -2064,7 +2064,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 82"
+  "next": "wait for machine checks queued at position 88"
  },
  {
   "pr": 145,
@@ -2090,7 +2090,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 83"
+  "next": "wait for machine checks queued at position 89"
  },
  {
   "pr": 140,
@@ -2103,7 +2103,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 84"
+  "next": "wait for machine checks queued at position 90"
  },
  {
   "pr": 136,
@@ -2116,7 +2116,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 85"
+  "next": "wait for machine checks queued at position 91"
  },
  {
   "pr": 133,
@@ -2142,7 +2142,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 86"
+  "next": "wait for machine checks queued at position 92"
  },
  {
   "pr": 104,
@@ -2155,7 +2155,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 87"
+  "next": "wait for machine checks queued at position 93"
  },
  {
   "pr": 59,
