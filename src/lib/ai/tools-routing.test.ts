@@ -308,9 +308,9 @@ describe('Pharmacy cash-close check selection (#728)', () => {
 
   it('keeps it from staff, other verticals, unrelated hints and the full set', () => {
     const hint = 'check the cash close';
-    expect(
-      buildAssistantTools({ ...ctx, vertical: 'PHARMACY' }, { hint })
-    ).not.toHaveProperty('askPharmacyCashCloseCheck');
+    expect(buildAssistantTools({ ...ctx, vertical: 'PHARMACY' }, { hint })).not.toHaveProperty(
+      'askPharmacyCashCloseCheck'
+    );
     for (const vertical of ['AGENCY', 'RESTAURANT'] as const)
       expect(buildAssistantTools({ ...adminCtx, vertical }, { hint })).not.toHaveProperty(
         'askPharmacyCashCloseCheck'

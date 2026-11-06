@@ -5,7 +5,13 @@ import { readPharmacyCashCloseCheck } from './cash-close-check-operations';
 
 const scope = { organizationId: 'org_1', branchId: 'branch_1' };
 const businessDate = new Date('2026-10-30T00:00:00.000Z');
-const line = (minor: number) => ({ quantity: 1, unitPriceMinor: minor, discountMinor: 0 });
+// A single-lot line's stored gross is quantity × unit price.
+const line = (minor: number) => ({
+  quantity: 1,
+  unitPriceMinor: minor,
+  grossMinor: minor,
+  discountMinor: 0,
+});
 
 function fixture() {
   const db = {
@@ -206,6 +212,41 @@ describe('readPharmacyCashCloseCheck (#728)', () => {
     );
     expect(check.totals.voidCount).toBe(1_002);
     expect(check.totals.voidValueMinor).toBe(10_020);
+  });
+
+  it('totals mixed-lot lines from the stored line gross, as the Z-report does', async () => {
+    const { db, scoped } = fixture();
+    // #636: a mixed-lot line charges its stored gross; unitPriceMinor is floor(gross / quantity).
+    const mixedLot = { quantity: 3, unitPriceMinor: 333, grossMinor: 1_001, discountMinor: 0 };
+    db.pharmacySale.findMany.mockResolvedValue([
+      { id: 'sale_1', lines: [line(2_000_000), mixedLot] },
+      { id: 'sale_2', lines: [line(2_000_000)] },
+    ]);
+    db.pharmacySaleEvent.findMany.mockResolvedValue([
+      {
+        id: 'event_1',
+        saleId: 'void_1',
+        actorId: 'user_1',
+        occurredAt: new Date('2026-10-30T05:00:00Z'),
+        sale: { lines: [mixedLot] },
+      },
+    ]);
+
+    const check = await readPharmacyCashCloseCheck(scoped, scope, businessDate);
+
+    const lines = { select: expect.objectContaining({ grossMinor: true }) };
+    expect(db.pharmacySale.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ select: expect.objectContaining({ lines }) })
+    );
+    expect(db.pharmacySaleEvent.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({ sale: { select: { lines } } }),
+      })
+    );
+    expect(check.totals.grossSalesMinor).toBe(4_001_001);
+    expect(check.totals.voidValueMinor).toBe(1_001);
+    expect(check.narrative).toContain('Gross sales USD 40010.01 across 2 sales');
+    expect(check.narrative).toContain('1 voids (USD 10.01)');
   });
 
   it('skips the return lookup when nothing was refunded', async () => {

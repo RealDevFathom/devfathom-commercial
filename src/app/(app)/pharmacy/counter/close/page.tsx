@@ -10,5 +10,7 @@ export default async function PharmacyDayClosePage({
   const params = await searchParams;
   const one = (value: string | string[] | undefined) =>
     typeof value === 'string' ? value : undefined;
-  return <PharmacyDayCloseConsole initial={{ branch: one(params.branch), date: one(params.date) }} />;
+  return (
+    <PharmacyDayCloseConsole initial={{ branch: one(params.branch), date: one(params.date) }} />
+  );
 }

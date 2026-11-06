@@ -52,7 +52,9 @@ export async function readPharmacyCashCloseCheck(
       where: { ...where, status: 'COMPLETED' },
       select: {
         id: true,
-        lines: { select: { quantity: true, unitPriceMinor: true, discountMinor: true } },
+        lines: {
+          select: { quantity: true, unitPriceMinor: true, grossMinor: true, discountMinor: true },
+        },
       },
     }),
     db.pharmacyRefund.findMany({
@@ -115,9 +117,10 @@ export async function readPharmacyCashCloseCheck(
           varianceNote: close.reason,
         }
       : null,
-    // Goods gross from line totals (quantity × price − discount). Service charge and
-    // tax are not included, so against a Z-report gross that carries them the refund
-    // rate can read slightly high — conservative for a review prompt, never understated.
+    // Goods gross from line totals (the stored line gross `grossMinor` − discount),
+    // matching the Z-report. Service charge and tax are not included, so against a
+    // Z-report gross that carries them the refund rate can read slightly high —
+    // conservative for a review prompt, never understated.
     grossSalesMinor: sales.reduce((sum, sale) => sum + saleTotalMinor(sale.lines), 0),
     completedSales: sales.length,
     drawers: drawers.map((drawer) => ({
@@ -166,7 +169,14 @@ async function readAllVoidEvents(
         occurredAt: true,
         sale: {
           select: {
-            lines: { select: { quantity: true, unitPriceMinor: true, discountMinor: true } },
+            lines: {
+              select: {
+                quantity: true,
+                unitPriceMinor: true,
+                grossMinor: true,
+                discountMinor: true,
+              },
+            },
           },
         },
       },
