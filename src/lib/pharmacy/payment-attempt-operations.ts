@@ -602,6 +602,9 @@ export async function collectProviderPayment(
       await authorize(db, scope);
       const attempt = await locked(db, scope, claimed.attempt.id);
       if (attempt.state !== 'UNKNOWN') throw new PaymentCollectionError('UNRESOLVED');
+      await tokenContext(db, 'app.pharmacy_settlement_token', claimed.settlementToken);
+      await db.$executeRaw(Prisma.sql`SELECT pharmacy_assert_payment_settlement_allowed(
+        ${scope.organizationId},${scope.branchId},${attempt.saleId},${attempt.method},${attempt.amountMinor},${attempt.id})`);
       const input = baseInput(attempt);
       await requirePharmacyDayOpen(db, scope, new Date(input.businessDate));
       const sale = await db.pharmacySale.findFirstOrThrow({
