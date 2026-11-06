@@ -19,7 +19,7 @@ const APPROVE = 'pharmacy:procurement-approve';
 // DDL is already applied by `prisma migrate`; it is left out here so the suite
 // neither needs table ownership nor holds an exclusive lock on the table.
 const migrationSql = readFileSync(
-  'prisma/migrations/20261106190200_pharmacy_purchasing_authz/migration.sql',
+  'prisma/migrations/20261106200200_pharmacy_purchasing_authz/migration.sql',
   'utf8'
 );
 const migration = migrationSql
