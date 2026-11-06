@@ -140,7 +140,9 @@ function contentPart(request: MenuExtractionRequest) {
 export function createVisionMenuExtractionAdapter(
   options: VisionAdapterOptions = {}
 ): MenuExtractionAdapter {
-  const selectModel = options.selectModel ?? (() => createAIModel());
+  const selectModel =
+    options.selectModel ??
+    (() => createAIModel(process.env, { feature: 'restaurant-menu-vision' }));
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   return {
@@ -178,6 +180,8 @@ export function createVisionMenuExtractionAdapter(
           ],
           // Transcription, not composition: the least creative setting available.
           temperature: 0,
+          // Retries belong to the routed chain (one jittered retry, then failover).
+          maxRetries: 0,
           abortSignal: signal,
           providerOptions: selection.providerOptions,
         }));

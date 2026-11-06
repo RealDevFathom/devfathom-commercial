@@ -37,8 +37,6 @@ const CONTRIBUTION_DEFINITION =
 const SCENARIO_PERIOD = { from: '2026-09-01', to: '2026-09-07' } as const;
 const STALE_ANCHOR = '2026-01-01T00:00:00.000Z';
 
-/** `assistantAvailabilityMessage` for a confirmed-off organization. */
-const ASK_FATHOM_OFF_MESSAGE = 'Ask Fathom chat is off for this organization.';
 /**
  * `requireLicensedModule` names the catalog module and falls back to the module
  * key when the withheld module is absent from the entitlement snapshot. Both
@@ -892,16 +890,8 @@ test('serves populated Insights on a tenant whose company chat is persistently o
   await expect(page.getByRole('heading', { name: 'This module is not enabled' })).toHaveCount(0);
   await expect(page.getByText('Restaurant Insights module disabled')).toHaveCount(0);
 
-  // The shell keeps the Ask Fathom affordance mounted and disabled, carrying the
-  // confirmed availability description. The "being checked" wording would also
-  // disable the button, so asserting this exact text is what proves the flag was
-  // read from the organization rather than left unknown.
-  const launcher = page.getByRole('button', { name: 'Open AI assistant' });
-  await expect(launcher).toBeVisible();
-  await expect(launcher).toHaveAttribute('aria-describedby', 'topbar-chat-availability');
-  await expect(page.locator('#topbar-chat-availability')).toHaveText(ASK_FATHOM_OFF_MESSAGE);
-  await expect(launcher).toHaveAttribute('title', ASK_FATHOM_OFF_MESSAGE);
-  await expect(launcher).toBeDisabled();
+  // The shell hides Ask Fathom when organization availability is explicitly off.
+  await expect(page.getByRole('button', { name: 'Open Ask Fathom assistant' })).toHaveCount(0);
 
   // Fixed seeded dates, never "today": these tenants carry no drawer fixture.
   await page.getByLabel('From date').fill(from!);
@@ -986,7 +976,7 @@ test('denies the Insights route and its authenticated API when the module entitl
 
   // The shell's chat affordance is live here, which separates this denial from
   // the company chat control the previous case covers.
-  await expect(page.getByRole('button', { name: 'Open AI assistant' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Open Ask Fathom assistant' })).toBeEnabled();
   for (const amount of money) await expect(page.locator('body')).not.toContainText(amount);
 
   // The same authenticated session still reads a licensed sibling module, so the

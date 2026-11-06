@@ -1,0 +1,13 @@
+[
+  { "goto": "/pharmacy/counter" },
+  { "press": "F2" },
+  { "type": { "label": "Scan or search" }, "value": "panadol", "delay": 30 },
+  { "wait": 1500 },
+  { "click": { "role": "button", "name": "Paracetamol 500mg Tablets" } },
+  { "wait": 800 },
+  { "fill": { "sel": "main input[type=number]" }, "value": "2" },
+  { "press": "Enter" },
+  { "wait": 2000, "map": true, "max": 1800, "log": "after Enter in qty" },
+  { "click": { "role": "button", "name": "Add to cart (F6)" } },
+  { "wait": 3000, "map": true, "max": 5000, "shot": "cash-sale-cart2", "log": "after click Add" }
+]

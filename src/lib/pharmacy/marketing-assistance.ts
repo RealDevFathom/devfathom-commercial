@@ -2,7 +2,9 @@ import 'server-only';
 
 import { z } from 'zod';
 import { routeAI } from '@/lib/ai/router';
+import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { validateMarketingBody } from './marketing-service';
+import { containsMedicineName, readTenantMedicineNames } from './medicine-names';
 
 // Only fixed generic choices cross the provider boundary. No free-text prompt,
 // campaign content, customer identity, audience, or database rows are accepted.
@@ -16,6 +18,8 @@ export const marketingAssistanceInput = z
 type MarketingAssistanceContext = {
   organizationId: string;
   branchId: string;
+  /** Tenant-scoped database for the medicine-name check; defaults to the organization's. */
+  db?: ScopedDb;
 };
 
 export async function draftMarketingCopy(
@@ -37,6 +41,12 @@ export async function draftMarketingCopy(
     });
     const body = z.string().trim().min(1).max(1000).parse(result.text);
     validateMarketingBody(body);
+    // Customer-facing text never names a drug: reject any of this tenant's medicine,
+    // brand, alias or ingredient names, not only the generic clinical words above.
+    const names = await readTenantMedicineNames(
+      context.db ?? createTenantDb(context.organizationId)
+    );
+    if (containsMedicineName(body, names)) throw new Error('Draft names a medicine.');
     return { available: true as const, body, approved: false as const };
   } catch {
     // Never expose provider errors, credentials, or fabricated fallback output.

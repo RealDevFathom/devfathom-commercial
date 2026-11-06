@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Logo } from '@/components/brand/logo';
 import { LoginHero } from '@/app/login/login-hero';
 import { verticalCopy, type LoginVertical } from '@/app/login/vertical';
+import pharmacyStyles from '@/components/pharmacy/auth-screens.module.css';
 
 /** One Studio split composition for sign-in, intake, terminal guidance and recovery. */
 export function AuthShell({
@@ -16,7 +17,9 @@ export function AuthShell({
   context?: string;
 }) {
   return (
-    <div className={`studio-auth${registration ? ' studio-auth-register' : ''}`}>
+    <div
+      className={`studio-auth${registration ? ' studio-auth-register' : ''} ${vertical === 'pharmacy' ? `${pharmacyStyles.pharmacy} ${registration ? pharmacyStyles.registration : ''}` : ''}`}
+    >
       <a
         href="#main-content"
         className="sr-only top-3 left-3 z-50 rounded-[var(--radius-xs)] bg-primary text-sm font-semibold text-primary-foreground focus:not-sr-only focus:fixed focus:px-4 focus:py-2"
