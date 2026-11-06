@@ -434,7 +434,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:counter',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(47);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(48);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);
