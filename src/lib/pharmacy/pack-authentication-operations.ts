@@ -39,7 +39,7 @@ export async function authenticatePharmacyPack(
           organizationId: input.organizationId,
           normalizedCode: normalizeMedicineText(fields.gtin),
         },
-        select: { presentation: { select: { medicineId: true } } },
+        select: { packLevelId: true, presentation: { select: { medicineId: true } } },
       })
     : null;
   const medicineId = barcode?.presentation.medicineId ?? null;
@@ -68,7 +68,7 @@ export async function authenticatePharmacyPack(
         select: { id: true },
       })
     : null;
-  const verdict = evaluatePackAuthentication({
+  const evaluated = evaluatePackAuthentication({
     parsed,
     knownMedicineId: medicineId,
     recordedBatch: batch
@@ -81,6 +81,36 @@ export async function authenticatePharmacyPack(
       : null,
     serialSeenOnDifferentPack: Boolean(prior),
   });
+  // An organization-wide batch record is not evidence that this branch ever
+  // received the pack. Keep an absent branch receipt unverified, not mismatched.
+  // Receiving scans occur before a lot may exist, so this check is dispensing-only.
+  const branchReceipt =
+    input.source === 'DISPENSING' &&
+    batch &&
+    barcode?.packLevelId &&
+    evaluated.status === 'VERIFIED'
+      ? await db.pharmacyInventoryLot.findFirst({
+          where: {
+            organizationId: input.organizationId,
+            branchId: input.branchId,
+            manufacturingBatchId: batch.id,
+            packLevelId: barcode.packLevelId,
+            receivedAt: { not: null },
+          },
+          select: { id: true },
+        })
+      : null;
+  const verdict =
+    input.source === 'DISPENSING' && evaluated.status === 'VERIFIED' && !branchReceipt
+      ? {
+          ...evaluated,
+          status: 'NOT_VERIFIABLE' as const,
+          issues: ['NOT_VERIFIABLE'] as typeof evaluated.issues,
+          explanation:
+            'This pack and batch cannot be matched to a recorded receipt at this branch.',
+          advisory: true,
+        }
+      : evaluated;
   const scan = await db.pharmacyPackAuthenticationScan.create({
     data: {
       organizationId: input.organizationId,
