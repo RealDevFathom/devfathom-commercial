@@ -89,7 +89,6 @@ vi.mock('@/lib/trpc', () => {
     pharmacySales: {
       counterSearch: {
         setData: mocks.searchSetData,
-        invalidate: vi.fn(),
         fetch: (...args: unknown[]) => mocks.searchFetch(...args),
         invalidate: vi.fn(),
       },
