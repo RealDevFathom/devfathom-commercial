@@ -340,5 +340,15 @@
    "verdict": "PASS",
    "details": "Checked DEV-316 against pr/105 @4ccf84c2. skippedQuietHours is correct (tests at the 22:00 and 07:59 boundaries). The Asia/Karachi ISO-week key is correct (Monday-midnight test; year-boundary math checked). Develop still lacks both. Two independent checks did not confirm the one reported blocker. That blocker is that the write-side legacy-key claim is time-boxed to LEGACY_WEEK_COMPATIBILITY_END (2026-11-02T19:00Z), so on a deploy now only the read-side guard applies. Note for the owner: move that cutoff to the real rollout week before merging if old and new workers can overlap. The branch also conflicts with develop's #294 refactor and needs a rebase"
   }
+ },
+ "1170": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "First review FAIL (the bump moves pg to 8.23.1 and @prisma/adapter-pg/@prisma/client to 7.10.1, but assertLockedDrivers() in prisma/fresh-database-adapter.ts only accepts pg 8.22.0 and Prisma 7.9.1 and pins pg's lib files by sha256, so the private initializer threw 'Private initializer driver rejected operation.' on 69469ed2d), fixed in ab89e8b2b. Re-review: git diff 69469ed2d ab89e8b2b touches only pg, @types/pg, @prisma/adapter-pg, @prisma/client and their lock-only deps, and each of those package.json and bun.lock lines is byte-identical to merge-base 47ea6c8d0. The other 18 bumps are unchanged. Frozen install, assertLockedDrivers() and tsc --noEmit pass. Prisma CLI 7.10.0 with client 7.9.1 matches develop. df59d8e68 only restores three blank lines to Bun's own lockfile layout. Owner note: the PR title and body still list pg and Prisma, and .github/dependabot.yml has no ignore rule for them, so Dependabot will propose them again"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked at ab89e8b2b. The held lock entries keep the merge-base sha512 integrity hashes byte for byte. All 1624 entries come from the default registry with sha512 integrity, with no git, tarball or custom-registry sources. trustedDependencies (unrs-resolver) and overrides are unchanged. None of the held packages has a lifecycle script. bun pm untrusted lists only prisma, @prisma/engines and esbuild, as on develop. df59d8e68 changes blank lines only"
+  }
  }
 }

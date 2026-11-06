@@ -258,9 +258,9 @@
   "initialFailure": "Prettier: src/components/pharmacy/medicine-reference-workbench.tsx unformatted"
  },
  "1170": {
-  "sha": "ab89e8b2b1b6d0e69ea3539dce2ab116c0821dc6",
+  "sha": "df59d8e68095dc11f7f7c2176b4d4c6ed3838905",
   "initialSha": "69469ed2d43eb180a56ceaedf2a3044c1da7cbe2",
-  "what": "pg, @types/pg, @prisma/adapter-pg and @prisma/client held at develop's versions",
+  "what": "ab89e8b2b holds pg, @types/pg, @prisma/adapter-pg and @prisma/client at develop's versions; df59d8e68 restores Bun's lockfile blank-line layout",
   "initialFailure": "no machine run (QA finding only)",
   "noInitialRun": true
  }
