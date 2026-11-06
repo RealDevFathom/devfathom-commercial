@@ -12,6 +12,7 @@ import {
 } from '@/lib/pharmacy/goods-receipt';
 import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
+import { FinancePostingError, PharmacyFinanceError } from '@/lib/pharmacy/finance-postings';
 import {
   allocateCentralReceipt,
   centralDemand,
@@ -96,6 +97,17 @@ const bps = z.number().int().min(0).max(10_000);
 const branchId = z.string().trim().min(1).max(128);
 
 function domainError(error: unknown): never {
+  if (error instanceof PharmacyFinanceError || error instanceof FinancePostingError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'CROSS_BRANCH_REFERENCE'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
   if (error instanceof CentralPurchasingError) {
     throw new TRPCError({
       code:

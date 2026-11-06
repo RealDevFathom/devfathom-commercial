@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const receiveLot = vi.hoisted(() => vi.fn());
 
+vi.mock('./finance-postings', () => ({ postGoodsReceiptEntry: vi.fn() }));
+
 vi.mock('./stock-ledger', async () => {
   const actual = await vi.importActual<typeof import('./stock-ledger')>('./stock-ledger');
   return { ...actual, receiveLot };

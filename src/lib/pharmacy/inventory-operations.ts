@@ -3,6 +3,11 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { arrangementFor, PharmacyInventoryError } from './inventory';
+import {
+  postCountAdjustmentEntry,
+  postInterbranchTransferEntry,
+  postInterbranchTransferReceiptEntry,
+} from './finance-postings';
 import type { LedgerScope } from './stock-ledger';
 
 /** Serialize recall-authority decisions that can overlap at batch or medicine scope. */
@@ -279,6 +284,7 @@ export async function approveCount(
         AND "branchId"=${scope.branchId}
       FOR UPDATE`
   );
+  const approvedAt = new Date();
   const count = await db.pharmacyInventoryCount.findFirst({
     where: { id: countId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: { lines: true },
@@ -307,10 +313,14 @@ export async function approveCount(
       },
     });
   }
-  return db.pharmacyInventoryCount.update({
+  const approved = await db.pharmacyInventoryCount.update({
     where: { id: count.id },
-    data: { status: 'APPROVED', approvedById: scope.actorId, approvedAt: new Date() },
+    data: { status: 'APPROVED', approvedById: scope.actorId, approvedAt },
   });
+  for (const line of count.lines) {
+    await postCountAdjustmentEntry(db, scope, { countLineId: line.id, at: approvedAt });
+  }
+  return approved;
 }
 
 export async function writeOff(
@@ -591,6 +601,7 @@ export async function dispatchTransfer(
   transferId: string,
   key: string
 ) {
+  const dispatchedAt = new Date();
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
     include: { lines: true },
@@ -639,10 +650,14 @@ export async function dispatchTransfer(
       },
     });
   }
-  return db.pharmacyInterbranchTransfer.update({
+  const dispatched = await db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },
-    data: { status: 'DISPATCHED', dispatchedById: scope.actorId, dispatchedAt: new Date() },
+    data: { status: 'DISPATCHED', dispatchedById: scope.actorId, dispatchedAt },
   });
+  for (const line of transfer.lines) {
+    await postInterbranchTransferEntry(db, scope, { transferLineId: line.id, at: dispatchedAt });
+  }
+  return dispatched;
 }
 
 export async function receiveTransferLine(
@@ -651,6 +666,14 @@ export async function receiveTransferLine(
   input: { transferId: string; lineId: string; receivedUnits: number; idempotencyKeyPrefix: string }
 ) {
   assertPositive(input.receivedUnits);
+  // Share the closing-receipt lock so competing receipts read committed totals.
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM "pharmacy_interbranch_transfers"
+      WHERE id=${input.transferId}
+        AND "organizationId"=${scope.organizationId}
+        AND "toBranchId"=${scope.branchId}
+      FOR UPDATE`
+  );
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: {
       id: input.transferId,
@@ -704,7 +727,7 @@ export async function receiveTransferLine(
       receivedAt: new Date(),
     },
   });
-  await db.pharmacyStockMovement.create({
+  const receivedMovement = await db.pharmacyStockMovement.create({
     data: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -718,6 +741,11 @@ export async function receiveTransferLine(
       actorId: scope.actorId,
       idempotencyKey: `${input.idempotencyKeyPrefix}:received`,
     },
+  });
+  await postInterbranchTransferReceiptEntry(db, scope, {
+    transferLineId: line.id,
+    stockMovementId: receivedMovement.id,
+    at: receivedMovement.occurredAt,
   });
   await db.pharmacyInterbranchTransferLine.update({
     where: { id: line.id },

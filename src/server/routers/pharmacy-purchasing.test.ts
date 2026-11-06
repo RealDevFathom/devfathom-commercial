@@ -23,6 +23,7 @@ vi.mock('@/server/audit', () => ({
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
 import type { TRPCContext } from '../trpc';
 import { moduleForProcedure } from '@/lib/module-catalog';
+import { FinancePostingError, PharmacyFinanceError } from '@/lib/pharmacy/finance-postings';
 
 const FUTURE = new Date('2030-01-01T00:00:00.000Z');
 const PAST = new Date('2020-01-01T00:00:00.000Z');
@@ -118,6 +119,30 @@ beforeEach(() => {
   mocks.can.mockReset().mockResolvedValue(true);
   db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
+});
+
+describe('pharmacy purchasing finance refusals', () => {
+  it.each([
+    { error: new PharmacyFinanceError('NOT_FOUND'), code: 'NOT_FOUND' },
+    { error: new PharmacyFinanceError('CROSS_BRANCH_REFERENCE'), code: 'FORBIDDEN' },
+    { error: new PharmacyFinanceError('INVALID_STATE'), code: 'BAD_REQUEST' },
+    { error: new FinancePostingError('INVALID_AMOUNT'), code: 'BAD_REQUEST' },
+  ])('maps finance refusal $error.reason to $code', async ({ error, code }) => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    });
+    db.$transaction.mockRejectedValueOnce(error);
+    await expect(
+      caller().reverseGoodsReceipt({
+        branchId: 'branch_a',
+        goodsReceiptId: 'receipt_1',
+        reason: 'Return delivery',
+      })
+    ).rejects.toMatchObject({ code, message: error.reason });
+  });
 });
 
 describe.each(['purchaseReturns', 'supplierCredits'] as const)(

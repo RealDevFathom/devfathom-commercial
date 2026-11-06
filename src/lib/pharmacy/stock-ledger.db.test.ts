@@ -189,6 +189,7 @@ async function stockLot(
     units: number;
     label: string;
     received?: boolean;
+    unitCostMinor?: number;
     branchId?: string;
     locationId?: string;
   }
@@ -212,7 +213,7 @@ async function stockLot(
       unitsPerPack: 10,
       supplierName: 'Distributor Ltd',
       supplierInvoiceRef: `INV-${tag(options.label)}`,
-      unitCostMinor: 1200,
+      unitCostMinor: options.unitCostMinor ?? 1200,
       printedMrpMinor: 2000,
       receivedExpiresAt: options.expiresAt,
       receivedExpiryPrecision: 'DAY',
@@ -312,6 +313,19 @@ beforeAll(async () => {
   ]);
   deps = { withTenantDb: scopedDb.withTenantDb, ledger, operations, drap };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  await scopedDb.withPlatformDb((db) =>
+    db.organization.createMany({
+      data: [ORG_A, ORG_B].map((id) => ({
+        id,
+        slug: id,
+        legalName: id,
+        displayName: id,
+        status: 'ACTIVE' as const,
+        deploymentMode: 'SHARED' as const,
+      })),
+      skipDuplicates: true,
+    })
+  );
 }, 120_000);
 
 // ── INV-01 — the append-only ledger and its projection ──────────────────────
@@ -453,6 +467,103 @@ describeIfDatabase('PH-INV ledger — INV-01 append-only stock ledger', () => {
 });
 
 describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
+  it('approves a nonzero count variance for a zero-cost lot', async () => {
+    const f = await scenario(ORG_A, BRANCH_A, 'free-count');
+    await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, f, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'free-count',
+        unitCostMinor: 0,
+      });
+      const count = await deps.operations.createCount(db, scopeOf(f), {
+        varianceThreshold: 100,
+        readings: [
+          {
+            inventoryLotId: lot.id,
+            stockLocationId: f.locationId,
+            countedSealedPacks: 3,
+            countedLooseUnits: 0,
+          },
+        ],
+      });
+      const approved = await deps.operations.approveCount(
+        db,
+        scopeOf(f),
+        count.id,
+        tag('free-count')
+      );
+      expect(approved.status).toBe('APPROVED');
+      expect(
+        (await db.pharmacyStockBalance.findFirstOrThrow({ where: { inventoryLotId: lot.id } }))
+          .onHandUnits
+      ).toBe(30);
+      expect(await db.financeJournalEntry.count({ where: { sourceId: count.lines[0]!.id } })).toBe(
+        0
+      );
+    });
+  });
+
+  it('dispatches and receives zero-cost stock without monetary entries', async () => {
+    const f = await scenario(ORG_A, BRANCH_A, 'free-transfer');
+    await inOrg(ORG_A, async (db) => {
+      const destinationBranch = `free_destination_${suffix}`;
+      await ensureBranch(db, ORG_A, destinationBranch);
+      const destination = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: destinationBranch,
+          code: tag('free-dest'),
+          name: 'Destination',
+          kind: 'STORE',
+        },
+      });
+      const { lot } = await stockLot(db, f, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'free-transfer',
+        unitCostMinor: 0,
+      });
+      const transfer = await deps.operations.allocateTransfer(db, scopeOf(f), {
+        toBranchId: destinationBranch,
+        lines: [
+          {
+            sourceLotId: lot.id,
+            sourceStockLocationId: f.locationId,
+            destinationStockLocationId: destination.id,
+            quantityUnits: 20,
+          },
+        ],
+      });
+      await deps.operations.approveTransfer(db, { ...scopeOf(f), actorId: 'manager' }, transfer.id);
+      expect(
+        (await deps.operations.dispatchTransfer(db, scopeOf(f), transfer.id, tag('free-dispatch')))
+          .status
+      ).toBe('DISPATCHED');
+      const received = await deps.operations.receiveTransferLine(
+        db,
+        { ...scopeOf(f), branchId: destinationBranch },
+        {
+          transferId: transfer.id,
+          lineId: transfer.lines[0]!.id,
+          receivedUnits: 20,
+          idempotencyKeyPrefix: tag('free-receive'),
+        }
+      );
+      expect(received.status).toBe('RECEIVED');
+      expect(
+        (
+          await db.pharmacyStockBalance.findFirstOrThrow({
+            where: { branchId: destinationBranch, disposition: 'AVAILABLE' },
+          })
+        ).onHandUnits
+      ).toBe(20);
+      expect(
+        await db.financeJournalEntry.count({ where: { sourceId: transfer.lines[0]!.id } })
+      ).toBe(0);
+    });
+  });
+
   it('requires a second actor above the count variance threshold and posts the adjustment once approved', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'count-coauth');
     const count = await inOrg(ORG_A, async (db) => {
@@ -1028,7 +1139,15 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         transfer.id
       );
       await deps.operations.dispatchTransfer(db, scopeOf(fixture), transfer.id, tag('dispatch'));
-      return { transferId: transfer.id, lineId: transfer.lines[0]!.id, lotId: lot.id };
+      const journal = await db.financeJournalEntry.findFirstOrThrow({
+        where: {
+          organizationId: ORG_A,
+          sourceKind: 'PHARMACY_INTERBRANCH_TRANSFER_LINE',
+          sourceId: transfer.lines[0]!.id,
+        },
+        include: { lines: true },
+      });
+      return { transferId: transfer.id, lineId: transfer.lines[0]!.id, lotId: lot.id, journal };
     });
     const dispatched = await inOrg(ORG_A, (db) =>
       db.pharmacyStockBalance.findMany({ where: { inventoryLotId: setup.lotId } })
@@ -1037,6 +1156,20 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       expect.arrayContaining([
         expect.objectContaining({ disposition: 'AVAILABLE', onHandUnits: 10 }),
         expect.objectContaining({ disposition: 'IN_TRANSIT', onHandUnits: 30 }),
+      ])
+    );
+    expect(setup.journal.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountCode: 'INVENTORY',
+          side: 'CREDIT',
+          amountMinor: 30 * 1_200,
+        }),
+        expect.objectContaining({
+          accountCode: 'INVENTORY_IN_TRANSIT',
+          side: 'DEBIT',
+          amountMinor: 30 * 1_200,
+        }),
       ])
     );
     const received = await inOrg(ORG_A, (db) =>
@@ -1052,6 +1185,61 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       )
     );
     expect(received.status).toBe('EXCEPTION');
+    const finance = await import('./finance-postings');
+    const reports = await import('./finance-reports');
+    const destinationScope = {
+      organizationId: ORG_A,
+      branchId: destinationBranch,
+      actorId: 'receiver',
+    };
+    const transitValue = () =>
+      inOrg(ORG_A, async (db) => {
+        const entries = await db.financeJournalEntry.findMany({
+          where: { sourceId: setup.lineId },
+          include: { lines: true },
+        });
+        return entries
+          .flatMap((entry) => entry.lines)
+          .filter((leg) => leg.accountCode === 'INVENTORY_IN_TRANSIT')
+          .reduce(
+            (sum, leg) => sum + (leg.side === 'DEBIT' ? leg.amountMinor : -leg.amountMinor),
+            0
+          );
+      });
+    expect(await transitValue()).toBe(10 * 1_200);
+    const partial = await inOrg(ORG_A, (db) =>
+      reports.perpetualValuation(db, destinationScope, new Date('2099-01-01'))
+    );
+    expect(
+      partial
+        .filter((row) => row.lotId !== setup.lotId)
+        .reduce((sum, row) => sum + row.valueMinor, 0)
+    ).toBe(20 * 1_200);
+    await inOrg(ORG_A, async (db) => {
+      const movement = await db.pharmacyStockMovement.findFirstOrThrow({
+        where: { branchId: destinationBranch, kind: 'TRANSFER_IN' },
+      });
+      const input = {
+        transferLineId: setup.lineId,
+        stockMovementId: movement.id,
+        at: movement.occurredAt,
+      };
+      const first = await finance.postInterbranchTransferReceiptEntry(db, destinationScope, input);
+      const replay = await finance.postInterbranchTransferReceiptEntry(db, destinationScope, input);
+      expect(first!.id).toBe(replay!.id);
+      const final = await deps.operations.receiveTransferLine(db, destinationScope, {
+        transferId: setup.transferId,
+        lineId: setup.lineId,
+        receivedUnits: 10,
+        idempotencyKeyPrefix: tag('receive-rest'),
+      });
+      expect(final.status).toBe('RECEIVED');
+      const rows = await reports.perpetualValuation(db, destinationScope, new Date('2099-01-01'));
+      expect(rows.some((row) => row.lotId === setup.lotId)).toBe(false);
+      expect(rows.reduce((sum, row) => sum + row.valueMinor, 0)).toBe(30 * 1_200);
+    });
+    expect(await transitValue()).toBe(0);
+
     await expect(
       inOrg(ORG_A, (db) =>
         deps.operations.receiveTransferLine(

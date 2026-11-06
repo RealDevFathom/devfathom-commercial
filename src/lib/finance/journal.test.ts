@@ -50,6 +50,26 @@ describe('assertBalanced — FIN-01 balanced postings', () => {
     ).toThrow(new FinancePostingError('UNBALANCED'));
   });
 
+  it('detects a one-unit imbalance even when accumulated totals exceed number precision', () => {
+    const max = Number.MAX_SAFE_INTEGER;
+    expect(() =>
+      assertBalanced([
+        leg('INVENTORY', 'DEBIT', max),
+        leg('INVENTORY', 'DEBIT', 2),
+        leg('OPENING_BALANCE_EQUITY', 'CREDIT', max),
+        leg('OPENING_BALANCE_EQUITY', 'CREDIT', 1),
+      ])
+    ).toThrow(new FinancePostingError('UNBALANCED'));
+    expect(() =>
+      assertBalanced([
+        leg('INVENTORY', 'DEBIT', max),
+        leg('INVENTORY', 'DEBIT', 2),
+        leg('OPENING_BALANCE_EQUITY', 'CREDIT', max - 1),
+        leg('OPENING_BALANCE_EQUITY', 'CREDIT', 3),
+      ])
+    ).not.toThrow();
+  });
+
   it('refuses an entry with no legs', () => {
     expect(() => assertBalanced([])).toThrow(new FinancePostingError('EMPTY_ENTRY'));
   });

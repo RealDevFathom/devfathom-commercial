@@ -40,7 +40,12 @@ import {
   setManufacturingBatchState,
   writeOff,
 } from '@/lib/pharmacy/inventory-operations';
-import { postWriteOffEntry } from '@/lib/pharmacy/finance-postings';
+import {
+  FinancePostingError,
+  PharmacyFinanceError,
+  postInterbranchTransferVarianceEntry,
+  postWriteOffEntry,
+} from '@/lib/pharmacy/finance-postings';
 import {
   allocateForSale,
   breakPack,
@@ -124,6 +129,17 @@ function txDb(tx: unknown): ScopedDb {
 }
 
 function domainError(error: unknown): never {
+  if (error instanceof PharmacyFinanceError || error instanceof FinancePostingError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'CROSS_BRANCH_REFERENCE'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
   if (error instanceof PharmacyInventoryError) {
     const code =
       error.reason === 'NOT_FOUND'
@@ -447,7 +463,7 @@ type VarianceReceiptInput = {
  * the line-by-line receipt path can never draw written-off units back out of
  * transit. Runs inside the caller's transaction.
  */
-async function receiveTransferWithVariance(
+export async function receiveTransferWithVariance(
   db: ScopedDb,
   scope: LedgerScope,
   input: VarianceReceiptInput
@@ -575,6 +591,11 @@ async function receiveTransferWithVariance(
         reason: evidence.reason,
         evidenceRef: evidence.evidenceRef,
       },
+    });
+    await postInterbranchTransferVarianceEntry(db, scope, {
+      transferLineId: step.line.id,
+      stockMovementId: movement.id,
+      at: movement.occurredAt,
     });
     postedVariances.push({ lineId: step.line.id, units: step.varianceUnits, movement, custody });
   }

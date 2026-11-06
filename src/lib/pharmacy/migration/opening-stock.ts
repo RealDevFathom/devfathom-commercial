@@ -27,6 +27,7 @@ import 'server-only';
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { postOpeningLedgerEntry, postOpeningStockEntry } from '../finance-postings';
 import { expiryInstant, normalizeExpiryBoundary } from '../stock-ledger';
 import type { LedgerScope } from '../stock-ledger';
 
@@ -441,6 +442,12 @@ export async function postOpeningSession(
     },
   });
 
+  if (totalValueMinor > BigInt(0)) {
+    // Recognize the opening position alongside its stock movements; postedAt
+    // remains the audit time at which the migration was submitted.
+    await postOpeningStockEntry(db, scope, { sessionId: session.id, at: session.openingAt });
+  }
+
   return { total, postedLineCount };
 }
 
@@ -474,18 +481,26 @@ export async function postOpeningLedger(
   }
 
   const postedAt = new Date();
-  await db.pharmacyOpeningLedgerEntry.createMany({
-    data: input.balances.map((balance) => ({
-      organizationId: scope.organizationId,
-      branchId: session.branchId,
-      sessionId: session.id,
-      account: balance.account,
-      balanceMinor: balance.balanceMinor,
-      sourceRef: balance.sourceRef.trim(),
-      actorId: scope.actorId,
-      postedAt,
-    })),
-  });
+  for (const balance of input.balances) {
+    const opening = await db.pharmacyOpeningLedgerEntry.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: session.branchId,
+        sessionId: session.id,
+        account: balance.account,
+        balanceMinor: balance.balanceMinor,
+        sourceRef: balance.sourceRef.trim(),
+        actorId: scope.actorId,
+        postedAt,
+      },
+    });
+    if (balance.balanceMinor !== BigInt(0)) {
+      await postOpeningLedgerEntry(db, scope, {
+        openingLedgerEntryId: opening.id,
+        at: session.openingAt,
+      });
+    }
+  }
 
   return openingLedger(db, scope, session.id);
 }

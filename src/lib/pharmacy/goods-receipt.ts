@@ -34,6 +34,7 @@ import {
 } from '@/lib/restaurant/operator-credentials';
 
 import { PharmacyInventoryError } from './inventory';
+import { postGoodsReceiptEntry, reversePostingForSource } from './finance-postings';
 import {
   assertGoodsReceiptTransition,
   assertSaleableOnReceipt,
@@ -398,6 +399,10 @@ export async function postGoodsReceipt(
     data: { status: 'POSTED', postedAt: input.at },
   });
 
+  // Inventory and its valuation are one event. Keep the journal write on this
+  // transaction client so a finance failure rolls the receipt and stock back.
+  await postGoodsReceiptEntry(db, scope, { goodsReceiptId: receipt.id, at: input.at });
+
   // PUR-02: the order is now being received against. SENT → RECEIVING is the
   // last transition of that status machine, so a second receipt against the
   // same order finds it already there and leaves it alone.
@@ -575,6 +580,28 @@ export async function reverseGoodsReceipt(
       reversalReason: input.reason,
     },
   });
+
+  // Receipts posted before finance journals were wired into this operation do
+  // not have an original entry to negate. Preserve their long-standing
+  // reversibility during a rolling upgrade; receipts posted by current code do
+  // have an entry, and still receive the complete additive finance audit trail.
+  const financePosting = await db.financeJournalEntry.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      sourceKind: 'PHARMACY_GOODS_RECEIPT',
+      sourceId: receipt.id,
+      reversesEntryId: null,
+    },
+    select: { id: true },
+  });
+  if (financePosting) {
+    await reversePostingForSource(db, scope, {
+      sourceKind: 'PHARMACY_GOODS_RECEIPT',
+      sourceId: receipt.id,
+      reason: input.reason,
+      at: input.at,
+    });
+  }
 
   return {
     goodsReceiptId: receipt.id,
