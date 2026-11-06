@@ -363,4 +363,15 @@ describe('CounterRxPanel checks', () => {
     expect(screen.getByLabelText('Approving pharmacist')).toBeDisabled();
     expect(screen.getByLabelText('Emergency supply, no prescription')).toBeDisabled();
   });
+
+  it('stops controlled authorization when no independent pharmacist is available', () => {
+    render(
+      <CounterRxPanel {...props({ patient, controlled: authorization({ pharmacists: [] }) })} />
+    );
+    expect(
+      screen.getByText(/No independent pharmacist with an active staff PIN is available/)
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Pharmacist PIN')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Patient address')).not.toBeInTheDocument();
+  });
 });

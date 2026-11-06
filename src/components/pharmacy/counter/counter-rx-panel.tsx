@@ -958,141 +958,155 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               Patient address and a pharmacist PIN are required. Use a prescription, or record an
               emergency supply. Online only.
             </p>
-            <h5 className="font-semibold text-text-strong">1 · Patient</h5>
-            <Label className="text-xs text-text-muted" htmlFor="controlled-address">
-              Patient address
-            </Label>
-            <Input
-              id="controlled-address"
-              className="h-11"
-              disabled={disabled || !patient}
-              value={controlled.patientAddress}
-              onChange={(event) => controlled.onChange('patientAddress', event.target.value)}
-            />
-            <h5 className="font-semibold text-text-strong">2 · Prescription</h5>
-            <label
-              className="flex min-h-11 items-center gap-2 text-sm text-text-body"
-              htmlFor="controlled-emergency"
-            >
-              <input
-                id="controlled-emergency"
-                type="checkbox"
-                checked={controlled.emergency}
-                disabled={disabled}
-                onChange={(event) => controlled.onChange('emergency', event.target.checked)}
-              />
-              Emergency supply, no prescription
-            </label>
-            {controlled.emergency ? (
-              <>
-                <Label className="text-xs text-text-muted" htmlFor="controlled-prescriber-name">
-                  Prescriber name
-                </Label>
-                <Input
-                  id="controlled-prescriber-name"
-                  className="h-11"
-                  disabled={disabled}
-                  value={controlled.prescriberName}
-                  onChange={(event) => controlled.onChange('prescriberName', event.target.value)}
-                />
-                <Label className="text-xs text-text-muted" htmlFor="controlled-prescriber-reg">
-                  Prescriber registration
-                </Label>
-                <Input
-                  id="controlled-prescriber-reg"
-                  className="h-11"
-                  disabled={disabled}
-                  value={controlled.prescriberRegNo}
-                  onChange={(event) => controlled.onChange('prescriberRegNo', event.target.value)}
-                />
-              </>
-            ) : null}
-            <Label htmlFor="controlled-prescription">Prescription line</Label>
-            <select
-              id="controlled-prescription"
-              className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
-              disabled={disabled || !patient}
-              value={controlled.prescriptionLineId}
-              onChange={(event) => controlled.onChange('prescriptionLineId', event.target.value)}
-            >
-              <option value="">Select prescription</option>
-              {patient?.prescriptions
-                .filter((rx) => rx.inDate)
-                .flatMap((rx) =>
-                  rx.lines.map((line) => (
-                    <option key={line.prescriptionLineId} value={line.prescriptionLineId}>
-                      {line.medicineName} · {rx.prescriberName} · {line.remainingAuthorizedUnits}{' '}
-                      units
-                    </option>
-                  ))
-                )}
-            </select>
-            <label
-              className="flex min-h-11 items-center gap-2 text-sm text-text-body"
-              htmlFor="controlled-rx-serial"
-            >
-              <input
-                id="controlled-rx-serial"
-                type="checkbox"
-                checked={controlled.rxSerialWritten}
-                disabled={disabled}
-                onChange={(event) => controlled.onChange('rxSerialWritten', event.target.checked)}
-              />
-              Register serial written on the prescription
-            </label>
-            <Label className="text-xs text-text-muted" htmlFor="controlled-ref-serial">
-              Earlier register serial
-            </Label>
-            <Input
-              id="controlled-ref-serial"
-              className="h-11"
-              inputMode="numeric"
-              disabled={disabled}
-              value={controlled.refSerial}
-              onChange={(event) => controlled.onChange('refSerial', event.target.value)}
-            />
-            <p className="text-xs text-text-muted">
-              Leave it blank unless this sale repeats an earlier register entry.
-            </p>
-            <h5 className="font-semibold text-text-strong">3 · Approving pharmacist</h5>
-            <Label htmlFor="controlled-pharmacist">Approving pharmacist</Label>
-            <select
-              id="controlled-pharmacist"
-              className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
-              disabled={disabled || controlled.loading || controlled.error}
-              value={controlled.staffProfileId}
-              onChange={(event) => controlled.onChange('staffProfileId', event.target.value)}
-            >
-              <option value="">Select pharmacist</option>
-              {controlled.pharmacists.map((staff) => (
-                <option key={staff.id} value={staff.id}>
-                  {staff.name}
-                </option>
-              ))}
-            </select>
-            {controlled.loading ? (
-              <p role="status">Loading pharmacists…</p>
-            ) : controlled.error ? (
-              <p role="alert">Pharmacists could not be loaded. Retry by refreshing the counter.</p>
-            ) : controlled.pharmacists.length === 0 ? (
-              <p role="status">
+            {!controlled.loading && !controlled.error && controlled.pharmacists.length === 0 ? (
+              <p role="status" className="text-sm text-text-muted">
                 No independent pharmacist with an active staff PIN is available. Ask your
                 administrator to configure one.
               </p>
-            ) : null}
-            <Label htmlFor="controlled-pin">Pharmacist PIN</Label>
-            <Input
-              id="controlled-pin"
-              type="password"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={8}
-              className="h-11"
-              disabled={disabled || !controlled.staffProfileId}
-              value={controlled.pin}
-              onChange={(event) => controlled.onChange('pin', event.target.value)}
-            />
-            <p className="text-xs text-text-muted">The PIN is cleared after each attempt.</p>
+            ) : (
+              <>
+                <h5 className="font-semibold text-text-strong">1 · Patient</h5>
+                <Label className="text-xs text-text-muted" htmlFor="controlled-address">
+                  Patient address
+                </Label>
+                <Input
+                  id="controlled-address"
+                  className="h-11"
+                  disabled={disabled || !patient}
+                  value={controlled.patientAddress}
+                  onChange={(event) => controlled.onChange('patientAddress', event.target.value)}
+                />
+                <h5 className="font-semibold text-text-strong">2 · Prescription</h5>
+                <label
+                  className="flex min-h-11 items-center gap-2 text-sm text-text-body"
+                  htmlFor="controlled-emergency"
+                >
+                  <input
+                    id="controlled-emergency"
+                    type="checkbox"
+                    checked={controlled.emergency}
+                    disabled={disabled}
+                    onChange={(event) => controlled.onChange('emergency', event.target.checked)}
+                  />
+                  Emergency supply, no prescription
+                </label>
+                {controlled.emergency ? (
+                  <>
+                    <Label className="text-xs text-text-muted" htmlFor="controlled-prescriber-name">
+                      Prescriber name
+                    </Label>
+                    <Input
+                      id="controlled-prescriber-name"
+                      className="h-11"
+                      disabled={disabled}
+                      value={controlled.prescriberName}
+                      onChange={(event) =>
+                        controlled.onChange('prescriberName', event.target.value)
+                      }
+                    />
+                    <Label className="text-xs text-text-muted" htmlFor="controlled-prescriber-reg">
+                      Prescriber registration
+                    </Label>
+                    <Input
+                      id="controlled-prescriber-reg"
+                      className="h-11"
+                      disabled={disabled}
+                      value={controlled.prescriberRegNo}
+                      onChange={(event) =>
+                        controlled.onChange('prescriberRegNo', event.target.value)
+                      }
+                    />
+                  </>
+                ) : null}
+                <Label htmlFor="controlled-prescription">Prescription line</Label>
+                <select
+                  id="controlled-prescription"
+                  className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+                  disabled={disabled || !patient}
+                  value={controlled.prescriptionLineId}
+                  onChange={(event) =>
+                    controlled.onChange('prescriptionLineId', event.target.value)
+                  }
+                >
+                  <option value="">Select prescription</option>
+                  {patient?.prescriptions
+                    .filter((rx) => rx.inDate)
+                    .flatMap((rx) =>
+                      rx.lines.map((line) => (
+                        <option key={line.prescriptionLineId} value={line.prescriptionLineId}>
+                          {line.medicineName} · {rx.prescriberName} ·{' '}
+                          {line.remainingAuthorizedUnits} units
+                        </option>
+                      ))
+                    )}
+                </select>
+                <label
+                  className="flex min-h-11 items-center gap-2 text-sm text-text-body"
+                  htmlFor="controlled-rx-serial"
+                >
+                  <input
+                    id="controlled-rx-serial"
+                    type="checkbox"
+                    checked={controlled.rxSerialWritten}
+                    disabled={disabled}
+                    onChange={(event) =>
+                      controlled.onChange('rxSerialWritten', event.target.checked)
+                    }
+                  />
+                  Register serial written on the prescription
+                </label>
+                <Label className="text-xs text-text-muted" htmlFor="controlled-ref-serial">
+                  Earlier register serial
+                </Label>
+                <Input
+                  id="controlled-ref-serial"
+                  className="h-11"
+                  inputMode="numeric"
+                  disabled={disabled}
+                  value={controlled.refSerial}
+                  onChange={(event) => controlled.onChange('refSerial', event.target.value)}
+                />
+                <p className="text-xs text-text-muted">
+                  Leave it blank unless this sale repeats an earlier register entry.
+                </p>
+                <h5 className="font-semibold text-text-strong">3 · Approving pharmacist</h5>
+                <Label htmlFor="controlled-pharmacist">Approving pharmacist</Label>
+                <select
+                  id="controlled-pharmacist"
+                  className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+                  disabled={disabled || controlled.loading || controlled.error}
+                  value={controlled.staffProfileId}
+                  onChange={(event) => controlled.onChange('staffProfileId', event.target.value)}
+                >
+                  <option value="">Select pharmacist</option>
+                  {controlled.pharmacists.map((staff) => (
+                    <option key={staff.id} value={staff.id}>
+                      {staff.name}
+                    </option>
+                  ))}
+                </select>
+                {controlled.loading ? (
+                  <p role="status">Loading pharmacists…</p>
+                ) : controlled.error ? (
+                  <p role="alert">
+                    Pharmacists could not be loaded. Retry by refreshing the counter.
+                  </p>
+                ) : null}
+                <Label htmlFor="controlled-pin">Pharmacist PIN</Label>
+                <Input
+                  id="controlled-pin"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={8}
+                  className="h-11"
+                  disabled={disabled || !controlled.staffProfileId}
+                  value={controlled.pin}
+                  onChange={(event) => controlled.onChange('pin', event.target.value)}
+                />
+                <p className="text-xs text-text-muted">The PIN is cleared after each attempt.</p>
+              </>
+            )}
           </section>
         ) : null}
       </div>
