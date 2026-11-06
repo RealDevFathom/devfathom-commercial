@@ -1314,6 +1314,7 @@ model PharmacyTender {
   changeGivenMinor  Int?
   provider          String?
   providerRef       String?
+  approvalCode      String?
   payerName         String?
   referenceSkipped  Boolean                      @default(false)
   drawerSessionId   String?

@@ -19,10 +19,16 @@ import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
 import { authenticatePharmacyCommand, validateLeasedReceiptReplay } from './sales';
 import type { PharmacyCommandAuthentication, PharmacyLeasedReceipt } from './sales';
-import { isManualTender, validateManualTender, type ManualTenderType, aggregateTenderTotals } from './manual-payments';
+import {
+  isManualTender,
+  validateManualTender,
+  type ManualTenderType,
+  aggregateTenderTotals,
+} from './manual-payments';
 import { readManualPaymentSettings } from './manual-payment-settings';
 
-export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT' | ManualTenderType;
+export type PharmacyTenderType =
+  'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT' | ManualTenderType;
 
 export class PharmacySettlementError extends Error {
   constructor(
@@ -187,6 +193,7 @@ export async function readPharmacyTenderOutcome(
         changeGivenMinor: true,
         provider: true,
         providerRef: true,
+        approvalCode: true,
         payerName: true,
         referenceSkipped: true,
       },
@@ -211,9 +218,19 @@ export async function readPharmacyTenderOutcome(
     )
       return unknown;
 
-    if (isManualTender(input.type) && (tender.provider !== 'MANUAL_MERCHANT' ||
-      tender.providerRef !== (input.providerRef ?? null) || tender.payerName !== (input.payerName?.trim() ?? null) ||
-      tender.referenceSkipped !== (input.referenceSkipped ?? false))) return unknown;
+    if (
+      isManualTender(input.type) &&
+      (input.type !== 'CARD' ||
+        input.providerRef !== undefined ||
+        input.approvalCode !== undefined ||
+        tender.provider === 'MANUAL_TERMINAL') &&
+      (tender.provider !== (input.type === 'CARD' ? 'MANUAL_TERMINAL' : 'MANUAL_MERCHANT') ||
+        tender.providerRef !== (input.providerRef?.trim() ?? null) ||
+        (tender.approvalCode ?? null) !== (input.approvalCode?.trim() ?? null) ||
+        tender.payerName !== (input.payerName?.trim() ?? null) ||
+        tender.referenceSkipped !== (input.referenceSkipped ?? false))
+    )
+      return unknown;
 
     return { status: 'ACCEPTED', replayUnsafe: true, result };
   } catch {
@@ -279,6 +296,7 @@ export async function applyPharmacyTender(
     amountMinor: number;
     cashReceivedMinor?: number;
     providerRef?: string;
+    approvalCode?: string;
     payerName?: string;
     referenceSkipped?: boolean;
     idempotencyKey: string;
@@ -369,10 +387,16 @@ export async function applyPharmacyTender(
   let changeGivenMinor: number | undefined;
   let provider: string | undefined;
   let providerRef: string | undefined;
+  let approvalCode: string | undefined;
   let payerName: string | undefined;
   let referenceSkipped: boolean | undefined;
-  if (!isManualTender(input.type) &&
-      (input.providerRef !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined))
+  if (
+    !isManualTender(input.type) &&
+    (input.providerRef !== undefined ||
+      input.approvalCode !== undefined ||
+      input.payerName !== undefined ||
+      input.referenceSkipped !== undefined)
+  )
     throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
   if (input.type === 'CASH') {
     cashReceivedMinor = input.cashReceivedMinor ?? input.amountMinor;
@@ -390,8 +414,9 @@ export async function applyPharmacyTender(
     });
     if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
     drawerSessionId = drawer.id;
-  } else if (isManualTender(input.type)) {
-    if (input.cashReceivedMinor !== undefined) throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
+  } else if (isManualTender(input.type) && !(input.type === 'CARD' && input.adapter)) {
+    if (input.cashReceivedMinor !== undefined)
+      throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
     // Policy and capture are checked in the money transaction. Saving policy
     // takes UPDATE on the same branch row, so a concurrent skip-policy change
     // cannot slip between this read and the committed tender.
@@ -400,14 +425,20 @@ export async function applyPharmacyTender(
     const branch = await readManualPaymentSettings(db, scope);
     try {
       const capture = validateManualTender(branch.settings, {
-        type: input.type, providerRef: input.providerRef,
-        payerName: input.payerName, referenceSkipped: input.referenceSkipped,
+        type: input.type,
+        providerRef: input.providerRef,
+        approvalCode: input.approvalCode,
+        payerName: input.payerName,
+        referenceSkipped: input.referenceSkipped,
       });
-      provider = 'MANUAL_MERCHANT';
+      provider = input.type === 'CARD' ? 'MANUAL_TERMINAL' : 'MANUAL_MERCHANT';
       providerRef = capture.providerRef;
+      approvalCode = capture.approvalCode;
       payerName = capture.payerName;
       referenceSkipped = capture.referenceSkipped;
-    } catch { throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE'); }
+    } catch {
+      throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
+    }
   } else if (input.type === 'CARD' || input.type === 'WALLET') {
     if (!input.adapter) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     const adapter = requireReleaseSafeAdapter(input.adapter);
@@ -433,6 +464,7 @@ export async function applyPharmacyTender(
       drawerSessionId,
       provider,
       providerRef,
+      approvalCode,
       payerName,
       referenceSkipped,
       businessDate: input.businessDate,
@@ -581,8 +613,10 @@ export async function refundPharmacyTender(
     )
       throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
   }
+  const manualTerminal = tender.type === 'CARD' && tender.provider === 'MANUAL_TERMINAL';
   const manualReversalRequired =
     (tender.type === 'CARD' || tender.type === 'WALLET') &&
+    !manualTerminal &&
     !input.adapter &&
     input.manualCashFallback === true;
   const refundReason = manualReversalRequired
@@ -590,7 +624,11 @@ export async function refundPharmacyTender(
     : input.reason.trim();
   let providerRef: string | undefined;
   let drawerSessionId: string | undefined;
-  if ((tender.type === 'CARD' || tender.type === 'WALLET') && !manualReversalRequired) {
+  if (
+    (tender.type === 'CARD' || tender.type === 'WALLET') &&
+    !manualTerminal &&
+    !manualReversalRequired
+  ) {
     if (!input.adapter || !tender.providerRef)
       throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     const adapter = requireReleaseSafeAdapter(input.adapter);
@@ -677,7 +715,9 @@ export function computePharmacyClose(source: CloseSource) {
     sales: [...source.sales].sort((a, b) => a.id.localeCompare(b.id)),
     refunds: [...source.refunds].sort((a, b) => a.id.localeCompare(b.id)),
     drawers: [...source.drawers].sort((a, b) => a.id.localeCompare(b.id)),
-    ...(source.tenders ? { tenders: [...source.tenders].sort((a, b) => a.id.localeCompare(b.id)) } : {}),
+    ...(source.tenders
+      ? { tenders: [...source.tenders].sort((a, b) => a.id.localeCompare(b.id)) }
+      : {}),
   };
   const grossSalesMinor = ordered.sales.reduce((sum, row) => sum + row.totalMinor, 0);
   const refundTotalMinor = ordered.refunds.reduce((sum, row) => sum + row.amountMinor, 0);
@@ -913,10 +953,22 @@ export async function cutPharmacyDailyClose(
       include: { movements: true },
     }),
     db.pharmacyTender.findMany({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId, businessDate: input.businessDate },
-      select: { id: true, type: true, amountMinor: true },
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        businessDate: input.businessDate,
+      },
+      select: { id: true, type: true, amountMinor: true, actorId: true },
     }),
   ]);
+  const confirmerIds = [...new Set(tenders.map((tender) => tender.actorId))];
+  const confirmers = confirmerIds.length
+    ? await db.user.findMany({
+        where: { organizationId: scope.organizationId, id: { in: confirmerIds } },
+        select: { id: true, name: true },
+      })
+    : [];
+  const confirmerNames = new Map(confirmers.map((user) => [user.id, user.name]));
   const aggregate = computePharmacyClose({
     tenders,
     sales: sales.map((sale) => ({ id: sale.id, totalMinor: saleTotalMinor(sale.lines) })),
@@ -944,7 +996,13 @@ export async function cutPharmacyDailyClose(
       // as before, otherwise the variance note.
       reason: input.reopenReason?.trim() ?? (input.varianceNote?.trim() || undefined),
       ...aggregate,
-      tenderTotals: aggregateTenderTotals(tenders, refunds),
+      tenderTotals: aggregateTenderTotals(
+        tenders.map((tender) => ({
+          ...tender,
+          confirmedBy: confirmerNames.get(tender.actorId) ?? tender.actorId,
+        })),
+        refunds
+      ),
       isFinal,
       controlledCountHook: input.controlledCountHook as Prisma.InputJsonValue | undefined,
       actorId: scope.actorId,

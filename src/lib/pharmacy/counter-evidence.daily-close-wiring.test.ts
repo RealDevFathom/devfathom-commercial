@@ -28,6 +28,7 @@ function fixture(camera: { id: string } | null) {
     pharmacySale: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyTender: { findMany: vi.fn().mockResolvedValue([]) },
+    user: { findMany: vi.fn().mockResolvedValue([{ id: 'actor-1', name: 'Ayesha Karim' }]) },
     // No parallel run: the close is final without touching migration comparisons.
     pharmacyParallelRunWindow: { count: vi.fn().mockResolvedValue(0) },
     camera: { findFirst: vi.fn().mockResolvedValue(camera) },
@@ -43,6 +44,30 @@ const run = (db: ReturnType<typeof fixture>) =>
   cutPharmacyDailyClose(db as unknown as ScopedDb, scope, input);
 
 describe('DAILY_CLOSE counter evidence wiring (service-level, integrated tip)', () => {
+  it('snapshots the confirmer name beside each tender total within the organization', async () => {
+    const db = fixture(null);
+    db.pharmacyTender.findMany.mockResolvedValue([
+      { id: 'tender-1', type: 'CARD', amountMinor: 100, actorId: 'actor-1' },
+    ]);
+    await run(db);
+    expect(db.user.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org-1', id: { in: ['actor-1'] } },
+      select: { id: true, name: true },
+    });
+    expect(db.pharmacyDailyClose.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tenderTotals: [
+          {
+            type: 'CARD',
+            amountMinor: 100,
+            refundMinor: 0,
+            netMinor: 100,
+            confirmedBy: ['Ayesha Karim'],
+          },
+        ],
+      }),
+    });
+  });
   it('writes the evidence outbox row on the close client, after the close row', async () => {
     const db = fixture({ id: 'camera-1' });
     await expect(run(db)).resolves.toMatchObject({ id: 'close-1', sequence: 1, isFinal: true });

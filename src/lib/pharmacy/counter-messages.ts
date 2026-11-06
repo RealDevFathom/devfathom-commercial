@@ -65,7 +65,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   IDEMPOTENCY_CONFLICT:
     'That payment was already recorded with different details. Refresh the counter and check the bill.',
   UNCERTIFIED_PROVIDER:
-    'This card terminal is not certified for live payments. Take another tender.',
+    'This tender needs a connected provider. Take another tender or use a manual tender.',
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
   REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',

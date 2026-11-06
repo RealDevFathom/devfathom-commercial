@@ -45,7 +45,7 @@ describe('DEV-618 payment panel', () => {
   });
 
   it.each(['Raast', 'JazzCash', 'Easypaisa'])(
-    'DEV-499 focuses %s reference and preserves optional payer capture',
+    'DEV-499 focuses %s reference and captures the payer',
     async (name) => {
       const { props } = setup({
         manualSettings: {
@@ -55,10 +55,10 @@ describe('DEV-618 payment panel', () => {
         },
       });
       chooseTender(name);
-      const reference = screen.getByLabelText('Transaction ID (last 4–6 digits)');
+      const reference = screen.getByLabelText('Transaction ID · last 4 to 6 digits');
       expect(reference).toHaveFocus();
       fireEvent.change(reference, { target: { value: '1234' } });
-      fireEvent.change(screen.getByLabelText('Payer’s name (optional)'), {
+      fireEvent.change(screen.getByLabelText('Payer’s name'), {
         target: { value: ' Ayesha ' },
       });
       fireEvent.submit(reference.closest('form')!);
@@ -115,7 +115,6 @@ describe('DEV-618 payment panel', () => {
     for (const name of [
       'Card',
       'Bank transfer',
-      'Wallet',
       'Khata / credit',
       'Raast',
       'JazzCash',
@@ -158,6 +157,28 @@ describe('DEV-618 payment panel', () => {
 });
 
 describe('#710 Raast / wallet counter controls', () => {
+  it('records a manually confirmed card with approval evidence', async () => {
+    const { props } = setup();
+    chooseTender('Card');
+    fireEvent.change(screen.getByLabelText('Terminal reference or card last 4 digits'), {
+      target: { value: '4242' },
+    });
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'APP-7' } });
+    fireEvent.submit(screen.getByLabelText('Approval code').closest('form')!);
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'CARD', amountMinor: 25000, providerRef: '4242', approvalCode: 'APP-7' },
+        { amount: '', cashReceived: '' }
+      )
+    );
+  });
+
+  it('blocks a wallet without a till number or QR', () => {
+    setup({ manualSettings: { JAZZCASH: { destination: '', allowReferenceSkip: false } } });
+    chooseTender('JazzCash');
+    expect(screen.getByRole('alert')).toHaveTextContent('isn’t set up at this branch');
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+  });
   it.each(['RAAST', 'JAZZCASH', 'EASYPAISA'])(
     'shows %s merchant details and requires a reference',
     async (type) => {
@@ -191,17 +212,26 @@ describe('#710 Raast / wallet counter controls', () => {
       expect(screen.getByText('PKR 250.00')).toBeVisible();
       expect(screen.getByText('PK00MERCHANT')).toBeVisible();
       expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
-      fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), {
+      fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
+      fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
         target: { value: '123' },
       });
       expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
-      fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), {
+      fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
+        target: { value: '1234567' },
+      });
+      expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+      fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
+        target: { value: '12ab' },
+      });
+      expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+      fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
         target: { value: '001234' },
       });
       fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
       await waitFor(() =>
         expect(onTender).toHaveBeenCalledWith(
-          { type, amountMinor: 25000, providerRef: '001234' },
+          { type, amountMinor: 25000, payerName: 'Ayesha', providerRef: '001234' },
           { amount: '', cashReceived: '' }
         )
       );
@@ -212,11 +242,12 @@ describe('#710 Raast / wallet counter controls', () => {
       manualSettings: { RAAST: { destination: 'Till 123', allowReferenceSkip: true } },
     });
     chooseTender('Raast');
+    fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
     fireEvent.click(screen.getByLabelText('Skip reference under branch policy'));
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await waitFor(() =>
       expect(props.onTender).toHaveBeenCalledWith(
-        { type: 'RAAST', amountMinor: 25000, referenceSkipped: true },
+        { type: 'RAAST', amountMinor: 25000, payerName: 'Ayesha', referenceSkipped: true },
         expect.anything()
       )
     );
@@ -291,30 +322,73 @@ describe('CounterTenderPanel acknowledgement', () => {
     expect(onTender).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['CARD', 'WALLET', 'BANK_TRANSFER'])(
-    'keeps rejected %s selection and amount',
-    async (type) => {
-      const onTender = vi
-        .fn()
-        .mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
-      setup({ onTender });
-      const label =
-        type === 'BANK_TRANSFER' ? 'Bank transfer' : type[0] + type.slice(1).toLowerCase();
-      chooseTender(label);
-      fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
-      await screen.findByText('Payment refused.');
-      expect(screen.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true');
-      expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
-      expect(onTender).toHaveBeenCalledExactlyOnceWith(
-        { type, amountMinor: 12550 },
-        { amount: '125.50', cashReceived: '' }
-      );
+  it.each(['CARD', 'BANK_TRANSFER'])('keeps rejected %s selection and amount', async (type) => {
+    const onTender = vi.fn().mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
+    setup({ onTender });
+    const label =
+      type === 'BANK_TRANSFER' ? 'Bank transfer' : type[0] + type.slice(1).toLowerCase();
+    chooseTender(label);
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    if (type === 'CARD') {
+      fireEvent.change(screen.getByLabelText('Terminal reference or card last 4 digits'), {
+        target: { value: '4242' },
+      });
+      fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'APP-7' } });
     }
-  );
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText('Payment refused.');
+    expect(screen.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
+    expect(onTender).toHaveBeenCalledExactlyOnceWith(
+      {
+        type,
+        amountMinor: 12550,
+        ...(type === 'CARD' ? { providerRef: '4242', approvalCode: 'APP-7' } : {}),
+      },
+      { amount: '125.50', cashReceived: '' }
+    );
+  });
 });
 
 describe('CounterTenderPanel bill and interaction states', () => {
+  it('restores card evidence read-only while an uncertain payment is checked', () => {
+    const { props } = setup({
+      initialDraft: {
+        type: 'CARD',
+        amount: '125.50',
+        cashReceived: '',
+        providerRef: '4242',
+        approvalCode: 'APP-7',
+      },
+      recoveryOutcome: { status: 'unknown', message: 'Check the saved payment.' },
+      onCheckOutcome: vi.fn(),
+    });
+    expect(screen.getByLabelText('Terminal reference or card last 4 digits')).toHaveValue('4242');
+    expect(screen.getByLabelText('Approval code')).toHaveValue('APP-7');
+    expect(screen.getByLabelText('Approval code')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(props.onTender).not.toHaveBeenCalled();
+  });
+
+  it('clears recovered card evidence after the server confirms payment', async () => {
+    setup({
+      state: 'stale',
+      initialDraft: {
+        type: 'CARD',
+        amount: '125.50',
+        cashReceived: '',
+        providerRef: '4242',
+        approvalCode: 'APP-7',
+      },
+      onCheckOutcome: vi
+        .fn()
+        .mockResolvedValue({ status: 'accepted', message: 'Payment recorded.' }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check payment outcome' }));
+    await screen.findByText('Payment recorded.');
+    expect(screen.getByLabelText('Terminal reference or card last 4 digits')).toHaveValue('');
+    expect(screen.getByLabelText('Approval code')).toHaveValue('');
+  });
   it('restores exact amounts read-only and uses a separate outcome check', async () => {
     const onCheckOutcome = vi
       .fn()

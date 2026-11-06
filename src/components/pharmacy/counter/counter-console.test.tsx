@@ -308,6 +308,12 @@ function enterPayment(type = 'CASH') {
   fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
   if (type === 'CASH')
     fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '200.00' } });
+  if (type === 'CARD') {
+    fireEvent.change(screen.getByLabelText('Terminal reference or card last 4 digits'), {
+      target: { value: '4242' },
+    });
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'APP-7' } });
+  }
   fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
 }
 
@@ -493,7 +499,7 @@ describe('PharmacyCounterConsole tender recovery', () => {
     expect(mocks.searchQuery).not.toHaveBeenCalled();
   });
 
-  it('DEV-499 uses distinct durable keys for unnamed wallet attempts of the same amount', async () => {
+  it('DEV-499 uses distinct durable keys for wallet attempts of the same amount', async () => {
     mocks.queries.manualPaymentSettings = query({
       settings: { RAAST: { destination: 'Merchant till', allowReferenceSkip: false } },
       revision: 0,
@@ -503,7 +509,8 @@ describe('PharmacyCounterConsole tender recovery', () => {
     for (const [index, reference] of ['001234', '005678'].entries()) {
       fireEvent.click(screen.getByRole('button', { name: 'Raast' }));
       fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.00' } });
-      fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), {
+      fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
+      fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
         target: { value: reference },
       });
       fireEvent.submit(
@@ -515,7 +522,7 @@ describe('PharmacyCounterConsole tender recovery', () => {
     const first = mocks.mutations.tender!.mock.calls[0]![0];
     const second = mocks.mutations.tender!.mock.calls[1]![0];
     expect(first.idempotencyKey).not.toBe(second.idempotencyKey);
-    expect(first).not.toHaveProperty('payerName');
+    expect(first.payerName).toBe('Ayesha');
     expect(second).toMatchObject({ type: 'RAAST', providerRef: '005678', amountMinor: 12500 });
   });
 
@@ -527,10 +534,10 @@ describe('PharmacyCounterConsole tender recovery', () => {
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     fireEvent.click(screen.getByRole('button', { name: 'Raast' }));
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
-    fireEvent.change(screen.getByLabelText('Payer’s name (optional)'), {
+    fireEvent.change(screen.getByLabelText('Payer’s name'), {
       target: { value: 'Ayesha' },
     });
-    fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), {
+    fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
       target: { value: '001234' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
@@ -582,7 +589,10 @@ describe('PharmacyCounterConsole tender recovery', () => {
         saleId: 'sale-a',
         amountMinor: 12550,
         type,
-        idempotencyKey: `counter-tender:sale-a:${type}:12550`,
+        idempotencyKey:
+          type === 'CARD'
+            ? expect.stringMatching(/^counter-tender:sale-a:CARD:/)
+            : `counter-tender:sale-a:${type}:12550`,
       })
     );
     expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();

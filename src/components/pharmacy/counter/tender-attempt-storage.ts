@@ -30,13 +30,24 @@ const storedSchema = z
         saleId: id,
         deviceId: id,
         businessDate: z.string().datetime({ offset: false }),
-        type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT', 'KHATA', 'RAAST', 'JAZZCASH', 'EASYPAISA']),
+        type: z.enum([
+          'CASH',
+          'CARD',
+          'BANK_TRANSFER',
+          'WALLET',
+          'CREDIT',
+          'KHATA',
+          'RAAST',
+          'JAZZCASH',
+          'EASYPAISA',
+        ]),
         amountMinor: minor.positive(),
         cashReceivedMinor: minor.optional(),
         idempotencyKey: z.string().trim().min(1).max(160),
         familyAccountId: id.optional(),
         ownerOverride: z.boolean().optional(),
-        providerRef: z.string().regex(/^\d{4,6}$/).optional(),
+        providerRef: z.string().trim().min(4).max(120).optional(),
+        approvalCode: z.string().trim().min(1).max(60).optional(),
         payerName: z.string().trim().min(1).max(100).optional(),
         referenceSkipped: z.boolean().optional(),
       })
@@ -79,10 +90,23 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
   const stored = storedSchema.parse(JSON.parse(raw));
   const input = stored.input;
   const date = new Date(input.businessDate);
-  if (isManualTender(input.type)) {
-    manualTenderCaptureSchema.parse({ type: input.type, providerRef: input.providerRef,
-      payerName: input.payerName, referenceSkipped: input.referenceSkipped });
-  } else if (input.providerRef !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined) {
+  if (
+    isManualTender(input.type) &&
+    !(input.type === 'CARD' && input.providerRef === undefined && input.approvalCode === undefined)
+  ) {
+    manualTenderCaptureSchema.parse({
+      type: input.type,
+      providerRef: input.providerRef,
+      approvalCode: input.approvalCode,
+      payerName: input.payerName,
+      referenceSkipped: input.referenceSkipped,
+    });
+  } else if (
+    input.providerRef !== undefined ||
+    input.approvalCode !== undefined ||
+    input.payerName !== undefined ||
+    input.referenceSkipped !== undefined
+  ) {
     throw new Error(TENDER_STORAGE_MESSAGE);
   }
   if (

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MANUAL_TENDER_TYPES,
+  CONFIGURED_MANUAL_TENDER_TYPES,
   manualPaymentSettingsSchema,
   merchantQrSchema,
   validateManualTender,
@@ -10,21 +10,32 @@ import {
 
 const settings = { RAAST: { destination: 'PK00TEST000000', allowReferenceSkip: false } };
 describe('#710 manual merchant capture', () => {
-  it.each(MANUAL_TENDER_TYPES)('requires 4–6 reference digits for %s', (type) => {
-    const branch = { [type]: { destination: 'Merchant till', allowReferenceSkip: false } };
-    expect(
-      validateManualTender(branch, { type, providerRef: '001234', payerName: ' Ayesha ' })
-    ).toMatchObject({ type, providerRef: '001234', payerName: 'Ayesha' });
-    for (const providerRef of [undefined, '', '123', '1234567', '12x4'])
+  it.each(CONFIGURED_MANUAL_TENDER_TYPES)(
+    'requires payer and a bounded transaction ID for %s',
+    (type) => {
+      const branch = { [type]: { destination: 'Merchant till', allowReferenceSkip: false } };
+      expect(
+        validateManualTender(branch, { type, providerRef: '001234', payerName: ' Ayesha ' })
+      ).toMatchObject({ type, providerRef: '001234', payerName: 'Ayesha' });
+      expect(
+        validateManualTender(branch, { type, providerRef: 'JC-1234567890', payerName: 'Ayesha' })
+      ).toMatchObject({ providerRef: 'JC-1234567890' });
+      for (const providerRef of [undefined, '', '123', 'x'.repeat(121)])
+        expect(() =>
+          validateManualTender(branch, { type, providerRef, payerName: 'Ayesha' })
+        ).toThrow();
       expect(() =>
-        validateManualTender(branch, { type, providerRef, payerName: 'Ayesha' })
+        validateManualTender(branch, { type, providerRef: '1234', payerName: ' ' })
       ).toThrow();
-    expect(validateManualTender(branch, { type, providerRef: '1234' })).toMatchObject({
-      type,
-      providerRef: '1234',
-    });
+    }
+  );
+  it('captures a standalone card terminal reference and approval code without merchant settings', () => {
+    expect(
+      validateManualTender({}, { type: 'CARD', providerRef: '4242', approvalCode: 'OK-19' })
+    ).toMatchObject({ type: 'CARD', providerRef: '4242', approvalCode: 'OK-19' });
+    expect(() => validateManualTender({}, { type: 'CARD', providerRef: '4242' })).toThrow();
   });
-  it('allows an explicit skip only under branch policy', () => {
+  it('allows an explicit skip only under branch policy and still requires the payer', () => {
     const capture = { type: 'RAAST', payerName: 'Ayesha', referenceSkipped: true };
     expect(() => validateManualTender(settings, capture)).toThrow(
       'requires a transaction reference'
@@ -33,12 +44,7 @@ describe('#710 manual merchant capture', () => {
     expect(validateManualTender(permitted, capture)).toMatchObject(capture);
     expect(() => validateManualTender(permitted, { type: 'RAAST', payerName: 'Ayesha' })).toThrow();
     expect(() => validateManualTender(permitted, { ...capture, providerRef: '1234' })).toThrow();
-    expect(
-      validateManualTender(permitted, { type: 'RAAST', referenceSkipped: true })
-    ).toMatchObject({
-      type: 'RAAST',
-      referenceSkipped: true,
-    });
+    expect(() => validateManualTender(permitted, { ...capture, payerName: '' })).toThrow();
     expect(() => validateManualTender({}, capture)).toThrow('no merchant details');
   });
   it('accepts QR-only or destination-only settings and rejects executable or remote uploads', () => {
@@ -47,7 +53,10 @@ describe('#710 manual merchant capture', () => {
       manualPaymentSettingsSchema.parse({ RAAST: { destination: '', qrImageDataUrl } }).RAAST
         ?.allowReferenceSkip
     ).toBe(false);
-    expect(() => manualPaymentSettingsSchema.parse({ RAAST: { destination: '' } })).toThrow();
+    expect(manualPaymentSettingsSchema.parse({ RAAST: { destination: '' } }).RAAST).toMatchObject({
+      destination: '',
+      allowReferenceSkip: false,
+    });
     for (const value of [
       'https://example.com/qr.png',
       'data:image/svg+xml;base64,PHN2Zz4=',
@@ -56,6 +65,7 @@ describe('#710 manual merchant capture', () => {
     ])
       expect(merchantQrSchema.safeParse(value).success).toBe(false);
     expect(manualMerchantPolicies({ RAAST: { ...settings.RAAST, qrImageDataUrl } })).toEqual({
+      CARD: { allowReferenceSkip: false },
       RAAST: { allowReferenceSkip: false },
     });
   });

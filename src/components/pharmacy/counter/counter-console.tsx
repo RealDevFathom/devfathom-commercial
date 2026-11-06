@@ -1248,6 +1248,7 @@ function ScopedPharmacyCounterConsole({
         familyAccountId?: string;
         ownerOverride?: boolean;
         providerRef?: string;
+        approvalCode?: string;
         payerName?: string;
         referenceSkipped?: boolean;
       },
@@ -1292,6 +1293,7 @@ function ScopedPharmacyCounterConsole({
             : {}),
           idempotencyKey:
             input.familyAccountId ||
+            input.type === 'CARD' ||
             input.payerName !== undefined ||
             input.providerRef !== undefined ||
             input.referenceSkipped !== undefined
@@ -1301,6 +1303,7 @@ function ScopedPharmacyCounterConsole({
             ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride }
             : {}),
           ...(input.providerRef !== undefined ? { providerRef: input.providerRef } : {}),
+          ...(input.approvalCode !== undefined ? { approvalCode: input.approvalCode } : {}),
           ...(input.payerName !== undefined ? { payerName: input.payerName } : {}),
           ...(input.referenceSkipped !== undefined
             ? { referenceSkipped: input.referenceSkipped }
@@ -2504,6 +2507,7 @@ function ScopedPharmacyCounterConsole({
                   type: restoredAttempt.input.type,
                   payerName: restoredAttempt.input.payerName,
                   providerRef: restoredAttempt.input.providerRef,
+                  approvalCode: restoredAttempt.input.approvalCode,
                   referenceSkipped: restoredAttempt.input.referenceSkipped,
                 }
               : undefined

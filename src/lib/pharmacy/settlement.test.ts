@@ -325,7 +325,11 @@ describe('pharmacy settlement invariants', () => {
                 quantity: 1,
                 unitPriceMinor: 100,
                 discountMinor: 0,
-                medicine: { organizationId: 'org-1', productName: 'Issued medicine', strengths: [] },
+                medicine: {
+                  organizationId: 'org-1',
+                  productName: 'Issued medicine',
+                  strengths: [],
+                },
               },
             ],
             tenders: [],
@@ -445,14 +449,66 @@ describe('readPharmacyTenderOutcome', () => {
   });
 
   it('#710 recovers the exact manual tender and rejects altered capture evidence', async () => {
-    const f = fixture({ ...original, type: 'RAAST', cashReceivedMinor: undefined,
-      providerRef: '001234', payerName: 'Ayesha' });
-    const recorded = { ...f.tender, provider: 'MANUAL_MERCHANT', providerRef: '001234', payerName: 'Ayesha', referenceSkipped: false };
+    const f = fixture({
+      ...original,
+      type: 'RAAST',
+      cashReceivedMinor: undefined,
+      providerRef: '001234',
+      payerName: 'Ayesha',
+    });
+    const recorded = {
+      ...f.tender,
+      provider: 'MANUAL_MERCHANT',
+      providerRef: '001234',
+      payerName: 'Ayesha',
+      referenceSkipped: false,
+    };
     f.tenderRead.mockResolvedValue(recorded);
-    expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toMatchObject({ status: 'ACCEPTED' });
-    for (const change of [{ providerRef: '1234' }, { payerName: 'Other payer' }, { referenceSkipped: true }]) {
+    expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toMatchObject({
+      status: 'ACCEPTED',
+    });
+    for (const change of [
+      { providerRef: '1234' },
+      { payerName: 'Other payer' },
+      { referenceSkipped: true },
+    ]) {
       f.tenderRead.mockResolvedValue({ ...recorded, ...change });
-      expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toEqual({ status: 'UNKNOWN', replayUnsafe: true });
+      expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toEqual({
+        status: 'UNKNOWN',
+        replayUnsafe: true,
+      });
+    }
+  });
+
+  it('recovers a standalone card approval and rejects changed terminal evidence', async () => {
+    const f = fixture({
+      ...original,
+      type: 'CARD',
+      cashReceivedMinor: undefined,
+      providerRef: '4242',
+      approvalCode: 'APP-7',
+    });
+    const recorded = {
+      ...f.tender,
+      provider: 'MANUAL_TERMINAL',
+      providerRef: '4242',
+      approvalCode: 'APP-7',
+      payerName: null,
+      referenceSkipped: false,
+    };
+    f.tenderRead.mockResolvedValue(recorded);
+    expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toMatchObject({
+      status: 'ACCEPTED',
+    });
+    for (const change of [
+      { provider: 'MANUAL_MERCHANT' },
+      { providerRef: '9999' },
+      { approvalCode: 'OTHER' },
+    ]) {
+      f.tenderRead.mockResolvedValue({ ...recorded, ...change });
+      expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toMatchObject({
+        status: 'UNKNOWN',
+      });
     }
   });
 

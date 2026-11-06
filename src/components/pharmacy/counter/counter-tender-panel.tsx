@@ -14,12 +14,11 @@ import {
   type ManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payments';
 
-/** The tenders POS-05 recognises. Card and wallet need a certified adapter. */
+/** Counter-facing tenders. Integrated providers remain on their separate adapter path. */
 const TENDER_TYPES = [
   { value: 'CASH', label: 'Cash', requiresAdapter: false },
-  { value: 'CARD', label: 'Card', requiresAdapter: true },
+  { value: 'CARD', label: 'Card', requiresAdapter: false },
   { value: 'BANK_TRANSFER', label: 'Bank transfer', requiresAdapter: false },
-  { value: 'WALLET', label: 'Wallet', requiresAdapter: true },
   { value: 'KHATA', label: 'Khata / credit', requiresAdapter: false },
   { value: 'CREDIT', label: 'Credit (legacy)', requiresAdapter: false, hidden: true },
   { value: 'RAAST', label: 'Raast', requiresAdapter: false },
@@ -27,7 +26,7 @@ const TENDER_TYPES = [
   { value: 'EASYPAISA', label: 'Easypaisa', requiresAdapter: false },
 ] as const;
 
-export type CounterTenderType = (typeof TENDER_TYPES)[number]['value'];
+export type CounterTenderType = (typeof TENDER_TYPES)[number]['value'] | 'WALLET';
 
 export type CounterTenderResult = {
   status: 'accepted' | 'rejected' | 'unknown';
@@ -62,6 +61,7 @@ export type CounterTenderPanelProps = {
     type: CounterTenderType;
     payerName?: string;
     providerRef?: string;
+    approvalCode?: string;
     referenceSkipped?: boolean;
   };
   recoveryOutcome?: CounterTenderResult | null;
@@ -76,6 +76,7 @@ export type CounterTenderPanelProps = {
       familyAccountId?: string;
       ownerOverride?: boolean;
       providerRef?: string;
+      approvalCode?: string;
       payerName?: string;
       referenceSkipped?: boolean;
     },
@@ -138,6 +139,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [totp, setTotp] = useState('');
     const [statementPending, setStatementPending] = useState(false);
     const [providerRef, setProviderRef] = useState(initialDraft?.providerRef ?? '');
+    const [approvalCode, setApprovalCode] = useState(initialDraft?.approvalCode ?? '');
     const [payerName, setPayerName] = useState(initialDraft?.payerName ?? '');
     const [referenceSkipped, setReferenceSkipped] = useState(
       initialDraft?.referenceSkipped ?? false
@@ -175,7 +177,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       type === 'CASH' && cashReceivedMinor !== null && amountMinor !== null && !cashShort
         ? cashReceivedMinor - amountMinor
         : null;
-    const selected = TENDER_TYPES.find((entry) => entry.value === type)!;
+    const selected = TENDER_TYPES.find((entry) => entry.value === type) ?? TENDER_TYPES[0];
     useEffect(() => {
       if (
         editable &&
@@ -196,14 +198,17 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     }, [type]);
     const isKhata = type === 'KHATA' || type === 'CREDIT';
     const manual = isManualTender(type);
-    const merchant = manual ? manualSettings?.[type] : undefined;
+    const manualCard = type === 'CARD';
+    const merchant = manual && type !== 'CARD' ? manualSettings?.[type] : undefined;
+    const merchantReady = Boolean(merchant?.destination.trim() || merchant?.qrImageDataUrl);
+    const walletReferenceValid = referenceSkipped || /^\d{4,6}$/.test(providerRef.trim());
     useEffect(() => {
       if (editable && merchant && !merchant.allowReferenceSkip) setReferenceSkipped(false);
     }, [editable, merchant]);
     const capture = manual
       ? manualTenderCaptureSchema.safeParse({
           type,
-          ...(payerName.trim() ? { payerName } : {}),
+          ...(manualCard ? { approvalCode } : { payerName }),
           ...(referenceSkipped ? { referenceSkipped: true } : { providerRef }),
         })
       : null;
@@ -238,6 +243,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     }, [isKhata, loadKhataAccounts]);
     const submittable =
       editable &&
+      TENDER_TYPES.some((entry) => entry.value === type && !('hidden' in entry && entry.hidden)) &&
       !blocked &&
       amountValid &&
       !cashShort &&
@@ -245,7 +251,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       (!manual ||
         (!manualSettingsLoading &&
           !manualSettingsError &&
-          Boolean(merchant) &&
+          (manualCard || (merchantReady && walletReferenceValid)) &&
           capture?.success === true &&
           (!referenceSkipped || merchant?.allowReferenceSkip === true))) &&
       (!isKhata ||
@@ -284,6 +290,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             ...(manual && capture?.success
               ? {
                   ...(capture.data.payerName ? { payerName: capture.data.payerName } : {}),
+                  ...(capture.data.approvalCode ? { approvalCode: capture.data.approvalCode } : {}),
                   ...(capture.data.referenceSkipped
                     ? { referenceSkipped: true }
                     : { providerRef: capture.data.providerRef }),
@@ -297,6 +304,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           setAmount('');
           setCashReceived('');
           setProviderRef('');
+          setApprovalCode('');
           setPayerName('');
           setReferenceSkipped(false);
           if (isKhata && loadKhataAccounts) {
@@ -329,6 +337,10 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         if (result.status === 'accepted') {
           setAmount('');
           setCashReceived('');
+          setProviderRef('');
+          setApprovalCode('');
+          setPayerName('');
+          setReferenceSkipped(false);
           statusRef.current?.focus();
         }
       } catch {
@@ -465,6 +477,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     }
                     setType(entry.value);
                     setProviderRef('');
+                    setApprovalCode('');
                     setPayerName('');
                     setReferenceSkipped(false);
                   }}
@@ -512,15 +525,15 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               {manualSettingsError ? (
                 <p role="alert">Merchant details could not be loaded.</p>
               ) : null}
-              {!manualSettingsLoading && !manualSettingsError && !merchant ? (
+              {!manualCard && !manualSettingsLoading && !manualSettingsError && !merchantReady ? (
                 <p role="alert">
-                  This branch has no merchant details for {type}. Ask an administrator to configure
-                  them in Finance.
+                  {selected.label} isn’t set up at this branch. No till number or QR is saved yet.
+                  An administrator adds it in Settings › Payments. Take cash or another method until
+                  then.
                 </p>
               ) : null}
               {onReloadManualSettings ? (
                 <Button
-                  type="button"
                   variant="outline"
                   className="min-h-11 rounded-sm"
                   disabled={takingPayment || manualSettingsLoading}
@@ -529,15 +542,15 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   Reload merchant details
                 </Button>
               ) : null}
-              {merchant ? (
+              {manualCard || merchantReady ? (
                 <>
                   <p className="font-mono text-lg tabular-nums">
                     {amountMinor === null ? 'Enter amount' : `PKR ${formatMinor(amountMinor)}`}
                   </p>
-                  {merchant.destination ? (
+                  {merchant?.destination ? (
                     <p className="break-all text-sm text-text-strong">{merchant.destination}</p>
                   ) : null}
-                  {merchant.qrImageDataUrl ? (
+                  {merchant?.qrImageDataUrl ? (
                     <>
                       {/* Static embedded raster; no remote image requests or proxy. */}
                       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -549,22 +562,40 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     </>
                   ) : null}
                   <p className="text-sm text-text-muted">
-                    Confirm receipt in the merchant bank or wallet account before taking payment.
-                    This QR is static; the payer enters the amount shown.
+                    {manualCard
+                      ? 'Confirm the approved payment on the standalone terminal before recording it.'
+                      : 'Confirm receipt in the merchant bank or wallet account before taking payment. Any configured QR is static; the payer enters the amount shown.'}
                   </p>
+                  {!manualCard ? (
+                    <>
+                      <Label htmlFor="manual-payer-name">Payer’s name</Label>
+                      <Input
+                        id="manual-payer-name"
+                        className="min-h-11"
+                        value={payerName}
+                        maxLength={100}
+                        disabled={!editable}
+                        onChange={(event) => setPayerName(event.target.value)}
+                      />
+                    </>
+                  ) : null}
                   <Label htmlFor="manual-provider-reference">
-                    Transaction ID (last 4–6 digits)
+                    {manualCard
+                      ? 'Terminal reference or card last 4 digits'
+                      : 'Transaction ID · last 4 to 6 digits'}
                   </Label>
                   <Input
                     ref={referenceInputRef}
                     id="manual-provider-reference"
                     className="min-h-11"
-                    inputMode="numeric"
+                    inputMode={manualCard ? 'text' : 'numeric'}
                     value={providerRef}
-                    maxLength={6}
+                    maxLength={120}
                     disabled={!editable || referenceSkipped}
                     aria-invalid={
-                      !referenceSkipped && providerRef !== '' && !/^\d{4,6}$/.test(providerRef)
+                      !referenceSkipped &&
+                      providerRef !== '' &&
+                      (manualCard ? providerRef.trim().length < 4 : !walletReferenceValid)
                     }
                     aria-describedby="manual-reference-help"
                     onChange={(event) => setProviderRef(event.target.value)}
@@ -572,18 +603,24 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   <p id="manual-reference-help" className="text-sm text-text-muted">
                     {referenceSkipped
                       ? 'Reference explicitly skipped under branch policy.'
-                      : 'Enter 4–6 digits from the payer’s transaction ID.'}
+                      : manualCard
+                        ? 'Enter the terminal reference or the card’s last 4 digits.'
+                        : 'Enter the last 4 to 6 digits, numbers only.'}
                   </p>
-                  <Label htmlFor="manual-payer-name">Payer’s name (optional)</Label>
-                  <Input
-                    id="manual-payer-name"
-                    className="min-h-11"
-                    value={payerName}
-                    maxLength={100}
-                    disabled={!editable}
-                    onChange={(event) => setPayerName(event.target.value)}
-                  />
-                  {merchant.allowReferenceSkip ? (
+                  {manualCard ? (
+                    <>
+                      <Label htmlFor="manual-approval-code">Approval code</Label>
+                      <Input
+                        id="manual-approval-code"
+                        className="min-h-11"
+                        value={approvalCode}
+                        maxLength={60}
+                        disabled={!editable}
+                        onChange={(event) => setApprovalCode(event.target.value)}
+                      />
+                    </>
+                  ) : null}
+                  {merchant?.allowReferenceSkip ? (
                     <Label className="flex min-h-11 items-center gap-2">
                       <input
                         type="checkbox"
