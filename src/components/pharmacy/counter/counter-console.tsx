@@ -2243,7 +2243,7 @@ function ScopedPharmacyCounterConsole({
                       }
                       void runSearch();
                     }}
-                    className="h-12"
+                    className="h-14 rounded-[var(--radius-sm)] border-[1.5px] border-border-default"
                   />
                   <p id="counter-search-help" className="text-xs text-text-muted">
                     {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the

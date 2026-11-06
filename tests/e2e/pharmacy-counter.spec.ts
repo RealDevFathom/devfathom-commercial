@@ -858,6 +858,8 @@ test('counter layout keeps the cart and payment visible while searching', async 
           expect(
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)
           ).toBe(true);
+          const searchBox = await page.getByLabel('Scan or search').boundingBox();
+          expect(searchBox?.height).toBe(56);
           const summary =
             width >= 1024
               ? page.getByRole('complementary', { name: 'Bill total' })
