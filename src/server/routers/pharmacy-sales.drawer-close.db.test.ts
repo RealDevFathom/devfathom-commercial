@@ -274,7 +274,7 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
             reason: 'Returned medicine',
             idempotencyKey: `refund-${branchId}`,
           }),
-        NOT_IN_WORKSPACE,
+        OUTSIDE,
       ],
     ] as Array<[string, (c: Awaited<ReturnType<typeof sales>>) => Promise<unknown>, Refusal]>;
 
