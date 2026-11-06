@@ -57,6 +57,7 @@ type PurchasingApi = ReturnType<PurchasingRouter['createCaller']>;
 
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
 let withPlatformDb: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
+let createTenantDb: typeof import('@/lib/tenancy/scoped-db').createTenantDb;
 let policyRouter: PolicyRouter;
 let purchasingRouter: PurchasingRouter;
 let seedDepartments: typeof import('@/lib/test-support/departments').seedDepartments;
@@ -1043,6 +1044,7 @@ beforeAll(async () => {
   const { db } = await import('@/lib/db');
   withTenantDb = scoped.withTenantDb;
   withPlatformDb = scoped.withPlatformDb;
+  createTenantDb = scoped.createTenantDb;
   policyRouter = policy.pharmacySupplierComplianceRouter;
   purchasingRouter = purchasing.pharmacyPurchasingRouter;
   seedDepartments = departments.seedDepartments;
@@ -2333,6 +2335,56 @@ describeIfDatabase(
           ]);
         }
       );
+
+      it('commits a new order and its skip together on the per-call database (the Server Action path), or neither', async () => {
+        // Server Actions use createTenantDb, where every call is its own transaction. Make the
+        // skip insert fail for one reference: the order must not survive without its evidence.
+        const state = STATES[0]!;
+        const failing = `PO-off-atomic-${suffix}`;
+        const fn = `dev753_test_fail_skip_${suffix}`;
+        const owner = new pg.Client({ connectionString: ownerUrl });
+        await owner.connect();
+        try {
+          await owner.query(
+            `CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $fn$
+             BEGIN
+               IF NEW.reference = '${failing}' THEN RAISE EXCEPTION 'DEV753 injected skip failure'; END IF;
+               RETURN NEW;
+             END $fn$`
+          );
+          await owner.query(
+            `CREATE TRIGGER ${fn} BEFORE INSERT ON pharmacy_supplier_compliance_skips
+             FOR EACH ROW EXECUTE FUNCTION ${fn}()`
+          );
+          const api = purchasingRouter.createCaller(
+            context(createTenantDb(E.org, buyer.userId), buyer) as never
+          );
+          await expect(
+            api.createPurchaseOrder(orderInput(state.supplierId, failing))
+          ).rejects.toThrow();
+          expect(
+            await rows(
+              E.org,
+              `SELECT id FROM pharmacy_purchase_orders WHERE "organizationId" = $1 AND reference = $2`,
+              E.org,
+              failing
+            )
+          ).toEqual([]);
+        } finally {
+          await owner.query(`DROP TRIGGER IF EXISTS ${fn} ON pharmacy_supplier_compliance_skips`);
+          await owner.query(`DROP FUNCTION IF EXISTS ${fn}()`);
+          await owner.end();
+        }
+
+        // Without the injected failure, the same path commits the order with its evidence.
+        const reference = `PO-off-percall-${suffix}`;
+        const order = await purchasingRouter
+          .createCaller(context(createTenantDb(E.org, buyer.userId), buyer) as never)
+          .createPurchaseOrder(orderInput(state.supplierId, reference));
+        expect(await skipsAbout({ reference, purchaseOrderId: order!.id })).toEqual([
+          expectedSkip('PURCHASE_ORDER_CREATE', state, { purchaseOrderId: order!.id, reference }),
+        ]);
+      });
 
       it.each(WITH_ORDERS)(
         'approves an order for a supplier now holding $label and records one skip',

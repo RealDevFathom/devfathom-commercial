@@ -695,8 +695,8 @@ const purchasingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         // PUR-01: refuse an unauthorized or licence-expired supplier before anything is written.
-        // With the owner's checks off, the evidence is written below, naming the new order.
-        const supplierGate = await assertOrderableSupplier(
+        // The gate is decided again below, in the transaction that writes the order.
+        await assertOrderableSupplier(
           ctx.db,
           ctx,
           await ctx.db.pharmacySupplier.findFirst({
@@ -768,40 +768,56 @@ const purchasingRouter = router({
         }
 
         const { lines, ...purchaseOrder } = input;
-        const created = await ctx.db.pharmacyPurchaseOrder.create({
-          data: {
-            ...purchaseOrder,
-            createdByUserId: ctx.session.user.id,
-            lines: {
-              create: lines.map((line, index) => ({
-                ...line,
-                forecastSellThroughPacks: undefined,
-                minimumExpiryDays: undefined,
-                leadTimeDays: undefined,
-                ...quoteAssumptions.get(line.medicineId),
-                lineNumber: index + 1,
-                orderedCanonicalUnits: line.orderedPacks * line.canonicalUnitsPerPack,
-                bonusCanonicalUnits: line.bonusPacks * line.canonicalUnitsPerPack,
-              })),
-            },
-          },
-          include: { lines: true },
-        });
-        // DEV-753: an order raised past the unchecked supplier gate says so, by its own id.
-        if (!supplierGate.checked) {
-          await recordSupplierComplianceSkip(
-            ctx.db,
-            { organizationId: tenantScope(ctx).organizationId, actorId: ctx.session.user.id },
-            {
-              operation: 'PURCHASE_ORDER_CREATE',
-              supplierId: input.supplierId,
-              purchaseOrderId: created.id,
-              reference: input.reference,
-              outcome: supplierGate,
-            }
+        // DEV-753: one transaction. The owner policy is share-locked while the order is
+        // written, and an order raised past the unchecked gate commits with its evidence,
+        // named by its own id, or not at all.
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const supplierGate = await assertOrderableSupplier(
+            db,
+            ctx,
+            await db.pharmacySupplier.findFirst({
+              where: { id: input.supplierId },
+              include: WITH_LICENCES,
+            }),
+            new Date(),
+            { operation: 'PURCHASE_ORDER_CREATE', reference: input.reference },
+            { record: false }
           );
-        }
-        return created;
+          const created = await db.pharmacyPurchaseOrder.create({
+            data: {
+              ...purchaseOrder,
+              createdByUserId: ctx.session.user.id,
+              lines: {
+                create: lines.map((line, index) => ({
+                  ...line,
+                  forecastSellThroughPacks: undefined,
+                  minimumExpiryDays: undefined,
+                  leadTimeDays: undefined,
+                  ...quoteAssumptions.get(line.medicineId),
+                  lineNumber: index + 1,
+                  orderedCanonicalUnits: line.orderedPacks * line.canonicalUnitsPerPack,
+                  bonusCanonicalUnits: line.bonusPacks * line.canonicalUnitsPerPack,
+                })),
+              },
+            },
+            include: { lines: true },
+          });
+          if (!supplierGate.checked) {
+            await recordSupplierComplianceSkip(
+              db,
+              { organizationId: tenantScope(ctx).organizationId, actorId: ctx.session.user.id },
+              {
+                operation: 'PURCHASE_ORDER_CREATE',
+                supplierId: input.supplierId,
+                purchaseOrderId: created.id,
+                reference: input.reference,
+                outcome: supplierGate,
+              }
+            );
+          }
+          return created;
+        });
       } catch (error) {
         domainError(error);
       }
