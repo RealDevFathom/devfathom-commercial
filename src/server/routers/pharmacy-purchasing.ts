@@ -1496,6 +1496,23 @@ const purchasingRouter = router({
               acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
               receivedAt: input.receivedAt,
             });
+            // GS1 AI(21) names ONE pack. A shared batch/expiry may cover many
+            // packs; a serial never does, so it cannot be cloned onto a count.
+            if (identity.serialKey && line.receivedPacks + line.bonusPacks !== 1) {
+              throw new PharmacyReceivingError('SERIALIZED_PACK_QUANTITY');
+            }
+            // Fail at draft time, not post time, when a shelf is not this branch's.
+            for (const locationId of [line.stockLocationId, line.quarantineLocationId]) {
+              if (!locationId) continue;
+              const location = await db.pharmacyStockLocation.findFirst({
+                where: { id: locationId, organizationId: scope.organizationId },
+                select: { branchId: true },
+              });
+              if (!location) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+              if (location.branchId !== scope.branchId) {
+                throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
+              }
+            }
             if (identity.gtin && identity.serialKey) {
               const token = `${identity.gtin}:${identity.serialKey}`;
               if (seenSerials.has(token)) throw new PharmacyReceivingError('DUPLICATE_SERIAL');

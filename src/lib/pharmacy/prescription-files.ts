@@ -84,6 +84,12 @@ async function validateImage(bytes: Buffer, contentType: PrescriptionUpload['con
   }
 }
 
+/**
+ * Shared bounded-image guards. DEV-752 pack photos reuse the same base64,
+ * size, format, frame and pixel-decode checks without the prescription store.
+ */
+export { decode as decodeBoundedImageBase64, validateImage as assertSingleFrameImage };
+
 export async function persistPrescriptionFile(
   organizationId: string,
   uploadedByUserId: string,

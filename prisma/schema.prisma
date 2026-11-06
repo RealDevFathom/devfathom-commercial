@@ -3408,7 +3408,8 @@ model TimeEntry {
 model Invoice {
   id             String        @id @default(cuid())
   organizationId String        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  invoiceNumber  String        @unique
+  // INV-<year>-<n>: a per-organization sequence, unique within the tenant only.
+  invoiceNumber  String
   clientId       String
   projectId      String?
   items          Json // [{description, quantity, rate, amount}]
@@ -3428,6 +3429,7 @@ model Invoice {
   project  Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
   payments Payment[] // IMP-FIN-04: partial payments recorded against this invoice
 
+  @@unique([organizationId, invoiceNumber])
   @@index([status])
   @@index([clientId])
   @@index([projectId])

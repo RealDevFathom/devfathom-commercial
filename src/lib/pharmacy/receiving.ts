@@ -57,6 +57,7 @@ export class PharmacyReceivingError extends Error {
       | 'GTIN_MEDICINE_MISMATCH'
       | 'PURCHASE_ORDER_LINE_ITEM_MISMATCH'
       | 'EXPIRED_PACK'
+      | 'SERIALIZED_PACK_QUANTITY'
   ) {
     super(reason);
   }

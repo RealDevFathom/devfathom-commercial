@@ -1148,6 +1148,131 @@ describe('goods-in scan and duplicate serial', () => {
     );
     expect(result.searchParams.get('field')).toBe('serialNumber');
   });
+
+  // DEV-752: one ordered line may arrive as several lots (extra slots `<line>.lot2/3`).
+  function lotForm(lots: Array<{ key: string; batch: string; expiry: string; packs: string }>) {
+    const form = new FormData();
+    form.set('branchId', 'branch-1');
+    form.set('purchaseOrderId', 'po-1');
+    form.set('reference', 'GRN-LOTS');
+    form.set('supplierInvoiceRef', 'INV-LOTS');
+    form.set('supplierInvoiceDate', '2026-10-21');
+    form.set('warrantyEvidenceRef', 'WAR-LOTS');
+    form.set('receivedAt', '2026-10-21');
+    for (const lot of lots) {
+      form.set(`batchNumber:${lot.key}`, lot.batch);
+      form.set(`printedExpiry:${lot.key}`, lot.expiry);
+      form.set(`printedMrp:${lot.key}`, '25.00');
+      form.set(`receivedPacks:${lot.key}`, lot.packs);
+      form.set(`invoicedPrice:${lot.key}`, '10.00');
+      form.set(`stockLocation:${lot.key}`, 'loc-1');
+    }
+    return form;
+  }
+
+  it('files each extra lot slot as its own receipt line against the same order line', async () => {
+    const write = vi.fn().mockResolvedValue({ id: 'gr-lots', reference: 'GRN-LOTS' });
+    mocks.createCaller.mockReturnValue(
+      callerStub({ purchaseOrders: vi.fn().mockResolvedValue([order]), createGoodsReceipt: write })
+    );
+    const action = findAction(
+      await ReceivingPage({ searchParams: params({ order: 'po-1' }) }),
+      'receiveAgainstOrder'
+    );
+    await action(
+      lotForm([
+        { key: 'line-1', batch: 'SYN-L1', expiry: '2028-06-30', packs: '6' },
+        { key: 'line-1.lot2', batch: 'SYN-L2', expiry: '2028-09-30', packs: '4' },
+        // A blank extra slot did not arrive and is skipped.
+        { key: 'line-1.lot3', batch: '', expiry: '', packs: '' },
+      ])
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+    const lines = write.mock.calls[0]![0].lines;
+    expect(
+      lines.map((line: Record<string, unknown>) => [
+        line.purchaseOrderLineId,
+        line.medicineId,
+        line.packLevelId,
+        line.canonicalUnitsPerPack,
+        line.batchNumber,
+        line.receivedPacks,
+      ])
+    ).toEqual([
+      ['line-1', 'med-1', 'pack-1', 10, 'SYN-L1', 6],
+      ['line-1', 'med-1', 'pack-1', 10, 'SYN-L2', 4],
+    ]);
+  });
+
+  it('refuses the same batch and expiry entered twice on one order line before writing', async () => {
+    const write = vi.fn();
+    mocks.createCaller.mockReturnValue(
+      callerStub({ purchaseOrders: vi.fn().mockResolvedValue([order]), createGoodsReceipt: write })
+    );
+    const action = findAction(
+      await ReceivingPage({ searchParams: params({ order: 'po-1' }) }),
+      'receiveAgainstOrder'
+    );
+    const result = new URL(
+      await action(
+        lotForm([
+          { key: 'line-1', batch: 'SYN-L1', expiry: '2028-06-30', packs: '6' },
+          { key: 'line-1.lot2', batch: 'syn-l1', expiry: '2028-06-30', packs: '4' },
+        ])
+      ),
+      'https://workspace.test'
+    );
+    expect(write).not.toHaveBeenCalled();
+    expect(result.searchParams.get('outcome')).toBe('rejected');
+    expect(result.searchParams.get('field')).toBe('batchNumber');
+    expect(result.searchParams.get('notice')).toMatch(/same batch and expiry is entered twice/);
+  });
+
+  it("pre-selects the branch's receiving default on every lot slot without guessing", async () => {
+    const twoShelves = {
+      ...workspace,
+      branches: [{ ...workspace.branches[0]!, defaultStockLocationId: 'loc-2' }],
+      stockLocations: [
+        ...workspace.stockLocations,
+        {
+          id: 'loc-2',
+          branchId: 'branch-1',
+          code: 'BACK',
+          name: 'Back store',
+          kind: 'STORE',
+          coldChain: false,
+        },
+      ],
+    };
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        workspace: vi.fn().mockResolvedValue(twoShelves),
+        purchaseOrders: vi.fn().mockResolvedValue([order]),
+      })
+    );
+    const view = render(await ReceivingPage({ searchParams: params({ order: 'po-1' }) }));
+    const shelves = [...view.container.querySelectorAll('select[name^="stockLocation:line-1"]')];
+    expect(shelves.map((select) => (select as HTMLSelectElement).name)).toEqual([
+      'stockLocation:line-1',
+      'stockLocation:line-1.lot2',
+      'stockLocation:line-1.lot3',
+    ]);
+    for (const select of shelves) expect(select).toHaveValue('loc-2');
+
+    // No branch default and two receiving shelves: nothing is pre-selected.
+    view.unmount();
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        workspace: vi.fn().mockResolvedValue({
+          ...twoShelves,
+          branches: [{ ...twoShelves.branches[0]!, defaultStockLocationId: null }],
+        }),
+        purchaseOrders: vi.fn().mockResolvedValue([order]),
+      })
+    );
+    const unset = render(await ReceivingPage({ searchParams: params({ order: 'po-1' }) }));
+    expect(unset.container.querySelector('select[name="stockLocation:line-1"]')).toHaveValue('');
+  });
 });
 
 describe('purchasing PIN controls', () => {

@@ -140,6 +140,11 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
     message: 'This GTIN is not the barcode of the medicine on this line.',
     field: 'serialNumber',
   },
+  SERIALIZED_PACK_QUANTITY: {
+    message:
+      "A serialized pack is received one pack per line. Scan each pack's 2D code; its serial is never copied to other packs.",
+    field: 'receivedPacks',
+  },
   EXPIRED_PACK: {
     message:
       'This pack is already expired. Reject the units into quarantine, or do not receive it.',
@@ -154,6 +159,7 @@ const KNOWN_REJECTIONS = new Set([
   'EXPIRED_PACK',
   'GS1_INVALID',
   'GTIN_MEDICINE_MISMATCH',
+  'SERIALIZED_PACK_QUANTITY',
 ]);
 
 export type ActionFailure = { message: string; field?: string };

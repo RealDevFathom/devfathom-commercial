@@ -21,7 +21,9 @@ DEV-745 therefore adds a small service that runs **on the gateway host, beside M
 - ffmpeg 5.0 or newer: its RTSP demuxer (`-rtsp_transport tcp -timeout`) and PNG encoder
   take one frame (`-frames:v 1 -f image2pipe -c:v png`). The service refuses older ffmpeg.
 
-The systemd unit confines the service to loopback plus the app's egress address, so it cannot
+The service refuses to start unless the host mounts `/proc` with `hidepid`, because ffmpeg's
+command line carries the MediaMTX reader secret. The systemd unit confines the service to
+loopback plus the app's egress address, so it cannot
 reach the DVR. The service reads the live path only. It never uses MediaMTX recording, playback or the API,
 never connects to the DVR, never writes to disk, and does not change `record` (default
 `false`). Old DVR recordings are untouched.
