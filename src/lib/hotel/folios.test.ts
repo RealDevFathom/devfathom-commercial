@@ -31,7 +31,11 @@ describe('hotel folio ledger', () => {
 
   it('rejects mixed currencies', () => {
     expect(() =>
-      calculateFolioBalance('USD', [{ grossMinor: BigInt(1), currency: 'EUR', reversesEntryId: null }], [])
+      calculateFolioBalance(
+        'USD',
+        [{ grossMinor: BigInt(1), currency: 'EUR', reversesEntryId: null }],
+        []
+      )
     ).toThrow('currency');
   });
 });

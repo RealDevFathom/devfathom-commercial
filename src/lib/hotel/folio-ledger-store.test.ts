@@ -30,8 +30,13 @@ describe('Prisma folio ledger store', () => {
     await store.readEntries(scope, 'folio-1');
     await store.catalogPrice(scope, 'extra-1');
     await store.insert(scope, {
-      folioId: 'folio-1', catalogItemId: 'extra-1', quantity: 1,
-      unitMinor: 100, netMinor: 100, taxMinor: 10, grossMinor: 110,
+      folioId: 'folio-1',
+      catalogItemId: 'extra-1',
+      quantity: 1,
+      unitMinor: 100,
+      netMinor: 100,
+      taxMinor: 10,
+      grossMinor: 110,
     });
     await store.reverse(scope, 'entry-1', 'Correction');
 
@@ -49,8 +54,13 @@ describe('Prisma folio ledger store', () => {
     };
     const store = createPrismaFolioLedgerStore(db, 'actor-1');
     await store.insert(scope, {
-      folioId: 'folio-1', catalogItemId: 'extra-1', quantity: 1,
-      unitMinor: 100, netMinor: 100, taxMinor: 10, grossMinor: 110,
+      folioId: 'folio-1',
+      catalogItemId: 'extra-1',
+      quantity: 1,
+      unitMinor: 100,
+      netMinor: 100,
+      taxMinor: 10,
+      grossMinor: 110,
     });
     await store.reverse(scope, 'entry-1', 'Correction');
 

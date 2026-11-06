@@ -113,7 +113,8 @@ export function createPrismaFolioLedgerStore(
           AND e."reversesEntryId" IS NULL
           AND f.status = 'OPEN'
         RETURNING id, kind::text AS kind, "reversesEntryId", reason, "grossMinor", currency, "createdAt"`);
-      if (!rows[0]) throw new Error('Folio entry is unavailable on an open folio of this property.');
+      if (!rows[0])
+        throw new Error('Folio entry is unavailable on an open folio of this property.');
       return rows[0];
     },
   };

@@ -13,7 +13,11 @@ import {
 } from '@/lib/hotel/reservations';
 import type { FolioReadScope, HotelFolioReadStore } from './hotel-folio-read-service';
 import { priceStay, type RateQuoteDb } from './hotel-rate-quote';
-import type { HotelReservationStore, ReservationCreated } from './hotel-reservation-service';
+import type {
+  HotelReservationStore,
+  ReservationCreated,
+  ReservationRoomType,
+} from './hotel-reservation-service';
 
 export type ReservationDb = RateQuoteDb;
 
@@ -54,7 +58,9 @@ export async function loadAvailabilityFacts(
       WHERE r."organizationId" = ${scope.organizationId}
         AND r."branchId" = ${scope.branchId}
         AND r.active = true`);
-  const units = await db.$queryRaw<{ roomTypeId: string; arrivalDate: Date; departureDate: Date; quantity: number }[]>(Prisma.sql`
+  const units = await db.$queryRaw<
+    { roomTypeId: string; arrivalDate: Date; departureDate: Date; quantity: number }[]
+  >(Prisma.sql`
       SELECT s."roomTypeId", s."arrivalDate", s."departureDate", s.quantity
       FROM hotel_reservation_stay_units s
       JOIN hotel_reservations r
@@ -64,7 +70,9 @@ export async function loadAvailabilityFacts(
         AND r.status::text IN (${consuming})
         AND s."arrivalDate" < ${departureDate}::date
         AND s."departureDate" > ${arrivalDate}::date`);
-  const blocks = await db.$queryRaw<{ roomId: string; startDate: Date; endDate: Date }[]>(Prisma.sql`
+  const blocks = await db.$queryRaw<
+    { roomId: string; startDate: Date; endDate: Date }[]
+  >(Prisma.sql`
       SELECT "roomId", "startDate", "endDate"
       FROM hotel_room_blocks
       WHERE "organizationId" = ${scope.organizationId}
@@ -113,7 +121,9 @@ export async function readFolioEvidence(
   scope: FolioReadScope,
   reservationId: string
 ): Promise<FolioEvidence | null> {
-  const folios = await db.$queryRaw<{ id: string; folioNumber: string; status: string; currency: string }[]>(
+  const folios = await db.$queryRaw<
+    { id: string; folioNumber: string; status: string; currency: string }[]
+  >(
     Prisma.sql`
       SELECT id, "folioNumber", status::text AS status, currency
       FROM hotel_folios
@@ -123,13 +133,17 @@ export async function readFolioEvidence(
   );
   const folio = folios[0];
   if (!folio) return null;
-  const entries = await db.$queryRaw<{ grossMinor: bigint; currency: string; reversesEntryId: string | null }[]>(Prisma.sql`
+  const entries = await db.$queryRaw<
+    { grossMinor: bigint; currency: string; reversesEntryId: string | null }[]
+  >(Prisma.sql`
       SELECT "grossMinor", currency, "reversesEntryId"
       FROM hotel_folio_entries
       WHERE "organizationId" = ${scope.organizationId}
         AND "branchId" = ${scope.branchId}
         AND "folioId" = ${folio.id}`);
-  const payments = await db.$queryRaw<{ amountMinor: bigint; currency: string; direction: 'COLLECTION' | 'REFUND' }[]>(Prisma.sql`
+  const payments = await db.$queryRaw<
+    { amountMinor: bigint; currency: string; direction: 'COLLECTION' | 'REFUND' }[]
+  >(Prisma.sql`
       SELECT "amountMinor", currency, direction::text AS direction
       FROM hotel_folio_payments
       WHERE "organizationId" = ${scope.organizationId}
@@ -156,6 +170,18 @@ export function createPrismaReservationStore(db: ReservationDb): HotelReservatio
           AND "branchId" = ${scope.branchId}
           AND scope = ${operation}
           AND key = ${key}`);
+      return rows[0] ?? null;
+    },
+
+    /** Share-locked so the type's limits and active flag cannot change under the booking. */
+    async roomType(scope, roomTypeId) {
+      const rows = await db.$queryRaw<ReservationRoomType[]>(Prisma.sql`
+        SELECT active, "maxAdults", "maxChildren", "inventoryKind"::text AS "inventoryKind"
+        FROM hotel_room_types
+        WHERE "organizationId" = ${scope.organizationId}
+          AND "branchId" = ${scope.branchId}
+          AND id = ${roomTypeId}
+        FOR SHARE`);
       return rows[0] ?? null;
     },
 
@@ -231,7 +257,13 @@ export function createPrismaReservationStore(db: ReservationDb): HotelReservatio
           RETURNING id`);
       }
 
-      return { id: reservationId, confirmationNumber: confirmation, status: 'HOLD', folioId, folioNumber };
+      return {
+        id: reservationId,
+        confirmationNumber: confirmation,
+        status: 'HOLD',
+        folioId,
+        folioNumber,
+      };
     },
 
     async saveReplay(scope, operation, key, requestHash, result: ReservationCreated) {

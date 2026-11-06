@@ -44,7 +44,9 @@ describe('hotel housekeeping rules', () => {
     expect(housekeepingStatusInput.safeParse(base).success).toBe(true);
     expect(() => housekeepingStatusInput.parse({ ...base, amountMinor: 1 })).toThrow();
     expect(housekeepingStatusInput.safeParse({ ...base, status: 'OCCUPIED' }).success).toBe(false);
-    expect(housekeepingStatusInput.safeParse({ ...base, status: 'OUT_OF_ORDER' }).success).toBe(false);
+    expect(housekeepingStatusInput.safeParse({ ...base, status: 'OUT_OF_ORDER' }).success).toBe(
+      false
+    );
     // The retired parallel vocabulary is gone.
     expect(housekeepingStatusInput.safeParse({ ...base, status: 'CLEAN' }).success).toBe(false);
   });

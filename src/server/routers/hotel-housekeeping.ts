@@ -43,7 +43,10 @@ function mapHousekeepingError(error: unknown): never {
         message: 'Assign the task to an active member of this organization.',
       });
     }
-    if (error.message === 'INVALID_HOUSEKEEPING_TRANSITION' || error.message === 'INVALID_TASK_TRANSITION') {
+    if (
+      error.message === 'INVALID_HOUSEKEEPING_TRANSITION' ||
+      error.message === 'INVALID_TASK_TRANSITION'
+    ) {
       throw new TRPCError({ code: 'CONFLICT', message: 'That status change is not allowed.' });
     }
   }
@@ -87,7 +90,10 @@ export const hotelHousekeepingRouter = router({
           entity: { type: 'HotelRoom', id: input.roomId },
           action: 'hotel.housekeeping.setStatus',
           after: { status: input.status },
-          metadata: { branchId: property.branchId, ...(input.reason ? { reason: input.reason } : {}) },
+          metadata: {
+            branchId: property.branchId,
+            ...(input.reason ? { reason: input.reason } : {}),
+          },
         });
         return result;
       },
@@ -107,10 +113,17 @@ export const hotelHousekeepingRouter = router({
           input
         );
         recordHotelAudit(ctx, {
-          entity: { type: 'HotelHousekeepingTask', id: String((task as { id?: unknown }).id ?? '') },
+          entity: {
+            type: 'HotelHousekeepingTask',
+            id: String((task as { id?: unknown }).id ?? ''),
+          },
           action: 'hotel.housekeeping.createTask',
           operation: 'CREATE',
-          after: { roomId: input.roomId, title: input.title, assignedToId: input.assignedToId ?? null },
+          after: {
+            roomId: input.roomId,
+            title: input.title,
+            assignedToId: input.assignedToId ?? null,
+          },
           metadata: { branchId: property.branchId },
         });
         return task;

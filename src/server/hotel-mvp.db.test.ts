@@ -73,9 +73,17 @@ function within<T>(s: Scope, run: (tx: Db) => Promise<T>) {
 
 /** One sellable ROOM type with `rooms` rooms, a plan in PKR and a published price. */
 async function seedInventory(s: Scope, rooms: number) {
-  const { createInventoryRoom, hotelRoomCreateInput, hotelRoomTypeCreateInput, withHotelInventory } =
-    await import('@/lib/hotel/inventory');
-  const inventoryScope = { organizationId: s.organizationId, branchId: s.branchId, actorId: s.userId };
+  const {
+    createInventoryRoom,
+    hotelRoomCreateInput,
+    hotelRoomTypeCreateInput,
+    withHotelInventory,
+  } = await import('@/lib/hotel/inventory');
+  const inventoryScope = {
+    organizationId: s.organizationId,
+    branchId: s.branchId,
+    actorId: s.userId,
+  };
   const type = await within(s, (tx) =>
     withHotelInventory(tx, inventoryScope, 'Hotel MVP fixture', (inner) =>
       inner.hotelRoomType.create({
@@ -221,16 +229,24 @@ describeIfDatabase('hotel MVP with restricted runtime and forced RLS', () => {
   });
 
   it('enables and forces RLS on every new table, and no housekeeping status table remains', async () => {
-    const rows = await within(scope, (tx) =>
-      tx.$queryRaw<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }[]>`
+    const rows = await within(
+      scope,
+      (tx) =>
+        tx.$queryRaw<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }[]>`
         SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
         WHERE relname = ANY(${TABLES}) AND relkind = 'r' ORDER BY relname`
     );
     expect(rows).toEqual(
-      TABLES.toSorted().map((relname) => ({ relname, relrowsecurity: true, relforcerowsecurity: true }))
+      TABLES.toSorted().map((relname) => ({
+        relname,
+        relrowsecurity: true,
+        relforcerowsecurity: true,
+      }))
     );
-    const parallel = await within(scope, (tx) =>
-      tx.$queryRaw<{ count: number }[]>`
+    const parallel = await within(
+      scope,
+      (tx) =>
+        tx.$queryRaw<{ count: number }[]>`
         SELECT COUNT(*)::int AS count FROM pg_class WHERE relname = 'hotel_room_housekeeping'`
     );
     expect(parallel).toEqual([{ count: 0 }]);
@@ -244,14 +260,18 @@ describeIfDatabase('hotel MVP with restricted runtime and forced RLS', () => {
     await expect(
       book(scope, { ...input, guest: { ...input.guest, lastName: 'Someone else' } })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
-    const counted = await within(scope, (tx) =>
-      tx.$queryRaw<{ count: number }[]>`
+    const counted = await within(
+      scope,
+      (tx) =>
+        tx.$queryRaw<{ count: number }[]>`
         SELECT COUNT(*)::int AS count FROM hotel_reservations
         WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId} AND id = ${first.id}`
     );
     expect(counted).toEqual([{ count: 1 }]);
-    const used = await within(scope, (tx) =>
-      tx.$queryRaw<{ used: boolean }[]>`
+    const used = await within(
+      scope,
+      (tx) =>
+        tx.$queryRaw<{ used: boolean }[]>`
         SELECT "usedAt" IS NOT NULL AS used FROM hotel_rate_plan_prices WHERE id = ${fixture.priceId}`
     );
     expect(used).toEqual([{ used: true }]);
@@ -264,8 +284,10 @@ describeIfDatabase('hotel MVP with restricted runtime and forced RLS', () => {
       );
       expect(rows.every((row) => row.organizationId === scope.organizationId)).toBe(true);
     }
-    const foreign = await within(other, (tx) =>
-      tx.$queryRaw<{ count: number }[]>`
+    const foreign = await within(
+      other,
+      (tx) =>
+        tx.$queryRaw<{ count: number }[]>`
         SELECT COUNT(*)::int AS count FROM hotel_reservations WHERE "organizationId" = ${scope.organizationId}`
     );
     expect(foreign).toEqual([{ count: 0 }]);
@@ -274,15 +296,23 @@ describeIfDatabase('hotel MVP with restricted runtime and forced RLS', () => {
   it('sells the last room exactly once under two concurrent bookings', async () => {
     const lastRoom = await seedInventory(scope, 1);
     const results = await Promise.allSettled([
-      book(scope, bookingInput(`race-a-${suffix}`, lastRoom.roomTypeId, lastRoom.ratePlanId, 'Racer A')),
-      book(scope, bookingInput(`race-b-${suffix}`, lastRoom.roomTypeId, lastRoom.ratePlanId, 'Racer B')),
+      book(
+        scope,
+        bookingInput(`race-a-${suffix}`, lastRoom.roomTypeId, lastRoom.ratePlanId, 'Racer A')
+      ),
+      book(
+        scope,
+        bookingInput(`race-b-${suffix}`, lastRoom.roomTypeId, lastRoom.ratePlanId, 'Racer B')
+      ),
     ]);
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     const refused = results.filter((result) => result.status === 'rejected');
     expect(refused).toHaveLength(1);
     expect((refused[0] as PromiseRejectedResult).reason).toMatchObject({ code: 'CONFLICT' });
-    const sold = await within(scope, (tx) =>
-      tx.$queryRaw<{ count: number }[]>`
+    const sold = await within(
+      scope,
+      (tx) =>
+        tx.$queryRaw<{ count: number }[]>`
         SELECT COUNT(*)::int AS count FROM hotel_reservation_stay_units
         WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
           AND "roomTypeId" = ${lastRoom.roomTypeId}`
@@ -304,12 +334,18 @@ describeIfDatabase('hotel MVP with restricted runtime and forced RLS', () => {
       })
     );
     // 2 × 500 net, 16% tax, priced by the server from the catalog.
-    expect(entry).toMatchObject({ netMinor: BigInt(1_000), taxMinor: BigInt(160), grossMinor: BigInt(1_160) });
+    expect(entry).toMatchObject({
+      netMinor: BigInt(1_000),
+      taxMinor: BigInt(160),
+      grossMinor: BigInt(1_160),
+    });
     const entryId = String(entry.id);
 
     await expect(
-      within(scope, (tx) =>
-        tx.$executeRaw`UPDATE hotel_folio_entries SET description = 'rewritten' WHERE id = ${entryId}`
+      within(
+        scope,
+        (tx) =>
+          tx.$executeRaw`UPDATE hotel_folio_entries SET description = 'rewritten' WHERE id = ${entryId}`
       )
     ).rejects.toThrow();
     await expect(
@@ -334,8 +370,10 @@ describeIfDatabase('hotel MVP with restricted runtime and forced RLS', () => {
     ).rejects.toThrow();
 
     // Once the folio is closed, neither a posting nor a correction moves it.
-    await within(scope, (tx) =>
-      tx.$executeRaw`UPDATE hotel_folios SET status = 'CLOSED' WHERE id = ${created.folioId}`
+    await within(
+      scope,
+      (tx) =>
+        tx.$executeRaw`UPDATE hotel_folios SET status = 'CLOSED' WHERE id = ${created.folioId}`
     );
     await expect(
       within(scope, (tx) =>
@@ -346,8 +384,10 @@ describeIfDatabase('hotel MVP with restricted runtime and forced RLS', () => {
         })
       )
     ).rejects.toThrow(/unavailable/);
-    const second = await within(scope, (tx) =>
-      tx.$queryRaw<{ id: string }[]>`
+    const second = await within(
+      scope,
+      (tx) =>
+        tx.$queryRaw<{ id: string }[]>`
         SELECT id FROM hotel_folio_entries WHERE "folioId" = ${created.folioId} AND "reversesEntryId" IS NULL`
     );
     expect(second).toHaveLength(1);

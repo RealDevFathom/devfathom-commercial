@@ -73,8 +73,11 @@ export async function quoteStay(
     arrival,
     departure,
   });
-  const expectedNights = Math.round((Date.parse(departureDay) - Date.parse(arrivalDay)) / 86_400_000);
-  if (rows.length !== expectedNights) throw new RangeError('The rate plan does not price every night.');
+  const expectedNights = Math.round(
+    (Date.parse(departureDay) - Date.parse(arrivalDay)) / 86_400_000
+  );
+  if (rows.length !== expectedNights)
+    throw new RangeError('The rate plan does not price every night.');
 
   let netMinor = ZERO;
   let taxMinor = ZERO;

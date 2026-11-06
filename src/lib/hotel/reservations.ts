@@ -77,7 +77,10 @@ export const reservationCreateInput = z
   .strict()
   .superRefine((value, context) => {
     // Refinements can run on a partially invalid object; only compare real dates.
-    if (!hotelDate.safeParse(value.arrivalDate).success || !hotelDate.safeParse(value.departureDate).success) {
+    if (
+      !hotelDate.safeParse(value.arrivalDate).success ||
+      !hotelDate.safeParse(value.departureDate).success
+    ) {
       return;
     }
     if (value.departureDate <= value.arrivalDate) {
@@ -86,7 +89,7 @@ export const reservationCreateInput = z
         path: ['departureDate'],
         message: 'Departure must follow arrival.',
       });
-    } else if (stayDates(value.arrivalDate, value.departureDate).length > MAX_STAY_NIGHTS) {
+    } else if (stayNightCount(value.arrivalDate, value.departureDate) > MAX_STAY_NIGHTS) {
       context.addIssue({
         code: 'custom',
         path: ['departureDate'],
@@ -99,8 +102,17 @@ export type ReservationCreateRequest = z.infer<typeof reservationCreateInput>;
 /** Defense in depth for non-router callers: refuse any client-authored money key. */
 export function rejectClientMoney(input: Record<string, unknown>) {
   for (const key of Object.keys(input)) {
-    if (forbiddenMoneyKeys.has(key)) throw new Error(`Client-authored money field is forbidden: ${key}`);
+    if (forbiddenMoneyKeys.has(key))
+      throw new Error(`Client-authored money field is forbidden: ${key}`);
   }
+}
+
+/**
+ * Nights in `[arrival, departure)`, computed without walking them, so the
+ * MAX_STAY_NIGHTS bound is checked before any per-night work.
+ */
+export function stayNightCount(arrival: string, departure: string): number {
+  return (Date.parse(`${departure}T00:00:00Z`) - Date.parse(`${arrival}T00:00:00Z`)) / 86_400_000;
 }
 
 /** Every stay night of `[arrival, departure)`, as `YYYY-MM-DD`. */
@@ -108,6 +120,9 @@ export function stayDates(arrival: string, departure: string): string[] {
   hotelDate.parse(arrival);
   hotelDate.parse(departure);
   if (departure <= arrival) throw new RangeError('Departure must follow arrival.');
+  if (stayNightCount(arrival, departure) > MAX_STAY_NIGHTS) {
+    throw new RangeError(`A stay may be at most ${MAX_STAY_NIGHTS} nights.`);
+  }
   const dates: string[] = [];
   for (
     let day = new Date(`${arrival}T00:00:00Z`);
@@ -166,7 +181,10 @@ export function calculateAvailability(
         )
         .reduce((sum, room) => sum + room.units, 0);
       const demand = facts.consuming
-        .filter((unit) => unit.roomTypeId === roomTypeId && overlaps(unit.arrivalDate, unit.departureDate, date))
+        .filter(
+          (unit) =>
+            unit.roomTypeId === roomTypeId && overlaps(unit.arrivalDate, unit.departureDate, date)
+        )
         .reduce((sum, unit) => sum + unit.quantity, 0);
       return { date, roomTypeId, supply, demand, available: Math.max(0, supply - demand) };
     })
@@ -217,5 +235,7 @@ function canonical(value: unknown): unknown {
 
 /** SHA-256 of the request with keys sorted, so key order never changes the hash. */
 export function reservationRequestHash(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
+  return createHash('sha256')
+    .update(JSON.stringify(canonical(value)))
+    .digest('hex');
 }

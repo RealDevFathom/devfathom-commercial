@@ -29,9 +29,27 @@ describe('hotel rate plan inputs', () => {
   });
 
   it('requires a forward, bounded stay', () => {
-    expect(ratePlanQuoteInput.safeParse({ ...quote, departureDate: '2026-11-01' }).success).toBe(false);
-    expect(ratePlanQuoteInput.safeParse({ ...quote, departureDate: '2027-11-01' }).success).toBe(false);
-    expect(ratePlanQuoteInput.safeParse({ ...quote, arrivalDate: '2026-02-30' }).success).toBe(false);
+    expect(ratePlanQuoteInput.safeParse({ ...quote, departureDate: '2026-11-01' }).success).toBe(
+      false
+    );
+    expect(ratePlanQuoteInput.safeParse({ ...quote, departureDate: '2027-11-01' }).success).toBe(
+      false
+    );
+    expect(ratePlanQuoteInput.safeParse({ ...quote, arrivalDate: '2026-02-30' }).success).toBe(
+      false
+    );
+  });
+
+  it('rejects a millennia-long quote without walking its nights', () => {
+    const started = performance.now();
+    const result = ratePlanQuoteInput.safeParse({
+      ...quote,
+      arrivalDate: '0000-01-01',
+      departureDate: '9999-12-31',
+    });
+    const elapsed = performance.now() - started;
+    expect(result.error?.issues.map((issue) => issue.path.join('.'))).toEqual(['departureDate']);
+    expect(elapsed).toBeLessThan(25);
   });
 
   it('creates a plan from terms only, never a nightly amount', () => {

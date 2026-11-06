@@ -36,7 +36,9 @@ type PlanRow = { id: string; currency: string; taxBasisPoints: number };
 
 const dateOnly = (value: Date) => value.toISOString().slice(0, 10);
 
-function priceLoader(db: RateQuoteDb): (input: Parameters<RateScope['loadPrices']>[0]) => Promise<PriceRow[]> {
+function priceLoader(
+  db: RateQuoteDb
+): (input: Parameters<RateScope['loadPrices']>[0]) => Promise<PriceRow[]> {
   return (scope) =>
     db.$queryRaw<PriceRow[]>(Prisma.sql`
       SELECT night.day AS "stayDate", p."netMinor", rp."taxBasisPoints", p.id AS "priceId"

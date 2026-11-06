@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { recordHotelAudit } from '@/lib/hotel/audit';
 import { MAX_MONEY_MINOR, MAX_TAX_BASIS_POINTS } from '@/lib/hotel/rates';
-import { hotelDate, MAX_STAY_NIGHTS, stayDates } from '@/lib/hotel/reservations';
+import { hotelDate, MAX_STAY_NIGHTS, stayNightCount } from '@/lib/hotel/reservations';
 import { currentProperty, hasSqlState, withLockedProperty } from '@/server/hotel-property-context';
 import { priceStay } from '@/server/hotel-rate-quote';
 import { capabilityProcedure, router } from '../trpc';
@@ -26,12 +26,19 @@ export const ratePlanQuoteInput = selection
   .extend({ roomTypeId: id, ratePlanId: id, arrivalDate: hotelDate, departureDate: hotelDate })
   .strict()
   .superRefine((value, context) => {
-    if (!hotelDate.safeParse(value.arrivalDate).success || !hotelDate.safeParse(value.departureDate).success) {
+    if (
+      !hotelDate.safeParse(value.arrivalDate).success ||
+      !hotelDate.safeParse(value.departureDate).success
+    ) {
       return;
     }
     if (value.departureDate <= value.arrivalDate) {
-      context.addIssue({ code: 'custom', path: ['departureDate'], message: 'Departure must follow arrival.' });
-    } else if (stayDates(value.arrivalDate, value.departureDate).length > MAX_STAY_NIGHTS) {
+      context.addIssue({
+        code: 'custom',
+        path: ['departureDate'],
+        message: 'Departure must follow arrival.',
+      });
+    } else if (stayNightCount(value.arrivalDate, value.departureDate) > MAX_STAY_NIGHTS) {
       context.addIssue({
         code: 'custom',
         path: ['departureDate'],
@@ -110,7 +117,8 @@ export const hotelRatePlansRouter = router({
     const property = await currentProperty(ctx, input.branchId, RATES);
     const scope = { organizationId: ctx.entitlements.organizationId, branchId: property.branchId };
     const priced = await priceStay(ctx.db, scope, input).catch((error: unknown) => {
-      if (error instanceof RangeError) throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+      if (error instanceof RangeError)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
       throw error;
     });
     if (!priced) throw new TRPCError({ code: 'NOT_FOUND', message: 'Rate plan not found.' });
@@ -145,11 +153,15 @@ export const hotelRatePlansRouter = router({
               AND rt.active = true`);
         } catch (error) {
           if (hasSqlState(error, '23505')) {
-            throw new TRPCError({ code: 'CONFLICT', message: 'A rate plan with that code already exists.' });
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'A rate plan with that code already exists.',
+            });
           }
           throw error;
         }
-        if (written !== 1) throw new TRPCError({ code: 'NOT_FOUND', message: 'Room type not found.' });
+        if (written !== 1)
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Room type not found.' });
         recordHotelAudit(ctx, {
           entity: { type: 'HotelRatePlan', id: planId, label: input.code },
           action: 'hotel.ratePlan.create',
@@ -189,7 +201,8 @@ export const hotelRatePlansRouter = router({
             AND rp.id = ${input.ratePlanId}
             AND rp."roomTypeId" = ${input.roomTypeId}
             AND rp.active = true`);
-        if (written !== 1) throw new TRPCError({ code: 'NOT_FOUND', message: 'Rate plan not found.' });
+        if (written !== 1)
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Rate plan not found.' });
         recordHotelAudit(ctx, {
           entity: { type: 'HotelRatePlanPrice', id: priceId, label: input.ratePlanId },
           action: 'hotel.ratePlan.publishPrice',

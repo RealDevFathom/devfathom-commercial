@@ -21,12 +21,16 @@ vi.mock('../trpc', async () => {
   };
 });
 
-import { hotelReservationsRouter } from './hotel-reservations';
+import { availabilityInput, hotelReservationsRouter } from './hotel-reservations';
 
 const db = {
   $queryRaw: vi.fn(async () => []),
   hotelProperty: {
-    findFirst: vi.fn(async () => ({ organizationId: 'org_1', branchId: 'branch_1', currency: 'PKR' })),
+    findFirst: vi.fn(async () => ({
+      organizationId: 'org_1',
+      branchId: 'branch_1',
+      currency: 'PKR',
+    })),
   },
 };
 const caller = () =>
@@ -53,7 +57,9 @@ describe('hotelReservations.getWithFolio', () => {
       if (capability !== 'hotel:folio') throw new TRPCError({ code: 'FORBIDDEN' });
       return { organizationId: 'org_1', branchId: 'branch_1' };
     });
-    await expect(caller().getWithFolio({ branchId: 'branch_1', id: 'res_1' })).rejects.toMatchObject({
+    await expect(
+      caller().getWithFolio({ branchId: 'branch_1', id: 'res_1' })
+    ).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
     expect(db.$queryRaw).not.toHaveBeenCalled();
@@ -64,7 +70,9 @@ describe('hotelReservations.getWithFolio', () => {
       if (capability !== 'hotel:reservations') throw new TRPCError({ code: 'FORBIDDEN' });
       return { organizationId: 'org_1', branchId: 'branch_1' };
     });
-    await expect(caller().getWithFolio({ branchId: 'branch_1', id: 'res_1' })).rejects.toMatchObject({
+    await expect(
+      caller().getWithFolio({ branchId: 'branch_1', id: 'res_1' })
+    ).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
     expect(db.$queryRaw).not.toHaveBeenCalled();
@@ -75,6 +83,25 @@ describe('hotelReservations.getWithFolio', () => {
     await caller()
       .getWithFolio({ branchId: 'branch_1', id: 'res_1' })
       .catch(() => undefined);
-    expect(mocks.scope.mock.calls.map((call) => call[2])).toEqual(['hotel:reservations', 'hotel:folio']);
+    expect(mocks.scope.mock.calls.map((call) => call[2])).toEqual([
+      'hotel:reservations',
+      'hotel:folio',
+    ]);
+  });
+});
+
+describe('hotelReservations.availability input', () => {
+  it('rejects a millennia-long range without walking its nights', () => {
+    const range = { branchId: 'branch_1', arrivalDate: '2026-10-22', departureDate: '2026-10-24' };
+    expect(availabilityInput.safeParse(range).success).toBe(true);
+    const started = performance.now();
+    const result = availabilityInput.safeParse({
+      ...range,
+      arrivalDate: '0000-01-01',
+      departureDate: '9999-12-31',
+    });
+    const elapsed = performance.now() - started;
+    expect(result.error?.issues.map((issue) => issue.path.join('.'))).toEqual(['departureDate']);
+    expect(elapsed).toBeLessThan(25);
   });
 });

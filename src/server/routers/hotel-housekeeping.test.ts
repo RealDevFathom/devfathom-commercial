@@ -102,7 +102,9 @@ describe('hotel housekeeping router isolation', () => {
         caller.updateTask({ branchId: 'branch_1', taskId: 'task_1', status: 'COMPLETED' }),
     ]) {
       order.length = 0;
-      await expect(call(hotelHousekeepingRouter.createCaller(context() as never))).rejects.toMatchObject({
+      await expect(
+        call(hotelHousekeepingRouter.createCaller(context() as never))
+      ).rejects.toMatchObject({
         code: 'FORBIDDEN',
       });
       // Transaction, then the property lock, then the scope check — and nothing after it.

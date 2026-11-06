@@ -57,7 +57,11 @@ describe('hotel MVP migration', () => {
   });
 
   it('makes recorded money append-only, admitting only the sanctioned purge', () => {
-    for (const table of ['hotel_reservation_stay_units', 'hotel_folio_entries', 'hotel_folio_payments']) {
+    for (const table of [
+      'hotel_reservation_stay_units',
+      'hotel_folio_entries',
+      'hotel_folio_payments',
+    ]) {
       expect(sql).toContain(`BEFORE UPDATE OR DELETE ON "${table}"`);
     }
     expect(sql).toContain("current_setting('app.purging_organization_id', true)");
@@ -114,6 +118,7 @@ describe('hotel MVP migration', () => {
     expect(fixes).toContain('refunded + NEW."amountMinor" > original."amountMinor"');
     expect(fixes).toMatch(/"refundsPaymentId"\s*FOR UPDATE;/);
     expect(schema).toContain('map: "hotel_folio_payments_refunds_idx"');
-    expect(fixes).not.toContain('IF NOT EXISTS');
+    // No idempotent DDL; the plpgsql guards' `IF NOT EXISTS (SELECT ...)` is control flow.
+    expect(fixes).not.toMatch(/\b(?:CREATE|ADD)\b[^;\n]*\bIF NOT EXISTS\b/);
   });
 });

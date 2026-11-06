@@ -40,7 +40,11 @@ function harness(respond: Responder) {
       return respond(sql, values) ?? [];
     }),
     hotelProperty: {
-      findFirst: vi.fn(async () => ({ branchId: 'branch_1', organizationId: 'org_1', currency: 'PKR' })),
+      findFirst: vi.fn(async () => ({
+        branchId: 'branch_1',
+        organizationId: 'org_1',
+        currency: 'PKR',
+      })),
     },
   };
   const db = { $transaction: vi.fn(async (run: (client: typeof tx) => unknown) => run(tx)) };
@@ -75,7 +79,9 @@ beforeEach(() => {
 describe('hotelFolios.postExtra idempotency', () => {
   it('requires an idempotency key and still refuses client money', () => {
     expect(folioPostExtraInput.safeParse(posting).success).toBe(true);
-    expect(folioPostExtraInput.safeParse({ ...posting, idempotencyKey: undefined }).success).toBe(false);
+    expect(folioPostExtraInput.safeParse({ ...posting, idempotencyKey: undefined }).success).toBe(
+      false
+    );
     expect(folioPostExtraInput.safeParse({ ...posting, grossMinor: 1 }).success).toBe(false);
     expect(folioPostExtraInput.safeParse({ ...posting, quantity: 2 ** 31 }).success).toBe(false);
   });
@@ -84,19 +90,26 @@ describe('hotelFolios.postExtra idempotency', () => {
     const { statements, caller } = harness((sql) => {
       if (sql.includes('FROM hotel_operation_idempotency_keys')) return [];
       if (sql.includes('FROM hotel_extras')) return [{ unitMinor: 500, taxBasisPoints: 0 }];
-      if (sql.includes('INSERT INTO hotel_folio_entries')) return [{ id: 'entry_new', grossMinor: BigInt(1_000) }];
+      if (sql.includes('INSERT INTO hotel_folio_entries'))
+        return [{ id: 'entry_new', grossMinor: BigInt(1_000) }];
       if (sql.includes('INSERT INTO hotel_operation_idempotency_keys')) return [{ id: 'key_1' }];
       return [];
     });
     await expect(caller.postExtra(posting)).resolves.toMatchObject({ id: 'entry_new' });
-    expect(statements.filter((sql) => sql.includes('INSERT INTO hotel_folio_entries'))).toHaveLength(1);
-    expect(statements.filter((sql) => sql.includes('INSERT INTO hotel_operation_idempotency_keys'))).toHaveLength(1);
+    expect(
+      statements.filter((sql) => sql.includes('INSERT INTO hotel_folio_entries'))
+    ).toHaveLength(1);
+    expect(
+      statements.filter((sql) => sql.includes('INSERT INTO hotel_operation_idempotency_keys'))
+    ).toHaveLength(1);
   });
 
   it('replays an exact retry without posting a second charge', async () => {
     const { statements, caller } = harness((sql) => {
-      if (sql.includes('FROM hotel_operation_idempotency_keys')) return [{ requestHash, resultId: 'entry_1' }];
-      if (sql.includes('FROM hotel_folio_entries')) return [{ id: 'entry_1', grossMinor: BigInt(1_000) }];
+      if (sql.includes('FROM hotel_operation_idempotency_keys'))
+        return [{ requestHash, resultId: 'entry_1' }];
+      if (sql.includes('FROM hotel_folio_entries'))
+        return [{ id: 'entry_1', grossMinor: BigInt(1_000) }];
       return [];
     });
     await expect(caller.postExtra(posting)).resolves.toMatchObject({ id: 'entry_1' });
@@ -105,10 +118,13 @@ describe('hotelFolios.postExtra idempotency', () => {
 
   it('refuses the same key for a different posting', async () => {
     const { statements, caller } = harness((sql) => {
-      if (sql.includes('FROM hotel_operation_idempotency_keys')) return [{ requestHash, resultId: 'entry_1' }];
+      if (sql.includes('FROM hotel_operation_idempotency_keys'))
+        return [{ requestHash, resultId: 'entry_1' }];
       return [];
     });
-    await expect(caller.postExtra({ ...posting, quantity: 3 })).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(caller.postExtra({ ...posting, quantity: 3 })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
     expect(statements.some((sql) => sql.includes('INSERT INTO'))).toBe(false);
   });
 });
@@ -131,7 +147,9 @@ describe('hotelFolios ledger error mapping', () => {
       code: 'BAD_REQUEST',
     });
     expect(
-      caught(() => mapLedgerError(new Error('Folio entry is unavailable on an open folio of this property.')))
+      caught(() =>
+        mapLedgerError(new Error('Folio entry is unavailable on an open folio of this property.'))
+      )
     ).toMatchObject({ code: 'NOT_FOUND' });
     const forbidden = new TRPCError({ code: 'FORBIDDEN' });
     expect(caught(() => mapLedgerError(forbidden))).toBe(forbidden);

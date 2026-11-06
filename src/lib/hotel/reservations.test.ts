@@ -6,6 +6,8 @@ import {
   folioNumberFor,
   reservationCreateInput,
   reservationRequestHash,
+  stayDates,
+  stayNightCount,
   stayRangeInput,
   type AvailabilityFacts,
 } from './reservations';
@@ -24,9 +26,15 @@ const create = {
 
 describe('hotel reservation contracts', () => {
   it('uses half-open, forward stay ranges', () => {
-    expect(stayRangeInput.safeParse({ arrivalDate: '2026-10-22', departureDate: '2026-10-23' }).success).toBe(true);
-    expect(stayRangeInput.safeParse({ arrivalDate: '2026-10-22', departureDate: '2026-10-22' }).success).toBe(false);
-    expect(stayRangeInput.safeParse({ arrivalDate: '2026-02-30', departureDate: '2026-03-02' }).success).toBe(false);
+    expect(
+      stayRangeInput.safeParse({ arrivalDate: '2026-10-22', departureDate: '2026-10-23' }).success
+    ).toBe(true);
+    expect(
+      stayRangeInput.safeParse({ arrivalDate: '2026-10-22', departureDate: '2026-10-22' }).success
+    ).toBe(false);
+    expect(
+      stayRangeInput.safeParse({ arrivalDate: '2026-02-30', departureDate: '2026-03-02' }).success
+    ).toBe(false);
   });
 
   it('hashes canonical requests independent of key order', () => {
@@ -37,8 +45,32 @@ describe('hotel reservation contracts', () => {
   it('accepts configuration and refuses client money or an unbounded stay', () => {
     expect(reservationCreateInput.safeParse(create).success).toBe(true);
     expect(reservationCreateInput.safeParse({ ...create, totalMinor: 1 }).success).toBe(false);
-    expect(reservationCreateInput.safeParse({ ...create, departureDate: '2027-10-22' }).success).toBe(false);
-    expect(reservationCreateInput.safeParse({ ...create, arrivalDate: 'not-a-date' }).success).toBe(false);
+    expect(
+      reservationCreateInput.safeParse({ ...create, departureDate: '2027-10-22' }).success
+    ).toBe(false);
+    expect(reservationCreateInput.safeParse({ ...create, arrivalDate: 'not-a-date' }).success).toBe(
+      false
+    );
+  });
+
+  it('rejects a millennia-long stay without walking its nights', () => {
+    const started = performance.now();
+    const result = reservationCreateInput.safeParse({
+      ...create,
+      arrivalDate: '0000-01-01',
+      departureDate: '9999-12-31',
+    });
+    const elapsed = performance.now() - started;
+    expect(result.error?.issues.map((issue) => issue.path.join('.'))).toEqual(['departureDate']);
+    expect(elapsed).toBeLessThan(25);
+  });
+
+  it('counts nights without walking them and refuses to walk an over-long stay', () => {
+    expect(stayNightCount('2026-10-22', '2026-10-24')).toBe(2);
+    expect(stayNightCount('2026-03-28', '2026-03-30')).toBe(2);
+    expect(stayDates('2026-10-22', '2026-12-21')).toHaveLength(60);
+    expect(() => stayDates('2026-10-22', '2026-12-22')).toThrow(RangeError);
+    expect(() => stayDates('0000-01-01', '9999-12-31')).toThrow(RangeError);
   });
 
   it('subtracts blocks from supply and consuming stays from it per night', () => {
@@ -48,7 +80,9 @@ describe('hotel reservation contracts', () => {
         { id: 'r2', roomTypeId: 'type', units: 1 },
         { id: 'r3', roomTypeId: 'type', units: 1 },
       ],
-      consuming: [{ roomTypeId: 'type', arrivalDate: '2026-10-22', departureDate: '2026-10-23', quantity: 1 }],
+      consuming: [
+        { roomTypeId: 'type', arrivalDate: '2026-10-22', departureDate: '2026-10-23', quantity: 1 },
+      ],
       blocks: [{ roomId: 'r3', startDate: '2026-10-22', endDate: '2026-10-24' }],
     };
     expect(calculateAvailability(facts, '2026-10-22', '2026-10-24')).toEqual([
@@ -60,7 +94,9 @@ describe('hotel reservation contracts', () => {
   it('refuses a booking when any night is sold out or the type has no rooms', () => {
     const facts: AvailabilityFacts = {
       rooms: [{ id: 'r1', roomTypeId: 'type', units: 1 }],
-      consuming: [{ roomTypeId: 'type', arrivalDate: '2026-10-23', departureDate: '2026-10-24', quantity: 1 }],
+      consuming: [
+        { roomTypeId: 'type', arrivalDate: '2026-10-23', departureDate: '2026-10-24', quantity: 1 },
+      ],
       blocks: [],
     };
     expect(canBook(facts, 'type', '2026-10-22', '2026-10-23')).toBe(true);

@@ -4,7 +4,13 @@ import { issueFolioReadGrant, readReservationProjection } from './hotel-folio-re
 import { createReservation, type HotelReservationStore } from './hotel-reservation-service';
 
 const scope = { organizationId: 'o', branchId: 'p' };
-const folio = { id: 'f', folioNumber: 'FOL-1', status: 'OPEN', currency: 'PKR', balanceMinor: BigInt(5) };
+const folio = {
+  id: 'f',
+  folioNumber: 'FOL-1',
+  status: 'OPEN',
+  currency: 'PKR',
+  balanceMinor: BigInt(5),
+};
 
 function readStore() {
   return {
@@ -16,7 +22,10 @@ function readStore() {
 describe('hotel security rules', () => {
   it('never loads the folio without a server-issued hotel:folio grant', async () => {
     const store = readStore();
-    expect(await readReservationProjection(store, scope, 'r')).toEqual({ id: 'r', folioAccess: false });
+    expect(await readReservationProjection(store, scope, 'r')).toEqual({
+      id: 'r',
+      folioAccess: false,
+    });
     expect(issueFolioReadGrant(scope, new Set(['hotel:reservations']))).toBeUndefined();
     expect(store.readFolio).not.toHaveBeenCalled();
   });
@@ -29,7 +38,10 @@ describe('hotel security rules', () => {
       folioAccess: true,
       folio,
     });
-    const foreign = issueFolioReadGrant({ organizationId: 'o', branchId: 'other' }, new Set(['hotel:folio']));
+    const foreign = issueFolioReadGrant(
+      { organizationId: 'o', branchId: 'other' },
+      new Set(['hotel:folio'])
+    );
     expect(await readReservationProjection(readStore(), scope, 'r', foreign)).toEqual({
       id: 'r',
       folioAccess: false,

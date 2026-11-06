@@ -7,7 +7,7 @@ import {
   calculateAvailability,
   MAX_STAY_NIGHTS,
   reservationCreateInput,
-  stayDates,
+  stayNightCount,
   stayRangeInput,
 } from '@/lib/hotel/reservations';
 import { issueFolioReadGrant, readReservationProjection } from '@/server/hotel-folio-read-service';
@@ -24,7 +24,9 @@ import { capabilityProcedure, router } from '../trpc';
 
 const reservations = capabilityProcedure('hotel:reservations');
 
-const scopedId = hotelPropertySelectionInput.extend({ id: z.string().trim().min(1).max(191) }).strict();
+const scopedId = hotelPropertySelectionInput
+  .extend({ id: z.string().trim().min(1).max(191) })
+  .strict();
 
 /** Guest search is bounded: a real term (no bare wildcard), prefix match, capped rows. */
 export const reservationSearchInput = hotelPropertySelectionInput
@@ -41,8 +43,12 @@ export const availabilityInput = hotelPropertySelectionInput
       departureDate: value.departureDate,
     });
     if (!range.success) {
-      context.addIssue({ code: 'custom', path: ['departureDate'], message: 'Choose a valid stay.' });
-    } else if (stayDates(value.arrivalDate, value.departureDate).length > MAX_STAY_NIGHTS) {
+      context.addIssue({
+        code: 'custom',
+        path: ['departureDate'],
+        message: 'Choose a valid stay.',
+      });
+    } else if (stayNightCount(value.arrivalDate, value.departureDate) > MAX_STAY_NIGHTS) {
       context.addIssue({
         code: 'custom',
         path: ['departureDate'],
@@ -63,7 +69,8 @@ function actorId(ctx: { session: { user?: { id?: string } } | null }): string {
 }
 
 function badRequestOnRange(error: unknown): never {
-  if (error instanceof RangeError) throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+  if (error instanceof RangeError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   throw error;
 }
 
@@ -72,7 +79,16 @@ export const hotelReservationsRouter = router({
     const property = await currentProperty(ctx, input.branchId, 'hotel:reservations');
     const term = likePrefix(input.query);
     return ctx.db.$queryRaw<
-      Pick<ReservationRow, 'id' | 'confirmationNumber' | 'status' | 'arrivalDate' | 'departureDate' | 'firstName' | 'lastName'>[]
+      Pick<
+        ReservationRow,
+        | 'id'
+        | 'confirmationNumber'
+        | 'status'
+        | 'arrivalDate'
+        | 'departureDate'
+        | 'firstName'
+        | 'lastName'
+      >[]
     >(Prisma.sql`
       SELECT r.id, r."confirmationNumber", r.status::text AS status, r."arrivalDate", r."departureDate",
         g."firstName", g."lastName"
@@ -118,7 +134,12 @@ export const hotelReservationsRouter = router({
       where: { organizationId: scope.organizationId, branchId: scope.branchId, active: true },
       select: { id: true },
     });
-    const facts = await loadAvailabilityFacts(ctx.db, scope, input.arrivalDate, input.departureDate);
+    const facts = await loadAvailabilityFacts(
+      ctx.db,
+      scope,
+      input.arrivalDate,
+      input.departureDate
+    );
     return calculateAvailability(
       facts,
       input.arrivalDate,
@@ -133,7 +154,10 @@ export const hotelReservationsRouter = router({
       ctx,
       input.branchId,
       async (tx, property) => {
-        const scope = { organizationId: tx.entitlements.organizationId, branchId: property.branchId };
+        const scope = {
+          organizationId: tx.entitlements.organizationId,
+          branchId: property.branchId,
+        };
         const created = await createReservation(
           createPrismaReservationStore(tx.db),
           scope,

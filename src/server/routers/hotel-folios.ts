@@ -65,7 +65,8 @@ function ledgerFor(
 
 export function mapLedgerError(error: unknown): never {
   if (error instanceof TRPCError) throw error;
-  if (error instanceof z.ZodError) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid posting.' });
+  if (error instanceof z.ZodError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid posting.' });
   if (hasSqlState(error, '23505')) {
     throw new TRPCError({ code: 'CONFLICT', message: 'That entry has already been reversed.' });
   }
@@ -136,7 +137,14 @@ export const hotelFoliosRouter = router({
     if (!header) throw new TRPCError({ code: 'NOT_FOUND', message: 'Folio not found.' });
     const entries = await ledger.entries(scope, input.folioId);
     const payments = await ctx.db.$queryRaw<
-      { id: string; direction: 'COLLECTION' | 'REFUND'; amountMinor: bigint; currency: string; refundsPaymentId: string | null; createdAt: Date }[]
+      {
+        id: string;
+        direction: 'COLLECTION' | 'REFUND';
+        amountMinor: bigint;
+        currency: string;
+        refundsPaymentId: string | null;
+        createdAt: Date;
+      }[]
     >(Prisma.sql`
       SELECT id, direction::text AS direction, "amountMinor", currency, "refundsPaymentId", "createdAt"
       FROM hotel_folio_payments
@@ -167,7 +175,10 @@ export const hotelFoliosRouter = router({
       ctx,
       input.branchId,
       async (tx, property) => {
-        const scope = { organizationId: tx.entitlements.organizationId, branchId: property.branchId };
+        const scope = {
+          organizationId: tx.entitlements.organizationId,
+          branchId: property.branchId,
+        };
         const posting = {
           folioId: input.folioId,
           catalogItemId: input.catalogItemId,
@@ -184,7 +195,8 @@ export const hotelFoliosRouter = router({
             });
           }
           const previous = await readPostedEntry(tx.db, scope, replay.resultId);
-          if (!previous) throw new TRPCError({ code: 'NOT_FOUND', message: 'Folio entry not found.' });
+          if (!previous)
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Folio entry not found.' });
           return previous;
         }
         const entry = await ledgerFor(tx, tx.db, property.branchId, 'hotel:folio', actor)
@@ -216,7 +228,10 @@ export const hotelFoliosRouter = router({
       ctx,
       input.branchId,
       async (tx, property) => {
-        const scope = { organizationId: tx.entitlements.organizationId, branchId: property.branchId };
+        const scope = {
+          organizationId: tx.entitlements.organizationId,
+          branchId: property.branchId,
+        };
         const entry = await ledgerFor(tx, tx.db, property.branchId, 'hotel:folio-adjust', actor)
           .reverse(scope, input.entryId, input.reason)
           .catch(mapLedgerError);

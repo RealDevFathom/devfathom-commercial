@@ -2757,7 +2757,8 @@ async function main() {
     );
     await expectDatabaseError(
       '23514',
-      () => reverseEntry(`hotel_mvp_reversal_of_reversal_${suffix}`, `hotel_mvp_reversal_${suffix}`),
+      () =>
+        reverseEntry(`hotel_mvp_reversal_of_reversal_${suffix}`, `hotel_mvp_reversal_${suffix}`),
       'a reversal of a reversal'
     );
     // An entry is in its folio's currency, on an open folio.
@@ -2769,7 +2770,13 @@ async function main() {
             "id", "organizationId", "branchId", "folioId", "kind", "catalogItemId", "description", "quantity",
             "unitMinor", "netMinor", "taxMinor", "grossMinor", "currency", "createdById"
           ) VALUES ($1, 'org_devfathom', $2, $3, 'EXTRA', $4, 'Laundry', 1, 1000, 1000, 0, 1000, 'USD', $5)`,
-          [`hotel_mvp_usd_entry_${suffix}`, hotelPropertyA, hotelMvp('folio', 'a'), hotelExtraA, userA]
+          [
+            `hotel_mvp_usd_entry_${suffix}`,
+            hotelPropertyA,
+            hotelMvp('folio', 'a'),
+            hotelExtraA,
+            userA,
+          ]
         ),
       'a folio entry in another currency'
     );
@@ -2781,13 +2788,21 @@ async function main() {
         ) VALUES ($1, 'org_devfathom', $2, $3, 'REFUND', $4, 'PKR', $5, $6)`,
         [id, hotelPropertyA, hotelMvp('folio', 'a'), amountMinor, hotelMvp('payment', 'a'), userA]
       );
-    assertEqual((await refund(`hotel_mvp_refund_1_${suffix}`, 600)).rowCount, 1, 'a partial refund must be admitted');
+    assertEqual(
+      (await refund(`hotel_mvp_refund_1_${suffix}`, 600)).rowCount,
+      1,
+      'a partial refund must be admitted'
+    );
     await expectDatabaseError(
       '23514',
       () => refund(`hotel_mvp_refund_2_${suffix}`, 401),
       'a refund beyond the remaining collected amount'
     );
-    assertEqual((await refund(`hotel_mvp_refund_3_${suffix}`, 400)).rowCount, 1, 'refunding the remainder must be admitted');
+    assertEqual(
+      (await refund(`hotel_mvp_refund_3_${suffix}`, 400)).rowCount,
+      1,
+      'refunding the remainder must be admitted'
+    );
     // A rate plan is in its property's currency, with tax at most 100%.
     for (const [label, currency, taxBasisPoints] of [
       ['a foreign-currency rate plan', 'USD', 0],
@@ -2848,10 +2863,13 @@ async function main() {
     await client.query(`SELECT set_config('app.purging_organization_id', 'org_devfathom', true)`);
     await expectDatabaseError(
       '55000',
-      () => client.query(`DELETE FROM "hotel_folio_entries" WHERE "id" = $1`, [hotelMvp('entry', 'b')]),
+      () =>
+        client.query(`DELETE FROM "hotel_folio_entries" WHERE "id" = $1`, [hotelMvp('entry', 'b')]),
       'a purge of tenant A deleting tenant B money'
     );
-    await client.query(`SELECT set_config('app.purging_organization_id', $1, true)`, [organizationB]);
+    await client.query(`SELECT set_config('app.purging_organization_id', $1, true)`, [
+      organizationB,
+    ]);
     await client.query('SAVEPOINT hotel_mvp_purge');
     try {
       const purged = await client.query(`DELETE FROM "hotel_folio_entries" WHERE "id" = $1`, [
