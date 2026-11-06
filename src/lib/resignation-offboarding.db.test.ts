@@ -274,7 +274,8 @@ describeIfDatabase('resignation offboarding, against PostgreSQL', () => {
 
   it('reconciles legacy offboarding without discarding the unprocessed overdue backlog', async () => {
     for (const name of [
-      'legacy_immediate',
+      'legacy_router_reactivated',
+      'legacy_assistant',
       'legacy_manual',
       'legacy_inactive',
       'legacy_backlog',
@@ -282,9 +283,22 @@ describeIfDatabase('resignation offboarding, against PostgreSQL', () => {
     ]) {
       await addMember(name, 'EMPLOYEE', name === 'legacy_future' ? new Date('2099-01-01') : cutoff);
     }
-    await client.query(`UPDATE resignations SET "reviewedAt" = "lastWorkingDay" WHERE id = $1`, [
-      id('resignation_legacy_immediate'),
-    ]);
+    await client.query(
+      `UPDATE resignations SET "reviewedAt" = "lastWorkingDay" WHERE id = ANY($1::text[])`,
+      [[id('resignation_legacy_router_reactivated'), id('resignation_legacy_assistant')]]
+    );
+    // Only a tRPC router review deactivated the user at approval time; the
+    // assistant tool recorded the decision without offboarding anyone.
+    for (const [name, source, action] of [
+      ['legacy_router_reactivated', 'TRPC', 'resignations.review'],
+      ['legacy_assistant', 'SYSTEM', 'assistant.resignations.review'],
+    ] as const) {
+      await client.query(
+        `INSERT INTO audit_logs (id, "organizationId", "actorType", source, category, operation, action, "targetType", "targetId")
+         VALUES ($1, $2, 'USER', $3::"AuditSource", 'RESIGNATIONS', 'UPDATE', $4, 'Resignation', $5)`,
+        [id(`${name}_review_audit`), org('primary'), source, action, id(`resignation_${name}`)]
+      );
+    }
     await client.query(`UPDATE users SET status = 'INACTIVE' WHERE id = $1`, [
       id('legacy_inactive'),
     ]);
@@ -311,15 +325,18 @@ describeIfDatabase('resignation offboarding, against PostgreSQL', () => {
       migration.slice(migration.indexOf('SELECT set_config'), migration.lastIndexOf('COMMIT;'))
     );
     await client.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
-    for (const name of ['legacy_immediate', 'legacy_manual', 'legacy_inactive']) {
+    for (const name of ['legacy_router_reactivated', 'legacy_manual', 'legacy_inactive']) {
       expect(await state(name)).toMatchObject({ offboardedAt: expect.any(Date) });
     }
-    expect(await state('legacy_future')).toMatchObject({ offboardedAt: null });
-    expect(await state('legacy_backlog')).toMatchObject({ offboardedAt: null });
-    await expect(processDueResignationOffboarding(cutoff)).resolves.toEqual({ offboarded: 1 });
-    for (const name of ['legacy_immediate', 'legacy_manual']) {
+    for (const name of ['legacy_future', 'legacy_backlog', 'legacy_assistant']) {
+      expect(await state(name)).toMatchObject({ offboardedAt: null });
+    }
+    await expect(processDueResignationOffboarding(cutoff)).resolves.toEqual({ offboarded: 2 });
+    for (const name of ['legacy_router_reactivated', 'legacy_manual']) {
       expect(await state(name)).toMatchObject({ status: 'ACTIVE', tokenVersion: 20 });
     }
-    expect(await state('legacy_backlog')).toMatchObject({ status: 'INACTIVE', tokenVersion: 21 });
+    for (const name of ['legacy_backlog', 'legacy_assistant']) {
+      expect(await state(name)).toMatchObject({ status: 'INACTIVE', tokenVersion: 21 });
+    }
   });
 });

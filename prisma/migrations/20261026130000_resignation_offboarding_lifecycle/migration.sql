@@ -5,9 +5,11 @@ BEGIN;
 -- reactivated user on a later worker run.
 ALTER TABLE "resignations" ADD COLUMN "offboardedAt" TIMESTAMP(3);
 
--- Reconcile legacy offboarding before enabling the sweep. The router already
--- offboarded approvals reviewed on/after the confirmed day. Manual offboarding
--- and reactivation are evidenced by tenant user-status audit entries. Do not
+-- Reconcile legacy offboarding before enabling the sweep. Only tRPC router
+-- reviews deactivated an approval reviewed on/after the confirmed day, so that
+-- case requires the router's review audit; assistant reviews never deactivated
+-- anyone and stay in the backlog. Manual offboarding and reactivation are
+-- evidenced by tenant user-status audit entries. Do not
 -- consume future-approved overdue requests that have never been offboarded:
 -- those are precisely the backlog this worker must process.
 -- RLS also applies to migration owners on these tenant tables.
@@ -23,7 +25,13 @@ WHERE r."userId" = u."id"
   AND r."offboardedAt" IS NULL
   AND (
     u."status" = 'INACTIVE'
-    OR r."reviewedAt" >= r."lastWorkingDay"
+    OR (r."reviewedAt" >= r."lastWorkingDay" AND EXISTS (
+      SELECT 1 FROM "audit_logs" AS a
+      WHERE a."organizationId" = r."organizationId"
+        AND a."targetType" = 'Resignation' AND a."targetId" = r."id"
+        AND a."action" = 'resignations.review' AND a."source" = 'TRPC'
+        AND a."outcome" = 'SUCCESS'
+    ))
     OR EXISTS (
       SELECT 1 FROM "audit_logs" AS a
       WHERE a."organizationId" = r."organizationId"
