@@ -125,6 +125,10 @@ if fs is not None:
                f"{fs['files']} files, {fs['passed']} passed" + (f", {fs['skipped']} skipped" if fs['skipped'] else ""))
         if fs["attributable"]:
             fail.append("tests"); msg += f"; FAIL: {len(fs['attributable'])} failure(s) not seen at the merge-base: " + "; ".join(a[:160] for a in fs["attributable"][:3])
+        if fs.get("flakyPassedOnRerun"):
+            files = sorted({x.split(' > ')[0] for x in fs["flakyPassedOnRerun"]})
+            msg += (f"; {len(fs['flakyPassedOnRerun'])} test(s) in {', '.join(files)} failed once in the parallel full run but "
+                    f"{fs.get('rerunNote', 'passed when re-run')} (timing flake, not caused by this PR)")
         if fs["preexisting"]:
             files = sorted({x.split(' > ')[0] for x in fs["preexisting"]})
             msg += f"; {len(fs['preexisting'])} failure(s) in {len(files)} file(s) also fail at its merge-base {fs['mergeBase'][:10]} (pre-existing)"

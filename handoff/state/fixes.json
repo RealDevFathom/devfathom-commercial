@@ -306,5 +306,26 @@
   "what": "same-amount currency relabel at commit covered in vitest (unit and DB acceptance)",
   "initialFailure": "no machine run (QA finding only)",
   "noInitialRun": true
+ },
+ "942": {
+  "sha": "3231bc9dc2a50ea07064a2da0ff48775c903c9c3",
+  "initialSha": "13677b4db28d99dd3aec1ad2e1e0ae4332f34185",
+  "what": "evaluate cold-chain zone at newest reading for fast sensor clocks",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "812": {
+  "sha": "24bbbff493db4c52e60f1240d11cee20ad5c104f",
+  "initialSha": "3a5ef472fa3a5f7996c9570ed663b9ccf266e2c8",
+  "what": "hold a superseded placeholder until workspace midnight",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "132": {
+  "sha": "e751947677298ef6e0380a52896baec61f06f74b",
+  "initialSha": "b8d79ee907932a3796a28374f6430bb79c8835fc",
+  "what": "map nontrade accrual, use Studio state tokens, cover voucher replay",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
  }
 }

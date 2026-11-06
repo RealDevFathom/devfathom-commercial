@@ -410,5 +410,75 @@
    "verdict": "PASS",
    "details": "Currency enforcement is server-side at both points. Review uses the tenant-scoped db and drops a relabelled amount. Commit, inside one org-scoped transaction with a FOR SHARE read of the org currency, now refuses a same-amount relabel by Decimal comparison. 5b19dd9e8 changes only tests. Router capability and zod bounds are unchanged, and there are no new queries. No vulnerabilities found"
   }
+ },
+ "1118": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At ba2c5d217 the first report test checks the new posted-equation, classification and posted-only pills and that the old pill text is gone. New UI tests cover wallets that cancel out (balanced but classification incomplete, no reconciled claim) and a nonzero gap. vitest: 13/13 passed in 3 files. Breaking the component on purpose makes these tests fail, as it should. eslint and prettier are clean. The branch still merges cleanly with develop, which has not touched these files"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "ba2c5d217 changes only tests and prettier whitespace and trailing commas. A normalized comparison shows the component's logic did not change. Data access, the tRPC call, the capability and ADMIN checks, and the forbidden path that shows no rows are untouched, and the denial test still passes. The new tests use fake data only. No input handling, query, secret or data-exposure changes. No security issues"
+  }
+ },
+ "996": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-reviewed ca294c9c3. The Pharmacist template is back to dispense and catalogue-review. Migration 20261101200300 now only removes the system Pharmacist pharmacy:close ALLOW and keeps any DENY. The backfill DB test passes 4/4 on a fresh migrated and seeded DB, and the five affected suites pass 206/206. tsc and eslint show nothing new versus base 47518cb. Still open: the PR body needs the DEV-622/DEV-97 link. Merging develop stacks its counter gate on the drawer calls, which would refuse managers; that needs a decision"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Re-checked ca294c9c3. It only narrows access: the Pharmacist template no longer grants pharmacy:counter, and migration 20261101200300 no longer inserts it. The migration deletes only pharmacy:close ALLOW rows on system pharmacist roles in PHARMACY orgs, in one transaction. DENY rows, tenant lookalikes and other verticals are untouched (DB test 4/4). The router gates are unchanged apart from one digit in a comment. A new test shows a pharmacist without counter is refused tender. No blocking issues"
+  }
+ },
+ "993": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 44e07fc7d the nested-pack feature is gone. Pack setup is back to flat packs, with Effective from required and the barcode editor kept. The 8 PR suites pass 171/171, both on the fix commit and merged with develop 9b5a11a82, which merges cleanly. The new readiness test fails if the barcoded-pack check is removed. ESLint is clean, and a typecheck of the touched files is clean. pharmacy-medicine.ts still fails prettier, as it already does on develop. The full typecheck and visual QA were not run. The unitsPerParent follow-up issue still needs filing"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "44e07fc7d only removes code and tests: the admin addInnerPackLevel mutation, its UI and its helpers. That shrinks the write surface and adds no new inputs, queries or permission paths. setPackBarcode and publish are unchanged: still adminProcedure inside tenant transactions under RLS, with Zod-bounded inputs, audit, and append-only barcodes that stay unique per tenant. The fix adds no raw SQL, secrets or injection points. No vulnerability found"
+  }
+ },
+ "955": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-reviewed 1f8b368db. qa:F1 is resolved: the scheduler filters out done branches and rotates the pending list each 5-minute tick, so a failing branch cannot lead every tick. The new test fails on 996265a and passes now. Churn tests pass 74/74. eslint and prettier are clean on the PR files. tsc shows only the 4 baseline errors, none in PR files. Note: develop has since moved, and the branch now conflicts in prisma/schema.prisma (PharmacyBranch relation list)"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "1f8b368db changes only the order in which a tick starts branches that are already due and entitled, plus quote style in two tests. Unchanged: the CRON_SECRET bearer check, the platform-side pharmacy-crm filter, per-branch withTenantDb with org, branch and entitlement re-checks, forced RLS and parameterized SQL. The offset comes from server time and has an empty-list guard. No new input, data exposure or permission gap"
+  }
+ },
+ "942": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-verified 3231bc9: both zone checks and refreshStockSignals run at max(server now, newest pushed reading), while lastSeenAt and entitlements keep now. On a migrated FORCE RLS Postgres the cold-chain DB suite passes 11/11. The new fast-clock test fails on the 13677b4 source and when only the refresh keeps now. Unit tests, eslint, prettier and a targeted tsc are clean. One write-off router test fails, and it also fails at the merge-base. Merging develop gives an import conflict in pharmacy-inventory.ts"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Re-checked 3231bc9: evaluatedAt comes only from reading timestamps that parseSensorPush already caps at server now plus 2 minutes. So a valid sensor credential can move zone evaluation and the PUR-07 refresh at most 2 minutes ahead. The fix adds no new input, query, or auth path. Hashed device auth, the FOR UPDATE tenant lock, RLS and parameterised SQL are unchanged. The DB suite passed under FORCE RLS with a NOSUPERUSER NOBYPASSRLS role. No new issues"
+  }
+ },
+ "812": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-checked 24bbbff49. A placeholder closed by an operator save is now held until workspace midnight west of UTC, in both the Prisma filter and its in-memory twin. Both boundary sets from the spec are tested, and the twin is checked against the filter through a shared test-only evaluator. With the pre-fix regulatory.ts, 4 new tests fail; at 24bbbff49, 52/52 pass, and 296/296 pass across 13 affected unit suites. eslint shows 0 errors, prettier is clean, and tsc reports nothing in PR files"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "24bbbff49 only widens the placeholder end check to the single next-workspace-day value. The operator branch already uses that rule, and it only matters west of UTC. Placeholder locks still close at ms-precision instants. Every query keeps its organizationId/branchId scope and its newest-version ordering. No inputs, procedures or raw SQL were added. The new prisma-filter helper sits under the test-only eslint rule and only *.test.ts files import it"
+  }
+ },
+ "132": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-reviewed fix e7519476. F1: MANUAL_NONTRADE_ACCRUAL is now mapped in profit-loss and balance-sheet, the TS1360 error is gone, and the P&L/BS tests pass. F2: the page uses the defined text-destructive/text-success tokens. F3: 6 new E1 tests pass and would fail if either guard were removed. 10 files are prettier-only. Full tsc shows only the 4 merge-base baseline errors. 112 unit and 50 DB tests pass. Before merge: _app.ts import conflict with develop"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "e7519476 changes no server logic: the security, router and general-journal source changes are byte-identical to prettier output of the parent. The only DB-test change sets app.is_platform_admin on the fixture owner client, used just for seeding and audit reads. Runtime assertions still run as a non-superuser, non-BYPASSRLS role, and the parent version fails with an RLS violation. Auth, scoping and RLS are unchanged; no new exposure found"
+  }
  }
 }
