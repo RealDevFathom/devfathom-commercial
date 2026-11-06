@@ -647,6 +647,8 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
   it('rejects an actor who can manage devices but is explicitly denied devices:revoke', async () => {
     const api = caller();
     const { device } = await api.initiateEnrollment({ branchId, name: 'POS-revoke-denied' });
+    // Not organization-wide, so the branch-level devices:revoke decision is consulted.
+    mocks.can.mockImplementation(async (...args: unknown[]) => args[1] !== 'restaurant:configure');
 
     await deps.withTenantDb(orgId, (tx) =>
       tx.restaurantStaffCapabilityGrant.create({
@@ -693,6 +695,32 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
         })
       );
     }
+  });
+
+  it('revokes through a branch-scoped devices:revoke job-role grant', async () => {
+    const api = caller();
+    const { device } = await api.initiateEnrollment({ branchId, name: 'POS-revoke-branch' });
+    // Not organization-wide, so only the manager role's branch grant can authorize it.
+    mocks.can.mockImplementation(async (...args: unknown[]) => args[1] !== 'restaurant:configure');
+
+    const result = await api.revoke({
+      deviceId: device.id,
+      approvingStaffProfileId: approvingStaffId,
+      approvingType: 'PIN',
+      approvingSecret: APPROVING_PIN,
+      reason: 'branch-scoped revoke',
+    });
+
+    expect(result.device.status).toBe('REVOKED');
+    await expect(
+      deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantCoAuthorization.findUnique({ where: { id: result.coAuthorizationId } })
+      )
+    ).resolves.toMatchObject({
+      actingStaffProfileId: actingStaffId,
+      capability: 'devices:revoke',
+      targetId: device.id,
+    });
   });
 
   it('ignores a forged acting profile and records the authenticated session actor', async () => {
