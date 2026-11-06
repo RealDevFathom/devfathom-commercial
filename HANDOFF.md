@@ -19,9 +19,9 @@ https://linear.app/devfathom/issue/DEV-258. GitHub issue: #441.
 ## What the PR does
 
 - `invoices.invoiceNumber` becomes unique per organization: `@@unique([organizationId, invoiceNumber])`.
-  Migration `20261106090000_invoice_number_per_organization` builds the new index and then drops the
-  global one. It was renamed from `20261102000000_…` so it sorts after `develop`'s
-  `20261102140100_ai_assistant_actions`.
+  Migration `20261106130000_invoice_number_per_organization` builds the new index and then drops the
+  global one. It was renamed from `20261102000000_…` so it sorts after every migration on `develop`,
+  the latest being `20261106120000_pharmacy_bootstrap_admin_branch_backfill`.
 - `src/lib/finance/invoice-number.ts` takes a per-organization `pg_advisory_xact_lock`, then reads the MAX
   of the year's `INV-<year>-<n>` suffix and inserts, all in one transaction.
   - The tenant comes from `app.current_organization_id`.
