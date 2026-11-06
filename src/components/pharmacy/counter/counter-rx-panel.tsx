@@ -991,7 +991,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               </p>
             ) : (
               <>
-                <h5 className="font-semibold text-text-strong">1 · Patient</h5>
+                <h4 className="font-semibold text-text-strong">1 · Patient</h4>
                 <Label className="text-xs text-text-muted" htmlFor="controlled-address">
                   Patient address
                 </Label>
@@ -1002,7 +1002,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   value={controlled.patientAddress}
                   onChange={(event) => controlled.onChange('patientAddress', event.target.value)}
                 />
-                <h5 className="font-semibold text-text-strong">2 · Prescription</h5>
+                <h4 className="font-semibold text-text-strong">2 · Prescription</h4>
                 <label
                   className="flex min-h-11 items-center gap-2 text-sm text-text-body"
                   htmlFor="controlled-emergency"
@@ -1095,7 +1095,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 <p className="text-xs text-text-muted">
                   Leave it blank unless this sale repeats an earlier register entry.
                 </p>
-                <h5 className="font-semibold text-text-strong">3 · Approving pharmacist</h5>
+                <h4 className="font-semibold text-text-strong">3 · Approving pharmacist</h4>
                 <Label htmlFor="controlled-pharmacist">Approving pharmacist</Label>
                 <select
                   id="controlled-pharmacist"

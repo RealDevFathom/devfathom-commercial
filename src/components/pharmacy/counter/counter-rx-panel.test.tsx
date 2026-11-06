@@ -401,6 +401,14 @@ describe('CounterRxPanel checks', () => {
       screen.getByText('This medicine is not on the bill until authorised.')
     ).toBeInTheDocument();
     expect(screen.queryByLabelText('Safety blocks')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'Controlled medicine authorization', level: 3 })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '1 · Patient', level: 4 })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '2 · Prescription', level: 4 })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: '3 · Approving pharmacist', level: 4 })
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Authorise and add' }));
     expect(onAuthorizeControlled).toHaveBeenCalledOnce();
   });
