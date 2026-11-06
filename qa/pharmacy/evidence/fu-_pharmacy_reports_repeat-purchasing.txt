@@ -1,0 +1,104 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Reports
+Repeat-purchasing
+Search workspace
+⌘K
+Ask Fathom
+Ask Fathom chat availability is being checked. Try again shortly.
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY REPORTS
+Repeat purchasing
+
+First-observed commercial customer cohorts in selected authorized branches.
+
+Back to reports
+Enrollment and observation
+Enrollment from (UTC)
+Enrollment through (UTC)
+As-of cutoff (ISO UTC)
+Selected authorized branches
+All authorized active branches
+Clifton Chemist
+
+Up to 90 inclusive enrollment days. Cutoff stays fixed when filters change. Today is included only through that instant. Item and supplier filters do not apply to person cohorts.
+
+Apply cohort window
+Identity coverage
+
+Completed original receipts in enrollment window, before purchase exclusions. Frozen cutoff: 2026-10-21T02:26:30.264Z.
+
+IDENTIFIED RECEIPT COVERAGE
+Unavailable
+COMPLETED RECEIPTS
+0
+IDENTIFIED RECEIPTS
+0
+ANONYMOUS RECEIPTS
+0
+Fully elapsed follow-up
+
+No identified customers first observed in this enrollment window. Rates are unavailable; adjust the window or branch scope.
+
+30-DAY REPEAT PURCHASING
+Unavailable
+0 repeat / 0 eligible customers · 0 immature, excluded from denominator
+60-DAY REPEAT PURCHASING
+Unavailable
+0 repeat / 0 eligible customers · 0 immature, excluded from denominator
+90-DAY REPEAT PURCHASING
+Unavailable
+0 repeat / 0 eligible customers · 0 immature, excluded from denominator
+
+0 enrolled customers. 0 identified customers first observed before enrollment, excluded. 0 receipts in enrollment excluded for missing receipt identity or purchase qualification.
+
+Observation gaps
+
+Across all selected data through cutoff: 0 completed originals missing completion timestamps; 0 timestamped originals missing receipt numbers. Earliest available completion: Unavailable. This is not a verified data-start date.
+
+Definition and limits
+
+First observed qualifying original completed receipt across all available data in selected authorized branches; not first-ever customers. Enrollment dates are inclusive UTC days, clipped at the frozen as-of instant. Follow-up uses elapsed 24-hour days; a repeat is a distinct receipt strictly later than first observation, at or before the horizon boundary.
+
+Qualification requires a receipt number, completion timestamp, positive original line value and remaining original units after posted returns, with posted refunds below original line value, all as of cutoff. Partial reversals can qualify. Returns and refunds have no direct matching link: these are independent exclusion tests, not a reconciled net-revenue measure. Current sale status and commercial identity are used; past status/identity changes cannot be reconstructed. Data start, missing receipts, ingestion delays, outages and off-system purchases are unknown; elapsed follow-up does not prove complete observation. No adherence, competitor churn or uplift inference. Anonymous receipts remain in coverage totals, outside person rates. All available selected history is aggregated in the database; receipt and detail counts are not truncated. Reports exceeding the 10-second database execution budget fail without partial rates. Large branch or chain histories may still exceed this budget; narrower enrollment dates do not reduce the history required.

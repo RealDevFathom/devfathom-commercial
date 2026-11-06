@@ -35,7 +35,7 @@ export async function completePaidPharmacySale(
     scope,
     sale.lines.map((line) => line.medicine)
   );
-  // #633: re-check every batch under lock before a receipt number is drawn. The receipt
+  // #659: re-check every batch under lock before a receipt number is drawn. The receipt
   // snapshot below records these checked facts, not the ones loaded with the sale.
   const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
   let receiptNumber = leasedReceiptNumber;
