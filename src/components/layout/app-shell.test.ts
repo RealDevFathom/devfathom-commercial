@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { createElement, type ComponentProps, type ComponentType } from 'react';
+import { createElement, useEffect, type ComponentProps, type ComponentType } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,6 +41,7 @@ vi.mock('@/components/restaurant/administrator-staff-profile-callout', () => ({
 
 import { AppShell, isPathModuleEnabled } from './app-shell';
 import { useCounterNavigation } from './counter-navigation-context';
+import { useCounterMobileChrome } from './counter-mobile-chrome';
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -56,6 +57,18 @@ describe('counter navigation preview', () => {
   };
   function CounterMenu() {
     const open = useCounterNavigation();
+    const setChrome = useCounterMobileChrome();
+    useEffect(() => {
+      setChrome?.({
+        branchName: 'Test',
+        connectionLabel: 'Network available',
+        moreOpen: false,
+        openMore: () => {},
+      });
+      return () => {
+        setChrome?.(null);
+      };
+    }, [setChrome]);
     return open
       ? createElement('button', { onClick: open }, 'Counter menu')
       : createElement('span', null, 'Studio navigation');
@@ -64,6 +77,14 @@ describe('counter navigation preview', () => {
     brand: Parameters<typeof AppShell>[0]['brand'];
     children?: React.ReactNode;
   }>;
+
+  it('keeps navigation available until the counter is ready', () => {
+    vi.stubEnv('NEXT_PUBLIC_COUNTER_IMMERSIVE_NAV', 'true');
+    mocks.pathname.mockReturnValue('/pharmacy/counter');
+    render(createElement(TestAppShell, { brand }, createElement('p', null, 'Loading')));
+    expect(screen.getByText('Desktop navigation').parentElement).not.toHaveClass('md:hidden');
+    expect(screen.getByRole('button', { name: 'More' })).toBeDisabled();
+  });
 
   it('keeps Studio navigation by default', () => {
     vi.stubEnv('NEXT_PUBLIC_COUNTER_IMMERSIVE_NAV', '');

@@ -17,6 +17,7 @@ import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import Link from 'next/link';
 import { Menu, ShieldCheck, Star, UserRound } from 'lucide-react';
 import { useCounterNavigation } from '@/components/layout/counter-navigation-context';
+import { useCounterMobileChrome } from '@/components/layout/counter-mobile-chrome';
 import { signIn, useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -140,6 +141,14 @@ function counterDeviceId(): string {
 }
 
 const subscribeToNothing = () => () => {};
+function subscribeCounterNetwork(onChange: () => void) {
+  window.addEventListener('online', onChange);
+  window.addEventListener('offline', onChange);
+  return () => {
+    window.removeEventListener('online', onChange);
+    window.removeEventListener('offline', onChange);
+  };
+}
 /** `null` when storage is unavailable: the tender path reports that case itself. */
 function readCounterDeviceId(): string | null {
   try {
@@ -318,6 +327,7 @@ function ScopedPharmacyCounterConsole({
   accountEmail: string;
 }) {
   const openCounterNavigation = useCounterNavigation();
+  const setMobileChrome = useCounterMobileChrome();
   const utils = trpc.useUtils();
 
   const [selectedBranchId, setSelectedBranchId] = useState(initialBranchId);
@@ -360,18 +370,15 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [drawerToast, setDrawerToast] = useState<string | null>(null);
-  const [networkAvailable, setNetworkAvailable] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    const update = () => setNetworkAvailable(navigator.onLine);
-    update();
-    window.addEventListener('online', update);
-    window.addEventListener('offline', update);
-    return () => {
-      window.removeEventListener('online', update);
-      window.removeEventListener('offline', update);
-    };
-  }, []);
+  const [drawerError, setDrawerError] = useState<string | null>(null);
+  const browserOnline = useSyncExternalStore(
+    subscribeCounterNetwork,
+    () => navigator.onLine,
+    () => null
+  );
+  const [reconnectState, setReconnectState] = useState<'idle' | 'reconnecting' | 'refresh-failed'>(
+    'idle'
+  );
   const [pending, setPending] = useState<string | null>(null);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
@@ -391,6 +398,12 @@ function ScopedPharmacyCounterConsole({
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
+  const moreReturnRef = useRef<HTMLElement | null>(null);
+  const openMore = useCallback((trigger: HTMLElement) => {
+    moreReturnRef.current = trigger;
+    setDrawerError(null);
+    setActionsOpen(true);
+  }, []);
   const [checksOpen, setChecksOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [loyaltyOpen, setLoyaltyOpen] = useState(false);
@@ -401,6 +414,36 @@ function ScopedPharmacyCounterConsole({
     staleTime: 60_000,
   });
   const branches = useMemo(() => branchesQuery.data?.branches ?? [], [branchesQuery.data]);
+  const refetchBranches = branchesQuery.refetch;
+  useEffect(() => {
+    let active = true;
+    let revision = 0;
+    const offline = () => {
+      revision += 1;
+      setReconnectState('idle');
+    };
+    const online = () => {
+      const attempt = ++revision;
+      setReconnectState('reconnecting');
+      void Promise.resolve()
+        .then(() => refetchBranches())
+        .then((result) => {
+          if (active && attempt === revision)
+            setReconnectState(result?.isSuccess ? 'idle' : 'refresh-failed');
+        })
+        .catch(() => {
+          if (active && attempt === revision) setReconnectState('refresh-failed');
+        });
+    };
+    window.addEventListener('offline', offline);
+    window.addEventListener('online', online);
+    return () => {
+      active = false;
+      revision += 1;
+      window.removeEventListener('offline', offline);
+      window.removeEventListener('online', online);
+    };
+  }, [refetchBranches]);
   // Every drawer, tender and loyalty write is stamped with the workspace's day.
   const workspaceZone = branchesQuery.data?.timezone;
   const todayBusinessDate = useCallback(() => businessDate(workspaceZone), [workspaceZone]);
@@ -408,6 +451,25 @@ function ScopedPharmacyCounterConsole({
   // Derived, not mirrored into state: the default branch is simply "the first
   // one" until the operator picks another, so an effect would only add a render.
   const branchId = selectedBranchId || (branches[0]?.id ?? '');
+  const networkState =
+    browserOnline === null
+      ? 'unknown'
+      : !browserOnline
+        ? 'offline'
+        : reconnectState === 'idle'
+          ? 'available'
+          : reconnectState;
+  const connectionLabel =
+    networkState === 'unknown'
+      ? 'Checking network'
+      : networkState === 'offline'
+        ? 'Offline'
+        : networkState === 'reconnecting'
+          ? 'Reconnecting'
+          : networkState === 'refresh-failed'
+            ? 'Network available · branch refresh failed'
+            : 'Network available';
+  const selectedBranchName = branches.find((branch) => branch.id === branchId)?.name ?? null;
   const recoveryScope = useMemo<TenderAttemptScope>(
     () => ({ organizationId, accountId, branchId }),
     [organizationId, accountId, branchId]
@@ -416,6 +478,28 @@ function ScopedPharmacyCounterConsole({
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
     branches.some((branch) => branch.id === branchId);
+
+  useEffect(() => {
+    setMobileChrome?.({
+      branchName: selectedBranchName,
+      connectionLabel,
+      moreOpen: actionsOpen,
+      openMore: branchAuthorized ? openMore : null,
+    });
+  }, [
+    setMobileChrome,
+    selectedBranchName,
+    connectionLabel,
+    actionsOpen,
+    openMore,
+    branchAuthorized,
+  ]);
+  useEffect(
+    () => () => {
+      setMobileChrome?.(null);
+    },
+    [setMobileChrome]
+  );
 
   useEffect(
     () => () => {
@@ -1897,29 +1981,28 @@ function ScopedPharmacyCounterConsole({
             </Button>
           ) : null}
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
-            <p className="text-xs text-text-muted md:hidden">
-              {networkAvailable === null
-                ? 'Checking connection'
-                : networkAvailable
-                  ? 'Network available'
-                  : 'Offline'}
-              {' · '}
-              {branches.find((branch) => branch.id === branchId)?.name}
-            </p>
+            <h1
+              className={`${setMobileChrome ? 'sr-only md:not-sr-only' : ''} text-2xl font-semibold tracking-tight text-text-strong`}
+            >
+              Counter
+            </h1>
+            {!setMobileChrome ? (
+              <p className="text-xs text-text-muted md:hidden">
+                {connectionLabel}
+                {selectedBranchName ? ` · ${selectedBranchName}` : ''}
+              </p>
+            ) : null}
           </div>
           <Button
             variant="outline"
-            className="ml-auto h-11 rounded-[var(--radius-sm)] xl:hidden"
+            className={`${setMobileChrome ? 'hidden md:inline-flex' : ''} ml-auto h-11 rounded-[var(--radius-sm)] xl:hidden`}
+            aria-haspopup="dialog"
             aria-expanded={actionsOpen}
-            aria-controls="counter-actions"
-            onClick={() => setActionsOpen(!actionsOpen)}
+            onClick={(event) => openMore(event.currentTarget)}
           >
             More
           </Button>
-          <div
-            className={`${actionsOpen ? 'flex' : 'hidden'} order-2 w-full flex-wrap items-center gap-3 md:order-none md:flex md:w-auto`}
-          >
+          <div className="order-2 hidden w-full flex-wrap items-center gap-3 md:order-none md:flex md:w-auto">
             <label className="sr-only" htmlFor="counter-branch">
               Branch
             </label>
@@ -1958,17 +2041,13 @@ function ScopedPharmacyCounterConsole({
               />
               {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
               <StatusPill
-                status={
-                  networkAvailable === null ? 'unknown' : networkAvailable ? 'online' : 'offline'
+                status={networkState}
+                tone={
+                  networkState === 'offline' || networkState === 'refresh-failed'
+                    ? 'warning'
+                    : 'neutral'
                 }
-                tone={networkAvailable === false ? 'warning' : 'neutral'}
-                label={
-                  networkAvailable === null
-                    ? 'Checking connection'
-                    : networkAvailable
-                      ? 'Network available'
-                      : 'Offline'
-                }
+                label={connectionLabel}
               />
               {openDrawerSession ? (
                 <StatusPill status="drawer-open" tone="success" label="Drawer open" />
@@ -2005,7 +2084,7 @@ function ScopedPharmacyCounterConsole({
           </div>
           <div
             id="counter-actions"
-            className={`${actionsOpen ? 'flex' : 'hidden'} order-3 w-full flex-wrap items-center gap-2 xl:order-none xl:ml-auto xl:flex xl:w-auto [&>button]:rounded-[var(--radius-sm)]`}
+            className="order-3 hidden w-full flex-wrap items-center gap-2 xl:order-none xl:ml-auto xl:flex xl:w-auto [&>button]:rounded-[var(--radius-sm)]"
           >
             <CounterReturnPanel
               branchId={branchId}
@@ -2537,6 +2616,109 @@ function ScopedPharmacyCounterConsole({
           <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
         </Button>
       </div>
+      <Dialog open={actionsOpen} onOpenChange={setActionsOpen}>
+        <DialogPortal>
+          <DialogOverlay className="bg-foreground/40 backdrop-blur-none" />
+          <DialogPrimitive.Popup
+            finalFocus={moreReturnRef}
+            className="pos-calm fixed inset-x-0 bottom-0 z-50 flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-t-3xl border border-border-subtle bg-surface-card text-text-strong outline-none md:inset-y-0 md:start-auto md:end-0 md:w-[460px] md:max-h-none md:rounded-none lg:w-[480px]"
+          >
+            <div className="flex shrink-0 items-center justify-between border-b border-border-subtle p-4">
+              <DialogTitle className="text-lg font-semibold">More</DialogTitle>
+              <DialogClose render={<Button variant="outline" className="h-11" />}>
+                Close
+              </DialogClose>
+            </div>
+            <DialogDescription className="sr-only">
+              Counter actions and branch settings.
+            </DialogDescription>
+            <div className="grid min-h-0 gap-3 overflow-y-auto p-4">
+              <div className="space-y-2 md:hidden">
+                <Label htmlFor="counter-more-branch">Branch</Label>
+                <select
+                  id="counter-more-branch"
+                  value={branchId}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setDrawerError(null);
+                    scannerRevision.current += 1;
+                    setSelectedBranchId(event.target.value);
+                    setActiveRow(null);
+                    setActiveSale(null);
+                    setHeldSaleId(null);
+                  }}
+                  className="h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-sunken px-3 text-sm font-semibold text-text-strong focus-visible:ring-3 focus-visible:ring-ring disabled:opacity-50"
+                >
+                  {branches.map((branch) => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name} · {branch.code}
+                    </option>
+                  ))}
+                </select>
+                {openDrawerSession ? (
+                  <StatusPill status="drawer-open" tone="success" label="Drawer open" />
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-12 w-full"
+                    disabled={busy || !drawerStatusKnown}
+                    onClick={() => {
+                      setDrawerError(null);
+                      setPending('drawer');
+                      openDrawer
+                        .mutateAsync({
+                          branchId,
+                          deviceId: counterDeviceId(),
+                          businessDate: todayBusinessDate(),
+                          openingFloatMinor: 0,
+                        })
+                        .then(() => setDrawerToast('Cash drawer opened for this counter.'))
+                        .catch((error: unknown) => setDrawerError(messageFrom(error)))
+                        .finally(() => {
+                          setPending(null);
+                          void utils.pharmacySales.drawerStatus.invalidate();
+                        });
+                    }}
+                  >
+                    Open drawer
+                  </Button>
+                )}
+                {drawerError ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {drawerError}
+                  </p>
+                ) : null}
+              </div>
+              <CounterReturnPanel
+                branchId={branchId}
+                organizationId={organizationId}
+                accountId={accountId}
+                deviceId={counterDeviceId}
+                businessDate={todayBusinessDate}
+              />
+              <Link
+                className={buttonVariants({ variant: 'outline', className: 'h-12' })}
+                href="/pharmacy/orders"
+                onClick={() => setActionsOpen(false)}
+              >
+                Customer orders
+              </Link>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-12"
+                onClick={() => {
+                  setActionsOpen(false);
+                  setShortcutsOpen(true);
+                }}
+              >
+                Shortcuts
+              </Button>
+            </div>
+          </DialogPrimitive.Popup>
+        </DialogPortal>
+      </Dialog>
       <CounterOverlay
         title="Payment"
         open={paymentOpen}

@@ -910,18 +910,102 @@ test('counter layout keeps the cart and payment visible while searching', async 
   });
 });
 
+test('counter More opens the correct sheet and restores focus', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await openCounter(page);
+  const header = page.getByRole('banner');
+  await expect(header).toContainText('Counter');
+  await expect(header).toContainText('Network available');
+  expect((await header.boundingBox())?.height).toBe(64);
+  for (const [width, height, expectedWidth] of [
+    [375, 812, 375],
+    [768, 1024, 460],
+  ]) {
+    await page.setViewportSize({ width, height });
+    const menu = page.getByRole('button', { name: 'Open menu' });
+    await pressControl(menu);
+    const navigation = page.getByRole('dialog', { name: 'Module navigation' });
+    await expect(navigation).toBeVisible();
+    const bounds = await navigation.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.width).toBe(expectedWidth);
+    if (width < 768) {
+      expect(bounds!.y + bounds!.height).toBe(height);
+      await expect(navigation.getByRole('button', { name: 'Search company hub' })).toBeVisible();
+      await expect(navigation.getByRole('button', { name: 'Open account menu' })).toBeVisible();
+      await expect(navigation.getByRole('button', { name: /Notifications/ })).toBeVisible();
+      await expect(
+        navigation.getByRole('button', { name: /Use (dark|light) theme/ })
+      ).toBeVisible();
+      await pressControl(navigation.getByRole('button', { name: 'Open account menu' }));
+      await expect(page.getByRole('menuitem', { name: 'Profile' })).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('menuitem', { name: 'Profile' })).not.toBeVisible();
+      await expect(navigation).toBeVisible();
+    } else {
+      expect(bounds!.x).toBe(0);
+      expect(bounds!.height).toBe(height);
+    }
+    await page.keyboard.press('Escape');
+    await expect(navigation).not.toBeVisible();
+    await expect(menu).toBeFocused();
+  }
+  for (const [width, height, expectedWidth] of [
+    [375, 812, 375],
+    [768, 1024, 460],
+    [1024, 768, 480],
+  ]) {
+    await page.setViewportSize({ width, height });
+    const more = page.getByRole('button', { name: 'More', exact: true });
+    await pressControl(more);
+    const sheet = page.getByRole('dialog', { name: 'More', exact: true });
+    await expect(sheet).toBeVisible();
+    const box = await sheet.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBe(expectedWidth);
+    if (width < 768) expect(box!.y + box!.height).toBe(height);
+    else {
+      expect(box!.x + box!.width).toBe(width);
+      expect(box!.height).toBe(height);
+    }
+    if (width === 375) {
+      await expect(sheet.getByLabel('Branch')).toBeVisible();
+      await pressControl(sheet.getByRole('button', { name: 'Returns & refunds' }));
+      await expect(page.getByRole('dialog', { name: 'Returns & refunds' })).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('dialog', { name: 'Returns & refunds' })).not.toBeVisible();
+      await expect(sheet).toBeVisible();
+      await pressControl(sheet.getByRole('button', { name: 'Open drawer' }));
+      await expect(sheet.getByText('Drawer open', { exact: true })).toBeVisible();
+    }
+    await page.keyboard.press('Escape');
+    await expect(sheet).not.toBeVisible();
+    await expect(more).toBeFocused();
+  }
+});
+
 test('opt-in counter navigation opens and restores focus', async ({ page }) => {
   test.skip(process.env.NEXT_PUBLIC_COUNTER_IMMERSIVE_NAV !== 'true', 'D02 preview is opt-in');
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 1024, height: 768 });
   await openCounter(page);
-  const menu = page.getByRole('button', { name: 'Menu', exact: true });
-  await expect(page.getByRole('navigation', { name: 'Primary navigation' })).not.toBeVisible();
-  await pressControl(menu);
-  await expect(page.getByRole('dialog', { name: 'Module navigation' })).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog', { name: 'Module navigation' })).not.toBeVisible();
-  await expect(menu).toBeFocused();
+  for (const [width, height, expectedWidth] of [
+    [768, 1024, 460],
+    [1024, 768, 480],
+  ]) {
+    await page.setViewportSize({ width, height });
+    const menu = page.getByRole('button', { name: 'Menu', exact: true });
+    await expect(page.getByRole('button', { name: 'Open menu' })).not.toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Primary navigation' })).not.toBeVisible();
+    await pressControl(menu);
+    const navigation = page.getByRole('dialog', { name: 'Module navigation' });
+    await expect(navigation).toBeVisible();
+    expect((await navigation.boundingBox())?.width).toBe(expectedWidth);
+    await page.keyboard.press('Escape');
+    await expect(navigation).not.toBeVisible();
+    await expect(menu).toBeFocused();
+  }
 });
 
 test('drawer confirmation overlays the counter and dismisses without moving it', async ({

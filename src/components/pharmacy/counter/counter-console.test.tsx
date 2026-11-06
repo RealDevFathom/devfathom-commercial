@@ -166,6 +166,7 @@ vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: (
 vi.mock('./counter-upsell-suggestions', () => ({ CounterUpsellSuggestions: () => null }));
 
 import { PharmacyCounterConsole } from './counter-console';
+import { CounterMobileChromeContext } from '@/components/layout/counter-mobile-chrome';
 import {
   persistTenderAttempt,
   readTenderAttempt,
@@ -376,8 +377,15 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('counter shell states', () => {
-  it('updates the network indicator when the browser goes offline and online', () => {
+  it('reports reconnecting only while a branch refresh is pending', async () => {
     const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    let resolve!: (value: { isSuccess: boolean }) => void;
+    mocks.queries.counterBranches!.refetch.mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        })
+    );
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
     expect(screen.getByText('Network available')).toBeInTheDocument();
     online.mockReturnValue(false);
@@ -385,7 +393,46 @@ describe('counter shell states', () => {
     expect(screen.getByText('Offline')).toBeInTheDocument();
     online.mockReturnValue(true);
     fireEvent(window, new Event('online'));
-    expect(screen.getByText('Network available')).toBeInTheDocument();
+    expect(screen.getByText('Reconnecting')).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
+      resolve({ isSuccess: true });
+    });
+    await waitFor(() => expect(screen.getByText('Network available')).toBeInTheDocument());
+    expect(mocks.queries.counterBranches!.refetch).toHaveBeenCalledOnce();
+  });
+
+  it('keeps offline status when an older reconnect completes after another disconnect', async () => {
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    let resolve!: (value: { isSuccess: boolean }) => void;
+    mocks.queries.counterBranches!.refetch.mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        })
+    );
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    fireEvent(window, new Event('online'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    online.mockReturnValue(false);
+    fireEvent(window, new Event('offline'));
+    await act(async () => {
+      resolve({ isSuccess: true });
+    });
+    expect(screen.getByText('Offline')).toBeInTheDocument();
+    expect(screen.queryByText('Network available')).not.toBeInTheDocument();
+  });
+
+  it('does not claim a successful reconnect when the branch refresh fails', async () => {
+    mocks.queries.counterBranches!.refetch.mockResolvedValue({ isSuccess: false });
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    fireEvent(window, new Event('online'));
+    expect(screen.getByText('Reconnecting')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Network available · branch refresh failed')
+    ).toBeInTheDocument();
   });
 
   it('shows a transient success toast without moving the counter', async () => {
@@ -405,6 +452,27 @@ describe('counter shell states', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('reports a drawer failure inside the open More sheet', async () => {
+    mocks.mutations.openDrawer!.mockRejectedValue(new Error('Drawer did not open'));
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const sheet = await screen.findByRole('dialog', { name: 'More' });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Open drawer' }));
+    expect(await within(sheet).findByRole('alert')).toHaveTextContent('Drawer did not open');
+    expect(sheet).toBeInTheDocument();
+  });
+
+  it('does not offer the More sheet while branches are loading', () => {
+    const setChrome = vi.fn();
+    mocks.queries.counterBranches = { ...query(), isLoading: true, isSuccess: false };
+    render(
+      <CounterMobileChromeContext.Provider value={setChrome}>
+        <PharmacyCounterConsole />
+      </CounterMobileChromeContext.Provider>
+    );
+    expect(setChrome).toHaveBeenLastCalledWith(expect.objectContaining({ openMore: null }));
   });
 
   it('offers a retry when branches fail to load', () => {
@@ -2106,11 +2174,25 @@ describe('DEV-618 counter composition', () => {
     expect(screen.getByLabelText('Bill status')).toHaveTextContent('Drawer open');
     expect(screen.getByText('No safety blocks · 0 notes to pass on')).toBeInTheDocument();
     expect(screen.getByText('Loyalty and khata · not linked')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'More' })).toHaveAttribute('aria-expanded', 'false');
+    const more = screen.getByRole('button', { name: 'More' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
     expect(document.getElementById('counter-actions')).toHaveClass('hidden', 'xl:flex');
-    fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    expect(screen.getByRole('button', { name: 'More' })).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Shortcuts' }));
+    more.focus();
+    fireEvent.click(more);
+    const sheet = await screen.findByRole('dialog', { name: 'More' });
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(within(sheet).getByLabelText('Branch')).toHaveValue('branch-a');
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'More' })).not.toBeInTheDocument()
+    );
+    await waitFor(() => expect(more).toHaveFocus());
+    fireEvent.click(more);
+    fireEvent.click(
+      within(await screen.findByRole('dialog', { name: 'More' })).getByRole('button', {
+        name: 'Shortcuts',
+      })
+    );
     const dialog = screen.getByRole('dialog', { name: 'Shortcuts' });
     fireEvent.change(within(dialog).getByLabelText('Keymap'), { target: { value: 'legacySpeed' } });
     expect(mocks.mutations.counterSaveKeymap).toHaveBeenCalledWith({
