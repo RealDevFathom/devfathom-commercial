@@ -93,7 +93,7 @@ describe('counter khata repayment', () => {
   });
 });
 
-it('refuses cash into another cashier\'s open drawer with no khata settle and no movement', async () => {
+it("refuses cash into another cashier's open drawer with no khata settle and no movement", async () => {
   const { db, payment, movement } = database();
   db.pharmacyDrawerSession.findFirst.mockResolvedValue({
     id: 'drawer-b',
