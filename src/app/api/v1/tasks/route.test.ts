@@ -6,12 +6,12 @@ const mocks = vi.hoisted(() => ({
     column: {
       findUnique: vi.fn(async () => ({
         id: 'column-1',
-        board: { project: { id: 'project-1', name: 'Project' } },
+        board: { id: 'board-1', project: { id: 'project-1', name: 'Project' } },
         defaultAssignees: [],
       })),
     },
     projectMember: { count: vi.fn(async () => 0) },
-    label: { count: vi.fn(async () => 0) },
+    label: { findMany: vi.fn() },
     task: {
       aggregate: vi.fn(async () => ({ _max: { order: null } })),
       create: vi.fn(),
@@ -57,6 +57,51 @@ describe('POST /api/v1/tasks assignees', () => {
         userId: { in: ['project-member', 'tenant-only-user'] },
       },
     });
+    expect(mocks.db.task.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/v1/tasks label isolation', () => {
+  it('rejects labels that do not belong to the selected column board', async () => {
+    mocks.db.label.findMany.mockResolvedValue([]);
+
+    const response = await POST(
+      new Request('https://example.test/api/v1/tasks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'Task A', columnId: 'column-1', labelIds: ['label-b'] }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'One or more labelIds do not belong to the selected column’s board.',
+    });
+    expect(mocks.db.label.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['label-b'] }, boardId: 'board-1' },
+      select: { id: true },
+    });
+    expect(mocks.db.task.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate label IDs before creating the task', async () => {
+    const response = await POST(
+      new Request('https://example.test/api/v1/tasks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Task A',
+          columnId: 'column-1',
+          labelIds: ['label-a', 'label-a'],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'labelIds must not contain duplicates.',
+    });
+    expect(mocks.db.label.findMany).not.toHaveBeenCalled();
     expect(mocks.db.task.create).not.toHaveBeenCalled();
   });
 });

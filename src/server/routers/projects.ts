@@ -1756,6 +1756,27 @@ export const projectsRouter = router({
     .input(z.object({ taskId: z.string(), labelId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await assertTaskAccess(ctx, input.taskId);
+
+      const [task, label] = await Promise.all([
+        ctx.db.task.findUnique({
+          where: { id: input.taskId },
+          select: { column: { select: { boardId: true } } },
+        }),
+        ctx.db.label.findUnique({
+          where: { id: input.labelId },
+          select: { boardId: true },
+        }),
+      ]);
+      if (!task) throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found' });
+      if (!label) throw new TRPCError({ code: 'NOT_FOUND', message: 'Label not found' });
+
+      // A label is board-local taxonomy. Authorize its board independently, then
+      // enforce that it is the exact same board as the task (not merely another
+      // board in a project the caller can access).
+      await assertBoardAccess(ctx, label.boardId);
+      if (label.boardId !== task.column.boardId) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Label does not belong to this board' });
+      }
       return ctx.db.taskLabel.create({
         data: { taskId: input.taskId, labelId: input.labelId },
       });

@@ -78,7 +78,7 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
   const column = await ctx.db.column.findUnique({
     where: { id: input.columnId },
     include: {
-      board: { select: { project: { select: { id: true, name: true } } } },
+      board: { select: { id: true, project: { select: { id: true, name: true } } } },
       defaultAssignees: { select: { userId: true } },
     },
   });
@@ -108,9 +108,19 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     }
   }
   if (input.labelIds.length > 0) {
-    const found = await ctx.db.label.count({ where: { id: { in: input.labelIds } } });
-    if (found !== new Set(input.labelIds).size) {
-      return NextResponse.json({ error: 'One or more labelIds do not exist.' }, { status: 400 });
+    const uniqueLabelIds = new Set(input.labelIds);
+    if (uniqueLabelIds.size !== input.labelIds.length) {
+      return NextResponse.json({ error: 'labelIds must not contain duplicates.' }, { status: 400 });
+    }
+    const labels = await ctx.db.label.findMany({
+      where: { id: { in: input.labelIds }, boardId: column.board.id },
+      select: { id: true },
+    });
+    if (labels.length !== uniqueLabelIds.size) {
+      return NextResponse.json(
+        { error: 'One or more labelIds do not belong to the selected column’s board.' },
+        { status: 400 }
+      );
     }
   }
 
