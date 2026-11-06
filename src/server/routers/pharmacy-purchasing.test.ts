@@ -140,15 +140,19 @@ const RETURN_LINE = {
 beforeEach(async () => {
   db = makeDb();
   const abac = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
-  mocks.can.mockReset().mockImplementation((subject, action, resource, options) =>
-    abac.can(abac.subjectFromSession(subject), action, resource, options)
-  );
+  mocks.can
+    .mockReset()
+    .mockImplementation((subject, action, resource, options) =>
+      abac.can(abac.subjectFromSession(subject), action, resource, options)
+    );
   db.user.findUnique.mockResolvedValue({
     status: 'ACTIVE',
     organizationRole: {
-      permissions: ['pharmacy:procurement', 'pharmacy:procurement-approve', 'reports:financial'].map(
-        (capability) => ({ capability, effect: 'ALLOW' })
-      ),
+      permissions: [
+        'pharmacy:procurement',
+        'pharmacy:procurement-approve',
+        'reports:financial',
+      ].map((capability) => ({ capability, effect: 'ALLOW' })),
     },
     permissionOverrides: [],
   });
@@ -2435,7 +2439,12 @@ describe.each(Object.keys(branchActions) as (keyof typeof branchActions)[])(
         }
         if (mode === 'unassigned')
           expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith({
-            where: { organizationId: 'org_a', branchId: 'branch_a', userId: 'user_a', active: true },
+            where: {
+              organizationId: 'org_a',
+              branchId: 'branch_a',
+              userId: 'user_a',
+              active: true,
+            },
             select: { id: true },
           });
         if (mode !== 'unassigned')
@@ -2807,7 +2816,9 @@ describe('solo owner purchasing exceptions', () => {
           }),
         });
         const verifiedPin = db.$queryRaw.mock.calls.find(([sql]) =>
-          (sql as TemplateStringsArray).join('?').includes('app.pharmacy_purchase_pin_verified_user_id')
+          (sql as TemplateStringsArray)
+            .join('?')
+            .includes('app.pharmacy_purchase_pin_verified_user_id')
         );
         expect(verifiedPin?.slice(1)).toEqual(['user_a']);
       } else {

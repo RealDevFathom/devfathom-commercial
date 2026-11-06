@@ -56,7 +56,9 @@ describe('INV-10 central purchasing access', () => {
     });
     const result = await centralDemand(db, { ...scope, actorId: 'user_central' });
     expect(result).toMatchObject({ organizationWide: true, branches: ['branch_a', 'branch_b'] });
-    expect(branchQuery).toMatchObject({ where: { organizationId: scope.organizationId, active: true } });
+    expect(branchQuery).toMatchObject({
+      where: { organizationId: scope.organizationId, active: true },
+    });
     expect(query.where?.branchId).toEqual({ in: ['branch_a', 'branch_b'] });
   });
 

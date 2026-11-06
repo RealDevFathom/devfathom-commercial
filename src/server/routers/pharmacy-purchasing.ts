@@ -13,10 +13,7 @@ import {
 } from '@/lib/restaurant/credential-lifecycle';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
-import {
-  actorIsPharmacyOwner,
-  procurementBranchIds,
-} from '@/lib/pharmacy/procurement-access';
+import { actorIsPharmacyOwner, procurementBranchIds } from '@/lib/pharmacy/procurement-access';
 import { hasModule } from '@/lib/entitlements';
 import {
   listReceivingExceptions,
@@ -2093,7 +2090,10 @@ const purchasingRouter = router({
         select: { branchId: true, requisition: { select: { branchId: true } } },
       });
       if (!order) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Order is outside your pharmacy scope.' });
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Order is outside your pharmacy scope.',
+        });
       }
       await purchasingRecordScope(ctx, order.branchId);
       await assertOrderBranches(ctx, {

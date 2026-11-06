@@ -777,19 +777,24 @@ describe('the solo owner can do all of their purchasing', () => {
     expect(verifiedPin?.slice(1)).toEqual(['owner']);
   });
 
-  it.each([undefined, '9999'])('refuses self-approval without the correct PIN (%s)', async (pin) => {
-    await expect(
-      caller('owner').approvePurchaseOrder({ purchaseOrderId: 'po_a', decision: 'APPROVED', pin })
-    ).resolves.toHaveProperty('blocked');
-    expect(m('pharmacyPurchaseOrder').update).not.toHaveBeenCalled();
-    expect(m('pharmacyPurchaseOrderApproval').create).not.toHaveBeenCalled();
-    expect(m('auditLog').create).not.toHaveBeenCalled();
-    expect(
-      db.$queryRaw.mock.calls.some(([sql]) =>
-        (sql as TemplateStringsArray).join('?').includes('app.pharmacy_purchase_pin_verified_user_id')
-      )
-    ).toBe(false);
-  });
+  it.each([undefined, '9999'])(
+    'refuses self-approval without the correct PIN (%s)',
+    async (pin) => {
+      await expect(
+        caller('owner').approvePurchaseOrder({ purchaseOrderId: 'po_a', decision: 'APPROVED', pin })
+      ).resolves.toHaveProperty('blocked');
+      expect(m('pharmacyPurchaseOrder').update).not.toHaveBeenCalled();
+      expect(m('pharmacyPurchaseOrderApproval').create).not.toHaveBeenCalled();
+      expect(m('auditLog').create).not.toHaveBeenCalled();
+      expect(
+        db.$queryRaw.mock.calls.some(([sql]) =>
+          (sql as TemplateStringsArray)
+            .join('?')
+            .includes('app.pharmacy_purchase_pin_verified_user_id')
+        )
+      ).toBe(false);
+    }
+  );
 
   it('sends their approved order', async () => {
     m('pharmacyPurchaseOrder').findFirst.mockResolvedValue(
@@ -874,16 +879,19 @@ describe('quotes and receiving exceptions are checked on the server, not by the 
     });
   });
 
-  it.each(API_ONLY)('%s → FORBIDDEN for the cashier, with nothing read or written', async (name) => {
-    for (const cashier of ['cashier_a', 'cashier_b']) {
-      await expect(CALLS[name](caller(cashier))).rejects.toMatchObject({
-        code: 'FORBIDDEN',
-        message: PERMISSION,
-      });
+  it.each(API_ONLY)(
+    '%s → FORBIDDEN for the cashier, with nothing read or written',
+    async (name) => {
+      for (const cashier of ['cashier_a', 'cashier_b']) {
+        await expect(CALLS[name](caller(cashier))).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: PERMISSION,
+        });
+      }
+      expect(touchedBusinessTables()).toEqual([]);
+      expect(db.$transaction).not.toHaveBeenCalled();
     }
-    expect(touchedBusinessTables()).toEqual([]);
-    expect(db.$transaction).not.toHaveBeenCalled();
-  });
+  );
 
   describe('the solo owner', () => {
     beforeEach(() => {
@@ -949,9 +957,7 @@ describe('approving and sending a purchase order needs the approver capability',
   });
 
   it('refuses the procurement role, which raises orders but does not approve them', async () => {
-    m('pharmacyPurchaseOrder').findFirst.mockResolvedValue(
-      order({ createdByUserId: 'manager_a' })
-    );
+    m('pharmacyPurchaseOrder').findFirst.mockResolvedValue(order({ createdByUserId: 'manager_a' }));
     await expect(CALLS.approvePurchaseOrder(caller('buyer'))).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: PERMISSION,
@@ -985,9 +991,7 @@ describe('approving and sending a purchase order needs the approver capability',
   });
 
   it('still refuses a manager approving their own order', async () => {
-    m('pharmacyPurchaseOrder').findFirst.mockResolvedValue(
-      order({ createdByUserId: 'manager_a' })
-    );
+    m('pharmacyPurchaseOrder').findFirst.mockResolvedValue(order({ createdByUserId: 'manager_a' }));
     await expect(CALLS.approvePurchaseOrder(caller('manager_a'))).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'SELF_APPROVAL',

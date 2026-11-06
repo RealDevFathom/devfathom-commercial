@@ -384,10 +384,7 @@ export async function purchasingWorkspace(
       }))
     )
       eligibleApprovers.push(user);
-    if (
-      procurementGrantedForUser(user) &&
-      (await actorCanApprovePurchase(db, user.id, at))
-    ) {
+    if (procurementGrantedForUser(user) && (await actorCanApprovePurchase(db, user.id, at))) {
       const person = {
         id: user.id,
         name: user.name,

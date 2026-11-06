@@ -655,7 +655,8 @@ export default async function PharmacyOrdersPage({
               actorId={ctx.session.user.id}
               canApprove={canApprove}
               soloOwnerEligible={
-                soloOwner && workspace.procurementApprovers.some(
+                soloOwner &&
+                workspace.procurementApprovers.some(
                   (person) =>
                     person.id === ctx.session!.user.id &&
                     (order.branchId

@@ -81,20 +81,14 @@ async function verifyApprover(
     !(await actorCanApprovePurchase(db, approverId))
   )
     return { blocked: APPROVAL_BLOCKED } as const;
-  if (
-    branchId &&
-    !(await procurementBranchIds(db, organizationId, approverId)).includes(branchId)
-  )
+  if (branchId && !(await procurementBranchIds(db, organizationId, approverId)).includes(branchId))
     return { blocked: APPROVAL_BLOCKED } as const;
   // The approval PIN is the approver's shared operator credential. Guesses typed
   // by somebody else must not lock that person out of their other workflows, so
   // they are bounded by a per-approver budget (the same five attempts per lockout
   // window) instead of the credential's strike counter.
   const throttleKey = `pharmacy-purchase-approver-pin:${organizationId}:${approverId}`;
-  if (
-    crossPerson &&
-    !(await rateLimit(throttleKey, MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS)).ok
-  )
+  if (crossPerson && !(await rateLimit(throttleKey, MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS)).ok)
     return { blocked: APPROVAL_BLOCKED } as const;
   // Serialize strikes even for simultaneous guesses of the same user's PIN.
   await db.$queryRaw`SELECT c.id FROM restaurant_operator_credentials c JOIN restaurant_staff_profiles s ON s.id=c."staffProfileId" WHERE c."organizationId"=${organizationId} AND s."organizationId"=${organizationId} AND s."userId"=${approverId} AND c.type='PIN' AND c."revokedAt" IS NULL AND c."deviceId" IS NULL ORDER BY c.id FOR UPDATE OF c`;

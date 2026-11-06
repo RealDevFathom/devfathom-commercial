@@ -261,9 +261,8 @@ async function newLink() {
       const { can } = await import('@/lib/abac');
       const { ALL_ACTIONS } = await import('@/lib/abac/policies');
       const { assignedRegisterBranchIds } = await import('./controlled-register');
-      const { actorCanProcure, actorCanReadPurchasing, procurementBranchIds } = await import(
-        './procurement-access'
-      );
+      const { actorCanProcure, actorCanReadPurchasing, procurementBranchIds } =
+        await import('./procurement-access');
       const { assertProcurementBranch } = await import('@/server/pharmacy-procurement-access');
       await inOrg(async (db) => {
         // No explicit assignment is needed, including branches created after the owner.

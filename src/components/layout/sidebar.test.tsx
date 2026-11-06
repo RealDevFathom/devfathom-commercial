@@ -12,8 +12,7 @@ const usePathnameMock = vi.hoisted(() => vi.fn(() => '/dashboard'));
 // The pharmacy rail's capability read (#979); unanswered unless a pharmacy case sets it.
 const pharmacyRailQuery = vi.hoisted(() => ({
   data: undefined as
-    | undefined
-    | { userId: string; organizationId: string | null; capabilities: string[] },
+    undefined | { userId: string; organizationId: string | null; capabilities: string[] },
 }));
 // The hospitality rail's one read; unanswered unless a hospitality case sets it.
 const railQuery = vi.hoisted(() => ({
@@ -300,7 +299,9 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
   it('keeps operational links for non-admins while finance and setup stay admin-only', () => {
     renderNavigation({ role: 'MEMBER' });
     for (const label of ['Inventory', 'Purchasing', 'Reports & Insights']) {
-      expect(screen.getByRole('link', { name: (name) => name.endsWith(label) })).toBeInTheDocument();
+      expect(
+        screen.getByRole('link', { name: (name) => name.endsWith(label) })
+      ).toBeInTheDocument();
     }
     for (const label of [
       'Finance',

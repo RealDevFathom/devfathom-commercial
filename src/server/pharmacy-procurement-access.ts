@@ -1,8 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import {
-  actorCanProcure,
-  actorCanReadPurchasing,
-} from '@/lib/pharmacy/procurement-access';
+import { actorCanProcure, actorCanReadPurchasing } from '@/lib/pharmacy/procurement-access';
 import type { TRPCContext } from './trpc';
 
 export async function assertProcurement(ctx: TRPCContext) {

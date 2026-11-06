@@ -1200,28 +1200,28 @@ describe('purchasing PIN controls', () => {
     mocks.createTRPCContext.mockResolvedValue(ctx);
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
     expect(screen.queryByLabelText('Approver PIN')).toBeNull();
-    expect(screen.getByRole('heading', { name: 'You do not have purchasing access' })).toBeDefined();
+    expect(
+      screen.getByRole('heading', { name: 'You do not have purchasing access' })
+    ).toBeDefined();
   });
   it.each(['branch-2', null])(
     'does not offer owner self-approval outside the solo branch (%s)',
     async (branchId) => {
       mocks.createCaller.mockReturnValue(
         callerStub({
-          workspace: vi
-            .fn()
-            .mockResolvedValue({
-              ...workspace,
-              procurementApprovers: [
-                {
-                  id: 'user-1',
-                  name: 'Owner',
-                  email: 'owner@example.test',
-                  branchIds: ['branch-1', 'branch-2'],
-                  soloBranchIds: ['branch-1'],
-                  soloOrganizationWide: false,
-                },
-              ],
-            }),
+          workspace: vi.fn().mockResolvedValue({
+            ...workspace,
+            procurementApprovers: [
+              {
+                id: 'user-1',
+                name: 'Owner',
+                email: 'owner@example.test',
+                branchIds: ['branch-1', 'branch-2'],
+                soloBranchIds: ['branch-1'],
+                soloOrganizationWide: false,
+              },
+            ],
+          }),
           purchaseOrders: vi.fn().mockResolvedValue([
             {
               id: 'po-1',

@@ -111,40 +111,43 @@ export type ProcedureMeta = {
   capabilities?: readonly Action[];
 };
 
-const t = initTRPC.context<TRPCContext>().meta<ProcedureMeta>().create({
-  transformer: superjson,
-  errorFormatter({ shape, error }) {
-    // tRPC sets `cause` to a ZodError for input-validation failures (BAD_REQUEST)
-    // *and* for a raw `schema.parse()` that throws inside a procedure body
-    // (INTERNAL_SERVER_ERROR). Gate on the code so an internal failure never
-    // reaches the client wearing a field-level message, and never publishes
-    // internal schema field names in `data.validation`.
-    //
-    // The first half is narrower than it reads: tRPC has already placed the raw
-    // serialized ZodError into `shape.message` before this formatter runs, and
-    // with `validation` null we pass `shape.message` through unchanged — so,
-    // outside production, the field name still reaches the client, in raw
-    // serialized form (the errorFormatter test pins exactly that string,
-    // `"path": ["internalOnlyField"]` and all). The gate governs `data.validation`
-    // and the FORMATTED message, not the pass-through.
-    const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
-    // In production an unexpected failure (that ZodError included) keeps its own
-    // message on the server, where the tRPC route's `onError` logs it, and the
-    // client is told only that something went wrong. Deliberate errors and every
-    // other code are untouched; outside production the pass-through is unchanged.
-    const withheld = process.env.NODE_ENV === 'production' && isUnexpectedInternalError(error);
-    // Never publish the server stack. tRPC attaches `data.stack` outside
-    // production, which leaks file paths and bundle chunk names onto ordinary
-    // client errors (e.g. an intentional 403). Drop it for every error code.
-    const data = { ...shape.data, validation: validation?.fields ?? null };
-    delete data.stack;
-    return {
-      ...shape,
-      message: withheld ? INTERNAL_ERROR_MESSAGE : (validation?.message ?? shape.message),
-      data,
-    };
-  },
-});
+const t = initTRPC
+  .context<TRPCContext>()
+  .meta<ProcedureMeta>()
+  .create({
+    transformer: superjson,
+    errorFormatter({ shape, error }) {
+      // tRPC sets `cause` to a ZodError for input-validation failures (BAD_REQUEST)
+      // *and* for a raw `schema.parse()` that throws inside a procedure body
+      // (INTERNAL_SERVER_ERROR). Gate on the code so an internal failure never
+      // reaches the client wearing a field-level message, and never publishes
+      // internal schema field names in `data.validation`.
+      //
+      // The first half is narrower than it reads: tRPC has already placed the raw
+      // serialized ZodError into `shape.message` before this formatter runs, and
+      // with `validation` null we pass `shape.message` through unchanged — so,
+      // outside production, the field name still reaches the client, in raw
+      // serialized form (the errorFormatter test pins exactly that string,
+      // `"path": ["internalOnlyField"]` and all). The gate governs `data.validation`
+      // and the FORMATTED message, not the pass-through.
+      const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
+      // In production an unexpected failure (that ZodError included) keeps its own
+      // message on the server, where the tRPC route's `onError` logs it, and the
+      // client is told only that something went wrong. Deliberate errors and every
+      // other code are untouched; outside production the pass-through is unchanged.
+      const withheld = process.env.NODE_ENV === 'production' && isUnexpectedInternalError(error);
+      // Never publish the server stack. tRPC attaches `data.stack` outside
+      // production, which leaks file paths and bundle chunk names onto ordinary
+      // client errors (e.g. an intentional 403). Drop it for every error code.
+      const data = { ...shape.data, validation: validation?.fields ?? null };
+      delete data.stack;
+      return {
+        ...shape,
+        message: withheld ? INTERNAL_ERROR_MESSAGE : (validation?.message ?? shape.message),
+        data,
+      };
+    },
+  });
 
 export const router = t.router;
 export const publicProcedure = t.procedure;

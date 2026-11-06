@@ -53,7 +53,11 @@ describe('#979 a refusal reads as no access, not as a failed load', () => {
   it.each([
     ['pharmacist queue', PharmacistQueueConsole, 'You do not have pharmacist review access'],
     ['substitution', SubstitutionConsole, 'You do not have substitution access'],
-    ['controlled register', ControlledRegisterConsole, 'You do not have controlled-register access'],
+    [
+      'controlled register',
+      ControlledRegisterConsole,
+      'You do not have controlled-register access',
+    ],
   ] as const)('shows the %s no-access state to a cashier', (_surface, Console, heading) => {
     render(<Console />);
 
