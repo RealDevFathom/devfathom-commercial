@@ -14765,6 +14765,17 @@ model HotelProperty {
   mealPlans        HotelMealPlan[]
   functionSpaces   HotelFunctionSpace[]
   journeyTemplates HotelJourneyTemplate[]
+  guests               HotelGuest[]
+  confirmationSequence HotelConfirmationSequence?
+  ratePlans            HotelRatePlan[]
+  ratePlanPrices       HotelRatePlanPrice[]
+  reservations         HotelReservation[]
+  stayUnits            HotelReservationStayUnit[]
+  folios               HotelFolio[]
+  folioEntries         HotelFolioEntry[]
+  folioPayments        HotelFolioPayment[]
+  idempotencyKeys      HotelOperationIdempotencyKey[]
+  housekeepingTasks    HotelHousekeepingTask[]
 
   @@unique([organizationId, branchId], map: "hotel_properties_org_branch_key")
   @@unique([organizationId, bookingEngineSlug], map: "hotel_properties_org_slug_key")
@@ -14878,8 +14889,10 @@ model HotelExtra {
   updatedAt DateTime @updatedAt
 
   property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Cascade, map: "hotel_extras_property_fkey")
+  folioEntries HotelFolioEntry[]
 
   @@unique([organizationId, id], map: "hotel_extras_org_id_key")
+  @@unique([organizationId, branchId, id], map: "hotel_extras_scope_key")
   @@unique([organizationId, branchId, code], map: "hotel_extras_org_branch_code_key")
   @@index([organizationId, branchId, active], map: "hotel_extras_org_branch_active_idx")
   @@index([organizationId, branchId, department], map: "hotel_extras_org_branch_department_idx")
@@ -14966,6 +14979,7 @@ model HotelRoomType {
   property    HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, map: "hotel_room_types_property_fkey")
   rooms       HotelRoom[]   @relation("HotelRoomTypeScoped")
   roomsByKind HotelRoom[]   @relation("HotelRoomTypeKind")
+  ratePlans   HotelRatePlan[]
 
   @@unique([organizationId, branchId, id], map: "hotel_room_types_scope_key")
   @@unique([organizationId, branchId, code], map: "hotel_room_types_org_branch_code_key")
@@ -15015,6 +15029,7 @@ model HotelRoom {
   bedsByKind     HotelBed[]             @relation("HotelBedRoomKind")
   statusEvents   HotelRoomStatusEvent[]
   blocks         HotelRoomBlock[]
+  housekeepingTasks HotelHousekeepingTask[]
 
   @@unique([organizationId, branchId, id], map: "hotel_rooms_scope_key")
   @@unique([organizationId, branchId, number], map: "hotel_rooms_org_branch_number_key")
@@ -15583,4 +15598,326 @@ model OutboundEffect {
   @@index([organizationId, status, createdAt])
   @@index([status, availableAt])
   @@map("outbound_effects")
+}
+
+// ============================================
+// HOSPITALITY — Hotel MVP reservations, folio and housekeeping
+// (migration 20261101170800_hotel_mvp_reservations_folio)
+// ============================================
+//
+// Every table below is RLS-forced on the organization (the standard hotel
+// policy); the property is enforced by the explicit `(organizationId,
+// branchId)` predicate on every query. Money is BigInt minor units, never
+// negative; recorded money (stay units, folio entries, payments) is
+// append-only by trigger, and a folio correction is a positive copy naming the
+// entry it reverses.
+
+enum HotelReservationStatus {
+  HOLD
+  CONFIRMED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+  NO_SHOW
+}
+
+enum HotelReservationSource {
+  WALK_IN
+  PHONE
+  EMAIL
+  DIRECT
+}
+
+enum HotelFolioStatus {
+  OPEN
+  CLOSED
+}
+
+enum HotelFolioEntryKind {
+  ROOM_NIGHT
+  EXTRA
+}
+
+enum HotelPaymentDirection {
+  COLLECTION
+  REFUND
+}
+
+enum HotelHousekeepingTaskStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+/// A guest of one property. PII: read only behind `hotel:reservations`.
+model HotelGuest {
+  id             String   @id @default(cuid())
+  organizationId String
+  branchId       String
+  firstName      String
+  lastName       String
+  email          String?
+  phone          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  property     HotelProperty      @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_guests_property_fkey")
+  reservations HotelReservation[]
+
+  @@unique([organizationId, branchId, id], map: "hotel_guests_scope_key")
+  @@index([organizationId, branchId, lastName], map: "hotel_guests_last_name_idx")
+  @@map("hotel_guests")
+}
+
+/// The property's confirmation-number counter; allocated under the property lock.
+model HotelConfirmationSequence {
+  id             String   @id @default(cuid())
+  organizationId String
+  branchId       String
+  nextNumber     Int      @default(1)
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_confirmation_sequences_property_fkey")
+
+  @@unique([organizationId, branchId], map: "hotel_confirmation_sequences_property_key")
+  @@map("hotel_confirmation_sequences")
+}
+
+/// RATE-01. A plan's terms (room type, code, currency, tax) are immutable by
+/// trigger; prices are effective-dated `HotelRatePlanPrice` rows. The currency
+/// is the property's (insert trigger) and tax is at most 10,000 bp (CHECK).
+model HotelRatePlan {
+  id             String   @id @default(cuid())
+  organizationId String
+  branchId       String
+  roomTypeId     String
+  code           String
+  name           String
+  currency       String
+  taxBasisPoints Int      @default(0)
+  active         Boolean  @default(true)
+  createdById    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  property  HotelProperty              @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_rate_plans_property_fkey")
+  roomType  HotelRoomType              @relation(fields: [organizationId, branchId, roomTypeId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Cascade, map: "hotel_rate_plans_room_type_fkey")
+  prices    HotelRatePlanPrice[]
+  stayUnits HotelReservationStayUnit[]
+
+  @@unique([organizationId, branchId, id], map: "hotel_rate_plans_scope_key")
+  @@unique([organizationId, branchId, id, roomTypeId], map: "hotel_rate_plans_scope_room_type_key")
+  @@unique([organizationId, branchId, code], map: "hotel_rate_plans_code_key")
+  @@map("hotel_rate_plans")
+}
+
+/// RATE-01. One effective-dated net price; immutable once published or used.
+model HotelRatePlanPrice {
+  id             String    @id @default(cuid())
+  organizationId String
+  branchId       String
+  roomTypeId     String
+  ratePlanId     String
+  validFrom      DateTime  @db.Date
+  validTo        DateTime  @db.Date
+  netMinor       BigInt
+  published      Boolean   @default(false)
+  usedAt         DateTime?
+  createdById    String
+  createdAt      DateTime  @default(now())
+
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_rate_plan_prices_property_fkey")
+  ratePlan HotelRatePlan @relation(fields: [organizationId, branchId, ratePlanId, roomTypeId], references: [organizationId, branchId, id, roomTypeId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_rate_plan_prices_rate_plan_fkey")
+
+  @@unique([organizationId, branchId, id], map: "hotel_rate_plan_prices_scope_key")
+  @@index([organizationId, branchId, ratePlanId, roomTypeId, validFrom], map: "hotel_rate_plan_prices_lookup_idx")
+  @@map("hotel_rate_plan_prices")
+}
+
+model HotelReservation {
+  id                 String                 @id @default(cuid())
+  organizationId     String
+  branchId           String
+  confirmationNumber String
+  status             HotelReservationStatus @default(HOLD)
+  source             HotelReservationSource
+  primaryGuestId     String
+  arrivalDate        DateTime               @db.Date
+  departureDate      DateTime               @db.Date
+  adults             Int
+  children           Int                    @default(0)
+  specialRequests    String?
+  currency           String
+  version            Int                    @default(1)
+  createdById        String
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @default(now()) @updatedAt
+
+  property     HotelProperty              @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_reservations_property_fkey")
+  primaryGuest HotelGuest                 @relation(fields: [organizationId, branchId, primaryGuestId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Cascade, map: "hotel_reservations_primary_guest_fkey")
+  stayUnits    HotelReservationStayUnit[]
+  folio        HotelFolio?
+
+  @@unique([organizationId, branchId, id], map: "hotel_reservations_scope_key")
+  @@unique([organizationId, branchId, confirmationNumber], map: "hotel_reservations_confirmation_key")
+  @@index([organizationId, branchId, arrivalDate], map: "hotel_reservations_arrival_idx")
+  @@map("hotel_reservations")
+}
+
+/// The availability-consuming row, with the server-computed price snapshot.
+model HotelReservationStayUnit {
+  id             String   @id @default(cuid())
+  organizationId String
+  branchId       String
+  reservationId  String
+  roomTypeId     String
+  ratePlanId     String
+  quantity       Int      @default(1)
+  adults         Int
+  children       Int      @default(0)
+  arrivalDate    DateTime @db.Date
+  departureDate  DateTime @db.Date
+  netMinor       BigInt
+  taxMinor       BigInt
+  totalMinor     BigInt
+  taxBasisPoints Int
+  nightlyRates   Json
+  currency       String
+  createdAt      DateTime @default(now())
+
+  property    HotelProperty    @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_reservation_stay_units_property_fkey")
+  reservation HotelReservation @relation(fields: [organizationId, branchId, reservationId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Cascade, map: "hotel_reservation_stay_units_reservation_fkey")
+  ratePlan    HotelRatePlan    @relation(fields: [organizationId, branchId, ratePlanId, roomTypeId], references: [organizationId, branchId, id, roomTypeId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_reservation_stay_units_rate_plan_fkey")
+
+  @@unique([organizationId, branchId, id], map: "hotel_reservation_stay_units_scope_key")
+  @@index([organizationId, branchId, reservationId], map: "hotel_reservation_stay_units_reservation_idx")
+  @@index([organizationId, branchId, roomTypeId, arrivalDate], map: "hotel_reservation_stay_units_availability_idx")
+  @@map("hotel_reservation_stay_units")
+}
+
+/// FOL-01. One folio per reservation.
+model HotelFolio {
+  id             String           @id @default(cuid())
+  organizationId String
+  branchId       String
+  reservationId  String
+  folioNumber    String
+  status         HotelFolioStatus @default(OPEN)
+  currency       String
+  version        Int              @default(1)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @default(now()) @updatedAt
+
+  property    HotelProperty       @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_folios_property_fkey")
+  reservation HotelReservation    @relation(fields: [organizationId, branchId, reservationId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Cascade, map: "hotel_folios_reservation_fkey")
+  entries     HotelFolioEntry[]
+  payments    HotelFolioPayment[]
+
+  @@unique([organizationId, branchId, id], map: "hotel_folios_scope_key")
+  @@unique([organizationId, branchId, reservationId], map: "hotel_folios_reservation_key")
+  @@unique([organizationId, branchId, folioNumber], map: "hotel_folios_number_key")
+  @@map("hotel_folios")
+}
+
+/// FOL-01. The single, append-only charge ledger. A reversal is a positive copy
+/// of the original with `reversesEntryId` set; balances subtract reversals.
+model HotelFolioEntry {
+  id              String              @id @default(cuid())
+  organizationId  String
+  branchId        String
+  folioId         String
+  kind            HotelFolioEntryKind
+  catalogItemId   String?
+  serviceDate     DateTime?           @db.Date
+  description     String
+  quantity        Int
+  unitMinor       BigInt
+  netMinor        BigInt
+  taxMinor        BigInt
+  grossMinor      BigInt
+  currency        String
+  reversesEntryId String?
+  reason          String?
+  createdById     String
+  createdAt       DateTime            @default(now())
+
+  property    HotelProperty    @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_folio_entries_property_fkey")
+  folio       HotelFolio       @relation(fields: [organizationId, branchId, folioId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Cascade, map: "hotel_folio_entries_folio_fkey")
+  catalogItem HotelExtra?      @relation(fields: [organizationId, branchId, catalogItemId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Cascade, map: "hotel_folio_entries_catalog_item_fkey")
+  reverses    HotelFolioEntry? @relation("HotelFolioEntryReversal", fields: [organizationId, branchId, reversesEntryId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Cascade, map: "hotel_folio_entries_reverses_fkey")
+  reversal    HotelFolioEntry? @relation("HotelFolioEntryReversal")
+
+  @@unique([organizationId, branchId, id], map: "hotel_folio_entries_scope_key")
+  @@unique([organizationId, branchId, reversesEntryId], map: "hotel_folio_entries_reversal_key")
+  @@index([organizationId, branchId, folioId], map: "hotel_folio_entries_folio_idx")
+  @@map("hotel_folio_entries")
+}
+
+/// Append-only collections and refunds. A refund names the payment it refunds.
+model HotelFolioPayment {
+  id               String                @id @default(cuid())
+  organizationId   String
+  branchId         String
+  folioId          String
+  direction        HotelPaymentDirection
+  amountMinor      BigInt
+  currency         String
+  refundsPaymentId String?
+  reference        String?
+  createdById      String
+  createdAt        DateTime              @default(now())
+
+  property   HotelProperty       @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_folio_payments_property_fkey")
+  folio      HotelFolio          @relation(fields: [organizationId, branchId, folioId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Cascade, map: "hotel_folio_payments_folio_fkey")
+  refunds    HotelFolioPayment?  @relation("HotelFolioPaymentRefund", fields: [organizationId, branchId, refundsPaymentId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Cascade, map: "hotel_folio_payments_refunds_fkey")
+  refundedBy HotelFolioPayment[] @relation("HotelFolioPaymentRefund")
+
+  @@unique([organizationId, branchId, id], map: "hotel_folio_payments_scope_key")
+  @@index([organizationId, branchId, folioId], map: "hotel_folio_payments_folio_idx")
+  @@index([organizationId, branchId, refundsPaymentId], map: "hotel_folio_payments_refunds_idx")
+  @@map("hotel_folio_payments")
+}
+
+/// A property-scoped operation key bound to the canonical request hash.
+model HotelOperationIdempotencyKey {
+  id             String   @id @default(cuid())
+  organizationId String
+  branchId       String
+  scope          String
+  key            String
+  requestHash    String
+  resultType     String?
+  resultId       String?
+  response       Json?
+  createdAt      DateTime @default(now())
+
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_operation_idempotency_keys_property_fkey")
+
+  @@unique([organizationId, branchId, scope, key], map: "hotel_operation_idempotency_keys_key")
+  @@map("hotel_operation_idempotency_keys")
+}
+
+/// HK-02. The housekeeping work queue.
+model HotelHousekeepingTask {
+  id             String                      @id @default(cuid())
+  organizationId String
+  branchId       String
+  roomId         String
+  title          String
+  notes          String?
+  status         HotelHousekeepingTaskStatus @default(OPEN)
+  assignedToId   String?
+  createdById    String
+  completedById  String?
+  completedAt    DateTime?
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @default(now()) @updatedAt
+
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_housekeeping_tasks_property_fkey")
+  room     HotelRoom     @relation(fields: [organizationId, branchId, roomId], references: [organizationId, branchId, id], onDelete: Cascade, onUpdate: Cascade, map: "hotel_housekeeping_tasks_room_fkey")
+
+  @@unique([organizationId, branchId, id], map: "hotel_housekeeping_tasks_scope_key")
+  @@index([organizationId, branchId, status], map: "hotel_housekeeping_tasks_branch_status_idx")
+  @@map("hotel_housekeeping_tasks")
 }

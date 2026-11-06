@@ -2590,6 +2590,302 @@ async function main() {
               set_config('app.hotel_inventory_reason', '', true)`
     );
 
+    // Hotel MVP (PR #964) — guests, rate plans and prices, reservations, stay
+    // units, folios, the folio ledger, payments, operation idempotency and the
+    // housekeeping queue. Seeded as the superuser, one mirrored row per table
+    // in each tenant; then probed as tenant A's assigned user for read, UPDATE
+    // and DELETE isolation, the append-only and reversal triggers, the folio,
+    // payment and rate-plan guards, fail-closed org-B inserts, platform reads
+    // and the sanctioned purge path.
+    await client.query('RESET ROLE');
+    const hotelMvp = (name: string, tag: 'a' | 'b') => `hotel_mvp_${name}_${tag}_${suffix}`;
+    for (const [tag, organizationId, branchId, roomTypeId, roomId, extraId, actorId] of [
+      ['a', 'org_devfathom', hotelPropertyA, hotelRoomTypeA, hotelRoomA, hotelExtraA, userA],
+      ['b', organizationB, hotelPropertyB, hotelRoomTypeB, hotelRoomB, hotelExtraB, userB],
+    ] as const) {
+      const scopeArgs = [organizationId, branchId];
+      await client.query(
+        `INSERT INTO "hotel_guests" ("id", "organizationId", "branchId", "firstName", "lastName")
+         VALUES ($3, $1, $2, 'Isolation', 'Guest')`,
+        [...scopeArgs, hotelMvp('guest', tag)]
+      );
+      await client.query(
+        `INSERT INTO "hotel_confirmation_sequences" ("id", "organizationId", "branchId", "nextNumber")
+         VALUES ($3, $1, $2, 2)`,
+        [...scopeArgs, hotelMvp('sequence', tag)]
+      );
+      await client.query(
+        `INSERT INTO "hotel_rate_plans" (
+          "id", "organizationId", "branchId", "roomTypeId", "code", "name", "currency", "taxBasisPoints", "createdById"
+        ) VALUES ($3, $1, $2, $4, 'BAR', 'Best available', 'PKR', 1600, $5)`,
+        [...scopeArgs, hotelMvp('rate_plan', tag), roomTypeId, actorId]
+      );
+      await client.query(
+        `INSERT INTO "hotel_rate_plan_prices" (
+          "id", "organizationId", "branchId", "roomTypeId", "ratePlanId", "validFrom", "validTo", "netMinor", "published", "createdById"
+        ) VALUES ($3, $1, $2, $4, $5, DATE '2030-03-01', DATE '2030-03-31', 10000, true, $6)`,
+        [...scopeArgs, hotelMvp('price', tag), roomTypeId, hotelMvp('rate_plan', tag), actorId]
+      );
+      await client.query(
+        `INSERT INTO "hotel_reservations" (
+          "id", "organizationId", "branchId", "confirmationNumber", "source", "primaryGuestId",
+          "arrivalDate", "departureDate", "adults", "currency", "createdById"
+        ) VALUES ($3, $1, $2, 'RSV-2030-000001', 'DIRECT', $4, DATE '2030-03-02', DATE '2030-03-03', 1, 'PKR', $5)`,
+        [...scopeArgs, hotelMvp('reservation', tag), hotelMvp('guest', tag), actorId]
+      );
+      await client.query(
+        `INSERT INTO "hotel_reservation_stay_units" (
+          "id", "organizationId", "branchId", "reservationId", "roomTypeId", "ratePlanId", "adults",
+          "arrivalDate", "departureDate", "netMinor", "taxMinor", "totalMinor", "taxBasisPoints", "nightlyRates", "currency"
+        ) VALUES ($3, $1, $2, $4, $5, $6, 1, DATE '2030-03-02', DATE '2030-03-03', 10000, 1600, 11600, 1600, '[]'::jsonb, 'PKR')`,
+        [
+          ...scopeArgs,
+          hotelMvp('stay_unit', tag),
+          hotelMvp('reservation', tag),
+          roomTypeId,
+          hotelMvp('rate_plan', tag),
+        ]
+      );
+      await client.query(
+        `INSERT INTO "hotel_folios" ("id", "organizationId", "branchId", "reservationId", "folioNumber", "currency")
+         VALUES ($3, $1, $2, $4, 'FOL-2030-000001', 'PKR')`,
+        [...scopeArgs, hotelMvp('folio', tag), hotelMvp('reservation', tag)]
+      );
+      await client.query(
+        `INSERT INTO "hotel_folio_entries" (
+          "id", "organizationId", "branchId", "folioId", "kind", "catalogItemId", "description", "quantity",
+          "unitMinor", "netMinor", "taxMinor", "grossMinor", "currency", "createdById"
+        ) VALUES ($3, $1, $2, $4, 'EXTRA', $5, 'Laundry', 1, 1000, 1000, 0, 1000, 'PKR', $6)`,
+        [...scopeArgs, hotelMvp('entry', tag), hotelMvp('folio', tag), extraId, actorId]
+      );
+      await client.query(
+        `INSERT INTO "hotel_folio_payments" (
+          "id", "organizationId", "branchId", "folioId", "direction", "amountMinor", "currency", "createdById"
+        ) VALUES ($3, $1, $2, $4, 'COLLECTION', 1000, 'PKR', $5)`,
+        [...scopeArgs, hotelMvp('payment', tag), hotelMvp('folio', tag), actorId]
+      );
+      await client.query(
+        `INSERT INTO "hotel_operation_idempotency_keys" (
+          "id", "organizationId", "branchId", "scope", "key", "requestHash"
+        ) VALUES ($3, $1, $2, 'folio.postExtra', 'isolation-key', 'hash')`,
+        [...scopeArgs, hotelMvp('idempotency', tag)]
+      );
+      await client.query(
+        `INSERT INTO "hotel_housekeeping_tasks" ("id", "organizationId", "branchId", "roomId", "title", "createdById")
+         VALUES ($3, $1, $2, $4, 'Turn down', $5)`,
+        [...scopeArgs, hotelMvp('task', tag), roomId, actorId]
+      );
+    }
+    await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
+    await client.query(`SELECT set_config('app.current_user_id', $1, true)`, [userA]);
+    const hotelMvpRows: Array<[table: string, name: string]> = [
+      ['hotel_guests', 'guest'],
+      ['hotel_confirmation_sequences', 'sequence'],
+      ['hotel_rate_plans', 'rate_plan'],
+      ['hotel_rate_plan_prices', 'price'],
+      ['hotel_reservations', 'reservation'],
+      ['hotel_reservation_stay_units', 'stay_unit'],
+      ['hotel_folios', 'folio'],
+      ['hotel_folio_entries', 'entry'],
+      ['hotel_folio_payments', 'payment'],
+      ['hotel_operation_idempotency_keys', 'idempotency'],
+      ['hotel_housekeeping_tasks', 'task'],
+    ];
+    for (const [table, name] of hotelMvpRows) {
+      const forced = await client.query<{ relrowsecurity: boolean; relforcerowsecurity: boolean }>(
+        `SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = $1`,
+        [table]
+      );
+      assertEqual(forced.rows[0]?.relrowsecurity, true, `"${table}" must enable RLS`);
+      assertEqual(forced.rows[0]?.relforcerowsecurity, true, `"${table}" must force RLS`);
+      const idA = hotelMvp(name, 'a');
+      const idB = hotelMvp(name, 'b');
+      const visible = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
+        [idA, idB]
+      );
+      assertEqual(visible.rows[0]?.count, 1, `tenant A must only see its own "${table}" row`);
+      const updated = await client.query(
+        `UPDATE "${table}" SET "organizationId" = "organizationId" WHERE "id" = $1`,
+        [idB]
+      );
+      assertEqual(updated.rowCount, 0, `tenant A must not update tenant B's "${table}" row`);
+      const deleted = await client.query(`DELETE FROM "${table}" WHERE "id" = $1`, [idB]);
+      assertEqual(deleted.rowCount, 0, `tenant A must not delete tenant B's "${table}" row`);
+    }
+    // Recorded money is append-only for its owner too.
+    for (const [table, name] of [
+      ['hotel_reservation_stay_units', 'stay_unit'],
+      ['hotel_folio_entries', 'entry'],
+      ['hotel_folio_payments', 'payment'],
+    ] as const) {
+      await expectDatabaseError(
+        '55000',
+        () =>
+          client.query(`UPDATE "${table}" SET "currency" = 'PKR' WHERE "id" = $1`, [
+            hotelMvp(name, 'a'),
+          ]),
+        `owner UPDATE on "${table}"`
+      );
+      await expectDatabaseError(
+        '55000',
+        () => client.query(`DELETE FROM "${table}" WHERE "id" = $1`, [hotelMvp(name, 'a')]),
+        `owner DELETE on "${table}"`
+      );
+    }
+    // A reversal is a positive copy, admitted once; a reversal of a reversal,
+    // a second reversal and a mismatched copy are all refused.
+    const reverseEntry = (id: string, reverses: string, grossMinor = 1000) =>
+      client.query(
+        `INSERT INTO "hotel_folio_entries" (
+          "id", "organizationId", "branchId", "folioId", "kind", "catalogItemId", "description", "quantity",
+          "unitMinor", "netMinor", "taxMinor", "grossMinor", "currency", "reversesEntryId", "reason", "createdById"
+        ) VALUES ($1, 'org_devfathom', $2, $3, 'EXTRA', $4, 'Laundry', 1, 1000, $5, 0, $5, 'PKR', $6, 'Isolation probe', $7)`,
+        [id, hotelPropertyA, hotelMvp('folio', 'a'), hotelExtraA, grossMinor, reverses, userA]
+      );
+    await expectDatabaseError(
+      '23514',
+      () => reverseEntry(`hotel_mvp_bad_reversal_${suffix}`, hotelMvp('entry', 'a'), 999),
+      'a reversal that does not copy the original amount'
+    );
+    const reversal = await reverseEntry(`hotel_mvp_reversal_${suffix}`, hotelMvp('entry', 'a'));
+    assertEqual(reversal.rowCount, 1, 'a positive-copy reversal must be admitted once');
+    await expectDatabaseError(
+      '23505',
+      () => reverseEntry(`hotel_mvp_second_reversal_${suffix}`, hotelMvp('entry', 'a')),
+      'a second reversal of one entry'
+    );
+    await expectDatabaseError(
+      '23514',
+      () =>
+        reverseEntry(`hotel_mvp_reversal_of_reversal_${suffix}`, `hotel_mvp_reversal_${suffix}`),
+      'a reversal of a reversal'
+    );
+    // An entry is in its folio's currency, on an open folio.
+    await expectDatabaseError(
+      '23514',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_folio_entries" (
+            "id", "organizationId", "branchId", "folioId", "kind", "catalogItemId", "description", "quantity",
+            "unitMinor", "netMinor", "taxMinor", "grossMinor", "currency", "createdById"
+          ) VALUES ($1, 'org_devfathom', $2, $3, 'EXTRA', $4, 'Laundry', 1, 1000, 1000, 0, 1000, 'USD', $5)`,
+          [
+            `hotel_mvp_usd_entry_${suffix}`,
+            hotelPropertyA,
+            hotelMvp('folio', 'a'),
+            hotelExtraA,
+            userA,
+          ]
+        ),
+      'a folio entry in another currency'
+    );
+    // A refund names a collection of the same folio and never exceeds it.
+    const refund = (id: string, amountMinor: number) =>
+      client.query(
+        `INSERT INTO "hotel_folio_payments" (
+          "id", "organizationId", "branchId", "folioId", "direction", "amountMinor", "currency", "refundsPaymentId", "createdById"
+        ) VALUES ($1, 'org_devfathom', $2, $3, 'REFUND', $4, 'PKR', $5, $6)`,
+        [id, hotelPropertyA, hotelMvp('folio', 'a'), amountMinor, hotelMvp('payment', 'a'), userA]
+      );
+    assertEqual(
+      (await refund(`hotel_mvp_refund_1_${suffix}`, 600)).rowCount,
+      1,
+      'a partial refund must be admitted'
+    );
+    await expectDatabaseError(
+      '23514',
+      () => refund(`hotel_mvp_refund_2_${suffix}`, 401),
+      'a refund beyond the remaining collected amount'
+    );
+    assertEqual(
+      (await refund(`hotel_mvp_refund_3_${suffix}`, 400)).rowCount,
+      1,
+      'refunding the remainder must be admitted'
+    );
+    // A rate plan is in its property's currency, with tax at most 100%.
+    for (const [label, currency, taxBasisPoints] of [
+      ['a foreign-currency rate plan', 'USD', 0],
+      ['a rate plan taxed above 100%', 'PKR', 10001],
+    ] as const) {
+      await expectDatabaseError(
+        '23514',
+        () =>
+          client.query(
+            `INSERT INTO "hotel_rate_plans" (
+              "id", "organizationId", "branchId", "roomTypeId", "code", "name", "currency", "taxBasisPoints", "createdById"
+            ) VALUES ($1, 'org_devfathom', $2, $3, $4, 'Probe', $5, $6, $7)`,
+            [
+              `hotel_mvp_plan_probe_${currency}_${suffix}`,
+              hotelPropertyA,
+              hotelRoomTypeA,
+              `PROBE${taxBasisPoints}`,
+              currency,
+              taxBasisPoints,
+              userA,
+            ]
+          ),
+        label
+      );
+    }
+    // Org-B rows fail closed on the tables with no BEFORE INSERT guard.
+    await expectDatabaseError(
+      '42501',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_guests" ("id", "organizationId", "branchId", "firstName", "lastName")
+           VALUES ($1, $2, $3, 'Escape', 'Guest')`,
+          [`hotel_mvp_guest_escape_${suffix}`, organizationB, hotelPropertyB]
+        ),
+      'tenant A inserting an org-B "hotel_guests" row'
+    );
+    await expectDatabaseError(
+      '42501',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_housekeeping_tasks" ("id", "organizationId", "branchId", "roomId", "title", "createdById")
+           VALUES ($1, $2, $3, $4, 'Escape', $5)`,
+          [`hotel_mvp_task_escape_${suffix}`, organizationB, hotelPropertyB, hotelRoomB, userA]
+        ),
+      'tenant A inserting an org-B "hotel_housekeeping_tasks" row'
+    );
+    // The control plane reads both tenants' rows on every table.
+    await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    for (const [table, name] of hotelMvpRows) {
+      const both = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
+        [hotelMvp(name, 'a'), hotelMvp(name, 'b')]
+      );
+      assertEqual(both.rows[0]?.count, 2, `platform scope must read both tenants' "${table}" rows`);
+    }
+    // The only DELETE of recorded money is the sanctioned purge of that row's
+    // own tenant: refused for another tenant's purge, admitted for its own.
+    await client.query(`SELECT set_config('app.purging_organization_id', 'org_devfathom', true)`);
+    await expectDatabaseError(
+      '55000',
+      () =>
+        client.query(`DELETE FROM "hotel_folio_entries" WHERE "id" = $1`, [hotelMvp('entry', 'b')]),
+      'a purge of tenant A deleting tenant B money'
+    );
+    await client.query(`SELECT set_config('app.purging_organization_id', $1, true)`, [
+      organizationB,
+    ]);
+    await client.query('SAVEPOINT hotel_mvp_purge');
+    try {
+      const purged = await client.query(`DELETE FROM "hotel_folio_entries" WHERE "id" = $1`, [
+        hotelMvp('entry', 'b'),
+      ]);
+      assertEqual(purged.rowCount, 1, 'the sanctioned purge must delete its own tenant money');
+    } finally {
+      await client.query('ROLLBACK TO SAVEPOINT hotel_mvp_purge');
+      await client.query('RELEASE SAVEPOINT hotel_mvp_purge');
+    }
+    await client.query(
+      `SELECT set_config('app.is_platform_admin', 'false', true),
+              set_config('app.purging_organization_id', '', true),
+              set_config('app.current_user_id', '', true)`
+    );
+
     // H1-07 — meal plans are organization-scoped configuration (no assignment
     // rule): read, UPDATE and DELETE isolation, blind writes reaching exactly
     // the tenant's rows, the org-B insert failing closed, and platform reads.

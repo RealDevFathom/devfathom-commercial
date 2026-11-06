@@ -71,6 +71,10 @@ describe('module catalog routing', () => {
     ['restaurantGrowth.review', 'restaurant-core'],
     ['pharmacyPrescriptions.counterPatients', 'pharmacy-counter'],
     ['pharmacyPrescriptions.counterPatientPanel', 'pharmacy-counter'],
+    ['hotelReservations.create', 'hotel-reservations'],
+    ['hotelFolios.postExtra', 'hotel-folio'],
+    ['hotelHousekeeping.list', 'hotel-core'],
+    ['hotelRates.ratePlans.quote', 'hotel-core'],
     ['unknown.list', null],
   ])('maps tRPC procedure %s to %s', (procedure, expected) => {
     expect(moduleForProcedure(procedure)).toBe(expected);

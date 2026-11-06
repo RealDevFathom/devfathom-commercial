@@ -3,6 +3,9 @@ import { pharmacyMarketingRouter } from './pharmacy-marketing';
 import { router } from '../trpc';
 import { hotelPropertyRouter } from './hotel-property';
 import { hotelRatesRouter } from './hotel-rates';
+import { hotelReservationsRouter } from './hotel-reservations';
+import { hotelFoliosRouter } from './hotel-folios';
+import { hotelHousekeepingRouter } from './hotel-housekeeping';
 import { restaurantPromotionsRouter } from './restaurant-promotions';
 import { platformHealthRouter } from './platform-health';
 import { platformAIUsageRouter } from './platform-ai-usage';
@@ -77,6 +80,9 @@ export const appRouter = router({
   aiSettings: aiSettingsRouter,
   hotelProperty: hotelPropertyRouter,
   hotelRates: hotelRatesRouter,
+  hotelReservations: hotelReservationsRouter,
+  hotelFolios: hotelFoliosRouter,
+  hotelHousekeeping: hotelHousekeepingRouter,
   restaurantPromotions: restaurantPromotionsRouter,
   platformHealth: platformHealthRouter,
   platformAIUsage: platformAIUsageRouter,
