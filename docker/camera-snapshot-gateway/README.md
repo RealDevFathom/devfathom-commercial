@@ -88,14 +88,23 @@ placeholder secrets are rejected until you replace them.
    keep `api`, `metrics`, `pprof` and `playback` disabled (or authenticated), and do not change
    `record`, playback or the DVR source.
 
-5. **Service.** Review `camera-snapshot-gateway.service` (an example). Set `IPAddressAllow`
+5. **Host /proc.** ffmpeg's command line carries the MediaMTX reader secret, and
+   `/proc/<pid>/cmdline` is readable by every local user by default. Mount the host's `/proc`
+   with `hidepid=invisible` (kernel 5.8+; `hidepid=2` on older kernels), for example in
+   `/etc/fstab`: `proc /proc proc defaults,hidepid=invisible 0 0`, then
+   `mount -o remount,hidepid=invisible /proc`. The service refuses to start
+   (`PROC_HIDEPID_REQUIRED`) without it. Acceptance check, as an unprivileged user while a
+   still is being taken: `cat /proc/$(pgrep -n ffmpeg)/cmdline` must fail. If you use
+   `hidepid`'s `gid=` exemption, only trusted administrators may be in that group.
+
+6. **Service.** Review `camera-snapshot-gateway.service` (an example). Set `IPAddressAllow`
    to loopback plus the app's egress address(es), install it, then
    `systemctl enable --now camera-snapshot-gateway`. Logs: `journalctl -u camera-snapshot-gateway`.
 
-6. **Firewall.** Allow the listen port only from the DevFathom app's egress address(es). Do
+7. **Firewall.** Allow the listen port only from the DevFathom app's egress address(es). Do
    not expose it to the LAN at large or the internet. MediaMTX's RTSP port needs no new rule.
 
-7. **Rotate** a secret by updating both the hash in `config.json` (then restart the service)
+8. **Rotate** a secret by updating both the hash in `config.json` (then restart the service)
    and the app's `CAMERA_SNAPSHOT_BINDINGS`.
 
 ## Files

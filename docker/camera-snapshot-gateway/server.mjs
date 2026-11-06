@@ -221,9 +221,11 @@ export function parseConfig(raw) {
  * The exact ffmpeg argument vector for one still. Pure; `path` must be a
  * configured path (it is re-checked against the path grammar).
  *
- * The MediaMTX reader credential is in the URL argument. The systemd unit's
- * ProtectProc=invisible hides the process from other users, and stderr (which
- * can echo the URL) is never read or logged.
+ * The MediaMTX reader credential is in the URL argument, which is visible in
+ * /proc/<pid>/cmdline to every local user unless the host's /proc hides other
+ * users' processes. `main()` therefore refuses to start unless the host /proc
+ * is mounted with hidepid (see `procHidesOtherUsers`). stderr (which can echo
+ * the URL) is never read or logged.
  *
  * @param {Pick<SnapshotConfig, 'rtspOrigin' | 'rtspReader' | 'timeoutMs' | 'maxWidth'>} config
  * @param {string} path
@@ -560,6 +562,32 @@ export function isSupportedFfmpegVersion(versionOutput) {
 }
 
 /**
+ * True when the `/proc` this process sees is mounted with `hidepid=1|2`
+ * (`noaccess`/`invisible`), so other local users cannot read this service's
+ * or ffmpeg's command line. The systemd unit must NOT give the service a
+ * private /proc (ProtectProc/ProcSubset): this check has to see the host's.
+ *
+ * @param {string} mountinfo contents of /proc/self/mountinfo
+ * @returns {boolean}
+ */
+export function procHidesOtherUsers(mountinfo) {
+  let hidden = null;
+  for (const line of String(mountinfo).split('\n')) {
+    const separator = line.indexOf(' - ');
+    if (separator < 0) continue;
+    const fields = line.slice(0, separator).split(' ');
+    const [fsType, , superOptions = ''] = line.slice(separator + 3).split(' ');
+    if (fields[4] !== '/proc' || fsType !== 'proc') continue;
+    const options = `${fields[5] ?? ''},${superOptions}`.split(',');
+    // The last /proc mount in the table is the one in effect.
+    hidden = options.some((option) =>
+      ['hidepid=1', 'hidepid=2', 'hidepid=noaccess', 'hidepid=invisible'].includes(option)
+    );
+  }
+  return hidden === true;
+}
+
+/**
  * Read the config named by SNAPSHOT_GATEWAY_CONFIG and start listening.
  *
  * @param {NodeJS.ProcessEnv} [env]
@@ -576,6 +604,11 @@ export async function main(env = process.env) {
   }).toString('utf8');
   if (!isSupportedFfmpegVersion(version)) {
     throw Object.assign(new Error(CONFIG_ERROR), { code: 'FFMPEG_VERSION_UNSUPPORTED' });
+  }
+  // ffmpeg's argv carries the MediaMTX reader secret: never run where other
+  // local users could read it from /proc.
+  if (!procHidesOtherUsers(readFileSync('/proc/self/mountinfo', 'utf8'))) {
+    throw Object.assign(new Error(CONFIG_ERROR), { code: 'PROC_HIDEPID_REQUIRED' });
   }
   const server = createGatewayServer(config);
   return new Promise((resolve, reject) => {
