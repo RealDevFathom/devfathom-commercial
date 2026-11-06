@@ -12,6 +12,49 @@ const money = (value: string | number) => {
     absolute = n < BigInt(0) ? -n : n;
   return `${n < BigInt(0) ? '-' : ''}${absolute / BigInt(100)}.${String(absolute % BigInt(100)).padStart(2, '0')}`;
 };
+
+// The journal projection is being delivered separately. Keep this consumer
+// compatible with the current response until that projection is deployed.
+type JournalEntry = Awaited<
+  ReturnType<ReturnType<typeof pharmacyFinanceRouter.createCaller>['financialStatements']>
+>['journal'][number] & {
+  eventLabel?: string | null;
+  billNumber?: number | null;
+  actorDisplayName?: string | null;
+};
+
+export function JournalEntryDetails({ entry: e }: { entry: JournalEntry }) {
+  const event = e.eventLabel || (e.reversesEntryId ? 'Reversal: Journal entry' : 'Journal entry');
+  return (
+    <details className="mt-3 rounded-sm border border-border p-3">
+      <summary className="min-h-11 cursor-pointer break-words focus-visible:outline-2 focus-visible:outline-ring">
+        {formatDisplayDateTime(e.occurredAt, 'Asia/Karachi')} PKT · {event} ·{' '}
+        {e.billNumber == null ? 'Bill number not available' : `Bill ${e.billNumber}`} ·{' '}
+        {e.actorDisplayName?.trim() || 'Staff member not available'}
+      </summary>
+      <p className="my-2 break-words text-sm">{e.description}</p>
+      <p className="my-2 break-all text-xs text-text-muted">
+        Entry {e.id} · source {e.sourceId}
+      </p>
+      <ul>
+        {e.lines.map((l) => (
+          <li
+            key={l.id}
+            className="flex flex-wrap justify-between gap-3 border-t border-border-subtle py-2 text-sm"
+          >
+            <span>
+              {l.accountCode} · {l.side}
+              {l.lotId ? ` · lot ${l.lotId}` : ''}
+            </span>
+            <span className="font-mono">
+              {e.currency} {money(l.amountMinor)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
 export async function FinancialStatements({
   caller,
   branchId,
@@ -192,31 +235,7 @@ export async function FinancialStatements({
         Export this journal page as evidence
       </Link>
       {result.journal.map((e) => (
-        <details key={e.id} className="mt-3 rounded-sm border border-border p-3">
-          <summary className="min-h-11 cursor-pointer break-words focus-visible:outline-2 focus-visible:outline-ring">
-            {formatDisplayDateTime(e.occurredAt)} · {e.description} · {e.sourceKind}
-            {e.reversesEntryId ? ' · reversal' : ''}
-          </summary>
-          <p className="my-2 break-all text-xs text-text-muted">
-            Entry {e.id} · source {e.sourceId}
-          </p>
-          <ul>
-            {e.lines.map((l) => (
-              <li
-                key={l.id}
-                className="flex flex-wrap justify-between gap-3 border-t border-border-subtle py-2 text-sm"
-              >
-                <span>
-                  {l.accountCode} · {l.side}
-                  {l.lotId ? ` · lot ${l.lotId}` : ''}
-                </span>
-                <span className="font-mono">
-                  {e.currency} {money(l.amountMinor)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </details>
+        <JournalEntryDetails key={e.id} entry={e} />
       ))}
       <nav aria-label="Journal pages" className="mt-3 flex gap-4">
         {result.page > 1 && (
