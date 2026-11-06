@@ -739,7 +739,11 @@
   --duration-base: 200ms;
   --duration-slow: 360ms;
 
+  --leading-tight: 1.08;
+  --leading-snug: 1.22;
+  --leading-relaxed: 1.65;
   --tracking-tight: -0.02em;
+  --tracking-wide: 0.04em;
   --tracking-caps: 0.14em;
 
   --font-display: var(--font-sans);

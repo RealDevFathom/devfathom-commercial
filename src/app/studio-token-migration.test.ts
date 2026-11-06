@@ -24,6 +24,13 @@ describe('Studio token migration', () => {
     expect(globals).toMatch(/--radius-sm:\s*12px/);
   });
 
+  it('keeps the Studio typography overrides of the Tailwind leading and tracking scale', () => {
+    expect(globals).toMatch(/--leading-tight:\s*1\.08;/);
+    expect(globals).toMatch(/--leading-snug:\s*1\.22;/);
+    expect(globals).toMatch(/--leading-relaxed:\s*1\.65;/);
+    expect(globals).toMatch(/--tracking-wide:\s*0\.04em;/);
+  });
+
   it('does not expose or consume retired palette utilities', () => {
     expect(globals).not.toMatch(/--color-(?:abyss|brass|paper-white|paper-\d+)/);
     expect(globals).not.toMatch(/\.\S*(?:abyss-|brass-|paper-white)/);
