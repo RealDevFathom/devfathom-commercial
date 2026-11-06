@@ -3,6 +3,7 @@ import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
 import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
+import { ReceivingSearch } from './receiving-search';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -187,7 +188,17 @@ export default async function PharmacyReceivingPage({
   /** The scan box resolves against the register, not against a guess. */
   const scanTerm = param(query, 'scan');
   let scan: ScanResolution | null = null;
-  if (scanTerm) scan = await caller.resolveScan({ term: scanTerm });
+  const chosenMedicine = workspace.medicines.find(
+    (medicine) => medicine.id === param(query, 'scanMedicine') && medicine.productName === scanTerm
+  );
+  if (chosenMedicine) {
+    scan = {
+      kind: 'medicine',
+      medicineId: chosenMedicine.id,
+      packLevelId: null,
+      label: chosenMedicine.productName,
+    };
+  } else if (scanTerm) scan = await caller.resolveScan({ term: scanTerm });
 
   let lots: Awaited<ReturnType<typeof caller.lotsFromReceipt>> = [];
   if (selectedReceipt && selectedReceipt.status === 'POSTED') {
@@ -463,24 +474,13 @@ export default async function PharmacyReceivingPage({
 
   return (
     <Frame branch={scope} notice={notice}>
-      <form action={ROUTE} className="flex flex-wrap items-end gap-3" method="get">
-        <input name="branch" type="hidden" value={branchId} />
-        {selectedOrder ? <input name="order" type="hidden" value={selectedOrder.id} /> : null}
-        {selectedReceipt ? <input name="receipt" type="hidden" value={selectedReceipt.id} /> : null}
-        <label className="min-w-56 flex-1 text-sm font-medium text-text-body" htmlFor="scan">
-          Scan or search
-          <input
-            autoComplete="off"
-            autoFocus
-            className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"
-            defaultValue={scanTerm ?? ''}
-            id="scan"
-            name="scan"
-            placeholder="Scan a 2D or linear code, or type a product name"
-          />
-        </label>
-        <SubmitButton variant="secondary">Find line</SubmitButton>
-      </form>
+      <ReceivingSearch
+        branchId={branchId}
+        orderId={selectedOrder?.id}
+        receiptId={selectedReceipt?.id}
+        initialTerm={scanTerm ?? ''}
+        medicines={workspace.medicines.map(({ id, productName }) => ({ id, productName }))}
+      />
       {scan ? <ScanNotice scan={scan} onThisOrder={scanOnOrder(scan, selectedOrder)} /> : null}
 
       <div className="grid gap-6 sm:grid-cols-4">
@@ -1585,7 +1585,7 @@ function ScanNotice({ scan, onThisOrder }: { scan: ScanResolution; onThisOrder: 
 
 function linkTo(query: SearchQuery, branchId: string, next: Record<string, string>): string {
   const params = new URLSearchParams({ branch: branchId });
-  for (const key of ['order', 'receipt', 'exceptions', 'scan'] as const) {
+  for (const key of ['order', 'receipt', 'exceptions', 'scan', 'scanMedicine'] as const) {
     const value = param(query, key);
     if (value) params.set(key, value);
   }

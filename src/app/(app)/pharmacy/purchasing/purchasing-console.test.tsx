@@ -845,6 +845,19 @@ describe('goods-in scan and duplicate serial', () => {
     expect(line.querySelector('input[name="gs1Payload:line-1"]')).toHaveValue(payload);
   });
 
+  it('accepts only a matching workspace medicine selection and otherwise resolves the scan', async () => {
+    const resolveScan = vi.fn().mockResolvedValue({ kind: 'unresolved', label: 'Other' });
+    mocks.createCaller.mockReturnValue(callerStub({ resolveScan }));
+    const selected = await ReceivingPage({
+      searchParams: params({ scan: 'Amoxicillin 500mg', scanMedicine: 'med-1' }),
+    });
+    render(selected);
+    expect(screen.getByText(/Matched Amoxicillin 500mg/)).toBeInTheDocument();
+    expect(resolveScan).not.toHaveBeenCalled();
+    await ReceivingPage({ searchParams: params({ scan: 'Other', scanMedicine: 'med-1' }) });
+    expect(resolveScan).toHaveBeenCalledWith({ term: 'Other' });
+  });
+
   it('reports a duplicate serial as a rejection the operator can correct', async () => {
     const write = vi.fn().mockRejectedValue(new Error('DUPLICATE_SERIAL'));
     mocks.createCaller.mockReturnValue(
