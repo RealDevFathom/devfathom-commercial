@@ -1,0 +1,23 @@
+22:  code: 'P2028',
+26:[audit] failed to record workforceFinancial Error [PrismaClientKnownRequestError
+29:  code: 'P2028',
+33:[audit] failed to record sop Error [PrismaClientKnownRequestError]: Transaction
+36:  code: 'P2028',
+41:Invalid `prisma.auditLog.create()` invocation:
+48:[audit] failed to record inventory Error [PrismaClientKnownRequestError]:
+49:Invalid `prisma.auditLog.create()` invocation:
+57:  code: 'P2028',
+66: GET /restaurant/reports 200 in 17.7min (next.js: 8ms, proxy.ts: 4ms, applicatio
+67:n-code: 17.7min)
+69:Invalid `prisma.auditLog.create()` invocation:
+76:[audit] failed to record catering Error [PrismaClientKnownRequestError]:
+77:Invalid `prisma.auditLog.create()` invocation:
+85:  code: 'P2028',
+95:Invalid `prisma.auditLog.create()` invocation:
+102:[audit] failed to record wastage Error [PrismaClientKnownRequestError]:
+103:Invalid `prisma.auditLog.create()` invocation:
+111:  code: 'P2028',
+120:[audit] failed to record restaurantCatalog.listProducts Error [PrismaClientKnown
+126:  code: 'P2028',
+130:[audit] failed to record payments Error [PrismaClientKnownRequestError]: Transac
+136:  code: 'P2028',

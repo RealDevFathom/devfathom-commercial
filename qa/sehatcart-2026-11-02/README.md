@@ -1,6 +1,6 @@
 # SehatCart develop QA pass (2026-11-02)
 
-Working files for the QA pass logged in `/HANDOFF.md`.
+Working files for the QA pass logged in `/QA_SEHATCART_HANDOFF.md`.
 
 - `findings-log.md` — running findings (N1…, plus re-verified GitHub issues) with evidence and code references.
 - `rbac-static.tsv` — static authorization audit of every pharmacy tRPC procedure (+ organization admin and team).
