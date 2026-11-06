@@ -160,17 +160,19 @@ export function assertSaleableOnReceipt(evidence: SaleableEvidence): void {
 
 /**
  * PUR-05: the direct purchase path is excused the purchase order and nothing
- * else. It still needs a named reason and an approver who is not the receiver.
+ * else. It still needs a named reason and a second approver, except when the
+ * server boundary has PIN-reauthenticated an eligible solo owner.
  */
 export function assertDirectPurchaseAuthorized(input: {
   bypassReason: string;
   bypassApprovedByUserId: string;
   receivedByUserId: string;
+  soloOwnerReauthenticated?: boolean;
 }): void {
   if (input.bypassReason.trim().length === 0 || input.bypassApprovedByUserId.trim().length === 0) {
     throw new PharmacyReceivingError('BYPASS_EVIDENCE_MISSING');
   }
-  if (input.bypassApprovedByUserId === input.receivedByUserId) {
+  if (input.bypassApprovedByUserId === input.receivedByUserId && !input.soloOwnerReauthenticated) {
     throw new PharmacyReceivingError('SELF_APPROVAL');
   }
 }

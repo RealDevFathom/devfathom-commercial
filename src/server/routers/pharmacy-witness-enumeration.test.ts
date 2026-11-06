@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
-  hasModule: () => true,
+  hasModule: vi.fn(() => true),
   resolveOrganizationEntitlements: vi.fn(),
 }));
 vi.mock('@/server/audit', () => ({
@@ -14,6 +14,8 @@ vi.mock('@/server/audit', () => ({
 import { pharmacySafetyRouter } from './pharmacy-safety';
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
 import { router, type TRPCContext } from '../trpc';
+import { hasModule } from '@/lib/entitlements';
+afterEach(() => vi.mocked(hasModule).mockReturnValue(true));
 const app = router({ safety: pharmacySafetyRouter, purchasing: pharmacyPurchasingRouter });
 function fixture(capability: string) {
   const db = {
@@ -35,7 +37,11 @@ function fixture(capability: string) {
     requestMeta: { ip: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
-  return { db, caller: app.createCaller(ctx) };
+  return {
+    db,
+    caller: app.createCaller(ctx),
+    purchasing: pharmacyPurchasingRouter.createCaller(ctx),
+  };
 }
 describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surface) => {
   function query(f: ReturnType<typeof fixture>) {
@@ -78,4 +84,28 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
       expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
     });
   }
+});
+
+function purchasingWitnesses(f: ReturnType<typeof fixture>) {
+  return f.purchasing.controlledWitnesses({ branchId: 'branch', goodsReceiptId: 'receipt' });
+}
+
+it('allows a procurement receiver to select a controlled purchase witness', async () => {
+  const f = fixture('pharmacy:procurement');
+  await expect(purchasingWitnesses(f)).resolves.toEqual([]);
+});
+it('rejects an inactive database actor before witness enumeration', async () => {
+  const f = fixture('pharmacy:safety');
+  f.db.user.findUnique.mockResolvedValue(null);
+  await expect(purchasingWitnesses(f)).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+  });
+  expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+});
+
+it('does not enumerate purchasing witnesses without the procurement module', async () => {
+  const f = fixture('pharmacy:safety');
+  vi.mocked(hasModule).mockReturnValue(false);
+  await expect(purchasingWitnesses(f)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
 });

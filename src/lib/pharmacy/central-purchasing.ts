@@ -1,3 +1,4 @@
+import { actorIsPharmacyOwner } from './procurement-access';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { allocateTransfer } from './inventory-operations';
 import type { InterbranchTransferSuggestion } from './interbranch-transfer-suggestions';
@@ -11,6 +12,9 @@ export class CentralPurchasingError extends Error {
 type Scope = { organizationId: string; actorId: string };
 
 export async function purchasingAccess(db: ScopedDb, scope: Scope, branchId?: string) {
+  if (await actorIsPharmacyOwner(db, scope.organizationId, scope.actorId)) {
+    return { organizationWide: true, branchIds: branchId ? [branchId] : undefined };
+  }
   const grants = await db.pharmacyCentralPurchasingAccess.findMany({
     where: { organizationId: scope.organizationId, userId: scope.actorId },
     select: { branchId: true },

@@ -12,6 +12,7 @@ const scope = { organizationId: 'org_chain', actorId: 'user_branch' };
 
 function fakeDb(overrides: Record<string, unknown> = {}) {
   return {
+    user: { findUnique: async () => null },
     pharmacyCentralPurchasingAccess: {
       findMany: async () => [{ branchId: 'branch_a' }],
     },
@@ -291,5 +292,30 @@ describe('INV-10 receipt allocation', () => {
     expect(evidence).toEqual([
       expect.objectContaining({ quantityUnits: 10, transferId: 'transfer' }),
     ]);
+  });
+});
+
+it('gives an installed owner central branch access without duplicate grant rows', async () => {
+  const db = fakeDb({
+    user: {
+      findUnique: async () => ({
+        role: 'ADMIN',
+        organizationRole: {
+          key: 'owner',
+          isSystem: true,
+          permissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+    },
+    pharmacyCentralPurchasingAccess: {
+      findMany: async () => {
+        throw new Error('Owner must not need duplicate grants');
+      },
+    },
+  });
+  expect(await centralDemand(db, scope, 'branch_a')).toMatchObject({
+    organizationWide: true,
+    branches: ['branch_a'],
   });
 });
