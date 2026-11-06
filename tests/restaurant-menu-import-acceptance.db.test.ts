@@ -603,6 +603,31 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
         });
         await expect(commit()).rejects.toMatchObject({ reason: 'CURRENCY_MISMATCH' });
       }
+
+      // Same figure re-entered after the line is already PKR: the review guard does not fire
+      // (currency unchanged), so commit itself must refuse the relabel.
+      await deps.menuImport.reviewMenuImportLine(dbA, {
+        lineId: foreignLine.id,
+        decision: 'ACCEPTED',
+        reviewedById: userA,
+        priceAmount: '3500',
+        currency: 'PKR',
+      });
+      await deps.menuImport.reviewMenuImportLine(dbA, {
+        lineId: foreignLine.id,
+        decision: 'ACCEPTED',
+        reviewedById: userA,
+        priceAmount: foreignLine.extractedPriceAmount!.toString(),
+        currency: 'PKR',
+      });
+      const relabelledSame = await dbA.restaurantMenuImportLine.findUniqueOrThrow({
+        where: { id: foreignLine.id },
+      });
+      expect(relabelledSame.reviewedCurrency).toBe('PKR');
+      expect(relabelledSame.reviewedPriceAmount?.toString()).toBe(
+        foreignLine.extractedPriceAmount!.toString()
+      );
+      await expect(commit()).rejects.toMatchObject({ reason: 'CURRENCY_MISMATCH' });
       expect(await dbA.restaurantProduct.count()).toBe(productsBefore);
       expect(await dbA.restaurantMenu.count()).toBe(menusBefore);
       expect(await dbA.restaurantPriceListVersion.count()).toBe(versionsBefore);
