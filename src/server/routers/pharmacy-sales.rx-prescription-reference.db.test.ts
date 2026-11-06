@@ -44,15 +44,19 @@ const RX_DENIED = refused(
   'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.',
   'FORBIDDEN'
 );
-const PRESCRIPTION_REQUIRED = refused(
-  'A verified prescription must be attached before adding a prescription-only or restricted medicine.'
-);
 
 type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 type Medicine = { medicineId: string; presentationId: string; packLevelId: string };
 type SalesCaller = {
   create: (input: { branchId: string }) => Promise<{ id: string }>;
   addLine: (input: Record<string, unknown>) => Promise<{ line: { id: string } }>;
+  attachCounterPrescription: (input: {
+    branchId: string;
+    saleId: string;
+    saleLineId: string;
+    patientId: string;
+    prescriptionLineId: string;
+  }) => Promise<unknown>;
   linkCustomer: (input: Record<string, unknown>) => Promise<unknown>;
   counterCart: (input: { branchId: string; saleId: string }) => Promise<{ lines: unknown[] }>;
   transition: (input: {
@@ -444,8 +448,135 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     await expectRefused(ids.pharmacist, rx, withReference(`rx-invented-${suffix}`), NOT_FOUND);
   });
 
-  it('refuses an Rx line when the API omits the prescription', async () => {
-    await expectRefused(ids.pharmacist, rx, {}, PRESCRIPTION_REQUIRED);
+  it('allows a cashier to stage an unlinked Rx line without authorizing it', async () => {
+    const saleId = await newSale(ids.cashier);
+    const added = await act(ids.cashier, (api) => api.addLine(line(saleId, rx)));
+    const cart = await act(ids.cashier, (api) => api.counterCart({ branchId: ids.branch, saleId }));
+    expect(cart.lines).toEqual([
+      expect.objectContaining({
+        saleLineId: added.line.id,
+        prescriptionLineId: null,
+        prescriptionSigned: false,
+      }),
+    ]);
+  });
+
+  it('serializes attachment against void and never attaches to a void bill', async () => {
+    const saleId = await newSale(ids.cashier);
+    const added = await act(ids.cashier, (api) => api.addLine(line(saleId, rx)));
+    let release: () => void = () => {};
+    let markLocked: () => void = () => {};
+    const locked = new Promise<void>((resolve) => {
+      markLocked = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const voiding = act(ids.cashier, async (api) => {
+      await api.transition({ branchId: ids.branch, saleId, action: 'void', reason: 'Cancelled' });
+      markLocked();
+      await held;
+    });
+    await locked;
+    const attaching = act(ids.cashier, (api) =>
+      api.attachCounterPrescription({
+        branchId: ids.branch,
+        saleId,
+        saleLineId: added.line.id,
+        patientId: patients.ayesha,
+        prescriptionLineId: lines.valid,
+      })
+    );
+    release();
+    const outcomes = await Promise.allSettled([voiding, attaching]);
+    expect(outcomes[0].status).toBe('fulfilled');
+    expect(outcomes[1].status).toBe('rejected');
+    const stored = await withTenantDb(ids.org, (tx) =>
+      tx.pharmacySaleLine.findFirstOrThrow({ where: { id: added.line.id } })
+    );
+    expect(stored.prescriptionLineId).toBeNull();
+  });
+
+  it('queues the attached line without signing and rejects the requesting cashier as signer', async () => {
+    const saleId = await newSale(ids.cashier);
+    const added = await act(ids.cashier, (api) => api.addLine(line(saleId, rx)));
+    const attachment = {
+      branchId: ids.branch,
+      saleId,
+      saleLineId: added.line.id,
+      patientId: patients.ayesha,
+      prescriptionLineId: lines.valid,
+    };
+    await expect(
+      act(ids.cashier, (api) =>
+        api.attachCounterPrescription({ ...attachment, patientId: patients.bilal })
+      )
+    ).rejects.toMatchObject(PATIENT_MISMATCH);
+    await act(ids.cashier, (api) => api.attachCounterPrescription(attachment));
+    const review = await withTenantDb(ids.org, (tx) =>
+      tx.pharmacyPharmacistReviewItem.findFirstOrThrow({ where: { saleLineId: added.line.id } })
+    );
+    const before = await act(ids.cashier, (api) =>
+      api.counterCart({ branchId: ids.branch, saleId })
+    );
+    expect(before.lines).toEqual([
+      expect.objectContaining({ prescriptionLineId: lines.valid, prescriptionSigned: false }),
+    ]);
+    await expect(
+      withTenantDb(
+        ids.org,
+        (tx) =>
+          tx.pharmacyPharmacistReviewDecision.create({
+            data: {
+              reviewItemId: review.id,
+              kind: 'SIGN',
+              signedAt: new Date(),
+              actorUserId: ids.cashier,
+            },
+          }),
+        { userId: ids.cashier }
+      )
+    ).rejects.toThrow();
+    await withTenantDb(
+      ids.org,
+      (tx) =>
+        tx.pharmacyPharmacistReviewDecision.create({
+          data: {
+            reviewItemId: review.id,
+            kind: 'SIGN',
+            signedAt: new Date(),
+            actorUserId: ids.pharmacist,
+          },
+        }),
+      { userId: ids.pharmacist }
+    );
+    const after = await act(ids.cashier, (api) =>
+      api.counterCart({ branchId: ids.branch, saleId })
+    );
+    expect(after.lines).toEqual([
+      expect.objectContaining({ prescriptionLineId: lines.valid, prescriptionSigned: true }),
+    ]);
+  });
+
+  it('refuses an attempt to attach a line belonging to a different bill', async () => {
+    const saleId = await newSale(ids.cashier);
+    const otherSaleId = await newSale(ids.cashier);
+    const added = await act(ids.cashier, (api) => api.addLine(line(otherSaleId, rx)));
+    await expect(
+      act(ids.cashier, (api) =>
+        api.attachCounterPrescription({
+          branchId: ids.branch,
+          saleId,
+          saleLineId: added.line.id,
+          patientId: patients.ayesha,
+          prescriptionLineId: lines.valid,
+        })
+      )
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    const lineAfter = await withTenantDb(ids.org, (tx) =>
+      tx.pharmacySaleLine.findFirstOrThrow({ where: { id: added.line.id } })
+    );
+    expect(lineAfter.prescriptionLineId).toBeNull();
   });
 
   it("refuses another organization's prescription", async () => {
@@ -579,7 +710,7 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
         data: {
           prescriptionLineId,
           saleLineId,
-          requestedByUserId: ids.pharmacist,
+          requestedByUserId: ids.cashier,
         },
       });
       await tx.pharmacyPharmacistReviewDecision.create({

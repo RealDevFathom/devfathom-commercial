@@ -564,6 +564,7 @@ function ScopedPharmacyCounterConsole({
 
   const createSale = trpc.pharmacySales.create.useMutation();
   const addLine = trpc.pharmacySales.addLine.useMutation();
+  const attachCounterPrescription = trpc.pharmacySales.attachCounterPrescription.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
@@ -665,7 +666,11 @@ function ScopedPharmacyCounterConsole({
     const lines: CounterAlertLine[] = (cart?.lines ?? []).map((line) => {
       const prescriptionLine = patient?.prescriptions
         .flatMap((prescription) => prescription.lines.map((entry) => ({ prescription, entry })))
-        .find(({ entry }) => entry.medicineId === line.medicineId);
+        .find(({ entry }) =>
+          line.controlled
+            ? entry.medicineId === line.medicineId
+            : entry.prescriptionLineId === line.prescriptionLineId
+        );
       return {
         ref: line.saleLineId,
         medicine: {
@@ -684,7 +689,9 @@ function ScopedPharmacyCounterConsole({
         prescription: prescriptionLine
           ? {
               id: prescriptionLine.entry.prescriptionLineId,
-              verified: prescriptionLine.entry.verified,
+              verified: line.controlled
+                ? prescriptionLine.entry.verified
+                : line.prescriptionSigned === true,
               expiresAt: new Date(prescriptionLine.prescription.validUntil),
               remainingAuthorizedUnits:
                 prescriptionLine.entry.remainingAuthorizedUnits +
@@ -2370,6 +2377,11 @@ function ScopedPharmacyCounterConsole({
                       ? 'Refresh this bill to verify payment before taking more money.'
                       : 'Cash, card, bank transfer, wallet or khata.'}
             </p>
+            {blocked ? (
+              <Button variant="outline" className="mt-2 min-h-11 w-full" onClick={openChecks}>
+                Attach a prescription or request pharmacist verification
+              </Button>
+            ) : null}
             {billState !== 'ready' && billState !== 'settled' && saleId ? (
               <Button variant="outline" className="mt-2 min-h-11 w-full" onClick={openPayment}>
                 Review payment status
@@ -2539,6 +2551,34 @@ function ScopedPharmacyCounterConsole({
       >
         <CounterRxPanel
           ref={rxPanelRef}
+          attachableLines={(cart?.lines ?? [])
+            .map((line, index) => ({ ...line, lineNumber: index + 1 }))
+            .filter(
+              (line) => !line.controlled && (line.rx || line.restricted) && !line.prescriptionLineId
+            )}
+          attachmentError={
+            attachCounterPrescription.error ? messageFrom(attachCounterPrescription.error) : null
+          }
+          onRefreshVerification={() => void refreshCart()}
+          onAttachPrescription={async (saleLineId, prescriptionLineId) => {
+            if (!saleId || !patient) return;
+            try {
+              await attachCounterPrescription.mutateAsync({
+                branchId,
+                saleId,
+                saleLineId,
+                prescriptionLineId,
+                patientId: patient.patientId,
+              });
+              await refreshCart();
+              setNotice({
+                tone: 'success',
+                message: 'Prescription attached. A pharmacist must sign this line before payment.',
+              });
+            } catch (error) {
+              setNotice({ tone: 'danger', message: messageFrom(error) });
+            }
+          }}
           controlled={
             // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A
             // FORBIDDEN read means this actor cannot dispense, so the controlled
@@ -2594,7 +2634,7 @@ function ScopedPharmacyCounterConsole({
                 ? messageFrom(patientPanelQuery.error)
                 : null
           }
-          disabled={busy}
+          disabled={busy || attachCounterPrescription.isPending}
           onQueryChange={setPatientQuery}
           onSearch={() => setSubmittedPatientQuery(patientQuery.trim())}
           onSelectPatient={(id) => {

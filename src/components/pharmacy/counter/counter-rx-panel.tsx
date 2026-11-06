@@ -492,6 +492,16 @@ function CounterRxPhotoCapture({
 }
 
 export type CounterRxPanelProps = {
+  attachableLines?: ReadonlyArray<{
+    saleLineId: string;
+    medicineId: string;
+    presentationId?: string;
+    medicineName: string;
+    lineNumber: number;
+  }>;
+  onAttachPrescription?: (saleLineId: string, prescriptionLineId: string) => void;
+  onRefreshVerification?: () => void;
+  attachmentError?: string | null;
   controlled?: {
     prescriptionLineId: string;
     staffProfileId: string;
@@ -558,6 +568,10 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
   function CounterRxPanel(
     {
       controlled,
+      attachableLines = [],
+      onAttachPrescription,
+      onRefreshVerification,
+      attachmentError,
       alerts,
       acknowledgementScope = null,
       patient,
@@ -585,6 +599,11 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
         className="min-w-0 space-y-5 rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
       >
         <section aria-label="Safety blocks" className="space-y-3">
+          {attachmentError ? (
+            <p role="alert" className="text-sm text-destructive">
+              {attachmentError}
+            </p>
+          ) : null}
           <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
             Safety blocks
           </h4>
@@ -746,7 +765,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                               <StatusPill
                                 status="verified"
                                 tone="success"
-                                label="Pharmacist signed"
+                                label="Prescription reviewed · bill line needs its own signature"
                               />
                             ) : (
                               <StatusPill
@@ -759,6 +778,29 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                                 }
                               />
                             )}
+                            {attachableLines
+                              .filter(
+                                (billLine) =>
+                                  billLine.medicineId === line.medicineId &&
+                                  billLine.presentationId === line.presentationId
+                              )
+                              .map((billLine) => (
+                                <Button
+                                  key={billLine.saleLineId}
+                                  type="button"
+                                  variant="outline"
+                                  className="h-11"
+                                  disabled={disabled || !onAttachPrescription}
+                                  onClick={() =>
+                                    onAttachPrescription?.(
+                                      billLine.saleLineId,
+                                      line.prescriptionLineId
+                                    )
+                                  }
+                                >
+                                  Attach to line {billLine.lineNumber}: {billLine.medicineName}
+                                </Button>
+                              ))}
                           </li>
                         ))}
                       </ul>
@@ -767,6 +809,29 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 </ul>
               )}
               <div className="space-y-2">
+                <p className="text-sm text-text-muted">
+                  An attached prescription still needs an independent pharmacist to sign this bill
+                  line.
+                </p>
+                <Link
+                  className={buttonVariants({ variant: 'outline' })}
+                  href="/pharmacy/pharmacist-queue"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open pharmacist review
+                </Link>
+                {onRefreshVerification ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11"
+                    disabled={disabled}
+                    onClick={onRefreshVerification}
+                  >
+                    Check pharmacist verification
+                  </Button>
+                ) : null}
                 <div className="flex flex-wrap gap-2">
                   {onCapturePrescription ? (
                     <Button

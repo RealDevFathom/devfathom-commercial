@@ -10,7 +10,7 @@ const REASONS = {
   PRESCRIPTION_NOT_IN_DATE: 'That prescription is outside its validity period.',
   PRESCRIPTION_EXHAUSTED: 'That prescription has no remaining quantity or repeats for this line.',
   PRESCRIPTION_REQUIRED:
-    'A verified prescription must be attached before adding a prescription-only or restricted medicine.',
+    'A verified prescription must be attached before payment for a prescription-only or restricted medicine.',
   PRESCRIPTION_NOT_VERIFIED:
     'A pharmacist must verify and sign the attached prescription before payment.',
   PRESCRIPTION_NEEDS_PHARMACIST:

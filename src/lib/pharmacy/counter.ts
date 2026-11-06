@@ -489,6 +489,7 @@ export async function searchCounterCatalog(
 export type CounterCartLine = {
   saleLineId: string;
   medicineId: string;
+  presentationId?: string;
   medicineName: string;
   strength: string | null;
   presentation: string;
@@ -509,6 +510,9 @@ export type CounterCartLine = {
   activeIngredients?: Array<{ ingredientId: string; name: string }>;
   /** An emergency controlled supply was recorded for this line (open follow-up). */
   emergencySupply: boolean;
+  /** The reference and review belong to this exact sale line. */
+  prescriptionLineId?: string | null;
+  prescriptionSigned?: boolean;
   /** What FEFO actually took, batch by batch (POS-03: cart shows allocation). */
   allocations: Array<{
     inventoryLotId: string;
@@ -582,6 +586,19 @@ export async function readCounterCart(
       })
     : [];
   const emergencyLineIds = new Set(emergencyFollowUps.map((row) => row.saleLineId));
+  const referenced = sale.lines.filter(
+    (line) => line.prescriptionLineId && !line.medicine.controlled
+  );
+  const signedReviews = referenced.length
+    ? await db.pharmacyPharmacistReviewItem.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          saleLineId: { in: referenced.map((line) => line.id) },
+          decisions: { some: { kind: 'SIGN', signedAt: { not: null } } },
+        },
+        select: { saleLineId: true, prescriptionLineId: true },
+      })
+    : [];
 
   const lines: CounterCartLine[] = sale.lines.map((line) => {
     // The earliest expiry among this line's own allocations is what FEFO would
@@ -596,6 +613,7 @@ export async function readCounterCart(
     return {
       saleLineId: line.id,
       medicineId: line.medicineId,
+      presentationId: line.presentationId,
       medicineName: line.medicine.productName,
       strength: renderStrength(line.medicine.strengths),
       presentation: line.presentation.presentation,
@@ -617,6 +635,11 @@ export async function readCounterCart(
         name: component.ingredient.name,
       })),
       emergencySupply: emergencyLineIds.has(line.id),
+      prescriptionLineId: line.prescriptionLineId,
+      prescriptionSigned: signedReviews.some(
+        (review) =>
+          review.saleLineId === line.id && review.prescriptionLineId === line.prescriptionLineId
+      ),
       allocations: line.allocations.map((allocation) => ({
         inventoryLotId: allocation.inventoryLotId,
         batchNumber: allocation.lot.batch.batchNumber,

@@ -1009,6 +1009,106 @@ export const pharmacySalesRouter = router({
         createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
       )
     ),
+  attachCounterPrescription: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          saleLineId: z.string().min(1),
+          patientId: z.string().min(1),
+          prescriptionLineId: z.string().min(1),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        category: 'PHARMACY_SAFETY',
+        action: 'attach_prescription',
+        targetType: 'PharmacySale',
+        targetId: input.saleId,
+        skipInput: true,
+      });
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          // Serialize with tender, completion, void, and other attachments.
+          await db.$queryRaw(
+            Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+          );
+          const sale = await db.pharmacySale.findFirst({
+            where: {
+              id: input.saleId,
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              status: 'OPEN',
+            },
+            select: { id: true },
+          });
+          if (!sale)
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'This bill is no longer open.' });
+          const line = await db.pharmacySaleLine.findFirst({
+            where: {
+              id: input.saleLineId,
+              saleId: sale.id,
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+            },
+            include: { medicine: true },
+          });
+          if (!line || line.medicine.controlled || !(line.medicine.rx || line.medicine.restricted))
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Choose an ordinary prescription-only line on this bill.',
+            });
+          if (
+            line.prescriptionLineId &&
+            (line.prescriptionLineId !== input.prescriptionLineId ||
+              line.prescriptionPatientId !== input.patientId)
+          )
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'This line already has a prescription attached.',
+            });
+          const reference = await resolvePrescriptionReference(db, scope, {
+            saleId: sale.id,
+            medicineId: line.medicineId,
+            presentationId: line.presentationId,
+            units: line.canonicalUnits,
+            patientId: input.patientId,
+            prescriptionLineId: input.prescriptionLineId,
+          });
+          const review = await db.pharmacyPharmacistReviewItem.findFirst({
+            where: { organizationId: scope.organizationId, saleLineId: line.id },
+          });
+          if (review && review.prescriptionLineId !== reference.prescriptionLineId)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'This line already has a different review.',
+            });
+          if (review && !line.prescriptionLineId)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'This line already has a review. Ask a pharmacist to resolve it.',
+            });
+          if (!line.prescriptionLineId)
+            await attachPrescriptionReference(db, scope, { ...reference, saleLineId: line.id });
+          if (!review)
+            await db.pharmacyPharmacistReviewItem.create({
+              data: {
+                organizationId: scope.organizationId,
+                saleLineId: line.id,
+                prescriptionLineId: reference.prescriptionLineId,
+                requestedByUserId: scope.actorId,
+              },
+            });
+          return { attached: true };
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
   addLine: protectedProcedure
     .input(
       z
@@ -1093,6 +1193,17 @@ export const pharmacySalesRouter = router({
         });
       }
       try {
+        let draftCounterAuthorized = false;
+        if (!input.prescription && !input.controlledAuthorization) {
+          const candidate = await ctx.db.medicine.findFirst({
+            where: { id: input.medicineId, organizationId: ctx.session!.user.organizationId! },
+            select: { rx: true, restricted: true, controlled: true },
+          });
+          if (candidate && !candidate.controlled && (candidate.rx || candidate.restricted)) {
+            await requireCounterReceiptAccess(ctx, input.branchId, true);
+            draftCounterAuthorized = true;
+          }
+        }
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           const scope = await scopeFor(ctx, input.branchId);
@@ -1104,12 +1215,18 @@ export const pharmacySalesRouter = router({
             // nothing on this line, so it is refused instead of being silently ignored.
             if (input.controlledAuthorization)
               throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
-            // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
-            if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
-            if (medicine && (medicine.rx || medicine.restricted) && !input.prescription)
-              throw new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED');
             const { prescription, ...lineInput } = input;
-            if (!prescription) return addSaleLine(db, scope, lineInput);
+            // A draft line does not release medicine: payment and completion require
+            // a prescription and a pharmacist's signature for this exact line.
+            if (!prescription) {
+              if (medicine && (medicine.rx || medicine.restricted) && !draftCounterAuthorized)
+                throw new TRPCError({
+                  code: 'FORBIDDEN',
+                  message: 'You do not have permission for this action.',
+                });
+              return addSaleLine(db, scope, lineInput);
+            }
+            if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
               !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {

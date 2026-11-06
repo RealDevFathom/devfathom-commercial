@@ -6,6 +6,7 @@ import { postTenderEntry } from './finance-postings';
 import { requestCounterEvidence } from './counter-evidence';
 import { lockCustomerConsent } from './consent-writer';
 import { assertRxSaleAllowed } from './rx-sale-gate';
+import { assertVerifiedPrescriptionRelease } from './rx-prescription-reference';
 
 import { Prisma } from '@/generated/prisma/client';
 import { pointsForNetPaid, redemptionFor } from '@/lib/commerce/loyalty-arithmetic';
@@ -174,6 +175,8 @@ export async function redeemSalePoints(
     scope,
     sale.lines.map((line) => line.medicine)
   );
+  // A partial points redemption is still payment, even when it does not complete the sale.
+  await assertVerifiedPrescriptionRelease(db, sale.lines);
   // #633: a points tender is a tender: refuse it while any batch on the bill is unsafe.
   await assertSaleBatchesSellable(db, scope, sale.id);
   await lockCustomerConsent(db, scope.organizationId, sale.customerId);

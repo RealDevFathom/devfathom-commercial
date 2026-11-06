@@ -118,6 +118,7 @@ vi.mock('@/lib/trpc', () => {
         'drawerStatus',
         'create',
         'addLine',
+        'attachCounterPrescription',
         'transition',
         'tender',
         'openDrawer',
@@ -341,6 +342,7 @@ beforeEach(() => {
     'counterSaveKeymap',
     'create',
     'addLine',
+    'attachCounterPrescription',
     'transition',
     'tender',
     'openDrawer',
@@ -728,6 +730,47 @@ describe('PharmacyCounterConsole tender recovery', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
     expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('does not use a signature from another review to release an unlinked bill line', () => {
+    const bill = cart();
+    bill.lines[0]!.rx = true;
+    bill.lines[0]!.prescriptionLineId = 'other-review';
+    bill.lines[0]!.prescriptionSigned = false;
+    mocks.queries.counterCart!.data = bill;
+    mocks.queries.counterPatientPanel = query({
+      patientId: 'patient-a',
+      displayName: 'Patient',
+      phone: null,
+      cnic: null,
+      address: null,
+      dispensingConsent: true,
+      prescriptions: [
+        {
+          validUntil: '2099-01-01',
+          lines: [
+            {
+              medicineId: 'synthetic-medicine',
+              prescriptionLineId: 'other-review',
+              verified: true,
+              remainingAuthorizedUnits: 10,
+            },
+          ],
+        },
+      ],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-a'));
+    expect(mocks.rxPanelProps.mock.lastCall![0].alerts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'PRESCRIPTION_NOT_VERIFIED', saleLineRef: 'line-a' }),
+      ])
+    );
+    expect(
+      screen.getByRole('button', {
+        name: 'Attach a prescription or request pharmacist verification',
+      })
+    ).toBeEnabled();
   });
 });
 

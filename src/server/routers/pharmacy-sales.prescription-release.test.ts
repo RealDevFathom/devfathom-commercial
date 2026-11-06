@@ -24,6 +24,10 @@ vi.mock('@/lib/pharmacy/finance-postings', () => ({
   postSaleLineEntry: vi.fn(),
   postTenderRefundEntry: vi.fn(),
 }));
+vi.mock('@/lib/pharmacy/sales', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/sales')>()),
+  addSaleLine: vi.fn(async () => ({ line: { id: 'line-a' } })),
+}));
 
 import { hasModule } from '@/lib/entitlements';
 import {
@@ -31,6 +35,8 @@ import {
   PharmacySaleBatchError,
 } from '@/lib/pharmacy/sale-batch-safety';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import { addSaleLine } from '@/lib/pharmacy/sales';
+import { completePaidPharmacySale } from '@/lib/pharmacy/sale-completion';
 import { pharmacySalesRouter } from './pharmacy-sales';
 import type { TRPCContext } from '../trpc';
 
@@ -60,6 +66,7 @@ function fixture(role = 'owner-operator', overrides: Permission[] = [], roleDeni
   const sale = {
     id: 'sale-a',
     status: 'OPEN',
+    customerId: 'customer-a',
     lines: [
       {
         id: 'line-a',
@@ -125,6 +132,15 @@ function fixture(role = 'owner-operator', overrides: Permission[] = [], roleDeni
     },
     pharmacyDrawerMovement: { create: vi.fn(async () => ({})) },
     pharmacySale: { findFirst: vi.fn(async () => sale), update: vi.fn(async () => ({})) },
+    pharmacySaleLine: {
+      findFirst: vi.fn(async () => ({ ...sale.lines[0], saleId: sale.id })),
+      updateMany: vi.fn(async () => ({ count: 1 })),
+    },
+    pharmacyLoyaltyPointsEntry: { findUnique: vi.fn(async () => null), create: vi.fn() },
+    pharmacyPharmacistReviewItem: {
+      findFirst: vi.fn(async (): Promise<{ prescriptionLineId: string } | null> => null),
+      create: vi.fn(async () => ({})),
+    },
     pharmacyTender: {
       create: vi.fn(async () => ({ id: 'tender-a', createdAt: new Date() })),
       findFirst: vi.fn(async () => ({ saleId: 'sale-a' })),
@@ -244,28 +260,74 @@ describe('DEV-629 server prescription enforcement', () => {
     expect(locks.some((s) => s.includes('pg_advisory_xact_lock'))).toBe(true);
     expect(locks.some((s) => s.includes('FOR UPDATE'))).toBe(true);
   });
-  it('refuses an Rx addLine API call without a prescription before stock allocation', async () => {
+  it('allows an unlinked draft line but does not authorize payment', async () => {
     const f = fixture();
+    f.sale.lines[0].prescriptionLineId = '';
     await expect(
-      f
-        .caller()
-        .addLine({
-          branchId: 'branch-a',
-          saleId: 'sale-a',
-          medicineId: 'medicine-a',
-          presentationId: 'presentation-a',
-          packLevelId: 'pack-a',
-          saleUnit: 'UNIT',
-          quantity: 1,
-          canonicalUnitsPerSaleUnit: 1,
-          idempotencyKey: 'line-a',
-        })
-    ).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-      message: expect.stringContaining('verified prescription'),
-    });
+      f.caller().addLine({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        medicineId: 'medicine-a',
+        presentationId: 'presentation-a',
+        packLevelId: 'pack-a',
+        saleUnit: 'UNIT',
+        quantity: 1,
+        canonicalUnitsPerSaleUnit: 1,
+        idempotencyKey: 'line-a',
+      })
+    ).resolves.toMatchObject({ line: { id: 'line-a' } });
+    expect(addSaleLine).toHaveBeenCalledOnce();
+    await expect(f.caller().tender(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.db.pharmacyTender.create).not.toHaveBeenCalled();
     expect(f.db.pharmacySale.update).not.toHaveBeenCalled();
+  });
+  it('attaches only the exact line and queues review without signing', async () => {
+    const f = fixture();
+    f.sale.lines[0].prescriptionLineId = '';
+    await expect(
+      f.caller().attachCounterPrescription({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        saleLineId: 'line-a',
+        patientId: 'patient-a',
+        prescriptionLineId: 'rx-a',
+      })
+    ).resolves.toEqual({ attached: true });
+    expect(f.db.pharmacySaleLine.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: 'line-a',
+          branchId: 'branch-a',
+          organizationId: 'org-a',
+        }),
+        data: { prescriptionLineId: 'rx-a', prescriptionPatientId: 'patient-a' },
+      })
+    );
+    expect(f.db.pharmacyPharmacistReviewItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          saleLineId: 'line-a',
+          prescriptionLineId: 'rx-a',
+          organizationId: 'org-a',
+        }),
+      })
+    );
+    expect(f.db.pharmacyPharmacistReviewDecision.findFirst).not.toHaveBeenCalled();
+  });
+  it('refuses an orphan review rather than reusing an earlier signature', async () => {
+    const f = fixture();
+    f.sale.lines[0].prescriptionLineId = '';
+    f.db.pharmacyPharmacistReviewItem.findFirst.mockResolvedValue({ prescriptionLineId: 'rx-a' });
+    await expect(
+      f.caller().attachCounterPrescription({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        saleLineId: 'line-a',
+        patientId: 'patient-a',
+        prescriptionLineId: 'rx-a',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.db.pharmacySaleLine.updateMany).not.toHaveBeenCalled();
   });
   it('refuses a legacy Rx sale with no attached reference before charging', async () => {
     const f = fixture();
@@ -276,6 +338,38 @@ describe('DEV-629 server prescription enforcement', () => {
     });
     expect(f.db.pharmacyTender.create).not.toHaveBeenCalled();
     expect(f.db.pharmacySale.update).not.toHaveBeenCalled();
+  });
+  it('refuses direct completion of an unlinked line before issuing a receipt', async () => {
+    const f = fixture();
+    f.sale.lines[0].prescriptionLineId = '';
+    await expect(
+      completePaidPharmacySale(
+        f.db as never,
+        { organizationId: 'org-a', branchId: 'branch-a', actorId: 'pharmacist-a' },
+        f.sale as never,
+        { deviceId: 'device-a', businessDate: new Date() }
+      )
+    ).rejects.toMatchObject({ reason: 'PRESCRIPTION_REQUIRED' });
+    expect(f.db.pharmacySale.update).not.toHaveBeenCalled();
+    expect(f.db.prescriptionFill.create).not.toHaveBeenCalled();
+  });
+  it('refuses even a partial loyalty tender on an unlinked Rx bill', async () => {
+    const f = fixture();
+    f.sale.lines[0].prescriptionLineId = '';
+    await expect(
+      f
+        .caller()
+        .redeemPoints({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          points: 1,
+          deviceId: 'device-a',
+          businessDate: new Date(),
+          idempotencyKey: 'loyalty-a',
+        })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.db.pharmacyTender.create).not.toHaveBeenCalled();
+    expect(f.db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
   });
   it('refuses an unsigned attached prescription before charging', async () => {
     const f = fixture();

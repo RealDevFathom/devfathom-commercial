@@ -193,7 +193,9 @@ describe('CounterRxPanel checks', () => {
     expect(screen.getByText('In date')).toBeInTheDocument();
     expect(screen.getByText(/held at pharmacy/)).toBeInTheDocument();
     expect(screen.getByText('4 of 6 units left')).toBeInTheDocument();
-    expect(screen.getByText('Pharmacist signed')).toBeInTheDocument();
+    expect(
+      screen.getByText('Prescription reviewed · bill line needs its own signature')
+    ).toBeInTheDocument();
     expect(screen.getByRole('img', { name: /Prescription photo from Dr. Imran/ })).toHaveAttribute(
       'src',
       '/api/pharmacy/prescription-files?id=photo-1'
@@ -207,6 +209,40 @@ describe('CounterRxPanel checks', () => {
     expect(screen.getByRole('button', { name: 'Save prescription' })).toBeDisabled();
     expect(
       screen.getByText(/Capture does not replace pharmacist review or dispensing consent/)
+    ).toBeInTheDocument();
+  });
+
+  it('links only a matching presentation to the explicitly chosen bill line', () => {
+    const onAttachPrescription = vi.fn();
+    render(
+      <CounterRxPanel
+        {...props({
+          patient,
+          onAttachPrescription,
+          attachableLines: [
+            {
+              saleLineId: 'sale-line-1',
+              medicineId: 'medicine-1',
+              presentationId: 'presentation-1',
+              medicineName: 'Amoxicillin',
+              lineNumber: 2,
+            },
+            {
+              saleLineId: 'different',
+              medicineId: 'medicine-1',
+              presentationId: 'different',
+              medicineName: 'Amoxicillin',
+              lineNumber: 3,
+            },
+          ],
+        })}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Attach to line 2: Amoxicillin' }));
+    expect(onAttachPrescription).toHaveBeenCalledExactlyOnceWith('sale-line-1', 'rx-line-1');
+    expect(screen.queryByRole('button', { name: /Attach to line 3/ })).toBeNull();
+    expect(
+      screen.getByText(/still needs an independent pharmacist to sign this bill line/)
     ).toBeInTheDocument();
   });
 
