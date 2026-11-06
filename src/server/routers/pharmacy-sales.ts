@@ -320,7 +320,8 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
   });
 }
 
-// Canonical names (#163) beside the legacy dotted ones, which still cover un-migrated grants.
+// Accept the canonical Cashier grant (#390) beside legacy dotted grants that have
+// not yet been migrated. Keep aliases in one family so DENY precedence is shared.
 const RECEIPT_READ_CAPABILITIES = [
   'pharmacy:dispense',
   'pharmacy.dispense',
