@@ -38,7 +38,7 @@ const administratorReportsMigration = readFileSync(
 // close only in phase 2, after the branch-assignment close gate is serving (see
 // docs/operations/pharmacy-day-close-rollout.md).
 const dayCloseMigration = readFileSync(
-  'prisma/migrations/20261104120000_pharmacy_pharmacist_day_close_revoke/migration.sql',
+  'prisma/migrations/20261106220000_pharmacy_pharmacist_day_close_revoke/migration.sql',
   'utf8'
 )
   .replace(/^BEGIN;$/m, '')
@@ -247,7 +247,7 @@ const legacy: Record<string, string[]> = {
     await client.query(migration);
     await client.query(managerProcurementMigration);
     await client.query(administratorReportsMigration);
-    // In migration order: 20261101120000 (owner PV safety), then 20261104120000 (day close).
+    // In migration order: 20261101120000 (owner PV safety), then 20261106220000 (day close).
     await client.query(ownerPvSafetyMigration);
     await client.query(dayCloseMigration);
   }, 60_000);
