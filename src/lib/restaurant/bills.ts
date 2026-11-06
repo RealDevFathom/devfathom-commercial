@@ -1877,10 +1877,7 @@ export async function finalizeBillSettlement(
 
 /** Why an order is not yet fully settled (the first failing condition). */
 export type OrderSettlementBlocker =
-  | 'NO_BILLS'
-  | 'ITEMS_UNBILLED'
-  | 'BILLS_OPEN'
-  | 'TOTAL_MISMATCH';
+  'NO_BILLS' | 'ITEMS_UNBILLED' | 'BILLS_OPEN' | 'TOTAL_MISMATCH';
 
 export type OrderSettlement = {
   orderId: string;
