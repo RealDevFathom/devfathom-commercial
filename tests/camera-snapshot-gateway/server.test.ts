@@ -217,6 +217,8 @@ describe('ffmpegArgs', () => {
       '-dn',
       '-vf',
       "scale='min(1280,iw)':-2",
+      '-threads',
+      '1',
       '-f',
       'image2pipe',
       '-c:v',

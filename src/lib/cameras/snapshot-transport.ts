@@ -126,8 +126,10 @@ function parseBindings(raw: string): SnapshotBinding[] {
       // Printable ASCII: the gateway compares bytes, so nothing else could ever match.
       if (binding.username.length > 256 || !/^[\x21-\x39\x3b-\x7e]+$/.test(binding.username))
         throw new Error();
-      // A generated reader secret, not a human password.
-      if (binding.password.length < 24) throw new Error();
+      // A generated reader secret (32+ printable ASCII, as the gateway README
+      // generates); the gateway compares bytes, so non-ASCII could never match.
+      if (binding.password.length < 32 || !/^[\x21-\x7e]+$/.test(binding.password))
+        throw new Error();
       const cameraKey = JSON.stringify([binding.organizationId, binding.cameraId]);
       const streamKey = `${snapshot.origin}/${binding.path}`;
       if (cameras.has(cameraKey) || streams.has(streamKey)) throw new Error();

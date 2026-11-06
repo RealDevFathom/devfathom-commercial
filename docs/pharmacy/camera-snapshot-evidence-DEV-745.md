@@ -80,7 +80,7 @@ that DEV-740 (#1415) is changing, and so snapshot credentials differ from HLS re
     "address": "10.0.0.10",
     "path": "pharmacy/branch-1/counter-1",
     "username": "app-snapshot",
-    "password": "<generated reader secret, at least 24 characters>"
+    "password": "<generated reader secret, at least 32 printable ASCII characters>"
   }
 ]
 ```

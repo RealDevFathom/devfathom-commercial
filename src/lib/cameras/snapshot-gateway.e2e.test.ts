@@ -252,7 +252,7 @@ describe.skipIf(!runnable)('real gateway service + real ffmpeg + app transport',
   }, 30_000);
 
   it('a wrong reader secret is refused by the gateway and nothing is stored', async () => {
-    const result = await capture(runtimeFor('wrong-reader-secret-0000000000'));
+    const result = await capture(runtimeFor('wrong-reader-secret-0123456789abcdef'));
     expect(result).toMatchObject({ outcome: 'FAILED', reason: 'SNAPSHOT_UNAVAILABLE' });
     expect(spawnedArgs).toHaveLength(0);
     expect(files.size).toBe(0);

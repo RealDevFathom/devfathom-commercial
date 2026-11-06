@@ -238,7 +238,7 @@ export function ffmpegArgs(config, path) {
     '-hide_banner',
     '-loglevel',
     'error',
-    // One decoder and filter thread: bounded tasks under the unit's TasksMax.
+    // One decoder and filter thread (input side); the encoder is pinned below.
     '-filter_threads',
     '1',
     '-threads',
@@ -259,6 +259,9 @@ export function ffmpegArgs(config, path) {
     '-dn',
     '-vf',
     `scale='min(${config.maxWidth},iw)':-2`,
+    // Output (encoder) threads too: the PNG encoder otherwise scales with cores.
+    '-threads',
+    '1',
     '-f',
     'image2pipe',
     '-c:v',

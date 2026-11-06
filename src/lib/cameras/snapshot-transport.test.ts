@@ -12,7 +12,7 @@ import {
   type CameraSnapshotScope,
 } from './snapshot-transport';
 
-const SECRET = 'reader-secret-0123456789abcdef';
+const SECRET = 'reader-secret-0123456789abcdef-0123';
 const binding = {
   vertical: 'pharmacy',
   organizationId: 'org-a',
@@ -139,6 +139,8 @@ describe('CAMERA_SNAPSHOT_BINDINGS validation', () => {
     ['non-ASCII username', [{ ...binding, username: 'caf\u00e9' }]],
     ['space in username', [{ ...binding, username: 'app snapshot' }]],
     ['weak secret', [{ ...binding, password: 'short' }]],
+    ['31-character secret', [{ ...binding, password: 'a'.repeat(31) }]],
+    ['non-ASCII secret', [{ ...binding, password: `${'a'.repeat(32)}\u00e9` }]],
     ['header injection', [{ ...binding, password: `${SECRET}\r\nX: y` }]],
     ['duplicate camera', [binding, { ...binding, path: 'other' }]],
     ['duplicate stream', [binding, { ...binding, cameraId: 'camera-b' }]],

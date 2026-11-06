@@ -56,7 +56,7 @@ placeholder secrets are rejected until you replace them.
 
 ## Install and operate (owner)
 
-1. **Reader secret, per path.** Generate a random secret of at least 32 characters (printable ASCII; the command below is) and hash it:
+1. **Reader secret, per path.** Generate a random printable-ASCII secret of at least 32 characters and hash it:
 
    ```sh
    SECRET="$(openssl rand -base64 33 | tr -d '\n')"
