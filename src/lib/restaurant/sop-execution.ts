@@ -11,15 +11,19 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * sop-late-missed.ts; verification transitions are in sop-verification.ts):
  *
  *   SCHEDULED → IN_PROGRESS  (start)
- *   IN_PROGRESS → SUBMITTED  (submit — all steps needn't be checked, requirement
- *                              flags are recorded not enforced per BUILD-ASSUMPTIONS §SOP-defaults)
+ *   IN_PROGRESS → SUBMITTED  (submit — every checklist step must be completed and
+ *                              each step's requiresNote/Photo/Signature flag must be
+ *                              satisfied; M7-L1 only RECORDS the flags, this L4
+ *                              execution lane ENFORCES them — BUILD-ASSUMPTIONS
+ *                              §SOP-defaults (3))
  *   REJECTED → IN_PROGRESS   (restart after rejection — §4 rework path)
  *
  * Evidence is APPEND-ONLY (enforced by the RLS SELECT+INSERT-only policy on
  * `restaurant_sop_evidence`). sha256 is computed server-side from the content
  * bytes supplied by the caller (base64-encoded body or a storageRef commitment).
  *
- * Actor attribution is best-effort: `completedByStaffProfileId` on steps and
+ * Actor IDs are trusted server inputs resolved from the authenticated session.
+ * Actor attribution storage: `completedByStaffProfileId` on steps and
  * `uploaderStaffProfileId` on evidence are nullable (per schema); this module
  * accepts them when provided.
  */
@@ -54,9 +58,6 @@ type OccurrenceOwner = {
 };
 
 function assertOccurrenceOwner(occurrence: OccurrenceOwner, actorStaffProfileId?: string | null) {
-  // Older unit fakes predate the owner columns. Real Prisma rows always include
-  // all three selected keys, including nulls, so this cannot bypass production.
-  if (!('assignedStaffProfileId' in occurrence)) return;
   if (!actorStaffProfileId) {
     throw new SopExecutionError('A completing staff profile is required.', 'NOT_OWNER');
   }
@@ -176,7 +177,9 @@ export async function completeStep(
         id: true,
         completed: true,
         completedAt: true,
-        templateStep: { select: { requiresPhoto: true, requiresSignature: true } },
+        templateStep: {
+          select: { requiresPhoto: true, requiresSignature: true, requiresNote: true },
+        },
         evidence: { select: { mimeType: true } },
       },
     });
@@ -204,6 +207,12 @@ export async function completeStep(
     if (step.templateStep?.requiresSignature && !hasSignature) {
       throw new SopExecutionError(
         'Signature proof is required before completing this step.',
+        'PROOF_REQUIRED'
+      );
+    }
+    if (step.templateStep?.requiresNote && !input.note?.trim()) {
+      throw new SopExecutionError(
+        'A completion note is required before completing this step.',
         'PROOF_REQUIRED'
       );
     }
@@ -349,7 +358,8 @@ export type SubmitOccurrenceResult = {
 
 /**
  * Transition IN_PROGRESS → SUBMITTED (or LATE if the window has already closed).
- * Step completeness is not enforced per §SOP-defaults (requirement flags recorded, not gated).
+ * Submission is the checklist integrity boundary: every pinned step must be complete
+ * and still contain the note/evidence required by its published template version.
  */
 export async function submitOccurrence(
   db: ScopedDb,
@@ -366,6 +376,16 @@ export async function submitOccurrence(
         assignedStaffProfileId: true,
         poolJobRoleId: true,
         claimedByStaffProfileId: true,
+        steps: {
+          select: {
+            completed: true,
+            note: true,
+            templateStep: {
+              select: { requiresPhoto: true, requiresSignature: true, requiresNote: true },
+            },
+            evidence: { select: { mimeType: true } },
+          },
+        },
       },
     });
     if (!occ) throw new SopExecutionError('Occurrence not found.', 'NOT_FOUND');
@@ -374,6 +394,37 @@ export async function submitOccurrence(
       throw new SopExecutionError(
         `Cannot submit an occurrence in status ${occ.status}. Expected IN_PROGRESS.`,
         'INVALID_STATE'
+      );
+    }
+    const incomplete = occ.steps.find((step) => !step.completed);
+    if (incomplete) {
+      throw new SopExecutionError(
+        'Complete every checklist step before submitting for review.',
+        'PROOF_REQUIRED'
+      );
+    }
+    const unmetRequirement = occ.steps.find((step) => {
+      const evidence = step.evidence ?? [];
+      const hasPhoto = evidence.some(
+        (row) =>
+          row.mimeType.includes('evidence=photo') ||
+          (row.mimeType.startsWith('image/') && !row.mimeType.includes('evidence=signature'))
+      );
+      const hasSignature = evidence.some(
+        (row) =>
+          row.mimeType.includes('evidence=signature') ||
+          row.mimeType === 'application/vnd.devfathom.signature+json'
+      );
+      return (
+        (step.templateStep.requiresNote && !step.note?.trim()) ||
+        (step.templateStep.requiresPhoto && !hasPhoto) ||
+        (step.templateStep.requiresSignature && !hasSignature)
+      );
+    });
+    if (unmetRequirement) {
+      throw new SopExecutionError(
+        'Every required note and proof item must be present before submitting for review.',
+        'PROOF_REQUIRED'
       );
     }
     // LATE = submitted after the window closed (BUILD-ASSUMPTIONS §SOP-defaults (4))

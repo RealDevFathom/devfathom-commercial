@@ -166,6 +166,7 @@ function makeCtx(
       attempts: 1,
       maxAttempts: 5,
       claimedBy: 'worker_1',
+      claimToken: 'sop-escalation-test-claim',
       startedAt: NOW,
     },
   };

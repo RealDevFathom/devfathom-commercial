@@ -1,0 +1,143 @@
+# .github/dependabot.yml for DevFathom (RealDevFathom/devfathom-commercial)
+# - Version updates go to develop after a cooldown; security fixes skip the cooldown.
+# - Security blocks (limit 0) shape the security PRs GitHub raises against the default branch.
+# - Nothing auto-merges or adds ci-ready. No registries or tokens.
+# - Dependabot reads this file only from the default branch.
+
+version: 2
+
+updates:
+  # Bun: version updates into develop
+  - package-ecosystem: "bun"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Karachi"
+    cooldown:
+      default-days: 7
+      semver-patch-days: 7
+      semver-minor-days: 14
+      semver-major-days: 30
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "javascript"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      nextjs:
+        patterns: ["next", "eslint-config-next", "@next/*"]
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+      prisma:
+        patterns: ["prisma", "@prisma/*"]
+      trpc:
+        patterns: ["@trpc/*"]
+      tanstack:
+        patterns: ["@tanstack/*"]
+      tiptap:
+        patterns: ["@tiptap/*"]
+      ai-sdk:
+        patterns: ["ai", "@ai-sdk/*"]
+      tailwind:
+        patterns: ["tailwindcss", "@tailwindcss/*"]
+      test-tooling:
+        patterns: ["vitest", "@vitest/*", "@playwright/test", "@axe-core/playwright", "@testing-library/*", "jsdom"]
+      production-patch:
+        dependency-type: "production"
+        update-types: ["patch"]
+      production-minor:
+        dependency-type: "production"
+        update-types: ["minor"]
+      development:
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
+
+  # Bun: security updates (daily, no version PRs)
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "08:00"
+      timezone: "Asia/Karachi"
+    open-pull-requests-limit: 0
+    labels: ["dependencies", "security"]
+    commit-message:
+      prefix: "fix"
+      include: "scope"
+
+  # Docker base images (Dockerfile, Dockerfile.aws) into develop
+  - package-ecosystem: "docker"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "Asia/Karachi"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+
+  # LiveKit compose image into develop
+  - package-ecosystem: "docker-compose"
+    directory: "/docker/livekit"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "Asia/Karachi"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # GitHub Actions into develop
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "09:00"
+      timezone: "Asia/Karachi"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "github-actions"]
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # GitHub Actions: security updates (daily, no version PRs)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "08:00"
+      timezone: "Asia/Karachi"
+    open-pull-requests-limit: 0
+    labels: ["dependencies", "security"]
+    commit-message:
+      prefix: "ci"
+      include: "scope"

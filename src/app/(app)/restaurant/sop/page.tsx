@@ -120,6 +120,7 @@ type BoardItem = {
   windowEndsAt: string;
   completedSteps: number;
   totalSteps: number;
+  claimable: boolean;
 };
 
 type BoardGroup = {
@@ -183,6 +184,7 @@ type OccurrenceDetail = {
   evidence: DetailEvidence[];
   verifications: DetailVerification[];
   escalationEvents: DetailEscalation[];
+  claimable: boolean;
 };
 
 type Notice = { kind: 'success' | 'error'; text: string };
@@ -380,8 +382,11 @@ function SopBoardView(props: SopBoardViewProps) {
   const total = groups.reduce((count, group) => count + group.items.length, 0);
   const reviewAllowed = selected ? ['SUBMITTED', 'LATE'].includes(selected.status) : false;
   const waiveAllowed = selected ? ['SUBMITTED', 'LATE', 'MISSED'].includes(selected.status) : false;
-  const startAllowed = selected ? ['SCHEDULED', 'REJECTED'].includes(selected.status) : false;
-  const submitAllowed = selected?.status === 'IN_PROGRESS';
+  const startAllowed = selected
+    ? ['SCHEDULED', 'REJECTED'].includes(selected.status) && !selected.claimable
+    : false;
+  const submitAllowed =
+    selected?.status === 'IN_PROGRESS' && selected.steps.every((step) => step.completed);
   const escalationKinds = new Set(selected?.escalationEvents.map((event) => event.kind) ?? []);
   const acknowledgeAllowed =
     escalationKinds.has('FIRED') &&
@@ -597,7 +602,7 @@ function SopBoardView(props: SopBoardViewProps) {
                 </div>
               </dl>
 
-              {startAllowed || submitAllowed || acknowledgeAllowed ? (
+              {startAllowed || selected.claimable || submitAllowed || acknowledgeAllowed ? (
                 <section className="mt-6 border-t border-border-subtle pt-5">
                   <h3 className="font-semibold text-text-strong">Operator controls</h3>
                   <form action={action} className="mt-3 space-y-3">
@@ -606,7 +611,9 @@ function SopBoardView(props: SopBoardViewProps) {
                       businessDate={businessDate}
                       occurrenceId={selected.id}
                     />
-                    <StaffSelect label="Acting staff" staff={staff} />
+                    <p className="text-xs text-text-muted">
+                      Recorded as your signed-in staff profile.
+                    </p>
                     <div className="flex flex-wrap gap-2">
                       {startAllowed ? (
                         <Button
@@ -617,6 +624,17 @@ function SopBoardView(props: SopBoardViewProps) {
                           value="start"
                         >
                           {selected.status === 'REJECTED' ? 'Start rework' : 'Start SOP'}
+                        </Button>
+                      ) : null}
+                      {selected.claimable ? (
+                        <Button
+                          className="min-h-11"
+                          disabled={!action}
+                          name="intent"
+                          type="submit"
+                          value="claim"
+                        >
+                          Claim SOP
                         </Button>
                       ) : null}
                       {submitAllowed ? (
@@ -744,10 +762,20 @@ function SopBoardView(props: SopBoardViewProps) {
                                 name="templateStepId"
                                 value={step.templateStepId}
                               />
-                              <StaffSelect label="Completing staff" staff={staff} />
+                              <p className="text-xs text-text-muted">
+                                Recorded as your signed-in staff profile.
+                              </p>
                               <label className="text-sm text-text-body">
                                 Completion note
-                                <Input className="mt-1 min-h-11" maxLength={2000} name="note" />
+                                <Input
+                                  className="mt-1 min-h-11"
+                                  maxLength={2000}
+                                  name="note"
+                                  pattern={
+                                    step.requirements.includes('note') ? '.*\\S.*' : undefined
+                                  }
+                                  required={step.requirements.includes('note')}
+                                />
                               </label>
                               <Button
                                 className="min-h-11 sm:col-span-2"
@@ -776,7 +804,9 @@ function SopBoardView(props: SopBoardViewProps) {
                           businessDate={businessDate}
                           occurrenceId={selected.id}
                         />
-                        <StaffSelect label="Verifier" staff={staff} />
+                        <p className="text-xs text-text-muted">
+                          Recorded as your signed-in staff profile.
+                        </p>
                         <label className="text-sm text-text-body">
                           Verification reason
                           <Input
@@ -822,15 +852,37 @@ function SopBoardView(props: SopBoardViewProps) {
                           intent="waive"
                           occurrenceId={selected.id}
                         />
-                        <StaffSelect label="Acting verifier" required staff={staff} />
+                        <p className="text-xs text-text-muted">
+                          Recorded as your signed-in staff profile.
+                        </p>
                         <StaffSelect
                           label="Approving co-author"
                           name="approvingStaffProfileId"
                           required
                           staff={staff}
                         />
+                        <label className="text-sm text-text-body">
+                          Approving credential type
+                          <select className={selectClass} name="approvingType" defaultValue="PIN">
+                            <option value="PIN">PIN</option>
+                            <option value="BADGE">Badge</option>
+                          </select>
+                        </label>
+                        <label className="text-sm text-text-body">
+                          Approving manager credential
+                          <Input
+                            className="mt-1"
+                            name="approvingSecret"
+                            type="password"
+                            autoComplete="off"
+                            required
+                            maxLength={256}
+                          />
+                        </label>
                         <p className="text-xs text-text-muted sm:col-span-2">
-                          Co-authorization requires two different active staff profiles.
+                          Co-authorization requires a different approving staff member, who confirms
+                          with their own PIN or badge. If you are the only active staff member and
+                          an owner, you may approve your own waive by re-entering your PIN.
                         </p>
                         <label className="text-sm text-text-body sm:col-span-2">
                           Waiver reason
@@ -853,7 +905,9 @@ function SopBoardView(props: SopBoardViewProps) {
                     ) : null}
                     {!reviewAllowed && !waiveAllowed ? (
                       <div className="mt-3">
-                        <StaffSelect label="Verifier" staff={staff} />
+                        <p className="text-xs text-text-muted">
+                          Recorded as your signed-in staff profile.
+                        </p>
                         <p className="mt-2 text-sm text-text-muted">
                           No verifier action is valid for{' '}
                           {STATUS_LABEL[selected.status].toLowerCase()} occurrences.
@@ -1008,9 +1062,10 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
   if (!user) return <SopBoardView state="permission" />;
 
   const subject = subjectFromSession(user);
-  const [canComplete, canVerify] = await Promise.all([
+  const [canComplete, canVerify, canConfigure] = await Promise.all([
     can(subject, 'sop:complete', undefined, { db: ctx.db, source: 'TRPC' }),
     can(subject, 'sop:verify', undefined, { db: ctx.db, source: 'TRPC' }),
+    can(subject, 'restaurant:configure', undefined, { db: ctx.db, source: 'TRPC' }),
   ]);
 
   if (!canComplete) return <SopBoardView state="permission" />;
@@ -1024,13 +1079,20 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
       if (!actionCtx) throw new Error(NO_ACTOR);
       const caller = restaurantSopExecutionRouter.createCaller(actionCtx);
       const occurrenceId = field(form, 'occurrenceId');
-      const actorStaffProfileId = optionalField(form, 'actorStaffProfileId');
       const intent = field(form, 'intent');
       let success: string;
 
       switch (intent) {
+        case 'claim': {
+          const outcome = await caller.claim({ occurrenceId });
+          success =
+            outcome.status === 'CLAIMED_BY_OTHER'
+              ? 'Another eligible staff member claimed this SOP first.'
+              : 'SOP claimed. You can now start it.';
+          break;
+        }
         case 'start':
-          await caller.start({ occurrenceId, actorStaffProfileId });
+          await caller.start({ occurrenceId });
           success = 'SOP started.';
           break;
         case 'completeStep':
@@ -1038,7 +1100,6 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
             occurrenceId,
             templateStepId: field(form, 'templateStepId'),
             note: optionalField(form, 'note'),
-            actorStaffProfileId,
           });
           success = 'Checklist step completed.';
           break;
@@ -1050,18 +1111,16 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
             mimeType: field(form, 'mimeType'),
             sizeBytes: Number(field(form, 'sizeBytes')),
             storageRef: optionalField(form, 'storageRef'),
-            uploaderStaffProfileId: optionalField(form, 'uploaderStaffProfileId'),
           });
           success = 'Evidence metadata attached.';
           break;
         case 'submit':
-          await caller.submit({ occurrenceId, actorStaffProfileId });
+          await caller.submit({ occurrenceId });
           success = 'SOP submitted for review.';
           break;
         case 'verify':
           await caller.verify({
             occurrenceId,
-            actorStaffProfileId,
             reason: optionalField(form, 'reason'),
           });
           success = 'SOP verified.';
@@ -1076,7 +1135,6 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
           }
           await caller.reject({
             occurrenceId,
-            actorStaffProfileId,
             reason,
           });
           success = 'SOP rejected for rework.';
@@ -1084,27 +1142,24 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
         }
         case 'waive': {
           const approvingStaffProfileId = field(form, 'approvingStaffProfileId');
-          if (
-            !actorStaffProfileId ||
-            !approvingStaffProfileId ||
-            actorStaffProfileId === approvingStaffProfileId
-          ) {
+          if (!approvingStaffProfileId) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
-              message: 'Select two different active staff profiles for co-authorization.',
+              message: 'Select the approving staff member for co-authorization.',
             });
           }
           await caller.waive({
             occurrenceId,
-            actorStaffProfileId,
             approvingStaffProfileId,
+            approvingType: field(form, 'approvingType') === 'BADGE' ? 'BADGE' : 'PIN',
+            approvingSecret: field(form, 'approvingSecret'),
             reason: field(form, 'reason'),
           });
           success = 'SOP waived with co-authorization.';
           break;
         }
         case 'acknowledge':
-          await caller.acknowledge({ occurrenceId, actorStaffProfileId });
+          await caller.acknowledge({ occurrenceId });
           success = 'Escalation acknowledged.';
           break;
         default:
@@ -1126,6 +1181,14 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
         where: {
           organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
           active: true,
+          ...(canConfigure
+            ? {}
+            : {
+                OR: [
+                  { staffProfiles: { some: { userId: user.id, status: 'ACTIVE' } } },
+                  { assignments: { some: { userId: user.id } } },
+                ],
+              }),
         },
         orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
         select: {
@@ -1194,6 +1257,7 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
           windowEndsAt: item.windowEndsAt.toISOString(),
           completedSteps: item.steps.filter((step) => step.completed).length,
           totalSteps: item.steps.length,
+          claimable: item.canClaim,
         })),
       }));
       const allItems = groups.flatMap((group) => group.items);
@@ -1260,6 +1324,7 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
             actorStaffProfileId: event.actorStaffProfileId,
             createdAt: event.createdAt.toISOString(),
           })),
+          claimable: selectedSummary.claimable,
         };
       }
 

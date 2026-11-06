@@ -718,8 +718,10 @@ export type RoleTemplate = {
   isSystem: boolean;
   /** Capabilities granted by default. `['*']` = full administration, matching the
    * bootstrap admin role, except that wildcards (`*`, `pharmacy:*`) never grant
-   * pharmacy:dispense, pharmacy:safety or pharmacy:catalogue-review: those must be
-   * granted exactly (separation of duties). A wildcard DENY still revokes them.
+   * pharmacy:dispense, pharmacy:prescriptions, pharmacy:safety or
+   * pharmacy:catalogue-review: those must be granted exactly (separation of duties).
+   * A pharmacy:dispense grant also covers pharmacy:prescriptions. A wildcard DENY
+   * still revokes them.
    * All entries are provisional (Phase 0 / D10). */
   capabilities: readonly string[];
 };
@@ -732,9 +734,11 @@ export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
 export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:*',
   'pharmacy:dispense',
+  'pharmacy:prescriptions',
   'pharmacy:catalogue-review',
   'pharmacy:manage',
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:orders',
@@ -746,10 +750,12 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
 /** Canonical actions checked by pharmacy workflows, including shared report gates. */
 export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:dispense',
+  'pharmacy:prescriptions',
   'pharmacy:safety',
   'pharmacy:catalogue-review',
   'pharmacy:orders',
@@ -757,18 +763,37 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'reports:financial',
 ] as const;
 
+/**
+ * Exact grants added to a PHARMACY tenant's bootstrap `admin` role beside its `*`.
+ * The wildcard never reaches pharmacy:safety, and a new pharmacy's only user sits on
+ * that role, so without this a solo pharmacy could not file or review PV reports.
+ */
+export const PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS: readonly string[] = ['pharmacy:safety'];
+
 export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   {
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+    // `pharmacy:*` never reaches the exact-grant-only actions. The Owner holds an
+    // explicit `pharmacy:safety` so a solo pharmacy can still file and review
+    // pharmacovigilance reports (#479). It deliberately does NOT receive
+    // pharmacy:dispense or pharmacy:catalogue-review: clinical powers stay with the
+    // pharmacist and the opt-in owner-operator template.
+    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial', 'pharmacy:safety'],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
     // for business/cashier guards that require literal ADMIN; EMPLOYEE plus this
     // template is not equivalent. Provisioning does not assign it to existing owners.
     // These grants neither verify clinical qualifications nor permit self-review/signing.
+    // Sole exception: in a tenant with no other active staff, a pharmacovigilance report
+    // may be marked READY by its own maker only after fresh server-side PIN
+    // reauthentication, with a durable audit row (pharmacy-reports PV:SOLO_OWNER_PIN).
+    // #975: a proprietor runs the whole shop, so the template also grants the
+    // operational actions (Goods-in, stock, counter, day close, management). Every
+    // grant stays exact (no wildcard), so the separation-of-duties caps remain
+    // explicit and individually revocable by DENY.
     key: 'owner-operator',
     name: 'Owner / Operator',
     isSystem: true,
@@ -779,18 +804,25 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'pharmacy:dispense',
       'pharmacy:catalogue-review',
       'pharmacy:safety',
+      'pharmacy:procurement',
+      'pharmacy:inventory',
+      'pharmacy:counter',
+      'pharmacy:close',
+      'pharmacy:manage',
     ],
   },
   {
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
+    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
   },
   {
     key: 'manager',
     name: 'Manager',
     isSystem: true,
+    // Managers retain the purchasing and Goods-in access that predates the
+    // explicit pharmacy capability model (#375).
     capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
   },
   {

@@ -7,9 +7,14 @@ import {
   assertSupplierEligible,
   compareQuotes,
   costPurchaseOrderLine,
+  effectiveCostPerSellableUnit,
+  ENFORCED_SUPPLIER_COMPLIANCE,
   landedCost,
+  licenceEvidence,
   MICRO,
+  supplierLicenceStatus,
   type QuoteCandidate,
+  type SupplierCompliancePolicy,
   type SupplierLicenceEvidence,
 } from './purchasing';
 
@@ -17,18 +22,23 @@ const NOW = new Date('2026-09-02T00:00:00.000Z');
 const VALID_LICENCE: SupplierLicenceEvidence = {
   expiresAt: new Date('2027-01-01T00:00:00.000Z'),
   verified: true,
+  superseded: false,
 };
+/** The owner policy as it stands by default: supplier checks ON. */
+const ON: SupplierCompliancePolicy = ENFORCED_SUPPLIER_COMPLIANCE;
+/** Supplier checks turned off at policy version 3. */
+const OFF: SupplierCompliancePolicy = { checksEnabled: false, version: 3 };
 
 describe('PUR-01 supplier eligibility', () => {
   it('accepts an authorized supplier holding one unexpired verified licence', () => {
     expect(() =>
-      assertSupplierEligible({ authorized: true, licences: [VALID_LICENCE], at: NOW })
+      assertSupplierEligible({ authorized: true, licences: [VALID_LICENCE], at: NOW, policy: ON })
     ).not.toThrow();
   });
 
   it('refuses an unauthorized supplier even with a valid licence', () => {
     expect(() =>
-      assertSupplierEligible({ authorized: false, licences: [VALID_LICENCE], at: NOW })
+      assertSupplierEligible({ authorized: false, licences: [VALID_LICENCE], at: NOW, policy: ON })
     ).toThrow('SUPPLIER_NOT_AUTHORIZED');
   });
 
@@ -36,8 +46,11 @@ describe('PUR-01 supplier eligibility', () => {
     expect(() =>
       assertSupplierEligible({
         authorized: true,
-        licences: [{ expiresAt: new Date('2026-09-01T23:59:59.999Z'), verified: true }],
+        licences: [
+          { expiresAt: new Date('2026-09-01T23:59:59.999Z'), verified: true, superseded: false },
+        ],
         at: NOW,
+        policy: ON,
       })
     ).toThrow('SUPPLIER_LICENCE_EXPIRED');
   });
@@ -48,6 +61,7 @@ describe('PUR-01 supplier eligibility', () => {
         authorized: true,
         licences: [{ ...VALID_LICENCE, verified: false }],
         at: NOW,
+        policy: ON,
       })
     ).toThrow('SUPPLIER_LICENCE_EXPIRED');
   });
@@ -56,8 +70,9 @@ describe('PUR-01 supplier eligibility', () => {
     expect(() =>
       assertSupplierEligible({
         authorized: true,
-        licences: [{ expiresAt: NOW, verified: true }],
+        licences: [{ expiresAt: NOW, verified: true, superseded: false }],
         at: NOW,
+        policy: ON,
       })
     ).not.toThrow();
   });
@@ -301,10 +316,34 @@ describe('PUR-02 quote comparison', () => {
     moqPacks: 1,
     leadTimeDays: 3,
     minimumExpiryDays: 365,
+    forecastSellThroughPacks: 12,
   };
+
+  it('treats 10+1 as 9.1% equivalent only when the bonus is forecast to sell', () => {
+    const allSell = effectiveCostPerSellableUnit({
+      costMinor: 100_000,
+      paidPacks: 10,
+      bonusPacks: 1,
+      canonicalUnitsPerPack: 1,
+      forecastSellThroughPacks: 11,
+    });
+    const bonusExpires = effectiveCostPerSellableUnit({
+      costMinor: 100_000,
+      paidPacks: 10,
+      bonusPacks: 1,
+      canonicalUnitsPerPack: 1,
+      forecastSellThroughPacks: 10,
+    });
+
+    expect(allSell.effectiveUnitCostMicroMinor).toBe(9_090_909_091);
+    expect(allSell.atRiskBonusPacks).toBe(0);
+    expect(bonusExpires.effectiveUnitCostMicroMinor).toBe(10_000 * MICRO);
+    expect(bonusExpires.atRiskBonusPacks).toBe(1);
+  });
 
   it('ranks by effective landed unit cost and explains every position', () => {
     const ranking = compareQuotes({
+      policy: ON,
       requiredPacks: 10,
       at: NOW,
       candidates: [
@@ -344,14 +383,140 @@ describe('PUR-02 quote comparison', () => {
       1_000 * MICRO,
     ]);
     expect(ranking[0]!.reasons).toContainEqual(
-      'Scheme adds 2 free packs, lowering the unit cost without adding revenue.'
+      'Scheme adds 2 free packs and the configured forecast sells all before expiry.'
     );
     expect(ranking[1]!.reasons).toContainEqual('Trade discount of 15.00% off list.');
     expect(ranking.every((row) => row.reasons.length > 0)).toBe(true);
   });
 
+  it.each([10, 12])('ranks schemes using the %i-pack sell-through forecast', (forecast) => {
+    const ranking = compareQuotes({
+      policy: ON,
+      requiredPacks: 10,
+      at: NOW,
+      candidates: [
+        {
+          ...base,
+          ...supplier('s_scheme', 'Scheme'),
+          quoteId: 'q_scheme',
+          pricePerPackMinor: 10_000,
+          schemeBuyPacks: 5,
+          schemeFreePacks: 1,
+          forecastSellThroughPacks: forecast,
+        },
+        {
+          ...base,
+          ...supplier('s_discount', 'Discount'),
+          quoteId: 'q_discount',
+          pricePerPackMinor: 10_000,
+          discountBps: 1_500,
+          forecastSellThroughPacks: forecast,
+        },
+      ],
+    });
+    expect(ranking.map((row) => row.quoteId)).toEqual(
+      forecast === 10 ? ['q_discount', 'q_scheme'] : ['q_scheme', 'q_discount']
+    );
+    const scheme = ranking.find((row) => row.quoteId === 'q_scheme')!;
+    expect(scheme.atRiskBonusPacks).toBe(forecast === 10 ? 2 : 0);
+    expect(scheme.effectiveSellableUnitCostMicroMinor).toBe(
+      forecast === 10 ? 1_000 * MICRO : 833_333_333
+    );
+  });
+
+  it('keeps a legacy scheme quote with no recorded forecast ranked as if all packs sell', () => {
+    const ranking = compareQuotes({
+      policy: ON,
+      requiredPacks: 10,
+      at: NOW,
+      candidates: [
+        {
+          ...base,
+          ...supplier('s_scheme', 'Scheme'),
+          quoteId: 'q_scheme',
+          pricePerPackMinor: 10_000,
+          schemeBuyPacks: 5,
+          schemeFreePacks: 1,
+          forecastSellThroughPacks: null,
+        },
+        {
+          ...base,
+          ...supplier('s_discount', 'Discount'),
+          quoteId: 'q_discount',
+          pricePerPackMinor: 10_000,
+          discountBps: 1_500,
+          forecastSellThroughPacks: null,
+        },
+      ],
+    });
+    expect(ranking.map((row) => row.quoteId)).toEqual(['q_scheme', 'q_discount']);
+    const scheme = ranking[0]!;
+    expect(scheme.forecastSellThroughPacks).toBeNull();
+    expect(scheme.atRiskBonusPacks).toBe(0);
+    expect(scheme.effectiveSellableUnitCostMicroMinor).toBe(833_333_333);
+    expect(scheme.reasons).toContainEqual(
+      'Scheme adds 2 free packs; no sell-through forecast is recorded, so all are assumed to sell.'
+    );
+  });
+
+  it('flags nothing at risk on a quote that cannot be compared', () => {
+    const [row] = compareQuotes({
+      policy: ON,
+      requiredPacks: 10,
+      at: NOW,
+      candidates: [
+        {
+          ...base,
+          ...supplier('s_lapsed', 'Lapsed'),
+          supplierAuthorized: false,
+          quoteId: 'q_lapsed',
+          pricePerPackMinor: 10_000,
+          schemeBuyPacks: 5,
+          schemeFreePacks: 1,
+          forecastSellThroughPacks: 5,
+        },
+      ],
+    });
+    expect(row!.comparable).toBe(false);
+    expect(row!.atRiskBonusPacks).toBe(0);
+    expect(row!.atRiskPaidPacks).toBe(0);
+    expect(row!.reasons).toContainEqual('Scheme adds 2 free packs.');
+    expect(row!.reasons.some((reason) => reason.includes('expiry risk'))).toBe(false);
+  });
+
+  it('reports paid packs at risk when the forecast is below the paid quantity', () => {
+    expect(
+      effectiveCostPerSellableUnit({
+        costMinor: 100_000,
+        paidPacks: 10,
+        bonusPacks: 2,
+        canonicalUnitsPerPack: 1,
+        forecastSellThroughPacks: 7,
+      })
+    ).toMatchObject({ sellablePacks: 7, atRiskPaidPacks: 3, atRiskBonusPacks: 2 });
+    const [row] = compareQuotes({
+      policy: ON,
+      requiredPacks: 10,
+      at: NOW,
+      candidates: [
+        {
+          ...base,
+          ...supplier('s_1', 'A'),
+          quoteId: 'q_a',
+          pricePerPackMinor: 10_000,
+          forecastSellThroughPacks: 7,
+        },
+      ],
+    });
+    expect(row!.atRiskPaidPacks).toBe(3);
+    expect(row!.reasons).toContainEqual(
+      '3 paid packs are at expiry risk under the configured sell-through forecast.'
+    );
+  });
+
   it('returns a ranked list and never awards a winner', () => {
     const ranking = compareQuotes({
+      policy: ON,
       requiredPacks: 10,
       at: NOW,
       candidates: [
@@ -366,6 +531,7 @@ describe('PUR-02 quote comparison', () => {
 
   it('ranks an unauthorized or licence-expired supplier last and says why', () => {
     const ranking = compareQuotes({
+      policy: ON,
       requiredPacks: 10,
       at: NOW,
       candidates: [
@@ -379,7 +545,9 @@ describe('PUR-02 quote comparison', () => {
         {
           quoteId: 'q_expired',
           ...supplier('s_2', 'Lapsed'),
-          supplierLicences: [{ expiresAt: new Date('2026-01-01T00:00:00.000Z'), verified: true }],
+          supplierLicences: [
+            { expiresAt: new Date('2026-01-01T00:00:00.000Z'), verified: true, superseded: false },
+          ],
           ...base,
           pricePerPackMinor: 2_000,
         },
@@ -400,6 +568,7 @@ describe('PUR-02 quote comparison', () => {
 
   it('excludes a lapsed quote from comparison and explains it', () => {
     const ranking = compareQuotes({
+      policy: ON,
       requiredPacks: 10,
       at: NOW,
       candidates: [
@@ -419,6 +588,7 @@ describe('PUR-02 quote comparison', () => {
 
   it('costs an MOQ that overshoots the requirement and flags it', () => {
     const [row] = compareQuotes({
+      policy: ON,
       requiredPacks: 4,
       at: NOW,
       candidates: [
@@ -439,6 +609,7 @@ describe('PUR-02 quote comparison', () => {
 
   it('breaks a unit-cost tie by lead time, then by shelf life', () => {
     const ranking = compareQuotes({
+      policy: ON,
       requiredPacks: 10,
       at: NOW,
       candidates: [
@@ -471,7 +642,200 @@ describe('PUR-02 quote comparison', () => {
   });
 
   it('rejects a comparison against a non-positive requirement', () =>
-    expect(() => compareQuotes({ requiredPacks: 0, at: NOW, candidates: [] })).toThrow(
+    expect(() => compareQuotes({ policy: ON, requiredPacks: 0, at: NOW, candidates: [] })).toThrow(
       'INVALID_QUANTITY'
     ));
+});
+
+describe('DEV-753 owner supplier-compliance policy with DEV-466 strict supersession', () => {
+  const EXPIRED: SupplierLicenceEvidence = {
+    expiresAt: new Date('2026-09-01T23:59:59.999Z'),
+    verified: true,
+    superseded: false,
+  };
+  const UNVERIFIED: SupplierLicenceEvidence = { ...VALID_LICENCE, verified: false };
+  const SUPERSEDED: SupplierLicenceEvidence = { ...VALID_LICENCE, superseded: true };
+
+  // Every supplier state the issue names, with the refusal ON must give and the
+  // evidence status OFF must record instead of refusing.
+  const cases: Array<{
+    name: string;
+    authorized: boolean;
+    licences: SupplierLicenceEvidence[];
+    on: 'SUPPLIER_NOT_AUTHORIZED' | 'SUPPLIER_LICENCE_EXPIRED' | null;
+    status: ReturnType<typeof supplierLicenceStatus>;
+  }> = [
+    {
+      name: 'no licence',
+      authorized: true,
+      licences: [],
+      on: 'SUPPLIER_LICENCE_EXPIRED',
+      status: 'NONE',
+    },
+    {
+      name: 'unverified licence',
+      authorized: true,
+      licences: [UNVERIFIED],
+      on: 'SUPPLIER_LICENCE_EXPIRED',
+      status: 'UNVERIFIED',
+    },
+    {
+      name: 'expired licence',
+      authorized: true,
+      licences: [EXPIRED],
+      on: 'SUPPLIER_LICENCE_EXPIRED',
+      status: 'EXPIRED',
+    },
+    {
+      name: 'superseded verified licence',
+      authorized: true,
+      licences: [SUPERSEDED],
+      on: 'SUPPLIER_LICENCE_EXPIRED',
+      status: 'SUPERSEDED',
+    },
+    {
+      name: 'unauthorized supplier with a valid licence',
+      authorized: false,
+      licences: [VALID_LICENCE],
+      on: 'SUPPLIER_NOT_AUTHORIZED',
+      status: 'VALID',
+    },
+    {
+      name: 'valid supplier',
+      authorized: true,
+      licences: [VALID_LICENCE],
+      on: null,
+      status: 'VALID',
+    },
+  ];
+
+  for (const testCase of cases) {
+    it(`ON: ${testCase.name} ${testCase.on ? `is refused with ${testCase.on}` : 'is checked and passes'}`, () => {
+      const run = () =>
+        assertSupplierEligible({
+          authorized: testCase.authorized,
+          licences: testCase.licences,
+          at: NOW,
+          policy: ON,
+        });
+      if (testCase.on) expect(run).toThrow(testCase.on);
+      else expect(run()).toEqual({ checked: true });
+    });
+
+    it(`OFF: ${testCase.name} is not refused and is recorded as not checked`, () => {
+      expect(
+        assertSupplierEligible({
+          authorized: testCase.authorized,
+          licences: testCase.licences,
+          at: NOW,
+          policy: OFF,
+        })
+      ).toEqual({
+        checked: false,
+        policyVersion: 3,
+        supplierAuthorized: testCase.authorized,
+        licenceStatus: testCase.status,
+      });
+    });
+  }
+
+  it('enforces anything that is not an explicit false (fail closed)', () => {
+    for (const checksEnabled of [undefined, null, 'false', 0] as unknown as boolean[]) {
+      expect(() =>
+        assertSupplierEligible({
+          authorized: true,
+          licences: [],
+          at: NOW,
+          policy: { checksEnabled, version: 9 },
+        })
+      ).toThrow('SUPPLIER_LICENCE_EXPIRED');
+    }
+  });
+
+  it('accepts the verified correction that supersedes an earlier filing', () => {
+    expect(
+      assertSupplierEligible({
+        authorized: true,
+        licences: [SUPERSEDED, VALID_LICENCE],
+        at: NOW,
+        policy: ON,
+      })
+    ).toEqual({ checked: true });
+  });
+
+  it('names the standing filing when a valid licence was superseded by an unverified correction', () => {
+    expect(supplierLicenceStatus([SUPERSEDED, UNVERIFIED], NOW)).toBe('UNVERIFIED');
+    expect(supplierLicenceStatus([SUPERSEDED, EXPIRED], NOW)).toBe('EXPIRED');
+    expect(supplierLicenceStatus([SUPERSEDED], NOW)).toBe('SUPERSEDED');
+  });
+
+  it('marks supersession from the organization-wide set, by licence id', () => {
+    expect(
+      licenceEvidence(
+        [
+          { id: 'old', expiresAt: VALID_LICENCE.expiresAt, verifiedAt: NOW },
+          { id: 'new', expiresAt: VALID_LICENCE.expiresAt, verifiedAt: null },
+        ],
+        new Set(['old'])
+      )
+    ).toEqual([
+      { expiresAt: VALID_LICENCE.expiresAt, verified: true, superseded: true },
+      { expiresAt: VALID_LICENCE.expiresAt, verified: false, superseded: false },
+    ]);
+  });
+
+  describe('quote comparison', () => {
+    const candidate = (overrides: Partial<QuoteCandidate>): QuoteCandidate => ({
+      quoteId: 'quote',
+      supplierId: 'supplier',
+      supplierName: 'Distributor',
+      supplierAuthorized: false,
+      supplierLicences: [],
+      validUntil: new Date('2026-10-01T00:00:00.000Z'),
+      pricePerPackMinor: 1_000,
+      canonicalUnitsPerPack: 10,
+      moqPacks: 1,
+      leadTimeDays: 3,
+      minimumExpiryDays: 365,
+      forecastSellThroughPacks: null,
+      ...overrides,
+    });
+
+    it('ON: an unauthorized, unlicensed supplier is not comparable and says why', () => {
+      const [row] = compareQuotes({
+        policy: ON,
+        requiredPacks: 1,
+        at: NOW,
+        candidates: [candidate({})],
+      });
+      expect(row).toMatchObject({ comparable: false, supplierChecked: true });
+      expect(row!.reasons).toContain('Supplier is not authorized to supply this pharmacy.');
+    });
+
+    it('OFF: the same supplier is ranked, and the row says the supplier was not checked', () => {
+      const [row] = compareQuotes({
+        policy: OFF,
+        requiredPacks: 1,
+        at: NOW,
+        candidates: [candidate({})],
+      });
+      expect(row).toMatchObject({ comparable: true, supplierChecked: false, rank: 1 });
+      expect(row!.effectiveUnitCostMicroMinor).not.toBeNull();
+      expect(row!.reasons).toContain(
+        'Supplier licence and trade authorization not checked: supplier checks are turned off.'
+      );
+      expect(row!.reasons.join(' ')).not.toMatch(/not authorized|no unexpired verified licence/i);
+    });
+
+    it('OFF: a lapsed quote is still not comparable (only the supplier checks are off)', () => {
+      const [row] = compareQuotes({
+        policy: OFF,
+        requiredPacks: 1,
+        at: NOW,
+        candidates: [candidate({ validUntil: new Date('2026-09-01T00:00:00.000Z') })],
+      });
+      expect(row).toMatchObject({ comparable: false, supplierChecked: false });
+      expect(row!.reasons).toContain('Quote validity has lapsed.');
+    });
+  });
 });

@@ -58,25 +58,115 @@ function divideRoundHalfUp(numerator: number, denominator: number): number {
 export type SupplierLicenceEvidence = {
   /** Exclusive: a licence that expires today is still valid for the whole of today. */
   expiresAt: Date;
-  /** A superseded or unverified filing is evidence of paperwork, not of a licence. */
+  /** An unverified filing is evidence of paperwork, not of a licence. */
   verified: boolean;
+  /**
+   * DEV-466: another filing in this organization names this one in `supersedesId`.
+   * Licence evidence is append-only, so a correction supersedes rather than rewrites;
+   * a superseded filing stays on file as evidence but no longer licenses anything.
+   */
+  superseded: boolean;
 };
 
 /**
- * PUR-01: an unauthorized supplier, or one with no unexpired verified licence
- * evidence, cannot be ordered from. Called before a PO is created and again
- * before it is sent, because authorization can lapse between the two.
+ * DEV-753: the tenant owner's supplier-compliance policy as the server resolved it.
+ * `checksEnabled` defaults to true; a missing or unreadable policy is enforced.
+ * `version` is 0 until the owner first changes it.
+ */
+export type SupplierCompliancePolicy = { checksEnabled: boolean; version: number };
+
+/** The fail-closed policy: what every path enforces when no stored policy says otherwise. */
+export const ENFORCED_SUPPLIER_COMPLIANCE: SupplierCompliancePolicy = Object.freeze({
+  checksEnabled: true,
+  version: 0,
+});
+
+/**
+ * What the licence evidence on file says, independent of any policy. VALID is the only
+ * status that satisfies PUR-01; the others name why not, for display and for evidence.
+ */
+export type SupplierLicenceStatus = 'VALID' | 'NONE' | 'UNVERIFIED' | 'EXPIRED' | 'SUPERSEDED';
+
+function licenceIsCurrent(licence: SupplierLicenceEvidence, at: Date): boolean {
+  return licence.expiresAt.getTime() >= at.getTime();
+}
+
+export function supplierLicenceStatus(
+  licences: readonly SupplierLicenceEvidence[],
+  at: Date
+): SupplierLicenceStatus {
+  if (licences.length === 0) return 'NONE';
+  if (licences.some((l) => l.verified && !l.superseded && licenceIsCurrent(l, at))) return 'VALID';
+  const standing = licences.filter((licence) => !licence.superseded);
+  if (standing.length === 0) return 'SUPERSEDED';
+  if (standing.some((licence) => !licence.verified && licenceIsCurrent(licence, at))) {
+    return 'UNVERIFIED';
+  }
+  if (standing.some((licence) => !licenceIsCurrent(licence, at))) return 'EXPIRED';
+  return 'UNVERIFIED';
+}
+
+/**
+ * The outcome of the PUR-01 gate. `checked: false` means the owner policy had the
+ * supplier licence and trade-authorization checks off, so nothing about the supplier
+ * was verified; the facts are what the check would have read, kept for evidence.
+ */
+export type SupplierComplianceOutcome =
+  | { checked: true }
+  | {
+      checked: false;
+      policyVersion: number;
+      supplierAuthorized: boolean;
+      licenceStatus: SupplierLicenceStatus;
+    };
+
+/**
+ * PUR-01: an unauthorized supplier, or one with no unexpired, verified and
+ * unsuperseded licence evidence, cannot be ordered from or received from. Called
+ * before a PO is created and again at approval, send, receipt creation and receipt
+ * posting, because authorization and licences can lapse in between.
+ *
+ * DEV-753: the owner policy is a required argument, so no caller can forget it. With
+ * the checks off, supplier trade authorization and licence evidence stop being
+ * refusal reasons and the outcome says they were not checked. Nothing else in the
+ * purchasing or receiving lanes is relaxed by it.
  */
 export function assertSupplierEligible(input: {
   authorized: boolean;
   licences: readonly SupplierLicenceEvidence[];
   at: Date;
-}): void {
+  policy: SupplierCompliancePolicy;
+}): SupplierComplianceOutcome {
+  // Anything other than an explicit `false` enforces.
+  if (input.policy.checksEnabled === false) {
+    return {
+      checked: false,
+      policyVersion: input.policy.version,
+      supplierAuthorized: input.authorized === true,
+      licenceStatus: supplierLicenceStatus(input.licences, input.at),
+    };
+  }
   if (!input.authorized) throw new PharmacyPurchasingError('SUPPLIER_NOT_AUTHORIZED');
-  const valid = input.licences.some(
-    (licence) => licence.verified && licence.expiresAt.getTime() >= input.at.getTime()
-  );
-  if (!valid) throw new PharmacyPurchasingError('SUPPLIER_LICENCE_EXPIRED');
+  if (supplierLicenceStatus(input.licences, input.at) !== 'VALID') {
+    throw new PharmacyPurchasingError('SUPPLIER_LICENCE_EXPIRED');
+  }
+  return { checked: true };
+}
+
+/**
+ * DEV-466: supersession is a property of the organization's whole licence register,
+ * not of one supplier's own filings: any filing whose id another row names in
+ * `supersedesId` is superseded. `supersededIds` is that set as the server read it.
+ */
+export function licenceEvidence(
+  licences: readonly { id: string; expiresAt: Date; verifiedAt: Date | null }[],
+  supersededIds: ReadonlySet<string>
+): SupplierLicenceEvidence[] {
+  return licences.map((licence) => ({
+    expiresAt: licence.expiresAt,
+    verified: licence.verifiedAt !== null,
+    superseded: supersededIds.has(licence.id),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -357,22 +447,43 @@ export type QuoteCandidate = {
   leadTimeDays: number;
   /** Shortest remaining shelf life the supplier will ship, in days. */
   minimumExpiryDays: number;
+  /**
+   * Operator-configured forecast of packs that will sell before the offered
+   * shelf life ends. `null` means none was recorded (quotes captured before the
+   * forecast existed): the comparison then assumes every pack sells, so legacy
+   * quotes keep their original ranking instead of being silently penalised.
+   */
+  forecastSellThroughPacks: number | null;
 };
 
 export type QuoteComparisonRow = {
   quoteId: string;
   supplierId: string;
   supplierName: string;
+  pricePerPackMinor: number;
   /** 1-based, best first. Non-comparable quotes rank last, in input order. */
   rank: number;
   comparable: boolean;
   /** Effective landed cost per canonical unit for one MOQ-satisfying buy. */
   effectiveUnitCostMicroMinor: number | null;
+  /** Cost divided only by stock forecast to sell before expiry. */
+  effectiveSellableUnitCostMicroMinor: number | null;
+  /** The recorded forecast, or `null` when none was recorded and all packs are assumed to sell. */
+  forecastSellThroughPacks: number | null;
+  /** Free packs the forecast does not sell before expiry. Zero when not comparable. */
+  atRiskBonusPacks: number;
+  /** Paid packs the forecast does not sell before expiry. Zero when not comparable. */
+  atRiskPaidPacks: number;
   packsForRequirement: number;
   bonusPacks: number;
   leadTimeDays: number;
   minimumExpiryDays: number;
   moqPacks: number;
+  /**
+   * DEV-753: whether the supplier's licence and trade authorization were checked for
+   * this ranking. `false` only while the owner policy has those checks off.
+   */
+  supplierChecked: boolean;
   /** Plain-language reasons — the operator awards, the comparison does not. */
   reasons: readonly string[];
 };
@@ -389,6 +500,46 @@ function scheduleForRequirement(
 }
 
 /**
+ * Cost per unit expected to remain sellable. Paid stock is consumed first, so a
+ * bonus lowers cost only to the extent the configured forecast also consumes it.
+ */
+export function effectiveCostPerSellableUnit(input: {
+  costMinor: number;
+  paidPacks: number;
+  bonusPacks: number;
+  canonicalUnitsPerPack: number;
+  forecastSellThroughPacks: number;
+}): {
+  effectiveUnitCostMicroMinor: number;
+  sellablePacks: number;
+  atRiskBonusPacks: number;
+  atRiskPaidPacks: number;
+} {
+  const { costMinor, paidPacks, bonusPacks, canonicalUnitsPerPack, forecastSellThroughPacks } =
+    input;
+  assertCount(costMinor, 'INVALID_MONEY');
+  [paidPacks, bonusPacks, forecastSellThroughPacks].forEach((value) =>
+    assertCount(value, 'INVALID_QUANTITY')
+  );
+  if (!Number.isSafeInteger(canonicalUnitsPerPack) || canonicalUnitsPerPack <= 0) {
+    throw new PharmacyPurchasingError('INVALID_QUANTITY');
+  }
+  const totalPacks = paidPacks + bonusPacks;
+  const sellablePacks = Math.min(totalPacks, forecastSellThroughPacks);
+  if (sellablePacks <= 0) throw new PharmacyPurchasingError('INVALID_QUANTITY');
+  const sellableBonusPacks = Math.max(0, sellablePacks - paidPacks);
+  return {
+    effectiveUnitCostMicroMinor: divideRoundHalfUp(
+      costMinor * MICRO,
+      sellablePacks * canonicalUnitsPerPack
+    ),
+    sellablePacks,
+    atRiskBonusPacks: bonusPacks - sellableBonusPacks,
+    atRiskPaidPacks: paidPacks - Math.min(paidPacks, sellablePacks),
+  };
+}
+
+/**
  * PUR-02: rank the quotes for one requisition line and explain every position.
  * Returns a list, not a winner — awarding stays a human decision. Ranking is by
  * effective landed cost per canonical unit, then lead time, then remaining
@@ -398,8 +549,10 @@ export function compareQuotes(input: {
   requiredPacks: number;
   candidates: readonly QuoteCandidate[];
   at: Date;
+  /** DEV-753: the owner's supplier-compliance policy, resolved on the server. */
+  policy: SupplierCompliancePolicy;
 }): readonly QuoteComparisonRow[] {
-  const { requiredPacks, candidates, at } = input;
+  const { requiredPacks, candidates, at, policy } = input;
   if (!Number.isSafeInteger(requiredPacks) || requiredPacks <= 0) {
     throw new PharmacyPurchasingError('INVALID_QUANTITY');
   }
@@ -407,13 +560,15 @@ export function compareQuotes(input: {
   const rows = candidates.map((candidate) => {
     const reasons: string[] = [];
     let comparable = true;
+    let supplierChecked = true;
 
     try {
-      assertSupplierEligible({
+      supplierChecked = assertSupplierEligible({
         authorized: candidate.supplierAuthorized,
         licences: candidate.supplierLicences,
         at,
-      });
+        policy,
+      }).checked;
     } catch (error) {
       comparable = false;
       reasons.push(
@@ -429,6 +584,12 @@ export function compareQuotes(input: {
 
     const { paidPacks, bonusPacks } = scheduleForRequirement(requiredPacks, candidate);
     let effectiveUnitCostMicroMinor: number | null = null;
+    let effectiveSellableUnitCostMicroMinor: number | null = null;
+    // A non-comparable quote is never risk-assessed, so it reports no packs at risk.
+    let atRiskBonusPacks = 0;
+    let atRiskPaidPacks = 0;
+    const forecast = candidate.forecastSellThroughPacks ?? null;
+    const forecastRecorded = forecast !== null;
     if (comparable) {
       const [line] = landedCost({
         lines: [
@@ -442,6 +603,16 @@ export function compareQuotes(input: {
         ],
       }).lines;
       effectiveUnitCostMicroMinor = line!.landedCostPerCanonicalUnitMicroMinor;
+      const riskAdjusted = effectiveCostPerSellableUnit({
+        costMinor: line!.landedCostMinor,
+        paidPacks,
+        bonusPacks,
+        canonicalUnitsPerPack: candidate.canonicalUnitsPerPack,
+        forecastSellThroughPacks: forecast ?? paidPacks + bonusPacks,
+      });
+      effectiveSellableUnitCostMicroMinor = riskAdjusted.effectiveUnitCostMicroMinor;
+      atRiskBonusPacks = riskAdjusted.atRiskBonusPacks;
+      atRiskPaidPacks = riskAdjusted.atRiskPaidPacks;
     }
 
     if (candidate.moqPacks > requiredPacks) {
@@ -451,7 +622,18 @@ export function compareQuotes(input: {
     }
     if (bonusPacks > 0) {
       reasons.push(
-        `Scheme adds ${bonusPacks} free packs, lowering the unit cost without adding revenue.`
+        !comparable
+          ? `Scheme adds ${bonusPacks} free packs.`
+          : !forecastRecorded
+            ? `Scheme adds ${bonusPacks} free packs; no sell-through forecast is recorded, so all are assumed to sell.`
+            : atRiskBonusPacks > 0
+              ? `Scheme adds ${bonusPacks} free packs; ${atRiskBonusPacks} are at expiry risk under the configured sell-through forecast.`
+              : `Scheme adds ${bonusPacks} free packs and the configured forecast sells all before expiry.`
+      );
+    }
+    if (atRiskPaidPacks > 0) {
+      reasons.push(
+        `${atRiskPaidPacks} paid packs are at expiry risk under the configured sell-through forecast.`
       );
     }
     if ((candidate.discountBps ?? 0) > 0) {
@@ -460,19 +642,30 @@ export function compareQuotes(input: {
     reasons.push(
       `Lead time ${candidate.leadTimeDays} days; shortest shelf life offered ${candidate.minimumExpiryDays} days.`
     );
+    if (!supplierChecked) {
+      reasons.push(
+        'Supplier licence and trade authorization not checked: supplier checks are turned off.'
+      );
+    }
 
     return {
       quoteId: candidate.quoteId,
       supplierId: candidate.supplierId,
       supplierName: candidate.supplierName,
+      pricePerPackMinor: candidate.pricePerPackMinor,
       rank: 0,
       comparable,
       effectiveUnitCostMicroMinor,
+      effectiveSellableUnitCostMicroMinor,
+      forecastSellThroughPacks: forecast,
+      atRiskBonusPacks,
+      atRiskPaidPacks,
       packsForRequirement: paidPacks,
       bonusPacks,
       leadTimeDays: candidate.leadTimeDays,
       minimumExpiryDays: candidate.minimumExpiryDays,
       moqPacks: candidate.moqPacks,
+      supplierChecked,
       reasons,
     };
   });
@@ -483,7 +676,7 @@ export function compareQuotes(input: {
     // returning 0 keeps them in the caller's input order.
     if (!a.comparable) return 0;
     return (
-      a.effectiveUnitCostMicroMinor! - b.effectiveUnitCostMicroMinor! ||
+      a.effectiveSellableUnitCostMicroMinor! - b.effectiveSellableUnitCostMicroMinor! ||
       a.leadTimeDays - b.leadTimeDays ||
       b.minimumExpiryDays - a.minimumExpiryDays ||
       a.quoteId.localeCompare(b.quoteId)

@@ -21,7 +21,7 @@ import {
  *   - verify and reject: require the `sop:verify` capability (enforced at the
  *     router layer — this module receives a pre-verified actor id).
  *   - waive: additionally requires a manager co-authorization (M2 pattern,
- *     distinct approver).
+ *     credential-proven, capable, distinct approver at the request boundary).
  *
  * After REJECT the occurrence status returns to a state where `startOccurrence`
  * (REJECTED → IN_PROGRESS) can be called again for the rework.
@@ -165,7 +165,8 @@ export type WaiveOccurrenceInput = {
   occurrenceId: string;
   /** The manager performing the waiver. */
   actorStaffProfileId: string;
-  /** A distinct approving manager is REQUIRED for a waiver (M2 co-authorization). */
+  /** Server-verified approving manager: the request boundary must prove their
+   * credential and sop:verify capability before calling this internal writer. */
   approvingStaffProfileId: string;
   reason: string;
   now?: Date;

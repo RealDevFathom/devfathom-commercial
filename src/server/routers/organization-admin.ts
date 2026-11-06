@@ -3,8 +3,16 @@ import { TRPCError } from '@trpc/server';
 import { hash } from 'bcryptjs';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
-import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
+import {
+  askFathomAvailability,
+  readAskFathomAvailability,
+  readRoutedAvailabilityFor,
+  readAskFathomSettings,
+} from '@/lib/ai/ask-fathom-settings';
+import { readDeepStrategySettings } from '@/lib/ai/deep-strategy-settings';
+import { readAIProviderReadiness } from '@/lib/ai/provider';
 import { passwordSchema } from '@/lib/password-policy';
+import { organizationRolePermissionsSchema } from '@/lib/organization-role';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { ianaTimezone } from '@/lib/timezone';
@@ -73,10 +81,12 @@ function organizationId(ctx: { session: { user: { organizationId?: string } } })
 }
 
 export const organizationAdminRouter = router({
+  // Shares POST /api/assistant's availability check: the launcher is enabled only when
+  // the company switch is on and the AI provider is configured.
   askFathomSettings: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
-    const settings = await readAskFathomSettings(ctx.db, organizationId(ctx));
-    if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
-    return settings;
+    const check = await readAskFathomAvailability(ctx.db, organizationId(ctx));
+    if (!check) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+    return check.availability;
   }),
 
   setAskFathomEnabled: adminProcedure
@@ -100,7 +110,47 @@ export const organizationAdminRouter = router({
         operation: 'UPDATE',
         description: `${saved.askFathomEnabled ? 'Enabled' : 'Disabled'} company Ask Fathom chat`,
       });
-      return { organizationId: saved.id, askFathomEnabled: saved.askFathomEnabled };
+      const provider = readAIProviderReadiness();
+      return askFathomAvailability(
+        { organizationId: saved.id, askFathomEnabled: saved.askFathomEnabled },
+        provider,
+        await readRoutedAvailabilityFor(provider)
+      );
+    }),
+
+  // The pharmacy's opt-in for deep strategy on the deep model. ADMIN only; no UI yet.
+  deepStrategySettings: adminProcedure.input(z.void()).query(async ({ ctx }) => {
+    if (ctx.session.user.role !== 'ADMIN') {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Administrator access is required.' });
+    }
+    const settings = await readDeepStrategySettings(ctx.db, organizationId(ctx));
+    if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+    return settings;
+  }),
+
+  setDeepStrategyEnabled: adminProcedure
+    .input(z.strictObject({ aiDeepStrategyEnabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      // A custom capability grant must not broaden this company control beyond ADMIN.
+      if (ctx.session.user.role !== 'ADMIN') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Administrator access is required.' });
+      }
+      const id = organizationId(ctx);
+      const settings = await readDeepStrategySettings(ctx.db, id);
+      if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+      const saved = await ctx.db.organization.update({
+        where: { id },
+        data: { aiDeepStrategyEnabled: input.aiDeepStrategyEnabled },
+        select: { id: true, aiDeepStrategyEnabled: true },
+      });
+      annotateAudit(ctx, {
+        targetType: 'Organization',
+        targetId: id,
+        operation: 'UPDATE',
+        description: `${saved.aiDeepStrategyEnabled ? 'Enabled' : 'Disabled'} AI deep strategy`,
+      });
+      // The router caches the opt-in for up to 30 seconds per server.
+      return { organizationId: saved.id, aiDeepStrategyEnabled: saved.aiDeepStrategyEnabled };
     }),
 
   departments: adminProcedure.query(async ({ ctx }) => {
@@ -403,42 +453,42 @@ export const organizationAdminRouter = router({
           ),
         name: z.string().trim().min(2).max(150),
         description: z.string().trim().max(500).nullable(),
-        permissions: z
-          .array(
-            z.object({
-              capability: z.string().trim().min(1).max(150),
-              effect: z.enum(['ALLOW', 'DENY']),
-            })
-          )
-          .max(250),
+        permissions: organizationRolePermissionsSchema,
       })
     )
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
       const { id: roleId, permissions, ...values } = input;
-      const existing = roleId
-        ? await ctx.db.organizationRole.findFirst({
-            where: { id: roleId, organizationId: id },
-          })
-        : null;
-      if (existing?.isSystem) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'System roles cannot be modified.' });
-      }
-      const role = roleId
-        ? await ctx.db.organizationRole.update({ where: { id: roleId }, data: values })
-        : await ctx.db.organizationRole.create({ data: { organizationId: id, ...values } });
-      await ctx.db.organizationRolePermission.deleteMany({
-        where: { organizationRoleId: role.id },
-      });
-      if (permissions.length) {
-        await ctx.db.organizationRolePermission.createMany({
-          data: permissions.map((permission) => ({
-            organizationId: id,
-            organizationRoleId: role.id,
-            ...permission,
-          })),
+      const role = await ctx.db.$transaction(async (tx) => {
+        // Serialize role replacements for this tenant so concurrent edits cannot
+        // interleave their delete/insert sequences.
+        await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${id} FOR UPDATE`;
+        const existing = roleId
+          ? await tx.organizationRole.findFirst({ where: { id: roleId, organizationId: id } })
+          : null;
+        if (roleId && !existing) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Role not found.' });
+        }
+        if (existing?.isSystem) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'System roles cannot be modified.' });
+        }
+        const saved = roleId
+          ? await tx.organizationRole.update({ where: { id: roleId }, data: values })
+          : await tx.organizationRole.create({ data: { organizationId: id, ...values } });
+        await tx.organizationRolePermission.deleteMany({
+          where: { organizationRoleId: saved.id },
         });
-      }
+        if (permissions.length) {
+          await tx.organizationRolePermission.createMany({
+            data: permissions.map((permission) => ({
+              organizationId: id,
+              organizationRoleId: saved.id,
+              ...permission,
+            })),
+          });
+        }
+        return saved;
+      });
       annotateAudit(ctx, {
         targetType: 'OrganizationRole',
         targetId: role.id,

@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { BranchAssignmentRequired } from '@/components/pharmacy/inventory/branch-assignment-required';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
@@ -23,7 +24,10 @@ import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
+import {
+  admittedInventoryBranchIds,
+  pharmacyInventoryRouter,
+} from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
 
 import { BreakPackForm } from './break-pack-form';
@@ -130,7 +134,25 @@ export default async function PharmacyInventoryPage({
     orderBy: { name: 'asc' },
     select: { id: true, name: true, city: true },
   });
-  const branch = branches.find((item) => item.id === query.branch) ?? branches[0] ?? null;
+  // DEV-660: the gated stock reads admit only a branch the actor is assigned to (or
+  // any branch, for a verified tenant ADMIN), so only those branches are offered.
+  // `branches` still names the other side of a transfer.
+  const admitted = await admittedInventoryBranchIds(ctx);
+  const workingBranches = branches.filter((item) => admitted.has(item.id));
+  const branch =
+    workingBranches.find((item) => item.id === query.branch) ?? workingBranches[0] ?? null;
+  if (!branch && branches.length > 0) {
+    return (
+      <main className="min-w-0 space-y-6">
+        <PageHeader
+          eyebrow="Pharmacy operations"
+          heading="Inventory"
+          description="Lots, counts, transfers, recalls, and ranked stock actions."
+        />
+        <BranchAssignmentRequired canAssign={ctx.session.user.role === 'ADMIN'} />
+      </main>
+    );
+  }
   if (!branch) {
     return (
       <main className="min-w-0 space-y-6">
@@ -156,73 +178,66 @@ export default async function PharmacyInventoryPage({
   }
 
   const caller = pharmacyInventoryRouter.createCaller(ctx);
-  const [
-    organizationLocations,
-    lots,
-    counts,
-    transfers,
-    recalls,
-    signals,
-    users,
-    nearExpiry,
-    temperatureLogs,
-  ] = await Promise.all([
-    ctx.db.pharmacyStockLocation.findMany({
-      where: { organizationId, active: true },
-      orderBy: { name: 'asc' },
-    }),
-    ctx.db.pharmacyInventoryLot.findMany({
-      where: { organizationId, branchId: branch.id },
-      orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
-      include: {
-        batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
-        balances: { include: { location: true } },
-      },
-    }),
-    ctx.db.pharmacyInventoryCount.findMany({
-      where: { organizationId, branchId: branch.id },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-      include: { lines: true },
-    }),
-    ctx.db.pharmacyInterbranchTransfer.findMany({
-      where: { organizationId, OR: [{ fromBranchId: branch.id }, { toBranchId: branch.id }] },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-      include: { lines: true },
-    }),
-    ctx.db.pharmacyRecallNotice.findMany({
-      where: { organizationId },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-      include: { acknowledgements: true },
-    }),
-    ctx.db.pharmacyStockSignal.findMany({
-      where: {
-        organizationId,
-        branchId: branch.id,
-        status: { in: ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] },
-      },
-      orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
-      take: 50,
-      include: {
-        medicine: { select: { productName: true } },
-        location: { select: { name: true } },
-      },
-    }),
-    ctx.db.user.findMany({
-      where: { organizationId, status: 'ACTIVE', id: { not: ctx.session.user.id } },
-      orderBy: { name: 'asc' },
-      select: { id: true, name: true, title: true },
-    }),
-    caller.nearExpiryBoard({ branchId: branch.id }),
-    ctx.db.pharmacyTemperatureLog.findMany({
-      where: { organizationId, branchId: branch.id },
-      orderBy: { recordedAt: 'desc' },
-      take: 20,
-      include: { location: { select: { name: true } } },
-    }),
-  ]);
+  // DEV-660: the gated read admits the branch (and, for a tenant ADMIN without an
+  // assignment, writes the exception's audit row) before any direct stock read.
+  const nearExpiry = await caller.nearExpiryBoard({ branchId: branch.id });
+  const [organizationLocations, lots, counts, transfers, recalls, signals, users, temperatureLogs] =
+    await Promise.all([
+      ctx.db.pharmacyStockLocation.findMany({
+        where: { organizationId, active: true },
+        orderBy: { name: 'asc' },
+      }),
+      ctx.db.pharmacyInventoryLot.findMany({
+        where: { organizationId, branchId: branch.id },
+        orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
+        include: {
+          batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
+          balances: { include: { location: true } },
+        },
+      }),
+      ctx.db.pharmacyInventoryCount.findMany({
+        where: { organizationId, branchId: branch.id },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        include: { lines: true },
+      }),
+      ctx.db.pharmacyInterbranchTransfer.findMany({
+        where: { organizationId, OR: [{ fromBranchId: branch.id }, { toBranchId: branch.id }] },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        include: { lines: true },
+      }),
+      ctx.db.pharmacyRecallNotice.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        include: { acknowledgements: true },
+      }),
+      ctx.db.pharmacyStockSignal.findMany({
+        where: {
+          organizationId,
+          branchId: branch.id,
+          status: { in: ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] },
+        },
+        orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
+        take: 50,
+        include: {
+          medicine: { select: { productName: true } },
+          location: { select: { name: true } },
+        },
+      }),
+      ctx.db.user.findMany({
+        where: { organizationId, status: 'ACTIVE', id: { not: ctx.session.user.id } },
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true, title: true },
+      }),
+      ctx.db.pharmacyTemperatureLog.findMany({
+        where: { organizationId, branchId: branch.id },
+        orderBy: { recordedAt: 'desc' },
+        take: 20,
+        include: { location: { select: { name: true } } },
+      }),
+    ]);
   const branchNames = new Map(branches.map((item) => [item.id, item.name]));
   const locations = organizationLocations.filter((item) => item.branchId === branch.id);
   const destinationLocations = organizationLocations.filter((item) => item.branchId !== branch.id);
@@ -240,6 +255,13 @@ export default async function PharmacyInventoryPage({
       .filter((balance) => balance.disposition === 'AVAILABLE' && balance.onHandUnits > 0)
       .map((balance) => ({ lot, balance }))
   );
+  const quarantined = lots.flatMap((lot) =>
+    lot.balances
+      .filter((balance) => balance.disposition === 'QUARANTINE' && balance.onHandUnits > 0)
+      .map((balance) => ({ lot, balance }))
+  );
+  const releasableQuarantined = quarantined.filter(({ lot }) => lot.batch.state === 'ACTIVE');
+  const writeOffPositions = [...available, ...quarantined];
   const totalUnits = available.reduce((sum, row) => sum + row.balance.onHandUnits, 0);
   const draftLotByMedicine = new Map(
     available.map(({ lot }) => [lot.batch.medicineId, lot] as const)
@@ -308,6 +330,16 @@ export default async function PharmacyInventoryPage({
           reason: field(data, 'reason'),
           evidenceRef: field(data, 'evidenceRef'),
           idempotencyKey: `ui-writeoff:${browserUuid()}`,
+          disposition: field(data, 'position').split(':')[2] as 'AVAILABLE' | 'QUARANTINE',
+        });
+      else if (action === 'release-quarantine')
+        await actionCaller.releaseQuarantinedPart({
+          branchId,
+          inventoryLotId: field(data, 'position').split(':')[0]!,
+          stockLocationId: field(data, 'position').split(':')[1]!,
+          units: number(data, 'units'),
+          reason: field(data, 'reason'),
+          idempotencyKeyPrefix: `ui-quarantine-release:${browserUuid()}`,
         });
       else if (action === 'allocate-transfer')
         await actionCaller.allocateTransfer({
@@ -398,12 +430,20 @@ export default async function PharmacyInventoryPage({
         heading="Inventory"
         description="FEFO lots, controlled stock movements, chain operations, and the ranked work queue."
         actions={
-          <Link
-            href="/pharmacy/inventory/imports"
-            className={buttonVariants({ variant: 'secondary' })}
-          >
-            Imported stock / Awaiting verification
-          </Link>
+          <>
+            <Link
+              href="/pharmacy/inventory/import"
+              className={buttonVariants({ variant: 'secondary' })}
+            >
+              Import opening stock
+            </Link>
+            <Link
+              href="/pharmacy/inventory/imports"
+              className={buttonVariants({ variant: 'secondary' })}
+            >
+              Imported stock / Awaiting verification
+            </Link>
+          </>
         }
       />
       {query.notice ? (
@@ -419,7 +459,7 @@ export default async function PharmacyInventoryPage({
           <label className="min-w-64 flex-1 text-sm text-text-body">
             Branch
             <select className={inputClass} defaultValue={branch.id} name="branch">
-              {branches.map((item) => (
+              {workingBranches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name} · {item.city}
                 </option>
@@ -466,7 +506,12 @@ export default async function PharmacyInventoryPage({
             </span>
           </Empty>
         ) : (
-          <div className="overflow-x-auto">
+          <div
+            role="region"
+            aria-label="Pharmacy inventory batches"
+            tabIndex={0}
+            className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
             <Table>
               <TableHeader>
                 <TableRow>
@@ -757,20 +802,20 @@ export default async function PharmacyInventoryPage({
       </div>
 
       <SectionCard title="Adjustments and write-off custody" eyebrow="INV-06">
-        {available.length && users.length ? (
+        {writeOffPositions.length && users.length ? (
           <form action={perform} className="grid gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="write-off" />
             <input name="branchId" type="hidden" value={branch.id} />
             <label className="text-sm md:col-span-2">
               Lot
               <select className={inputClass} name="position">
-                {available.map(({ lot, balance }) => (
+                {writeOffPositions.map(({ lot, balance }) => (
                   <option
-                    key={`${lot.id}:${balance.stockLocationId}`}
-                    value={`${lot.id}:${balance.stockLocationId}`}
+                    key={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
+                    value={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
                   >
                     {lot.batch.medicine.productName} · {lot.batch.batchNumber} ·{' '}
-                    {balance.location.name}
+                    {balance.location.name} · {label(balance.disposition)}
                   </option>
                 ))}
               </select>
@@ -808,9 +853,44 @@ export default async function PharmacyInventoryPage({
           </form>
         ) : (
           <Empty>
-            A write-off needs available stock and a different active organization member as witness.
+            A write-off needs available or quarantined stock and a different active organization
+            member as witness.
           </Empty>
         )}
+        {releasableQuarantined.length ? (
+          <form action={perform} className="mt-6 grid gap-3 md:grid-cols-3">
+            <input name="action" type="hidden" value="release-quarantine" />
+            <input name="branchId" type="hidden" value={branch.id} />
+            <label className="text-sm md:col-span-2">
+              Manually held stock
+              <select className={inputClass} name="position">
+                {releasableQuarantined.map(({ lot, balance }) => (
+                  <option
+                    key={`${lot.id}:${balance.stockLocationId}`}
+                    value={`${lot.id}:${balance.stockLocationId}`}
+                  >
+                    {lot.batch.medicine.productName} · {lot.batch.batchNumber} ·{' '}
+                    {balance.location.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm">
+              Units
+              <Input className="mt-1" min="1" name="units" required type="number" />
+            </label>
+            <label className="text-sm md:col-span-2">
+              Clearance reason
+              <Input className="mt-1" name="reason" required />
+            </label>
+            <Button className="self-end" type="submit" variant="secondary">
+              Release manual hold
+            </Button>
+            <p className="text-xs text-text-muted md:col-span-3">
+              Regulatory recall units remain reserved for the safety-authorized recall reversal.
+            </p>
+          </form>
+        ) : null}
       </SectionCard>
 
       <SectionCard
@@ -893,11 +973,14 @@ export default async function PharmacyInventoryPage({
                     <Submit>Dispatch</Submit>
                   </form>
                 ) : null}
+                {/* DEV-660: stock is received at the destination, by someone assigned there,
+                    so the action is offered only while that branch is the working branch. */}
                 {['DISPATCHED', 'PARTIALLY_RECEIVED'].includes(transfer.status) &&
+                transfer.toBranchId === branch.id &&
                 transfer.lines[0] ? (
                   <form action={perform}>
                     <input name="action" type="hidden" value="receive-transfer" />
-                    <input name="branchId" type="hidden" value={transfer.toBranchId} />
+                    <input name="branchId" type="hidden" value={branch.id} />
                     <input name="transferId" type="hidden" value={transfer.id} />
                     <input name="lineId" type="hidden" value={transfer.lines[0].id} />
                     <input

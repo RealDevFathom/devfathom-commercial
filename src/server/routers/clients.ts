@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { sortCurrencies } from '@/lib/finance/currency';
+import { createWithNextInvoiceNumber } from '@/lib/finance/invoice-number';
 import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import { router, protectedProcedure, adminProcedure } from '../trpc';
@@ -49,12 +51,17 @@ export const clientsRouter = router({
 
     const revenueByClient = isAdmin
       ? await ctx.db.invoice.groupBy({
-          by: ['clientId'],
+          by: ['clientId', 'currency'],
           where: { status: 'PAID' },
           _sum: { total: true },
         })
       : [];
-    const revenueMap = new Map(revenueByClient.map((r) => [r.clientId, Number(r._sum.total ?? 0)]));
+    const revenueMap = new Map<string, Array<{ currency: string; amount: number }>>();
+    for (const row of revenueByClient) {
+      const totals = revenueMap.get(row.clientId) ?? [];
+      totals.push({ currency: row.currency, amount: Number(row._sum.total ?? 0) });
+      revenueMap.set(row.clientId, totals);
+    }
 
     return clients.map((c) => ({
       ...c,
@@ -62,7 +69,7 @@ export const clientsRouter = router({
         ...c._count,
         invoices: isAdmin ? c._count.invoices : 0,
       },
-      totalRevenue: isAdmin ? (revenueMap.get(c.id) ?? 0) : 0,
+      totalRevenue: isAdmin ? sortCurrencies(revenueMap.get(c.id) ?? []) : [],
     }));
   }),
 
@@ -487,30 +494,27 @@ export const clientsRouter = router({
         });
       }
 
-      // FIN-09: scope the sequence to THIS year's invoices so it resets each Jan.
-      const year = new Date().getFullYear();
-      const count = await ctx.db.invoice.count({
-        where: { invoiceNumber: { startsWith: `INV-${year}-` } },
-      });
-      const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
       const dueDate = new Date(Date.now() + input.dueInDays * 24 * 60 * 60 * 1000);
 
-      const invoice = await ctx.db.invoice.create({
-        data: {
-          invoiceNumber,
-          clientId: contract.clientId,
-          projectId: contract.projectId,
-          items: [{ description: contract.title, quantity: 1, rate: amount, amount }],
-          subtotal: amount,
-          tax: 0,
-          total: amount,
-          currency: contract.currency,
-          status: 'DRAFT',
-          dueDate,
-          notes: `Generated from contract "${contract.title}"`,
-        },
-        include: { client: { select: { name: true } } },
-      });
+      // Same per-organization, per-year INV sequence as finance.createInvoice.
+      const invoice = await createWithNextInvoiceNumber(ctx.db, (tx, invoiceNumber) =>
+        tx.invoice.create({
+          data: {
+            invoiceNumber,
+            clientId: contract.clientId,
+            projectId: contract.projectId,
+            items: [{ description: contract.title, quantity: 1, rate: amount, amount }],
+            subtotal: amount,
+            tax: 0,
+            total: amount,
+            currency: contract.currency,
+            status: 'DRAFT',
+            dueDate,
+            notes: `Generated from contract "${contract.title}"`,
+          },
+          include: { client: { select: { name: true } } },
+        })
+      );
 
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'invoice_created',

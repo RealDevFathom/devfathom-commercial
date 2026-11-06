@@ -222,6 +222,7 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       'permission_restaurant_e2e_operator_3',
       'permission_restaurant_e2e_operator_4',
       'permission_restaurant_e2e_operator_5',
+      'permission_restaurant_e2e_operator_6',
       'permission_restaurant_e2e_delivery_denied',
       'permission_restaurant_e2e_manager_all',
       'permission_restaurant_e2e_reports_operational',
@@ -1292,6 +1293,7 @@ async function main() {
                 'cash:close',
                 'orders:take',
                 'customers:read',
+                'kitchen:operate',
               ].map((capability, index) => ({
                 id: `permission_restaurant_e2e_operator_${index}`,
                 capability,
@@ -1312,6 +1314,7 @@ async function main() {
                 'cash:close',
                 'orders:take',
                 'customers:read',
+                'kitchen:operate',
               ].map((capability, index) => ({
                 id: `permission_restaurant_e2e_operator_${index}`,
                 capability,
@@ -1512,7 +1515,7 @@ async function main() {
               title: user.title,
               status: 'ACTIVE',
               startDate: FIXED_AT,
-              role: 'EMPLOYEE',
+              role: user.id === IDS.alexUser ? 'ADMIN' : 'EMPLOYEE',
               avatar: null,
               phone: null,
               bio: null,
@@ -1531,6 +1534,7 @@ async function main() {
               name: user.name,
               email: user.email,
               password: user.password,
+              role: user.id === IDS.alexUser ? 'ADMIN' : 'EMPLOYEE',
               // A restaurant has no LEADERSHIP department; both fixture users
               // work the floor.
               department: adminDepartmentKeyForVertical('RESTAURANT'),
@@ -2675,7 +2679,9 @@ async function main() {
             graceMinutes: 0,
             active: true,
             assigneeTargetType: 'PERSON',
-            assigneeStaffProfileId: RESTAURANT_E2E.operatorId,
+            // SOP actions are recorded against the signed-in user's own staff
+            // profile, so the acceptance lane's signed-in admin owns this SOP.
+            assigneeStaffProfileId: IDS.alexStaff,
             assigneeJobRoleId: null,
           },
           create: {
@@ -2688,7 +2694,7 @@ async function main() {
             startDate: BUSINESS_DATE,
             dueTimeMinutes: 480,
             assigneeTargetType: 'PERSON',
-            assigneeStaffProfileId: RESTAURANT_E2E.operatorId,
+            assigneeStaffProfileId: IDS.alexStaff,
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
           },
@@ -2706,7 +2712,7 @@ async function main() {
             startedAt: null,
             submittedAt: null,
             resolvedAt: null,
-            assignedStaffProfileId: RESTAURANT_E2E.operatorId,
+            assignedStaffProfileId: IDS.alexStaff,
             poolJobRoleId: null,
             claimedByStaffProfileId: null,
             claimedAt: null,
@@ -2720,7 +2726,7 @@ async function main() {
             status: 'SCHEDULED',
             dueAt: new Date('2026-08-27T03:00:00.000Z'),
             windowEndsAt: new Date('2026-08-28T03:00:00.000Z'),
-            assignedStaffProfileId: RESTAURANT_E2E.operatorId,
+            assignedStaffProfileId: IDS.alexStaff,
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
           },

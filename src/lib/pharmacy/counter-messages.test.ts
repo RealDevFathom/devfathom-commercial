@@ -6,6 +6,7 @@ import {
   COUNTER_UNKNOWN_ERROR_MESSAGE,
   counterErrorMessage,
 } from './counter-messages';
+import { PharmacyLoyaltyError } from './customer-loyalty';
 import { PharmacySaleBatchError } from './sale-batch-safety';
 import { PharmacySettlementError } from './settlement';
 
@@ -23,12 +24,14 @@ describe('counterErrorMessage', () => {
     );
   });
 
+  /** #453: linking a customer requires loyalty consent, not dispensing consent. */
   it('names loyalty consent without referring to dispensing', () => {
-    const message = counterErrorMessage(new Error('LOYALTY_CONSENT_REQUIRED'));
+    const message = counterErrorMessage(new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED'));
     expect(message).toBe(
       'Loyalty consent is required before linking this customer or redeeming loyalty points.'
     );
     expect(message).not.toContain('dispensing');
+    expect(message).not.toBe(COUNTER_ERROR_MESSAGES.CONSENT_REQUIRED);
   });
 
   it('never returns a raw reason code for an unmapped failure', () => {
@@ -77,7 +80,7 @@ describe('counterErrorMessage', () => {
     }
   });
 
-  /** #633: a batch that became unsafe after add-to-cart refuses the payment mid-bill. */
+  /** #659: a batch that became unsafe after add-to-cart refuses the payment mid-bill. */
   it('has a sentence for every reason PharmacySaleBatchError can raise', () => {
     const reasons = [
       ['SALE_BATCH_RECALLED', 'RECALLED', 'recalled'],

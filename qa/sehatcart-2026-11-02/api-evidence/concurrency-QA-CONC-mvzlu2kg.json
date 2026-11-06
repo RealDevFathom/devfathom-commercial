@@ -1,0 +1,310 @@
+{
+  "b4Lot": "cmvzlu34h026d4oqrilu5mem5",
+  "before": [
+    {
+      "inventoryLotId": "cmvzlu34h026d4oqrilu5mem5",
+      "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+      "disposition": "AVAILABLE",
+      "onHandUnits": 30,
+      "sealedPacks": 3,
+      "looseUnits": 0,
+      "unitsPerPack": 10,
+      "blockedBy": null
+    },
+    {
+      "inventoryLotId": "cmvzl8u3u01pq4oqrosqy5nsi",
+      "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+      "disposition": "AVAILABLE",
+      "onHandUnits": 280,
+      "sealedPacks": 28,
+      "looseUnits": 0,
+      "unitsPerPack": 10,
+      "blockedBy": null
+    },
+    {
+      "inventoryLotId": "cmvzl8u4a01pt4oqrafza14oh",
+      "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+      "disposition": "AVAILABLE",
+      "onHandUnits": 300,
+      "sealedPacks": 30,
+      "looseUnits": 0,
+      "unitsPerPack": 10,
+      "blockedBy": null
+    }
+  ],
+  "lines": [
+    {
+      "i": 0,
+      "role": "owner",
+      "sale": "cmvzlu38j026h4oqrpqtqj0eg",
+      "status": 200,
+      "code": null,
+      "msg": null,
+      "gross": 5200,
+      "unit": 2600,
+      "units": 20,
+      "allocs": []
+    },
+    {
+      "i": 1,
+      "role": "owner",
+      "sale": "cmvzlu3as026k4oqr3ud2v14x",
+      "status": 200,
+      "code": null,
+      "msg": null,
+      "gross": 5400,
+      "unit": 2700,
+      "units": 20,
+      "allocs": []
+    },
+    {
+      "i": 2,
+      "role": "cashier",
+      "sale": "cmvzlu3cn026n4oqrkam3weaq",
+      "status": 200,
+      "code": null,
+      "msg": null,
+      "gross": 5600,
+      "unit": 2800,
+      "units": 20,
+      "allocs": []
+    },
+    {
+      "i": 3,
+      "role": "cashier",
+      "sale": "cmvzlu3ei026q4oqrwdhb0yxg",
+      "status": 200,
+      "code": null,
+      "msg": null,
+      "gross": 5600,
+      "unit": 2800,
+      "units": 20,
+      "allocs": []
+    }
+  ],
+  "after": [
+    {
+      "inventoryLotId": "cmvzl8u3u01pq4oqrosqy5nsi",
+      "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+      "disposition": "AVAILABLE",
+      "onHandUnits": 230,
+      "sealedPacks": 23,
+      "looseUnits": 0,
+      "unitsPerPack": 10,
+      "blockedBy": null
+    },
+    {
+      "inventoryLotId": "cmvzl8u4a01pt4oqrafza14oh",
+      "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+      "disposition": "AVAILABLE",
+      "onHandUnits": 300,
+      "sealedPacks": 30,
+      "looseUnits": 0,
+      "unitsPerPack": 10,
+      "blockedBy": null
+    }
+  ],
+  "final": [
+    {
+      "inventoryLotId": "cmvzlu34h026d4oqrilu5mem5",
+      "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+      "disposition": "AVAILABLE",
+      "onHandUnits": 30,
+      "sealedPacks": 3,
+      "looseUnits": 0,
+      "unitsPerPack": 10,
+      "blockedBy": null
+    },
+    {
+      "inventoryLotId": "cmvzl8u3u01pq4oqrosqy5nsi",
+      "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+      "disposition": "AVAILABLE",
+      "onHandUnits": 280,
+      "sealedPacks": 28,
+      "looseUnits": 0,
+      "unitsPerPack": 10,
+      "blockedBy": null
+    },
+    {
+      "inventoryLotId": "cmvzl8u4a01pt4oqrafza14oh",
+      "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+      "disposition": "AVAILABLE",
+      "onHandUnits": 300,
+      "sealedPacks": 30,
+      "looseUnits": 0,
+      "unitsPerPack": 10,
+      "blockedBy": null
+    }
+  ],
+  "raw": [
+    {
+      "line": {
+        "id": "cmvzlu3gj026u4oqrg04dq8q5",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "saleId": "cmvzlu38j026h4oqrpqtqj0eg",
+        "medicineId": "cmvxpws13002v1xqrfsg4p4hz",
+        "presentationId": "cmvxpx8in003a1xqrbz6z4t3n",
+        "packLevelId": "cmvxpy8hn003t1xqr9az7aste",
+        "saleUnit": "STRIP",
+        "quantity": 2,
+        "canonicalUnitsPerSaleUnit": 10,
+        "canonicalUnits": 20,
+        "unitPriceMinor": 2600,
+        "grossMinor": 5200,
+        "proRataCeilingMinor": 2600,
+        "unitCostMinor": 1050,
+        "discountKind": null,
+        "discountMinor": 0,
+        "approvalPolicy": null,
+        "approvedByUserId": null,
+        "prescriptionLineId": null,
+        "prescriptionPatientId": null,
+        "idempotencyKey": "QA-CONC-mvzlu2kg-0",
+        "createdAt": "2026-11-02T18:40:54.787Z"
+      },
+      "allocation": {
+        "allocations": [
+          {
+            "inventoryLotId": "cmvzlu34h026d4oqrilu5mem5",
+            "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+            "units": 20
+          }
+        ],
+        "recommendedLotId": "cmvzlu34h026d4oqrilu5mem5",
+        "blocked": [],
+        "overrideId": null,
+        "discrepancyId": null,
+        "movementIds": ["cmvzlu3gg026t4oqrv0ax5z01"]
+      }
+    },
+    {
+      "line": {
+        "id": "cmvzlu3kk02704oqrph2sawsf",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "saleId": "cmvzlu3as026k4oqr3ud2v14x",
+        "medicineId": "cmvxpws13002v1xqrfsg4p4hz",
+        "presentationId": "cmvxpx8in003a1xqrbz6z4t3n",
+        "packLevelId": "cmvxpy8hn003t1xqr9az7aste",
+        "saleUnit": "STRIP",
+        "quantity": 2,
+        "canonicalUnitsPerSaleUnit": 10,
+        "canonicalUnits": 20,
+        "unitPriceMinor": 2700,
+        "grossMinor": 5400,
+        "proRataCeilingMinor": 2800,
+        "unitCostMinor": 1075,
+        "discountKind": null,
+        "discountMinor": 0,
+        "approvalPolicy": null,
+        "approvedByUserId": null,
+        "prescriptionLineId": null,
+        "prescriptionPatientId": null,
+        "idempotencyKey": "QA-CONC-mvzlu2kg-1",
+        "createdAt": "2026-11-02T18:40:54.932Z"
+      },
+      "allocation": {
+        "allocations": [
+          {
+            "inventoryLotId": "cmvzlu34h026d4oqrilu5mem5",
+            "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+            "units": 10
+          },
+          {
+            "inventoryLotId": "cmvzl8u3u01pq4oqrosqy5nsi",
+            "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+            "units": 10
+          }
+        ],
+        "recommendedLotId": "cmvzlu34h026d4oqrilu5mem5",
+        "blocked": [],
+        "overrideId": null,
+        "discrepancyId": null,
+        "movementIds": ["cmvzlu3kb026y4oqr5hos3e4r", "cmvzlu3ke026z4oqrg77osusu"]
+      }
+    },
+    {
+      "line": {
+        "id": "cmvzlu3mr027b4oqrbip5qqug",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "saleId": "cmvzlu3cn026n4oqrkam3weaq",
+        "medicineId": "cmvxpws13002v1xqrfsg4p4hz",
+        "presentationId": "cmvxpx8in003a1xqrbz6z4t3n",
+        "packLevelId": "cmvxpy8hn003t1xqr9az7aste",
+        "saleUnit": "STRIP",
+        "quantity": 2,
+        "canonicalUnitsPerSaleUnit": 10,
+        "canonicalUnits": 20,
+        "unitPriceMinor": 2800,
+        "grossMinor": 5600,
+        "proRataCeilingMinor": 2800,
+        "unitCostMinor": 1100,
+        "discountKind": null,
+        "discountMinor": 0,
+        "approvalPolicy": null,
+        "approvedByUserId": null,
+        "prescriptionLineId": null,
+        "prescriptionPatientId": null,
+        "idempotencyKey": "QA-CONC-mvzlu2kg-2",
+        "createdAt": "2026-11-02T18:40:55.011Z"
+      },
+      "allocation": {
+        "allocations": [
+          {
+            "inventoryLotId": "cmvzl8u3u01pq4oqrosqy5nsi",
+            "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+            "units": 20
+          }
+        ],
+        "recommendedLotId": "cmvzl8u3u01pq4oqrosqy5nsi",
+        "blocked": [],
+        "overrideId": null,
+        "discrepancyId": null,
+        "movementIds": ["cmvzlu3mh027a4oqr20skub1h"]
+      }
+    },
+    {
+      "line": {
+        "id": "cmvzlu3lx02764oqrojrb78ss",
+        "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+        "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+        "saleId": "cmvzlu3ei026q4oqrwdhb0yxg",
+        "medicineId": "cmvxpws13002v1xqrfsg4p4hz",
+        "presentationId": "cmvxpx8in003a1xqrbz6z4t3n",
+        "packLevelId": "cmvxpy8hn003t1xqr9az7aste",
+        "saleUnit": "STRIP",
+        "quantity": 2,
+        "canonicalUnitsPerSaleUnit": 10,
+        "canonicalUnits": 20,
+        "unitPriceMinor": 2800,
+        "grossMinor": 5600,
+        "proRataCeilingMinor": 2800,
+        "unitCostMinor": 1100,
+        "discountKind": null,
+        "discountMinor": 0,
+        "approvalPolicy": null,
+        "approvedByUserId": null,
+        "prescriptionLineId": null,
+        "prescriptionPatientId": null,
+        "idempotencyKey": "QA-CONC-mvzlu2kg-3",
+        "createdAt": "2026-11-02T18:40:54.981Z"
+      },
+      "allocation": {
+        "allocations": [
+          {
+            "inventoryLotId": "cmvzl8u3u01pq4oqrosqy5nsi",
+            "stockLocationId": "cmvxw8ed000094oqr68yrqp8c",
+            "units": 20
+          }
+        ],
+        "recommendedLotId": "cmvzl8u3u01pq4oqrosqy5nsi",
+        "blocked": [],
+        "overrideId": null,
+        "discrepancyId": null,
+        "movementIds": ["cmvzlu3lo02754oqrby9f81x4"]
+      }
+    }
+  ]
+}

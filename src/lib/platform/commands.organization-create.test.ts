@@ -7,7 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 
-const mocks = vi.hoisted(() => ({ userFindFirst: vi.fn(), userCreate: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  userFindFirst: vi.fn(),
+  userCreate: vi.fn(),
+  opportunityFindUnique: vi.fn(),
+  opportunityUpdateMany: vi.fn(),
+  accountForUpdate: vi.fn(),
+}));
 
 vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ hash: vi.fn(async () => 'hashed'), compare: vi.fn() }));
@@ -26,6 +32,7 @@ function record(model: string) {
 }
 
 const platformDb = {
+  $queryRaw: mocks.accountForUpdate,
   platformPackage: {
     findUnique: vi.fn(async () => ({
       id: 'pkg_1',
@@ -44,6 +51,13 @@ const platformDb = {
   organizationDeployment: { create: record('deployment') },
   platformJob: { create: record('job') },
   organizationLifecycleEvent: { create: record('lifecycle') },
+  platformOpportunity: {
+    findUnique: mocks.opportunityFindUnique,
+    updateMany: mocks.opportunityUpdateMany,
+    update: record('opportunityUpdate'),
+  },
+  platformOpportunityStageEvent: { create: record('opportunityStageEvent') },
+  platformAccount: { update: record('accountUpdate') },
   platformAuditLog: { create: record('audit') },
 };
 
@@ -113,6 +127,162 @@ describe('organization.create admin email', () => {
         data: expect.objectContaining({ email: 'admin@acme.com', mustChangePassword: true }),
       })
     );
+  });
+});
+
+describe('crm.opportunity.convert eligibility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    for (const key of Object.keys(created)) delete created[key];
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+    mocks.accountForUpdate.mockResolvedValue([{ organizationId: null }]);
+  });
+
+  it.each([
+    ['WON', 'org_existing'],
+    ['LOST', null],
+    ['QUALIFIED', 'org_existing'],
+  ])(
+    'rejects an ineligible opportunity before provisioning',
+    async (stage, convertedOrganizationId) => {
+      mocks.opportunityFindUnique.mockResolvedValue({
+        id: 'opp_1',
+        accountId: 'account_1',
+        stage,
+        convertedOrganizationId,
+      });
+
+      const error = await executePlatformCommand(
+        actor,
+        'crm.opportunity.convert',
+        { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+        request
+      ).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(PlatformSecurityError);
+      expect(error).toMatchObject({
+        status: 409,
+        message: 'Opportunity is not eligible for conversion.',
+      });
+      expect(mocks.opportunityUpdateMany).not.toHaveBeenCalled();
+      expect(platformDb.organization.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects a missing opportunity before provisioning', async () => {
+    mocks.opportunityFindUnique.mockResolvedValue(null);
+
+    const error = await executePlatformCommand(
+      actor,
+      'crm.opportunity.convert',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_missing' },
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'Opportunity is not eligible for conversion.',
+    });
+    expect(mocks.opportunityUpdateMany).not.toHaveBeenCalled();
+    expect(mocks.accountForUpdate).not.toHaveBeenCalled();
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['PROPOSAL', 'WON'])('loses a concurrent %s conversion claim before provisioning', async (stage) => {
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: 'opp_1', accountId: 'account_1', stage, convertedOrganizationId: null,
+    });
+    mocks.opportunityUpdateMany.mockResolvedValue({ count: 0 });
+
+    const error = await executePlatformCommand(actor, 'crm.opportunity.convert',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_1' }, request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ status: 409 });
+    expect(mocks.opportunityUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'opp_1', stage, convertedOrganizationId: null },
+      data: { stage: 'WON', wonAt: expect.any(Date) },
+    });
+    expect(mocks.accountForUpdate).not.toHaveBeenCalled();
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['DISCOVERY', 'WON'])('rejects a %s opportunity when its account is already linked', async (stage) => {
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: 'opp_2', accountId: 'account_1', stage, convertedOrganizationId: null,
+    });
+    mocks.opportunityUpdateMany.mockResolvedValue({ count: 1 });
+    mocks.accountForUpdate.mockResolvedValue([{ organizationId: 'org_existing' }]);
+
+    const error = await executePlatformCommand(actor, 'crm.opportunity.convert',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_2' }, request
+    ).catch((caught: unknown) => caught);
+
+    expect(mocks.accountForUpdate).toHaveBeenCalledOnce();
+    const accountLock = mocks.accountForUpdate.mock.calls[0]?.[0] as {
+      strings: string[];
+      values: unknown[];
+    };
+    expect(accountLock.values).toEqual(['account_1']);
+    expect(accountLock.strings.join('?')).toContain('FOR UPDATE');
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'Account is already linked to an organization.',
+    });
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
+
+  it('applies the same replay guard to opportunity-linked organization onboarding', async () => {
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: 'opp_1', accountId: 'account_1', stage: 'WON', convertedOrganizationId: 'org_existing',
+    });
+
+    const error = await executePlatformCommand(actor, 'organization.create',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_1' }, request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ status: 409 });
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['crm.opportunity.convert', 'NEGOTIATION'],
+    ['crm.opportunity.convert', 'WON'],
+    ['organization.create', 'NEGOTIATION'],
+    ['organization.create', 'WON'],
+  ])('%s claims an unlinked %s opportunity and preserves its original stage in the event', async (command, stage) => {
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: 'opp_1', accountId: 'account_1', stage, convertedOrganizationId: null,
+    });
+    mocks.opportunityUpdateMany.mockResolvedValue({ count: 1 });
+
+    await executePlatformCommand(
+      actor,
+      command,
+      { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+      request
+    );
+
+    expect(mocks.opportunityUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'opp_1', stage, convertedOrganizationId: null },
+      data: { stage: 'WON', wonAt: expect.any(Date) },
+    });
+    expect(mocks.accountForUpdate).toHaveBeenCalledOnce();
+    expect(mocks.accountForUpdate).toHaveBeenCalledBefore(platformDb.organization.create);
+    expect(created.opportunityUpdate).toContainEqual({ convertedOrganizationId: 'org_new' });
+    expect(created.opportunityStageEvent).toContainEqual(
+      expect.objectContaining({
+        opportunityId: 'opp_1',
+        fromStage: stage,
+        toStage: 'WON',
+      })
+    );
+    expect(created.accountUpdate).toContainEqual({
+      organizationId: 'org_new',
+      status: 'CUSTOMER',
+    });
   });
 });
 
@@ -240,25 +410,22 @@ describe('organization.create duplicate slug', () => {
 
   it('maps a pg adapter unique violation that omitted the constraint', async () => {
     platformDb.organization.create.mockRejectedValueOnce(
-      new Prisma.PrismaClientKnownRequestError(
-        'Unique constraint failed on the (not available)',
-        {
-          code: 'P2002',
-          clientVersion: '7.9.1',
-          meta: {
-            modelName: 'Organization',
-            driverAdapterError: {
-              name: 'DriverAdapterError',
-              cause: {
-                originalCode: '23505',
-                originalMessage:
-                  'duplicate key value violates unique constraint "organizations_slug_key"',
-                kind: 'UniqueConstraintViolation',
-              },
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the (not available)', {
+        code: 'P2002',
+        clientVersion: '7.9.1',
+        meta: {
+          modelName: 'Organization',
+          driverAdapterError: {
+            name: 'DriverAdapterError',
+            cause: {
+              originalCode: '23505',
+              originalMessage:
+                'duplicate key value violates unique constraint "organizations_slug_key"',
+              kind: 'UniqueConstraintViolation',
             },
           },
-        }
-      )
+        },
+      })
     );
 
     const error = await executePlatformCommand(
@@ -287,7 +454,8 @@ describe('organization.create duplicate slug', () => {
           driverAdapterError: {
             cause: {
               originalCode: '23505',
-              originalMessage: 'duplicate key value violates unique constraint "organizations_pkey"',
+              originalMessage:
+                'duplicate key value violates unique constraint "organizations_pkey"',
               kind: 'UniqueConstraintViolation',
             },
           },
@@ -351,31 +519,47 @@ describe('organization.create package seat fallback', () => {
     mocks.userCreate.mockResolvedValue({ id: 'user_new' });
   });
 
-  it.each([1, 25, 100000, 0, -1, 'invalid'])('ignores a submitted seat limit of %j', async (seatLimit) => {
+  it.each([1, 25, 100000, 0, -1, 'invalid'])(
+    'ignores a submitted seat limit of %j',
+    async (seatLimit) => {
+      await executePlatformCommand(
+        { id: 'op_sales', role: 'SALES' } as never,
+        'organization.create',
+        { ...payload('admin@acme.com'), seatLimit },
+        request
+      );
+      expect(platformDb.organization.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ seatLimit: 42 }) })
+      );
+    }
+  );
+
+  it.each([1, 25, 42])('accepts a super admin override of %j', async (seatLimit) => {
     await executePlatformCommand(
-      { id: 'op_sales', role: 'SALES' } as never,
+      actor,
       'organization.create',
       { ...payload('admin@acme.com'), seatLimit },
       request
     );
     expect(platformDb.organization.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ seatLimit: 42 }) })
-    );
-  });
-
-  it.each([1, 25, 42])('accepts a super admin override of %j', async (seatLimit) => {
-    await executePlatformCommand(actor, 'organization.create',
-      { ...payload('admin@acme.com'), seatLimit }, request);
-    expect(platformDb.organization.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ seatLimit }) })
     );
   });
 
-  it.each([0, -1, 43, 100000, 'invalid', 1.5])('rejects a super admin override of %j', async (seatLimit) => {
-    await expect(executePlatformCommand(actor, 'organization.create',
-      { ...payload('admin@acme.com'), seatLimit }, request)).rejects.toThrow();
-    expect(platformDb.organization.create).not.toHaveBeenCalled();
-  });
+  it.each([0, -1, 43, 100000, 'invalid', 1.5])(
+    'rejects a super admin override of %j',
+    async (seatLimit) => {
+      await expect(
+        executePlatformCommand(
+          actor,
+          'organization.create',
+          { ...payload('admin@acme.com'), seatLimit },
+          request
+        )
+      ).rejects.toThrow();
+      expect(platformDb.organization.create).not.toHaveBeenCalled();
+    }
+  );
 
   it('inherits package default seats when a legacy payload omits seatLimit', async () => {
     const { seatLimit: _omitted, ...legacyPayload } = payload('admin@acme.com');

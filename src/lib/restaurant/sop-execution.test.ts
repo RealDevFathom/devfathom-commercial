@@ -63,12 +63,30 @@ beforeEach(() => {
 // ── startOccurrence ────────────────────────────────────────────────────────────
 
 describe('startOccurrence', () => {
-  it('transitions SCHEDULED → IN_PROGRESS', async () => {
+  it('fails closed when an occurrence lacks owner columns', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SCHEDULED' });
+    await expect(
+      startOccurrence(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'staff_1',
+      })
+    ).rejects.toMatchObject({ reason: 'NOT_OWNER' });
+    expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+  });
+
+  it('transitions SCHEDULED → IN_PROGRESS', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'SCHEDULED',
+    });
     db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, startedAt: NOW });
 
     const result = await startOccurrence(db as unknown as ScopedDb, {
       occurrenceId: OCC_ID,
+      actorStaffProfileId: 'staff_1',
       now: NOW,
     });
 
@@ -82,11 +100,18 @@ describe('startOccurrence', () => {
   });
 
   it('transitions REJECTED → IN_PROGRESS (rework path)', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'REJECTED' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'REJECTED',
+    });
     db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, startedAt: NOW });
 
     const result = await startOccurrence(db as unknown as ScopedDb, {
       occurrenceId: OCC_ID,
+      actorStaffProfileId: 'staff_1',
       now: NOW,
     });
     expect(result.status).toBe('IN_PROGRESS');
@@ -96,27 +121,48 @@ describe('startOccurrence', () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue(null);
 
     await expect(
-      startOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+      startOccurrence(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'staff_1',
+      })
     ).rejects.toMatchObject({
       reason: 'NOT_FOUND',
     });
   });
 
   it('throws INVALID_STATE when occurrence is already IN_PROGRESS', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'IN_PROGRESS',
+    });
 
     await expect(
-      startOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+      startOccurrence(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'staff_1',
+      })
     ).rejects.toMatchObject({
       reason: 'INVALID_STATE',
     });
   });
 
   it('throws INVALID_STATE when occurrence is SUBMITTED', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SUBMITTED' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'SUBMITTED',
+    });
 
     await expect(
-      startOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+      startOccurrence(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'staff_1',
+      })
     ).rejects.toMatchObject({
       reason: 'INVALID_STATE',
     });
@@ -191,8 +237,41 @@ describe('completeStep', () => {
     expect(db.restaurantSopOccurrenceStep.findUnique).not.toHaveBeenCalled();
   });
 
+  it('requires a non-blank note when the published step requires one', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'IN_PROGRESS',
+    });
+    db.restaurantSopOccurrenceStep.findUnique.mockResolvedValue({
+      id: STEP_ID,
+      completed: false,
+      completedAt: null,
+      templateStep: { requiresPhoto: false, requiresSignature: false, requiresNote: true },
+      evidence: [],
+    });
+
+    await expect(
+      completeStep(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        templateStepId: TMPL_STEP_ID,
+        actorStaffProfileId: 'staff_1',
+        note: '   ',
+      })
+    ).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
+    expect(db.restaurantSopOccurrenceStep.update).not.toHaveBeenCalled();
+  });
+
   it('marks a step completed on an IN_PROGRESS occurrence', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'IN_PROGRESS',
+    });
     db.restaurantSopOccurrenceStep.findUnique.mockResolvedValue({
       id: STEP_ID,
       completed: false,
@@ -202,6 +281,7 @@ describe('completeStep', () => {
 
     const result = await completeStep(db as unknown as ScopedDb, {
       occurrenceId: OCC_ID,
+      actorStaffProfileId: 'staff_1',
       templateStepId: TMPL_STEP_ID,
       now: NOW,
     });
@@ -211,7 +291,13 @@ describe('completeStep', () => {
   });
 
   it('is idempotent — returns existing completedAt when already done', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'IN_PROGRESS',
+    });
     db.restaurantSopOccurrenceStep.findUnique.mockResolvedValue({
       id: STEP_ID,
       completed: true,
@@ -220,6 +306,7 @@ describe('completeStep', () => {
 
     const result = await completeStep(db as unknown as ScopedDb, {
       occurrenceId: OCC_ID,
+      actorStaffProfileId: 'staff_1',
       templateStepId: TMPL_STEP_ID,
     });
 
@@ -228,23 +315,37 @@ describe('completeStep', () => {
   });
 
   it('throws INVALID_STATE when occurrence is not IN_PROGRESS', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SUBMITTED' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'SUBMITTED',
+    });
 
     await expect(
       completeStep(db as unknown as ScopedDb, {
         occurrenceId: OCC_ID,
+        actorStaffProfileId: 'staff_1',
         templateStepId: TMPL_STEP_ID,
       })
     ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
   });
 
   it('throws STEP_NOT_FOUND when step is not on the occurrence', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'IN_PROGRESS',
+    });
     db.restaurantSopOccurrenceStep.findUnique.mockResolvedValue(null);
 
     await expect(
       completeStep(db as unknown as ScopedDb, {
         occurrenceId: OCC_ID,
+        actorStaffProfileId: 'staff_1',
         templateStepId: TMPL_STEP_ID,
       })
     ).rejects.toMatchObject({ reason: 'STEP_NOT_FOUND' });
@@ -259,7 +360,13 @@ describe('attachEvidence', () => {
   const expectedHash = createHash('sha256').update(contentBytes).digest('hex');
 
   it('computes sha256 from contentBytes and creates evidence', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'IN_PROGRESS',
+    });
     db.restaurantSopEvidence.findFirst.mockResolvedValue({
       id: 'ev_1',
       contentHash: expectedHash,
@@ -268,6 +375,7 @@ describe('attachEvidence', () => {
 
     const result = await attachEvidence(db as unknown as ScopedDb, {
       occurrenceId: OCC_ID,
+      uploaderStaffProfileId: 'staff_1',
       contentBytes,
       mimeType: 'image/jpeg',
       sizeBytes: contentBytes.length,
@@ -284,7 +392,13 @@ describe('attachEvidence', () => {
   });
 
   it('accepts a pre-computed contentHashHex', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'IN_PROGRESS',
+    });
     db.restaurantSopEvidence.findFirst.mockResolvedValue({
       id: 'ev_1',
       contentHash: expectedHash,
@@ -293,6 +407,7 @@ describe('attachEvidence', () => {
 
     const result = await attachEvidence(db as unknown as ScopedDb, {
       occurrenceId: OCC_ID,
+      uploaderStaffProfileId: 'staff_1',
       contentHashHex: expectedHash,
       mimeType: 'image/jpeg',
       sizeBytes: 100,
@@ -301,8 +416,14 @@ describe('attachEvidence', () => {
     expect(result.contentHash).toBe(expectedHash);
   });
 
-  it('returns the frozen winner when an identical nullable-attribution retry loses', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'IN_PROGRESS' });
+  it('returns the frozen winner when an identical authenticated-attribution retry loses', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'IN_PROGRESS',
+    });
     db.restaurantSopEvidence.createMany.mockResolvedValue({ count: 0 });
     db.restaurantSopEvidence.findFirst.mockResolvedValue({
       id: 'ev_original',
@@ -313,7 +434,7 @@ describe('attachEvidence', () => {
     const result = await attachEvidence(db as unknown as ScopedDb, {
       occurrenceId: OCC_ID,
       occurrenceStepId: null,
-      uploaderStaffProfileId: null,
+      uploaderStaffProfileId: 'staff_1',
       contentHashHex: expectedHash,
       mimeType: 'image/jpeg; evidence=photo',
       sizeBytes: 100,
@@ -332,6 +453,7 @@ describe('attachEvidence', () => {
     await expect(
       attachEvidence(db as unknown as ScopedDb, {
         occurrenceId: OCC_ID,
+        uploaderStaffProfileId: 'staff_1',
         mimeType: 'image/jpeg',
         sizeBytes: 0,
       })
@@ -342,6 +464,7 @@ describe('attachEvidence', () => {
     await expect(
       attachEvidence(db as unknown as ScopedDb, {
         occurrenceId: OCC_ID,
+        uploaderStaffProfileId: 'staff_1',
         contentHashHex: expectedHash,
         mimeType: 'image/jpeg',
         sizeBytes: -1,
@@ -350,11 +473,18 @@ describe('attachEvidence', () => {
   });
 
   it('throws INVALID_STATE when occurrence is VERIFIED', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'VERIFIED' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'VERIFIED',
+    });
 
     await expect(
       attachEvidence(db as unknown as ScopedDb, {
         occurrenceId: OCC_ID,
+        uploaderStaffProfileId: 'staff_1',
         contentHashHex: expectedHash,
         mimeType: 'image/jpeg',
         sizeBytes: 0,
@@ -536,13 +666,18 @@ describe('submitOccurrence', () => {
   it('transitions IN_PROGRESS → SUBMITTED when within window', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({
       id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
       status: 'IN_PROGRESS',
       windowEndsAt: WINDOW_FUTURE,
+      steps: [],
     });
     db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, submittedAt: NOW });
 
     const result = await submitOccurrence(db as unknown as ScopedDb, {
       occurrenceId: OCC_ID,
+      actorStaffProfileId: 'staff_1',
       now: NOW,
     });
     expect(result.status).toBe('SUBMITTED');
@@ -551,13 +686,18 @@ describe('submitOccurrence', () => {
   it('transitions IN_PROGRESS → LATE when window has closed', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({
       id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
       status: 'IN_PROGRESS',
       windowEndsAt: WINDOW_PAST,
+      steps: [],
     });
     db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, submittedAt: NOW });
 
     const result = await submitOccurrence(db as unknown as ScopedDb, {
       occurrenceId: OCC_ID,
+      actorStaffProfileId: 'staff_1',
       now: NOW,
     });
     expect(result.status).toBe('LATE');
@@ -569,12 +709,72 @@ describe('submitOccurrence', () => {
   it('throws INVALID_STATE when occurrence is not IN_PROGRESS', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({
       id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
       status: 'SUBMITTED',
       windowEndsAt: WINDOW_FUTURE,
     });
 
     await expect(
-      submitOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+      submitOccurrence(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'staff_1',
+      })
     ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+  });
+
+  it('refuses submission while any checklist step is incomplete', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'IN_PROGRESS',
+      windowEndsAt: WINDOW_FUTURE,
+      steps: [
+        {
+          completed: false,
+          note: null,
+          templateStep: { requiresPhoto: false, requiresSignature: false, requiresNote: false },
+          evidence: [],
+        },
+      ],
+    });
+
+    await expect(
+      submitOccurrence(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'staff_1',
+      })
+    ).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
+    expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+  });
+
+  it('revalidates published note and evidence requirements at submission', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
+      status: 'IN_PROGRESS',
+      windowEndsAt: WINDOW_FUTURE,
+      steps: [
+        {
+          completed: true,
+          note: 'done',
+          templateStep: { requiresPhoto: true, requiresSignature: false, requiresNote: true },
+          evidence: [],
+        },
+      ],
+    });
+
+    await expect(
+      submitOccurrence(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'staff_1',
+      })
+    ).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
+    expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
   });
 });

@@ -43,7 +43,18 @@ import {
   type OrderedTerms,
 } from './receiving';
 import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
-import { expiryInstant, receiveLot, reverseMovements } from './stock-ledger';
+import { assertSupplierEligible } from './purchasing';
+import {
+  readSupplierCompliancePolicy,
+  recordSupplierComplianceSkip,
+  strictLicenceEvidence,
+} from './supplier-compliance-policy';
+import {
+  expiryInstant,
+  normalizeExpiryBoundary,
+  receiveLot,
+  reverseMovements,
+} from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
 
 export type ReceivingScope = LedgerScope;
@@ -151,11 +162,40 @@ export async function verifyControlledPurchaseWitness(
   return { pharmacistId: pharmacist.id };
 }
 
+/** Lock and validate a PO for the full transaction that creates its receipt. */
+export async function lockReceivablePurchaseOrder(
+  db: ScopedDb,
+  scope: ReceivingScope,
+  input: { purchaseOrderId: string; supplierId: string }
+) {
+  await db.$queryRaw`SELECT id FROM pharmacy_purchase_orders WHERE id=${input.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
+  const order = await db.pharmacyPurchaseOrder.findFirst({
+    where: {
+      id: input.purchaseOrderId,
+      organizationId: scope.organizationId,
+      supplierId: input.supplierId,
+    },
+  });
+  if (!order) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+  // A null branch denotes an organization-wide order; its receipts still
+  // belong to the branch receiving the delivery.
+  if (order.branchId !== null && order.branchId !== scope.branchId) {
+    throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
+  }
+  if (order.status !== 'SENT' && order.status !== 'RECEIVING') {
+    throw new PharmacyReceivingError('INVALID_TRANSITION');
+  }
+  return order;
+}
+
 export async function postGoodsReceipt(
   db: ScopedDb,
   scope: ReceivingScope,
   input: { goodsReceiptId: string; at: Date; staffProfileId?: string; pin?: string }
 ): Promise<PostGoodsReceiptResult> {
+  // Serialize posting with every other receipt transition before reading its
+  // state. The linked order is locked below, before any inventory write.
+  await db.$queryRaw`SELECT id FROM pharmacy_goods_receipts WHERE id=${input.goodsReceiptId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`;
   const receipt = await db.pharmacyGoodsReceipt.findFirst({
     where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
     include: {
@@ -169,6 +209,33 @@ export async function postGoodsReceipt(
   }
   assertGoodsReceiptTransition(receipt.status, 'POSTED');
   if (receipt.lines.length === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
+  let purchaseOrder: {
+    id: string;
+    branchId: string | null;
+    supplierId: string;
+    status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
+  } | null = null;
+  if (receipt.purchaseOrderId) {
+    const [lockedOrder] = await db.$queryRaw<
+      Array<{
+        id: string;
+        branchId: string | null;
+        supplierId: string;
+        status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
+      }>
+    >`SELECT id, "branchId", "supplierId", status FROM pharmacy_purchase_orders WHERE id=${receipt.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
+    purchaseOrder = lockedOrder ?? null;
+    if (!purchaseOrder) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+    if (purchaseOrder.supplierId !== receipt.supplierId) {
+      throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+    }
+    if (purchaseOrder.branchId !== null && purchaseOrder.branchId !== scope.branchId) {
+      throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
+    }
+    if (purchaseOrder.status !== 'SENT' && purchaseOrder.status !== 'RECEIVING') {
+      throw new PharmacyReceivingError('INVALID_TRANSITION');
+    }
+  }
 
   const controlledMedicines = await db.medicine.findMany({
     where: {
@@ -187,6 +254,19 @@ export async function postGoodsReceipt(
   if (needsRegister && !witness.pharmacistId) {
     throw new PharmacyReceivingError('CONTROLLED_WITNESS_REQUIRED');
   }
+
+  // PUR-01 / DEV-753: the owner's supplier-compliance policy at the moment of
+  // posting, under a share lock so a concurrent owner change waits for this
+  // posting to commit. Supersession is read strictly across the register (DEV-466).
+  // The policy covers supplier licence and authorization only, for every medicine. The
+  // controlled-drug witness PIN and register above are independent and never read it.
+  const supplierCompliance = await readSupplierCompliancePolicy(db, scope.organizationId, {
+    lock: 'share',
+  });
+  const supplierEvidence = {
+    authorized: receipt.supplier.authorized,
+    licences: await strictLicenceEvidence(db, scope.organizationId, receipt.supplier.licences),
+  };
 
   // Fail closed on the whole receipt before a single lot exists: a receipt that
   // posted three good lines and then refused the fourth would leave stock on
@@ -208,14 +288,26 @@ export async function postGoodsReceipt(
       warrantyEvidenceRef: receipt.warrantyEvidenceRef,
       canonicalUnitsPerPack: line.canonicalUnitsPerPack,
       printedMrpMinor: line.printedMrpMinor,
-      supplier: {
-        authorized: receipt.supplier.authorized,
-        licences: receipt.supplier.licences.map((licence) => ({
-          expiresAt: licence.expiresAt,
-          verified: licence.verifiedAt !== null,
-        })),
-      },
+      supplier: supplierEvidence,
+      supplierCompliance,
       at: input.at,
+    });
+  }
+  // With the checks off the receipt posts unchecked on supplier licence and trade
+  // authorization only; it says so, immutably, in this same transaction.
+  const supplierOutcome = assertSupplierEligible({
+    ...supplierEvidence,
+    at: input.at,
+    policy: supplierCompliance,
+  });
+  if (!supplierOutcome.checked) {
+    await recordSupplierComplianceSkip(db, scope, {
+      operation: 'GOODS_RECEIPT_POST',
+      supplierId: receipt.supplierId,
+      goodsReceiptId: receipt.id,
+      purchaseOrderId: receipt.purchaseOrderId,
+      reference: receipt.reference,
+      outcome: supplierOutcome,
     });
   }
 
@@ -276,8 +368,24 @@ export async function postGoodsReceipt(
       quarantineMovementId: posted.quarantineMovement?.id ?? null,
     });
 
+    // DEV-752: one order line may arrive as several lots on this receipt. The
+    // quantity leg is cumulative across them and judged once, on the last lot,
+    // so lots neither hide an over-receipt nor each report a false shortage.
+    const siblings = line.purchaseOrderLineId
+      ? receipt.lines.filter((other) => other.purchaseOrderLineId === line.purchaseOrderLineId)
+      : [];
+    const earlierOnReceipt = siblings
+      .filter((other) => other.lineNumber < line.lineNumber)
+      .reduce(
+        (total, other) => total + other.receivedCanonicalUnits + other.bonusCanonicalUnits,
+        0
+      );
+    const lastLotOfOrderLine = !siblings.some((other) => other.lineNumber > line.lineNumber);
+    const terms = await orderedTermsFor(db, scope, line.purchaseOrderLineId, receipt.id);
     for (const exception of matchReceiptLine({
-      ordered: await orderedTermsFor(db, scope, line.purchaseOrderLineId, receipt.id),
+      ordered: terms
+        ? { ...terms, previouslyReceivedUnits: terms.previouslyReceivedUnits + earlierOnReceipt }
+        : null,
       received: {
         canonicalUnitsPerPack: line.canonicalUnitsPerPack,
         arrivedCanonicalUnits: line.receivedCanonicalUnits + line.bonusCanonicalUnits,
@@ -285,7 +393,10 @@ export async function postGoodsReceipt(
         rejectionReason: line.rejectionReason,
         invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
       },
-    })) {
+    }).filter(
+      (exception) =>
+        lastLotOfOrderLine || (exception.kind !== 'SHORTAGE' && exception.kind !== 'OVERAGE')
+    )) {
       const created = await db.pharmacyReceivingException.create({
         data: {
           organizationId: scope.organizationId,
@@ -341,14 +452,16 @@ export async function postGoodsReceipt(
   // last transition of that status machine, so a second receipt against the
   // same order finds it already there and leaves it alone.
   if (receipt.purchaseOrderId) {
-    const order = await db.pharmacyPurchaseOrder.findFirst({
-      where: { id: receipt.purchaseOrderId, organizationId: scope.organizationId },
-    });
-    if (order?.status === 'SENT') {
-      await db.pharmacyPurchaseOrder.update({
-        where: { id: order.id },
+    if (purchaseOrder?.status === 'SENT') {
+      const transitioned = await db.pharmacyPurchaseOrder.updateMany({
+        where: {
+          id: purchaseOrder.id,
+          organizationId: scope.organizationId,
+          status: 'SENT',
+        },
         data: { status: 'RECEIVING' },
       });
+      if (transitioned.count !== 1) throw new PharmacyReceivingError('INVALID_TRANSITION');
     }
   }
 
@@ -384,10 +497,13 @@ async function resolveManufacturingBatch(
     },
   });
   if (existing) {
-    if (existing.expiresAt.getTime() !== expiresAt.getTime()) {
+    if (
+      normalizeExpiryBoundary(existing.expiresAt).getTime() !==
+      normalizeExpiryBoundary(expiresAt).getTime()
+    ) {
       throw new PharmacyReceivingError('BATCH_EXPIRY_CONFLICT');
     }
-    return existing;
+    return { ...existing, expiresAt };
   }
   return db.pharmacyManufacturingBatch.create({
     data: {

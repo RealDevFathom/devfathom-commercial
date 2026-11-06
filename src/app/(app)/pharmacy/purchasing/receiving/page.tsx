@@ -3,6 +3,7 @@ import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
 import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
+import { PackPhotoReader } from '../_components/pack-photo-reader';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -14,6 +15,7 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { reconcileInputTaxBills } from '@/lib/pharmacy/input-tax-reconciliation';
 import type {
   GoodsReceiptDetail,
   MedicineOption,
@@ -23,6 +25,14 @@ import type {
   ScanResolution,
   StockLocationOption,
 } from '@/lib/pharmacy/purchasing-console';
+import { packConversionLabel } from '@/lib/pharmacy/pack-conversion-label';
+import { configuredPackLabelOcrAdapterName } from '@/lib/pharmacy/pack-label-ocr';
+import {
+  defaultReceivingLocationId,
+  EXTRA_LOT_SLOTS,
+  findRepeatedLot,
+  lotSlotKey,
+} from '@/lib/pharmacy/pack-photo-receiving';
 import {
   BranchPicker,
   ChooseBranchState,
@@ -69,6 +79,11 @@ import {
   type Notice,
   type SearchQuery,
 } from '../_lib/console';
+import {
+  readPolicyForDisplay,
+  supplierChecksOn,
+  supplierComplianceCaller,
+} from '../suppliers/_lib/supplier-compliance';
 
 export const metadata: Metadata = { title: 'Goods in · Pharmacy purchasing' };
 
@@ -126,6 +141,12 @@ export default async function PharmacyReceivingPage({
       </Frame>
     );
   }
+  // DEV-753: off when a listed supplier says so; with none listed, ask the stored setting
+  // (fail closed: anything but a positive OFF reads as checks on).
+  const checksOff =
+    workspace.suppliers.length > 0
+      ? workspace.suppliers.some((supplier) => supplier.compliance?.checked === false)
+      : !supplierChecksOn(await readPolicyForDisplay(await supplierComplianceCaller()));
 
   const scope = resolveBranch(workspace.branches, param(query, 'branch'));
   if (scope.kind === 'none') {
@@ -165,6 +186,14 @@ export default async function PharmacyReceivingPage({
   }
 
   const locations = workspace.stockLocations.filter((location) => location.branchId === branchId);
+  // DEV-752: the receiving shelf starts on the branch's own default (or its only
+  // receiving location). Nothing here writes a default; it only pre-selects one.
+  const receiveLocations = locations.filter((location) => location.kind !== 'QUARANTINE');
+  const defaultLocationId = defaultReceivingLocationId(
+    scope.branch.defaultStockLocationId,
+    locations
+  );
+  const packPhotoEnabled = configuredPackLabelOcrAdapterName() !== null;
   // PUR-02 receives against an order that has left the building; a draft or
   // unapproved order has nothing to deliver.
   const receivable = orders.filter(
@@ -197,7 +226,10 @@ export default async function PharmacyReceivingPage({
     (selectedReceipt.qualifiedPersonUserId ||
       selectedReceipt.lines.some((line) => line.medicine.controlled))
   );
-  const witnesses = needsWitness ? await caller.controlledWitnesses() : [];
+  const witnesses =
+    needsWitness && selectedReceipt
+      ? await caller.controlledWitnesses({ branchId, goodsReceiptId: selectedReceipt.id })
+      : [];
 
   // ── actions ───────────────────────────────────────────────────────────────
 
@@ -214,20 +246,33 @@ export default async function PharmacyReceivingPage({
       if (!order)
         throw new PurchasingValidationError('That order no longer exists. Reload the page.');
 
-      const lines = order.lines.flatMap((line) => {
-        // A line with no batch number was not delivered on this consignment.
-        // It stays outstanding rather than being filed as a zero receipt.
-        if (!field(form, `batchNumber:${line.id}`)) return [];
-        return [
-          {
-            ...readCaptureFields(form, line.id),
-            purchaseOrderLineId: line.id,
-            medicineId: line.medicineId,
-            packLevelId: line.packLevelId,
-            canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-          },
-        ];
-      });
+      const lines = order.lines.flatMap((line) =>
+        // DEV-752: one ordered line may arrive as several lots. Each different
+        // batch or expiry is its own receipt line against the same order line.
+        [1, ...EXTRA_LOT_SLOTS].flatMap((slot) => {
+          const key = lotSlotKey(line.id, slot);
+          // A lot with no batch number was not delivered on this consignment.
+          // It stays outstanding rather than being filed as a zero receipt.
+          if (!field(form, `batchNumber:${key}`)) return [];
+          return [
+            {
+              ...readCaptureFields(form, key),
+              purchaseOrderLineId: line.id,
+              medicineId: line.medicineId,
+              packLevelId: line.packLevelId,
+              canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+            },
+          ];
+        })
+      );
+      if (findRepeatedLot(lines)) {
+        throw Object.assign(
+          new PurchasingValidationError(
+            'The same batch and expiry is entered twice on one order line. Enter the total packs once; a separate lot is only for a different batch or expiry.'
+          ),
+          { field: 'batchNumber' }
+        );
+      }
       if (lines.length === 0) {
         throw Object.assign(
           new PurchasingValidationError(
@@ -243,6 +288,8 @@ export default async function PharmacyReceivingPage({
         purchaseOrderId: order.id,
         supplierInvoiceRef: field(form, 'supplierInvoiceRef'),
         supplierInvoiceDate: dateField(form, 'supplierInvoiceDate', 'Invoice date'),
+        distributorNtn: optionalField(form, 'distributorNtn'),
+        distributorStrn: optionalField(form, 'distributorStrn'),
         warrantyEvidenceRef: field(form, 'warrantyEvidenceRef'),
         receivedAt: dateField(form, 'receivedAt', 'Received on'),
         note: optionalField(form, 'note'),
@@ -302,6 +349,8 @@ export default async function PharmacyReceivingPage({
         supplierId: field(form, 'supplierId'),
         supplierInvoiceRef: field(form, 'directInvoiceRef'),
         supplierInvoiceDate: dateField(form, 'directInvoiceDate', 'Invoice date'),
+        distributorNtn: optionalField(form, 'directDistributorNtn'),
+        distributorStrn: optionalField(form, 'directDistributorStrn'),
         warrantyEvidenceRef: field(form, 'directWarranty'),
         receivedAt: dateField(form, 'directReceivedAt', 'Received on'),
         directPurchase: {
@@ -450,6 +499,7 @@ export default async function PharmacyReceivingPage({
   }
 
   const openExceptionCount = exceptionStatus === 'OPEN' ? exceptions.length : null;
+  const inputTaxReport = reconcileInputTaxBills(receipts);
 
   return (
     <Frame branch={scope} notice={notice}>
@@ -578,6 +628,36 @@ export default async function PharmacyReceivingPage({
         )}
       </SectionCard>
 
+      <SectionCard eyebrow="Input-tax hygiene" title="Purchase bill reconciliation" titleLevel={2}>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Stat label="Bills needing tax identity" value={inputTaxReport.flaggedBillCount} />
+          <Stat label="Posted input tax" value={money(inputTaxReport.claimedInputTaxMinor)} />
+          <Stat label="Claim on flagged bills" value={money(inputTaxReport.flaggedClaimMinor)} />
+        </div>
+        <p className="mt-3 text-sm text-text-muted">
+          Input tax is calculated from posted, creditable invoice lines. Confirm the claim with your
+          tax adviser; this report is a reconciliation aid, not a tax filing.
+        </p>
+        {inputTaxReport.rows.some((row) => row.flagged) ? (
+          <ul className="mt-3 divide-y divide-border-subtle rounded-[var(--radius-sm)] border border-warning/40">
+            {inputTaxReport.rows
+              .filter((row) => row.flagged)
+              .map((row) => (
+                <li className="flex flex-wrap items-center justify-between gap-2 p-3" key={row.id}>
+                  <span className="text-sm text-text-strong">
+                    {row.reference} · invoice {row.supplierInvoiceRef}
+                  </span>
+                  <span className="text-sm font-medium text-warning">
+                    Missing {row.missing.join(' and ')} · claim {money(row.claimMinor)}
+                  </span>
+                </li>
+              ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-sm text-text-muted">Every recorded bill has both NTN and STRN.</p>
+        )}
+      </SectionCard>
+
       {/* ── PUR-02 capture against a purchase order ────────────────────────── */}
       <SectionCard eyebrow="PUR-02" title="Receive against a purchase order" titleLevel={2}>
         {receivable.length === 0 ? (
@@ -644,7 +724,19 @@ export default async function PharmacyReceivingPage({
                     type="date"
                   />
                   <TextField
-                    className="lg:col-span-4"
+                    label="Distributor NTN"
+                    name="distributorNtn"
+                    notice={notice}
+                    hint="As printed on this purchase bill. Missing values are flagged in reconciliation."
+                  />
+                  <TextField
+                    label="Distributor STRN"
+                    name="distributorStrn"
+                    notice={notice}
+                    hint="As printed on this purchase bill. Missing values are flagged in reconciliation."
+                  />
+                  <TextField
+                    className="lg:col-span-2"
                     label="Warranty / source evidence"
                     name="warrantyEvidenceRef"
                     notice={notice}
@@ -662,31 +754,90 @@ export default async function PharmacyReceivingPage({
                       scan?.kind === 'gs1' && scan.medicineId
                         ? selectedOrder.lines.find((row) => row.medicineId === scan.medicineId)?.id
                         : undefined;
+                    const outstandingPacks =
+                      line.canonicalUnitsPerPack > 0
+                        ? Math.floor(remaining / line.canonicalUnitsPerPack)
+                        : null;
+                    const reader = (key: string, lotLabel: string) =>
+                      packPhotoEnabled ? (
+                        <PackPhotoReader
+                          branchId={branchId}
+                          defaultLocationId={defaultLocationId ?? null}
+                          fieldKey={key}
+                          locations={receiveLocations.map((location) => ({
+                            id: location.id,
+                            label: `${location.name} (${location.kind}${location.coldChain ? ', cold chain' : ''})`,
+                          }))}
+                          lotLabel={lotLabel}
+                          medicineName={line.medicine.productName}
+                          outstandingPacks={outstandingPacks}
+                          packLevel={line.packLevel.level}
+                          purchaseOrderId={selectedOrder.id}
+                          purchaseOrderLineId={line.id}
+                          siblingFieldKeys={[1, ...EXTRA_LOT_SLOTS]
+                            .map((slot) => lotSlotKey(line.id, slot))
+                            .filter((sibling) => sibling !== key)}
+                          unitsPerPack={line.canonicalUnitsPerPack}
+                        />
+                      ) : null;
+                    const prefill = prefillId === line.id ? gs1Prefill(scan, scanTerm) : undefined;
                     return (
-                      <CaptureFieldset
-                        highlighted={
-                          scan?.kind !== 'unresolved' &&
-                          scan?.kind !== 'manual' &&
-                          scan?.medicineId === line.medicineId
-                        }
-                        prefill={prefillId === line.id ? gs1Prefill(scan, scanTerm) : undefined}
-                        key={line.id}
-                        keyPrefix={line.id}
-                        locations={locations}
-                        notice={notice}
-                        subtitle={`Ordered ${line.orderedPacks} ${line.packLevel.level}${
-                          line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''
-                        } · ${units(orderedUnits)} · already received ${units(already?.receivedUnits ?? 0)} · outstanding ${units(remaining)}`}
-                        suggestedPacks={receivedPacksForScan(
-                          prefillId === line.id && scan?.kind === 'gs1' ? scan.serial : null,
-                          line.canonicalUnitsPerPack > 0
-                            ? Math.floor(remaining / line.canonicalUnitsPerPack)
-                            : 0
-                        )}
-                        suggestedPriceMinor={line.listPricePerPackMinor}
-                        title={line.medicine.productName}
-                        unitsPerPack={line.canonicalUnitsPerPack}
-                      />
+                      <div className="space-y-3" key={line.id}>
+                        <CaptureFieldset
+                          defaultLocationId={defaultLocationId}
+                          photoReader={
+                            // A scanned 2D code is the evidence for lot 1; a photo cannot replace it.
+                            prefill?.payload ? undefined : reader(line.id, 'Lot 1')
+                          }
+                          highlighted={
+                            scan?.kind !== 'unresolved' &&
+                            scan?.kind !== 'manual' &&
+                            scan?.medicineId === line.medicineId
+                          }
+                          prefill={prefill}
+                          keyPrefix={line.id}
+                          locations={locations}
+                          notice={notice}
+                          subtitle={`Ordered ${line.orderedPacks} ${line.packLevel.level}${
+                            line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''
+                          } · ${units(orderedUnits)} · already received ${units(already?.receivedUnits ?? 0)} · outstanding ${units(remaining)}`}
+                          suggestedPacks={receivedPacksForScan(
+                            prefillId === line.id && scan?.kind === 'gs1' ? scan.serial : null,
+                            line.canonicalUnitsPerPack > 0
+                              ? Math.floor(remaining / line.canonicalUnitsPerPack)
+                              : 0
+                          )}
+                          suggestedPriceMinor={line.listPricePerPackMinor}
+                          title={line.medicine.productName}
+                          unitsPerPack={line.canonicalUnitsPerPack}
+                        />
+                        <details className="rounded-[var(--radius-sm)] border border-border-subtle px-4 py-2">
+                          <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-text-body focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2">
+                            Another batch or expiry of {line.medicine.productName} arrived
+                          </summary>
+                          <p className="text-xs text-text-muted">
+                            Each different batch or expiry is its own lot. The same batch and expiry
+                            is one lot: enter its total packs once. Leave a lot&apos;s batch blank
+                            if it did not arrive.
+                          </p>
+                          <div className="mt-3 space-y-3 pb-2">
+                            {EXTRA_LOT_SLOTS.map((slot) => (
+                              <CaptureFieldset
+                                defaultLocationId={defaultLocationId}
+                                key={slot}
+                                keyPrefix={lotSlotKey(line.id, slot)}
+                                locations={locations}
+                                notice={notice}
+                                photoReader={reader(lotSlotKey(line.id, slot), `Lot ${slot}`)}
+                                subtitle={`A separate batch or expiry against the same order line · outstanding ${units(remaining)}`}
+                                suggestedPriceMinor={line.listPricePerPackMinor}
+                                title={`${line.medicine.productName} — lot ${slot}`}
+                                unitsPerPack={line.canonicalUnitsPerPack}
+                              />
+                            ))}
+                          </div>
+                        </details>
+                      </div>
                     );
                   })}
                 </div>
@@ -752,7 +903,11 @@ export default async function PharmacyReceivingPage({
                 required
               />
               <SelectField
-                emptyHint="No orderable supplier. Authorize one and file a verified licence first."
+                emptyHint={
+                  checksOff
+                    ? 'No supplier yet. Add one in the supplier register first.'
+                    : 'No orderable supplier. Authorize one and file a verified licence first.'
+                }
                 label="Supplier"
                 name="supplierId"
                 notice={notice}
@@ -786,6 +941,18 @@ export default async function PharmacyReceivingPage({
                 name="directWarranty"
                 notice={notice}
                 required
+              />
+              <TextField
+                label="Distributor NTN"
+                name="directDistributorNtn"
+                notice={notice}
+                hint="As printed on this purchase bill."
+              />
+              <TextField
+                label="Distributor STRN"
+                name="directDistributorStrn"
+                notice={notice}
+                hint="As printed on this purchase bill."
               />
               <TextAreaField
                 className="sm:col-span-2"
@@ -973,6 +1140,8 @@ function CaptureFieldset({
   suggestedPriceMinor,
   highlighted,
   prefill,
+  photoReader,
+  defaultLocationId,
 }: {
   keyPrefix: string;
   title: string;
@@ -984,12 +1153,15 @@ function CaptureFieldset({
   suggestedPriceMinor?: number;
   highlighted?: boolean;
   prefill?: Gs1Prefill;
+  /** DEV-752: the pack-photo shortcut that fills this line's lot fields. */
+  photoReader?: React.ReactNode;
+  defaultLocationId?: string;
 }) {
   const stock = locations.filter((location) => location.kind !== 'QUARANTINE');
   const quarantine = locations.filter((location) => location.kind === 'QUARANTINE');
   return (
     <fieldset
-      className={`rounded-[var(--radius-sm)] border p-4 ${
+      className={`min-w-0 rounded-[var(--radius-sm)] border p-4 ${
         highlighted ? 'border-primary bg-primary/5' : 'border-border-subtle'
       }`}
     >
@@ -999,8 +1171,9 @@ function CaptureFieldset({
         <p className="mt-1 text-xs text-text-muted">{prefill.warnings.join(' ')}</p>
       ) : null}
       {unitsPerPack ? (
-        <Derived label="Pack conversion" value={`1 pack = ${unitsPerPack} units`} />
+        <Derived label="Pack conversion" value={packConversionLabel('pack', [], unitsPerPack)} />
       ) : null}
+      {photoReader}
       <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <TextField
           defaultValue={prefill?.batchNumber}
@@ -1121,7 +1294,13 @@ function CaptureFieldset({
           ]}
         />
         <SelectField
+          defaultValue={defaultLocationId}
           emptyHint="This branch has no active stock location. Create one before receiving."
+          hint={
+            defaultLocationId
+              ? "Starts on this branch's receiving location. A change applies to this line only."
+              : undefined
+          }
           label="Receive into"
           name={`stockLocation:${keyPrefix}`}
           notice={notice}
@@ -1195,6 +1374,12 @@ function ReceiptDetail({
         {receipt.supplier.name} · invoice {receipt.supplierInvoiceRef} (
         {dateOnly(receipt.supplierInvoiceDate)}) · received {dateOnly(receipt.receivedAt)}
         {receipt.purchaseOrder ? ` · against ${receipt.purchaseOrder.reference}` : ''}
+      </p>
+      <p
+        className={`mt-1 text-sm ${receipt.distributorNtn && receipt.distributorStrn ? 'text-text-muted' : 'font-medium text-warning'}`}
+      >
+        Distributor NTN {receipt.distributorNtn ?? 'missing'} · STRN{' '}
+        {receipt.distributorStrn ?? 'missing'}
       </p>
       {receipt.directPurchase ? (
         <div className="mt-3 rounded-[var(--radius-sm)] border border-warning/40 bg-warning/5 p-3">

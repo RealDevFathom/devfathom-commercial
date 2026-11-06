@@ -30,6 +30,7 @@ type AssignmentFixture = {
   dueTimeMinutes: number;
   intervalEndTimeMinutes: number | null;
   windowMinutes: number;
+  active: boolean;
   branch: { id: string; timezone: string; businessDayCutoff: string };
 };
 
@@ -59,6 +60,7 @@ function assignment(overrides: Partial<AssignmentFixture> = {}): AssignmentFixtu
     dueTimeMinutes: 6 * 60,
     intervalEndTimeMinutes: null,
     windowMinutes: 120,
+    active: true,
     branch: { id: 'b1', timezone: 'America/New_York', businessDayCutoff: '00:00' },
     ...overrides,
   };
@@ -76,7 +78,7 @@ function makeDb(opts: {
 
   const db = {
     restaurantSopAssignment: {
-      findMany: vi.fn(async () => opts.assignments),
+      findMany: vi.fn(async () => opts.assignments.filter((candidate) => candidate.active)),
     },
     restaurantSopTemplateVersion: {
       findFirst: vi.fn(
@@ -136,6 +138,45 @@ describe('generateDueSopOccurrences', () => {
     expect(second).toEqual({ assignmentsProcessed: 1, created: 0, skipped: 0 });
     // No second write burst: create called exactly the 3 times from run one.
     expect(raw.restaurantSopOccurrence.create).toHaveBeenCalledTimes(3);
+  });
+
+  it('switches from a bounded predecessor to its future-effective successor', async () => {
+    const predecessor = assignment({
+      id: 'a1',
+      startDate: utcDate(2026, 5, 1),
+      endDate: utcDate(2026, 5, 31),
+    });
+    const successor = assignment({
+      id: 'a2',
+      startDate: utcDate(2026, 6, 1),
+      dueTimeMinutes: 9 * 60,
+    });
+    const { db, store } = makeDb({ assignments: [predecessor, successor] });
+
+    await generateDueSopOccurrences(db, {
+      now: at('2026-06-01T12:00:00.000Z'),
+      lookbackDays: 1,
+      horizonDays: 0,
+    });
+
+    expect(
+      store.map((row) => ({
+        assignmentId: row.assignmentId,
+        businessDate: row.businessDate.toISOString(),
+        dueAt: row.dueAt.toISOString(),
+      }))
+    ).toEqual([
+      {
+        assignmentId: 'a1',
+        businessDate: '2026-05-31T00:00:00.000Z',
+        dueAt: '2026-05-31T10:00:00.000Z',
+      },
+      {
+        assignmentId: 'a2',
+        businessDate: '2026-06-01T00:00:00.000Z',
+        dueAt: '2026-06-01T13:00:00.000Z',
+      },
+    ]);
   });
 
   it('pins the latest published version and seeds occurrence steps', async () => {

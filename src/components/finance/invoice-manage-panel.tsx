@@ -219,15 +219,20 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
 
   const addItem = () => setItems((cur) => [...cur, { description: '', quantity: 1, rate: 0 }]);
   const removeItem = (i: number) => setItems((cur) => cur.filter((_, idx) => idx !== i));
-  const updateItem = (i: number, field: 'description' | 'quantity' | 'rate', value: string | number) =>
-    setItems((cur) => cur.map((it, idx) => (idx === i ? { ...it, [field]: value } : it)));
+  const updateItem = (
+    i: number,
+    field: 'description' | 'quantity' | 'rate',
+    value: string | number
+  ) => setItems((cur) => cur.map((it, idx) => (idx === i ? { ...it, [field]: value } : it)));
 
   // Live preview — recomputed exactly as the server will (qty × rate, + tax).
   const taxNum = parseFloat(tax) || 0;
   const subtotal = items.reduce((s, it) => s + it.quantity * it.rate, 0);
   const total = subtotal + taxNum;
 
-  const hasValidItems = items.length > 0 && items.every((it) => it.description.trim() && it.quantity > 0 && it.rate > 0);
+  const hasValidItems =
+    items.length > 0 &&
+    items.every((it) => it.description.trim() && it.quantity > 0 && it.rate > 0);
   const taxTooLarge = taxNum > MAX_MONEY;
   const canSave = hasValidItems && !taxTooLarge && !!dueDate && !updateInvoice.isPending;
 
