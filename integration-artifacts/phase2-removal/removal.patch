@@ -1,0 +1,2097 @@
+From 061f4ea072fa5574c42be049ac6e4931a7a1baa7 Mon Sep 17 00:00:00 2001
+From: Saad Ajmal <subs.codenineteen@gmail.com>
+Date: Fri, 6 Nov 2026 07:37:38 +0000
+Subject: [PATCH] Add guarded sale-line removal and shared active-line readers
+
+---
+ docs/pharmacy/active-sale-line-removal.md     | 124 +++
+ .../migration.sql                             |  95 ++
+ prisma/schema.prisma                          |   5 +
+ src/lib/pharmacy/active-sale-line.ts          |   5 +
+ .../pharmacy/anomaly-signals-operations.ts    |   2 +-
+ src/lib/pharmacy/basket-workflow.ts           |   3 +-
+ src/lib/pharmacy/category-growth-report.ts    |   2 +-
+ src/lib/pharmacy/counter-purchase-history.ts  |   3 +-
+ src/lib/pharmacy/counter.ts                   |   2 +
+ src/lib/pharmacy/customer-delivery.ts         |   5 +-
+ src/lib/pharmacy/customer-loyalty.ts          |   4 +-
+ src/lib/pharmacy/day-close.ts                 |   3 +-
+ src/lib/pharmacy/demand-evidence-reader.ts    |   2 +
+ .../pharmacy/dispensing-label-source.test.ts  |   1 +
+ src/lib/pharmacy/dispensing-label-source.ts   |   2 +
+ src/lib/pharmacy/dispensing.test.ts           |   1 +
+ src/lib/pharmacy/dispensing.ts                |  15 +
+ src/lib/pharmacy/drap-monitoring.ts           |   2 +-
+ .../duplicate-salt-acknowledgement.ts         |   2 +
+ src/lib/pharmacy/expiry-advisor-operations.ts |   2 +-
+ src/lib/pharmacy/finance-postings.ts          |   3 +-
+ src/lib/pharmacy/growth-evidence.ts           |   2 +-
+ src/lib/pharmacy/marketing-attribution.ts     |   2 +-
+ src/lib/pharmacy/migration/parallel-run.ts    |   3 +-
+ .../pharmacy/payment-attempt-operations.ts    |   8 +-
+ src/lib/pharmacy/refill-support.ts            |   2 +
+ src/lib/pharmacy/remove-sale-line.db.test.ts  | 827 ++++++++++++++++++
+ src/lib/pharmacy/remove-sale-line.ts          | 129 +++
+ src/lib/pharmacy/repeat-purchasing.ts         |   2 +-
+ src/lib/pharmacy/reports.ts                   |   4 +-
+ src/lib/pharmacy/rx-prescription-reference.ts |   5 +-
+ src/lib/pharmacy/sale-batch-safety.ts         |   2 +-
+ src/lib/pharmacy/sale-completion.ts           |   2 +
+ src/lib/pharmacy/sales.ts                     |  27 +-
+ src/lib/pharmacy/settlement.ts                |  21 +-
+ src/server/routers/pharmacy-dispensing.ts     |  51 +-
+ src/server/routers/pharmacy-sales.ts          |  54 ++
+ 37 files changed, 1378 insertions(+), 46 deletions(-)
+ create mode 100644 docs/pharmacy/active-sale-line-removal.md
+ create mode 100644 prisma/migrations/20261106100000_pharmacy_sale_line_removal/migration.sql
+ create mode 100644 src/lib/pharmacy/active-sale-line.ts
+ create mode 100644 src/lib/pharmacy/remove-sale-line.db.test.ts
+ create mode 100644 src/lib/pharmacy/remove-sale-line.ts
+
+diff --git a/docs/pharmacy/active-sale-line-removal.md b/docs/pharmacy/active-sale-line-removal.md
+new file mode 100644
+index 00000000..12ac15a4
+--- /dev/null
++++ b/docs/pharmacy/active-sale-line-removal.md
+@@ -0,0 +1,124 @@
++# Active sale lines and safe removal
++
++## Ownership and pinned integration baseline
++
++Phase 2 owns the durable line-removal representation. This patch is prepared locally,
++with no remote branch update, against integration commit
++`078070e156a53004efe007f6011bd01da68298e7`:
++
++- Payment #1363: `990cb7a7ccaf837dc3672d09a85b7f1a74526696`.
++- Safety #1377: `d7c2306db3d58e6d470ff93679efec838ad8bb71`, including shell #1375
++  at `9c25673026b939304f5e599a62bf3b0d6ced5ede`.
++
++The local baseline merges the two feature branches. Conflict resolution keeps the
++payment branch's tender input and historical manual-card compatibility, its
++uncertainty/recovery condition and day-close actor projection. It also retains the
++safety branch's prescription release gates and prescription-action button.
++No branch is merged to develop. These local commits are a review/integration
++artifact; they are not permission to publish or to change another active branch.
++
++## Durable representation
++
++`PharmacySaleLine` gains nullable `removedAt`, `removedByUserId` and
++`removalReason`. An active line is exactly `removedAt IS NULL`.
++
++Use `ACTIVE_SALE_LINE` from `src/lib/pharmacy/active-sale-line.ts` in Prisma
++predicates. Raw SQL uses `"removedAt" IS NULL`. In-memory legacy projections use
++`isActiveSaleLine`. Existing database rows default to null and stay active.
++A removal marker is immutable and cannot be cleared. Original quantities, money,
++prescription references and append-only allocations remain unchanged.
++
++Migration `20261106100000_pharmacy_sale_line_removal` depends on the payment
++migrations through `20261106070000_pharmacy_payment_attempt_handoff`. It updates
++the preparation balance trigger, protects clinical inserts against removed lines,
++and writes a database-generated `LINE_REMOVED` sale event. It requires an exact
++linked stock reversal before the tombstone, and controlled restorations must also
++have their matching register correction. No repricing or discount rule is added.
++
++## Mutation contract
++
++`pharmacySales.removeLine` accepts `branchId`, `saleId`, `saleLineId`, a nonempty
++reason (up to 500 characters), and optional `controlledWitness` containing the
++existing staff-profile ID and PIN. It uses current counter/member/branch admission.
++PIN input is omitted from request audit evidence.
++
++The domain operation owns no transaction: the authorized router supplies one and
++retains its scoped sale lock through COMMIT. Its first database operation calls
++`pharmacy_assert_no_payment_attempt(organizationId, branchId, saleId)`.
++Released/settled attempts do not establish that a bill is unpaid: the operation
++separately requires OPEN status, no issued receipt/completion, no tender or refund,
++and no customer-order attachment. A line with return evidence or inconsistent
++allocation/movement evidence also fails closed.
++
++A duplicate retry on the same unpaid open sale returns `replayed: true`, without
++another reversal or audit event. The tombstone itself supplies the durable retry
++identity. A retry after payment is conservatively refused by the paid-sale checks.
++All original stock movements are reversed exactly once in the same lot, location,
++disposition and pack arrangement, using the existing stock-ledger primitive.
++
++Controlled lines require current dispensing authority and the existing fresh,
++independent pharmacist witness PIN. Missing original controlled-register source
++evidence refuses removal. Each restoration appends a witnessed correction linked
++to the original sale entry and the compensating stock movement. Historical
++prescription fills and review decisions are retained; removal does not free a
++prescription repeat or erase an emergency-supply history. A wrong PIN commits its
++existing lockout accounting through the router's blocked-result path, before any
++stock mutation.
++
++## Readers and phase 4 integration
++
++The patch filters preparation (SQL and application), checkout totals, completion,
++receipts, sale postings, stock/batch safety, loyalty, day close, returns, purchase
++history and analytical consumers. Void reversals exclude removed lines, avoiding
++a second reversal. Existing evidence/audit rows remain available as history.
++Preparation and provider dispatch also retain the safety branch's verified-prescription release gate before exposing instructions or collecting. Clinical queues hide removed lines; new review decisions, substitutions and
++sale-linked prescription fills serialize on the sale lock and reject removed
++lines. Prescription attachment cannot reactivate a tombstone.
++
++For the forthcoming #1377 scan binding:
++
++1. Keep scan and binding evidence immutable and reference the retained sale-line
++   ID. Removal must not delete scans, binding rows, allocations or clinical history.
++2. Under the same scoped sale lock, query the bound line using organization,
++   branch, sale and line identity plus `ACTIVE_SALE_LINE`. Re-read after locking.
++3. Payment and confirmed-mismatch checks must consider bindings only on active
++   lines. A removed mismatch remains historical evidence and does not remain a
++   payable line or block a different active pack.
++4. Bind/verify versus removal must serialize on that sale lock. An operation that
++   obtains the lock after removal must refuse the inactive line; no client flag or
++   manual-sale shortcut may reactivate it. Manual sales and missing-evidence
++   unverified states retain the already agreed policy.
++
++## Integration and rollout
++
++Integrate the pinned payment and safety foundations first in a local review
++checkout, retaining their respective behavior as described above. Apply the entire
++removal patch there, including the migration and all readers, and regenerate
++Prisma. Do not cherry-pick only the mutation or only the marker. Rebase/retest if
++any pinned head changes. The same SQL/body change belongs in #1363/#1372's shared
++payment core when those existing branches are reconciled; do not invent a second
++preparation balance calculation.
++
++The schema change is additive, but an old server does not know to exclude
++removed lines. Do not enable/call removal until every serving reader is on the
++coordinated implementation. No remove button, quantity editing, unit conversion,
++repricing, held-bill recovery or pack-binding implementation is included in this
++prerequisite backend patch. Keep existing PRs draft pending owner integration,
++UI wiring, race tests for the new scan binding and normal release review.
++
++## Verification
++
++- Node 22 typecheck and changed-file ESLint pass.
++- Complete migrations apply to a new isolated PostgreSQL 16 database.
++- Restricted runtime asserts `NOSUPERUSER` and `NOBYPASSRLS`.
++- 36 removal and existing payment-attempt database tests pass. The suites cover preparation/removal
++  in both lock orders, duplicate concurrent retries, transaction rollback,
++  partially paid/held/completed refusal, tenant and branch denial, actual router
++  membership/branch admission, controlled authority/PIN/lockout/register correction,
++  retained allocation evidence, clinical inserts, receipt exclusion and live report
++  SQL. No production data, provider, money or device is used.
++- Focused reader regressions: 249 pass and one existing report-catalog assertion
++  fails (expects 23 metrics; the foundation has 24). The identical 17-pass/1-fail
++  report test result reproduces at the unchanged pinned integration baseline.
++- An additional 178 focused sales/settlement/clinical tests pass.
++- No browser/Studio QA is claimed for this backend-only prerequisite.
+diff --git a/prisma/migrations/20261106100000_pharmacy_sale_line_removal/migration.sql b/prisma/migrations/20261106100000_pharmacy_sale_line_removal/migration.sql
+new file mode 100644
+index 00000000..8c018933
+--- /dev/null
++++ b/prisma/migrations/20261106100000_pharmacy_sale_line_removal/migration.sql
+@@ -0,0 +1,95 @@
++-- Requires the payment-attempt migrations through 20261106070000.
++ALTER TYPE "PharmacySaleEventKind" ADD VALUE 'LINE_REMOVED';
++ALTER TABLE pharmacy_sale_lines ADD COLUMN "removedAt" TIMESTAMP(3), ADD COLUMN "removedByUserId" TEXT, ADD COLUMN "removalReason" TEXT;
++ALTER TABLE pharmacy_sale_lines ADD CONSTRAINT pharmacy_line_removal_complete CHECK (
++  ("removedAt" IS NULL AND "removedByUserId" IS NULL AND "removalReason" IS NULL) OR
++  ("removedAt" IS NOT NULL AND length(trim("removedByUserId"))>0 AND length(trim("removalReason")) BETWEEN 1 AND 500));
++CREATE INDEX pharmacy_active_sale_lines ON pharmacy_sale_lines("organizationId","branchId","saleId") WHERE "removedAt" IS NULL;
++CREATE FUNCTION pharmacy_removed_line_guard() RETURNS TRIGGER LANGUAGE plpgsql AS $$
++DECLARE bill RECORD; actor TEXT;
++BEGIN
++ IF TG_OP='INSERT' THEN
++   IF NEW."removedAt" IS NOT NULL THEN RAISE EXCEPTION 'REMOVAL_REQUIRES_EXISTING_LINE'; END IF;
++   RETURN NEW;
++ END IF;
++ IF OLD."removedAt" IS NOT NULL THEN RAISE EXCEPTION 'REMOVED_LINE_IMMUTABLE'; END IF;
++ IF TG_OP='DELETE' THEN RAISE EXCEPTION 'SALE_LINE_EVIDENCE_IMMUTABLE'; END IF;
++ IF NEW."removedAt" IS NULL THEN RETURN NEW; END IF;
++ IF (to_jsonb(NEW)-ARRAY['removedAt','removedByUserId','removalReason']) IS DISTINCT FROM
++    (to_jsonb(OLD)-ARRAY['removedAt','removedByUserId','removalReason']) THEN RAISE EXCEPTION 'REMOVAL_CANNOT_REPRICE'; END IF;
++ PERFORM pharmacy_assert_no_payment_attempt(OLD."organizationId",OLD."branchId",OLD."saleId");
++ SELECT * INTO bill FROM pharmacy_sales WHERE "organizationId"=OLD."organizationId" AND "branchId"=OLD."branchId" AND id=OLD."saleId" FOR UPDATE;
++ IF bill.status::text<>'OPEN' OR bill."receiptNumber" IS NOT NULL OR bill."completedAt" IS NOT NULL OR
++    EXISTS(SELECT 1 FROM pharmacy_tenders WHERE "organizationId"=OLD."organizationId" AND "saleId"=OLD."saleId") OR
++    EXISTS(SELECT 1 FROM pharmacy_refunds WHERE "organizationId"=OLD."organizationId" AND "saleId"=OLD."saleId") OR
++    EXISTS(SELECT 1 FROM pharmacy_customer_orders WHERE "organizationId"=OLD."organizationId" AND "counterSaleId"=OLD."saleId")
++ THEN RAISE EXCEPTION 'REMOVAL_REQUIRES_UNPAID_OPEN_SALE'; END IF;
++ actor:=NULLIF(current_setting('app.current_user_id',true),'');
++ IF actor IS NULL OR actor<>NEW."removedByUserId" THEN RAISE EXCEPTION 'REMOVAL_ACTOR_REQUIRED'; END IF;
++ -- Stock must have been reversed exactly once before the tombstone is written.
++ IF NOT EXISTS(SELECT 1 FROM pharmacy_sale_line_allocations WHERE "organizationId"=OLD."organizationId" AND "saleLineId"=OLD.id) OR
++    EXISTS(SELECT 1 FROM pharmacy_sale_line_allocations a WHERE a."organizationId"=OLD."organizationId" AND a."saleLineId"=OLD.id AND NOT EXISTS(
++      SELECT 1 FROM pharmacy_stock_movements r WHERE r."organizationId"=a."organizationId" AND r."branchId"=OLD."branchId" AND r."reversesMovementId"=a."stockMovementId"))
++ THEN RAISE EXCEPTION 'REMOVAL_REVERSAL_REQUIRED'; END IF;
++ IF EXISTS(SELECT 1 FROM pharmacy_medicines WHERE id=OLD."medicineId" AND controlled) AND EXISTS(
++   SELECT 1 FROM pharmacy_sale_line_allocations a WHERE a."organizationId"=OLD."organizationId" AND a."saleLineId"=OLD.id AND NOT EXISTS(
++    SELECT 1 FROM pharmacy_controlled_register_entries src JOIN pharmacy_controlled_register_entries correction ON correction."organizationId"=src."organizationId" AND correction."correctsEntryId"=src.id
++    JOIN pharmacy_stock_movements r ON r."organizationId"=a."organizationId" AND r."reversesMovementId"=a."stockMovementId"
++    WHERE src."organizationId"=a."organizationId" AND src."stockMovementId"=a."stockMovementId" AND src."entryKind"::text='SALE' AND correction."restorationMovementId"=r.id))
++ THEN RAISE EXCEPTION 'CONTROLLED_REMOVAL_RESTORATION_REQUIRED'; END IF;
++ RETURN NEW;
++END $$;
++CREATE TRIGGER pharmacy_removed_line BEFORE INSERT OR UPDATE OR DELETE ON pharmacy_sale_lines FOR EACH ROW EXECUTE FUNCTION pharmacy_removed_line_guard();
++-- Preparation's authoritative remaining balance uses the same predicate: removedAt IS NULL.
++CREATE OR REPLACE FUNCTION pharmacy_payment_attempt_prepare_guard() RETURNS TRIGGER LANGUAGE plpgsql AS $$
++DECLARE bill RECORD; remaining BIGINT;
++BEGIN
++ SELECT s.*,o.currency AS "billCurrency" INTO bill FROM pharmacy_sales s JOIN organizations o ON o.id=s."organizationId"
++ JOIN pharmacy_branches b ON b.id=s."branchId" AND b."organizationId"=s."organizationId" AND b.active
++ WHERE s.id=NEW."saleId" AND s."organizationId"=NEW."organizationId" AND s."branchId"=NEW."branchId" FOR UPDATE OF s;
++ IF NOT FOUND OR (NEW.source<>'LEGACY_CAPTURE' AND bill.status::text<>'OPEN') THEN RAISE EXCEPTION 'PAYMENT_SALE_NOT_OPEN'; END IF;
++ IF NEW."billRevision"<>bill."paymentRevision" OR NEW.currency<>bill."billCurrency" OR NEW.state<>(CASE WHEN NEW.source='LEGACY_CAPTURE' THEN 'UNKNOWN' ELSE 'PREPARED' END) THEN RAISE EXCEPTION 'PAYMENT_BILL_CHANGED'; END IF;
++ SELECT coalesce((SELECT sum("grossMinor"::bigint-"discountMinor") FROM pharmacy_sale_lines WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId" AND "saleId"=NEW."saleId" AND "removedAt" IS NULL),0)
++ -coalesce((SELECT sum("amountMinor"::bigint) FROM pharmacy_tenders WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId" AND "saleId"=NEW."saleId"),0) INTO remaining;
++ IF NEW.source='PRECOLLECTION' AND NEW."amountMinor">remaining THEN RAISE EXCEPTION 'PAYMENT_AMOUNT_EXCEEDS_BALANCE'; END IF;
++ RETURN NEW;
++END $$;
++-- New clinical actions on removed lines are rejected under the same sale lock.
++CREATE FUNCTION pharmacy_review_active_line_guard() RETURNS TRIGGER LANGUAGE plpgsql AS $$
++DECLARE line_id TEXT; linked RECORD;
++BEGIN
++ IF TG_TABLE_NAME='pharmacy_pharmacist_review_decisions' THEN
++   SELECT "saleLineId" INTO line_id FROM pharmacy_pharmacist_review_items WHERE "organizationId"=NEW."organizationId" AND id=NEW."reviewItemId";
++ ELSE line_id:=NEW."saleLineId"; END IF;
++ SELECT "saleId","branchId" INTO linked FROM pharmacy_sale_lines WHERE "organizationId"=NEW."organizationId" AND id=line_id;
++ IF NOT FOUND THEN RAISE EXCEPTION 'REVIEW_LINE_NOT_FOUND'; END IF;
++ PERFORM 1 FROM pharmacy_sales WHERE "organizationId"=NEW."organizationId" AND "branchId"=linked."branchId" AND id=linked."saleId" FOR UPDATE;
++ IF NOT EXISTS(SELECT 1 FROM pharmacy_sale_lines WHERE "organizationId"=NEW."organizationId" AND id=line_id AND "removedAt" IS NULL) THEN RAISE EXCEPTION 'REVIEW_LINE_REMOVED'; END IF;
++ RETURN NEW;
++END $$;
++CREATE TRIGGER pharmacy_review_active_line BEFORE INSERT ON pharmacy_pharmacist_review_items FOR EACH ROW EXECUTE FUNCTION pharmacy_review_active_line_guard();
++CREATE TRIGGER pharmacy_review_active_line BEFORE INSERT ON pharmacy_pharmacist_review_decisions FOR EACH ROW EXECUTE FUNCTION pharmacy_review_active_line_guard();
++CREATE TRIGGER pharmacy_substitution_active_line BEFORE INSERT ON pharmacy_substitution_records FOR EACH ROW EXECUTE FUNCTION pharmacy_review_active_line_guard();
++
++CREATE FUNCTION pharmacy_audit_removed_line() RETURNS TRIGGER LANGUAGE plpgsql AS $$
++BEGIN
++ IF OLD."removedAt" IS NULL AND NEW."removedAt" IS NOT NULL THEN
++ INSERT INTO pharmacy_sale_events(id,"organizationId","branchId","saleId",kind,"actorId",reason,payload,"occurredAt")
++ VALUES(gen_random_uuid()::text,NEW."organizationId",NEW."branchId",NEW."saleId",'LINE_REMOVED',NEW."removedByUserId",NEW."removalReason",jsonb_build_object('saleLineId',NEW.id),NEW."removedAt");
++ END IF; RETURN NEW;
++END $$;
++CREATE TRIGGER pharmacy_audit_removed_line AFTER UPDATE ON pharmacy_sale_lines FOR EACH ROW EXECUTE FUNCTION pharmacy_audit_removed_line();
++-- Sale-linked fills keep their evidence, but no new fill may consume a removed line.
++CREATE FUNCTION pharmacy_fill_active_line_guard() RETURNS TRIGGER LANGUAGE plpgsql AS $$
++DECLARE line_id TEXT; linked RECORD;
++BEGIN
++ IF NEW."idempotencyKey" LIKE 'rx-reference:%' THEN line_id:=substr(NEW."idempotencyKey",14);
++ ELSIF NEW."idempotencyKey" LIKE 'controlled:%' THEN line_id:=substr(NEW."idempotencyKey",12);
++ ELSE RETURN NEW; END IF;
++ SELECT "saleId","branchId" INTO linked FROM pharmacy_sale_lines WHERE "organizationId"=NEW."organizationId" AND id=line_id;
++ IF NOT FOUND THEN RAISE EXCEPTION 'FILL_LINE_NOT_FOUND'; END IF;
++ PERFORM 1 FROM pharmacy_sales WHERE "organizationId"=NEW."organizationId" AND "branchId"=linked."branchId" AND id=linked."saleId" FOR UPDATE;
++ IF NOT EXISTS(SELECT 1 FROM pharmacy_sale_lines WHERE "organizationId"=NEW."organizationId" AND id=line_id AND "removedAt" IS NULL) THEN RAISE EXCEPTION 'FILL_LINE_REMOVED'; END IF;
++ RETURN NEW;
++END $$;
++CREATE TRIGGER pharmacy_fill_active_line BEFORE INSERT ON pharmacy_prescription_fills FOR EACH ROW EXECUTE FUNCTION pharmacy_fill_active_line_guard();
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index fbff7417..d4530f5b 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -878,6 +878,7 @@ enum PharmacySaleStatus {
+ enum PharmacySaleEventKind {
+   CREATED
+   LINE_ADDED
++  LINE_REMOVED
+   HELD
+   RESUMED
+   QUOTATION_CREATED
+@@ -1524,6 +1525,10 @@ model PharmacyCounterKeymapPreference {
+ }
+ 
+ model PharmacySaleLine {
++  /// Tombstone only: original money, allocations and clinical evidence remain immutable.
++  removedAt                 DateTime?                    @db.Timestamp(3)
++  removedByUserId            String?
++  removalReason             String?
+   id                        String                       @id @default(cuid())
+   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+   branchId                  String
+diff --git a/src/lib/pharmacy/active-sale-line.ts b/src/lib/pharmacy/active-sale-line.ts
+new file mode 100644
+index 00000000..803e7e78
+--- /dev/null
++++ b/src/lib/pharmacy/active-sale-line.ts
+@@ -0,0 +1,5 @@
++/** The only active-line rule. Historical lines without a tombstone remain active. */
++export const ACTIVE_SALE_LINE = { removedAt: null } as const;
++export function isActiveSaleLine(line: { removedAt?: Date | string | null }): boolean {
++  return line.removedAt == null;
++}
+diff --git a/src/lib/pharmacy/anomaly-signals-operations.ts b/src/lib/pharmacy/anomaly-signals-operations.ts
+index 1476c279..f0a8fafc 100644
+--- a/src/lib/pharmacy/anomaly-signals-operations.ts
++++ b/src/lib/pharmacy/anomaly-signals-operations.ts
+@@ -125,7 +125,7 @@ export async function readPharmacyAnomalyFacts(
+                  COALESCE(SUM(l."discountMinor"),0)::int AS "discountMinor", MAX(s."completedAt") AS "occurredAt"
+           FROM "pharmacy_sale_lines" l
+           JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId"
+-          WHERE s."branchId" IN (${branches}) AND s."status"='COMPLETED'
++          WHERE l."removedAt" IS NULL AND s."branchId" IN (${branches}) AND s."status"='COMPLETED'
+             AND s."businessDate">=${window.from} AND s."businessDate"<${window.to}
+             AND (l."discountMinor">0 OR l."approvedByUserId" IS NOT NULL)
+           GROUP BY s."branchId", s."createdByUserId" ORDER BY MAX(s."completedAt") DESC LIMIT 200`);
+diff --git a/src/lib/pharmacy/basket-workflow.ts b/src/lib/pharmacy/basket-workflow.ts
+index 5ee4cff1..eaff8441 100644
+--- a/src/lib/pharmacy/basket-workflow.ts
++++ b/src/lib/pharmacy/basket-workflow.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import 'server-only';
+ 
+ import { createHash, randomUUID } from 'node:crypto';
+@@ -78,7 +79,7 @@ export async function generateBasketInsights(
+       receiptNumber: { not: null },
+       completedAt: { gte: input.from, lt: input.cutoff },
+     },
+-    select: { id: true, lines: { select: { medicineId: true } } },
++    select: { id: true, lines: { where: ACTIVE_SALE_LINE, select: { medicineId: true } } },
+     orderBy: { id: 'asc' },
+     take: 5001,
+   });
+diff --git a/src/lib/pharmacy/category-growth-report.ts b/src/lib/pharmacy/category-growth-report.ts
+index 3582d2f3..098a06bd 100644
+--- a/src/lib/pharmacy/category-growth-report.ts
++++ b/src/lib/pharmacy/category-growth-report.ts
+@@ -96,7 +96,7 @@ export async function readPharmacyCategoryGrowthReport(
+       FROM pharmacy_sale_lines l
+       JOIN pharmacy_sales s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s.id=l."saleId"
+       JOIN pharmacy_medicines m ON m."organizationId"=l."organizationId" AND m.id=l."medicineId"
+-      WHERE l."organizationId"=${organizationId} AND l."branchId" IN (${Prisma.join(input.branchIds)})
++      WHERE l."removedAt" IS NULL AND l."organizationId"=${organizationId} AND l."branchId" IN (${Prisma.join(input.branchIds)})
+         AND s.status='COMPLETED' AND s."receiptNumber" IS NOT NULL
+         AND s."completedAt">=${from} AND s."completedAt"<${cutoff}
+     ), branch_totals AS (
+diff --git a/src/lib/pharmacy/counter-purchase-history.ts b/src/lib/pharmacy/counter-purchase-history.ts
+index 7554330a..b5db18fb 100644
+--- a/src/lib/pharmacy/counter-purchase-history.ts
++++ b/src/lib/pharmacy/counter-purchase-history.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import 'server-only';
+ 
+ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+@@ -51,7 +52,7 @@ export async function readCounterPurchaseHistory(
+     select: {
+       id: true,
+       completedAt: true,
+-      lines: { select: { medicine: { select: { productName: true } } } },
++      lines: { where: ACTIVE_SALE_LINE, select: { medicine: { select: { productName: true } } } },
+     },
+   });
+   return {
+diff --git a/src/lib/pharmacy/counter.ts b/src/lib/pharmacy/counter.ts
+index 7d07a18b..9421f285 100644
+--- a/src/lib/pharmacy/counter.ts
++++ b/src/lib/pharmacy/counter.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ /**
+  * PH-POS — the counter's read side (POS-02 search, the FEFO cart, POS-08
+  * receipts).
+@@ -546,6 +547,7 @@ async function saleInScope(db: ScopedDb, scope: CounterScope, saleId: string) {
+         take: 1,
+       },
+       lines: {
++        where: ACTIVE_SALE_LINE,
+         orderBy: { createdAt: 'asc' },
+         include: {
+           medicine: {
+diff --git a/src/lib/pharmacy/customer-delivery.ts b/src/lib/pharmacy/customer-delivery.ts
+index 20fbfd9d..dfff93f8 100644
+--- a/src/lib/pharmacy/customer-delivery.ts
++++ b/src/lib/pharmacy/customer-delivery.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import 'server-only';
+ import { createHash } from 'node:crypto';
+ import { z } from 'zod';
+@@ -147,7 +148,7 @@ export async function recordDeliveryCommand(
+       deliveryEvidence: { orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }] },
+       counterSale: {
+         include: {
+-          lines: { include: { allocations: true, returnLines: true } },
++          lines: { where: ACTIVE_SALE_LINE, include: { allocations: true, returnLines: true } },
+           tenders: { include: { refunds: true } },
+         },
+       },
+@@ -192,7 +193,7 @@ export async function recordDeliveryCommand(
+           branchId: scope.branchId,
+         },
+         include: {
+-          lines: { include: { allocations: true, returnLines: true } },
++          lines: { where: ACTIVE_SALE_LINE, include: { allocations: true, returnLines: true } },
+           tenders: { include: { refunds: true } },
+         },
+       });
+diff --git a/src/lib/pharmacy/customer-loyalty.ts b/src/lib/pharmacy/customer-loyalty.ts
+index 01d4a400..2d4949f9 100644
+--- a/src/lib/pharmacy/customer-loyalty.ts
++++ b/src/lib/pharmacy/customer-loyalty.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import 'server-only';
+ 
+ import { assertSaleBatchesSellable } from './sale-batch-safety';
+@@ -56,6 +57,7 @@ export async function linkCustomerToSale(
+   if (!sale) throw new PharmacyLoyaltyError('SALE_NOT_OPEN');
+   const referencedLine = await db.pharmacySaleLine.findFirst({
+     where: {
++      ...ACTIVE_SALE_LINE,
+       organizationId: scope.organizationId,
+       branchId: scope.branchId,
+       saleId: sale.id,
+@@ -350,7 +352,7 @@ export async function readCustomerSnapshot(
+         id: true,
+         receiptNumber: true,
+         completedAt: true,
+-        lines: { select: { grossMinor: true, discountMinor: true } },
++        lines: { where: ACTIVE_SALE_LINE, select: { grossMinor: true, discountMinor: true } },
+         tenders: {
+           select: { type: true, amountMinor: true, refunds: { select: { amountMinor: true } } },
+         },
+diff --git a/src/lib/pharmacy/day-close.ts b/src/lib/pharmacy/day-close.ts
+index 87cc55b6..9ae2e1f0 100644
+--- a/src/lib/pharmacy/day-close.ts
++++ b/src/lib/pharmacy/day-close.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import { TRPCError } from '@trpc/server';
+ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+ import { workspaceTimezone } from '@/lib/timezone';
+@@ -30,7 +31,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
+     }),
+     db.pharmacySale.findMany({
+       where: { ...where, status: 'COMPLETED' },
+-      include: { lines: true },
++      include: { lines: { where: ACTIVE_SALE_LINE } },
+     }),
+     db.pharmacyRefund.findMany({ where, include: { originalTender: { select: { type: true } } } }),
+     // The workspace's zone, which the close screen shows every time in: a
+diff --git a/src/lib/pharmacy/demand-evidence-reader.ts b/src/lib/pharmacy/demand-evidence-reader.ts
+index 63b1b2b8..2410390d 100644
+--- a/src/lib/pharmacy/demand-evidence-reader.ts
++++ b/src/lib/pharmacy/demand-evidence-reader.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import 'server-only';
+ 
+ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+@@ -140,6 +141,7 @@ export async function readPharmacyDemandEvidence(
+   // Separate projections: no identities, prescriptions, event payloads or free-text fields.
+   const lines = await db.pharmacySaleLine.findMany({
+     where: {
++      ...ACTIVE_SALE_LINE,
+       ...scope,
+       sale: {
+         organizationId: scope.organizationId,
+diff --git a/src/lib/pharmacy/dispensing-label-source.test.ts b/src/lib/pharmacy/dispensing-label-source.test.ts
+index 0f6d2c82..0d38c3c7 100644
+--- a/src/lib/pharmacy/dispensing-label-source.test.ts
++++ b/src/lib/pharmacy/dispensing-label-source.test.ts
+@@ -55,6 +55,7 @@ describe('label source provenance', () => {
+     ]);
+     expect(db.pharmacySaleLine.findMany).toHaveBeenCalledWith({
+       where: {
++        removedAt: null,
+         ...scope,
+         saleId: 'sale',
+         sale: { status: 'COMPLETED' },
+diff --git a/src/lib/pharmacy/dispensing-label-source.ts b/src/lib/pharmacy/dispensing-label-source.ts
+index 4112e45f..5ede7e6b 100644
+--- a/src/lib/pharmacy/dispensing-label-source.ts
++++ b/src/lib/pharmacy/dispensing-label-source.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import 'server-only';
+ 
+ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+@@ -25,6 +26,7 @@ export async function readDispensingLabelSources(
+     }),
+     db.pharmacySaleLine.findMany({
+       where: {
++        ...ACTIVE_SALE_LINE,
+         ...scope,
+         saleId: receipt.saleId,
+         sale: { status: 'COMPLETED' },
+diff --git a/src/lib/pharmacy/dispensing.test.ts b/src/lib/pharmacy/dispensing.test.ts
+index f032bb0a..c91fc06c 100644
+--- a/src/lib/pharmacy/dispensing.test.ts
++++ b/src/lib/pharmacy/dispensing.test.ts
+@@ -8,6 +8,7 @@ import {
+ 
+ function dbWith(options: { signed?: boolean; substitution?: boolean }) {
+   return {
++    pharmacySaleLine: { findFirst: vi.fn().mockResolvedValue({ id: 'sale-line-1' }) },
+     pharmacyPharmacistReviewDecision: {
+       findFirst: vi.fn().mockResolvedValue(options.signed ? { id: 'decision' } : null),
+     },
+diff --git a/src/lib/pharmacy/dispensing.ts b/src/lib/pharmacy/dispensing.ts
+index 0352b43b..506ad7a1 100644
+--- a/src/lib/pharmacy/dispensing.ts
++++ b/src/lib/pharmacy/dispensing.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+ 
+ export class PharmacyDispensingError extends Error {
+@@ -13,6 +14,13 @@ export class PharmacyDispensingError extends Error {
+ 
+ /** Stable POS-A integration boundary: completion must call this for required lines. */
+ export async function assertPharmacistApproved(db: ScopedDb, saleLineId: string): Promise<void> {
++  if (
++    !(await db.pharmacySaleLine.findFirst({
++      where: { id: saleLineId, ...ACTIVE_SALE_LINE },
++      select: { id: true },
++    }))
++  )
++    throw new PharmacyDispensingError('PHARMACIST_APPROVAL_REQUIRED');
+   const signed = await db.pharmacyPharmacistReviewDecision.findFirst({
+     where: { reviewItem: { saleLineId }, kind: 'SIGN', signedAt: { not: null } },
+     select: { id: true },
+@@ -25,6 +33,13 @@ export async function assertSubstitutionRecorded(
+   db: ScopedDb,
+   input: { saleLineId: string; prescribedPresentationId: string; suppliedPresentationId: string }
+ ): Promise<void> {
++  if (
++    !(await db.pharmacySaleLine.findFirst({
++      where: { id: input.saleLineId, ...ACTIVE_SALE_LINE },
++      select: { id: true },
++    }))
++  )
++    throw new PharmacyDispensingError('SUBSTITUTION_RECORD_REQUIRED');
+   if (input.prescribedPresentationId === input.suppliedPresentationId) return;
+   const record = await db.pharmacySubstitutionRecord.findFirst({
+     where: {
+diff --git a/src/lib/pharmacy/drap-monitoring.ts b/src/lib/pharmacy/drap-monitoring.ts
+index fbeba4a2..20c175c9 100644
+--- a/src/lib/pharmacy/drap-monitoring.ts
++++ b/src/lib/pharmacy/drap-monitoring.ts
+@@ -328,7 +328,7 @@ export async function recallActionList(db: ScopedDb, scope: ActorScope, recallNo
+       patientPhone: string | null;
+     }>
+   >(
+-    Prisma.sql`SELECT a."branchId",a."inventoryLotId",a."quantityUnits" AS "quarantinedUnits",p."displayName" AS "patientName",p.phone AS "patientPhone" FROM "pharmacy_recall_quarantine_actions" a LEFT JOIN "pharmacy_sale_line_allocations" la ON la."organizationId"=a."organizationId" AND la."inventoryLotId"=a."inventoryLotId" LEFT JOIN "pharmacy_sale_lines" sl ON sl."organizationId"=la."organizationId" AND sl.id=la."saleLineId" LEFT JOIN "pharmacy_sales" s ON s."organizationId"=sl."organizationId" AND s.id=sl."saleId" AND s.status='COMPLETED' LEFT JOIN "pharmacy_customers" c ON c."organizationId"=s."organizationId" AND c.id=s."customerId" LEFT JOIN "pharmacy_patients" p ON p."organizationId"=c."organizationId" AND p.id=c."patientId" WHERE a."organizationId"=${scope.organizationId} AND a."recallNoticeId"=${recallNoticeId} ORDER BY a."branchId",a."inventoryLotId"`
++    Prisma.sql`SELECT a."branchId",a."inventoryLotId",a."quantityUnits" AS "quarantinedUnits",p."displayName" AS "patientName",p.phone AS "patientPhone" FROM "pharmacy_recall_quarantine_actions" a LEFT JOIN "pharmacy_sale_line_allocations" la ON la."organizationId"=a."organizationId" AND la."inventoryLotId"=a."inventoryLotId" LEFT JOIN "pharmacy_sale_lines" sl ON sl."removedAt" IS NULL AND sl."organizationId"=la."organizationId" AND sl.id=la."saleLineId" LEFT JOIN "pharmacy_sales" s ON s."organizationId"=sl."organizationId" AND s.id=sl."saleId" AND s.status='COMPLETED' LEFT JOIN "pharmacy_customers" c ON c."organizationId"=s."organizationId" AND c.id=s."customerId" LEFT JOIN "pharmacy_patients" p ON p."organizationId"=c."organizationId" AND p.id=c."patientId" WHERE a."organizationId"=${scope.organizationId} AND a."recallNoticeId"=${recallNoticeId} ORDER BY a."branchId",a."inventoryLotId"`
+   );
+ }
+ 
+diff --git a/src/lib/pharmacy/duplicate-salt-acknowledgement.ts b/src/lib/pharmacy/duplicate-salt-acknowledgement.ts
+index 106427e4..fb3f2c75 100644
+--- a/src/lib/pharmacy/duplicate-salt-acknowledgement.ts
++++ b/src/lib/pharmacy/duplicate-salt-acknowledgement.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+ 
+ import { duplicateSaltGroups, type DuplicateSaltGroup } from './duplicate-salt';
+@@ -37,6 +38,7 @@ export async function verifyDuplicateSaltAcknowledgement(
+     select: {
+       id: true,
+       lines: {
++        where: ACTIVE_SALE_LINE,
+         orderBy: { createdAt: 'asc' },
+         select: {
+           id: true,
+diff --git a/src/lib/pharmacy/expiry-advisor-operations.ts b/src/lib/pharmacy/expiry-advisor-operations.ts
+index edb7651f..21b55d7d 100644
+--- a/src/lib/pharmacy/expiry-advisor-operations.ts
++++ b/src/lib/pharmacy/expiry-advisor-operations.ts
+@@ -40,7 +40,7 @@ export async function readExpiryAdvice(db: ScopedDb, scope: ExpiryAdvisorScope,
+     ), sold AS (
+       SELECT a."inventoryLotId", COALESCE(sum(a."canonicalUnits"),0)::int AS "soldUnits"
+       FROM "pharmacy_sale_line_allocations" a
+-      JOIN "pharmacy_sale_lines" line ON line."organizationId"=a."organizationId" AND line."branchId"=a."branchId" AND line."id"=a."saleLineId"
++      JOIN "pharmacy_sale_lines" line ON line."removedAt" IS NULL AND line."organizationId"=a."organizationId" AND line."branchId"=a."branchId" AND line."id"=a."saleLineId"
+       JOIN "pharmacy_sales" s ON s."organizationId"=line."organizationId" AND s."branchId"=line."branchId" AND s."id"=line."saleId"
+       WHERE a."organizationId"=${organizationId} AND a."branchId" IN (${branches})
+         AND s."status"='COMPLETED' AND s."businessDate">=${historyFrom} AND s."businessDate"<${at}
+diff --git a/src/lib/pharmacy/finance-postings.ts b/src/lib/pharmacy/finance-postings.ts
+index f676edb6..f0dc8f2a 100644
+--- a/src/lib/pharmacy/finance-postings.ts
++++ b/src/lib/pharmacy/finance-postings.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ /**
+  * PH-FIN / PRD §6.8 FIN-01 — the pharmacy posting adapters.
+  *
+@@ -169,7 +170,7 @@ export async function postSaleLineEntry(
+   input: { saleLineId: string; at: Date }
+ ) {
+   const line = await db.pharmacySaleLine.findFirst({
+-    where: { id: input.saleLineId, organizationId: scope.organizationId },
++    where: { ...ACTIVE_SALE_LINE, id: input.saleLineId, organizationId: scope.organizationId },
+     include: { allocations: { orderBy: { id: 'asc' } } },
+   });
+   if (!line) throw new PharmacyFinanceError('NOT_FOUND');
+diff --git a/src/lib/pharmacy/growth-evidence.ts b/src/lib/pharmacy/growth-evidence.ts
+index 0a8f210b..efc4f21e 100644
+--- a/src/lib/pharmacy/growth-evidence.ts
++++ b/src/lib/pharmacy/growth-evidence.ts
+@@ -49,7 +49,7 @@ export function growthReceiptMoney(cutoff: Date) {
+           OR e."sourceKind"='PHARMACY_UNIDENTIFIED_RETURN_HOLD' AND EXISTS (
+           SELECT 1 FROM pharmacy_unidentified_return_holds h WHERE h."organizationId"=l."organizationId" AND h."branchId"=l."branchId" AND h."saleLineId"=l.id AND h.id=e."sourceId" AND h."createdAt" < ${cutoff}))
+     ) posted ON true
+-    WHERE l."organizationId"=s."organizationId" AND l."branchId"=s."branchId" AND l."saleId"=s.id
++    WHERE l."removedAt" IS NULL AND l."organizationId"=s."organizationId" AND l."branchId"=s."branchId" AND l."saleId"=s.id
+   `;
+ }
+ 
+diff --git a/src/lib/pharmacy/marketing-attribution.ts b/src/lib/pharmacy/marketing-attribution.ts
+index e308cf21..07f1ae4b 100644
+--- a/src/lib/pharmacy/marketing-attribution.ts
++++ b/src/lib/pharmacy/marketing-attribution.ts
+@@ -50,7 +50,7 @@ export async function eligibleMarketingReceipts(
+       JOIN finance_journal_lines j ON j."organizationId" = l."organizationId"
+         AND j."branchId" = l."branchId" AND j."sourceLineId" = l.id
+       JOIN finance_journal_entries entry ON entry."organizationId" = j."organizationId" AND entry.id = j."entryId"
+-      WHERE l."organizationId" = s."organizationId" AND l."branchId" = s."branchId" AND l."saleId" = s.id
++      WHERE l."removedAt" IS NULL AND l."organizationId" = s."organizationId" AND l."branchId" = s."branchId" AND l."saleId" = s.id
+         AND j."accountCode" IN ('SALES_REVENUE','SALES_DISCOUNT','COST_OF_GOODS_SOLD')
+         AND entry."occurredAt" < ${cutoff}
+         AND (entry."sourceKind" = 'PHARMACY_SALE_LINE' AND entry."sourceId" = l.id
+diff --git a/src/lib/pharmacy/migration/parallel-run.ts b/src/lib/pharmacy/migration/parallel-run.ts
+index 077be944..dfd9bb8f 100644
+--- a/src/lib/pharmacy/migration/parallel-run.ts
++++ b/src/lib/pharmacy/migration/parallel-run.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from '../active-sale-line';
+ import 'server-only';
+ 
+ /**
+@@ -152,7 +153,7 @@ export async function devfathomDayTotals(
+         businessDate,
+         status: 'COMPLETED',
+       },
+-      include: { lines: true },
++      include: { lines: { where: ACTIVE_SALE_LINE } },
+     }),
+     db.pharmacyRefund.findMany({
+       where: {
+diff --git a/src/lib/pharmacy/payment-attempt-operations.ts b/src/lib/pharmacy/payment-attempt-operations.ts
+index f022088c..793d62f8 100644
+--- a/src/lib/pharmacy/payment-attempt-operations.ts
++++ b/src/lib/pharmacy/payment-attempt-operations.ts
+@@ -1,3 +1,5 @@
++import { assertVerifiedPrescriptionRelease } from './rx-prescription-reference';
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import 'server-only';
+ 
+ import { createHash, randomBytes } from 'node:crypto';
+@@ -232,7 +234,7 @@ async function beginCollection(
+         branchId: scope.branchId,
+         status: 'OPEN',
+       },
+-      include: { lines: { include: { medicine: true } } },
++      include: { lines: { where: ACTIVE_SALE_LINE, include: { medicine: true } } },
+     });
+     if (!sale) throw new PaymentCollectionError('NOT_FOUND');
+     await assertRxSaleAllowed(
+@@ -240,6 +242,7 @@ async function beginCollection(
+       scope,
+       sale.lines.map((line) => line.medicine)
+     );
++    await assertVerifiedPrescriptionRelease(db, sale.lines);
+     await assertSaleBatchesSellable(db, scope, sale.id);
+     if (!['BANK_TRANSFER', 'CARD', 'WALLET'].includes(input.method)) {
+       const { settings } = await readManualPaymentSettings(db, scope);
+@@ -613,13 +616,14 @@ export async function collectProviderPayment(
+           organizationId: scope.organizationId,
+           branchId: scope.branchId,
+         },
+-        include: { lines: { include: { medicine: true } } },
++        include: { lines: { where: ACTIVE_SALE_LINE, include: { medicine: true } } },
+       });
+       await assertRxSaleAllowed(
+         db,
+         scope,
+         sale.lines.map((line) => line.medicine)
+       );
++      await assertVerifiedPrescriptionRelease(db, sale.lines);
+       await assertSaleBatchesSellable(db, scope, sale.id);
+       const approval = await adapter.execute({
+         capability: 'SALE',
+diff --git a/src/lib/pharmacy/refill-support.ts b/src/lib/pharmacy/refill-support.ts
+index bc9ddc6c..1b2d1a74 100644
+--- a/src/lib/pharmacy/refill-support.ts
++++ b/src/lib/pharmacy/refill-support.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import 'server-only';
+ 
+ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+@@ -173,6 +174,7 @@ export async function captureRefillReminder(
+   const reviewedSaleLine = pharmacistDecision
+     ? await db.pharmacySaleLine.findFirst({
+         where: {
++          ...ACTIVE_SALE_LINE,
+           id: pharmacistDecision.reviewItem.saleLineId,
+           organizationId: scope.organizationId,
+           branchId: scope.branchId,
+diff --git a/src/lib/pharmacy/remove-sale-line.db.test.ts b/src/lib/pharmacy/remove-sale-line.db.test.ts
+new file mode 100644
+index 00000000..c4aa31a9
+--- /dev/null
++++ b/src/lib/pharmacy/remove-sale-line.db.test.ts
+@@ -0,0 +1,827 @@
++import { removeSaleLine } from './remove-sale-line';
++import { readCounterCart, readCounterReceipt } from './counter';
++/** Run only against a NEW disposable wha1364_* database, never an existing tenant. */
++import { randomUUID } from 'node:crypto';
++import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
++import { db } from '@/lib/db';
++import type { ScopedDb } from '@/lib/tenancy/scoped-db';
++import { addSaleLine, createSale, changeSaleStatus } from './sales';
++import { receiveLot } from './stock-ledger';
++import { applyPharmacyTender } from './settlement';
++import { prepareExternalPaymentAttempt } from './payment-attempts';
++import { resolveManualCollection } from './payment-attempt-operations';
++
++vi.mock('@/server/audit', async () => {
++  const actual = await vi.importActual<typeof import('@/server/audit')>('@/server/audit');
++  return { ...actual, recordTrpcAudit: vi.fn() };
++});
++const url = process.env.WHA1364_RECEIPT_TEST_DATABASE_URL;
++if (url && !new URL(url).pathname.startsWith('/wha1364_')) {
++  throw new Error(
++    'New isolated WHA1364_RECEIPT_TEST_DATABASE_URL required; no skipped DB acceptance'
++  );
++}
++// The app client, not a bare PrismaPg one: only it decodes the void result of the services'
++// `SELECT pg_advisory_xact_lock(...)`. It reads DATABASE_URL lazily, on first use.
++if (url) process.env.DATABASE_URL = url;
++const client = url ? db : null;
++const describeDatabase = url ? describe : describe.skip;
++const org = `org_${randomUUID()}`;
++const branch = `branch_${randomUUID()}`;
++const scope = { organizationId: org, branchId: branch, actorId: `actor_${randomUUID()}` };
++let owner: typeof scope;
++let unassignedManager: typeof scope;
++const businessDate = new Date('2026-09-05T13:14:00.000Z');
++function transaction<T>(work: (db: ScopedDb) => Promise<T>, organizationId = org) {
++  if (!client) throw new Error('Isolated receipt database required');
++  return client.$transaction(
++    async (tx) => {
++      await tx.$queryRawUnsafe(
++        "SELECT set_config('app.current_organization_id', $1, true), set_config('app.is_platform_admin', 'false', true)",
++        organizationId
++      );
++      return work(tx as ScopedDb);
++    },
++    { timeout: 30000 }
++  );
++}
++beforeAll(async () => {
++  if (!client) return;
++  const [role] = await client.$queryRawUnsafe<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>(
++    'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
++  );
++  expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
++  // Integrated tip (20261012120000_visibility_context_anchors): tenant rows must reference an
++  // existing organization, so anchor this suite's synthetic tenant first.
++  await client.$transaction(async (tx) => {
++    await tx.$queryRawUnsafe("SELECT set_config('app.is_platform_admin', 'true', true)");
++    await tx.$executeRawUnsafe(
++      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
++       VALUES ($1, $1, $1, $1, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
++      org
++    );
++  });
++  await transaction((db) =>
++    db.pharmacyBranch.create({
++      data: {
++        id: branch,
++        organizationId: org,
++        code: branch,
++        name: 'Receipt test',
++        addressLine: 'Test',
++        city: 'Test',
++        provinceCode: 'PB',
++        manualPaymentSettings: {
++          JAZZCASH: { destination: 'Test till', allowReferenceSkip: false },
++          RAAST: { destination: 'Test IBAN', allowReferenceSkip: true },
++          EASYPAISA: { destination: 'Test till', allowReferenceSkip: false },
++        },
++      },
++    })
++  );
++  await transaction(async (db) => {
++    await db.organizationDepartment.create({
++      data: { organizationId: org, key: 'payment-test', name: 'Payment test' },
++    });
++  });
++  const member = async (actorId: string, key: string | null, isSystem = true, assigned = true) =>
++    transaction(async (db) => {
++      const role = key
++        ? await db.organizationRole.create({
++            data: {
++              organizationId: org,
++              key: `${key}-${actorId}`,
++              name: key,
++              isSystem,
++              permissions: {
++                create: [
++                  { organizationId: org, capability: 'pharmacy:counter', effect: 'ALLOW' },
++                  { organizationId: org, capability: 'pharmacy:close', effect: 'ALLOW' },
++                ],
++              },
++            },
++          })
++        : null;
++      // Approved system keys are exact; keep them unique per tenant, with only
++      // the second manager sharing the same stored assigned role below.
++      if (role && ['manager', 'cashier'].includes(key!))
++        await db.organizationRole.update({ where: { id: role.id }, data: { key: key! } });
++      await db.user.create({
++        data: {
++          id: actorId,
++          organizationId: org,
++          name: actorId,
++          email: `${actorId}@example.invalid`,
++          department: 'payment-test',
++          title: 'Test',
++          role: key ? 'EMPLOYEE' : 'ADMIN',
++          organizationRoleId: role?.id,
++        },
++      });
++      if (assigned)
++        await db.pharmacyBranchAssignment.create({
++          data: { organizationId: org, branchId: branch, userId: actorId },
++        });
++      return { ...scope, actorId };
++    });
++  await member(scope.actorId, 'cashier');
++  await member(`manager_${randomUUID()}`, 'manager');
++  owner = await member(`owner_${randomUUID()}`, null, true, false);
++  unassignedManager = { ...scope, actorId: `unassigned_${randomUUID()}` };
++  await transaction(async (db) => {
++    const role = await db.organizationRole.findUniqueOrThrow({
++      where: { organizationId_key: { organizationId: org, key: 'manager' } },
++    });
++    await db.user.create({
++      data: {
++        id: unassignedManager.actorId,
++        organizationId: org,
++        name: 'Unassigned',
++        email: `${unassignedManager.actorId}@example.invalid`,
++        department: 'payment-test',
++        title: 'Test',
++        role: 'EMPLOYEE',
++        organizationRoleId: role.id,
++      },
++    });
++  });
++});
++afterAll(() => client?.$disconnect());
++
++async function fixture() {
++  return transaction(async (db) => {
++    const medicine = await db.medicine.create({
++      data: {
++        organizationId: org,
++        productName: 'Issued medicine',
++        productFamily: 'PHARMACEUTICAL',
++        saleable: true,
++        presentations: { create: { organizationId: org, presentation: 'Issued tablet' } },
++      },
++      include: { presentations: true },
++    });
++    const presentation = medicine.presentations[0]!;
++    const ingredient = await db.ingredient.create({
++      data: { organizationId: org, name: `Ingredient ${randomUUID()}` },
++    });
++    await db.medicineStrengthComponent.create({
++      data: {
++        organizationId: org,
++        medicineId: medicine.id,
++        ingredientId: ingredient.id,
++        value: 500,
++        unit: 'mg',
++      },
++    });
++    const pack = await db.packLevel.create({
++      data: {
++        organizationId: org,
++        presentationId: presentation.id,
++        versionGroupId: randomUUID(),
++        version: 1,
++        level: 'STRIP',
++        unitsPerParent: 10,
++        effectiveFrom: new Date('2026-01-01'),
++      },
++    });
++    const location = await db.pharmacyStockLocation.create({
++      data: {
++        organizationId: org,
++        branchId: branch,
++        code: randomUUID(),
++        name: 'Test stock',
++        kind: 'STORE',
++      },
++    });
++    const batches = [];
++    for (const [index, quantity] of [3, 7].entries()) {
++      const expiresAt = new Date(`203${index + 1}-01-01T00:00:00.000Z`);
++      const batch = await db.pharmacyManufacturingBatch.create({
++        data: {
++          organizationId: org,
++          medicineId: medicine.id,
++          batchNumber: `ISSUED-${index}`,
++          expiresAt,
++          expiryPrecision: 'DAY',
++        },
++      });
++      await receiveLot(db, scope, {
++        manufacturingBatchId: batch.id,
++        packLevelId: pack.id,
++        stockLocationId: location.id,
++        unitsPerPack: 10,
++        supplierName: 'Test',
++        supplierInvoiceRef: randomUUID(),
++        unitCostMinor: 1,
++        printedMrpMinor: 1000,
++        receivedExpiresAt: expiresAt,
++        receivedExpiryPrecision: 'DAY',
++        quantityUnits: quantity,
++        idempotencyKey: randomUUID(),
++        receivedAt: new Date('2026-01-01'),
++      });
++      batches.push(batch);
++    }
++    const sale = await createSale(db, scope);
++    await addSaleLine(db, scope, {
++      saleId: sale.id,
++      medicineId: medicine.id,
++      presentationId: presentation.id,
++      packLevelId: pack.id,
++      saleUnit: 'UNIT',
++      quantity: 10,
++      canonicalUnitsPerSaleUnit: 1,
++      discountMinor: 50,
++      discountKind: 'DISCOUNT',
++      approvedByUserId: scope.actorId,
++      approvalPolicy: 'test',
++      idempotencyKey: randomUUID(),
++    });
++    return {
++      sale,
++      medicine,
++      presentation,
++      batches,
++      input: {
++        saleId: sale.id,
++        deviceId: randomUUID(),
++        businessDate,
++        type: 'BANK_TRANSFER' as const,
++        amountMinor: 950,
++        idempotencyKey: randomUUID(),
++      },
++    };
++  });
++}
++async function reservation(
++  f: Awaited<ReturnType<typeof fixture>>,
++  requestKey = randomUUID(),
++  amountMinor = 950
++) {
++  const revision = await transaction(
++    async (db) =>
++      (await db.pharmacySale.findFirstOrThrow({ where: { id: f.sale.id } })).paymentRevision
++  );
++  return {
++    saleId: f.sale.id,
++    deviceId: f.input.deviceId,
++    requestKey,
++    method: 'JAZZCASH' as const,
++    amountMinor,
++    expectedRevision: revision,
++  };
++}
++
++async function removal(f: Awaited<ReturnType<typeof fixture>>) {
++  const line = await transaction((db) =>
++    db.pharmacySaleLine.findFirstOrThrow({ where: { saleId: f.sale.id } })
++  );
++  return { saleId: f.sale.id, saleLineId: line.id, reason: 'Pack set aside after checking' };
++}
++async function evidence(saleId: string) {
++  return transaction(async (db) => ({
++    lines: await db.pharmacySaleLine.findMany({
++      where: { saleId },
++      include: { allocations: true },
++    }),
++    events: await db.pharmacySaleEvent.findMany({ where: { saleId, kind: 'LINE_REMOVED' } }),
++    cart: await readCounterCart(db, scope, saleId),
++  }));
++}
++const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
++describeDatabase('atomic active-line removal under payment lock', () => {
++  it('preserves mixed-lot money/allocation evidence, reverses once and excludes removed lines from totals', async () => {
++    const f = await fixture(),
++      input = await removal(f);
++    const before = await evidence(f.sale.id);
++    const results = await Promise.all([
++      transaction((db) => removeSaleLine(db, scope, input)),
++      transaction((db) => removeSaleLine(db, scope, input)),
++    ]);
++    expect(results.map((r) => r.replayed).sort()).toEqual([false, true]);
++    const after = await evidence(f.sale.id);
++    expect(after.cart.lines).toHaveLength(0);
++    expect(after.cart.totals.netMinor).toBe(0);
++    expect(after.lines[0]).toMatchObject({
++      grossMinor: before.lines[0]!.grossMinor,
++      discountMinor: before.lines[0]!.discountMinor,
++      removalReason: input.reason,
++      removedByUserId: scope.actorId,
++    });
++    expect(after.lines[0]!.allocations).toEqual(before.lines[0]!.allocations);
++    expect(after.events).toHaveLength(1);
++    const ids = after.lines[0]!.allocations.map((a) => a.stockMovementId);
++    const reversals = await transaction((db) =>
++      db.pharmacyStockMovement.findMany({ where: { reversesMovementId: { in: ids } } })
++    );
++    expect(reversals).toHaveLength(ids.length);
++    expect(reversals.reduce((n, r) => n + r.quantityUnits, 0)).toBe(10);
++    await expect(
++      transaction((db) =>
++        db.pharmacySaleLine.update({
++          where: { id: input.saleLineId },
++          data: { removedAt: null, removedByUserId: null, removalReason: null },
++        })
++      )
++    ).rejects.toThrow(/REMOVED_LINE_IMMUTABLE/);
++    await expect(
++      transaction((db) => changeSaleStatus(db, scope, f.sale.id, 'void'))
++    ).resolves.toBeTruthy();
++  });
++  it('rejects a direct tombstone without linked stock reversals', async () => {
++    const f = await fixture(),
++      input = await removal(f);
++    await expect(
++      transaction(async (db) => {
++        await db.$queryRawUnsafe("SELECT set_config('app.current_user_id',$1,true)", scope.actorId);
++        return db.pharmacySaleLine.update({
++          where: { id: input.saleLineId },
++          data: { removedAt: new Date(), removedByUserId: scope.actorId, removalReason: 'Direct' },
++        });
++      })
++    ).rejects.toThrow(/REMOVAL_REVERSAL_REQUIRED/);
++    expect((await evidence(f.sale.id)).cart.lines).toHaveLength(1);
++  });
++  it('rejects partial payment even with no unresolved attempt', async () => {
++    const f = await fixture(),
++      input = await removal(f);
++    await transaction((db) => applyPharmacyTender(db, scope, { ...f.input, amountMinor: 100 }));
++    await expect(transaction((db) => removeSaleLine(db, scope, input))).rejects.toThrow(
++      /unpaid open/
++    );
++    expect((await evidence(f.sale.id)).cart.totals.tenderedMinor).toBe(100);
++  });
++  it('rejects held and completed bills', async () => {
++    const f = await fixture(),
++      input = await removal(f);
++    await transaction((db) => changeSaleStatus(db, scope, f.sale.id, 'hold'));
++    await expect(transaction((db) => removeSaleLine(db, scope, input))).rejects.toThrow(
++      /unpaid open/
++    );
++    const paid = await fixture();
++    await transaction((db) => applyPharmacyTender(db, scope, paid.input));
++    const paidInput = await removal(paid);
++    await expect(transaction((db) => removeSaleLine(db, scope, paidInput))).rejects.toThrow();
++  });
++  it('blocks removal when preparation wins the lock', async () => {
++    const f = await fixture(),
++      input = await removal(f),
++      request = await reservation(f);
++    let unlock!: () => void, ready!: () => void;
++    const held = new Promise<void>((r) => (unlock = r)),
++      locked = new Promise<void>((r) => (ready = r));
++    const holder = transaction(async (db) => {
++      await db.$queryRawUnsafe('SELECT id FROM pharmacy_sales WHERE id=$1 FOR UPDATE', f.sale.id);
++      ready();
++      await held;
++    });
++    await locked;
++    const prepare = prepareExternalPaymentAttempt(scope, request);
++    await delay(50);
++    const remove = transaction((db) => removeSaleLine(db, scope, input));
++    unlock();
++    await holder;
++    await prepare;
++    await expect(remove).rejects.toThrow(/PAYMENT_ATTEMPT_UNRESOLVED/);
++    expect((await evidence(f.sale.id)).cart.lines).toHaveLength(1);
++  });
++  it('bumps revision and rejects stale preparation when removal wins the lock', async () => {
++    const f = await fixture(),
++      input = await removal(f),
++      request = await reservation(f);
++    let unlock!: () => void, ready!: () => void;
++    const held = new Promise<void>((r) => (unlock = r)),
++      locked = new Promise<void>((r) => (ready = r));
++    const remove = transaction(async (db) => {
++      await removeSaleLine(db, scope, input);
++      ready();
++      await held;
++    });
++    await locked;
++    const prepare = prepareExternalPaymentAttempt(scope, request);
++    expect(
++      await Promise.race([
++        prepare.then(
++          () => 'finished',
++          () => 'finished'
++        ),
++        delay(50).then(() => 'blocked'),
++      ])
++    ).toBe('blocked');
++    unlock();
++    await remove;
++    await expect(prepare).rejects.toThrow(/PAYMENT_BILL_CHANGED/);
++    const revision = await transaction(
++      async (db) =>
++        (await db.pharmacySale.findFirstOrThrow({ where: { id: f.sale.id } })).paymentRevision
++    );
++    await expect(
++      prepareExternalPaymentAttempt(scope, {
++        ...request,
++        requestKey: randomUUID(),
++        expectedRevision: revision,
++      })
++    ).rejects.toThrow(/PAYMENT_AMOUNT_EXCEEDS_BALANCE/);
++  });
++  it('does not accept another branch or invisible tenant line', async () => {
++    const f = await fixture(),
++      input = await removal(f);
++    await expect(
++      transaction((db) => removeSaleLine(db, { ...scope, branchId: 'other' }, input))
++    ).rejects.toThrow(/PAYMENT_SALE_NOT_FOUND/);
++    await expect(
++      transaction((db) => removeSaleLine(db, { ...scope, organizationId: 'other' }, input), 'other')
++    ).rejects.toThrow(/PAYMENT_SALE_NOT_FOUND/);
++    expect((await evidence(f.sale.id)).cart.lines).toHaveLength(1);
++  });
++  it('requires current counter authorization and branch assignment at the real router', async () => {
++    const { pharmacySalesRouter } = await import('@/server/routers/pharmacy-sales');
++    const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
++    const f = await fixture(),
++      input = await removal(f);
++    const call = (userId: string, branchId = branch) =>
++      withTenantDb(
++        org,
++        (db) =>
++          pharmacySalesRouter
++            .createCaller({
++              db,
++              entitlements: {
++                organizationId: org,
++                enabledModules: ['pharmacy-counter'],
++                modules: [],
++                limits: {},
++              },
++              session: {
++                expires: 'later',
++                user: {
++                  id: userId,
++                  organizationId: org,
++                  role: 'EMPLOYEE',
++                  department: 'LEADERSHIP',
++                  status: 'ACTIVE',
++                },
++              },
++              organization: { id: org, vertical: 'PHARMACY' },
++              support: null,
++              requestMeta: { ip: null, userAgent: null },
++              audit: { detail: {} },
++            } as never)
++            .removeLine({ ...input, branchId }),
++        { userId, timeout: 30000 }
++      );
++    await expect(call(unassignedManager.actorId)).rejects.toMatchObject({ code: 'FORBIDDEN' });
++    await expect(call('missing')).rejects.toMatchObject({ code: 'FORBIDDEN' });
++    const prepared = await prepareExternalPaymentAttempt(scope, await reservation(f));
++    await expect(call(scope.actorId)).rejects.toMatchObject({
++      code: 'CONFLICT',
++      message: 'Review the payment outcome before changing this bill.',
++    });
++    await resolveManualCollection(owner, {
++      attemptId: prepared.attempt.id,
++      decision: 'RELEASE',
++      reason: 'Synthetic uncollected payment',
++    });
++    await expect(call(scope.actorId)).resolves.toMatchObject({ removed: true });
++  });
++  it('rejects controlled restoration by a cashier without touching stock', async () => {
++    const f = await fixture(),
++      input = await removal(f);
++    await transaction((db) =>
++      db.medicine.update({ where: { id: f.medicine.id }, data: { controlled: true } })
++    );
++    await expect(transaction((db) => removeSaleLine(db, scope, input))).rejects.toMatchObject({
++      forbidden: true,
++    });
++    expect((await evidence(f.sale.id)).cart.lines).toHaveLength(1);
++  });
++});
++
++describeDatabase('controlled removal retains independent PIN and register evidence', () => {
++  it('refuses missing or invalid witness and appends exact witnessed restorations on success', async () => {
++    const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
++    const { appendControlledSaleEntries } = await import('./controlled-register');
++    const f = await fixture(),
++      input = await removal(f);
++    const pin = '4826';
++    const hash = await hashOperatorCredential('PIN', pin);
++    const actors = await transaction(async (db) => {
++      const role = await db.organizationRole.create({
++        data: {
++          organizationId: org,
++          key: randomUUID(),
++          name: 'Restoration pharmacist',
++          permissions: {
++            create: [
++              { organizationId: org, capability: 'pharmacy:counter', effect: 'ALLOW' },
++              { organizationId: org, capability: 'pharmacy:dispense', effect: 'ALLOW' },
++            ],
++          },
++        },
++      });
++      const users = [];
++      for (let index = 0; index < 2; index++) {
++        const id = randomUUID();
++        await db.user.create({
++          data: {
++            id,
++            organizationId: org,
++            organizationRoleId: role.id,
++            role: 'EMPLOYEE',
++            department: 'payment-test',
++            title: 'Pharmacist',
++            name: id,
++            email: `${id}@example.invalid`,
++          },
++        });
++        await db.pharmacyBranchAssignment.create({
++          data: { organizationId: org, branchId: branch, userId: id },
++        });
++        const staff = await db.restaurantStaffProfile.create({
++          data: { organizationId: org, userId: id, displayName: id },
++        });
++        const cred = await db.restaurantOperatorCredential.create({
++          data: {
++            organizationId: org,
++            staffProfileId: staff.id,
++            type: 'PIN',
++            credentialHash: hash,
++          },
++        });
++        users.push({ id, staffId: staff.id, credId: cred.id });
++      }
++      await db.medicine.update({ where: { id: f.medicine.id }, data: { controlled: true } });
++      const patient = await db.pharmacyPatient.create({
++        data: {
++          organizationId: org,
++          displayName: 'Synthetic controlled patient',
++          cnic: 'synthetic',
++        },
++      });
++      const line = await db.pharmacySaleLine.findFirstOrThrow({
++        where: { id: input.saleLineId },
++        include: { allocations: true },
++      });
++      await appendControlledSaleEntries(db, {
++        organizationId: org,
++        branchId: branch,
++        movementIds: line.allocations.map((a) => a.stockMovementId),
++        patientId: patient.id,
++        patientAddress: 'Test address',
++        medicineId: f.medicine.id,
++        manufacturer: null,
++        prescriberId: null,
++        prescriberName: 'Synthetic prescriber',
++        prescriberRegNo: null,
++        prescriptionId: null,
++        prescriptionLineId: null,
++        emergency: true,
++        rxSerialWritten: true,
++        refEntryId: null,
++        recordedByUserId: users[0]!.id,
++        witnessedByUserId: users[1]!.id,
++        signatureRef: 'synthetic-source',
++      });
++      return users;
++    });
++    const actor = { ...scope, actorId: actors[0]!.id };
++    await expect(transaction((db) => removeSaleLine(db, actor, input))).rejects.toThrow(
++      /fresh witness PIN/
++    );
++    await expect(
++      transaction((db) =>
++        removeSaleLine(db, actor, {
++          ...input,
++          controlledWitness: { staffProfileId: actors[0]!.staffId, pin },
++        })
++      )
++    ).rejects.toThrow(/fresh witness PIN/);
++    // Match the router: commit the credential failure record without committing a removal.
++    await transaction(async (db) => {
++      try {
++        await removeSaleLine(db, actor, {
++          ...input,
++          controlledWitness: { staffProfileId: actors[1]!.staffId, pin: '0000' },
++        });
++      } catch (error) {
++        expect(error).toMatchObject({ forbidden: false });
++      }
++    });
++    expect(
++      await transaction((db) =>
++        db.restaurantOperatorCredential.findUniqueOrThrow({ where: { id: actors[1]!.credId } })
++      )
++    ).toMatchObject({ failedAttempts: 1 });
++    expect((await evidence(f.sale.id)).cart.lines).toHaveLength(1);
++    await transaction((db) =>
++      removeSaleLine(db, actor, {
++        ...input,
++        controlledWitness: { staffProfileId: actors[1]!.staffId, pin },
++      })
++    );
++    const corrections = await transaction((db) =>
++      db.pharmacyControlledRegisterEntry.findMany({
++        where: { medicineId: f.medicine.id, entryKind: 'CORRECTION' },
++      })
++    );
++    expect(corrections).toHaveLength(2);
++    expect(corrections.reduce((n, r) => n + r.quantityCanonicalUnits, 0)).toBe(10);
++    expect(
++      corrections.every(
++        (r) =>
++          r.recordedByUserId === actor.actorId &&
++          r.witnessedByUserId === actors[1]!.id &&
++          r.restorationMovementId &&
++          r.correctsEntryId
++      )
++    ).toBe(true);
++    expect((await evidence(f.sale.id)).events).toHaveLength(1);
++  });
++});
++
++describeDatabase('one active-line rule across clinical and financial readers', () => {
++  it('keeps removed Rx/recalled evidence out of preparation, tender and issued receipt', async () => {
++    const f = await fixture(),
++      input = await removal(f);
++    const second = await fixture(),
++      secondInput = await removal(second);
++    await transaction((db) => removeSaleLine(db, scope, secondInput)); // restore another medicine's shelf stock
++    const added = await transaction(async (db) => {
++      const pack = await db.packLevel.findFirstOrThrow({
++        where: { presentationId: second.presentation.id },
++      });
++      const result = await addSaleLine(db, scope, {
++        saleId: f.sale.id,
++        medicineId: second.medicine.id,
++        presentationId: second.presentation.id,
++        packLevelId: pack.id,
++        saleUnit: 'UNIT',
++        quantity: 1,
++        canonicalUnitsPerSaleUnit: 1,
++        idempotencyKey: randomUUID(),
++      });
++      await db.medicine.update({ where: { id: f.medicine.id }, data: { rx: true } });
++      return result.line;
++    });
++    await transaction((db) => removeSaleLine(db, scope, input));
++    await transaction((db) =>
++      db.pharmacyManufacturingBatch.updateMany({
++        where: { medicineId: f.medicine.id },
++        data: { state: 'RECALLED', stateReason: 'Synthetic recall', stateChangedAt: new Date() },
++      })
++    );
++    const current = await evidence(f.sale.id);
++    expect(current.cart.lines.map((l) => l.saleLineId)).toEqual([added.id]);
++    const request = await reservation(f, randomUUID(), 100);
++    const prepared = await prepareExternalPaymentAttempt(scope, request);
++    expect(prepared.attempt.state).toBe('PREPARED');
++    // Release using the established Owner path, then ordinary amount-only bank transfer.
++    await resolveManualCollection(owner, {
++      attemptId: prepared.attempt.id,
++      decision: 'RELEASE',
++      reason: 'Synthetic no collection',
++    });
++    await transaction((db) => applyPharmacyTender(db, scope, { ...f.input, amountMinor: 100 }));
++    const receipt = await transaction((db) =>
++      readCounterReceipt(db, scope, f.sale.id, { name: 'Test', currency: 'PKR' })
++    );
++    expect(receipt.lines.map((l) => l.saleLineId)).toEqual([added.id]);
++    expect((await evidence(f.sale.id)).lines).toHaveLength(2);
++  });
++  it('retains old review evidence but rejects a new review/signature or prescription attachment after removal', async () => {
++    const f = await fixture(),
++      input = await removal(f);
++    const reference = await transaction(async (db) => {
++      const patient = await db.pharmacyPatient.create({
++        data: { organizationId: org, displayName: 'Synthetic review patient' },
++      });
++      const prescriber = await db.pharmacyPrescriber.create({
++        data: {
++          organizationId: org,
++          name: 'Synthetic prescriber',
++          registrationNumber: randomUUID(),
++        },
++      });
++      const rx = await db.prescription.create({
++        data: {
++          organizationId: org,
++          patientId: patient.id,
++          prescriberId: prescriber.id,
++          sourceKind: 'PAPER_IMAGE',
++          sourceFileRef: 'synthetic',
++          validFrom: new Date('2026-01-01'),
++          validUntil: new Date('2030-01-01'),
++          capturedByUserId: scope.actorId,
++        },
++      });
++      const line = await db.prescriptionLine.create({
++        data: {
++          organizationId: org,
++          prescriptionId: rx.id,
++          lineNumber: 1,
++          medicineId: f.medicine.id,
++          presentationId: f.presentation.id,
++          authorizedCanonicalUnits: 100,
++          directions: 'Synthetic',
++        },
++      });
++      const review = await db.pharmacyPharmacistReviewItem.create({
++        data: {
++          organizationId: org,
++          prescriptionLineId: line.id,
++          saleLineId: input.saleLineId,
++          requestedByUserId: scope.actorId,
++        },
++      });
++      return { line, review, patient };
++    });
++    await transaction((db) => removeSaleLine(db, scope, input));
++    await expect(
++      transaction((db) =>
++        db.pharmacyPharmacistReviewDecision.create({
++          data: {
++            organizationId: org,
++            reviewItemId: reference.review.id,
++            kind: 'SIGN',
++            actorUserId: scope.actorId,
++            signedAt: new Date(),
++          },
++        })
++      )
++    ).rejects.toThrow(/REVIEW_LINE_REMOVED/);
++    const { attachPrescriptionReference } = await import('./rx-prescription-reference');
++    await expect(
++      transaction((db) =>
++        attachPrescriptionReference(db, scope, {
++          saleLineId: input.saleLineId,
++          prescriptionLineId: reference.line.id,
++          patientId: reference.patient.id,
++        })
++      )
++    ).rejects.toThrow();
++    await expect(
++      transaction((db) =>
++        db.prescriptionFill.create({
++          data: {
++            organizationId: org,
++            prescriptionLineId: reference.line.id,
++            fillSequence: 1,
++            quantityCanonicalUnits: 1,
++            dispensedByUserId: scope.actorId,
++            idempotencyKey: `rx-reference:${input.saleLineId}`,
++          },
++        })
++      )
++    ).rejects.toThrow(/FILL_LINE_REMOVED/);
++    expect(
++      await transaction((db) =>
++        db.pharmacyPharmacistReviewItem.count({ where: { id: reference.review.id } })
++      )
++    ).toBe(1);
++  });
++});
++
++describeDatabase('active-line reporting reads', () => {
++  it('runs operational report SQL with the active-line predicate', async () => {
++    const { readPharmacyAnomalyFacts } = await import('./anomaly-signals-operations');
++    const { readPharmacyCategoryGrowthReport } = await import('./category-growth-report');
++    const { readExpiryAdvice } = await import('./expiry-advisor-operations');
++    const { readPharmacyOwnerCommandCentre } = await import('./reports');
++    const filters = { branchIds: [branch], from: '2026-09-01', to: '2026-10-01' };
++    await transaction(async (db) => {
++      await readPharmacyAnomalyFacts(db, filters, new Date('2026-10-01'));
++      await readPharmacyCategoryGrowthReport(db, org, { ...filters, configuration: [] });
++      await readExpiryAdvice(
++        db,
++        { organizationId: org, branchIds: [branch] },
++        new Date('2026-10-01')
++      );
++      const report = await readPharmacyOwnerCommandCentre(db, filters);
++      expect(report.metrics.safetyQueue).toBe(0);
++    });
++  });
++});
++
++describeDatabase('removal rollback', () => {
++  it('rolls back the marker, reversal and audit together after a later failure', async () => {
++    const f = await fixture(),
++      input = await removal(f);
++    const before = await evidence(f.sale.id);
++    const ids = before.lines[0]!.allocations.map((a) => a.stockMovementId);
++    await expect(
++      transaction(async (db) => {
++        await removeSaleLine(db, scope, input);
++        throw new Error('SYNTHETIC_AFTER_REMOVAL');
++      })
++    ).rejects.toThrow('SYNTHETIC_AFTER_REMOVAL');
++    const after = await evidence(f.sale.id);
++    expect(after.lines[0]!.removedAt).toBeNull();
++    expect(after.cart.totals).toEqual(before.cart.totals);
++    expect(after.events).toHaveLength(0);
++    expect(
++      await transaction((db) =>
++        db.pharmacyStockMovement.count({ where: { reversesMovementId: { in: ids } } })
++      )
++    ).toBe(0);
++  });
++});
+diff --git a/src/lib/pharmacy/remove-sale-line.ts b/src/lib/pharmacy/remove-sale-line.ts
+new file mode 100644
+index 00000000..62f435ce
+--- /dev/null
++++ b/src/lib/pharmacy/remove-sale-line.ts
+@@ -0,0 +1,129 @@
++import { Prisma } from '@/generated/prisma/client';
++import type { ScopedDb } from '@/lib/tenancy/scoped-db';
++import type { LedgerScope } from './stock-ledger';
++import { reverseMovements } from './stock-ledger';
++import {
++  authorizeControlledRestoration,
++  type ControlledRestorationPin,
++} from './controlled-restoration-authorization';
++import { appendControlledRestorations } from './controlled-register';
++
++export class SaleLineRemovalError extends Error {}
++/** Caller supplies an authorized scope and owns the transaction through COMMIT. */
++export async function removeSaleLine(
++  db: ScopedDb,
++  scope: LedgerScope,
++  input: {
++    saleId: string;
++    saleLineId: string;
++    reason: string;
++    controlledWitness?: ControlledRestorationPin;
++  }
++) {
++  const reason = input.reason.trim();
++  if (!reason || reason.length > 500) throw new SaleLineRemovalError('Enter a removal reason.');
++  await db.$executeRaw(
++    Prisma.sql`SELECT pharmacy_assert_no_payment_attempt(${scope.organizationId},${scope.branchId},${input.saleId})`
++  );
++  const sale = await db.pharmacySale.findFirst({
++    where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
++    include: { tenders: true, refunds: true, customerOrder: true },
++  });
++  if (
++    !sale ||
++    sale.status !== 'OPEN' ||
++    sale.receiptNumber !== null ||
++    sale.completedAt !== null ||
++    sale.tenders.length ||
++    sale.refunds.length ||
++    sale.customerOrder
++  )
++    throw new SaleLineRemovalError('Only an unpaid open counter bill can be changed.');
++  const line = await db.pharmacySaleLine.findFirst({
++    where: {
++      id: input.saleLineId,
++      saleId: input.saleId,
++      organizationId: scope.organizationId,
++      branchId: scope.branchId,
++    },
++    include: {
++      medicine: true,
++      allocations: true,
++      returnLines: true,
++      unidentifiedReturnHolds: true,
++    },
++  });
++  if (!line) throw new SaleLineRemovalError('That line is not on this bill.');
++  // The sale lock serializes retries. Tombstones are stable, never a second stock reversal.
++  if (line.removedAt) return { saleLineId: line.id, removed: true as const, replayed: true };
++  if (!line.allocations.length || line.returnLines.length || line.unidentifiedReturnHolds.length)
++    throw new SaleLineRemovalError('This line needs review before it can be removed.');
++  const witness = line.medicine.controlled
++    ? await authorizeControlledRestoration(db, scope, input.controlledWitness)
++    : undefined;
++  const movements = await db.pharmacyStockMovement.findMany({
++    where: {
++      organizationId: scope.organizationId,
++      branchId: scope.branchId,
++      id: { in: line.allocations.map((a) => a.stockMovementId) },
++    },
++    orderBy: [{ inventoryLotId: 'asc' }, { stockLocationId: 'asc' }, { id: 'asc' }],
++  });
++  if (
++    movements.length !== line.allocations.length ||
++    movements.some((m) => {
++      const allocation = line.allocations.find((a) => a.stockMovementId === m.id);
++      return (
++        !allocation ||
++        m.kind !== 'SALE' ||
++        m.disposition !== 'AVAILABLE' ||
++        allocation.canonicalUnits <= 0 ||
++        m.quantityUnits !== -allocation.canonicalUnits ||
++        m.inventoryLotId !== allocation.inventoryLotId ||
++        m.stockLocationId !== allocation.stockLocationId
++      );
++    }) ||
++    line.allocations.reduce((sum, a) => sum + a.canonicalUnits, 0) !== line.canonicalUnits
++  )
++    throw new SaleLineRemovalError('This line has inconsistent stock evidence.');
++  if (line.medicine.controlled) {
++    const entries = await db.pharmacyControlledRegisterEntry.findMany({
++      where: {
++        organizationId: scope.organizationId,
++        branchId: scope.branchId,
++        entryKind: 'SALE',
++        stockMovementId: { in: movements.map((m) => m.id) },
++      },
++    });
++    if (
++      movements.some(
++        (m) => !entries.some((e) => e.stockMovementId === m.id && e.medicineId === line.medicineId)
++      )
++    )
++      throw new SaleLineRemovalError('Controlled stock evidence needs pharmacist review.');
++  }
++  const reversals = await reverseMovements(db, scope, {
++    movementIds: movements.map((m) => m.id),
++    reason,
++    at: new Date(),
++  });
++  await appendControlledRestorations(db, {
++    organizationId: scope.organizationId,
++    branchId: scope.branchId,
++    recordedByUserId: scope.actorId,
++    witness,
++    reason,
++    lines: movements.map((m) => ({
++      sourceMovementId: m.id,
++      restorationMovementId: reversals.find((r) => r.reversesMovementId === m.id)!.id,
++      quantityCanonicalUnits: -m.quantityUnits,
++      restoreSellable: true,
++    })),
++  });
++  await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_user_id',${scope.actorId},true)`);
++  await db.pharmacySaleLine.update({
++    where: { organizationId_id: { organizationId: scope.organizationId, id: line.id } },
++    data: { removedAt: new Date(), removedByUserId: scope.actorId, removalReason: reason },
++  });
++  return { saleLineId: line.id, removed: true as const, replayed: false };
++}
+diff --git a/src/lib/pharmacy/repeat-purchasing.ts b/src/lib/pharmacy/repeat-purchasing.ts
+index 101d1b95..4ef5da0c 100644
+--- a/src/lib/pharmacy/repeat-purchasing.ts
++++ b/src/lib/pharmacy/repeat-purchasing.ts
+@@ -234,7 +234,7 @@ export async function readRepeatPurchasing(
+           l."grossMinor"::numeric - l."discountMinor" AS gross
+         FROM pharmacy_sale_lines l JOIN eligible_originals s
+           ON s.id = l."saleId" AND s."organizationId" = l."organizationId" AND s."branchId" = l."branchId"
+-        WHERE l."organizationId" = ${organizationId} AND l."branchId" IN (${branches}) AND l."createdAt" <= ${asOf}
++        WHERE l."removedAt" IS NULL AND l."organizationId" = ${organizationId} AND l."branchId" IN (${branches}) AND l."createdAt" <= ${asOf}
+       ), returned AS (
+         SELECT l.id, sum(r."canonicalUnits"::numeric) AS units
+         FROM lines l JOIN pharmacy_sale_return_lines r
+diff --git a/src/lib/pharmacy/reports.ts b/src/lib/pharmacy/reports.ts
+index c2286a88..51f92705 100644
+--- a/src/lib/pharmacy/reports.ts
++++ b/src/lib/pharmacy/reports.ts
+@@ -326,7 +326,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
+   const [money, stock, lostDemand, expiry, recalls, claims, receiving, coverage, safety, fiscal] =
+     await Promise.all([
+       db.$queryRaw<MoneyCounts[]>(
+-        Prisma.sql`SELECT COALESCE((SELECT SUM(l."grossMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "salesMinor", (SELECT SUM("grossMarginMinor")::int FROM (${marginQuery}) journal_margin) AS "marginMinor", COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")),0)::int AS "cashVarianceMinor"`
++        Prisma.sql`SELECT COALESCE((SELECT SUM(l."grossMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."removedAt" IS NULL AND l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "salesMinor", (SELECT SUM("grossMarginMinor")::int FROM (${marginQuery}) journal_margin) AS "marginMinor", COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")),0)::int AS "cashVarianceMinor"`
+       ),
+       db.$queryRaw<Array<{ open: number; recommended: number }>>(
+         Prisma.sql`SELECT COUNT(*)::int AS "open", COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "pharmacy_stock_signal_actions" a WHERE a."organizationId"=s."organizationId" AND a."branchId"=s."branchId" AND a."signalId"=s."id" AND a."kind"='DRAFT_REQUISITION' AND a."requisitionId" IS NOT NULL))::int AS "recommended" FROM "pharmacy_stock_signals" s WHERE s."branchId" IN (${branches}) AND s."status" IN ('OPEN','ACKNOWLEDGED','SNOOZED')`
+@@ -356,7 +356,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
+         },
+       }),
+       db.$queryRaw<Array<{ value: number }>>(
+-        Prisma.sql`SELECT (SELECT COUNT(*)::int FROM "pharmacy_pharmacist_review_items" i WHERE i."organizationId"=current_setting('app.current_organization_id',true) AND NOT EXISTS (SELECT 1 FROM "pharmacy_pharmacist_review_decisions" d WHERE d."organizationId"=i."organizationId" AND d."reviewItemId"=i."id" AND d."kind"='SIGN')) + (SELECT COUNT(*)::int FROM "pharmacy_register_incidents" r WHERE r."organizationId"=current_setting('app.current_organization_id',true) AND r."status"='OPEN') AS value`
++        Prisma.sql`SELECT (SELECT COUNT(*)::int FROM "pharmacy_pharmacist_review_items" i WHERE i."organizationId"=current_setting('app.current_organization_id',true) AND EXISTS (SELECT 1 FROM "pharmacy_sale_lines" line WHERE line."organizationId"=i."organizationId" AND line.id=i."saleLineId" AND line."removedAt" IS NULL) AND NOT EXISTS (SELECT 1 FROM "pharmacy_pharmacist_review_decisions" d WHERE d."organizationId"=i."organizationId" AND d."reviewItemId"=i."id" AND d."kind"='SIGN')) + (SELECT COUNT(*)::int FROM "pharmacy_register_incidents" r WHERE r."organizationId"=current_setting('app.current_organization_id',true) AND r."status"='OPEN') AS value`
+       ),
+       db.$queryRaw<Array<{ aging: number; rejected: number }>>(
+         Prisma.sql`SELECT COUNT(*) FILTER (WHERE "status" IN ('QUEUED','SUBMITTING') AND "createdAt"<=CURRENT_TIMESTAMP-interval '15 minutes')::int AS aging, COUNT(*) FILTER (WHERE "status" IN ('REJECTED','DEAD'))::int AS rejected FROM "pharmacy_fiscal_documents" WHERE "branchId" IN (${branches})`
+diff --git a/src/lib/pharmacy/rx-prescription-reference.ts b/src/lib/pharmacy/rx-prescription-reference.ts
+index 38444f8b..9a70e317 100644
+--- a/src/lib/pharmacy/rx-prescription-reference.ts
++++ b/src/lib/pharmacy/rx-prescription-reference.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE, isActiveSaleLine } from './active-sale-line';
+ import { Prisma } from '@/generated/prisma/client';
+ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+ 
+@@ -38,6 +39,7 @@ export class PharmacyRxReferenceError extends Error {
+ export type PrescriptionReference = { prescriptionLineId: string; patientId: string };
+ 
+ type RegulatedSaleLine = {
++  removedAt?: Date | null;
+   id: string;
+   prescriptionLineId: string | null;
+   medicine: { rx: boolean; restricted: boolean; controlled: boolean };
+@@ -52,7 +54,7 @@ export async function assertVerifiedPrescriptionRelease(
+   db: ScopedDb,
+   lines: readonly RegulatedSaleLine[]
+ ): Promise<void> {
+-  for (const line of lines) {
++  for (const line of lines.filter(isActiveSaleLine)) {
+     if (line.medicine.controlled || (!line.medicine.rx && !line.medicine.restricted)) continue;
+     if (!line.prescriptionLineId) throw new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED');
+     const signed = await db.pharmacyPharmacistReviewDecision.findFirst({
+@@ -150,6 +152,7 @@ export async function attachPrescriptionReference(
+       organizationId: scope.organizationId,
+       branchId: scope.branchId,
+       id: input.saleLineId,
++      ...ACTIVE_SALE_LINE,
+     },
+     data: {
+       prescriptionLineId: input.prescriptionLineId,
+diff --git a/src/lib/pharmacy/sale-batch-safety.ts b/src/lib/pharmacy/sale-batch-safety.ts
+index 677c1e59..00e0fa32 100644
+--- a/src/lib/pharmacy/sale-batch-safety.ts
++++ b/src/lib/pharmacy/sale-batch-safety.ts
+@@ -85,7 +85,7 @@ export async function assertSaleBatchesSellable(
+     FROM pharmacy_sale_line_allocations allocation
+     JOIN pharmacy_sale_lines line
+       ON line.id = allocation."saleLineId" AND line."organizationId" = allocation."organizationId"
+-    WHERE line."saleId" = ${saleId}
++    WHERE line."removedAt" IS NULL AND line."saleId" = ${saleId}
+       AND line."organizationId" = ${scope.organizationId}
+       AND line."branchId" = ${scope.branchId}
+     ORDER BY allocation."saleLineId", allocation.id`);
+diff --git a/src/lib/pharmacy/sale-completion.ts b/src/lib/pharmacy/sale-completion.ts
+index 83b189b5..c4b0a0f3 100644
+--- a/src/lib/pharmacy/sale-completion.ts
++++ b/src/lib/pharmacy/sale-completion.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import 'server-only';
+ import { randomUUID } from 'node:crypto';
+ import { Prisma } from '@/generated/prisma/client';
+@@ -14,6 +15,7 @@ import {
+ 
+ export const completionSaleInclude = {
+   lines: {
++    where: ACTIVE_SALE_LINE,
+     include: {
+       medicine: { include: { strengths: { orderBy: { id: 'asc' } } } },
+       presentation: true,
+diff --git a/src/lib/pharmacy/sales.ts b/src/lib/pharmacy/sales.ts
+index 996e69bf..351bfa14 100644
+--- a/src/lib/pharmacy/sales.ts
++++ b/src/lib/pharmacy/sales.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import { createHmac, timingSafeEqual } from 'node:crypto';
+ import { Prisma } from '@/generated/prisma/client';
+ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+@@ -201,7 +202,7 @@ export function priceMixedLotAllocation(
+ async function saleInScope(db: ScopedDb, scope: LedgerScope, saleId: string) {
+   const sale = await db.pharmacySale.findFirst({
+     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+-    include: { lines: { include: { medicine: true } } },
++    include: { lines: { where: ACTIVE_SALE_LINE, include: { medicine: true } } },
+   });
+   if (!sale) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+   return sale;
+@@ -439,7 +440,7 @@ export async function changeSaleStatus(
+       where: {
+         organizationId: scope.organizationId,
+         branchId: scope.branchId,
+-        saleLine: { saleId },
++        saleLine: { saleId, ...ACTIVE_SALE_LINE },
+       },
+       orderBy: { createdAt: 'asc' },
+       select: { stockMovementId: true },
+@@ -514,6 +515,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
+     },
+     include: {
+       lines: {
++        where: ACTIVE_SALE_LINE,
+         include: {
+           medicine: { select: { productName: true, controlled: true } },
+           returnLines: true,
+@@ -649,7 +651,12 @@ export async function returnSaleLine(
+   await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sale_lines WHERE id=${input.saleLineId}
+     AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
+   const line = await db.pharmacySaleLine.findFirst({
+-    where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
++    where: {
++      ...ACTIVE_SALE_LINE,
++      id: input.saleLineId,
++      organizationId: scope.organizationId,
++      branchId: scope.branchId,
++    },
+     include: {
+       sale: true,
+       medicine: true,
+@@ -988,7 +995,12 @@ export async function recoverDemandWithAlternate(
+     },
+   });
+   const line = await db.pharmacySaleLine.findFirst({
+-    where: { id: saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
++    where: {
++      ...ACTIVE_SALE_LINE,
++      id: saleLineId,
++      organizationId: scope.organizationId,
++      branchId: scope.branchId,
++    },
+   });
+   if (!demand || !line || !demand.saleId || demand.saleId !== line.saleId)
+     throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+@@ -1215,7 +1227,12 @@ export async function recoverRestockInterest(
+   });
+   if (interest?.orderLineId) throw new PharmacySaleError('INVALID_STATE');
+   const line = await db.pharmacySaleLine.findFirst({
+-    where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
++    where: {
++      ...ACTIVE_SALE_LINE,
++      id: input.saleLineId,
++      organizationId: scope.organizationId,
++      branchId: scope.branchId,
++    },
+     include: { sale: true },
+   });
+   if (
+diff --git a/src/lib/pharmacy/settlement.ts b/src/lib/pharmacy/settlement.ts
+index f85a0599..88507c57 100644
+--- a/src/lib/pharmacy/settlement.ts
++++ b/src/lib/pharmacy/settlement.ts
+@@ -1,3 +1,4 @@
++import { ACTIVE_SALE_LINE, isActiveSaleLine } from './active-sale-line';
+ import { requestCounterEvidence } from './counter-evidence';
+ import 'server-only';
+ 
+@@ -87,13 +88,16 @@ export function saleTotalMinor(
+     unitPriceMinor: number;
+     grossMinor?: number;
+     discountMinor: number;
++    removedAt?: Date | null;
+   }[]
+ ) {
+-  return lines.reduce(
+-    (total, line) =>
+-      total + (line.grossMinor ?? line.quantity * line.unitPriceMinor) - line.discountMinor,
+-    0
+-  );
++  return lines
++    .filter(isActiveSaleLine)
++    .reduce(
++      (total, line) =>
++        total + (line.grossMinor ?? line.quantity * line.unitPriceMinor) - line.discountMinor,
++      0
++    );
+ }
+ 
+ export function assertPositiveMinor(value: number) {
+@@ -653,7 +657,10 @@ export async function refundPharmacyTender(
+       status: 'COMPLETED',
+     },
+     include: {
+-      lines: { include: { returnLines: true, unidentifiedReturnHolds: true } },
++      lines: {
++        where: ACTIVE_SALE_LINE,
++        include: { returnLines: true, unidentifiedReturnHolds: true },
++      },
+       refunds: true,
+     },
+   });
+@@ -1007,7 +1014,7 @@ export async function cutPharmacyDailyClose(
+         businessDate: input.businessDate,
+         status: 'COMPLETED',
+       },
+-      include: { lines: true },
++      include: { lines: { where: ACTIVE_SALE_LINE } },
+     }),
+     db.pharmacyRefund.findMany({
+       where: {
+diff --git a/src/server/routers/pharmacy-dispensing.ts b/src/server/routers/pharmacy-dispensing.ts
+index 175349b2..067595b4 100644
+--- a/src/server/routers/pharmacy-dispensing.ts
++++ b/src/server/routers/pharmacy-dispensing.ts
+@@ -1,7 +1,24 @@
++import { Prisma } from '@/generated/prisma/client';
++import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+ import { z } from 'zod';
+ import { capabilityProcedure, router } from '../trpc';
+ import { TRPCError } from '@trpc/server';
+ 
++async function activeReviewIds(db: ScopedDb): Promise<string[]> {
++  const rows = await db.$queryRaw<Array<{ id: string }>>(
++    Prisma.sql`SELECT item.id FROM pharmacy_pharmacist_review_items item JOIN pharmacy_sale_lines line ON line.id=item."saleLineId" AND line."organizationId"=item."organizationId" WHERE line."removedAt" IS NULL`
++  );
++  return rows.map((row) => row.id);
++}
++
++function clinicalWriteFailure(error: unknown): never {
++  if (error instanceof Error && error.message.includes('REVIEW_LINE_REMOVED'))
++    throw new TRPCError({
++      code: 'CONFLICT',
++      message: 'This line was removed from the bill. Refresh the review queue.',
++    });
++  throw error;
++}
+ const dispense = capabilityProcedure('pharmacy:dispense');
+ 
+ export const pharmacyDispensingRouter = router({
+@@ -32,6 +49,7 @@ export const pharmacyDispensingRouter = router({
+   reviewQueue: dispense.query(async ({ ctx }) => ({
+     currentUserId: ctx.session!.user.id,
+     items: await ctx.db.pharmacyPharmacistReviewItem.findMany({
++      where: { id: { in: await activeReviewIds(ctx.db) } },
+       orderBy: { requestedAt: 'asc' },
+       include: {
+         line: {
+@@ -47,6 +65,7 @@ export const pharmacyDispensingRouter = router({
+   })),
+   substitutionWorkspace: dispense.query(async ({ ctx }) => ({
+     lines: await ctx.db.pharmacyPharmacistReviewItem.findMany({
++      where: { id: { in: await activeReviewIds(ctx.db) } },
+       orderBy: { requestedAt: 'desc' },
+       include: {
+         line: {
+@@ -64,9 +83,11 @@ export const pharmacyDispensingRouter = router({
+       z.object({ prescriptionLineId: z.string().min(1), saleLineId: z.string().min(1) }).strict()
+     )
+     .mutation(({ ctx, input }) =>
+-      ctx.db.pharmacyPharmacistReviewItem.create({
+-        data: { ...input, requestedByUserId: ctx.session!.user.id },
+-      })
++      ctx.db.pharmacyPharmacistReviewItem
++        .create({
++          data: { ...input, requestedByUserId: ctx.session!.user.id },
++        })
++        .catch(clinicalWriteFailure)
+     ),
+   decideReview: dispense
+     .input(
+@@ -79,13 +100,15 @@ export const pharmacyDispensingRouter = router({
+         .strict()
+     )
+     .mutation(({ ctx, input }) =>
+-      ctx.db.pharmacyPharmacistReviewDecision.create({
+-        data: {
+-          ...input,
+-          actorUserId: ctx.session!.user.id,
+-          signedAt: input.kind === 'SIGN' ? new Date() : undefined,
+-        },
+-      })
++      ctx.db.pharmacyPharmacistReviewDecision
++        .create({
++          data: {
++            ...input,
++            actorUserId: ctx.session!.user.id,
++            signedAt: input.kind === 'SIGN' ? new Date() : undefined,
++          },
++        })
++        .catch(clinicalWriteFailure)
+     ),
+   recordSubstitution: dispense
+     .input(
+@@ -102,8 +125,10 @@ export const pharmacyDispensingRouter = router({
+         .strict()
+     )
+     .mutation(({ ctx, input }) =>
+-      ctx.db.pharmacySubstitutionRecord.create({
+-        data: { ...input, actorUserId: ctx.session!.user.id },
+-      })
++      ctx.db.pharmacySubstitutionRecord
++        .create({
++          data: { ...input, actorUserId: ctx.session!.user.id },
++        })
++        .catch(clinicalWriteFailure)
+     ),
+ });
+diff --git a/src/server/routers/pharmacy-sales.ts b/src/server/routers/pharmacy-sales.ts
+index 9ccab2e1..a99547a1 100644
+--- a/src/server/routers/pharmacy-sales.ts
++++ b/src/server/routers/pharmacy-sales.ts
+@@ -1,3 +1,5 @@
++import { removeSaleLine, SaleLineRemovalError } from '@/lib/pharmacy/remove-sale-line';
++import { ACTIVE_SALE_LINE } from '@/lib/pharmacy/active-sale-line';
+ import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
+ import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
+ import {
+@@ -1188,6 +1190,7 @@ export const pharmacySalesRouter = router({
+           const line = await db.pharmacySaleLine.findFirst({
+             where: {
+               id: input.saleLineId,
++              ...ACTIVE_SALE_LINE,
+               saleId: sale.id,
+               organizationId: scope.organizationId,
+               branchId: scope.branchId,
+@@ -1655,6 +1658,57 @@ export const pharmacySalesRouter = router({
+         fail(error);
+       }
+     }),
++  removeLine: protectedProcedure
++    .input(
++      z
++        .object({
++          branchId,
++          saleId: z.string().min(1),
++          saleLineId: z.string().min(1),
++          reason: z.string().trim().min(1).max(500),
++          controlledWitness: z
++            .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
++            .strict()
++            .optional(),
++        })
++        .strict()
++    )
++    .mutation(async ({ ctx, input }) => {
++      annotateAudit(ctx, {
++        category: 'PHARMACY_SAFETY',
++        action: 'remove_line',
++        targetType: 'PharmacySale',
++        targetId: input.saleId,
++        skipInput: true,
++      });
++      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
++      try {
++        return await ctx.db.$transaction(async (tx) => {
++          try {
++            return await removeSaleLine(txDb(tx), scope, input);
++          } catch (error) {
++            if (error instanceof ControlledRestorationDenied && !error.forbidden)
++              return { blocked: error.message };
++            throw error;
++          }
++        });
++      } catch (error) {
++        if (error instanceof SaleLineRemovalError)
++          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
++        if (error instanceof Error && error.message.includes('PAYMENT_ATTEMPT_UNRESOLVED'))
++          throw new TRPCError({
++            code: 'CONFLICT',
++            message: 'Review the payment outcome before changing this bill.',
++          });
++        if (error instanceof Prisma.PrismaClientKnownRequestError)
++          throw new TRPCError({
++            code: 'CONFLICT',
++            message:
++              'This line could not be removed. Refresh the bill and ask the pharmacist to review it.',
++          });
++        fail(error);
++      }
++    }),
+   transition: protectedProcedure
+     .input(
+       z
+-- 
+2.52.0
+
