@@ -7,7 +7,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TRPCContext } from '../trpc';
 import { assertDisposableRlsDatabase } from '../../../tests/disposable-rls-database';
 
+// Setup needs CREATE ROLE and RLS-bypassing seed writes, so it runs on a superuser URL.
+// The code under test still connects through TEST_DATABASE_URL (gate_runtime in CI).
 const databaseUrl = process.env.TEST_DATABASE_URL;
+const superuserUrl = process.env.SUPERUSER_URL ?? process.env.CATALOG_TEST_DATABASE_URL;
 const tag = `invoice_discount_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
 const role = `${tag}_runtime`;
 const orgId = `${tag}_org`;
@@ -54,13 +57,17 @@ function seedInvoice(tx: ScopedDb, extra: Partial<Prisma.InvoiceUncheckedCreateI
 
 // A unique non-bypassing role makes the invoice locks, RLS and rollbacks real.
 // No schema changes or migrations are performed by this suite.
-describe.skipIf(!databaseUrl)('invoice discounts against PostgreSQL', () => {
+describe.skipIf(!databaseUrl || !superuserUrl)('invoice discounts against PostgreSQL', () => {
   beforeAll(async () => {
     assertDisposableRlsDatabase(databaseUrl!);
+    assertDisposableRlsDatabase(superuserUrl!);
     previousDatabaseUrl = process.env.DATABASE_URL;
-    owner = new pg.Client({ connectionString: databaseUrl });
+    owner = new pg.Client({ connectionString: superuserUrl });
     await owner.connect();
+    const runtimeLogin = new URL(databaseUrl!);
     await owner.query(`CREATE ROLE "${role}" NOLOGIN NOSUPERUSER NOBYPASSRLS`);
+    // Let the runtime login switch to the disposable role via the connection options below.
+    await owner.query(`GRANT "${role}" TO "${decodeURIComponent(runtimeLogin.username)}"`);
     await owner.query(`GRANT USAGE ON SCHEMA public TO "${role}"`);
     await owner.query(`GRANT ALL ON ALL TABLES IN SCHEMA public TO "${role}"`);
     await owner.query(`GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "${role}"`);
