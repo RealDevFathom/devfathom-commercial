@@ -1020,6 +1020,53 @@ async function assertExcursionNoteBeforeCompletion(
   });
 }
 
+/**
+ * The same rule for a reading linked where no later note can reach it: to a
+ * step already done (after a send-back) or to no step at all. Without a
+ * separate excursion step, submission needs a note on the link or its step,
+ * and neither a done step's note nor an existing link's note can change, so
+ * an undocumented out-of-range reading linked there could never be submitted.
+ */
+async function assertExcursionNoteBeforeLateLink(
+  ctx: TRPCContext,
+  site: PharmacySopSiteRef,
+  occurrenceId: string,
+  input: {
+    occurrenceStepId: string | null;
+    recordType: PharmacySopRecordType;
+    recordId: string;
+    note?: string | null;
+  }
+): Promise<void> {
+  if (input.recordType !== 'TEMPERATURE_LOG' || input.note?.trim()) return;
+  const steps = await ctx.db.restaurantSopOccurrenceStep.findMany({
+    where: { occurrenceId },
+    select: { id: true, completed: true, templateStep: { select: { title: true } } },
+  });
+  if (steps.some((step) => EXCURSION_STEP.test(step.templateStep.title))) return;
+  if (input.occurrenceStepId) {
+    const step = steps.find((candidate) => candidate.id === input.occurrenceStepId);
+    // An open step takes the note before it is marked done (checked there).
+    if (!step || !step.completed) return;
+  }
+  // Linking the same reading again stays the adapter's no-op.
+  const existing = await ctx.db.pharmacySopRecordLink.findFirst({
+    where: { occurrenceId, recordType: 'TEMPERATURE_LOG', recordId: input.recordId },
+    select: { id: true },
+  });
+  if (existing) return;
+  const outOfRange = await ctx.db.pharmacyTemperatureLog.findFirst({
+    where: { id: input.recordId, branchId: site.pharmacyBranchId, outOfRange: true },
+    select: { id: true },
+  });
+  if (!outOfRange) return;
+  throw new TRPCError({
+    code: 'PRECONDITION_FAILED',
+    message:
+      'This reading is out of range. Write what happened and what you did with it before linking it.',
+  });
+}
+
 // ── Schemas ───────────────────────────────────────────────────────────────────
 
 const ID = z.string().trim().min(1).max(200);
@@ -2464,6 +2511,12 @@ export const pharmacySopRouter = router({
           input.occurrenceStepId ?? null,
           input.recordType
         );
+        await assertExcursionNoteBeforeLateLink(ctx, site, occurrence.id, {
+          occurrenceStepId: input.occurrenceStepId ?? null,
+          recordType: input.recordType,
+          recordId: input.recordId,
+          note: input.note,
+        });
         // A refrigerator step takes only a cold-chain reading, the ambient step
         // only an ambient one (checked by the adapter against the location).
         const result = await linkPharmacySopRecord(ctx.db, {

@@ -1302,6 +1302,86 @@ describe('proof captured outside the pharmacy workspace', () => {
   });
 });
 
+describe('an out-of-range reading linked where no later note can reach it', () => {
+  const TEMP_STEP = opening.steps[1]!.title;
+  const arrange = (opts: {
+    done?: boolean;
+    existing?: boolean;
+    outOfRange?: boolean;
+    excursion?: boolean;
+  }) => {
+    db.restaurantSopTemplateVersion.findFirst.mockResolvedValue({
+      template: { name: opening.name },
+    });
+    db.restaurantSopOccurrenceStep.findFirst.mockResolvedValue({
+      templateStep: { title: TEMP_STEP, stepOrder: 2 },
+    });
+    db.restaurantSopOccurrenceStep.findMany.mockResolvedValue(
+      opening.steps.map((step, index) => ({
+        id: `ostep_${index + 1}`,
+        completed: index === 1 ? opts.done !== false : false,
+        templateStep: {
+          title: opts.excursion && index === 4 ? 'Record any excursion' : step.title,
+        },
+      }))
+    );
+    db.pharmacySopRecordLink.findFirst.mockResolvedValue(opts.existing ? { id: 'link_0' } : null);
+    db.pharmacyTemperatureLog.findFirst.mockResolvedValue(
+      opts.outOfRange === false ? null : { id: 'log_hot' }
+    );
+    mocks.adapter.linkPharmacySopRecord.mockResolvedValue({ linkId: 'link_1', created: true });
+  };
+  const link = (extra: { occurrenceStepId?: string | null; note?: string } = {}) =>
+    caller().linkRecord({
+      ...OCC_INPUT,
+      occurrenceStepId: 'ostep_2',
+      recordType: 'TEMPERATURE_LOG',
+      recordId: 'log_hot',
+      ...extra,
+    });
+
+  it('refuses it on a done step without a note (the procedure could never be submitted)', async () => {
+    arrange({});
+    await expect(link()).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: expect.stringContaining('out of range'),
+    });
+    await expect(link({ note: '   ' })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mocks.adapter.linkPharmacySopRecord).not.toHaveBeenCalled();
+    expect(db.pharmacyTemperatureLog.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'log_hot', branchId: SITE.pharmacyBranchId, outOfRange: true },
+      })
+    );
+  });
+
+  it('refuses it on no step at all without a note', async () => {
+    arrange({});
+    await expect(link({ occurrenceStepId: null })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    expect(mocks.adapter.linkPharmacySopRecord).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a note on the link', { note: 'Fridge at 9 °C; moved stock' }, {}],
+    ['a step not yet done', {}, { done: false }],
+    ['an in-range reading', {}, { outOfRange: false }],
+    ['the same reading linked again', {}, { existing: true }],
+    ['a separate excursion step', {}, { excursion: true }],
+  ])('links it with %s', async (_label, extra, opts) => {
+    arrange(opts);
+    await expect(link(extra)).resolves.toMatchObject({ linkId: 'link_1' });
+    expect(mocks.adapter.linkPharmacySopRecord).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        recordId: 'log_hot',
+        note: 'note' in extra ? extra.note : null,
+      })
+    );
+  });
+});
+
 describe('record links follow the pack', () => {
   beforeEach(() => {
     db.restaurantSopTemplateVersion.findFirst.mockResolvedValue({

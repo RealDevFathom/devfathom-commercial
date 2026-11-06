@@ -5,6 +5,7 @@ import { useId, useState } from 'react';
 
 import { fieldClass } from '@/components/pharmacy/dispensing/field';
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import { trpc } from '@/lib/trpc';
 
 import {
@@ -99,6 +100,7 @@ export function SopRecordPicker({
 }: SopRecordPickerProps) {
   const id = useId();
   const [error, setError] = useState<string | null>(null);
+  const [linkNote, setLinkNote] = useState('');
   const label = RECORD_LABEL[recordType];
   const records = trpc.pharmacySop.linkableRecords.useQuery(
     // The step lets the server offer only records that fit it (for example
@@ -109,6 +111,7 @@ export function SopRecordPicker({
   const link = trpc.pharmacySop.linkRecord.useMutation({
     onSuccess: () => {
       setError(null);
+      setLinkNote('');
       onChange('');
       onLinked();
     },
@@ -126,6 +129,13 @@ export function SopRecordPicker({
   const options = all.filter((record) => !linkedIds.has(record.id));
   const home = RECORD_HOME[recordType];
   const another = variant === 'another';
+  // A done step's note can't change, so without a separate excursion step an
+  // out-of-range reading linked after a send-back carries its own note (the
+  // server refuses it otherwise).
+  const needsLinkNote =
+    another &&
+    !excursionStep &&
+    options.some((record) => record.id === value && record.detail?.outOfRange === true);
 
   return (
     <div className="grid gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
@@ -181,12 +191,17 @@ export function SopRecordPicker({
               setError(`Choose the ${label} to link.`);
               return;
             }
+            if (needsLinkNote && !linkNote.trim()) {
+              setError('This reading is out of range. Write what happened and what you did.');
+              return;
+            }
             link.mutate({
               pharmacyBranchId,
               occurrenceId,
               occurrenceStepId,
               recordType,
               recordId: value,
+              ...(needsLinkNote ? { note: linkNote.trim() } : {}),
             });
           }}
         >
@@ -209,7 +224,29 @@ export function SopRecordPicker({
               ))}
             </select>
           </label>
-          <Button type="submit" variant="outline" size="touch" disabled={link.isPending}>
+          {needsLinkNote ? (
+            <label
+              className="grid gap-1.5 text-sm font-medium text-text-strong sm:col-span-2"
+              htmlFor={`${id}-link-note`}
+            >
+              <span>What happened and what you did · required</span>
+              <Textarea
+                id={`${id}-link-note`}
+                className="min-h-20 bg-surface-raised"
+                maxLength={2000}
+                value={linkNote}
+                disabled={link.isPending}
+                onChange={(event) => setLinkNote(event.target.value)}
+              />
+            </label>
+          ) : null}
+          <Button
+            type="submit"
+            variant="outline"
+            size="touch"
+            className={needsLinkNote ? 'sm:col-start-2' : undefined}
+            disabled={link.isPending}
+          >
             {link.isPending ? 'Linking…' : 'Link record'}
           </Button>
         </form>

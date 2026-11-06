@@ -16,6 +16,7 @@ import {
   reworkOccurrence,
   RunnerHarness,
   sentBackAt,
+  step,
 } from './sop-test-harness';
 import { mockState as h } from './sop-trpc-mock';
 
@@ -250,6 +251,90 @@ describe('reworking a sent-back procedure', () => {
     const notes = screen.getByRole('list', { name: 'What changed on step 1' });
     expect(notes).toHaveTextContent('Linked this morning’s reading.');
     expect(notes).toHaveTextContent('New since sent back');
+  });
+
+  it('asks what happened before linking an out-of-range reading to a done step without an excursion step', () => {
+    given(
+      reworkOccurrence({
+        steps: [
+          step({ requiredRecordType: 'TEMPERATURE_LOG', completed: true, completedByName: 'Asma' }),
+          step({
+            id: 'step-2',
+            templateStepId: 'tstep-2',
+            stepOrder: 2,
+            title: 'Open the counter',
+            completed: true,
+            completedByName: 'Asma',
+          }),
+        ],
+      })
+    );
+    h.queries.linkableRecords = {
+      data: [
+        {
+          id: 'temp-hot',
+          recordType: 'TEMPERATURE_LOG',
+          occurredAt: new Date('2026-11-04T05:30:00Z'),
+          detail: recordDetail({ label: 'Vaccine fridge · 9.4 °C', outOfRange: true }),
+        },
+        {
+          id: 'temp-ok',
+          recordType: 'TEMPERATURE_LOG',
+          occurredAt: new Date('2026-11-04T05:40:00Z'),
+          detail: recordDetail({ label: 'Vaccine fridge · 5.0 °C', outOfRange: false }),
+        },
+      ],
+    };
+    render(<RunnerHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add a change to step 1' }));
+    const picker = screen.getByLabelText(
+      'temperature log for Confirm the refrigerator temperature was recorded'
+    );
+    const noteLabel = /What happened and what you did · required/;
+
+    // An in-range reading links as before, with no note.
+    fireEvent.change(picker, { target: { value: 'temp-ok' } });
+    expect(screen.queryByLabelText(noteLabel)).not.toBeInTheDocument();
+
+    // An out-of-range one needs the note first, then carries it.
+    fireEvent.change(picker, { target: { value: 'temp-hot' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Link record' }));
+    expect(h.calls.linkRecord ?? []).toEqual([]);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'This reading is out of range. Write what happened and what you did.'
+    );
+    fireEvent.change(screen.getByLabelText(noteLabel), {
+      target: { value: '  Door left open; moved stock.  ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Link record' }));
+    expect(h.calls.linkRecord).toEqual([
+      expect.objectContaining({ recordId: 'temp-hot', note: 'Door left open; moved stock.' }),
+    ]);
+  });
+
+  it('needs no link note when the procedure records excursions on their own step', () => {
+    given(reworkOccurrence());
+    h.queries.linkableRecords = {
+      data: [
+        {
+          id: 'temp-hot',
+          recordType: 'TEMPERATURE_LOG',
+          occurredAt: new Date('2026-11-04T05:30:00Z'),
+          detail: recordDetail({ label: 'Vaccine fridge · 9.4 °C', outOfRange: true }),
+        },
+      ],
+    };
+    render(<RunnerHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add a change to step 1' }));
+    fireEvent.change(
+      screen.getByLabelText(
+        'temperature log for Confirm the refrigerator temperature was recorded'
+      ),
+      { target: { value: 'temp-hot' } }
+    );
+    expect(screen.queryByLabelText(/What happened and what you did/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Link record' }));
+    expect(h.calls.linkRecord).toEqual([expect.not.objectContaining({ note: expect.anything() })]);
   });
 
   it('adds the rework note blocker only while reworking', () => {
