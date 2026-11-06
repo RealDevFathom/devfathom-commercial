@@ -78,61 +78,67 @@ export function CounterUnitToggle({
   return (
     <div className={inline ? 'grid items-end gap-3 sm:grid-cols-[auto_auto_1fr]' : 'space-y-2'}>
       <div className="space-y-1">
-        {inline ? (
+        {inline || (options.length === 1 && selectedOption) ? (
           <span className="block text-xs font-semibold text-text-strong">Sale unit</span>
         ) : null}
-        <div
-          role="radiogroup"
-          aria-label="Sale unit"
-          aria-disabled={disabled || undefined}
-          className="flex flex-wrap gap-2"
-        >
-          {options.map((option) => {
-            const active = option.kind === selected;
-            const chord = chordFor?.(option.kind) ?? null;
-            return (
-              <button
-                key={option.packLevelId}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                // Only the selected unit is in the tab order; arrow keys move
-                // within the group. This is the standard radio-group pattern and
-                // keeps one Tab stop per control on a keyboard-only counter.
-                tabIndex={active || (selected === null && option === options[0]) ? 0 : -1}
-                disabled={disabled}
-                onClick={() => onSelect(option.kind)}
-                onKeyDown={(event) => {
-                  if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
-                  event.preventDefault();
-                  const index = options.findIndex((entry) => entry.kind === option.kind);
-                  const next =
-                    event.key === 'ArrowRight'
-                      ? options[(index + 1) % options.length]!
-                      : options[(index - 1 + options.length) % options.length]!;
-                  onSelect(next.kind);
-                }}
-                className={`flex min-h-11 min-w-0 flex-col items-start gap-0.5 rounded-md border px-2 py-1 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 ${
-                  active
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : 'border-border-subtle bg-surface-card text-text-strong hover:bg-surface-sunken'
-                }`}
-              >
-                <span className="text-sm font-semibold">
-                  {KIND_LABEL[option.kind]}
-                  {option.levelLabel && option.levelLabel !== option.kind ? (
-                    <span className="ml-1 font-normal opacity-80">({option.levelLabel})</span>
-                  ) : null}
-                </span>
-                <span
-                  className={`font-mono text-[0.625rem] tracking-wide ${active ? 'text-primary-foreground' : 'text-text-muted'}`}
+        {options.length === 1 && selectedOption ? (
+          <p className="text-sm font-semibold text-text-strong">
+            {KIND_LABEL[selectedOption.kind]}
+          </p>
+        ) : (
+          <div
+            role="radiogroup"
+            aria-label="Sale unit"
+            aria-disabled={disabled || undefined}
+            className="flex flex-wrap gap-2"
+          >
+            {options.map((option) => {
+              const active = option.kind === selected;
+              const chord = chordFor?.(option.kind) ?? null;
+              return (
+                <button
+                  key={option.packLevelId}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  // Only the selected unit is in the tab order; arrow keys move
+                  // within the group. This is the standard radio-group pattern and
+                  // keeps one Tab stop per control on a keyboard-only counter.
+                  tabIndex={active || (selected === null && option === options[0]) ? 0 : -1}
+                  disabled={disabled}
+                  onClick={() => onSelect(option.kind)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+                    event.preventDefault();
+                    const index = options.findIndex((entry) => entry.kind === option.kind);
+                    const next =
+                      event.key === 'ArrowRight'
+                        ? options[(index + 1) % options.length]!
+                        : options[(index - 1 + options.length) % options.length]!;
+                    onSelect(next.kind);
+                  }}
+                  className={`flex min-h-11 min-w-0 flex-col items-start gap-0.5 rounded-md border px-2 py-1 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 ${
+                    active
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border-subtle bg-surface-card text-text-strong hover:bg-surface-sunken'
+                  }`}
                 >
-                  {option.canonicalUnitsPerSaleUnit} units{chord ? ` · ${chord}` : ''}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+                  <span className="text-sm font-semibold">
+                    {KIND_LABEL[option.kind]}
+                    {option.levelLabel && option.levelLabel !== option.kind ? (
+                      <span className="ml-1 font-normal opacity-80">({option.levelLabel})</span>
+                    ) : null}
+                  </span>
+                  <span
+                    className={`font-mono text-[0.625rem] tracking-wide ${active ? 'text-primary-foreground' : 'text-text-muted'}`}
+                  >
+                    {option.canonicalUnitsPerSaleUnit} units{chord ? ` · ${chord}` : ''}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="space-y-1">

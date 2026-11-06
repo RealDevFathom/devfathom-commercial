@@ -55,6 +55,20 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(screen.getByRole('radio', { name: /Unit/ })).toBeTruthy();
   });
 
+  it('shows a single selected sale unit as a label while retaining quantity entry', () => {
+    renderToggle({ options: [OPTIONS[2]!], selected: 'UNIT', preview: previewFor('UNIT', 2) });
+    expect(screen.getByText('Sale unit')).toBeVisible();
+    expect(screen.getByText('Unit')).toBeVisible();
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Quantity')).toBeEnabled();
+  });
+
+  it('allows the only option to be selected if no unit has been selected yet', () => {
+    const props = renderToggle({ options: [OPTIONS[2]!], selected: null, preview: null });
+    fireEvent.click(screen.getByRole('radio', { name: /Unit/ }));
+    expect(props.onSelect).toHaveBeenCalledWith('UNIT');
+  });
+
   it('marks only the selected unit as checked', () => {
     renderToggle({ selected: 'PACK' });
     expect(screen.getByRole('radio', { name: /Pack/ }).getAttribute('aria-checked')).toBe('true');
