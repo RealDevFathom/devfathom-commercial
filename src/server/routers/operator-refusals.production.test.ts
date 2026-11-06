@@ -37,11 +37,14 @@ const app = router({
 const GENERIC = 'Something went wrong on our side. Please try again.';
 
 const db = {
-  // The capability check: this member holds `pharmacy:safety`.
+  // This operator can enter both the goods-in bench and Safety procedures.
   user: {
     findUnique: vi.fn(async () => ({
       organizationRole: null,
-      permissionOverrides: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
+      permissionOverrides: [
+        { capability: 'pharmacy:safety', effect: 'ALLOW' },
+        { capability: 'pharmacy:procurement', effect: 'ALLOW' },
+      ],
     })),
   },
   // The scanned branch is not an active branch of the organization: neither the

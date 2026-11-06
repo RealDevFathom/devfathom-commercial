@@ -619,7 +619,10 @@ describe('delivered Pharmacy Reports & Insights navigation gates', () => {
         askFathomEnabled
       );
       for (const role of ['ADMIN', 'EMPLOYEE']) {
-        const navigation = visibleNavigation(f.entitlements, role);
+        expect(visibleNavigation(f.entitlements, role).map((item) => item.href)).not.toContain(
+          '/pharmacy/reports'
+        );
+        const navigation = visibleNavigation(f.entitlements, role, [], ['reports:operational']);
         expect(navigation).toContainEqual(
           expect.objectContaining({ label: 'Reports & Insights', href: '/pharmacy/reports' })
         );
@@ -636,7 +639,9 @@ describe('delivered Pharmacy Reports & Insights navigation gates', () => {
     await confirmCompanySettings(unlicensed);
     expect(isAssistantAvailable(useAssistant.getState(), 'org-a')).toBe(true);
     expect(
-      visibleNavigation(unlicensed.entitlements, 'ADMIN').map((item) => item.href)
+      visibleNavigation(unlicensed.entitlements, 'ADMIN', [], ['reports:operational']).map(
+        (item) => item.href
+      )
     ).not.toContain('/pharmacy/reports');
     for (const path of paths)
       expect(isPathModuleEnabled(path, unlicensed.entitlements)).toBe(false);
@@ -663,7 +668,9 @@ describe('delivered Pharmacy Reports & Insights navigation gates', () => {
         askFathomEnabled: false,
         open: false,
       });
-      const navigation = visibleNavigation(f.entitlements, 'ADMIN').map((item) => item.href);
+      const navigation = visibleNavigation(f.entitlements, 'ADMIN', [], [
+        'reports:operational',
+      ]).map((item) => item.href);
       if (vertical === 'PHARMACY') {
         expect(navigation).toContain('/pharmacy/reports');
         expect(navigation).not.toContain('/restaurant/reports');

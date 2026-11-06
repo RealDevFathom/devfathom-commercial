@@ -6,7 +6,19 @@ import type { EntitlementView } from '@/lib/module-catalog';
 import { Sidebar, TopNavigation } from './sidebar';
 
 const useSessionMock = vi.hoisted(() =>
-  vi.fn(() => ({ data: { user: { role: 'ADMIN', name: 'Test operator' } } }))
+  vi.fn<
+    () => {
+      data: {
+        user: {
+          role: string;
+          name: string;
+          id?: string;
+          organizationId?: string;
+          status?: string;
+        };
+      };
+    }
+  >(() => ({ data: { user: { role: 'ADMIN', name: 'Test operator' } } }))
 );
 const usePathnameMock = vi.hoisted(() => vi.fn(() => '/dashboard'));
 // The hospitality rail's one read; unanswered unless a hospitality case sets it.
@@ -18,6 +30,11 @@ const railQuery = vi.hoisted(() => ({
         organizationId: string;
         properties: { branchId: string; name: string; capabilities: string[] }[];
       },
+}));
+const pharmacyRailQuery = vi.hoisted(() => ({
+  data: undefined as undefined | { userId: string; organizationId: string; capabilities: string[] },
+  isError: false,
+  isFetching: false,
 }));
 
 vi.mock('next/link', () => ({
@@ -65,7 +82,9 @@ vi.mock('@/lib/trpc', () => ({
       },
     },
     pharmacySafety: {
-      access: { useQuery: () => ({ data: { allowed: false } }) },
+      navigationAccess: {
+        useQuery: () => ({ ...pharmacyRailQuery, refetch: vi.fn() }),
+      },
     },
   },
 }));
@@ -220,13 +239,36 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     vertical = 'PHARMACY',
     granted = pharmacyModules,
     pathname = '/dashboard',
+    capabilities = [
+      'pharmacy:counter',
+      'pharmacy:inventory',
+      'pharmacy:procurement',
+      'reports:operational',
+      'pharmacy:dispense',
+    ],
   }: {
     role?: string;
     vertical?: EntitlementView['vertical'];
     granted?: string[];
     pathname?: string;
+    capabilities?: string[];
   } = {}) {
-    useSessionMock.mockReturnValue({ data: { user: { role, name: 'Test operator' } } });
+    useSessionMock.mockReturnValue({
+      data: {
+        user: {
+          id: 'user-1',
+          organizationId: 'pharmacy-1',
+          status: 'ACTIVE',
+          role,
+          name: 'Test operator',
+        },
+      },
+    });
+    pharmacyRailQuery.data = {
+      userId: 'user-1',
+      organizationId: 'pharmacy-1',
+      capabilities,
+    };
     usePathnameMock.mockReturnValue(pathname);
     const onNavigate = vi.fn();
     render(
@@ -293,6 +335,51 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     ]) {
       expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
     }
+  });
+
+  it('shows a cashier only counter work, not purchasing, reports, dispensing or day close', () => {
+    renderNavigation({
+      role: 'EMPLOYEE',
+      capabilities: ['pharmacy:counter', 'pharmacy:orders'],
+    });
+    expect(screen.getByRole('link', { name: /Counter$/ })).toBeInTheDocument();
+    for (const label of [
+      'Day close',
+      'Inventory',
+      'Purchasing',
+      'Reports & Insights',
+      'Prescriptions',
+      'Pharmacist queue',
+      'Substitution',
+    ]) {
+      expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
+    }
+  });
+
+  it('fails closed when Pharmacy capabilities belong to another identity', () => {
+    renderNavigation({ role: 'EMPLOYEE', capabilities: ['pharmacy:procurement'] });
+    pharmacyRailQuery.data = {
+      ...pharmacyRailQuery.data!,
+      userId: 'previous-user',
+    };
+    cleanup();
+    // Render directly so the helper does not replace the deliberately stale response.
+    render(
+      <EntitlementsProvider
+        value={{
+          organizationId: 'pharmacy-1',
+          vertical: 'PHARMACY',
+          seatLimit: 10,
+          activeSeats: 1,
+          enabledModules: pharmacyModules,
+          modules: [],
+          limits: {},
+        }}
+      >
+        {surface === 'mobile' ? <Sidebar collapsible={false} /> : <TopNavigation />}
+      </EntitlementsProvider>
+    );
+    expect(screen.queryByRole('link', { name: /Purchasing$/ })).not.toBeInTheDocument();
   });
 
   it('denies unlicensed Pharmacy navigation without removing baseline access', () => {

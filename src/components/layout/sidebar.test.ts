@@ -109,7 +109,17 @@ describe('pharmacy navigation', () => {
     (route, module) => {
       const granted = visibleNavigation(
         { vertical: 'PHARMACY', enabledModules: [module] },
-        'ADMIN'
+        'ADMIN',
+        [],
+        [
+          module === 'pharmacy-inventory'
+            ? 'pharmacy:inventory'
+            : module === 'pharmacy-procurement'
+              ? 'pharmacy:procurement'
+              : module === 'pharmacy-reports'
+                ? 'reports:operational'
+                : 'reports:financial',
+        ]
       ).map((item) => item.href);
       expect(granted).toContain(route);
       expect(granted).not.toContain('/chat');
@@ -141,7 +151,9 @@ describe('pharmacy navigation', () => {
           vertical: 'PHARMACY',
           enabledModules: ['pharmacy-core', ...operations.map(([, module]) => module)],
         },
-        role
+        role,
+        [],
+        ['pharmacy:inventory', 'pharmacy:procurement', 'reports:operational']
       ).map((item) => item.href);
       expect(visible).toEqual(
         expect.arrayContaining(['/pharmacy/inventory', '/pharmacy/purchasing', '/pharmacy/reports'])
@@ -191,7 +203,9 @@ describe('pharmacy navigation', () => {
         vertical: 'RESTAURANT',
         enabledModules: ['restaurant-core', 'pharmacy-core', 'pharmacy-counter'],
       },
-      'ADMIN'
+      'ADMIN',
+      [],
+      ['pharmacy:counter']
     ).map((item) => item.href);
 
     for (const route of pharmacyRoutes) {
@@ -222,7 +236,9 @@ describe('pharmacy navigation', () => {
         vertical: 'PHARMACY',
         enabledModules: ['pharmacy-core', 'pharmacy-counter'],
       },
-      'ADMIN'
+      'ADMIN',
+      [],
+      ['pharmacy:counter']
     ).map((item) => item.href);
 
     expect(visible).toEqual(expect.arrayContaining(pharmacyRoutes));

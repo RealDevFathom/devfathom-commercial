@@ -293,6 +293,8 @@ export function alternativeModulesForProcedure(path: string): readonly string[] 
 export function moduleForProcedure(path: string): string | null {
   // Inviting workspace users is baseline administration in every vertical.
   if (path === 'team.inviteMember') return 'admin';
+  // Navigation resolves all Pharmacy capabilities, including Essentials without Safety.
+  if (path === 'pharmacySafety.navigationAccess') return 'pharmacy-core';
   if (
     ACCOUNT_PROCEDURES.has(path) ||
     ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES.has(path)
