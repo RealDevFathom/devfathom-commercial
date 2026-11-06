@@ -475,7 +475,9 @@ test('accepting extracted variants requires and persists explicit human review',
     importId: 'imp_1',
     extractedProductName: 'Synthetic item',
     extractedPriceAmount: new (class {
-      toString() { return '10.00'; }
+      toString() {
+        return '10.00';
+      }
     })(),
     extractedVariants: [
       { name: 'Large', price: { amount: '14.00' } },
@@ -512,40 +514,202 @@ test('accepting extracted variants requires and persists explicit human review',
   );
 });
 
-test('accepting does not restore an extracted value that the reviewer explicitly cleared', async () => {
+test('a blank name or price keeps the extracted value instead of clearing it', async () => {
   const f = setup('production', 'disabled');
   const menu = f.load('@/lib/restaurant/menu-import');
   f.record.status = 'AWAITING_REVIEW';
-  f.db.restaurantMenuImportLine.findUnique = async () => ({
-    id: 'line_1',
-    importId: 'imp_1',
-    extractedProductName: 'Synthetic item',
-    extractedPriceAmount: new (class {
-      toString() { return '10.00'; }
-    })(),
-    extractedVariants: [],
-    import: f.record,
-  });
 
+  // The default fixture line has no extracted price, so a blank price cannot
+  // fall back to anything and acceptance stays refused.
   await assert.rejects(
     menu.reviewMenuImportLine(f.db, {
       lineId: 'line_1',
       decision: 'ACCEPTED',
       reviewedById: 'user_1',
       priceAmount: null,
+      variants: [],
     }),
     { reason: 'PRICE_REQUIRED' }
   );
-  await assert.rejects(
-    menu.reviewMenuImportLine(f.db, {
-      lineId: 'line_1',
-      decision: 'ACCEPTED',
-      reviewedById: 'user_1',
-      productName: '   ',
-    }),
-    { reason: 'INVALID' }
-  );
   assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'review'));
+
+  f.db.restaurantMenuImportLine.findUnique = async () => ({
+    id: 'line_1',
+    importId: 'imp_1',
+    extractedProductName: 'Synthetic item',
+    extractedPriceAmount: new (class {
+      toString() {
+        return '10.00';
+      }
+    })(),
+    extractedVariants: [],
+    import: f.record,
+  });
+
+  await menu.reviewMenuImportLine(f.db, {
+    lineId: 'line_1',
+    decision: 'ACCEPTED',
+    reviewedById: 'user_1',
+    productName: '   ',
+    priceAmount: null,
+    variants: [],
+  });
+  const review = f.events.findLast((event) => Array.isArray(event) && event[0] === 'review');
+  assert.equal(review[1].reviewStatus, 'ACCEPTED');
+  // Blank clears the correction; the extracted value is what commit will use.
+  assert.equal(review[1].reviewedProductName, null);
+  assert.equal(review[1].reviewedPriceAmount, null);
+});
+
+function twoExtractedVariantsLine(f) {
+  f.db.restaurantMenuImportLine.findUnique = async () => ({
+    id: 'line_1',
+    importId: 'imp_1',
+    extractedProductName: 'Synthetic item',
+    extractedPriceAmount: new (class {
+      toString() {
+        return '10.00';
+      }
+    })(),
+    extractedVariants: [
+      { name: 'Large', price: { amount: '14.00' } },
+      { name: 'Family', price: { amount: '20.00' } },
+    ],
+    import: f.record,
+  });
+}
+
+for (const [label, variants] of [
+  ['shorter', [{ name: 'Large', priceAmount: '14.00' }]],
+  [
+    'longer',
+    [
+      { name: 'Large', priceAmount: '14.00' },
+      { name: 'Family', priceAmount: '20.00' },
+      { name: 'Party', priceAmount: '30.00' },
+    ],
+  ],
+]) {
+  test(`accepting refuses a reviewed variant list ${label} than the extracted list`, async () => {
+    const f = setup('production', 'disabled');
+    const menu = f.load('@/lib/restaurant/menu-import');
+    f.record.status = 'AWAITING_REVIEW';
+    twoExtractedVariantsLine(f);
+
+    await assert.rejects(
+      menu.reviewMenuImportLine(f.db, {
+        lineId: 'line_1',
+        decision: 'ACCEPTED',
+        reviewedById: 'user_1',
+        variants,
+      }),
+      {
+        message: 'Every extracted variant must be included in the review.',
+        reason: 'REVIEW_INCOMPLETE',
+      }
+    );
+    assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'review'));
+  });
+}
+
+function acceptedLineWithVariants(reviewedVariants) {
+  return {
+    id: 'line_1',
+    reviewStatus: 'ACCEPTED',
+    sortOrder: 1,
+    extractedCategoryName: null,
+    extractedProductName: 'Synthetic item',
+    extractedDescription: null,
+    extractedPriceAmount: '10.00',
+    extractedVariants: [
+      { name: 'Large', price: { amount: '14.00' } },
+      { name: 'Family', price: { amount: '20.00' } },
+      { name: 'Party', price: { amount: '30.00' } },
+    ],
+    reviewedVariants,
+    reviewedCategoryName: null,
+    reviewedProductName: null,
+    reviewedDescription: null,
+    reviewedPriceAmount: null,
+    mergeProductId: null,
+    mergeVariantId: null,
+  };
+}
+
+test('commit rejects stored variant review evidence that omits an extracted variant', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.lines.push(acceptedLineWithVariants([{ name: 'Large', price: { amount: '14.00' } }]));
+
+  await assert.rejects(
+    menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
+    {
+      message: 'A confirmed line does not include a review of every extracted variant.',
+      reason: 'REVIEW_INCOMPLETE',
+    }
+  );
+  assert.ok(
+    !f.events.some(
+      (event) =>
+        Array.isArray(event) &&
+        ['createProduct', 'createVariant', 'addPriceListEntry', 'createMenu'].includes(event[0])
+    )
+  );
+});
+
+test('commit imports the reviewer-confirmed variant names and prices, not the extracted ones', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.record.storageObjectName = null;
+  f.lines.push(
+    acceptedLineWithVariants([
+      { name: 'Large (12in)', price: { amount: '14.00' } },
+      { name: 'Family', price: { amount: '22.50' } },
+      { name: 'Party', price: { amount: null } },
+    ])
+  );
+  let sequence = 0;
+  const returning =
+    (name) =>
+    async (...args) => {
+      f.events.push([name, ...args.slice(1)]);
+      sequence += 1;
+      return { id: `${name}_${sequence}` };
+    };
+  const catalog = f.load('@/lib/restaurant/catalog');
+  const menus = f.load('@/lib/restaurant/menus');
+  const priceLists = f.load('@/lib/restaurant/price-lists');
+  for (const name of ['ensureDefaultBrand', 'createProduct', 'createCategory', 'createVariant']) {
+    catalog[name] = returning(name);
+  }
+  for (const name of ['createMenu', 'createMenuItem', 'createMenuSection']) {
+    menus[name] = returning(name);
+  }
+  for (const name of ['addPriceListEntry', 'createPriceListVersion']) {
+    priceLists[name] = returning(name);
+  }
+  f.db.restaurantCategory = { findMany: async () => [] };
+  f.db.restaurantPriceList = { findFirst: async () => ({ id: 'price_list_1' }) };
+
+  const outcome = await menu.commitMenuImport(f.db, {
+    importId: 'imp_1',
+    committedById: 'user_1',
+  });
+
+  const calls = (name) => f.events.filter((event) => Array.isArray(event) && event[0] === name);
+  assert.deepEqual(
+    calls('createVariant').map((event) => event[1].name),
+    ['Large (12in)', 'Family', 'Party']
+  );
+  const variantPrices = calls('addPriceListEntry')
+    .filter((event) => event[1].variantId !== null)
+    .map((event) => event[1].price);
+  // The edited price is imported; the blanked price creates no entry.
+  assert.deepEqual(variantPrices, ['14.00', '22.50']);
+  assert.equal(outcome.priceEntryIds.length, 3);
+  assert.equal(f.record.status, 'COMMITTED');
 });
 
 test('review rechecks import state after acquiring the commit lock', async () => {

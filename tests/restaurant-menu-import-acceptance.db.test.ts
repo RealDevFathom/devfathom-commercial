@@ -635,6 +635,54 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
     expect(version.activatedAt).toBeNull();
   });
 
+  it('imports the reviewer-confirmed variant names and prices, not the extracted ones', async () => {
+    const importId = await seedAwaitingReview('variants', { label: 'reviewed-variants' });
+    const [line] = await linesOf(importId);
+    const variants = variantsForReview(line!.extractedVariants);
+    expect(variants.map((variant) => variant.name)).toEqual([
+      'Small 9"',
+      'Medium 12"',
+      'Large 15"',
+    ]);
+    variants[0]!.name = 'Personal 9"';
+    variants[1]!.priceAmount = '1900.00';
+    variants[2]!.priceAmount = null;
+    await deps.menuImport.reviewMenuImportLine(dbA, {
+      lineId: line!.id,
+      decision: 'ACCEPTED',
+      reviewedById: userA,
+      variants,
+    });
+
+    const result = await deps.menuImport.commitMenuImport(
+      dbA,
+      { importId, committedById: userA },
+      { runtime: store.runtime }
+    );
+
+    // Base price plus the two variants that kept a price.
+    expect(result.priceEntryIds).toHaveLength(3);
+    const product = await dbA.restaurantProduct.findUniqueOrThrow({
+      where: { id: result.createdProductIds[0]! },
+      include: { variants: true },
+    });
+    expect(product.variants.map((variant) => variant.name).sort()).toEqual([
+      'Large 15"',
+      'Medium 12"',
+      'Personal 9"',
+    ]);
+    const variantId = (name: string) => product.variants.find((v) => v.name === name)!.id;
+    const entries = await dbA.restaurantPriceListEntry.findMany({
+      where: { priceListVersionId: result.priceListVersionId, productId: product.id },
+    });
+    const priceOf = (id: string | null) =>
+      entries.filter((entry) => entry.variantId === id).map((entry) => entry.price.toString());
+    expect(priceOf(variantId('Personal 9"'))).toEqual(['1200']);
+    expect(priceOf(variantId('Medium 12"'))).toEqual(['1900']);
+    expect(priceOf(variantId('Large 15"'))).toEqual([]);
+    expect(priceOf(null)).toEqual(['1200']);
+  });
+
   it('merges into an existing product instead of duplicating it', async () => {
     const existing = await dbA.restaurantProduct.create({
       data: { name: `Merge Target ${suffix}` },

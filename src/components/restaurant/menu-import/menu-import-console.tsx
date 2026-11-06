@@ -256,11 +256,11 @@ function editorFor(line: ImportLine): LineEditor {
   const variants = reviewed ?? variantsFor(line.extractedVariants);
   return {
     lineId: line.id,
-    categoryName: line.reviewedCategoryName ?? line.extractedCategoryName ?? '',
-    productName: line.reviewedProductName ?? line.extractedProductName ?? '',
-    description: line.reviewedDescription ?? line.extractedDescription ?? '',
-    priceAmount: line.reviewedPriceAmount ?? line.extractedPriceAmount ?? '',
-    currency: line.reviewedCurrency ?? line.extractedCurrency ?? '',
+    categoryName: line.reviewedCategoryName ?? '',
+    productName: line.reviewedProductName ?? '',
+    description: line.reviewedDescription ?? '',
+    priceAmount: line.reviewedPriceAmount ?? '',
+    currency: line.reviewedCurrency ?? '',
     note: line.reviewNote ?? '',
     mergeProductId: line.mergeProductId ?? '',
     mergeVariantId: line.mergeVariantId ?? '',
@@ -268,7 +268,7 @@ function editorFor(line: ImportLine): LineEditor {
   };
 }
 
-/** Send an explicit blank as `null`; acceptance validates required fields. */
+/** Blank means "no override" — send `null` so the server clears any earlier edit. */
 function override(value: string): string | null {
   const trimmed = value.trim();
   return trimmed === '' ? null : trimmed;
@@ -799,12 +799,21 @@ export function RestaurantMenuImportConsole({
                           <TableBody>
                             {page.lines.map((line, index) => {
                               const reviewedVariants = variantsFor(line.reviewedVariants);
+                              const extractedVariants = variantsFor(line.extractedVariants);
+                              // Confirming the extracted variants unchanged is not a
+                              // correction; only a changed name or price is.
+                              const variantsCorrected = reviewedVariants.some(
+                                (variant, variantIndex) =>
+                                  variant.name !== extractedVariants[variantIndex]?.name ||
+                                  variant.priceAmount !==
+                                    extractedVariants[variantIndex]?.priceAmount
+                              );
                               const corrected =
                                 line.reviewedProductName ??
                                 line.reviewedCategoryName ??
                                 line.reviewedPriceAmount ??
                                 line.reviewNote ??
-                                (reviewedVariants.length > 0 ? true : null);
+                                (variantsCorrected ? true : null);
                               // Three identically-labelled buttons per row are
                               // ambiguous to a screen reader, so each decision
                               // names its line. The name is extracted text and
@@ -837,7 +846,7 @@ export function RestaurantMenuImportConsole({
                                         fallback="(no price)"
                                       />
                                     </span>
-                                    <VariantList variants={variantsFor(line.extractedVariants)} />
+                                    <VariantList variants={extractedVariants} />
                                   </TableCell>
                                   <TableCell className="max-w-[18rem] align-top">
                                     {corrected ? (
@@ -858,7 +867,9 @@ export function RestaurantMenuImportConsole({
                                             {line.reviewNote}
                                           </span>
                                         ) : null}
-                                        <VariantList variants={reviewedVariants} />
+                                        {variantsCorrected ? (
+                                          <VariantList variants={reviewedVariants} />
+                                        ) : null}
                                       </>
                                     ) : (
                                       <span className="text-text-faint">No correction</span>
@@ -1057,8 +1068,8 @@ function LineEditorPanel({
             Correcting: <Extracted value={line.extractedProductName} fallback="(no product name)" />
           </h5>
           <p className="mt-1 text-xs text-text-muted">
-            Product name and price are required to accept a line. To restore either, enter its
-            extracted value shown below. Blanking category or description clears its correction.
+            Leave a product field blank to keep the extracted value. Blanking a product field you
+            previously edited clears that correction.
           </p>
         </div>
         <FlagChips flags={line.flags} />
@@ -1133,7 +1144,10 @@ function LineEditorPanel({
                     maxLength={200}
                   />
                 </Field>
-                <Field label={`Variant ${index + 1} price`} hint="Leave blank if no price was stated.">
+                <Field
+                  label={`Variant ${index + 1} price`}
+                  hint="Leave blank if no price was stated."
+                >
                   <Input
                     value={variant.priceAmount}
                     onChange={(event) => {

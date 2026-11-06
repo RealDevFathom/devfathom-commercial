@@ -731,16 +731,14 @@ export async function reviewMenuImportLine(
       // product under and a price to put on the draft version. This is where a
       // blurred or price-less OCR row is forced back to a human rather than
       // becoming a product with an invented price.
-      const effectiveName =
-        productName === undefined ? line.extractedProductName : productName;
+      const effectiveName = productName ?? line.extractedProductName;
       if (!effectiveName) {
         throw new MenuImportError(
           'Accepting a line needs a product name; supply one to correct the extraction.',
           'INVALID'
         );
       }
-      const effectivePrice =
-        priceAmount === undefined ? line.extractedPriceAmount : priceAmount;
+      const effectivePrice = priceAmount ?? line.extractedPriceAmount;
       if (effectivePrice === null || effectivePrice === undefined) {
         throw new MenuImportError(
           'Accepting a line needs a price; the menu did not state one.',
@@ -1078,29 +1076,32 @@ export async function commitMenuImport(
         price,
         mergeProductId: line.mergeProductId,
         mergeVariantId: line.mergeVariantId,
-        variants: line.reviewStatus === 'MERGED' ? [] : (() => {
-          const extracted = resolveVariants(line.extractedVariants);
-          if (line.reviewedVariants === null) {
-            throw new MenuImportError(
-              'A confirmed line has no variant review evidence.',
-              'REVIEW_INCOMPLETE'
-            );
-          }
-          const reviewed = resolveReviewedVariants(line.reviewedVariants);
-          if (reviewed === null) {
-            throw new MenuImportError(
-              'A confirmed line has invalid variant review evidence.',
-              'REVIEW_INCOMPLETE'
-            );
-          }
-          if (reviewed.length !== extracted.length) {
-            throw new MenuImportError(
-              'A confirmed line does not include a review of every extracted variant.',
-              'REVIEW_INCOMPLETE'
-            );
-          }
-          return reviewed;
-        })(),
+        variants:
+          line.reviewStatus === 'MERGED'
+            ? []
+            : (() => {
+                const extracted = resolveVariants(line.extractedVariants);
+                if (line.reviewedVariants === null) {
+                  throw new MenuImportError(
+                    'A confirmed line has no variant review evidence.',
+                    'REVIEW_INCOMPLETE'
+                  );
+                }
+                const reviewed = resolveReviewedVariants(line.reviewedVariants);
+                if (reviewed === null) {
+                  throw new MenuImportError(
+                    'A confirmed line has invalid variant review evidence.',
+                    'REVIEW_INCOMPLETE'
+                  );
+                }
+                if (reviewed.length !== extracted.length) {
+                  throw new MenuImportError(
+                    'A confirmed line does not include a review of every extracted variant.',
+                    'REVIEW_INCOMPLETE'
+                  );
+                }
+                return reviewed;
+              })(),
         sortOrder: line.sortOrder,
       });
     }
