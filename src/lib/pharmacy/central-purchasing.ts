@@ -2,6 +2,12 @@ import { actorIsPharmacyOwner } from './procurement-access';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { allocateTransfer } from './inventory-operations';
 import type { InterbranchTransferSuggestion } from './interbranch-transfer-suggestions';
+import { assertSupplierEligible, PharmacyPurchasingError } from './purchasing';
+import {
+  readSupplierCompliancePolicy,
+  recordSupplierComplianceSkip,
+  strictLicenceEvidence,
+} from './supplier-compliance-policy';
 
 export class CentralPurchasingError extends Error {
   constructor(readonly reason: 'FORBIDDEN' | 'INVALID_ALLOCATION' | 'NOT_FOUND') {
@@ -90,13 +96,11 @@ export async function createCentralPurchaseOrder(
 ) {
   await requireOrganizationPurchaser(db, scope);
   const [supplier, branch] = await Promise.all([
+    // PUR-01 is decided below by the shared, policy-aware gate rather than by a
+    // query filter here, so this path and the ordinary one cannot disagree.
     db.pharmacySupplier.findFirst({
-      where: {
-        id: input.supplierId,
-        organizationId: scope.organizationId,
-        authorized: true,
-        licences: { some: { verifiedAt: { not: null }, expiresAt: { gt: new Date() } } },
-      },
+      where: { id: input.supplierId, organizationId: scope.organizationId },
+      include: { licences: true },
     }),
     db.pharmacyBranch.findFirst({
       where: { id: input.receivingBranchId, organizationId: scope.organizationId, active: true },
@@ -118,12 +122,55 @@ export async function createCentralPurchaseOrder(
     ]);
     if (!medicine || !packLevel) throw new CentralPurchasingError('NOT_FOUND');
   }
+  return db.$transaction(async (transaction) => {
+    const tx = transaction as unknown as ScopedDb;
+    // DEV-753: the owner's supplier-compliance policy, share-locked for this write.
+    // With the checks on, an ineligible supplier stays NOT_FOUND here as before, now
+    // with supersession read strictly (DEV-466). With them off the order is raised and
+    // the skip is recorded against it in the same transaction.
+    const policy = await readSupplierCompliancePolicy(tx, scope.organizationId, {
+      lock: 'share',
+    });
+    const licences = await strictLicenceEvidence(tx, scope.organizationId, supplier.licences);
+    let outcome: ReturnType<typeof assertSupplierEligible>;
+    try {
+      outcome = assertSupplierEligible({
+        authorized: supplier.authorized,
+        licences,
+        at: new Date(),
+        policy,
+      });
+    } catch (error) {
+      if (error instanceof PharmacyPurchasingError) throw new CentralPurchasingError('NOT_FOUND');
+      throw error;
+    }
+    const order = await createCentralOrderRow(tx, scope, input, supplier.id, branch.id);
+    if (!outcome.checked) {
+      await recordSupplierComplianceSkip(tx, scope, {
+        operation: 'CENTRAL_PURCHASE_ORDER_CREATE',
+        supplierId: supplier.id,
+        purchaseOrderId: order.id,
+        reference: input.reference,
+        outcome,
+      });
+    }
+    return order;
+  });
+}
+
+function createCentralOrderRow(
+  db: ScopedDb,
+  scope: Scope,
+  input: Parameters<typeof createCentralPurchaseOrder>[2],
+  supplierId: string,
+  branchId: string
+) {
   return db.pharmacyPurchaseOrder.create({
     data: {
       organizationId: scope.organizationId,
-      branchId: branch.id,
+      branchId,
       reference: input.reference,
-      supplierId: supplier.id,
+      supplierId,
       createdByUserId: scope.actorId,
       lines: {
         create: input.lines.map((line, index) => ({

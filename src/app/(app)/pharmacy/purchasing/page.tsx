@@ -24,6 +24,11 @@ import {
   tenantContext,
   type SearchQuery,
 } from './_lib/console';
+import {
+  readPolicyForDisplay,
+  supplierChecksOn,
+  supplierComplianceCaller,
+} from './suppliers/_lib/supplier-compliance';
 
 export const metadata: Metadata = { title: 'Purchasing · Pharmacy' };
 
@@ -186,6 +191,13 @@ export default async function PharmacyPurchasingPage({
 
   const orderable = workspace.suppliers.filter((supplier) => supplier.eligibility.orderable);
   const medicinesWithPacks = workspace.medicines.filter((medicine) => medicine.packs.length > 0);
+  // DEV-753: supplier checks are off. A summary without `compliance` reads as checked.
+  // Off when a listed supplier says so; with no supplier listed yet, ask the stored setting
+  // (read fail-closed: anything but a positive OFF reads as checks on).
+  const checksOff =
+    workspace.suppliers.length > 0
+      ? workspace.suppliers.some((supplier) => supplier.compliance?.checked === false)
+      : !supplierChecksOn(await readPolicyForDisplay(await supplierComplianceCaller()));
 
   /** UX rule 13 — every unmet gate, each linked to the page that clears it. */
   const gates = [
@@ -213,7 +225,9 @@ export default async function PharmacyPurchasingPage({
     {
       met: orderable.length > 0,
       label: 'A supplier that can be ordered from',
-      why: 'PUR-01 refuses an order or a receipt unless the supplier is authorized and holds an unexpired verified licence.',
+      why: checksOff
+        ? 'Supplier checks are off, so suppliers are not checked before an order or a receipt.'
+        : 'PUR-01 refuses an order or a receipt unless the supplier is authorized and holds an unexpired verified licence.',
       href: `${PURCHASING_ROUTE}/suppliers`,
       action: 'Open the supplier register',
     },
@@ -270,7 +284,7 @@ export default async function PharmacyPurchasingPage({
         <Stat
           label="Orderable suppliers"
           value={`${orderable.length} of ${workspace.suppliers.length}`}
-          sub="Authorized and licensed"
+          sub={checksOff ? 'Supplier checks off: not checked' : 'Authorized and licensed'}
         />
         <Stat
           label="Awaiting approval"
@@ -329,8 +343,9 @@ export default async function PharmacyPurchasingPage({
             {
               href: `${PURCHASING_ROUTE}/suppliers`,
               title: 'Suppliers (PUR-01)',
-              detail:
-                'Licence evidence, terms, credit and the standing decision to trade. A supplier is orderable only while both the authorization and an unexpired verified licence hold.',
+              detail: checksOff
+                ? 'Terms, credit and any licence evidence on file. Supplier checks are off, so suppliers are not checked before ordering.'
+                : 'Licence evidence, terms, credit and the standing decision to trade. A supplier is orderable only while both the authorization and an unexpired verified licence hold.',
             },
             {
               href: `${PURCHASING_ROUTE}/orders`,
