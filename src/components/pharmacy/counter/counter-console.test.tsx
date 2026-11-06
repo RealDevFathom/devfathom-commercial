@@ -2015,7 +2015,9 @@ describe('DEV-618 counter composition', () => {
         })
       )
     );
-    expect(mocks.mutations.addLine!.mock.calls[0]![0].override).not.toHaveProperty('approvalPolicy');
+    expect(mocks.mutations.addLine!.mock.calls[0]![0].override).not.toHaveProperty(
+      'approvalPolicy'
+    );
     const added = await screen.findByText('2 × Paracetamol added with a recorded batch override.');
     expect(added.closest('[role="status"]')).toBeInTheDocument();
     expect(

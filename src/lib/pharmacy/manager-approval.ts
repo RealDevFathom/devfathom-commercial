@@ -157,8 +157,7 @@ export async function listManagerApprovers(db: ScopedDb, scope: LedgerScope) {
   const eligible: Array<{ id: string; name: string }> = [];
   for (const profile of staff) {
     const user = profile.user;
-    if (!user || user.organizationId !== scope.organizationId || user.status !== 'ACTIVE')
-      continue;
+    if (!user || user.organizationId !== scope.organizationId || user.status !== 'ACTIVE') continue;
     if (user.id === scope.actorId && activeMembers !== 1) continue;
     const assignment = await db.pharmacyBranchAssignment.findFirst({
       where: {
