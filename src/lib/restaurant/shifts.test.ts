@@ -55,6 +55,12 @@ const staff = new Map<
   { id: string; status: 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED'; primaryBranchId: string | null }
 >();
 let shifts: Row[] = [];
+let adjustments: {
+  shiftId: string;
+  kind: 'CLOCK_IN' | 'CLOCK_OUT';
+  breakId: string | null;
+  correctedAt: Date;
+}[] = [];
 let sequence = 0;
 let beforeShiftUpdateMany: (() => void) | undefined;
 
@@ -74,6 +80,15 @@ function matches(row: Row, where: Record<string, unknown>): boolean {
       if (!(condition as Record<string, unknown>[]).some((clause) => matches(row, clause))) {
         return false;
       }
+      continue;
+    }
+    if (field === 'adjustments') {
+      const { some, none } = condition as Record<string, { kind: string; breakId: null }>;
+      const hit = (clause: { kind: string; breakId: null }) =>
+        adjustments.some(
+          (a) => a.shiftId === row.id && a.kind === clause.kind && a.breakId === clause.breakId
+        );
+      if ((some && !hit(some)) || (none && hit(none))) return false;
       continue;
     }
     if (field === 'id' && typeof condition === 'object' && condition !== null) {
@@ -142,8 +157,10 @@ const db = {
         shifts.filter((row) => matches(row, where)),
         orderBy ?? { startAt: 'asc' }
       ),
-    findUnique: async ({ where }: { where: { id: string } }) =>
-      shifts.find((row) => row.id === where.id) ?? null,
+    findUnique: async ({ where }: { where: { id: string } }) => {
+      const row = shifts.find((candidate) => candidate.id === where.id);
+      return row ? { ...row, adjustments: adjustments.filter((a) => a.shiftId === row.id) } : null;
+    },
     create: async ({ data }: { data: Partial<Row> }) => {
       const row: Row = {
         id: `shift_${++sequence}`,
@@ -204,6 +221,7 @@ beforeEach(() => {
   branches.clear();
   staff.clear();
   shifts = [];
+  adjustments = [];
   sequence = 0;
   beforeShiftUpdateMany = undefined;
   branches.set(BRANCH, {
@@ -527,6 +545,64 @@ describe('cancelShift', () => {
       status: 'CANCELLED',
       cancelledAt: NOON,
     });
+  });
+
+  it('rejects cancellation while a clock-in correction leaves attendance open', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    adjustments.push({ shiftId: shift.id, kind: 'CLOCK_IN', breakId: null, correctedAt: START });
+
+    await expect(cancelShift(db, shift.id, { now: NOON })).rejects.toMatchObject({
+      reason: 'ACTIVE_ATTENDANCE',
+    });
+    expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null, clockedInAt: null });
+  });
+
+  it('allows cancellation once a clock-out correction closes raw-open attendance', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    await db.restaurantShift.update({
+      where: { id: shift.id },
+      data: { clockedInAt: new Date('2026-08-20T09:05:00Z') },
+    });
+    adjustments.push({
+      shiftId: shift.id,
+      kind: 'CLOCK_OUT',
+      breakId: null,
+      correctedAt: new Date('2026-08-20T11:05:00Z'),
+    });
+
+    await expect(cancelShift(db, shift.id, { now: NOON })).resolves.toMatchObject({
+      status: 'CANCELLED',
+      cancelledAt: NOON,
+      clockedOutAt: null,
+    });
+  });
+
+  it('atomically rejects a clock-in correction racing with cancellation', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    beforeShiftUpdateMany = () => {
+      adjustments.push({ shiftId: shift.id, kind: 'CLOCK_IN', breakId: null, correctedAt: START });
+      beforeShiftUpdateMany = undefined;
+    };
+
+    await expect(cancelShift(db, shift.id, { now: NOON })).rejects.toMatchObject({
+      reason: 'ACTIVE_ATTENDANCE',
+    });
+    expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null, version: 1 });
   });
 
   it.each([
