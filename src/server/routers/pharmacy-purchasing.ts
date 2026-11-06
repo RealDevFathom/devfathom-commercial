@@ -1479,8 +1479,12 @@ const purchasingRouter = router({
             );
           }
           // PUR-01: an unauthorized or licence-expired supplier cannot be
-          // received from, checked here and again when the receipt posts.
-          await assertOrderableSupplier(
+          // received from, checked here and again when the receipt posts. With
+          // supplier checks off, the evidence row is written once the receipt
+          // exists: a direct purchase refused at the approver PIN below returns
+          // `{ blocked }` and commits, and must not leave evidence of a receipt
+          // that was never drafted.
+          const supplierGate = await assertOrderableSupplier(
             db,
             ctx,
             await db.pharmacySupplier.findFirst({
@@ -1492,7 +1496,8 @@ const purchasingRouter = router({
               operation: 'GOODS_RECEIPT_CREATE',
               purchaseOrderId: input.purchaseOrderId ?? null,
               reference: input.reference,
-            }
+            },
+            { record: false }
           );
           if (input.directPurchase) {
             const selfApproval = input.directPurchase.approvedByUserId === scope.actorId;
@@ -1688,6 +1693,19 @@ const purchasingRouter = router({
               actorId: scope.actorId,
               approverId: input.directPurchase.approvedByUserId,
             });
+          }
+          if (!supplierGate.checked) {
+            await recordSupplierComplianceSkip(
+              db,
+              { organizationId: scope.organizationId, actorId: scope.actorId },
+              {
+                operation: 'GOODS_RECEIPT_CREATE',
+                supplierId: input.supplierId,
+                purchaseOrderId: input.purchaseOrderId ?? null,
+                reference: input.reference,
+                outcome: supplierGate,
+              }
+            );
           }
           return receipt;
         });
