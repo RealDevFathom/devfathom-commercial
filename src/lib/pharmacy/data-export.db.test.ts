@@ -221,11 +221,20 @@ async function seed(organizationId: string, label: string, catalogueEdges = fals
         displayName: `${label} family`,
       },
     });
+    const member = await db.pharmacyFamilyMember.create({
+      data: {
+        organizationId,
+        branchId: branch.id,
+        familyAccountId: family.id,
+        customerId: customer.id,
+      },
+    });
     await db.pharmacyKhataEvent.create({
       data: {
         organizationId,
         branchId: branch.id,
         familyAccountId: family.id,
+        memberId: member.id,
         kind: 'CHARGE',
         amountMinor: 125_050,
         dueAt: new Date('2026-11-30T00:00:00.000Z'),
