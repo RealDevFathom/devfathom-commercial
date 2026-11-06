@@ -6,14 +6,16 @@
  * at-most-one reversal, tenant isolation) are in `journal.db.test.ts`; those
  * are claims about PostgreSQL and cannot be shown here.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   ACCOUNT_NORMAL_SIDE,
   assertBalanced,
   FinancePostingError,
+  postJournalEntry,
   signedMinor,
   type JournalLineInput,
+  type PostJournalEntryInput,
 } from './journal';
 
 function leg(
@@ -91,5 +93,96 @@ describe('signedMinor — the FIN-03 sign convention', () => {
     for (const side of Object.values(ACCOUNT_NORMAL_SIDE)) {
       expect(['DEBIT', 'CREDIT']).toContain(side);
     }
+  });
+});
+
+describe('E1 compatibility — voucher replay identity and sum bounds', () => {
+  const scope = { organizationId: 'org_e1', actorId: 'actor_e1' };
+  const voucherLines = [
+    leg('OPERATING_EXPENSE', 'DEBIT', 100),
+    leg('MANUAL_NONTRADE_ACCRUAL', 'CREDIT', 100),
+  ];
+
+  function stubDb(existing: { sourceKind: string; sourceId: string }) {
+    return {
+      financeJournalEntry: { findFirst: vi.fn().mockResolvedValue(existing), create: vi.fn() },
+      financeJournalLine: { create: vi.fn() },
+    };
+  }
+
+  function input(overrides: Partial<PostJournalEntryInput> = {}): PostJournalEntryInput {
+    return {
+      sourceKind: 'PHARMACY_JOURNAL_VOUCHER',
+      sourceId: 'voucher_1',
+      description: 'Nontrade accrual',
+      occurredAt: new Date('2026-10-25T00:00:00Z'),
+      idempotencyKey: 'key_1',
+      lines: voucherLines,
+      ...overrides,
+    };
+  }
+
+  it('keeps accepting legacy Int32 maximum legs on each side', () => {
+    expect(() =>
+      assertBalanced([
+        leg('OPERATING_EXPENSE', 'DEBIT', 2_147_483_647),
+        leg('MANUAL_NONTRADE_ACCRUAL', 'CREDIT', 2_147_483_647),
+      ])
+    ).not.toThrow();
+  });
+
+  it('refuses side totals that leave the safe-integer range', () => {
+    expect(() =>
+      assertBalanced([
+        leg('OPERATING_EXPENSE', 'DEBIT', Number.MAX_SAFE_INTEGER),
+        leg('OPERATING_EXPENSE', 'DEBIT', 1),
+        leg('MANUAL_NONTRADE_ACCRUAL', 'CREDIT', Number.MAX_SAFE_INTEGER),
+        leg('MANUAL_NONTRADE_ACCRUAL', 'CREDIT', 1),
+      ])
+    ).toThrow(new FinancePostingError('INVALID_AMOUNT'));
+  });
+
+  it('preserves legacy replay: a reused key returns the existing entry whatever its source', async () => {
+    const existing = { sourceKind: 'PHARMACY_SALE_LINE', sourceId: 'sale_line_1' };
+    const db = stubDb(existing);
+    await expect(
+      postJournalEntry(
+        db as never,
+        scope,
+        input({
+          sourceKind: 'PHARMACY_SALE_LINE',
+          sourceId: 'sale_line_2',
+          lines: [leg('SALES_CLEARING', 'DEBIT', 100), leg('SALES_REVENUE', 'CREDIT', 100)],
+        })
+      )
+    ).resolves.toBe(existing);
+    expect(db.financeJournalEntry.create).not.toHaveBeenCalled();
+    expect(db.financeJournalLine.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a voucher key reused for a different voucher of the same kind', async () => {
+    const db = stubDb({ sourceKind: 'PHARMACY_JOURNAL_VOUCHER', sourceId: 'voucher_other' });
+    await expect(postJournalEntry(db as never, scope, input())).rejects.toThrow(
+      new FinancePostingError('MISSING_SOURCE')
+    );
+    expect(db.financeJournalEntry.create).not.toHaveBeenCalled();
+    expect(db.financeJournalLine.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a voucher key already used by a different source kind with the same id', async () => {
+    const db = stubDb({ sourceKind: 'PHARMACY_SALE_LINE', sourceId: 'voucher_1' });
+    await expect(postJournalEntry(db as never, scope, input())).rejects.toThrow(
+      new FinancePostingError('MISSING_SOURCE')
+    );
+    expect(db.financeJournalEntry.create).not.toHaveBeenCalled();
+    expect(db.financeJournalLine.create).not.toHaveBeenCalled();
+  });
+
+  it('replays a voucher once when the key, kind and source match', async () => {
+    const existing = { sourceKind: 'PHARMACY_JOURNAL_VOUCHER', sourceId: 'voucher_1' };
+    const db = stubDb(existing);
+    await expect(postJournalEntry(db as never, scope, input())).resolves.toBe(existing);
+    expect(db.financeJournalEntry.create).not.toHaveBeenCalled();
+    expect(db.financeJournalLine.create).not.toHaveBeenCalled();
   });
 });

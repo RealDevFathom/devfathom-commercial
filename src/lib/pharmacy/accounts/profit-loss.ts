@@ -15,6 +15,7 @@ export const profitAndLossClassification = {
   INVENTORY: 'balance_sheet',
   INVENTORY_IN_TRANSIT: 'balance_sheet',
   GOODS_RECEIVED_ACCRUAL: 'balance_sheet',
+  MANUAL_NONTRADE_ACCRUAL: 'balance_sheet',
   SALES_CLEARING: 'balance_sheet',
   SUPPLIER_CLAIM_RECEIVABLE: 'balance_sheet',
   CASH: 'balance_sheet',
