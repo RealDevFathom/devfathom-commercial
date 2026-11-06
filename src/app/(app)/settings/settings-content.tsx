@@ -807,8 +807,8 @@ export function SessionsSection() {
           <div>
             <p className="text-xs font-medium text-foreground">Sign out everywhere</p>
             <p className="text-[11px] text-muted-foreground">
-              Revoke all sessions on every device, including this one. Use this if you suspect
-              your account is compromised.
+              Revoke all sessions on every device, including this one. Use this if you suspect your
+              account is compromised.
             </p>
           </div>
           <Button

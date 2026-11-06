@@ -632,8 +632,7 @@ function ReportEvidence({
         </p>
         <p className="mt-2 break-words text-sm text-text-muted">
           As of report read: {formatReportTimestamp(report.readAt)}. History:{' '}
-          {demand.period.startDate} to{' '}
-          {demand.period.endDateExclusive} (exclusive).
+          {demand.period.startDate} to {demand.period.endDateExclusive} (exclusive).
         </p>
         <p className="mt-2 break-words text-sm text-text-muted">
           Demand provenance: {demand.provenance.kind} · {demand.provenance.reference}. Read at:{' '}

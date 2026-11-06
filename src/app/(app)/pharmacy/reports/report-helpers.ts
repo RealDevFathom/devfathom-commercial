@@ -55,21 +55,12 @@ export function reportsBackHref(scope: { branch?: string | null; from?: string; 
   return `/pharmacy/reports${query ? `?${query}` : ''}`;
 }
 
-const timestampFormat = new Intl.DateTimeFormat('en-GB', {
-  day: 'numeric',
-  month: 'short',
-  year: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-  hourCycle: 'h23',
-  timeZone: 'UTC',
-});
-const dateFormat = new Intl.DateTimeFormat('en-GB', {
-  day: 'numeric',
-  month: 'short',
-  year: 'numeric',
-  timeZone: 'UTC',
-});
+// Spelled out rather than taken from Intl: ICU versions disagree on en-GB
+// month abbreviations ("Sep" vs "Sept"), so server and browser could differ.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const twoDigits = (value: number) => String(value).padStart(2, '0');
+const utcDate = (date: Date) =>
+  `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
 
 /** "1 Nov 2026, 14:59 UTC". Deterministic on server and client; unknown values read as such. */
 export function formatReportTimestamp(
@@ -79,14 +70,14 @@ export function formatReportTimestamp(
   if (value == null || value === '') return unavailable;
   const date = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(date.getTime())) return unavailable;
-  return `${timestampFormat.format(date)} UTC`;
+  return `${utcDate(date)}, ${twoDigits(date.getUTCHours())}:${twoDigits(date.getUTCMinutes())} UTC`;
 }
 
 /** "26 Oct 2026" for a YYYY-MM-DD business date; anything else is returned unchanged. */
 export function formatReportDate(value: string) {
   if (!YMD.test(value)) return value;
   const date = new Date(`${value}T00:00:00.000Z`);
-  return Number.isFinite(date.getTime()) ? dateFormat.format(date) : value;
+  return Number.isFinite(date.getTime()) ? utcDate(date) : value;
 }
 
 /** "26 Oct 2026 – 1 Nov 2026" (inclusive business dates). */

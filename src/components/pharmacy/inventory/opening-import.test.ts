@@ -77,14 +77,16 @@ describe('defaultImportTarget', () => {
 describe('explainImportRow', () => {
   const line = { medicineName: null, packReference: '1234567890123', unitsPerPack: null };
 
-  it('explains an unmatched pack code and links catalogue pick and review request', () => {
+  it('explains an unmatched pack code and links the catalogue search and reference upload', () => {
     const [problem] = explainImportRow({ ...line, errors: [MATCH_ERROR] });
     expect(problem!.title).toBe('No medicine in your catalogue has pack code 1234567890123');
-    expect(problem!.detail).toMatch(/catalogue review/);
-    expect(problem!.detail).toMatch(/only becomes available after it is published/);
+    expect(problem!.detail).toMatch(/reference upload under Medicine reference connectors/);
+    expect(problem!.detail).toMatch(/available after review and publication/);
+    expect(problem!.detail).toMatch(/Adding a barcode to an existing pack is not available yet/);
+    expect(problem!.detail).not.toMatch(/add this barcode or pack ID/);
     expect(problem!.medicine).toEqual({
       pickHref: '/pharmacy/medicines?query=1234567890123',
-      reviewHref: '/pharmacy/medicines/staged?query=1234567890123',
+      reviewHref: '/pharmacy/medicines',
     });
   });
 
@@ -117,7 +119,7 @@ describe('explainImportRow', () => {
     expect(problem!.title).toBe('No pack code on this row');
     expect(problem!.medicine).toEqual({
       pickHref: '/pharmacy/medicines',
-      reviewHref: '/pharmacy/medicines/staged',
+      reviewHref: '/pharmacy/medicines',
     });
   });
 

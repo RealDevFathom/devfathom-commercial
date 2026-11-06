@@ -70,6 +70,11 @@ describe('people-readable dates', () => {
     expect(formatReportTimestamp('not a date', 'unknown')).toBe('unknown');
   });
 
+  it('writes September as Sep whatever month names the runtime ICU data uses', () => {
+    expect(formatReportTimestamp('2026-09-04T12:00:00.000Z')).toBe('4 Sep 2026, 12:00 UTC');
+    expect(formatReportDate('2026-09-01')).toBe('1 Sep 2026');
+  });
+
   it('formats business dates and periods', () => {
     expect(formatReportDate('2026-10-26')).toBe('26 Oct 2026');
     expect(formatReportDate('later')).toBe('later');

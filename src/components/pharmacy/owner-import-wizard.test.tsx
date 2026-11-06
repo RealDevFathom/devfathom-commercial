@@ -107,7 +107,7 @@ describe('owner importer wizard', () => {
     render(<OwnerImportWizard />);
     expect(screen.getByRole('link', { name: 'Imported stock awaiting verification' })).toHaveAttribute('href', '/pharmacy/inventory/imports');
   });
-  it('explains an unmatched row and offers catalogue pick and review request', async () => {
+  it('explains an unmatched row and offers the catalogue search and catalogue review', async () => {
     mocks.preview.mutateAsync.mockResolvedValueOnce({ previewHash: 'b'.repeat(64), canCommit: false, blockers: [], totalUnits: 100, totalValueMinor: '30000', lines: [{ rowNumber: 2, sourceRef: 'QA-OPEN-1', packReference: '1234567890123', medicineName: null, batchNumber: 'QA-B001', expiryDate: '2027-06-30', expiryPrecision: 'DAY', expectedUnits: 100, countedUnits: 100, currentUnits: 0, proposedUnits: 100, varianceUnits: 0, unitsPerPack: null, printedMrpMinor: 5000, unitCostMinor: 300, varianceNote: '', errors: ['Match exactly one published medicine pack with a valid current conversion, using its barcode or pack ID.'] }] });
     render(<OwnerImportWizard />);
     const file = new File(['A\n1'], 'stock.csv');
@@ -117,9 +117,11 @@ describe('owner importer wizard', () => {
     expect(await screen.findByText('No medicine in your catalogue has pack code 1234567890123')).toBeVisible();
     expect(screen.getByText('1 row needs a fix')).toBeVisible();
     expect(screen.queryByText(/Match exactly one published medicine pack/)).toBeNull();
-    expect(screen.getByRole('link', { name: /Pick the matching medicine/ })).toHaveAttribute('href', '/pharmacy/medicines?query=1234567890123');
-    const review = screen.getByRole('link', { name: /Request a new medicine for review/ });
-    expect(review).toHaveAttribute('href', '/pharmacy/medicines/staged?query=1234567890123');
+    expect(screen.getByRole('link', { name: /Open medicine catalogue and packs/ })).toHaveAttribute('href', '/pharmacy/medicines?query=1234567890123');
+    const review = screen.getByRole('link', { name: /Open catalogue review/ });
+    expect(review).toHaveAttribute('href', '/pharmacy/medicines');
+    expect(screen.getByText(/Medicine reference connectors section/)).toBeVisible();
+    expect(screen.queryByRole('link', { name: /Pick the matching medicine|Request a new medicine/ })).toBeNull();
     expect(review).toHaveAttribute('target', '_blank');
     expect(screen.getByRole('button', { name: 'Import opening stock' })).toBeDisabled();
   });

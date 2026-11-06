@@ -296,7 +296,10 @@ export default async function PharmacyTransfersPage({
                 : !destinations.length
                   ? [
                       {
-                        href: inventoryHref(otherBranchWithoutLocation?.id ?? branch.id, '#locations'),
+                        href: inventoryHref(
+                          otherBranchWithoutLocation?.id ?? branch.id,
+                          '#locations'
+                        ),
                         label: `Create a location at ${otherBranchWithoutLocation?.name ?? 'the other branch'}`,
                       },
                     ]
@@ -328,8 +331,8 @@ export default async function PharmacyTransfersPage({
           </div>
         ) : (
           <Empty>
-            No transfers are on their way to {branch.name}. When another branch sends stock here,
-            it appears in this list to receive.
+            No transfers are on their way to {branch.name}. When another branch sends stock here, it
+            appears in this list to receive.
           </Empty>
         )}
       </SectionCard>

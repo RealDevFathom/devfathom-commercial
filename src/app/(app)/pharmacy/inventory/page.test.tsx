@@ -338,9 +338,10 @@ describe('Inventory entry points and empty states', () => {
     );
     expect(screen.getByText(/no stock at this branch to adjust or write off/)).toBeVisible();
     expect(screen.getByText(/you have one/)).toBeVisible();
-    expect(
-      screen.getByRole('link', { name: 'Add a second branch in onboarding' })
-    ).toHaveAttribute('href', '/pharmacy');
+    expect(screen.getByRole('link', { name: 'Add a second branch in onboarding' })).toHaveAttribute(
+      'href',
+      '/pharmacy'
+    );
     expect(
       screen.getAllByRole('link', { name: 'Receive a supplier delivery' }).length
     ).toBeGreaterThan(0);

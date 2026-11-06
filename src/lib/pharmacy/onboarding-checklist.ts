@@ -19,6 +19,8 @@
  * states plainly who delivers the step. Gates whose console has not shipped
  * therefore carry `href: null` and a `why` that names the next action.
  */
+import { OPENING_IMPORT_ROUTE } from '@/components/pharmacy/inventory/opening-import';
+
 import type { PharmacyGateResult, PharmacyOnboardingGate, PharmacyReadiness } from './onboarding';
 
 /**
@@ -116,10 +118,10 @@ export const PHARMACY_GATE_GUIDANCE: Record<PharmacyOnboardingGate, GateGuidance
     linkLabel: 'Set up medicines and packs',
   },
   OPENING_STOCK_READINESS: {
-    todo: 'Receive opening stock against at least one lot, so the ledger starts from a counted position.',
+    todo: 'Import the stock already on your shelves (or receive a supplier delivery in Goods in), so the ledger starts from a counted position.',
     done: 'Opening stock has been received into the ledger.',
-    href: '/pharmacy/purchasing/receiving',
-    linkLabel: 'Receive opening stock',
+    href: OPENING_IMPORT_ROUTE,
+    linkLabel: 'Import opening stock',
   },
   PARTIES_AND_BALANCES: {
     todo: 'Add at least one authorized, active supplier so purchasing and returns have a counterparty.',

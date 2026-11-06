@@ -162,7 +162,7 @@ export function OwnerImportWizard({ initialBranchId }: { initialBranchId?: strin
               <StatusPill status={preview.canCommit ? 'success' : 'blocked'} label={preview.canCommit ? 'Ready to import' : problemRows ? `${problemRows} ${problemRows === 1 ? 'row needs' : 'rows need'} a fix` : 'Import blocked'} />
               <p>{preview.lines.length} rows · {preview.totalUnits} counted units · {money(preview.totalValueMinor)} opening stock value.</p>
               <p>Nothing has been saved yet. Each row that passes adds your shelf count as new stock; the old system’s quantity is only shown for comparison. Stock that was imported before cannot be imported again.</p>
-              {!preview.canCommit && problemRows > 0 && <p>Each row marked below says what is wrong and what to do. Fix your file or your catalogue, then choose Preview import again. Catalogue links open in a new tab so this import stays open.</p>}
+              {!preview.canCommit && problemRows > 0 && <p>Each row marked below says what is wrong and what to do. Fix your file or your catalogue, then choose Preview import again. Catalogue links open in a new tab so this import stays open. On the catalogue page, the packs, review and reference upload tools are in the Medicine reference connectors section.</p>}
             </div>
             {preview.blockers.length > 0 && <ul className="mb-4 list-disc space-y-2 pl-5 text-sm text-destructive">{preview.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>}
             <Table><caption className="sr-only">Opening stock rows, count differences, and blocking validation errors</caption>
@@ -179,8 +179,8 @@ export function OwnerImportWizard({ initialBranchId }: { initialBranchId?: strin
                     <p className="font-medium text-destructive">{problem.title}</p>
                     <p className="mt-1 text-xs text-text-body">{problem.detail}</p>
                     {problem.medicine && <div className="mt-2 flex flex-wrap gap-2">
-                      <a href={problem.medicine.pickHref} {...newTab} className={buttonVariants({ variant: 'secondary', size: 'sm' })}>Pick the matching medicine<span className="sr-only"> (opens in a new tab)</span></a>
-                      <a href={problem.medicine.reviewHref} {...newTab} className={buttonVariants({ variant: 'outline', size: 'sm' })}>Request a new medicine for review<span className="sr-only"> (opens in a new tab)</span></a>
+                      <a href={problem.medicine.pickHref} {...newTab} className={buttonVariants({ variant: 'secondary', size: 'sm' })}>Open medicine catalogue and packs<span className="sr-only"> (opens in a new tab)</span></a>
+                      <a href={problem.medicine.reviewHref} {...newTab} className={buttonVariants({ variant: 'outline', size: 'sm' })}>Open catalogue review<span className="sr-only"> (opens in a new tab)</span></a>
                     </div>}
                   </li>)}</ul> : <><StatusPill status="success" label="Ready" /><p className="mt-2 text-xs">MRP {money(String(line.printedMrpMinor))} per pack · Cost {money(String(line.unitCostMinor))} per unit</p></>}
                   {line.varianceNote && <p className="mt-2 break-words text-xs text-text-muted">Reason for difference: {line.varianceNote}</p>}

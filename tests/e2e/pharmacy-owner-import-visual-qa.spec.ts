@@ -55,8 +55,8 @@ test.describe('owner importer Studio visual QA', () => {
           const commit = page.getByRole('button', { name: 'Import opening stock', exact: true });
           await expect(commit).toBeDisabled();
           await expect(page.getByText('1 row needs a fix', { exact: true })).toBeVisible();
-          await expect(page.getByRole('link', { name: /Pick the matching medicine/ })).toBeVisible();
-          await expect(page.getByRole('link', { name: /Request a new medicine for review/ })).toBeVisible();
+          await expect(page.getByRole('link', { name: /Open medicine catalogue and packs/ })).toBeVisible();
+          await expect(page.getByRole('link', { name: /Open catalogue review/ })).toHaveAttribute('href', '/pharmacy/medicines');
           await expect(page.getByRole('checkbox')).toBeDisabled();
           await page.getByRole('heading', { name: '3. Review and import' }).scrollIntoViewIfNeeded();
           expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1), name).toBe(false);

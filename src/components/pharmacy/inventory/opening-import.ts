@@ -7,7 +7,6 @@
 export const OPENING_IMPORT_ROUTE = '/pharmacy/inventory/import';
 export const IMPORTED_STOCK_ROUTE = '/pharmacy/inventory/imports';
 export const MEDICINE_CATALOGUE_ROUTE = '/pharmacy/medicines';
-export const MEDICINE_REVIEW_ROUTE = '/pharmacy/medicines/staged';
 
 /** The one link every inventory surface uses to start an opening-stock import. */
 export function openingImportHref(branchId?: string | null): string {
@@ -61,7 +60,11 @@ export type ImportRowProblem = {
   title: string;
   /** What to do about it. */
   detail: string;
-  /** Present when the fix happens in the medicine catalogue. */
+  /**
+   * Present when the fix happens in the medicine catalogue: the catalogue
+   * searched for this row, and the catalogue page whose Medicine reference
+   * connectors section holds the reference upload, packs and review tools.
+   */
   medicine?: { pickHref: string; reviewHref: string };
 };
 
@@ -137,7 +140,7 @@ function medicineProblem(line: ImportRowLine): ImportRowProblem {
   const term = (line.medicineName ?? line.packReference).trim();
   const medicine = {
     pickHref: query(MEDICINE_CATALOGUE_ROUTE, term),
-    reviewHref: query(MEDICINE_REVIEW_ROUTE, term),
+    reviewHref: MEDICINE_CATALOGUE_ROUTE,
   };
   if (!line.medicineName)
     return {
@@ -145,7 +148,7 @@ function medicineProblem(line: ImportRowLine): ImportRowProblem {
         ? `No medicine in your catalogue has pack code ${line.packReference}`
         : 'No pack code on this row',
       detail:
-        'Pick the matching medicine and add this barcode or pack ID to its pack, or request the medicine for review. A requested medicine is checked in catalogue review and only becomes available after it is published.',
+        'Check the barcode in your file. If the medicine is not in your catalogue, add it through a reference upload under Medicine reference connectors in the medicine catalogue. It becomes available after review and publication. Adding a barcode to an existing pack is not available yet.',
       medicine,
     };
   if (line.unitsPerPack === null)

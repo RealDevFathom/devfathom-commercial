@@ -87,8 +87,9 @@ describe('daily work pack', () => {
 
   it('leads with plain words and keeps ISO timestamps behind a disclosure', async () => {
     await show();
-    expect(screen.getByText(/26 Oct 2026 – 1 Nov 2026 · Main · checked 1 Nov 2026, 14:59 UTC/))
-      .toBeVisible();
+    expect(
+      screen.getByText(/26 Oct 2026 – 1 Nov 2026 · Main · checked 1 Nov 2026, 14:59 UTC/)
+    ).toBeVisible();
     expect(screen.getByText(/No items found/)).toBeVisible();
     for (const summary of screen.getAllByText('Technical detail')) {
       expect(summary.tagName).toBe('SUMMARY');

@@ -9,7 +9,8 @@ const selectClass =
 /** Builds the URL a GET filter form would navigate to. */
 export function filterHref(action: string, data: FormData): string {
   const query = new URLSearchParams();
-  for (const [key, value] of data.entries()) if (typeof value === 'string') query.append(key, value);
+  for (const [key, value] of data.entries())
+    if (typeof value === 'string') query.append(key, value);
   const search = query.toString();
   return search ? `${action}?${search}` : action;
 }

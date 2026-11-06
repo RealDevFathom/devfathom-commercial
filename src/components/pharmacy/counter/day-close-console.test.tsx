@@ -11,7 +11,12 @@ const mocks = vi.hoisted(() => ({
   /** The zone the workspace has stored. */
   zone: '',
   /** Per-payment-type totals the preview returns. */
-  tenderTotals: [] as { type: string; amountMinor: number; refundMinor: number; netMinor: number }[],
+  tenderTotals: [] as {
+    type: string;
+    amountMinor: number;
+    refundMinor: number;
+    netMinor: number;
+  }[],
   totals: {} as Record<string, number>,
   drawers: null as Record<string, unknown>[] | null,
 }));
@@ -163,7 +168,9 @@ describe('day-close console', () => {
   it('labels a drawer by its opener and time, never by the device identifier', () => {
     render(<PharmacyDayCloseConsole />);
     const label = screen.getByText(/^Drawer 1 ·/);
-    expect(label).toHaveTextContent(/Drawer 1 · Opened \d{2}:\d{2} by Ayesha Karim · Drawer still open/);
+    expect(label).toHaveTextContent(
+      /Drawer 1 · Opened \d{2}:\d{2} by Ayesha Karim · Drawer still open/
+    );
     expect(label).not.toHaveTextContent(/counter-0f3b9a5e/);
     expect(
       drawerOpenedLabel({ openedAt: '2026-09-29T04:12:00Z', openedBy: null }, WORKSPACE_ZONE)
@@ -335,7 +342,9 @@ describe('day-close console', () => {
     mocks.drawers = [];
     mocks.totals = { cashExpectedMinor: 0 };
     render(<PharmacyDayCloseConsole />);
-    expect(screen.getByText(/no completed sales, refunds or drawer cash movements/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/no completed sales, refunds or drawer cash movements/)
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Refresh preview' })).toHaveAccessibleDescription(
       REFRESH_PREVIEW_COPY
     );

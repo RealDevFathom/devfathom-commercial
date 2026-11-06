@@ -11,9 +11,17 @@ export type ReportFilterOptions = {
   available: boolean;
 };
 
-const EMPTY: ReportFilterOptions = { suppliers: [], ingredients: [], batches: [], available: false };
+const EMPTY: ReportFilterOptions = {
+  suppliers: [],
+  ingredients: [],
+  batches: [],
+  available: false,
+};
 
-type FilterOptionDb = Pick<ScopedDb, 'pharmacySupplier' | 'ingredient' | 'pharmacyManufacturingBatch'>;
+type FilterOptionDb = Pick<
+  ScopedDb,
+  'pharmacySupplier' | 'ingredient' | 'pharmacyManufacturingBatch'
+>;
 
 /**
  * Names for the supplier, ingredient and batch report filters. Reads through the

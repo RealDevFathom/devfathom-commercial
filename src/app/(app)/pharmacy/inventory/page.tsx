@@ -499,9 +499,9 @@ export default async function PharmacyInventoryPage({
               receiveStep,
             ]}
           >
-            No available stock at this branch yet. Add your medicines and their packs first. To
-            load stock you already have, use Import opening stock at the top of this page; for new
-            stock, receive a supplier delivery.
+            No available stock at this branch yet. Add your medicines and their packs first. To load
+            stock you already have, use Import opening stock at the top of this page; for new stock,
+            receive a supplier delivery.
           </Empty>
         ) : (
           <div
