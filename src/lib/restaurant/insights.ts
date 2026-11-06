@@ -111,6 +111,7 @@ type DailyRow = {
   branch: { name: string; timezone: string };
   sourceDailyClose: {
     grossSales: Prisma.Decimal;
+    netSales: Prisma.Decimal;
     compTotal: Prisma.Decimal;
     discountTotal: Prisma.Decimal;
     refundTotal: Prisma.Decimal;

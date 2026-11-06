@@ -37,6 +37,7 @@ const dailyRow = {
   branch: { name: 'Main', timezone: 'Asia/Karachi' },
   sourceDailyClose: {
     grossSales: D('125.50'),
+    netSales: D('110.25'),
     compTotal: D('5.25'),
     discountTotal: D('0'),
     refundTotal: D('10'),
@@ -153,6 +154,7 @@ it.each(['7', '4'])(
       netSales: D(stored),
       sourceDailyClose: {
         grossSales: D('10'),
+        netSales: D('7'),
         compTotal: D('2'),
         discountTotal: D('1'),
         refundTotal: D('3'),
@@ -176,10 +178,41 @@ it.each(['7', '4'])(
       expect.objectContaining({
         select: expect.objectContaining({
           sourceDailyClose: expect.objectContaining({
-            select: expect.objectContaining({ discountTotal: true, refundTotal: true }),
+            select: expect.objectContaining({
+              netSales: true,
+              discountTotal: true,
+              refundTotal: true,
+            }),
           }),
         }),
       })
     );
   }
 );
+
+it('reports current close net sales when a refund includes tax or service charge', async () => {
+  const row = {
+    ...dailyRow,
+    netSales: D('4'),
+    sourceDailyClose: {
+      grossSales: D('10'),
+      netSales: D('5'),
+      compTotal: D('2'),
+      discountTotal: D('1'),
+      refundTotal: D('3'),
+      supersededBy: [],
+    },
+  };
+  db.insightDailyRollup.findMany.mockResolvedValue([row]);
+  db.insightDailyRollup.findFirst.mockResolvedValue(row);
+  const [report] = await listInsightReports(db as unknown as ScopedDb, 'financial', {});
+  expect(report.netSales).toBe('5');
+  const detail = await readInsightReport(db as unknown as ScopedDb, 'financial', {
+    branchId: row.branchId,
+    businessDate: '2026-08-20',
+  });
+  expect(detail.netSales).toBe('5');
+  const csv = await exportInsightReports(db as unknown as ScopedDb, 'financial', {});
+  const [header, line] = csv.content.split('\n');
+  expect(line!.split(',')[header!.split(',').indexOf('netSales')]).toBe('5');
+});
