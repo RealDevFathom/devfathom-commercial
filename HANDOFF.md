@@ -14,11 +14,11 @@ _Generated 2026-11-06 20:04 UTC from the live run state by `handoff/scripts/gen-
 - **Update 2026-11-06 20:05 UTC.**
   - **Posted since the restart:** #986 (PASS/PASS/PASS) and #1005 (PASS/PASS/PASS).
   - **#985:** formatting fix 22bb45b4a. Its re-check is first in the queue, and the override carries the original PASS/PASS.
-  - **#1170:** QA found that the bumped pg 8.23.1 and Prisma 7.10.1 fail  in , which would break the private initializer. Fix ab89e8b2b holds pg, @types/pg, @prisma/adapter-pg and @prisma/client at develop's versions. The independent re-review is running (Agent), and the re-check is second in the queue. Do not use the stale review at 860fadd/69469ed2d for #1170.
-  - **Batch B reviews (wf_91b9c8e3-d35):** saved in , with #1170 excluded.
+  - **#1170:** QA found that the bumped pg 8.23.1 and Prisma 7.10.1 fail `assertLockedDrivers()` in `prisma/fresh-database-adapter.ts`, which would break the private initializer. Fix ab89e8b2b holds pg, @types/pg, @prisma/adapter-pg and @prisma/client at develop's versions. The independent re-review is running (Agent), and the re-check is second in the queue. Do not use the stale review at 860fadd/69469ed2d for #1170.
+  - **Batch B reviews (wf_91b9c8e3-d35):** saved in `review-g3-oth-b.json`, with #1170 excluded.
     - Security switched to PASS (no vulnerability; superseded is a QA matter): #963, #961, #903, #259, #853, #1065 and #1054.
     - #105: QA PASS override. The skeptics refuted the expired-cutoff blocker; it stays as an owner note.
-  - **Fixes:** 11 fixes are planned in  (#1067, #1063, #1059, #1057, #1052, #888, #875, #864, #262, #146 and #144). Specs are in . #1059, #1067 and #864 run now as Agent fixers; the other 8 follow in batches of three.
+  - **Fixes:** 11 fixes are planned in `fix-g3-w-othb.json` (#1067, #1063, #1059, #1057, #1052, #888, #875, #864, #262, #146 and #144). Specs are in `fixspec/`. #1059, #1067 and #864 run now as Agent fixers; the other 8 follow in batches of three.
   - **Closed or merged since:** #1120, #1086, #66, #63, #59, #57, #56 and #37 (dropped from the queue).
 - **Half-written / uncommitted:** nothing outside the partial patches above.
 
