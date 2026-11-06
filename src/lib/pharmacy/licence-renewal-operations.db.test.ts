@@ -8,7 +8,8 @@ import { renderRenewalDigest } from './licence-renewal';
 vi.mock('server-only', () => ({}));
 
 const runtimeUrl = process.env.TEST_DATABASE_URL;
-const ownerUrl = process.env.PHARMACY_TEST_OWNER_DATABASE_URL ?? process.env.M8_TEST_OWNER_DATABASE_URL;
+const ownerUrl =
+  process.env.PHARMACY_TEST_OWNER_DATABASE_URL ?? process.env.M8_TEST_OWNER_DATABASE_URL;
 if (runtimeUrl) process.env.DATABASE_URL = runtimeUrl;
 const describeDb = runtimeUrl && ownerUrl ? describe : describe.skip;
 
@@ -174,28 +175,30 @@ describeDb('#720 licence renewal reminders (forced RLS)', () => {
       qpFrom: 5,
       due: ['BRANCH_LICENCE', 'QUALIFIED_PERSON_REGISTRATION'],
     },
-  ])('preserves continuous coverage with $name', async ({ start, end, licenceFrom, qpFrom, due }) => {
-    const id = `branch_ren720_future_${randomBytes(5).toString('hex')}`;
-    await asOwner(async (owner) => {
-      await owner.query(
-        `INSERT INTO pharmacy_branches
+  ])(
+    'preserves continuous coverage with $name',
+    async ({ start, end, licenceFrom, qpFrom, due }) => {
+      const id = `branch_ren720_future_${randomBytes(5).toString('hex')}`;
+      await asOwner(async (owner) => {
+        await owner.query(
+          `INSERT INTO pharmacy_branches
            (id, "organizationId", code, name, "addressLine", city, "provinceCode", "updatedAt")
          VALUES ($1, $2, $1, 'Future renewal', '1 Test Road', 'Lahore', 'PB', now())`,
-        [id, orgA]
-      );
-      await owner.query(PROFILE_INSERT, [
-        `${id}_v1`,
-        orgA,
-        id,
-        1,
-        inDays(-700),
-        inDays(end),
-        'DSL-CURRENT',
-        inDays(7),
-        inDays(7),
-      ]);
-      await owner.query(
-        `INSERT INTO pharmacy_branch_regulatory_profiles
+          [id, orgA]
+        );
+        await owner.query(PROFILE_INSERT, [
+          `${id}_v1`,
+          orgA,
+          id,
+          1,
+          inDays(-700),
+          inDays(end),
+          'DSL-CURRENT',
+          inDays(7),
+          inDays(7),
+        ]);
+        await owner.query(
+          `INSERT INTO pharmacy_branch_regulatory_profiles
            (id, "organizationId", "branchId", version, "effectiveFrom", "provinceCode",
             "jurisdictionRuleSetId", premises, "licenceCategory", "licenceNumber",
             "licenceValidFrom", "licenceValidTo", "licenceEvidenceFileRef", "permittedSchedules",
@@ -204,29 +207,32 @@ describeDb('#720 licence renewal reminders (forced RLS)', () => {
          VALUES ($1, $2, $3, 2, $4, 'PK-PB', 'pk_pb_provisional_v1', '{}',
            'PHARMACY', 'DSL-FUTURE', $5, $6, 'file', ARRAY[]::text[],
            'QP-FUTURE', $7, $6, 'roster', 'UNCONFIRMED', '{}')`,
-        [`${id}_v2`, orgA, id, inDays(start), inDays(licenceFrom), inDays(730), inDays(qpFrom)]
-      );
-    });
-    const reminders = (await read(orgA, [id])).filter((reminder) => reminder.branchId === id);
-    expect(reminders.map((reminder) => reminder.kind).sort()).toEqual([...due].sort());
-    for (const reminder of reminders) {
-      expect(reminder).toMatchObject({ stage: 7, expiresAt: new Date(inDays(7)) });
-      expect(reminder.reference).toBe(reminder.kind === 'BRANCH_LICENCE' ? 'DSL-CURRENT' : 'QP-1');
+          [`${id}_v2`, orgA, id, inDays(start), inDays(licenceFrom), inDays(730), inDays(qpFrom)]
+        );
+      });
+      const reminders = (await read(orgA, [id])).filter((reminder) => reminder.branchId === id);
+      expect(reminders.map((reminder) => reminder.kind).sort()).toEqual([...due].sort());
+      for (const reminder of reminders) {
+        expect(reminder).toMatchObject({ stage: 7, expiresAt: new Date(inDays(7)) });
+        expect(reminder.reference).toBe(
+          reminder.kind === 'BRANCH_LICENCE' ? 'DSL-CURRENT' : 'QP-1'
+        );
+      }
+      // Every reminder channel consumes these same subjects.
+      expect(renderRenewalDigest(reminders)).toHaveLength(due.length ? due.length + 1 : 0);
+      if (start > 7) {
+        const expired = (await read(orgA, [id], new Date(inDays(8)))).filter(
+          (reminder) => reminder.branchId === id
+        );
+        expect(expired).toHaveLength(2);
+        expect(expired.every((reminder) => reminder.expired)).toBe(true);
+        const renewed = (await read(orgA, [id], new Date(inDays(start)))).filter(
+          (reminder) => reminder.branchId === id
+        );
+        expect(renewed).toEqual([]);
+      }
     }
-    // Every reminder channel consumes these same subjects.
-    expect(renderRenewalDigest(reminders)).toHaveLength(due.length ? due.length + 1 : 0);
-    if (start > 7) {
-      const expired = (await read(orgA, [id], new Date(inDays(8)))).filter(
-        (reminder) => reminder.branchId === id
-      );
-      expect(expired).toHaveLength(2);
-      expect(expired.every((reminder) => reminder.expired)).toBe(true);
-      const renewed = (await read(orgA, [id], new Date(inDays(start)))).filter(
-        (reminder) => reminder.branchId === id
-      );
-      expect(renewed).toEqual([]);
-    }
-  });
+  );
 
   it('does not skip an intermediate future coverage gap to reach a distant renewal', async () => {
     const id = `branch_ren720_chain_${suffix}`;
@@ -274,7 +280,8 @@ describeDb('#720 licence renewal reminders (forced RLS)', () => {
       reference: string,
       days: number,
       verified: boolean,
-      supersedesId: string | null
+      supersedesId: string | null,
+      issuedDays = -700
     ) =>
       asOwner(async (owner) => {
         await owner.query(
@@ -287,7 +294,7 @@ describeDb('#720 licence renewal reminders (forced RLS)', () => {
             orgA,
             supplierId,
             reference,
-            inDays(-700),
+            inDays(issuedDays),
             inDays(days),
             verified ? iso(NOW) : null,
             supersedesId,
@@ -303,14 +310,19 @@ describeDb('#720 licence renewal reminders (forced RLS)', () => {
     });
     const subjects = () =>
       deps.withTenantDb(orgA, (db) =>
-        deps.operations.readLicenceRenewalSubjects(db, { organizationId: orgA, branchIds: [], at: NOW })
+        deps.operations.readLicenceRenewalSubjects(db, {
+          organizationId: orgA,
+          branchIds: [],
+          at: NOW,
+        })
       );
     const supplierReminders = async () =>
       (await read(orgA, [])).filter(
         (reminder) => reminder.subjectId === shortId || reminder.subjectId === longId
       );
-    await insert(shortId, 'WS-SHORT', 7, true, null);
-    await insert(longId, 'WS-LONG', 730, true, null);
+    // Issued on different dates, as independent licences usually are.
+    await insert(shortId, 'WS-SHORT', 7, true, null, -358);
+    await insert(longId, 'WS-LONG', 730, true, null, -30);
     expect(
       (await subjects()).filter((subject) => [shortId, longId].includes(subject.subjectId))
     ).toEqual(
@@ -346,10 +358,54 @@ describeDb('#720 licence renewal reminders (forced RLS)', () => {
     );
   });
 
+  it('retires a supplier filing renewed without a link, or lapsed beside a valid one of its type', async () => {
+    const supplierId = `supplier_ren720_unlinked_${suffix}`;
+    await asOwner(async (owner) => {
+      await owner.query(
+        `INSERT INTO pharmacy_suppliers (id, "organizationId", name, authorized, "updatedAt")
+         VALUES ($1, $2, $1, true, now())`,
+        [supplierId, orgA]
+      );
+    });
+    const insert = (id: string, type: string, reference: string, days: number) =>
+      asOwner(async (owner) => {
+        await owner.query(
+          `INSERT INTO pharmacy_supplier_licences
+             (id, "organizationId", "supplierId", "licenceType", "licenceNumber",
+              "issuingAuthority", "issuedAt", "expiresAt", "verifiedAt")
+           VALUES ($1, $2, $3, $4, $5, 'Test authority', $6, $7, $8)`,
+          [id, orgA, supplierId, type, reference, inDays(days - 365), inDays(days), iso(NOW)]
+        );
+      });
+    const supplierReminders = async () =>
+      (await read(orgA, [])).filter((reminder) => reminder.subjectId.startsWith(supplierId));
+
+    // Saved with the form's default "No — this is a new licence": no supersession link.
+    await insert(`${supplierId}_old`, 'WHOLESALE', 'WS-9', 7);
+    expect(await supplierReminders()).toEqual([
+      expect.objectContaining({ reference: 'WS-9', stage: 7 }),
+    ]);
+    await insert(`${supplierId}_new`, ' wholesale ', ' ws-9 ', 730);
+    expect(await supplierReminders()).toEqual([]);
+
+    // A valid licence of another type does not cover a lapsed one.
+    await insert(`${supplierId}_lapsed`, 'RETAIL', 'RT-1', -10);
+    const lapsed = await supplierReminders();
+    expect(lapsed).toEqual([expect.objectContaining({ reference: 'RT-1', expired: true })]);
+    expect(renderRenewalDigest(lapsed).join('\n')).toContain('RT-1');
+    await insert(`${supplierId}_valid`, 'Retail', 'RT-2', 400);
+    expect(await supplierReminders()).toEqual([]);
+  });
+
   it('reminds about a branch licence expiring in 30 days and a supplier licence at 7 days', async () => {
     const reminders = await read(orgA, [branchA]);
     expect(
-      reminders.map(({ kind, reference, stage, branchId }) => ({ kind, reference, stage, branchId }))
+      reminders.map(({ kind, reference, stage, branchId }) => ({
+        kind,
+        reference,
+        stage,
+        branchId,
+      }))
     ).toEqual([
       { kind: 'SUPPLIER_LICENCE', reference: 'WS-1', stage: 7, branchId: null },
       { kind: 'BRANCH_LICENCE', reference: 'DSL-OLD', stage: 30, branchId: branchA },
@@ -369,7 +425,13 @@ describeDb('#720 licence renewal reminders (forced RLS)', () => {
            (id, "organizationId", "supplierId", "licenceType", "licenceNumber",
             "issuingAuthority", "issuedAt", "expiresAt", "supersedesId")
          VALUES ($1, $2, $3, 'WHOLESALE', 'WS-PENDING', 'Test authority', now(), $4, $5)`,
-        [`licence_ren720_pending_${suffix}`, orgA, supplierA, inDays(730), `licence_ren720_a1_${suffix}`]
+        [
+          `licence_ren720_pending_${suffix}`,
+          orgA,
+          supplierA,
+          inDays(730),
+          `licence_ren720_a1_${suffix}`,
+        ]
       );
     });
     const reminders = await read(orgA, [branchA]);

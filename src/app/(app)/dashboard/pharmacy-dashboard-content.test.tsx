@@ -186,7 +186,9 @@ describe('PharmacyDashboardContent states', () => {
     expect(screen.getByTestId('licence-renewal-banner')).toBeVisible();
     expect(screen.getByRole('heading', { name: '1 licence due for renewal' })).toBeVisible();
     expect(screen.getByText('30-day reminder')).toBeVisible();
-    expect(screen.getByText(/expires in 30 days \(2026-10-04\) · Renewal fee Rs 3,000/i)).toBeVisible();
+    expect(
+      screen.getByText(/expires in 30 days \(2026-10-04\) · Renewal fee Rs 3,000/i)
+    ).toBeVisible();
     expect(
       screen.getByRole('link', { name: 'Record the renewal on the regulatory profile' })
     ).toHaveAttribute('href', '/pharmacy/regulatory?branch=b1');

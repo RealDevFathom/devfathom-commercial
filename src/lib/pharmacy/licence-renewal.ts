@@ -22,7 +22,8 @@ export type RenewalReminderStage = (typeof RENEWAL_REMINDER_DAYS)[number];
 /** The widest window: a licence further out than this raises no reminder. */
 export const RENEWAL_WINDOW_DAYS = RENEWAL_REMINDER_DAYS[0];
 
-export type RenewalSubjectKind = 'BRANCH_LICENCE' | 'QUALIFIED_PERSON_REGISTRATION' | 'SUPPLIER_LICENCE';
+export type RenewalSubjectKind =
+  'BRANCH_LICENCE' | 'QUALIFIED_PERSON_REGISTRATION' | 'SUPPLIER_LICENCE';
 
 export type RenewalSubject = {
   kind: RenewalSubjectKind;
@@ -104,7 +105,7 @@ export function renewalChecklist(
       province: null,
       documents: [
         'Ask the supplier for a copy of the renewed drug sale licence.',
-        'Record the renewed licence on the supplier under Purchasing → Suppliers.',
+        "Record the renewed licence on the supplier under Purchasing → Suppliers, and choose the expiring filing under 'Supersedes an earlier filing'.",
       ],
       fee: null,
       provisional: false,
@@ -225,7 +226,12 @@ export function renderRenewalDigest(reminders: readonly RenewalReminder[]): stri
 
 /** Template text must stay a short single line: the provider rejects newlines in parameters. */
 function templateText(value: string, max: number): string {
-  return Array.from(value.replace(/[\r\n\u2028\u2029\t]+/g, ' ').replace(/\s+/g, ' ').trim())
+  return Array.from(
+    value
+      .replace(/[\r\n\u2028\u2029\t]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  )
     .slice(0, max)
     .join('');
 }

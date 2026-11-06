@@ -513,7 +513,7 @@ function SupplierDetail({
             className="sm:col-span-2"
             defaultValue=""
             emptyHint="Nothing to supersede yet — this will be the first filing."
-            hint="A correction supersedes the earlier filing; both are kept."
+            hint="Pick the filing this renews or corrects; both are kept."
             label="Supersedes an earlier filing"
             name="supersedesId"
             notice={notice}
