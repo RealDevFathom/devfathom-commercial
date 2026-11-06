@@ -727,6 +727,8 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await dialog.getByLabel('Sold line').selectOption({ index: 1 });
   await dialog.getByLabel('Returned lot / batch').selectOption({ index: 1 });
   await dialog.getByLabel('Return quantity (base units)').fill('5');
+  await expect(dialog.getByRole('button', { name: 'Record return', exact: true })).toBeDisabled();
+  await dialog.getByLabel('Reason', { exact: true }).selectOption('WRONG_ITEM');
   await dialog.getByLabel('Stock disposition', { exact: true }).selectOption('RESTOCK');
   await dialog
     .getByLabel('Inspection and integrity decision')
@@ -748,6 +750,10 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   // The remaining physical units have no verifiable lot. Keep separate quarantine custody.
   await dialog.getByLabel('Returned lot / batch').selectOption('');
   await dialog.getByLabel('Return quantity (base units)').fill('5');
+  await expect(dialog.getByLabel('Reason', { exact: true })).toHaveValue('');
+  await expect(dialog.getByLabel('Stock disposition', { exact: true })).toHaveValue('');
+  await dialog.getByLabel('Reason', { exact: true }).selectOption('WRONG_ITEM');
+  await dialog.getByLabel('Stock disposition', { exact: true }).selectOption('QUARANTINE');
   await dialog.getByLabel('Quarantine location').selectOption({ index: 1 });
   await dialog
     .getByLabel('Inspection and integrity decision')

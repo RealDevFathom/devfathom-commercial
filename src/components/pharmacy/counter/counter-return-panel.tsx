@@ -132,8 +132,10 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const [lineId, setLineId] = useState('');
   const [lotId, setLotId] = useState('');
   const [units, setUnits] = useState('1');
-  const [reason, setReason] = useState('WRONG_ITEM');
-  const [disposition, setDisposition] = useState<'RESTOCK' | 'QUARANTINE'>('QUARANTINE');
+  const [reason, setReason] = useState('');
+  // Refunds retain their existing reason behavior independently of the return choices.
+  const [refundReason, setRefundReason] = useState('WRONG_ITEM');
+  const [disposition, setDisposition] = useState<'' | 'RESTOCK' | 'QUARANTINE'>('');
   const [location, setLocation] = useState('');
   const [integrity, setIntegrity] = useState('');
   const [tenderId, setTenderId] = useState('');
@@ -236,6 +238,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       localStorage.removeItem(storageKey);
       setAttempt(null);
       setConfirmed(false);
+      setReason('');
+      setDisposition('');
       setUnits('1');
       setAmount('');
       setMessage(
@@ -300,8 +304,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         </p>
       ) : pharmacists.data && pharmacists.data.length === 0 ? (
         <p role="status">
-          No independent pharmacist with an active staff PIN is available. Ask your administrator
-          to configure one.
+          No independent pharmacist with an active staff PIN is available. Ask your administrator to
+          configure one.
         </p>
       ) : null}
       <Label htmlFor="return-witness-pin">Witness PIN</Label>
@@ -387,6 +391,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           setSearched(Number(number));
           setSaleId('');
           setLineId('');
+          setLotId('');
+          setReason('');
+          setDisposition('');
           setTenderId('');
           setConfirmed(false);
         }}
@@ -439,6 +446,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               onClick={() => {
                 setSaleId(row.id);
                 setLineId('');
+                setLotId('');
+                setReason('');
+                setDisposition('');
                 setTenderId('');
                 setConfirmed(false);
               }}
@@ -475,7 +485,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 setWitnessStaffId('');
                 setWitnessPin('');
                 setLotId('');
-                setDisposition('QUARANTINE');
+                setReason('');
+                setDisposition('');
                 setConfirmed(false);
               }}
             >
@@ -498,7 +509,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               value={lotId}
               onChange={(event) => {
                 setLotId(event.target.value);
-                setDisposition('QUARANTINE');
+                setReason('');
+                setDisposition('');
                 setConfirmed(false);
               }}
             >
@@ -539,13 +551,16 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
             <Label htmlFor="return-reason">Reason</Label>
             <select
               id="return-reason"
+              required
               className={selectClass}
               value={reason}
               onChange={(event) => {
                 setReason(event.target.value);
+                if (event.target.value) setRefundReason(event.target.value);
                 setConfirmed(false);
               }}
             >
+              <option value="">Choose a reason</option>
               <option value="WRONG_ITEM">Wrong item / strip</option>
               <option value="DAMAGED">Damaged</option>
               <option value="CUSTOMER_CHANGED_MIND">Customer changed mind</option>
@@ -554,6 +569,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
             <Label htmlFor="return-disposition">Stock disposition</Label>
             <select
               id="return-disposition"
+              required
               className={selectClass}
               value={disposition}
               onChange={(event) => {
@@ -561,7 +577,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 setConfirmed(false);
               }}
             >
-              <option value="QUARANTINE">Quarantine for review</option>
+              <option value="">Choose a stock disposition</option>
+              <option value="QUARANTINE">Keep aside for review</option>
               <option value="RESTOCK" disabled={!selectedLot?.restockAllowed}>
                 Restock to verified lot and original shelf
               </option>
@@ -621,6 +638,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               variant="destructive"
               disabled={
                 !line ||
+                !reason ||
+                !disposition ||
                 !confirmed ||
                 !integrity.trim() ||
                 !Number.isSafeInteger(Number(units)) ||
@@ -630,7 +649,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 (disposition === 'QUARANTINE' && !location) ||
                 !witnessReady
               }
-              onClick={() =>
+              onClick={() => {
+                if (!reason || !disposition) return;
                 void execute(
                   {
                     kind: 'return',
@@ -648,8 +668,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                     },
                   },
                   witness
-                )
-              }
+                );
+              }}
             >
               Record return
             </Button>
@@ -720,7 +740,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                     amountMinor,
                     deviceId: deviceId(),
                     businessDate: businessDate().toISOString(),
-                    reason,
+                    reason: refundReason,
                     idempotencyKey: browserUuid(),
                     manualCashFallback: manualRequired && manual,
                   },

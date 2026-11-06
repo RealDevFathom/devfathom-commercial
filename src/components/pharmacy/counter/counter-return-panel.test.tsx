@@ -113,6 +113,10 @@ describe('counter returns', () => {
     const submit = screen.getByRole('button', { name: 'Record return' });
     expect(submit).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'WRONG_ITEM' } });
+    fireEvent.change(screen.getByLabelText('Stock disposition'), {
+      target: { value: 'QUARANTINE' },
+    });
     fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
     fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
       target: { value: 'seal unknown' },
@@ -130,6 +134,70 @@ describe('counter returns', () => {
       )
     );
     await screen.findByText(/Return recorded/);
+  });
+  it('requires fresh choices and clears them on receipt, line, lot and successful return', async () => {
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    const reason = screen.getByLabelText('Reason');
+    const disposition = screen.getByLabelText('Stock disposition');
+    const selectChoices = () => {
+      fireEvent.change(reason, { target: { value: 'DAMAGED' } });
+      fireEvent.change(disposition, { target: { value: 'QUARANTINE' } });
+    };
+    const expectCleared = () => {
+      expect(reason).toHaveValue('');
+      expect(disposition).toHaveValue('');
+      expect(screen.getByRole('button', { name: 'Record return' })).toBeDisabled();
+    };
+    expectCleared();
+    selectChoices();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    expectCleared();
+    selectChoices();
+    fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: 'lot-a' } });
+    expectCleared();
+    selectChoices();
+    chooseReceipt();
+    expectCleared();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+      target: { value: 'intact' },
+    });
+    fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    expect(screen.getByRole('button', { name: 'Record return' })).toBeDisabled();
+    fireEvent.change(reason, { target: { value: 'DAMAGED' } });
+    expect(screen.getByRole('button', { name: 'Record return' })).toBeDisabled();
+    fireEvent.change(disposition, { target: { value: 'QUARANTINE' } });
+    fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
+    fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+    await screen.findByText(/Return recorded/);
+    expectCleared();
+    expect(mocks.returnLine).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'DAMAGED', disposition: 'QUARANTINE' })
+    );
+  });
+  it('retains the chosen refund reason after the return choices reset', async () => {
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'DAMAGED' } });
+    fireEvent.change(screen.getByLabelText('Stock disposition'), {
+      target: { value: 'QUARANTINE' },
+    });
+    fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
+    fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+      target: { value: 'intact' },
+    });
+    fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+    await screen.findByText(/Return recorded/);
+    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await waitFor(() =>
+      expect(mocks.refund).toHaveBeenCalledWith(expect.objectContaining({ reason: 'DAMAGED' }))
+    );
   });
   it('caps refunds at returned value and requires explicit cash fallback for card', () => {
     render(<ReturnForm {...props} />);
@@ -188,6 +256,7 @@ it('offers sold lots, prevents unsafe restock and caps the selected lot', async 
   expect(restock).toBeDisabled();
   fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: 'lot-a' } });
   expect(restock).not.toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'DAMAGED' } });
   fireEvent.change(screen.getByLabelText('Stock disposition'), { target: { value: 'RESTOCK' } });
   fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
     target: { value: 'Physical batch A verified, intact' },
@@ -218,6 +287,10 @@ describe('controlled medicine returns', () => {
   function fillControlledReturn() {
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'WRONG_ITEM' } });
+    fireEvent.change(screen.getByLabelText('Stock disposition'), {
+      target: { value: 'QUARANTINE' },
+    });
     fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
     fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
       target: { value: 'sealed' },
