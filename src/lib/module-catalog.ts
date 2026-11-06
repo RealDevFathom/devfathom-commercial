@@ -391,6 +391,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/settings/branches', 'pharmacy-core'],
   ['/pharmacy/marketing', 'pharmacy-crm'],
   ['/pharmacy/loyalty', 'pharmacy-crm'],
+  ['/pharmacy/khata', 'pharmacy-counter'],
   ['/pharmacy/cameras', 'pharmacy-core'],
   ['/pharmacy/orders', 'pharmacy-counter'],
   ['/restaurant/staff/roster', 'restaurant-core'],
