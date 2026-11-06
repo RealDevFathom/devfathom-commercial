@@ -119,7 +119,10 @@ Same baseline as `industry-specific-docs/restaurants/cameras/002-configured-medi
 2. An authenticated TLS HLS endpoint, reachable from the app over private routing, with a
    certificate valid for the configured hostname. Never expose anonymous HLS or the MediaMTX
    control API publicly. Restrict each reader to its intended path. Use ordinary `fmp4` or
-   `mpegts` HLS; low-latency HLS is unsupported.
+   `mpegts` HLS; low-latency HLS is unsupported. Do not rely on any anonymous or
+   loopback-only MediaMTX read grant: a same-host reverse proxy in front of HLS makes LAN
+   clients look like loopback, and `hlsTrustedProxies` only changes the logged address, not
+   authentication. Every HLS read must use the authenticated reader in item 4.
 3. A pharmacy gateway and camera registered in the app. Their IDs are shown on the camera card.
 4. A dedicated least-privilege HLS reader username/password delivered through secret
    configuration. This is not the DVR password.
