@@ -23,6 +23,7 @@
  * Skipped unless TEST_DATABASE_URL and OWNER_DATABASE_URL are set.
  */
 import { randomBytes } from 'node:crypto';
+import { hashSync } from 'bcryptjs';
 
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -64,6 +65,8 @@ let seedDepartments: typeof import('@/lib/test-support/departments').seedDepartm
 let disconnect: (() => Promise<void>) | null = null;
 
 const suffix = randomBytes(5).toString('hex');
+/** The direct-purchase approver's PIN in Org E. Synthetic; this database is disposable. */
+const APPROVER_PIN = '2468';
 
 /** The warning version the server publishes (`policy().warningVersion`), read once in setup. */
 let warningVersion = '';
@@ -118,6 +121,7 @@ const ROLES = {
       'pharmacy:counter',
       'pharmacy:close',
       'pharmacy:manage',
+      'pharmacy:procurement-approve',
     ].map((capability) => [capability, 'ALLOW'] as const),
   },
   manager: {
@@ -127,6 +131,7 @@ const ROLES = {
       ['pharmacy:manage', 'ALLOW'],
       ['pharmacy:orders', 'ALLOW'],
       ['pharmacy:procurement', 'ALLOW'],
+      ['pharmacy:procurement-approve', 'ALLOW'],
     ],
   },
   cashier: {
@@ -138,6 +143,15 @@ const ROLES = {
     ],
   },
   procurement: { key: 'procurement', isSystem: true, grants: [['pharmacy:procurement', 'ALLOW']] },
+  /** Raises and approves purchases: approving and sending need their own capability (#994). */
+  procurementApprover: {
+    key: 'procurement-approver',
+    isSystem: false,
+    grants: [
+      ['pharmacy:procurement', 'ALLOW'],
+      ['pharmacy:procurement-approve', 'ALLOW'],
+    ],
+  },
   /** A tenant-made role holding everything. Not the system owner role. */
   superAdmin: { key: 'super-admin', isSystem: false, grants: [['*', 'ALLOW']] },
   /** Everything, except the pharmacy settings capability, which the role itself DENYs. */
@@ -687,6 +701,7 @@ function receiptInput(
           directPurchase: {
             reason: 'Emergency purchase for a patient waiting at the counter.',
             approvedByUserId: options.bypassApprover ?? E.approver,
+            pin: APPROVER_PIN,
           },
         }),
     lines: [
@@ -854,11 +869,11 @@ const PAST = new Date('2026-01-01T00:00:00.000Z');
 async function seedEnforcementOrganization() {
   await seedOrganization(
     E.org,
-    [ROLES.owner, ROLES.procurement, ROLES.cashier],
+    [ROLES.owner, ROLES.procurement, ROLES.procurementApprover, ROLES.cashier],
     [
       { id: E.owner, name: `Esa Owner ${suffix}`, role: 'owner', tenantRole: 'ADMIN' },
       { id: E.buyer, name: `Bilal Buyer ${suffix}`, role: 'procurement' },
-      { id: E.approver, name: `Ayesha Approver ${suffix}`, role: 'procurement' },
+      { id: E.approver, name: `Ayesha Approver ${suffix}`, role: 'procurement-approver' },
       { id: E.cashier, name: `Kamran Cashier ${suffix}`, role: 'cashier' },
     ],
     async (tx) => {
@@ -882,6 +897,18 @@ async function seedEnforcementOrganization() {
           code: `MAIN-${suffix}`,
           name: 'Main',
           kind: 'STORE',
+        },
+      });
+      // Purchasing acts only at branches its staff are assigned to (#994), and a direct
+      // purchase names an approver who reauthenticates with their PIN (#246).
+      for (const userId of [E.buyer, E.approver]) {
+        await tx.pharmacyBranchAssignment.create({ data: { branchId: E.branch, userId } });
+      }
+      await tx.restaurantStaffProfile.create({
+        data: {
+          userId: E.approver,
+          displayName: 'Ayesha Approver',
+          credentials: { create: { type: 'PIN', credentialHash: hashSync(APPROVER_PIN, 4) } },
         },
       });
       for (const [medicineId, packLevelId, controlled] of [
@@ -2170,7 +2197,7 @@ describeIfDatabase(
         async (state) => {
           const purchaseOrderId = orderOf(state.key, 'send-on');
           await expect(
-            asPurchasing(buyer, (api) => api.sendPurchaseOrder({ purchaseOrderId }))
+            asPurchasing(approver, (api) => api.sendPurchaseOrder({ purchaseOrderId }))
           ).rejects.toMatchObject({ code: 'FORBIDDEN', message: state.refusal });
           expect(await orderStatus(purchaseOrderId)).toBe('APPROVED');
           expect(await skipCount()).toBe(0);
@@ -2239,7 +2266,7 @@ describeIfDatabase(
           )
         ).rejects.toMatchObject({ code: 'FORBIDDEN', message: ctl.refusal });
         await expect(
-          asPurchasing(buyer, (api) =>
+          asPurchasing(approver, (api) =>
             api.sendPurchaseOrder({ purchaseOrderId: orderOf(ctl.key, 'send-controlled') })
           )
         ).rejects.toMatchObject({ code: 'FORBIDDEN', message: ctl.refusal });
@@ -2290,7 +2317,9 @@ describeIfDatabase(
         await asPurchasing(approver, (api) =>
           api.approvePurchaseOrder({ purchaseOrderId: order!.id, decision: 'APPROVED' })
         );
-        await asPurchasing(buyer, (api) => api.sendPurchaseOrder({ purchaseOrderId: order!.id }));
+        await asPurchasing(approver, (api) =>
+          api.sendPurchaseOrder({ purchaseOrderId: order!.id })
+        );
         const receipt = await asPurchasing(buyer, (api) =>
           api.createGoodsReceipt(
             receiptInput(state.supplierId, 'on-valid-po', {
@@ -2406,10 +2435,10 @@ describeIfDatabase(
         async (state) => {
           const purchaseOrderId = orderOf(state.key, 'send-off');
           await expect(
-            asPurchasing(buyer, (api) => api.sendPurchaseOrder({ purchaseOrderId }))
+            asPurchasing(approver, (api) => api.sendPurchaseOrder({ purchaseOrderId }))
           ).resolves.toMatchObject({ id: purchaseOrderId, status: 'SENT' });
           expect(await skipsAbout({ purchaseOrderId })).toEqual([
-            expectedSkip('PURCHASE_ORDER_SEND', state, { purchaseOrderId }),
+            expectedSkip('PURCHASE_ORDER_SEND', state, { purchaseOrderId }, 1, E.approver),
           ]);
         }
       );
@@ -2525,7 +2554,9 @@ describeIfDatabase(
         await asPurchasing(approver, (api) =>
           api.approvePurchaseOrder({ purchaseOrderId: order!.id, decision: 'APPROVED' })
         );
-        await asPurchasing(buyer, (api) => api.sendPurchaseOrder({ purchaseOrderId: order!.id }));
+        await asPurchasing(approver, (api) =>
+          api.sendPurchaseOrder({ purchaseOrderId: order!.id })
+        );
         const input = receiptInput(state.supplierId, 'off-lifecycle', {
           purchaseOrderId: order!.id,
           line: { purchaseOrderLineId: order!.lines[0]!.id, receivedPacks: 5 },
@@ -2547,7 +2578,7 @@ describeIfDatabase(
             1,
             E.approver
           ),
-          expectedSkip('PURCHASE_ORDER_SEND', state, { purchaseOrderId: order!.id }),
+          expectedSkip('PURCHASE_ORDER_SEND', state, { purchaseOrderId: order!.id }, 1, E.approver),
           expectedSkip('GOODS_RECEIPT_CREATE', state, {
             purchaseOrderId: order!.id,
             reference: input.reference,
@@ -2578,14 +2609,16 @@ describeIfDatabase(
 
         it('refuses self-approval', async () => {
           const reference = `PO-off-self-${suffix}`;
-          const order = await asPurchasing(buyer, (api) =>
+          // Approval needs its own capability (#994), so the self-approver is the approver
+          // raising their own order: the creator still may not approve it.
+          const order = await asPurchasing(approver, (api) =>
             api.createPurchaseOrder(orderInput(state.supplierId, reference))
           );
-          await asPurchasing(buyer, (api) =>
+          await asPurchasing(approver, (api) =>
             api.submitPurchaseOrder({ purchaseOrderId: order!.id })
           );
           await expect(
-            asPurchasing(buyer, (api) =>
+            asPurchasing(approver, (api) =>
               api.approvePurchaseOrder({ purchaseOrderId: order!.id, decision: 'APPROVED' })
             )
           ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'SELF_APPROVAL' });
@@ -2605,6 +2638,21 @@ describeIfDatabase(
           ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'SELF_APPROVAL' });
           expect(await countWhere('pharmacy_goods_receipts', 'reference', input.reference)).toBe(0);
           // The skip was written inside the refused request's transaction and went with it.
+          expect(await skipsAbout({ reference: input.reference })).toEqual([]);
+        });
+
+        it('leaves no skip behind when the direct-purchase approver PIN is wrong', async () => {
+          // A refused approver PIN returns `{ blocked }` and commits its throttle, so the
+          // supplier evidence must wait for the receipt itself (#994 with #1421).
+          const input = receiptInput(state.supplierId, 'off-wrong-pin');
+          if (!('directPurchase' in input) || !input.directPurchase) {
+            throw new Error('expected a direct purchase');
+          }
+          const wrongPin = { ...input, directPurchase: { ...input.directPurchase, pin: '1357' } };
+          await expect(
+            asPurchasing(buyer, (api) => api.createGoodsReceipt(wrongPin))
+          ).resolves.toEqual({ blocked: expect.any(String) });
+          expect(await countWhere('pharmacy_goods_receipts', 'reference', input.reference)).toBe(0);
           expect(await skipsAbout({ reference: input.reference })).toEqual([]);
         });
 
@@ -2771,7 +2819,7 @@ describeIfDatabase(
           await asPurchasing(approver, (api) =>
             api.approvePurchaseOrder({ purchaseOrderId: toApprove, decision: 'APPROVED' })
           );
-          await asPurchasing(buyer, (api) => api.sendPurchaseOrder({ purchaseOrderId: toSend }));
+          await asPurchasing(approver, (api) => api.sendPurchaseOrder({ purchaseOrderId: toSend }));
           expect(await orderStatus(toApprove)).toBe('APPROVED');
           expect(await orderStatus(toSend)).toBe('SENT');
           expect(await skipsAbout({ purchaseOrderId: toApprove })).toEqual([
@@ -2784,7 +2832,7 @@ describeIfDatabase(
             ),
           ]);
           expect(await skipsAbout({ purchaseOrderId: toSend })).toEqual([
-            expectedSkip('PURCHASE_ORDER_SEND', state, { purchaseOrderId: toSend }),
+            expectedSkip('PURCHASE_ORDER_SEND', state, { purchaseOrderId: toSend }, 1, E.approver),
           ]);
         });
 
@@ -3046,7 +3094,7 @@ describeIfDatabase(
           )
         ).rejects.toMatchObject({ code: 'FORBIDDEN', message: CROSS.refusal });
         await expect(
-          asPurchasing(buyer, (api) =>
+          asPurchasing(approver, (api) =>
             api.sendPurchaseOrder({ purchaseOrderId: orderOf(CROSS.key, 'send-on') })
           )
         ).rejects.toMatchObject({ code: 'FORBIDDEN', message: CROSS.refusal });
@@ -3119,10 +3167,10 @@ describeIfDatabase(
           ]);
           const toSend = orderOf(CROSS.key, 'send-off');
           await expect(
-            asPurchasing(buyer, (api) => api.sendPurchaseOrder({ purchaseOrderId: toSend }))
+            asPurchasing(approver, (api) => api.sendPurchaseOrder({ purchaseOrderId: toSend }))
           ).resolves.toMatchObject({ status: 'SENT' });
           expect(await skipsAbout({ purchaseOrderId: toSend })).toEqual([
-            expectedSkip('PURCHASE_ORDER_SEND', CROSS, { purchaseOrderId: toSend }, 3),
+            expectedSkip('PURCHASE_ORDER_SEND', CROSS, { purchaseOrderId: toSend }, 3, E.approver),
           ]);
         });
 
