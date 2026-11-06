@@ -1505,7 +1505,7 @@
   "machine": null,
   "comment": null,
   "fix": "7fc894abd6f59be1cbedcab95812d8a61daf154d",
-  "next": "`python3 handoff/scripts/compose.py 1064`, then post comments/1064.md via the poster workflow"
+  "next": "re-check queued for fix 7fc894abd6; then `python3 handoff/scripts/compose.py 1064` and post comments/1064.md"
  },
  {
   "pr": 1063,
@@ -1745,14 +1745,14 @@
   "pr": 888,
   "dev": "DEV-252",
   "branch": "cloud/issue-448",
-  "head": "d8fc3f54048af169c283e7062578ad812e1a30d9",
+  "head": "b92a83317a16c73ba56215becb0035215490a963",
   "status": "in progress",
   "qa": "FAIL",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": "d8fc3f54048af169c283e7062578ad812e1a30d9",
-  "next": "re-check queued for fix d8fc3f5404; then `python3 handoff/scripts/compose.py 888` and post comments/888.md"
+  "fix": "b92a83317a16c73ba56215becb0035215490a963",
+  "next": "re-check queued for fix b92a83317a; then `python3 handoff/scripts/compose.py 888` and post comments/888.md"
  },
  {
   "pr": 887,
@@ -1824,13 +1824,13 @@
   "dev": "DEV-345",
   "branch": "cloud/issue-314",
   "head": "032cd874e3d6d7e84a30bc145631af06e0763369",
-  "status": "in progress",
+  "status": "done",
   "qa": "PASS",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/864#issuecomment-6697726797",
   "fix": "032cd874e3d6d7e84a30bc145631af06e0763369",
-  "next": "re-check queued for fix 032cd874e3; then `python3 handoff/scripts/compose.py 864` and post comments/864.md"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/864#issuecomment-6697726797)"
  },
  {
   "pr": 863,
@@ -2096,14 +2096,14 @@
   "pr": 140,
   "dev": "DEV-119",
   "branch": "codex/fix-639",
-  "head": "3eb90cc8b27e427fd35be5e57fb7d37dd1e2560d",
+  "head": "332eed9dcfce2fc17d3f45e2405a0e9b3b1ceadb",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 90"
+  "fix": "332eed9dcfce2fc17d3f45e2405a0e9b3b1ceadb",
+  "next": "re-check queued for fix 332eed9dcf; then `python3 handoff/scripts/compose.py 140` and post comments/140.md"
  },
  {
   "pr": 136,
@@ -2116,7 +2116,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 91"
+  "next": "wait for machine checks queued at position 90"
  },
  {
   "pr": 133,
@@ -2142,7 +2142,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 92"
+  "next": "wait for machine checks queued at position 91"
  },
  {
   "pr": 104,
@@ -2155,7 +2155,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 93"
+  "next": "wait for machine checks queued at position 92"
  },
  {
   "pr": 59,

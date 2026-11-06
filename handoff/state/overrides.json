@@ -810,5 +810,25 @@
    "verdict": "PASS",
    "details": "At 15321aa94 the reverse route keeps orders:complimentary enforced server-side by moneyMutationRoute before the body is parsed, checks the bill is in the device branch before resolveApprover, and passes only the authenticated approver id. assertCoAuthorization rejects approver = operator unless sole-owner PIN reauth. New tests pin the order and approver id, and mutations fail them. No new issue"
   }
+ },
+ "140": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 3eb90cc8b all four items are fixed. Reserve, record and commit share findEffectiveModelPrice, the duplicate @@index is gone with no ai_model_prices drift, and the 4096 cap applies only on the routed path. prettier, eslint, tsc and the unit tests pass. The re-review then found that the PR's own ledger.db.test.ts could not run under the gate's gate_runtime role (RLS refused its organization seed). Fixed in 332eed9dc: setup and cleanup run in a fixture-only platform-admin transaction, and usage cleanup is tenant-scoped. All 6 DB tests now run and pass as gate_runtime and as superuser, with no assertion changed and no leftover rows"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "3eb90cc8b adds no new production SQL. The shared price lookup is a parameterised Prisma query, and unknown models still throw UnknownAIModelPriceError on reserve, record and commit. The routed path keeps its output cap, and the legacy path is uncapped again, as on develop. With platform-admin context for the org setup, ledger.db.test passes 6/6 as gate_runtime, so the ai_usages tenant-isolation checks ran under FORCE RLS. 332eed9dc changes only test fixture setup and cleanup; the code under test still runs under RLS"
+  }
+ },
+ "888": {
+  "qa": {
+   "verdict": "FAIL",
+   "details": "First review FAIL (the printed invoice's new Discount row had no test, and Prettier failed), fixed in d8fc3f540: print-invoice.discount.test.tsx checks row order and exact USD/PKR amounts and fails if the row, its minus sign or the server total breaks. The re-review then found the PR's finance.invoice-discount.db.test.ts ran CREATE ROLE as gate_runtime, so the gate lane skipped all 8 tests; b92a83317 moves setup to SUPERUSER_URL and 7/8 now pass under the gate role. Still FAIL: 'keeps a fully discounted draft editable' hits invoices_invoiceNumber_key, because at this merge-base invoice numbers are counted per tenant but unique globally. Develop fixes that in 988e1b82f (DEV-258), so the branch needs develop merged before it can go green. Merge note: develop's print-invoice.test.tsx fixture then needs discount: 0"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "On tRPC, REST and the assistant, the discount must be 0..MAX_MONEY and at most the subtotal. Totals are recomputed on the server and client totals are ignored. Edits run under FOR UPDATE with a version guard and reject a total below payments. adminProcedure, finance:write and h.isAdmin on the RLS-scoped db are intact. The fix commits change only tests, whitespace and the test suite's setup connection; the code under test still runs as a non-bypassing role"
+  }
  }
 }

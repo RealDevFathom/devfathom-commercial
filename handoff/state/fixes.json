@@ -388,13 +388,6 @@
   "initialFailure": "no machine run (QA finding and Prettier)",
   "noInitialRun": true
  },
- "888": {
-  "sha": "d8fc3f54048af169c283e7062578ad812e1a30d9",
-  "initialSha": "e597375dd806fbf4fca024b83441753c5424214a",
-  "what": "printed invoice discount row covered by a test; Prettier on finance.invoice-status.test.ts",
-  "initialFailure": "no machine run (QA finding and Prettier)",
-  "noInitialRun": true
- },
  "1060": {
   "sha": "0eaf120a45c6906b6d55495bc420b6d036ca32d2",
   "initialSha": "f88abb84b9bb469f6ece18904e3bf4dceb25cf63",
@@ -481,6 +474,20 @@
   "sha": "c3de4a7334446096de52b22a86918bd496ec7a02",
   "initialSha": "95854e025213e12cbf2da0873fb5841c47eff630",
   "what": "keep actorId out of goods-in reversal lookups",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "140": {
+  "sha": "332eed9dcfce2fc17d3f45e2405a0e9b3b1ceadb",
+  "initialSha": "19d4093fba323543df5ef75bf28cb693122bde60",
+  "what": "3eb90cc8b prices the ledger through one tested catalog lookup; 332eed9dc seeds the ledger DB suite as platform admin so it runs under the gate runtime role",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "888": {
+  "sha": "b92a83317a16c73ba56215becb0035215490a963",
+  "initialSha": "e597375dd806fbf4fca024b83441753c5424214a",
+  "what": "d8fc3f540 adds a printed-invoice discount test and Prettier; b92a83317 runs the invoice-discount DB suite's setup on the superuser URL",
   "initialFailure": "no machine run (review findings only)",
   "noInitialRun": true
  }
