@@ -147,6 +147,38 @@ function grant(role: Rule[], overrides: Rule[] = []) {
   });
 }
 
+/**
+ * Write-off authorization and the witness lookup run as raw SQL. Answer each
+ * statement by its shape: the actor's branch assignment (unless `assigned` is
+ * false), the locked actor and witness rows, empty ABAC lock reads, and the
+ * service's witness lookup.
+ */
+function mockWriteOffSql(
+  target: ReturnType<typeof makeDb>,
+  { witness, assigned = true }: { witness: { id: string } | null; assigned?: boolean }
+) {
+  target.$queryRaw.mockImplementation((async (query: { strings: readonly string[] }) => {
+    const sql = query.strings.join('?');
+    if (sql.includes('FROM pharmacy_branches b')) return assigned ? [{ id: 'assignment_a' }] : [];
+    if (sql.includes('u.id, u.role, u.department, u.status')) {
+      return [
+        { id: 'user_a', role: 'ADMIN', department: null, status: 'ACTIVE' },
+        ...(witness
+          ? [{ id: witness.id, role: 'EMPLOYEE', department: null, status: 'ACTIVE' }]
+          : []),
+      ];
+    }
+    if (
+      sql.includes('organization_roles') ||
+      sql.includes('organization_role_permissions') ||
+      sql.includes('user_permission_overrides')
+    ) {
+      return [];
+    }
+    return witness ? [witness] : [];
+  }) as never);
+}
+
 /** The capability middleware's refusal, as opposed to a handler's own FORBIDDEN. */
 const CAPABILITY_REFUSAL = {
   code: 'FORBIDDEN',
@@ -162,9 +194,8 @@ beforeEach(() => {
 describe('pharmacy write-off accounting', () => {
   it('posts the write-off journal in the same transaction as the stock movement', async () => {
     grant([allow('pharmacy:inventory')]);
-    db.user.findFirst.mockResolvedValue({ id: 'user_b' });
+    mockWriteOffSql(db, { witness: { id: 'user_b' } });
     const occurredAt = new Date('2026-10-29T00:02:07.000Z');
-    db.user.findFirst.mockResolvedValue({ id: 'user_b' });
     db.pharmacyInventoryLot.findFirst.mockResolvedValue({
       id: 'lot_1',
       unitsPerPack: 10,
@@ -441,6 +472,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
 
   it('rejects a write-off witness who is not an active member assigned to the branch', async () => {
     grant([allow('pharmacy:inventory')]);
+    mockWriteOffSql(db, { witness: null });
 
     await expect(
       caller().writeOff({
@@ -455,24 +487,16 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'COAUTH_REQUIRED' });
 
-    expect(db.user.findFirst).toHaveBeenCalledWith({
-      where: {
-        id: 'untrusted_string',
-        organizationId: 'org_a',
-        status: 'ACTIVE',
-        pharmacyBranchAssignments: {
-          some: { organizationId: 'org_a', branchId: 'branch_a', active: true },
-        },
-      },
-      select: { id: true },
-    });
+    expect(db.$queryRaw.mock.lastCall).toEqual([
+      expect.objectContaining({ values: ['untrusted_string', 'org_a', 'org_a', 'branch_a'] }),
+    ]);
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
     expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
   });
 
   it('accepts an active same-tenant witness assigned to the write-off branch', async () => {
     grant([allow('pharmacy:inventory')]);
-    db.user.findFirst.mockResolvedValue({ id: 'witness_a' });
+    mockWriteOffSql(db, { witness: { id: 'witness_a' } });
     db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1', unitsPerPack: 1 });
     db.pharmacyStockBalance.findFirst.mockResolvedValue({
       onHandUnits: 5,
@@ -499,6 +523,34 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
         witnessId: 'witness_a',
       }),
     });
+  });
+
+  it('refuses a write-off in a branch the actor is not assigned to before any stock write', async () => {
+    grant([allow('pharmacy:inventory')]);
+    mockWriteOffSql(db, { witness: { id: 'witness_a' }, assigned: false });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1', unitsPerPack: 1 });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 5,
+      sealedPacks: 5,
+      looseUnits: 0,
+    });
+
+    await expect(
+      caller().writeOff({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        witnessId: 'witness_a',
+        reason: 'Damaged package',
+        evidenceRef: 'PHOTO-1',
+        idempotencyKey: 'write-off-1',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
+    expect(mocks.postWriteOffEntry).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -863,6 +915,7 @@ describe('manual quarantine resolution authorization', () => {
       db.pharmacyRecallQuarantineAction.findMany.mockResolvedValue([
         { quantityUnits: 20, heldMovementId: 'recall-held-1' },
       ]);
+      if (operation === 'write-off') mockWriteOffSql(db, { witness: { id: 'witness' } });
       const result =
         operation === 'release'
           ? caller().releaseQuarantinedPart(input)
