@@ -14,6 +14,7 @@ import {
   recoverPaymentCollection,
   collectProviderPayment,
   registerUnpreparedManualCollection,
+  listPendingOfflinePayments,
 } from './payment-attempt-operations';
 
 const url = process.env.WHA1364_RECEIPT_TEST_DATABASE_URL;
@@ -584,6 +585,110 @@ describeDatabase('durable payment attempt foundation on restricted PostgreSQL', 
 
 describeDatabase('authenticated collection hand-off and recovery on restricted PostgreSQL', () => {
   const capture = { payerName: 'Ayesha', providerRef: '001234' };
+  async function offlineHold(f: Awaited<ReturnType<typeof fixture>>) {
+    const input = await reservation(f);
+    const attemptId = randomUUID();
+    return transaction(async (db) =>
+      db.pharmacyPaymentAttempt.create({
+        data: {
+          id: attemptId,
+          organizationId: org,
+          branchId: branch,
+          saleId: input.saleId,
+          deviceId: input.deviceId,
+          requestKey: randomUUID(),
+          requestHash: 'a'.repeat(64),
+          method: input.method,
+          currency: (
+            await db.organization.findUniqueOrThrow({
+              where: { id: org },
+              select: { currency: true },
+            })
+          ).currency,
+          amountMinor: input.amountMinor,
+          billRevision: input.expectedRevision,
+          createdByUserId: scope.actorId,
+          source: 'OFFLINE_HOLD',
+        },
+      })
+    );
+  }
+  it('pages server-recovered offline holds only and rejects foreign branch cursors and missing authority', async () => {
+    const f = await fixture();
+    const ids = [];
+    for (let index = 0; index < 22; index++) ids.push((await offlineHold(f)).id);
+    // The same sale can carry several historical reports; every one remains locked.
+    const all: Awaited<ReturnType<typeof listPendingOfflinePayments>>['items'] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await listPendingOfflinePayments(scope, { cursor });
+      all.push(...page.items);
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    expect(ids.every((id) => all.some((row) => row.id === id))).toBe(true);
+    expect(new Set(all.map((row) => row.id)).size).toBe(all.length);
+    expect(all.every((row) => row.canResolve === false)).toBe(true);
+    expect(all.every((row) => !('settlementInput' in row) && !('collectionTokenHash' in row))).toBe(
+      true
+    );
+    const otherBranch = await transaction((db) =>
+      db.pharmacyBranch.create({
+        data: {
+          organizationId: org,
+          code: randomUUID(),
+          name: 'Other branch',
+          addressLine: 'Test',
+          city: 'Test',
+          provinceCode: 'PB',
+        },
+      })
+    );
+    const ownerOther = { ...owner, branchId: otherBranch.id };
+    expect((await listPendingOfflinePayments(ownerOther, {})).items).toEqual([]);
+    await expect(listPendingOfflinePayments(ownerOther, { cursor: ids[0] })).rejects.toThrow(
+      'PAYMENT_NOT_FOUND'
+    );
+    await expect(
+      listPendingOfflinePayments({ ...scope, branchId: otherBranch.id }, {})
+    ).rejects.toThrow('PAYMENT_FORBIDDEN');
+    await expect(
+      listPendingOfflinePayments({ ...scope, actorId: 'missing-actor' }, {})
+    ).rejects.toThrow('PAYMENT_FORBIDDEN');
+    expect(
+      (await listPendingOfflinePayments(manager, {})).items.every((row) => row.canResolve)
+    ).toBe(true);
+  });
+  it('keeps a listed offline hold locked until assigned manager review and omits it after resolution', async () => {
+    const f = await fixture();
+    const hold = await offlineHold(f);
+    await expect(
+      resolveManualCollection(scope, {
+        attemptId: hold.id,
+        decision: 'CONFIRM',
+        reason: 'Cashier cannot confirm',
+        businessDate,
+        ...capture,
+      })
+    ).rejects.toThrow('PAYMENT_FORBIDDEN');
+    await expect(
+      transaction((db) =>
+        db.pharmacySaleLine.updateMany({ where: { saleId: f.sale.id }, data: { discountMinor: 0 } })
+      )
+    ).rejects.toThrow('PAYMENT_ATTEMPT_UNRESOLVED');
+    expect(
+      await resolveManualCollection(manager, {
+        attemptId: hold.id,
+        decision: 'CONFIRM',
+        reason: 'Verified original offline evidence and branch account',
+        businessDate,
+        ...capture,
+      })
+    ).toMatchObject({ state: 'SETTLED' });
+    expect(
+      (await listPendingOfflinePayments(manager, {})).items.some((row) => row.id === hold.id)
+    ).toBe(false);
+    expect((await counts(f.sale.id)).tenders).toBe(1);
+  });
   it('retains historical manual-card uncertainty without permitting manual card resolution', async () => {
     const f = await fixture();
     const reported = await registerUnpreparedManualCollection(scope, {

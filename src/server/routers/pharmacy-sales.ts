@@ -31,6 +31,8 @@ import {
   resolveManualCollectionSchema,
   PaymentCollectionError,
   registerUnpreparedManualCollection,
+  listPendingOfflinePayments,
+  pendingOfflinePaymentsSchema,
 } from '@/lib/pharmacy/payment-attempt-operations';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -891,6 +893,16 @@ export const pharmacySalesRouter = router({
           : await scopeFor(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
+  pendingOfflinePayments: protectedProcedure
+    .input(pendingOfflinePaymentsSchema.extend({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const { branchId: branch, ...request } = input;
+      try {
+        return await listPendingOfflinePayments(await paymentScope(ctx, branch), request);
+      } catch (error) {
+        fail(error);
+      }
+    }),
   beginManualCollection: protectedProcedure
     .input(beginManualCollectionSchema.extend({ branchId }).strict())
     .mutation(async ({ ctx, input }) => {

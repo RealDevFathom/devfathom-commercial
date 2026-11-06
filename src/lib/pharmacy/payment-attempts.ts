@@ -29,9 +29,9 @@ export class PharmacyPaymentAttemptError extends Error {
  * before exposing collection details or calling any provider. Passing an outer
  * settlement transaction here would recreate the rollback gap.
  *
- * This first slice deliberately exposes no dispatch, release or confirmation
- * method. A prepared bill remains locked until the audited resolution and
- * settlement hand-off is implemented. Do not enable a collection UI yet.
+ * This low-level helper does not dispatch or resolve funds. Authenticated
+ * collection and audited recovery live in payment-attempt-operations.ts and
+ * must retain this separate commit before exposing collection instructions.
  */
 export async function prepareExternalPaymentAttempt(
   scope: LedgerScope,

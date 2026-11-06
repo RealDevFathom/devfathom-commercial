@@ -110,3 +110,40 @@ restricted roles, tenant/branch isolation, immutable audit, late reports and
 receipt-free offline holds. Unit/component tests cover persisted identity,
 malformed acknowledgements, preparation, uncertain recovery and local-store
 financial-data restrictions. No production data or real provider is exercised.
+
+## Pending offline payment management
+
+`/pharmacy/counter/pending-payments` lists only unresolved `OFFLINE_HOLD`
+attempts already recovered to a server sale. The counter opens it in a separate
+tab so an active bill or one-use collection token is not replaced. Local unsent
+holds remain on their original counter and appear only after authenticated
+replay; absence from the list never proves no funds arrived.
+
+The server re-reads stored counter or Owner/Manager authority on every paginated
+read. The cursor must belong to the same tenant, active branch and source. No
+payer/reference, token hash, settlement input or receipt is exposed by the list.
+Selecting a bill fetches fresh scoped recovery data. Confirmation/release uses
+the existing audited role boundary, frozen original request identity/date and
+settlement transaction; neither a UI flag nor list permission authorizes it.
+Cashiers can inspect permitted holds but cannot confirm/release. Failed reads or
+malformed acknowledgements retain uncertainty. Open bill reads the current
+server balance/receipt; the management view never prints a hold receipt.
+
+## Provider reconciliation investigation
+
+The only current provider port (`PharmacyPaymentAdapter`) exposes SALE/REFUND
+`execute`; it has no provider-status lookup or authenticated reconciliation
+response. `payment-sandbox.ts` supports UNKNOWN → RECONCILE in its explicitly
+admitted local simulator, but its outcome is operator-selected synthetic data.
+Its loopback/database admission restriction is retained. That simulator cannot
+be used as evidence to resolve a real durable CARD/WALLET attempt.
+
+Focused mock sandbox tests cover refusal of EXECUTE/RETRY on UNKNOWN and
+synthetic reconciliation. Restricted database tests separately cover durable
+provider success/lost acknowledgement, no second execute, manual-resolution
+refusal and recovery from an actual mock adapter approval after DB rollback.
+No provider network or real credentials are used. A production reconciliation
+binding still needs an authenticated status lookup with exact merchant,
+operation/attempt, currency and amount binding, plus a provider-specific terminal
+no-collection guarantee before release. An unbound reference, timeout or generic
+not-found cannot unlock a bill. No such capability is invented in this slice.
