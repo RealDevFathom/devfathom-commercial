@@ -1,6 +1,6 @@
 # PR review handoff log
 
-_Generated 2026-11-06 18:36 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
+_Generated 2026-11-06 18:50 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
 
 ## Resume here
 
@@ -599,12 +599,12 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 ### #1068 · DEV-322 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1068 · branch `codex/DEV-322-command-centre-khata` · head `53af03e404` · group 3
 - Title: DEV-322: Preserve command-centre Khata branch context
-- Verdicts: machine pending · QA FAIL · Security PASS
+- Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: fix commit 53af03e404 (gives the finance-insights test fixture db the $transaction the scoped tenant db provides; first run on 86d85bfeb7 failed on 5 regressed tests in tests/finance-insights-ai-independence.test.ts (ctx.db.$transaction is not a function)); QA+Security reviews complete
 - Next step: re-check queued for fix 53af03e404; then `python3 handoff/scripts/compose.py 1068` and post comments/1068.md
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1068` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1068`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
-- Decisions: F1 (qa) confirmed by skeptics: The PR makes commandCentre call ctx.db.$transaction. The fixture db built in this suite (lines 112-180) has no $transaction method. ctx.db.$transaction is therefore undefined, the TypeError is caught by the router's try/
+- Decisions: qa verdict set to PASS by hand: Commit 53af03e adds only a $transaction to the fixture db in tests/finance-insights-ai-independence.test.ts. It runs the callback on the same db, as the nested scoped db does, and no assertions changed. That suite and the new command-centre test pass 24/24. Without the line, 5 tests fail. Across 14  | security verdict set to PASS by hand: Commit 53af03e changes one line, in a test fixture only, and adds no production code, raw SQL or new mocks of gates. In the PR as a whole, commandCentre still checks branch IDs against the org's active branches before the read. It then runs readPharmacyOwnerCommandCentre in one ctx.db.$transaction,  | F1 (qa) confirmed by skeptics: The PR makes commandCentre call ctx.db.$transaction. The fixture db built in this suite (lines 112-180) has no $transaction method. ctx.db.$transaction is therefore undefined, the TypeError is caught by the router's try/
 
 ### #1061 · DEV-138 · done
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1061 · branch `codex/linear-mention-dev-138-qa]-sev2]-restaurant-reports-wast` · head `c1fbb802eb` · group 3
@@ -1155,7 +1155,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: security verdict set to PASS by hand: Checked witness validation, org/branch scoping, the in-transaction can() re-check and every new raw SQL (all Prisma.sql-parameterized, org-filtered, run under withTenantDb RLS). Denial tests assert no-effect. The PR introduces no vulnerability, but develop already fixes the issue (1c615d3b4 #657, 7f | F1 (qa) confirmed by skeptics: Superseded. Develop (merge-base 47518cbf9) already fully implements DEV-265. The PR adds nothing the issue still requires. | F2 (qa) confirmed by skeptics: Regression: the new writeOffScopeFor breaks three router tests that came from develop, and the PR does not update them. The merge commit says "Tests updated for both behaviours", but these tests were left as they were. | F3 (qa) confirmed by skeptics: Behaviour change outside the issue. Write-off now requires the actor's own active branch assignment and refuses org ADMINs who have no assignment. On develop, any pharmacy:inventory holder can write off in any active bra | F4 (qa) confirmed by skeptics: The diff includes changes unrelated to the witness issue. | SEC-1 (security) confirmed by skeptics: Superseded: develop already fully satisfies DEV-265. Commit 1c615d3b4 (fix #657 / DEV-124) and commit 7f8649221 (fix #430, the GitHub issue that DEV-265 links, same title as this PR) are both in the merge-base. writeOff 
 
-### #1171 · none (Dependabot production-patch group) · in progress
+### #1171 · PR-1171 (Dependabot, no Linear issue) · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1171 · branch `dependabot/bun/develop/production-patch-51bcce1992` · head `0bab2ace7e` · group 3
 - Title: chore(deps): bump the production-patch group across 1 directory with 11 updates
 - Verdicts: machine pending · QA PASS · Security PASS
@@ -1164,10 +1164,10 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1171` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1171`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
-### #1170 · none (Dependabot PR, no DEV-/# reference) · in progress
+### #1170 · PR #1170 (Dependabot; no DEV-<n> Linear issue or GitHub #<n> issue cited) · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1170 · branch `dependabot/bun/develop/production-minor-d4c3b1f27e` · head `69469ed2d4` · group 3
 - Title: chore(deps): bump the production-minor group across 1 directory with 21 updates
-- Verdicts: machine pending · QA FAIL (partial) · Security PASS (partial)
+- Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
 - Next step: wait for machine checks queued at position 6
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1170` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1170`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)

@@ -232,5 +232,15 @@
    "verdict": "PASS",
    "details": "Checked the cutBills/openOrder closed-day guards, the cutClose/correctClose guard under the branch-day advisory lock (parameterized $executeRaw), org/branch scoping, error mapping and the close-packet permission split. The PR introduces no vulnerability. Not a security failure: no vulnerability was found, and the only blocking point raised (the PR is superseded by develop) is reported under QA"
   }
+ },
+ "1068": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Commit 53af03e adds only a $transaction to the fixture db in tests/finance-insights-ai-independence.test.ts. It runs the callback on the same db, as the nested scoped db does, and no assertions changed. That suite and the new command-centre test pass 24/24. Without the line, 5 tests fail. Across 14 related pharmacy-report suites the only 4 failures also fail on the merge-base 47518cb. Eslint and prettier are clean, a targeted tsc is clean, and the PR merges into develop without conflicts."
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Commit 53af03e changes one line, in a test fixture only, and adds no production code, raw SQL or new mocks of gates. In the PR as a whole, commandCentre still checks branch IDs against the org's active branches before the read. It then runs readPharmacyOwnerCommandCentre in one ctx.db.$transaction, which goes through withTenantDb (org/user GUCs) or reuses the request transaction. The reports:operational gate and the reports:financial masking, including khataAgingMinor, are unchanged."
+  }
  }
 }
