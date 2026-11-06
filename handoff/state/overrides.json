@@ -390,5 +390,25 @@
    "verdict": "PASS",
    "details": "The route no longer reads uploaderStaffProfileId. After the sop:complete check it takes the uploader from the session user's single ACTIVE staff profile in the org (take 2) and fails before storage on zero or several; attachEvidence's owner check still applies. The route test posts a forged id and gets the session-derived id. 70d7e309c/111cdb0c9 also stop the form posting the field, so a posted value has no effect"
   }
+ },
+ "1059": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "First review FAIL (DailyRow.sourceDailyClose lacked the netSales field DAILY_SELECT now reads, a TS2345 at insights.ts:194, and the Insights fixtures had no source-close netSales, so reportNetSales threw), fixed in 477cdfe25. Re-review: full tsc shows no insights/report-net-sales errors. Fixture netSales values match the close formula, and the select assertion is stricter. The new componentized-refund case returns '5' in list, detail and CSV and fails if the old formula comes back. The 3 target suites pass 33/33, and lint and prettier are clean. Non-blocking: legacy-close detection is by equality, so a same-day refund with zero sales value would be normalized as legacy"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Re-checked 477cdfe25 and the full PR: the fix only adds a type field and test fixtures. The nested sourceDailyClose.netSales select reads a row already scoped to the organization, through ScopedDb under financial/capability procedures with branch scope, and appears only in financial report output. No new input, raw SQL, secrets, logging or error leakage. No security issues found"
+  }
+ },
+ "1063": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "First review FAIL (the PR's only regression test for its acceptance path is in menu-import-fixture-runtime.test.mjs, which vitest never collects and no script runs), fixed in 5b19dd9e8. Re-review: the commit-time relabel check now has running vitest coverage, a no-DB unit test and a DB acceptance case, which pass (101 unit, 40 DB). With the guard removed, each fails on its own. Non-blocking: the .mjs case is still dead code (vitest ignores .mjs and its harness fails at load under node --test), so it should be repaired or removed in a follow-up"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Currency enforcement is server-side at both points. Review uses the tenant-scoped db and drops a relabelled amount. Commit, inside one org-scoped transaction with a FOR SHARE read of the org currency, now refuses a same-amount relabel by Decimal comparison. 5b19dd9e8 changes only tests. Router capability and zod bounds are unchanged, and there are no new queries. No vulnerabilities found"
+  }
  }
 }

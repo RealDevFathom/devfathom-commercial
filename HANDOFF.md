@@ -1,6 +1,6 @@
 # PR review handoff log
 
-_Generated 2026-11-06 21:06 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
+_Generated 2026-11-06 21:21 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
 
 ## Resume here
 
@@ -1253,12 +1253,12 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 ### #1063 · DEV-174 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1063 · branch `codex/linear-mention-dev-174-qa]-sev2]-menu-import-reviewed-fo` · head `5b19dd9e80` · group 3
 - Title: fix(menu-import): reject foreign-currency relabelling at commit
-- Verdicts: machine pending · QA FAIL · Security PASS
+- Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: fix commit 5b19dd9e80 (same-amount currency relabel at commit covered in vitest (unit and DB acceptance); first run on 328b3edd4c failed on no machine run (QA finding only)); QA+Security reviews complete
 - Next step: re-check queued for fix 5b19dd9e80; then `python3 handoff/scripts/compose.py 1063` and post comments/1063.md
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1063` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1063`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
-- Decisions: F1 (qa) confirmed by skeptics: The PR's only regression test for its acceptance path never executes. Nothing in CI or locally checks that commit rejects a foreign price relabelled as local with the same amount.
+- Decisions: qa verdict set to PASS by hand: First review FAIL (the PR's only regression test for its acceptance path is in menu-import-fixture-runtime.test.mjs, which vitest never collects and no script runs), fixed in 5b19dd9e8. Re-review: the commit-time relabel check now has running vitest coverage, a no-DB unit test and a DB acceptance ca | security verdict set to PASS by hand: Currency enforcement is server-side at both points. Review uses the tenant-scoped db and drops a relabelled amount. Commit, inside one org-scoped transaction with a FOR SHARE read of the org currency, now refuses a same-amount relabel by Decimal comparison. 5b19dd9e8 changes only tests. Router capab | F1 (qa) confirmed by skeptics: The PR's only regression test for its acceptance path never executes. Nothing in CI or locally checks that commit rejects a foreign price relabelled as local with the same amount.
 
 ### #1062 · DEV-169 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1062 · branch `codex/linear-mention-dev-169-qa]-sev2]-workforce-shift-swaps-c` · head `a9b2e060ea` · group 3
@@ -1273,12 +1273,12 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 ### #1059 · DEV-160 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1059 · branch `codex/linear-mention-dev-160-qa]-sev2]-restaurant-reports/insig` · head `477cdfe258` · group 3
 - Title: fix(restaurant): preserve componentized refund net sales
-- Verdicts: machine pending · QA FAIL · Security PASS
+- Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: fix commit 477cdfe258 (netSales added to the DailyRow source-close type and to the Insights fixtures, plus a componentized-refund Insights test; first run on dc17a4e99f failed on no machine run (QA finding only)); QA+Security reviews complete
 - Next step: re-check queued for fix 477cdfe258; then `python3 handoff/scripts/compose.py 1059` and post comments/1059.md
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1059` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1059`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
-- Decisions: F1 (qa) confirmed by skeptics: The PR adds `netSales: true` to DAILY_SELECT.sourceDailyClose (line 62) and makes `netSales` required in CloseSalesComponents. It does not add the field to the hand-written DailyRow.sourceDailyClose type (lines 112-118:  | F2 (qa) confirmed by skeptics: Existing Insights fixtures were not updated for the new required source-close netSales. reportNetSales now runs `close.netSales.equals(...)` (report-net-sales.ts:21), so every financial serialization with these fixtures 
+- Decisions: qa verdict set to PASS by hand: First review FAIL (DailyRow.sourceDailyClose lacked the netSales field DAILY_SELECT now reads, a TS2345 at insights.ts:194, and the Insights fixtures had no source-close netSales, so reportNetSales threw), fixed in 477cdfe25. Re-review: full tsc shows no insights/report-net-sales errors. Fixture net | security verdict set to PASS by hand: Re-checked 477cdfe25 and the full PR: the fix only adds a type field and test fixtures. The nested sourceDailyClose.netSales select reads a row already scoped to the organization, through ScopedDb under financial/capability procedures with branch scope, and appears only in financial report output. N | F1 (qa) confirmed by skeptics: The PR adds `netSales: true` to DAILY_SELECT.sourceDailyClose (line 62) and makes `netSales` required in CloseSalesComponents. It does not add the field to the hand-written DailyRow.sourceDailyClose type (lines 112-118:  | F2 (qa) confirmed by skeptics: Existing Insights fixtures were not updated for the new required source-close netSales. reportNetSales now runs `close.netSales.equals(...)` (report-net-sales.ts:21), so every financial serialization with these fixtures 
 
 ### #1058 · DEV-176 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1058 · branch `codex/linear-mention-dev-176-qa]-sev2]-offline-pos-modifier-re` · head `3b5bc3e06b` · group 3
