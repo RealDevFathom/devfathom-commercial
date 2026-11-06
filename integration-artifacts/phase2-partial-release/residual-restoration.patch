@@ -1,0 +1,843 @@
+diff --git a/prisma/migrations/20261106160000_pharmacy_residual_restoration/migration.sql b/prisma/migrations/20261106160000_pharmacy_residual_restoration/migration.sql
+new file mode 100644
+index 00000000..b075cb2e
+--- /dev/null
++++ b/prisma/migrations/20261106160000_pharmacy_residual_restoration/migration.sql
+@@ -0,0 +1,136 @@
++-- Review-only prerequisite for integrating void/removal after partial release.
++CREATE TABLE pharmacy_allocation_residual_restorations (
++ id TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL, "branchId" TEXT NOT NULL,
++ "allocationId" TEXT NOT NULL, "stockMovementId" TEXT NOT NULL,
++ "idempotencyKey" TEXT NOT NULL CHECK(length("idempotencyKey") BETWEEN 1 AND 160),
++ "actorId" TEXT NOT NULL CHECK(length("actorId")>0), "reason" TEXT NOT NULL CHECK(length(trim("reason")) BETWEEN 1 AND 500),
++ "canonicalUnits" INTEGER NOT NULL CHECK("canonicalUnits">0), "grossMinor" INTEGER NOT NULL CHECK("grossMinor">=0),
++ "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++ UNIQUE ("organizationId","allocationId"), UNIQUE ("organizationId","stockMovementId"), UNIQUE ("organizationId","idempotencyKey"),
++ FOREIGN KEY ("organizationId","allocationId") REFERENCES pharmacy_allocation_price_evidence("organizationId","allocationId") ON DELETE RESTRICT,
++ FOREIGN KEY ("organizationId","stockMovementId") REFERENCES pharmacy_stock_movements("organizationId",id) ON DELETE RESTRICT
++);
++ALTER TABLE pharmacy_allocation_residual_restorations ENABLE ROW LEVEL SECURITY;
++ALTER TABLE pharmacy_allocation_residual_restorations FORCE ROW LEVEL SECURITY;
++CREATE POLICY tenant_isolation ON pharmacy_allocation_residual_restorations
++ USING ("organizationId"=current_setting('app.current_organization_id',true))
++ WITH CHECK ("organizationId"=current_setting('app.current_organization_id',true));
++CREATE TRIGGER pharmacy_residual_restoration_immutable BEFORE UPDATE OR DELETE ON pharmacy_allocation_residual_restorations
++ FOR EACH ROW EXECUTE FUNCTION pharmacy_reject_mutation();
++
++CREATE FUNCTION pharmacy_guard_residual_restoration() RETURNS trigger LANGUAGE plpgsql AS $$
++DECLARE a RECORD; line RECORD; bill RECORD; snap RECORD; original RECORD; correction RECORD; released RECORD;
++BEGIN
++ SELECT * INTO a FROM pharmacy_sale_line_allocations WHERE "organizationId"=NEW."organizationId" AND id=NEW."allocationId";
++ IF NOT FOUND OR a."branchId"<>NEW."branchId" THEN RAISE EXCEPTION 'RESIDUAL_SCOPE_INVALID'; END IF;
++ SELECT * INTO line FROM pharmacy_sale_lines WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId" AND id=a."saleLineId";
++ IF NOT FOUND THEN RAISE EXCEPTION 'RESIDUAL_LINE_INVALID'; END IF;
++ PERFORM pharmacy_assert_no_payment_attempt(NEW."organizationId",NEW."branchId",line."saleId");
++ SELECT * INTO bill FROM pharmacy_sales WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId" AND id=line."saleId" FOR UPDATE;
++ SELECT * INTO line FROM pharmacy_sale_lines WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId" AND id=a."saleLineId" FOR UPDATE;
++ IF bill.status::text<>'OPEN' OR bill."receiptNumber" IS NOT NULL OR bill."completedAt" IS NOT NULL OR line."removedAt" IS NOT NULL OR
++   EXISTS(SELECT 1 FROM pharmacy_tenders WHERE "organizationId"=NEW."organizationId" AND "saleId"=bill.id) OR
++   EXISTS(SELECT 1 FROM pharmacy_refunds WHERE "organizationId"=NEW."organizationId" AND "saleId"=bill.id) OR
++   EXISTS(SELECT 1 FROM pharmacy_customer_orders WHERE "organizationId"=NEW."organizationId" AND "counterSaleId"=bill.id) OR
++   EXISTS(SELECT 1 FROM pharmacy_medicines WHERE "organizationId"=NEW."organizationId" AND id=line."medicineId" AND (rx OR restricted OR controlled OR "highAlert")) OR
++   EXISTS(SELECT 1 FROM pharmacy_pharmacist_review_items WHERE "organizationId"=NEW."organizationId" AND "saleLineId"=line.id) OR
++   EXISTS(SELECT 1 FROM pharmacy_substitution_records WHERE "organizationId"=NEW."organizationId" AND "saleLineId"=line.id) OR
++   EXISTS(SELECT 1 FROM pharmacy_prescription_fills WHERE "organizationId"=NEW."organizationId" AND "idempotencyKey" IN ('rx-reference:'||line.id,'controlled:'||line.id)) OR
++   EXISTS(SELECT 1 FROM pharmacy_sale_return_lines WHERE "organizationId"=NEW."organizationId" AND "saleLineId"=line.id) OR
++   EXISTS(SELECT 1 FROM pharmacy_unidentified_return_holds WHERE "organizationId"=NEW."organizationId" AND "saleLineId"=line.id) OR
++   line."prescriptionLineId" IS NOT NULL THEN RAISE EXCEPTION 'RESIDUAL_NOT_ALLOWED'; END IF;
++ IF NULLIF(current_setting('app.current_user_id',true),'') IS DISTINCT FROM NEW."actorId" THEN RAISE EXCEPTION 'RESIDUAL_ACTOR_INVALID'; END IF;
++ SELECT * INTO snap FROM pharmacy_allocation_price_evidence WHERE "organizationId"=NEW."organizationId" AND "allocationId"=a.id;
++ SELECT * INTO original FROM pharmacy_stock_movements WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId" AND id=a."stockMovementId";
++ SELECT *,xmin::text::bigint AS insert_xid INTO correction FROM pharmacy_stock_movements WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId" AND id=NEW."stockMovementId";
++ SELECT coalesce(sum(r."canonicalUnits"),0) units,coalesce(sum(r."grossMinor"),0) gross,
++   coalesce(sum(m."sealedPackDelta"),0) sealed,coalesce(sum(m."looseUnitDelta"),0) loose
++ INTO released FROM pharmacy_allocation_partial_releases r JOIN pharmacy_stock_movements m ON m."organizationId"=r."organizationId" AND m.id=r."stockMovementId"
++ WHERE r."organizationId"=NEW."organizationId" AND r."allocationId"=a.id;
++ IF snap."allocationId" IS NULL OR original.id IS NULL OR correction.id IS NULL OR released.units<=0 OR
++   original.kind::text<>'SALE' OR original.disposition::text<>'AVAILABLE' OR original."quantityUnits"<>-a."canonicalUnits" OR
++   original."inventoryLotId"<>a."inventoryLotId" OR original."stockLocationId"<>a."stockLocationId" OR
++   EXISTS(SELECT 1 FROM pharmacy_stock_movements WHERE "organizationId"=NEW."organizationId" AND "reversesMovementId"=original.id) OR
++   NEW."canonicalUnits"<>a."canonicalUnits"-released.units OR NEW."grossMinor"<>snap."grossMinor"-released.gross OR
++   correction.kind::text<>'ADJUSTMENT' OR correction."reversesMovementId" IS NOT NULL OR
++   correction."inventoryLotId"<>original."inventoryLotId" OR correction."stockLocationId"<>original."stockLocationId" OR
++   correction.disposition<>original.disposition OR correction."quantityUnits"<>NEW."canonicalUnits" OR
++   correction."sealedPackDelta"<>-original."sealedPackDelta"-released.sealed OR correction."looseUnitDelta"<>-original."looseUnitDelta"-released.loose OR
++   correction."sealedPackDelta"<0 OR correction."looseUnitDelta"<0 OR correction."actorId"<>NEW."actorId" OR correction.reason IS DISTINCT FROM NEW.reason OR
++   correction."idempotencyKey"<>('residual-restoration:'||NEW."idempotencyKey") OR correction.insert_xid<>(txid_current()%4294967296)
++ THEN RAISE EXCEPTION 'RESIDUAL_EVIDENCE_INVALID'; END IF;
++ RETURN NEW;
++END $$;
++CREATE TRIGGER pharmacy_residual_restoration_guard BEFORE INSERT ON pharmacy_allocation_residual_restorations
++ FOR EACH ROW EXECUTE FUNCTION pharmacy_guard_residual_restoration();
++
++-- A restoration must be committed with a void or line tombstone; it cannot be
++-- used to return stock while the same units are still payable on the bill.
++CREATE FUNCTION pharmacy_check_residual_finalization() RETURNS trigger LANGUAGE plpgsql AS $$
++DECLARE final_sale RECORD;
++BEGIN
++ IF NOT EXISTS(SELECT 1 FROM pharmacy_sale_line_allocations a JOIN pharmacy_sale_lines l ON l."organizationId"=a."organizationId" AND l.id=a."saleLineId"
++   JOIN pharmacy_sales s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s.id=l."saleId"
++   WHERE a."organizationId"=NEW."organizationId" AND a.id=NEW."allocationId" AND (l."removedAt" IS NOT NULL OR s.status::text='VOID'))
++ THEN RAISE EXCEPTION 'RESIDUAL_FINALIZATION_REQUIRED'; END IF;
++ SELECT s.* INTO final_sale FROM pharmacy_sale_line_allocations a JOIN pharmacy_sale_lines l ON l."organizationId"=a."organizationId" AND l.id=a."saleLineId"
++   JOIN pharmacy_sales s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s.id=l."saleId"
++   WHERE a."organizationId"=NEW."organizationId" AND a.id=NEW."allocationId";
++ IF final_sale.status::text='VOID' AND EXISTS(SELECT 1 FROM pharmacy_sale_lines l WHERE l."organizationId"=NEW."organizationId"
++   AND l."branchId"=NEW."branchId" AND l."saleId"=final_sale.id AND l."removedAt" IS NULL AND
++   (NOT EXISTS(SELECT 1 FROM pharmacy_sale_line_allocations a WHERE a."organizationId"=l."organizationId" AND a."saleLineId"=l.id) OR
++    EXISTS(SELECT 1 FROM pharmacy_sale_line_allocations a WHERE a."organizationId"=l."organizationId" AND a."saleLineId"=l.id
++      AND NOT pharmacy_allocation_restoration_complete(a."organizationId",a."branchId",a.id))))
++ THEN RAISE EXCEPTION 'VOID_RESTORATION_INCOMPLETE'; END IF;
++ RETURN NULL;
++END $$;
++CREATE CONSTRAINT TRIGGER pharmacy_residual_finalization AFTER INSERT ON pharmacy_allocation_residual_restorations
++ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION pharmacy_check_residual_finalization();
++
++CREATE FUNCTION pharmacy_allocation_restoration_complete(org TEXT,branch TEXT,allocation TEXT) RETURNS BOOLEAN
++ LANGUAGE sql STABLE AS $$
++ SELECT coalesce((SELECT CASE WHEN coalesce(r.units,0)=0 THEN
++   EXISTS(SELECT 1 FROM pharmacy_stock_movements m WHERE m."organizationId"=a."organizationId" AND m."branchId"=a."branchId" AND m."reversesMovementId"=a."stockMovementId")
++ ELSE
++   NOT EXISTS(SELECT 1 FROM pharmacy_stock_movements m WHERE m."organizationId"=a."organizationId" AND m."reversesMovementId"=a."stockMovementId")
++   AND (r.units=a."canonicalUnits" OR EXISTS(SELECT 1 FROM pharmacy_allocation_residual_restorations x
++     WHERE x."organizationId"=a."organizationId" AND x."branchId"=a."branchId" AND x."allocationId"=a.id
++       AND x."canonicalUnits"=a."canonicalUnits"-r.units))
++ END FROM pharmacy_sale_line_allocations a
++ LEFT JOIN LATERAL (SELECT sum("canonicalUnits") units FROM pharmacy_allocation_partial_releases
++   WHERE "organizationId"=a."organizationId" AND "allocationId"=a.id) r ON true
++ WHERE a."organizationId"=org AND a."branchId"=branch AND a.id=allocation),false)
++$$;
++
++-- Reconcile the active-line tombstone guard with residual evidence without
++-- weakening the controlled-register checks for untouched allocations.
++CREATE OR REPLACE FUNCTION pharmacy_removed_line_guard() RETURNS TRIGGER LANGUAGE plpgsql AS $$
++DECLARE bill RECORD; actor TEXT;
++BEGIN
++ IF TG_OP='INSERT' THEN IF NEW."removedAt" IS NOT NULL THEN RAISE EXCEPTION 'REMOVAL_REQUIRES_EXISTING_LINE'; END IF; RETURN NEW; END IF;
++ IF OLD."removedAt" IS NOT NULL THEN RAISE EXCEPTION 'REMOVED_LINE_IMMUTABLE'; END IF;
++ IF TG_OP='DELETE' THEN RAISE EXCEPTION 'SALE_LINE_EVIDENCE_IMMUTABLE'; END IF;
++ IF NEW."removedAt" IS NULL THEN RETURN NEW; END IF;
++ IF (to_jsonb(NEW)-ARRAY['removedAt','removedByUserId','removalReason']) IS DISTINCT FROM
++    (to_jsonb(OLD)-ARRAY['removedAt','removedByUserId','removalReason']) THEN RAISE EXCEPTION 'REMOVAL_CANNOT_REPRICE'; END IF;
++ PERFORM pharmacy_assert_no_payment_attempt(OLD."organizationId",OLD."branchId",OLD."saleId");
++ SELECT * INTO bill FROM pharmacy_sales WHERE "organizationId"=OLD."organizationId" AND "branchId"=OLD."branchId" AND id=OLD."saleId" FOR UPDATE;
++ IF bill.status::text<>'OPEN' OR bill."receiptNumber" IS NOT NULL OR bill."completedAt" IS NOT NULL OR
++    EXISTS(SELECT 1 FROM pharmacy_tenders WHERE "organizationId"=OLD."organizationId" AND "saleId"=OLD."saleId") OR
++    EXISTS(SELECT 1 FROM pharmacy_refunds WHERE "organizationId"=OLD."organizationId" AND "saleId"=OLD."saleId") OR
++    EXISTS(SELECT 1 FROM pharmacy_customer_orders WHERE "organizationId"=OLD."organizationId" AND "counterSaleId"=OLD."saleId")
++ THEN RAISE EXCEPTION 'REMOVAL_REQUIRES_UNPAID_OPEN_SALE'; END IF;
++ actor:=NULLIF(current_setting('app.current_user_id',true),'');
++ IF actor IS NULL OR actor<>NEW."removedByUserId" THEN RAISE EXCEPTION 'REMOVAL_ACTOR_REQUIRED'; END IF;
++ IF NOT EXISTS(SELECT 1 FROM pharmacy_sale_line_allocations WHERE "organizationId"=OLD."organizationId" AND "saleLineId"=OLD.id) OR
++    EXISTS(SELECT 1 FROM pharmacy_sale_line_allocations a WHERE a."organizationId"=OLD."organizationId" AND a."saleLineId"=OLD.id
++      AND NOT pharmacy_allocation_restoration_complete(a."organizationId",a."branchId",a.id))
++ THEN RAISE EXCEPTION 'REMOVAL_REVERSAL_REQUIRED'; END IF;
++ IF EXISTS(SELECT 1 FROM pharmacy_medicines WHERE id=OLD."medicineId" AND controlled) AND EXISTS(
++   SELECT 1 FROM pharmacy_sale_line_allocations a WHERE a."organizationId"=OLD."organizationId" AND a."saleLineId"=OLD.id AND NOT EXISTS(
++    SELECT 1 FROM pharmacy_controlled_register_entries src JOIN pharmacy_controlled_register_entries correction ON correction."organizationId"=src."organizationId" AND correction."correctsEntryId"=src.id
++    JOIN pharmacy_stock_movements r ON r."organizationId"=a."organizationId" AND r."reversesMovementId"=a."stockMovementId"
++    WHERE src."organizationId"=a."organizationId" AND src."stockMovementId"=a."stockMovementId" AND src."entryKind"::text='SALE' AND correction."restorationMovementId"=r.id))
++ THEN RAISE EXCEPTION 'CONTROLLED_REMOVAL_RESTORATION_REQUIRED'; END IF;
++ RETURN NEW;
++END $$;
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index 41669477..3403f6d5 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -1557,11 +1557,34 @@ model PharmacyAllocationPriceEvidence {
+   allocation     PharmacySaleLineAllocation @relation(fields: [organizationId, allocationId], references: [organizationId, id], onDelete: Restrict)
+   request        PharmacySaleLineEditRequest? @relation(fields: [organizationId, requestKey], references: [organizationId, idempotencyKey], onDelete: Restrict)
+   releases       PharmacyAllocationPartialRelease[]
++  residualRestoration PharmacyAllocationResidualRestoration?
+ 
+   @@id([organizationId, allocationId])
+   @@map("pharmacy_allocation_price_evidence")
+ }
+ 
++/// Final linked correction of the still-allocated portion after partial releases.
++model PharmacyAllocationResidualRestoration {
++  id              String @id
++  organizationId  String
++  branchId        String
++  allocationId    String
++  stockMovementId String
++  idempotencyKey  String
++  actorId         String
++  reason          String
++  canonicalUnits  Int
++  grossMinor      Int
++  createdAt       DateTime @default(now()) @db.Timestamp(3)
++  priceEvidence   PharmacyAllocationPriceEvidence @relation(fields: [organizationId, allocationId], references: [organizationId, allocationId], onDelete: Restrict)
++  stockMovement   PharmacyStockMovement @relation(fields: [organizationId, stockMovementId], references: [organizationId, id], onDelete: Restrict)
++
++  @@unique([organizationId, allocationId])
++  @@unique([organizationId, stockMovementId])
++  @@unique([organizationId, idempotencyKey])
++  @@map("pharmacy_allocation_residual_restorations")
++}
++
+ /// Append-only release evidence; each row names one compensating stock movement.
+ model PharmacyAllocationPartialRelease {
+   id             String                          @id
+@@ -2299,6 +2322,7 @@ model PharmacyStockMovement {
+   /// reversed at most once.
+   reversesMovementId   String?
+   partialRelease       PharmacyAllocationPartialRelease?
++  residualRestoration  PharmacyAllocationResidualRestoration?
+   occurredAt           DateTime                  @default(now())
+   createdAt            DateTime                  @default(now())
+ 
+diff --git a/src/lib/pharmacy/mixed-lot-money.db.test.ts b/src/lib/pharmacy/mixed-lot-money.db.test.ts
+index 69456d10..14bb4348 100644
+--- a/src/lib/pharmacy/mixed-lot-money.db.test.ts
++++ b/src/lib/pharmacy/mixed-lot-money.db.test.ts
+@@ -2,6 +2,7 @@
+ import { randomUUID } from 'node:crypto';
+ import { reduceSaleLineQuantity } from './edit-sale-line-quantity';
+ import { increaseSaleLineQuantity } from './increase-sale-line-quantity';
++import { restoreAllocationResidual } from './restore-allocation-residual';
+ import { Prisma } from '@/generated/prisma/client';
+ import { growthReceiptMoney } from '@/lib/pharmacy/growth-evidence';
+ import { beforeAll, expect, it } from 'vitest';
+@@ -500,6 +501,490 @@ test('serializes full reversal against partial release in both lock orders', asy
+   }
+ });
+ 
++test('restores only the remaining allocation in a void and replays without stock movement', async () => {
++  const f = await cart([100], [2]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 2,
++      toQuantity: 1,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  const allocation = await tenant((db) =>
++    db.pharmacySaleLineAllocation.findFirstOrThrow({
++      where: { organizationId: org, saleLineId: f.line.id },
++    })
++  );
++  const input = {
++    saleId: f.sale.id,
++    saleLineId: f.line.id,
++    allocationId: allocation.id,
++    reason: 'Synthetic void or removal',
++    idempotencyKey: randomUUID(),
++  };
++  await expect(tenant((db) => restoreAllocationResidual(db, scope, input))).rejects.toThrow(
++    /RESIDUAL_FINALIZATION_REQUIRED/
++  );
++  await tenant(async (db) => {
++    const count = await db.$queryRaw<Array<{ n: bigint }>>(
++      Prisma.sql`SELECT count(*) AS n FROM pharmacy_allocation_residual_restorations WHERE "organizationId"=${org} AND "allocationId"=${allocation.id}`
++    );
++    expect(Number(count[0]!.n)).toBe(0);
++  });
++  const result = await tenant(async (db) => {
++    const restored = await restoreAllocationResidual(db, scope, input);
++    await db.pharmacySale.update({
++      where: { organizationId_id: { organizationId: org, id: f.sale.id } },
++      data: { status: 'VOID' },
++    });
++    return restored;
++  });
++  expect(result).toMatchObject({ kind: 'RESTORED', replayed: false });
++  expect(await tenant((db) => restoreAllocationResidual(db, scope, input))).toMatchObject({
++    kind: 'RESTORED',
++    replayed: true,
++  });
++  await expect(
++    tenant((db) => restoreAllocationResidual(db, scope, { ...input, idempotencyKey: randomUUID() }))
++  ).rejects.toThrow('RESIDUAL_IDEMPOTENCY_CONFLICT');
++  await expect(
++    tenant((db) =>
++      restoreAllocationResidual(db, { ...scope, branchId: `${scope.branchId}_other` }, input)
++    )
++  ).rejects.toThrow();
++  await expect(
++    withTenantDb(`${org}_other`, (db) =>
++      restoreAllocationResidual(db, { ...scope, organizationId: `${org}_other` }, input)
++    )
++  ).rejects.toThrow();
++  await tenant(async (db) => {
++    const rows = await db.$queryRaw<Array<{ n: bigint; units: bigint; gross: bigint }>>(
++      Prisma.sql`SELECT count(*) AS n, sum("canonicalUnits") AS units, sum("grossMinor") AS gross FROM pharmacy_allocation_residual_restorations WHERE "organizationId"=${org} AND "allocationId"=${allocation.id}`
++    );
++    expect(rows.map((x) => [Number(x.n), Number(x.units), Number(x.gross)])).toEqual([[1, 1, 100]]);
++    const balance = await db.pharmacyStockBalance.findFirstOrThrow({
++      where: { organizationId: org, inventoryLotId: f.lots[0]!.id, disposition: 'AVAILABLE' },
++    });
++    expect(balance.onHandUnits).toBe(2);
++  });
++});
++
++test('refuses residual restoration if a partially released medicine becomes controlled', async () => {
++  const f = await cart([100], [2]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 2,
++      toQuantity: 1,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  const allocation = await tenant((db) =>
++    db.pharmacySaleLineAllocation.findFirstOrThrow({
++      where: { organizationId: org, saleLineId: f.line.id },
++    })
++  );
++  await tenant((db) =>
++    db.medicine.update({ where: { id: f.line.medicineId }, data: { controlled: true } })
++  );
++  await expect(
++    tenant(async (db) => {
++      await restoreAllocationResidual(db, scope, {
++        saleId: f.sale.id,
++        saleLineId: f.line.id,
++        allocationId: allocation.id,
++        reason: 'Synthetic void or removal',
++        idempotencyKey: randomUUID(),
++      });
++      await db.pharmacySale.update({
++        where: { organizationId_id: { organizationId: org, id: f.sale.id } },
++        data: { status: 'VOID' },
++      });
++    })
++  ).rejects.toThrow(/RESIDUAL_NOT_ALLOWED/);
++  await tenant(async (db) => {
++    const balance = await db.pharmacyStockBalance.findFirstOrThrow({
++      where: { organizationId: org, inventoryLotId: f.lots[0]!.id, disposition: 'AVAILABLE' },
++    });
++    expect(balance.onHandUnits).toBe(1);
++  });
++});
++
++test('allows a scoped tombstone only after the residual correction', async () => {
++  const f = await cart([100], [2]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 2,
++      toQuantity: 1,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  const allocation = await tenant((db) =>
++    db.pharmacySaleLineAllocation.findFirstOrThrow({
++      where: { organizationId: org, saleLineId: f.line.id },
++    })
++  );
++  await tenant(async (db) => {
++    await restoreAllocationResidual(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      allocationId: allocation.id,
++      reason: 'Synthetic void or removal',
++      idempotencyKey: randomUUID(),
++    });
++    await db.$executeRaw(
++      Prisma.sql`UPDATE pharmacy_sale_lines SET "removedAt"=now(), "removedByUserId"=${scope.actorId}, "removalReason"='test removal' WHERE "organizationId"=${org} AND id=${f.line.id}`
++    );
++  });
++  await tenant(async (db) => {
++    const [result] = await db.$queryRaw<Array<{ complete: boolean }>>(
++      Prisma.sql`SELECT pharmacy_allocation_restoration_complete(${org},${scope.branchId},${allocation.id}) AS complete`
++    );
++    expect(result!.complete).toBe(true);
++    const balance = await db.pharmacyStockBalance.findFirstOrThrow({
++      where: { organizationId: org, inventoryLotId: f.lots[0]!.id, disposition: 'AVAILABLE' },
++    });
++    expect(balance.onHandUnits).toBe(2);
++  });
++});
++
++test('skips a fully released allocation and fully reverses untouched allocation on void', async () => {
++  const f = await cart([100, 200], [1, 1]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 2,
++      toQuantity: 1,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  const allocations = await tenant((db) =>
++    db.pharmacySaleLineAllocation.findMany({
++      where: { organizationId: org, saleLineId: f.line.id },
++    })
++  );
++  await tenant(async (db) => {
++    for (const allocation of allocations) {
++      const result = await restoreAllocationResidual(db, scope, {
++        saleId: f.sale.id,
++        saleLineId: f.line.id,
++        allocationId: allocation.id,
++        reason: 'Synthetic void or removal',
++        idempotencyKey: `test-${allocation.id}`,
++      });
++      if (allocation.inventoryLotId === f.lots[1]!.id) expect(result.kind).toBe('ALREADY_RELEASED');
++      else {
++        expect(result.kind).toBe('FULL_REVERSAL_REQUIRED');
++        await reverseMovements(db, scope, {
++          movementIds: [allocation.stockMovementId],
++          reason: 'synthetic void',
++          at: new Date(),
++        });
++      }
++    }
++    await db.pharmacySale.update({
++      where: { organizationId_id: { organizationId: org, id: f.sale.id } },
++      data: { status: 'VOID' },
++    });
++  });
++  await tenant(async (db) => {
++    const balances = await db.pharmacyStockBalance.findMany({
++      where: {
++        organizationId: org,
++        inventoryLotId: { in: f.lots.map((lot) => lot.id) },
++        disposition: 'AVAILABLE',
++      },
++    });
++    expect(balances.map((balance) => balance.onHandUnits).sort()).toEqual([1, 1]);
++  });
++});
++
++test('requires every allocation to be restored when residual evidence finalizes a void', async () => {
++  const f = await cart([100, 200], [1, 2]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 3,
++      toQuantity: 2,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  const allocations = await tenant((db) =>
++    db.pharmacySaleLineAllocation.findMany({
++      where: { organizationId: org, saleLineId: f.line.id },
++    })
++  );
++  const first = allocations.find((a) => a.inventoryLotId === f.lots[0]!.id)!;
++  const second = allocations.find((a) => a.inventoryLotId === f.lots[1]!.id)!;
++  const input = {
++    saleId: f.sale.id,
++    saleLineId: f.line.id,
++    allocationId: second.id,
++    reason: 'Synthetic void or removal',
++    idempotencyKey: randomUUID(),
++  };
++  await expect(
++    tenant(async (db) => {
++      await restoreAllocationResidual(db, scope, input);
++      await db.pharmacySale.update({
++        where: { organizationId_id: { organizationId: org, id: f.sale.id } },
++        data: { status: 'VOID' },
++      });
++    })
++  ).rejects.toThrow(/VOID_RESTORATION_INCOMPLETE/);
++  await tenant(async (db) => {
++    await reverseMovements(db, scope, {
++      movementIds: [first.stockMovementId],
++      reason: 'synthetic void',
++      at: new Date(),
++    });
++    await restoreAllocationResidual(db, scope, input);
++    await db.pharmacySale.update({
++      where: { organizationId_id: { organizationId: org, id: f.sale.id } },
++      data: { status: 'VOID' },
++    });
++  });
++  await tenant(async (db) => {
++    const balances = await db.pharmacyStockBalance.findMany({
++      where: {
++        organizationId: org,
++        inventoryLotId: { in: f.lots.map((lot) => lot.id) },
++        disposition: 'AVAILABLE',
++      },
++    });
++    expect(balances.map((balance) => balance.onHandUnits).sort()).toEqual([1, 2]);
++  });
++});
++
++test('serializes residual restoration against another reduction in both orders', async () => {
++  for (const first of ['restore', 'reduce'] as const) {
++    const f = await cart([100], [3]);
++    await tenant((db) =>
++      reduceSaleLineQuantity(db, scope, {
++        saleId: f.sale.id,
++        saleLineId: f.line.id,
++        fromQuantity: 3,
++        toQuantity: 2,
++        idempotencyKey: randomUUID(),
++      })
++    );
++    const allocation = await tenant((db) =>
++      db.pharmacySaleLineAllocation.findFirstOrThrow({
++        where: { organizationId: org, saleLineId: f.line.id },
++      })
++    );
++    const restore = async (db: ScopedDb) => {
++      await restoreAllocationResidual(db, scope, {
++        saleId: f.sale.id,
++        saleLineId: f.line.id,
++        allocationId: allocation.id,
++        reason: 'Synthetic void or removal',
++        idempotencyKey: 'race-' + allocation.id,
++      });
++      await db.pharmacySale.update({
++        where: { organizationId_id: { organizationId: org, id: f.sale.id } },
++        data: { status: 'VOID' },
++      });
++    };
++    const reduce = (db: ScopedDb) =>
++      reduceSaleLineQuantity(db, scope, {
++        saleId: f.sale.id,
++        saleLineId: f.line.id,
++        fromQuantity: 2,
++        toQuantity: 1,
++        idempotencyKey: randomUUID(),
++      });
++    let unlock!: () => void, signal!: () => void;
++    const held = new Promise<void>((resolve) => {
++      unlock = resolve;
++    });
++    const ready = new Promise<void>((resolve) => {
++      signal = resolve;
++    });
++    const winner = tenant(async (db) => {
++      if (first === 'restore') await restore(db);
++      else await reduce(db);
++      signal();
++      await held;
++    });
++    await ready;
++    const loser = tenant(async (db) => {
++      if (first === 'restore') await reduce(db);
++      else await restore(db);
++    });
++    const observed = loser.then(
++      () => 'finished',
++      () => 'finished'
++    );
++    expect(
++      await Promise.race([
++        observed,
++        new Promise((resolve) => setTimeout(() => resolve('blocked'), 50)),
++      ])
++    ).toBe('blocked');
++    unlock();
++    await winner;
++    if (first === 'restore') await expect(loser).rejects.toThrow('SALE_NOT_EDITABLE');
++    else await loser;
++    await tenant(async (db) => {
++      const balance = await db.pharmacyStockBalance.findFirstOrThrow({
++        where: { organizationId: org, inventoryLotId: f.lots[0]!.id, disposition: 'AVAILABLE' },
++      });
++      expect(balance.onHandUnits).toBe(3);
++      const rows = await db.$queryRaw<Array<{ n: bigint }>>(
++        Prisma.sql`SELECT count(*) AS n FROM pharmacy_allocation_residual_restorations WHERE "organizationId"=${org} AND "allocationId"=${allocation.id}`
++      );
++      expect(Number(rows[0]!.n)).toBe(1);
++    });
++  }
++});
++
++test('concurrent residual retries restore stock exactly once', async () => {
++  const f = await cart([100], [2]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 2,
++      toQuantity: 1,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  const allocation = await tenant((db) =>
++    db.pharmacySaleLineAllocation.findFirstOrThrow({
++      where: { organizationId: org, saleLineId: f.line.id },
++    })
++  );
++  const input = {
++    saleId: f.sale.id,
++    saleLineId: f.line.id,
++    allocationId: allocation.id,
++    reason: 'Synthetic void or removal',
++    idempotencyKey: randomUUID(),
++  };
++  let unlock!: () => void, signal!: () => void;
++  const held = new Promise<void>((resolve) => {
++    unlock = resolve;
++  });
++  const ready = new Promise<void>((resolve) => {
++    signal = resolve;
++  });
++  const first = tenant(async (db) => {
++    const result = await restoreAllocationResidual(db, scope, input);
++    await db.pharmacySale.update({
++      where: { organizationId_id: { organizationId: org, id: f.sale.id } },
++      data: { status: 'VOID' },
++    });
++    signal();
++    await held;
++    return result;
++  });
++  await ready;
++  const retry = tenant((db) => restoreAllocationResidual(db, scope, input));
++  const observed = retry.then(
++    () => 'finished',
++    () => 'finished'
++  );
++  expect(
++    await Promise.race([
++      observed,
++      new Promise((resolve) => setTimeout(() => resolve('blocked'), 50)),
++    ])
++  ).toBe('blocked');
++  unlock();
++  expect(await first).toMatchObject({ kind: 'RESTORED', replayed: false });
++  expect(await retry).toMatchObject({ kind: 'RESTORED', replayed: true });
++  await tenant(async (db) => {
++    const balance = await db.pharmacyStockBalance.findFirstOrThrow({
++      where: { organizationId: org, inventoryLotId: f.lots[0]!.id, disposition: 'AVAILABLE' },
++    });
++    expect(balance.onHandUnits).toBe(2);
++  });
++});
++
++test('serializes residual restoration against payment preparation in both orders', async () => {
++  for (const first of ['restore', 'prepare'] as const) {
++    const f = await cart([100], [2]);
++    await tenant((db) =>
++      reduceSaleLineQuantity(db, scope, {
++        saleId: f.sale.id,
++        saleLineId: f.line.id,
++        fromQuantity: 2,
++        toQuantity: 1,
++        idempotencyKey: randomUUID(),
++      })
++    );
++    const allocation = await tenant((db) =>
++      db.pharmacySaleLineAllocation.findFirstOrThrow({
++        where: { organizationId: org, saleLineId: f.line.id },
++      })
++    );
++    const [revision] = await tenant((db) =>
++      db.$queryRaw<Array<{ paymentRevision: number }>>(
++        Prisma.sql`SELECT "paymentRevision" FROM pharmacy_sales WHERE "organizationId"=${org} AND id=${f.sale.id}`
++      )
++    );
++    const restore = async (db: ScopedDb) => {
++      await restoreAllocationResidual(db, scope, {
++        saleId: f.sale.id,
++        saleLineId: f.line.id,
++        allocationId: allocation.id,
++        reason: 'Synthetic void or removal',
++        idempotencyKey: randomUUID(),
++      });
++      await db.pharmacySale.update({
++        where: { organizationId_id: { organizationId: org, id: f.sale.id } },
++        data: { status: 'VOID' },
++      });
++    };
++    const prepare = (db: ScopedDb) =>
++      db.$executeRaw(Prisma.sql`
++      INSERT INTO pharmacy_payment_attempts (id,"organizationId","branchId","saleId","deviceId","requestKey","requestHash",method,currency,"amountMinor","billRevision","createdByUserId")
++      SELECT ${randomUUID()},${org},${scope.branchId},${f.sale.id},${randomUUID()},${randomUUID()},${'a'.repeat(64)},'JAZZCASH',o.currency,100,${revision!.paymentRevision},${scope.actorId}
++      FROM organizations o WHERE o.id=${org}`);
++    let unlock!: () => void, signal!: () => void;
++    const held = new Promise<void>((resolve) => {
++      unlock = resolve;
++    });
++    const ready = new Promise<void>((resolve) => {
++      signal = resolve;
++    });
++    const winner = tenant(async (db) => {
++      if (first === 'restore') await restore(db);
++      else await prepare(db);
++      signal();
++      await held;
++    });
++    await ready;
++    const loser = tenant(async (db) => {
++      if (first === 'restore') await prepare(db);
++      else await restore(db);
++    });
++    const observed = loser.then(
++      () => 'finished',
++      () => 'finished'
++    );
++    expect(
++      await Promise.race([
++        observed,
++        new Promise((resolve) => setTimeout(() => resolve('blocked'), 50)),
++      ])
++    ).toBe('blocked');
++    unlock();
++    await winner;
++    await expect(loser).rejects.toThrow(
++      first === 'restore' ? /PAYMENT_SALE_NOT_OPEN/ : /PAYMENT_ATTEMPT_UNRESOLVED/
++    );
++  }
++});
++
+ test('refuses a partially paid bill and a clinically restricted line', async () => {
+   const paid = await cart([100], [2]);
+   await tenant((db) =>
+diff --git a/src/lib/pharmacy/restore-allocation-residual.ts b/src/lib/pharmacy/restore-allocation-residual.ts
+new file mode 100644
+index 00000000..7e10062d
+--- /dev/null
++++ b/src/lib/pharmacy/restore-allocation-residual.ts
+@@ -0,0 +1,145 @@
++import { createHash, randomUUID } from 'node:crypto';
++import { Prisma } from '@/generated/prisma/client';
++import type { ScopedDb } from '@/lib/tenancy/scoped-db';
++import type { LedgerScope } from './stock-ledger';
++
++/**
++ * Internal void/removal building block. Caller checks actor/branch permission,
++ * owns the transaction and must complete the void or tombstone before commit.
++ * Untouched allocations still require the existing full-reversal path.
++ * This is intentionally not exposed through a router.
++ */
++export async function restoreAllocationResidual(
++  db: ScopedDb,
++  scope: LedgerScope,
++  input: {
++    saleId: string;
++    saleLineId: string;
++    allocationId: string;
++    idempotencyKey: string;
++    reason: string;
++  }
++) {
++  const reason = input.reason.trim();
++  if (
++    !input.idempotencyKey.trim() ||
++    input.idempotencyKey.length > 160 ||
++    !reason ||
++    reason.length > 500
++  )
++    throw new Error('INVALID_RESIDUAL_REQUEST');
++  await db.$executeRaw(
++    Prisma.sql`SELECT pharmacy_assert_no_payment_attempt(${scope.organizationId},${scope.branchId},${input.saleId})`
++  );
++  await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_user_id',${scope.actorId},true)`);
++  const [row] = await db.$queryRaw<
++    Array<{
++      allocationId: string;
++      stockMovementId: string;
++      canonicalUnits: number;
++      grossMinor: number | null;
++      inventoryLotId: string;
++      stockLocationId: string;
++      saleStatus: string;
++      receiptNumber: string | null;
++      completedAt: Date | null;
++      removedAt: Date | null;
++      quantityUnits: number;
++      sealedPackDelta: number;
++      looseUnitDelta: number;
++      disposition: string;
++      releasedUnits: number;
++      releasedGross: number;
++      releasedSealed: number;
++      releasedLoose: number;
++    }>
++  >(Prisma.sql`
++    SELECT a.id AS "allocationId",a."stockMovementId",a."canonicalUnits",e."grossMinor",a."inventoryLotId",a."stockLocationId",
++      s.status::text AS "saleStatus",s."receiptNumber",s."completedAt",l."removedAt",m."quantityUnits",m."sealedPackDelta",m."looseUnitDelta",m.disposition::text,
++      coalesce(r.units,0)::int AS "releasedUnits",coalesce(r.gross,0)::int AS "releasedGross",
++      coalesce(r.sealed,0)::int AS "releasedSealed",coalesce(r.loose,0)::int AS "releasedLoose"
++    FROM pharmacy_sale_line_allocations a JOIN pharmacy_sale_lines l ON l."organizationId"=a."organizationId" AND l.id=a."saleLineId"
++    JOIN pharmacy_sales s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s.id=l."saleId"
++    JOIN pharmacy_stock_movements m ON m."organizationId"=a."organizationId" AND m.id=a."stockMovementId"
++    LEFT JOIN pharmacy_allocation_price_evidence e ON e."organizationId"=a."organizationId" AND e."allocationId"=a.id
++    LEFT JOIN LATERAL (SELECT sum(x."canonicalUnits") units,sum(x."grossMinor") gross,
++      sum(sm."sealedPackDelta") sealed,sum(sm."looseUnitDelta") loose
++      FROM pharmacy_allocation_partial_releases x JOIN pharmacy_stock_movements sm ON sm."organizationId"=x."organizationId" AND sm.id=x."stockMovementId"
++      WHERE x."organizationId"=a."organizationId" AND x."allocationId"=a.id) r ON true
++    WHERE a."organizationId"=${scope.organizationId} AND a."branchId"=${scope.branchId}
++      AND a.id=${input.allocationId} AND l.id=${input.saleLineId} AND s.id=${input.saleId}
++  `);
++  if (!row) throw new Error('RESIDUAL_SCOPE_INVALID');
++  const key = createHash('sha256')
++    .update(JSON.stringify([scope.organizationId, input.idempotencyKey, input.allocationId]))
++    .digest('hex');
++  const [prior] = await db.$queryRaw<
++    Array<{ idempotencyKey: string; actorId: string; stockMovementId: string; reason: string }>
++  >(Prisma.sql`
++    SELECT "idempotencyKey","actorId","stockMovementId",reason FROM pharmacy_allocation_residual_restorations
++    WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND "allocationId"=${input.allocationId}`);
++  if (prior) {
++    if (prior.idempotencyKey !== key || prior.actorId !== scope.actorId || prior.reason !== reason)
++      throw new Error('RESIDUAL_IDEMPOTENCY_CONFLICT');
++    return {
++      kind: 'RESTORED' as const,
++      replayed: true as const,
++      stockMovementId: prior.stockMovementId,
++    };
++  }
++  const sale = await db.pharmacySale.findFirstOrThrow({
++    where: {
++      id: input.saleId,
++      organizationId: scope.organizationId,
++      branchId: scope.branchId,
++    },
++    include: { tenders: true, refunds: true, customerOrder: true },
++  });
++  if (
++    row.saleStatus !== 'OPEN' ||
++    row.removedAt ||
++    row.receiptNumber ||
++    row.completedAt ||
++    sale.tenders.length ||
++    sale.refunds.length ||
++    sale.customerOrder
++  )
++    throw new Error('SALE_NOT_EDITABLE');
++  if (row.releasedUnits === 0) return { kind: 'FULL_REVERSAL_REQUIRED' as const };
++  if (
++    row.grossMinor === null ||
++    row.quantityUnits !== -row.canonicalUnits ||
++    row.disposition !== 'AVAILABLE' ||
++    row.releasedUnits > row.canonicalUnits
++  )
++    throw new Error('RESIDUAL_EVIDENCE_INVALID');
++  const units = row.canonicalUnits - row.releasedUnits;
++  const sealed = -row.sealedPackDelta - row.releasedSealed;
++  const loose = -row.looseUnitDelta - row.releasedLoose;
++  const gross = row.grossMinor - row.releasedGross;
++  if (units === 0) {
++    if (sealed !== 0 || loose !== 0 || gross !== 0) throw new Error('RESIDUAL_EVIDENCE_INVALID');
++    return { kind: 'ALREADY_RELEASED' as const };
++  }
++  if (sealed < 0 || loose < 0 || gross < 0) throw new Error('RESIDUAL_EVIDENCE_INVALID');
++  const movement = await db.pharmacyStockMovement.create({
++    data: {
++      organizationId: scope.organizationId,
++      branchId: scope.branchId,
++      inventoryLotId: row.inventoryLotId,
++      stockLocationId: row.stockLocationId,
++      kind: 'ADJUSTMENT',
++      disposition: 'AVAILABLE',
++      quantityUnits: units,
++      sealedPackDelta: sealed,
++      looseUnitDelta: loose,
++      actorId: scope.actorId,
++      reason,
++      idempotencyKey: `residual-restoration:${key}`,
++    },
++  });
++  await db.$executeRaw(Prisma.sql`INSERT INTO pharmacy_allocation_residual_restorations
++    (id,"organizationId","branchId","allocationId","stockMovementId","idempotencyKey","actorId",reason,"canonicalUnits","grossMinor")
++    VALUES (${randomUUID()},${scope.organizationId},${scope.branchId},${input.allocationId},${movement.id},${key},${scope.actorId},${reason},${units},${gross})`);
++  return { kind: 'RESTORED' as const, replayed: false as const, stockMovementId: movement.id };
++}
