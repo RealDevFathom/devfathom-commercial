@@ -12,6 +12,7 @@ import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { getUpload, StorageUnavailableError } from '@/lib/storage';
+import { pharmacySopEvidenceReadDecision } from '@/lib/pharmacy/sop-evidence';
 
 // Mirrors the upload allowlist — non-executable types served inline same-origin.
 const MIME: Record<string, string> = {
@@ -72,10 +73,33 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   const sopEvidence = await withTenantDb(organization.id, (db) =>
     db.restaurantSopEvidence.findFirst({
       where: { storageRef: fileRef },
-      select: { occurrence: { select: { branchId: true } } },
+      select: {
+        uploaderStaffProfileId: true,
+        occurrence: {
+          select: {
+            branchId: true,
+            templateVersionId: true,
+            assignedStaffProfileId: true,
+            claimedByStaffProfileId: true,
+          },
+        },
+      },
     })
   );
-  if (sopEvidence && session.user.role !== 'ADMIN') {
+  // DEV-751: proof on a pharmacy SOP site is governed by pharmacy branch
+  // assignment and SOP capability, not by restaurant branch membership.
+  const pharmacyDecision =
+    sopEvidence && session.user.role !== 'ADMIN'
+      ? await withTenantDb(organization.id, (db) =>
+          pharmacySopEvidenceReadDecision(db, {
+            organizationId: organization.id,
+            user: session.user,
+            evidence: sopEvidence,
+          })
+        )
+      : null;
+  if (pharmacyDecision === 'DENY') return new Response('Not found', { status: 404 });
+  if (sopEvidence && session.user.role !== 'ADMIN' && pharmacyDecision === 'NOT_PHARMACY') {
     const branchAccess = await withTenantDb(organization.id, (db) =>
       db.restaurantBranchAssignment.findUnique({
         where: {

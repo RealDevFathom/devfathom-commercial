@@ -417,6 +417,17 @@ export const navigation: NavItem[] = [
     module: 'pharmacy-safety',
     pharmacyCapabilities: ['pharmacy:safety'],
   },
+  // DEV-751: pharmacy procedures on the shared SOP engine, licensed as Pharmacy
+  // Safety. Shown to whoever holds any SOP capability (complete, verify or
+  // manage) — the same three `pharmacySop.access` reports and the page checks.
+  {
+    label: 'Procedures',
+    href: '/pharmacy/sop',
+    icon: ClipboardList,
+    group: 'Pharmacy',
+    module: 'pharmacy-safety',
+    pharmacyCapabilities: ['pharmacy:sop'],
+  },
   {
     label: 'Regulatory profile',
     href: '/pharmacy/regulatory',
@@ -649,8 +660,17 @@ function useVisibleNavigation() {
     pharmacyRail && railAccess.data && railAccess.data.userId === session?.user.id
       ? railAccess.data.capabilities
       : [];
+  const sopAccess = trpc.pharmacySop.access.useQuery(undefined, {
+    enabled: safetyModule,
+    retry: false,
+    staleTime: 30_000,
+  });
   const pharmacyCapabilities = [
     ...(safetyAccess.data?.allowed ? ['pharmacy:safety'] : []),
+    ...(sopAccess.data &&
+    (sopAccess.data.canComplete || sopAccess.data.canVerify || sopAccess.data.canManage)
+      ? ['pharmacy:sop']
+      : []),
     ...railCapabilities,
   ];
   const filteredNav = visibleNavigation(

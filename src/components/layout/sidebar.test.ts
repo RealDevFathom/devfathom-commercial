@@ -293,6 +293,46 @@ describe('pharmacy navigation', () => {
     });
   });
 
+  it('shows Procedures only with Pharmacy Safety and an SOP capability', () => {
+    const entry = navigation.find((item) => item.href === '/pharmacy/sop');
+    expect(entry).toMatchObject({
+      label: 'Procedures',
+      group: 'Pharmacy',
+      module: 'pharmacy-safety',
+      pharmacyCapabilities: ['pharmacy:sop'],
+    });
+    const entitled = {
+      vertical: 'PHARMACY' as const,
+      enabledModules: ['pharmacy-core', 'pharmacy-safety'],
+    };
+    const shows = (...args: Parameters<typeof visibleNavigation>) =>
+      visibleNavigation(...args).some((item) => item.href === '/pharmacy/sop');
+
+    expect(shows(entitled, 'ADMIN')).toBe(false);
+    expect(shows(entitled, 'EMPLOYEE', [], ['pharmacy:safety'])).toBe(false);
+    expect(shows(entitled, 'EMPLOYEE', [], ['pharmacy:sop'])).toBe(true);
+    // The capability opens nothing without the module, nor in another vertical.
+    expect(
+      shows(
+        { vertical: 'PHARMACY', enabledModules: ['pharmacy-core'] },
+        'ADMIN',
+        [],
+        ['pharmacy:sop']
+      )
+    ).toBe(false);
+    expect(
+      shows(
+        {
+          vertical: 'RESTAURANT',
+          enabledModules: ['restaurant-core', 'restaurant-sop', 'pharmacy-safety'],
+        },
+        'ADMIN',
+        [],
+        ['pharmacy:sop']
+      )
+    ).toBe(false);
+  });
+
   it('shows pharmacy routes to a Pharmacy admin with core and counter modules', () => {
     const visible = visibleNavigation(
       {
