@@ -130,6 +130,7 @@ export function OrdersConsole() {
   const [selectedOrderId, setSelectedOrderId] = useState('');
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelError, setCancelError] = useState('');
+  const [cancelApproverId, setCancelApproverId] = useState('');
 
   const normalizedBranchId = branchId.trim();
   const listEnabled = posEnabled && normalizedBranchId.length > 0;
@@ -197,14 +198,28 @@ export function OrdersConsole() {
     const form = event.currentTarget;
     const data = new FormData(form);
     const wastageDisposition = text(data, 'wastageDisposition') as Disposition | '';
+    const approvingStaffProfileId = text(data, 'approvingStaffProfileId') || null;
+    const approvingType: 'PIN' | 'BADGE' =
+      text(data, 'approvingType') === 'BADGE' ? 'BADGE' : 'PIN';
     setCancelError('');
+    // The acting staff member is the signed-in user's own staff profile, resolved
+    // on the server. A named approver must prove who they are with their own PIN
+    // or badge; an approver id alone is refused.
     cancel.mutate({
       orderId: selectedOrderId,
       reason: text(data, 'reason'),
       ...(wastageDisposition ? { wastageDisposition } : {}),
-      approvingStaffProfileId: text(data, 'approvingStaffProfileId') || null,
+      approvingStaffProfileId,
+      ...(approvingStaffProfileId
+        ? {
+            approvingCredential: {
+              type: approvingType,
+              // Secrets are sent verbatim; never trim a PIN or badge value.
+              secret: String(data.get('approvingSecret') ?? ''),
+            },
+          }
+        : {}),
       actor: {
-        staffProfileId: text(data, 'staffProfileId'),
         deviceId: text(data, 'deviceId'),
         idempotencyKey: browserUuid(),
       },
@@ -442,6 +457,7 @@ export function OrdersConsole() {
                   onClose={() => setSelectedOrderId('')}
                   onCancel={() => {
                     setCancelError('');
+                    setCancelApproverId('');
                     setCancelOpen(true);
                   }}
                 />
@@ -473,17 +489,10 @@ export function OrdersConsole() {
                 This order is already terminal and cannot be cancelled.
               </p>
             ) : null}
+            <p className="text-sm text-text-muted">
+              The cancellation is recorded as your own signed-in staff profile.
+            </p>
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Acting staff member">
-                <RestaurantStaffSelect
-                  name="staffProfileId"
-                  required
-                  staff={staffQuery.data ?? []}
-                  loading={staffQuery.isLoading}
-                  error={Boolean(staffQuery.error)}
-                  label="Acting staff member"
-                />
-              </Field>
               <Field label="Device">
                 <RestaurantDeviceSelect
                   devices={devicesQuery.data ?? []}
@@ -515,9 +524,30 @@ export function OrdersConsole() {
                   allowEmpty
                   emptyLabel="No additional approval"
                   label="Approving staff member"
+                  value={cancelApproverId}
+                  onChange={setCancelApproverId}
                 />
               </Field>
             </div>
+            {cancelApproverId ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Approving credential type">
+                  <select name="approvingType" defaultValue="PIN" className={selectClass}>
+                    <option value="PIN">PIN</option>
+                    <option value="BADGE">Badge</option>
+                  </select>
+                </Field>
+                <Field label="Approving PIN or badge secret">
+                  <Input
+                    name="approvingSecret"
+                    type="password"
+                    required
+                    autoComplete="new-password"
+                    className="h-11"
+                  />
+                </Field>
+              </div>
+            ) : null}
             <p className="text-xs text-text-muted">
               A fresh device-scoped idempotency key is generated in this browser when submitted.
             </p>

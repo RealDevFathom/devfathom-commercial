@@ -1,5 +1,35 @@
 # Administration Platform Changelog
 
+## 2026-11-01
+
+### Security
+
+- **SOP and back-office order approvals now verify identity on the server
+  (H5).** SOP commands, evidence uploads and role-pool claims are recorded
+  against the signed-in user's own staff profile. Client-supplied actor ids are
+  ignored. SOP waivers and back-office order item voids/cancellations
+  (`restaurantOrders.voidItem` / `cancel`) no longer accept an approver id on its
+  own. The approver must present their own PIN or badge (`approvingCredential`
+  on orders; `approvingType` / `approvingSecret` on waivers). The server checks
+  it with a durable lockout and requires the approver's permission at the
+  record's branch (`coauth:approve` for orders, `sop:verify` for waivers). The
+  approver must be a different person. The one exception is the workspace's only
+  active staff member, who must be an owner: they may approve their own request
+  by re-entering their PIN, and the co-authorization record is stamped
+  `[Owner PIN reauthentication]`.
+- **Behaviour change: an active staff profile is now required to act.** SOP
+  commands and back-office order voids/cancellations are recorded only as the
+  signed-in user's own staff profile. A user with profiles at several branches
+  acts as their profile for the record's branch. Organization-wide supervisors
+  (`restaurant:configure` / `sop:verify`) with no active staff profile can still
+  read SOP boards, but they can no longer record SOP work or void/cancel orders.
+  Link them to a staff profile before rollout. The orders console no longer asks
+  for an "acting staff member". When an approver is named, it asks for that
+  approver's PIN or badge.
+- **Known limitation.** Approver PIN failures share the terminal sign-in lockout
+  counter, so repeated wrong guesses on the back-office path can lock a
+  manager's PIN. There is no separate rate limit on that path yet.
+
 ## 2026-08-02
 
 ### Added
