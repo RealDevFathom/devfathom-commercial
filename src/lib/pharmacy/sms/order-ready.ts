@@ -163,7 +163,8 @@ export async function processDeferredOrderReadySms(
   // pharmacy staff reader, then scan under that tenant/user rather than widening
   // the order policies for this job. Use this current reader for sending too;
   // the ready event's actor may have been deactivated or lost permission.
-  const readers = await withPlatformDb((db) => db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+  const readers = await withPlatformDb((db) =>
+    db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT actor.id FROM users actor
     JOIN organization_roles role
       ON role.id = actor."organizationRoleId" AND role."organizationId" = actor."organizationId"
@@ -180,11 +181,14 @@ export async function processDeferredOrderReadySms(
           AND (denied."expiresAt" IS NULL OR denied."expiresAt" > ${now})
       )
     ORDER BY actor.id LIMIT 1
-  `));
+  `)
+  );
   const reader = readers[0];
   if (!reader) return { scanned: 0, outcomes: [] };
-  const orders = await withTenantDb(organizationId, (db) =>
-    db.$queryRaw<Array<{ orderId: string; branchId: string }>>(Prisma.sql`
+  const orders = await withTenantDb(
+    organizationId,
+    (db) =>
+      db.$queryRaw<Array<{ orderId: string; branchId: string }>>(Prisma.sql`
     SELECT orders.id AS "orderId", orders."branchId"
     FROM pharmacy_customer_orders orders
     JOIN pharmacy_customers customer

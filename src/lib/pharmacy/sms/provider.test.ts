@@ -90,9 +90,7 @@ describe('SMS providers', () => {
     // Per-run fixture key (not a hardcoded secret).
     const webhookSecret = randomBytes(32).toString('hex');
     const signature = `sha256=${createHmac('sha256', webhookSecret).update(body).digest('hex')}`;
-    const signed = createSmsProvider(
-      readSmsConfig({ PHARMACY_SMS_WEBHOOK_SECRET: webhookSecret })
-    );
+    const signed = createSmsProvider(readSmsConfig({ PHARMACY_SMS_WEBHOOK_SECRET: webhookSecret }));
     expect(signed.verifyWebhook(body, signature)).toBe(true);
     expect(signed.verifyWebhook(`${body} `, signature)).toBe(false);
     expect(signed.verifyWebhook(body, null)).toBe(false);

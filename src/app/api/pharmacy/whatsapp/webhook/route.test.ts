@@ -14,7 +14,9 @@ vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
 }));
 vi.mock('@/lib/pharmacy/whatsapp/inbound', () => ({ handleInboundWhatsAppMessage: mocks.inbound }));
 vi.mock('@/lib/pharmacy/marketing-delivery', () => ({ recordMarketingCallback: mocks.callback }));
-vi.mock('@/lib/pharmacy/whatsapp/reminder-delivery', () => ({ recordReminderDelivery: mocks.reminder }));
+vi.mock('@/lib/pharmacy/whatsapp/reminder-delivery', () => ({
+  recordReminderDelivery: mocks.reminder,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: async (_org: string, fn: (db: unknown) => unknown) => fn({}),
 }));
@@ -109,19 +111,38 @@ it('routes authenticated status evidence only for the owned sender', async () =>
 });
 
 it('passes signed sender-owned failure codes to reminder fallback handling', async () => {
-  const payload = (sender: string) => new Request('http://pharmacy.localhost/api/pharmacy/whatsapp/webhook', {
-    method: 'POST',
-    body: JSON.stringify({ entry: [{ changes: [{ value: {
-      metadata: { phone_number_id: sender },
-      statuses: [{ id: 'reminder-a', status: 'failed', timestamp: '1790000000',
-        errors: [{ code: 131026, message: 'Never persist this provider text' }] }],
-    } }] }] }),
-  });
+  const payload = (sender: string) =>
+    new Request('http://pharmacy.localhost/api/pharmacy/whatsapp/webhook', {
+      method: 'POST',
+      body: JSON.stringify({
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  metadata: { phone_number_id: sender },
+                  statuses: [
+                    {
+                      id: 'reminder-a',
+                      status: 'failed',
+                      timestamp: '1790000000',
+                      errors: [{ code: 131026, message: 'Never persist this provider text' }],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    });
   await POST(payload('foreign'));
   expect(mocks.reminder).not.toHaveBeenCalled();
   await POST(payload('sender-a'));
   expect(mocks.reminder).toHaveBeenCalledExactlyOnceWith({}, 'org-a', {
-    messageId: 'reminder-a', state: 'FAILED',
-    occurredAt: new Date(1790000000 * 1000), errorCodes: [131026],
+    messageId: 'reminder-a',
+    state: 'FAILED',
+    occurredAt: new Date(1790000000 * 1000),
+    errorCodes: [131026],
   });
 });

@@ -49,12 +49,19 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         ) ?? null,
     },
     pharmacyMessageLog: {
-      findFirst: async ({ where }: { where: { organizationId: string; dedupeKey: string; channel: string } }) =>
+      findFirst: async ({
+        where,
+      }: {
+        where: { organizationId: string; dedupeKey: string; channel: string };
+      }) =>
         store.logs.find(
-          (log) => log.organizationId === where.organizationId &&
-            log.dedupeKey === where.dedupeKey && (log.channel ?? 'WHATSAPP') === where.channel
+          (log) =>
+            log.organizationId === where.organizationId &&
+            log.dedupeKey === where.dedupeKey &&
+            (log.channel ?? 'WHATSAPP') === where.channel
         ) ?? null,
-      count: async () => store.logs.filter((log) => !(log.channel === 'WHATSAPP' && log.status === 'FAILED')).length,
+      count: async () =>
+        store.logs.filter((log) => !(log.channel === 'WHATSAPP' && log.status === 'FAILED')).length,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {
         const row = data[0]!;
         if (
@@ -351,21 +358,30 @@ describe('processDueWhatsAppRefillReminders SMS fallback (#723)', () => {
 });
 
 describe('SMS refill captures and independent sender configuration', () => {
-  it.each([false, true])('selects SMS captures and respects that channel with WhatsApp consent = %s', async (whatsappOptIn) => {
-    store.captures = [{ ...capture(), channel: 'SMS' }];
-    store.customers = [customer(whatsappOptIn)];
-    store.consents = [consent('SMS'), ...(whatsappOptIn ? [consent('WHATSAPP')] : [])];
-    const provider = new MockWhatsAppProvider(config);
-    const smsProvider = new MockSmsProvider(smsConfig);
-    await processDueWhatsAppRefillReminders({ now: NOW, config, provider, smsConfig, smsProvider });
-    // Assert the actual SQL passed to Prisma, so the fake cannot hide a
-    // regression back to selecting WhatsApp captures only.
-    expect(store.captureQueries[0]).toContain(`capture."channel" IN ('WHATSAPP', 'SMS')`);
-    expect(store.captureQueries[0]).toContain('capture."channel",');
-    expect(smsProvider.calls).toHaveLength(1);
-    expect(provider.calls).toEqual([]);
-    expect(store.logs[0]).toMatchObject({ channel: 'SMS', refillCaptureId: 'capture-1' });
-  });
+  it.each([false, true])(
+    'selects SMS captures and respects that channel with WhatsApp consent = %s',
+    async (whatsappOptIn) => {
+      store.captures = [{ ...capture(), channel: 'SMS' }];
+      store.customers = [customer(whatsappOptIn)];
+      store.consents = [consent('SMS'), ...(whatsappOptIn ? [consent('WHATSAPP')] : [])];
+      const provider = new MockWhatsAppProvider(config);
+      const smsProvider = new MockSmsProvider(smsConfig);
+      await processDueWhatsAppRefillReminders({
+        now: NOW,
+        config,
+        provider,
+        smsConfig,
+        smsProvider,
+      });
+      // Assert the actual SQL passed to Prisma, so the fake cannot hide a
+      // regression back to selecting WhatsApp captures only.
+      expect(store.captureQueries[0]).toContain(`capture."channel" IN ('WHATSAPP', 'SMS')`);
+      expect(store.captureQueries[0]).toContain('capture."channel",');
+      expect(smsProvider.calls).toHaveLength(1);
+      expect(provider.calls).toEqual([]);
+      expect(store.logs[0]).toMatchObject({ channel: 'SMS', refillCaptureId: 'capture-1' });
+    }
+  );
 
   it.each([
     readWhatsAppConfig({}),
@@ -378,7 +394,11 @@ describe('SMS refill captures and independent sender configuration', () => {
     const provider = new MockWhatsAppProvider(whatsapp);
     const smsProvider = new MockSmsProvider(smsConfig);
     const result = await processDueWhatsAppRefillReminders({
-      now: NOW, config: whatsapp, provider, smsConfig, smsProvider,
+      now: NOW,
+      config: whatsapp,
+      provider,
+      smsConfig,
+      smsProvider,
     });
     expect(result.configured).toBe(true);
     expect(smsProvider.calls).toHaveLength(1);
@@ -390,7 +410,10 @@ describe('SMS refill captures and independent sender configuration', () => {
     store.consents = [consent('WHATSAPP'), consent('SMS')];
     const smsProvider = new MockSmsProvider(smsConfig);
     await processDueWhatsAppRefillReminders({
-      now: NOW, config: readWhatsAppConfig({}), smsConfig, smsProvider,
+      now: NOW,
+      config: readWhatsAppConfig({}),
+      smsConfig,
+      smsProvider,
     });
     expect(smsProvider.calls).toEqual([]);
   });
@@ -398,16 +421,27 @@ describe('SMS refill captures and independent sender configuration', () => {
   it('picks up a permanent delivery failure on a subsequent run, once', async () => {
     store.customers = [customer(true)];
     store.consents = [consent('WHATSAPP'), consent('SMS')];
-    store.logs = [{ id: 'wa-log', organizationId: 'org_a', channel: 'WHATSAPP',
-      dedupeKey: 'refill:patient-1:medicine-1:2026-10-01', status: 'FAILED',
-      refillCaptureId: 'capture-1', error: 'WHATSAPP_DELIVERY_FAILED' }];
+    store.logs = [
+      {
+        id: 'wa-log',
+        organizationId: 'org_a',
+        channel: 'WHATSAPP',
+        dedupeKey: 'refill:patient-1:medicine-1:2026-10-01',
+        status: 'FAILED',
+        refillCaptureId: 'capture-1',
+        error: 'WHATSAPP_DELIVERY_FAILED',
+      },
+    ];
     const provider = new MockWhatsAppProvider(config);
     const smsProvider = new MockSmsProvider(smsConfig);
-    const run = () => processDueWhatsAppRefillReminders({ now: NOW, config, provider, smsConfig, smsProvider });
+    const run = () =>
+      processDueWhatsAppRefillReminders({ now: NOW, config, provider, smsConfig, smsProvider });
     await run();
     await run();
     expect(smsProvider.calls).toHaveLength(1);
     expect(provider.calls).toEqual([]);
-    expect(store.captureQueries[0]).toContain(`log."channel" = 'WHATSAPP' AND log."status" = 'FAILED'`);
+    expect(store.captureQueries[0]).toContain(
+      `log."channel" = 'WHATSAPP' AND log."status" = 'FAILED'`
+    );
   });
 });

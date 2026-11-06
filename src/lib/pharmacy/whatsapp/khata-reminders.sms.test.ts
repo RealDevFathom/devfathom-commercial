@@ -46,11 +46,19 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         ) ?? null,
     },
     pharmacyMessageLog: {
-      findFirst: async ({ where }: { where: { organizationId: string; dedupeKey: string; channel: string } }) =>
-        store.logs.find(
-          (log) => log.organizationId === where.organizationId &&
-            log.dedupeKey === where.dedupeKey && (log.channel ?? 'WHATSAPP') === where.channel
-        ) ?? null,
+      findMany: async ({
+        where,
+      }: {
+        where: { organizationId: string; kind: string; dedupeKey: { in: string[] } };
+      }) =>
+        store.logs
+          .filter(
+            (log) =>
+              log.organizationId === where.organizationId &&
+              log.kind === where.kind &&
+              where.dedupeKey.in.includes(log.dedupeKey)
+          )
+          .map((log) => ({ channel: log.channel ?? 'WHATSAPP', status: log.status })),
       count: async () => store.logs.length,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {
         const row = data[0]!;
@@ -229,7 +237,13 @@ it.each([
   store.consents = [consent('SMS')];
   const provider = new MockWhatsAppProvider(whatsapp);
   const smsProvider = new MockSmsProvider(smsConfig);
-  const result = await processDueWhatsAppKhataReminders({ now: NOW, config: whatsapp, provider, smsConfig, smsProvider });
+  const result = await processDueWhatsAppKhataReminders({
+    now: NOW,
+    config: whatsapp,
+    provider,
+    smsConfig,
+    smsProvider,
+  });
   expect(result.configured).toBe(true);
   expect(smsProvider.calls).toHaveLength(1);
   expect(provider.calls).toEqual([]);
@@ -240,11 +254,75 @@ it('falls back once for a permanent delivery failure recorded after the send', a
   store.consents = [consent('WHATSAPP'), consent('SMS')];
   const provider = new MockWhatsAppProvider(config);
   const smsProvider = new MockSmsProvider(smsConfig);
-  const run = () => processDueWhatsAppKhataReminders({ now: NOW, config, provider, smsConfig, smsProvider });
+  const run = () =>
+    processDueWhatsAppKhataReminders({ now: NOW, config, provider, smsConfig, smsProvider });
   await run();
   Object.assign(store.logs[0]!, { status: 'FAILED', error: 'WHATSAPP_DELIVERY_FAILED' });
   await run();
   await run();
   expect(provider.calls).toHaveLength(1);
   expect(smsProvider.calls).toHaveLength(1);
+});
+
+describe('khata weekly cap across channels (#723)', () => {
+  it('sends no SMS after a WhatsApp reminder once WhatsApp consent is lost', async () => {
+    store.customers = [customer(true)];
+    store.consents = [consent('WHATSAPP'), consent('SMS')];
+    const provider = new MockWhatsAppProvider(config);
+    provider.sendTemplate = async () => ({
+      providerMessageId: 'wamid-1',
+      acceptedByProvider: true,
+    });
+    const smsProvider = new MockSmsProvider(smsConfig);
+    const run = () =>
+      processDueWhatsAppKhataReminders({ now: NOW, config, provider, smsConfig, smsProvider });
+
+    await expect(run()).resolves.toMatchObject({ sent: 1 });
+    store.customers = [customer(false)];
+    const rerun = await run();
+
+    expect(rerun).toMatchObject({ duplicate: 1, skippedNoConsent: 0 });
+    expect(smsProvider.calls).toEqual([]);
+    expect(store.logs).toHaveLength(1);
+  });
+
+  it('sends no SMS after an unknown WhatsApp outcome once WhatsApp consent is lost', async () => {
+    store.customers = [customer(true)];
+    store.consents = [consent('WHATSAPP'), consent('SMS')];
+    const provider = new MockWhatsAppProvider(config);
+    provider.sendTemplate = async () => {
+      throw new Error('socket hang up');
+    };
+    const smsProvider = new MockSmsProvider(smsConfig);
+    const run = () =>
+      processDueWhatsAppKhataReminders({ now: NOW, config, provider, smsConfig, smsProvider });
+
+    await expect(run()).resolves.toMatchObject({ unknown: 1 });
+    expect(store.logs[0]).toMatchObject({ status: 'PENDING' });
+    store.consents = [consent('SMS')];
+    const rerun = await run();
+
+    expect(rerun).toMatchObject({ duplicate: 1 });
+    expect(smsProvider.calls).toEqual([]);
+    expect(store.logs).toHaveLength(1);
+  });
+
+  it('sends no WhatsApp reminder after an SMS once WhatsApp consent is granted', async () => {
+    store.customers = [customer(false)];
+    store.consents = [consent('SMS')];
+    const provider = new MockWhatsAppProvider(config);
+    const smsProvider = new MockSmsProvider(smsConfig);
+    const run = () =>
+      processDueWhatsAppKhataReminders({ now: NOW, config, provider, smsConfig, smsProvider });
+
+    await expect(run()).resolves.toMatchObject({ sms: { prepared: 1 } });
+    store.customers = [customer(true)];
+    store.consents = [consent('WHATSAPP'), consent('SMS')];
+    const rerun = await run();
+
+    expect(rerun.sms).toMatchObject({ duplicate: 1 });
+    expect(provider.calls).toEqual([]);
+    expect(smsProvider.calls).toHaveLength(1);
+    expect(store.logs).toHaveLength(1);
+  });
 });

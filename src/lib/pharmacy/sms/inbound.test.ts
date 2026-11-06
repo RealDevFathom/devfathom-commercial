@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type LogRow = { id: string; dedupeKey: string; [key: string]: unknown };
-type CustomerRow = { id: string; smsOptIn: boolean | null; smsOptInChangedAt: Date | null; phone?: string };
+type CustomerRow = {
+  id: string;
+  smsOptIn: boolean | null;
+  smsOptInChangedAt: Date | null;
+  phone?: string;
+};
 
 const store = vi.hoisted(() => ({
   customer: null as CustomerRow | null,
@@ -13,13 +18,14 @@ vi.mock('../consent-writer', () => ({ lockCustomerConsent: async () => undefined
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     pharmacyCustomer: {
-      findMany: async () => [store.customer, ...store.shared]
-        .filter((row): row is CustomerRow => row !== null)
-        .map((row) => ({
-          id: row.id,
-          patientId: `patient-${row.id}`,
-          patient: { phone: row.phone ?? '0300-1234567' },
-        })),
+      findMany: async () =>
+        [store.customer, ...store.shared]
+          .filter((row): row is CustomerRow => row !== null)
+          .map((row) => ({
+            id: row.id,
+            patientId: `patient-${row.id}`,
+            patient: { phone: row.phone ?? '0300-1234567' },
+          })),
       updateMany: async ({
         where,
         data,
@@ -78,7 +84,13 @@ describe('handleInboundSms (#723)', () => {
   it('ignores a sender without four trailing digits before reading or changing consent', async () => {
     const provider = new MockSmsProvider(config);
     await expect(
-      handleInboundSms('org_a', config, provider, { ...message('m1', 'STOP'), from: 'invalid' }, NOW)
+      handleInboundSms(
+        'org_a',
+        config,
+        provider,
+        { ...message('m1', 'STOP'), from: 'invalid' },
+        NOW
+      )
     ).resolves.toBe('IGNORED');
     expect(store.customer).toMatchObject({ smsOptIn: null, smsOptInChangedAt: null });
     expect(store.logs).toEqual([]);
@@ -204,7 +216,9 @@ it('applies shared-phone STOP and START to every match and acknowledges only onc
   expect(store.logs[0]).toMatchObject({ customerId: null, kind: 'OPT_OUT' });
   await expect(handleInboundSms('org_a', config, provider, stop, NOW)).resolves.toBe('DUPLICATE');
   expect(provider.calls).toHaveLength(1);
-  await expect(handleInboundSms('org_a', config, provider, message('shared-start', 'START'), NOW)).resolves.toBe('OPTED_IN');
+  await expect(
+    handleInboundSms('org_a', config, provider, message('shared-start', 'START'), NOW)
+  ).resolves.toBe('OPTED_IN');
   expect(store.customer!.smsOptIn).toBe(true);
   expect(store.shared[0]!.smsOptIn).toBe(true);
   expect(provider.calls).toHaveLength(2);
@@ -215,7 +229,9 @@ it('preserves timestamp ordering independently for each customer on a shared pho
   store.customer!.smsOptIn = false;
   store.shared = [{ id: 'customer-2', smsOptIn: true, smsOptInChangedAt: null }];
   const provider = new MockSmsProvider(config);
-  await expect(handleInboundSms('org_a', config, provider, message('shared-stop', 'STOP'), NOW)).resolves.toBe('OPTED_OUT');
+  await expect(
+    handleInboundSms('org_a', config, provider, message('shared-stop', 'STOP'), NOW)
+  ).resolves.toBe('OPTED_OUT');
   expect(store.customer).toMatchObject({ smsOptIn: false, smsOptInChangedAt: NOW });
   expect(store.shared[0]!.smsOptIn).toBe(false);
 });

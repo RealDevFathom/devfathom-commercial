@@ -38,10 +38,16 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         store.consents.find((consent) => consent.patientId === where.patientId) ?? null,
     },
     pharmacyMessageLog: {
-      findFirst: async ({ where }: { where: { organizationId: string; dedupeKey: string; channel: string } }) =>
+      findFirst: async ({
+        where,
+      }: {
+        where: { organizationId: string; dedupeKey: string; channel: string };
+      }) =>
         store.logs.find(
-          (log) => log.organizationId === where.organizationId &&
-            log.dedupeKey === where.dedupeKey && (log.channel ?? 'WHATSAPP') === where.channel
+          (log) =>
+            log.organizationId === where.organizationId &&
+            log.dedupeKey === where.dedupeKey &&
+            (log.channel ?? 'WHATSAPP') === where.channel
         ) ?? null,
       count: async () => store.logs.length,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {

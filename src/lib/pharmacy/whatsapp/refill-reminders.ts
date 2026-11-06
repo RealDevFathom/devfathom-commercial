@@ -295,10 +295,10 @@ export async function processDueWhatsAppRefillReminders(
       if (!customer) return null;
       const whatsappAllowed = Boolean(
         to &&
-          canMessageCustomer(customer) &&
-          consent?.granted &&
-          !consent.revokedAt &&
-          !(consent.recordedAt > now)
+        canMessageCustomer(customer) &&
+        consent?.granted &&
+        !consent.revokedAt &&
+        !(consent.recordedAt > now)
       );
       const previous = await db.pharmacyMessageLog.findFirst({
         where: {

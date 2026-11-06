@@ -29,7 +29,8 @@ vi.mock('../consent-writer', () => ({ lockPatientConsent: async () => undefined 
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     $queryRaw: async (query: { sql: string; values: unknown[] }) => {
-      if (query.sql.includes('FROM users actor')) return store.readerAvailable ? [{ id: 'staff-1' }] : [];
+      if (query.sql.includes('FROM users actor'))
+        return store.readerAvailable ? [{ id: 'staff-1' }] : [];
       if (query.sql.includes('FROM pharmacy_customer_orders orders')) {
         store.scans.push(query.sql);
         return store.logs.length ? [] : store.deferred;
@@ -220,12 +221,17 @@ it('defers quiet-hour order notices to the next daytime scheduler run and sends 
   store.customers = [customer(null)];
   store.consents = [consent('SMS')];
   const smsProvider = new MockSmsProvider(smsConfig);
-  await expect(notify(smsProvider, new Date('2026-10-21T18:00:00.000Z'))).resolves.toBe('QUIET_HOURS');
+  await expect(notify(smsProvider, new Date('2026-10-21T18:00:00.000Z'))).resolves.toBe(
+    'QUIET_HOURS'
+  );
   expect(store.logs).toEqual([]);
   store.deferred = [{ orderId: ORDER_ID, branchId: 'branch-1', actorUserId: 'staff-1' }];
-  const run = () => processDeferredOrderReadySms({
-    now: new Date('2026-10-22T03:00:00.000Z'), smsConfig, smsProvider,
-  });
+  const run = () =>
+    processDeferredOrderReadySms({
+      now: new Date('2026-10-22T03:00:00.000Z'),
+      smsConfig,
+      smsProvider,
+    });
   await expect(run()).resolves.toEqual({ scanned: 1, outcomes: ['PREPARED'] });
   await expect(run()).resolves.toEqual({ scanned: 0, outcomes: [] });
   expect(smsProvider.calls).toHaveLength(1);
@@ -241,44 +247,53 @@ it('sends deferred notices as the current reader instead of a former ready actor
   store.deferred = [{ orderId: ORDER_ID, branchId: 'branch-1', actorUserId: 'deactivated-staff' }];
   const smsProvider = new MockSmsProvider(smsConfig);
 
-  await expect(processDeferredOrderReadySms({ now: NOW, smsConfig, smsProvider }))
-    .resolves.toEqual({ scanned: 1, outcomes: ['PREPARED'] });
+  await expect(processDeferredOrderReadySms({ now: NOW, smsConfig, smsProvider })).resolves.toEqual(
+    { scanned: 1, outcomes: ['PREPARED'] }
+  );
 
   expect(smsProvider.calls).toHaveLength(1);
+  // The order scan and send claim run as the current reader; the log update is org-scoped only.
   expect(store.tenantCalls).toEqual([
     { organizationId: 'org_a', userId: 'staff-1' },
     { organizationId: 'org_a', userId: 'staff-1' },
+    { organizationId: 'org_a' },
   ]);
+  expect(store.tenantCalls.some((call) => call.userId === 'deactivated-staff')).toBe(false);
 });
 
-it.each(['COMPLETED', 'CANCELLED'])('rechecks deferred order status before sending: %s', async (status) => {
-  store.customers = [customer(null)];
-  store.consents = [consent('SMS')];
-  store.deferred = [{ orderId: ORDER_ID, branchId: 'branch-1', actorUserId: 'staff-1' }];
-  store.orderStatus = status;
-  const smsProvider = new MockSmsProvider(smsConfig);
-  await expect(processDeferredOrderReadySms({ now: NOW, smsConfig, smsProvider }))
-    .resolves.toEqual({ scanned: 1, outcomes: ['NOT_ELIGIBLE'] });
-  expect(smsProvider.calls).toEqual([]);
-  expect(store.logs).toEqual([]);
-});
+it.each(['COMPLETED', 'CANCELLED'])(
+  'rechecks deferred order status before sending: %s',
+  async (status) => {
+    store.customers = [customer(null)];
+    store.consents = [consent('SMS')];
+    store.deferred = [{ orderId: ORDER_ID, branchId: 'branch-1', actorUserId: 'staff-1' }];
+    store.orderStatus = status;
+    const smsProvider = new MockSmsProvider(smsConfig);
+    await expect(
+      processDeferredOrderReadySms({ now: NOW, smsConfig, smsProvider })
+    ).resolves.toEqual({ scanned: 1, outcomes: ['NOT_ELIGIBLE'] });
+    expect(smsProvider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  }
+);
 
 it('rechecks STOP before sending a deferred notice', async () => {
   store.customers = [customer(null, false)];
   store.consents = [consent('SMS')];
   store.deferred = [{ orderId: ORDER_ID, branchId: 'branch-1', actorUserId: 'staff-1' }];
   const smsProvider = new MockSmsProvider(smsConfig);
-  await expect(processDeferredOrderReadySms({ now: NOW, smsConfig, smsProvider }))
-    .resolves.toEqual({ scanned: 1, outcomes: ['NO_SMS_CONSENT'] });
+  await expect(processDeferredOrderReadySms({ now: NOW, smsConfig, smsProvider })).resolves.toEqual(
+    { scanned: 1, outcomes: ['NO_SMS_CONSENT'] }
+  );
   expect(smsProvider.calls).toEqual([]);
 });
-
 
 it('defers without broadening order RLS when no current staff reader exists', async () => {
   store.readerAvailable = false;
   const smsProvider = new MockSmsProvider(smsConfig);
-  await expect(processDeferredOrderReadySms({ now: NOW, smsConfig, smsProvider }))
-    .resolves.toEqual({ scanned: 0, outcomes: [] });
+  await expect(processDeferredOrderReadySms({ now: NOW, smsConfig, smsProvider })).resolves.toEqual(
+    { scanned: 0, outcomes: [] }
+  );
   expect(store.scans).toEqual([]);
   expect(store.tenantCalls).toEqual([]);
   expect(smsProvider.calls).toEqual([]);

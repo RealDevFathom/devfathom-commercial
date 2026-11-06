@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // commits, as the acting staff user. The notice is best effort and never fails
 // or undoes the staff transition; other actions never notify.
 const background = vi.hoisted(() => ({ tasks: [] as Array<() => Promise<unknown>> }));
-vi.mock('next/server', () => ({ after: (task: () => Promise<unknown>) => background.tasks.push(task) }));
+vi.mock('next/server', () => ({
+  after: (task: () => Promise<unknown>) => background.tasks.push(task),
+}));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -103,7 +105,8 @@ describe('pharmacyOrdering.transition SMS order-ready fallback', () => {
     ).resolves.toEqual(order);
     await expect(background.tasks[0]!()).resolves.toBeUndefined();
     expect(error).toHaveBeenCalledWith('PHARMACY_ORDER_READY_SMS_FAILED', {
-      organizationId: 'org-1', orderId: 'order-1',
+      organizationId: 'org-1',
+      orderId: 'order-1',
     });
     expect(JSON.stringify(error.mock.calls)).not.toContain('sensitive');
     error.mockRestore();

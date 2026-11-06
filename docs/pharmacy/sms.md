@@ -6,11 +6,11 @@ directly; WhatsApp captures and khata reminders use SMS as a fallback.
 
 ## When SMS is sent
 
-| Message | WhatsApp path | SMS fallback triggers |
-| --- | --- | --- |
-| Refill due | `processDueWhatsAppRefillReminders` | staff selected SMS at capture, customer has no WhatsApp consent, or WhatsApp failed **permanently** at send time or through a signed delivery callback |
-| Khata due | `processDueWhatsAppKhataReminders` | no WhatsApp consent or a permanent WhatsApp failure |
-| Order ready | none yet | `notifyOrderReadyBySms`, run after a staff `ready` transition commits, sends only to customers **without** WhatsApp consent |
+| Message     | WhatsApp path                       | SMS fallback triggers                                                                                                                                  |
+| ----------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Refill due  | `processDueWhatsAppRefillReminders` | staff selected SMS at capture, customer has no WhatsApp consent, or WhatsApp failed **permanently** at send time or through a signed delivery callback |
+| Khata due   | `processDueWhatsAppKhataReminders`  | no WhatsApp consent or a permanent WhatsApp failure                                                                                                    |
+| Order ready | none yet                            | `notifyOrderReadyBySms`, run after a staff `ready` transition commits, sends only to customers **without** WhatsApp consent                            |
 
 "WhatsApp consent" is the gate the reminder jobs already use: `whatsappOptIn === true`
 and a granted, unrevoked `REMINDERS/WHATSAPP` patient consent. A transient or unknown
@@ -64,13 +64,13 @@ sent only for messages less than 24 hours old.
 
 ## Configuration
 
-| Variable | Meaning |
-| --- | --- |
-| `PHARMACY_SMS_PROVIDER` | `mock` (default, no network) or `aggregator` (PK aggregator, chosen later; sending refused until its adapter is approved) |
-| `PHARMACY_SMS_ORGANIZATION_ID` | Organization that owns the SMS sender. Unset = SMS fallback disabled |
-| `PHARMACY_SMS_SENDER_ID` | Masking / sender id registered with the aggregator |
-| `PHARMACY_SMS_WEBHOOK_SECRET` | HMAC secret for the inbound webhook |
-| `PHARMACY_SMS_LANGUAGE` | `en` (default) or `ur` template language |
+| Variable                       | Meaning                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `PHARMACY_SMS_PROVIDER`        | `mock` (default, no network) or `aggregator` (PK aggregator, chosen later; sending refused until its adapter is approved) |
+| `PHARMACY_SMS_ORGANIZATION_ID` | Organization that owns the SMS sender. Unset = SMS fallback disabled                                                      |
+| `PHARMACY_SMS_SENDER_ID`       | Masking / sender id registered with the aggregator                                                                        |
+| `PHARMACY_SMS_WEBHOOK_SECRET`  | HMAC secret for the inbound webhook                                                                                       |
+| `PHARMACY_SMS_LANGUAGE`        | `en` (default) or `ur` template language                                                                                  |
 
 Refill and khata SMS run inside the existing reminder jobs using the SMS tenant
 binding independently of WhatsApp templates, sender binding, or provider selection.

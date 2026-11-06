@@ -110,18 +110,31 @@ suite('refill batch selection (PostgreSQL)', () => {
   });
 
   it('retains a failed WhatsApp capture when SMS consent becomes available', async () => {
-    await expect(select({
-      channel: 'WHATSAPP', status: 'FAILED', whatsappGranted: true, smsGranted: true,
-    })).resolves.toEqual(['old']);
+    await expect(
+      select({
+        channel: 'WHATSAPP',
+        status: 'FAILED',
+        whatsappGranted: true,
+        smsGranted: true,
+      })
+    ).resolves.toEqual(['old']);
   });
 
   it('keeps an eligible WhatsApp capture without requiring SMS consent', async () => {
     await expect(select({ channel: 'WHATSAPP', whatsappGranted: true })).resolves.toEqual(['old']);
   });
 
-  it.each(['UNKNOWN', 'SENT'] as const)('never falls back on a %s WhatsApp claim', async (status) => {
-    await expect(select({
-      channel: 'WHATSAPP', status, whatsappGranted: true, smsGranted: true,
-    })).resolves.toEqual(['new']);
-  });
+  it.each(['UNKNOWN', 'SENT'] as const)(
+    'never falls back on a %s WhatsApp claim',
+    async (status) => {
+      await expect(
+        select({
+          channel: 'WHATSAPP',
+          status,
+          whatsappGranted: true,
+          smsGranted: true,
+        })
+      ).resolves.toEqual(['new']);
+    }
+  );
 });

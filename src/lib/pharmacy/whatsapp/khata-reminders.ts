@@ -235,20 +235,28 @@ export async function processDueWhatsAppKhataReminders(
       const to = normalizeWhatsAppNumber(customer.patient.phone);
       const whatsappAllowed = Boolean(
         to &&
-          canMessageCustomer(customer) &&
-          consent?.granted &&
-          !consent.revokedAt &&
-          !(consent.recordedAt > now)
+        canMessageCustomer(customer) &&
+        consent?.granted &&
+        !consent.revokedAt &&
+        !(consent.recordedAt > now)
       );
-      const previous = await db.pharmacyMessageLog.findFirst({
+      const weekLogs = await db.pharmacyMessageLog.findMany({
         where: {
           organizationId: account.organizationId,
-          channel: 'WHATSAPP',
           direction: 'OUTBOUND',
-          dedupeKey: plan.dedupeKey,
+          kind: 'KHATA_REMINDER',
+          dedupeKey: { in: [plan.dedupeKey, `sms:${plan.dedupeKey}`] },
         },
-        select: { status: true },
+        select: { channel: true, status: true },
       });
+      const previous = weekLogs.find((log) => log.channel === 'WHATSAPP');
+      // This week's reminder is already claimed on some channel, so a consent
+      // change cannot buy a second one. Only a permanent WhatsApp failure that
+      // has not yet fallen back may still use SMS.
+      if (weekLogs.some((log) => log.channel === 'SMS'))
+        return { channel: 'DUPLICATE' as const, claimedOn: 'SMS' as const };
+      if (previous && previous.status !== 'FAILED')
+        return { channel: 'DUPLICATE' as const, claimedOn: 'WHATSAPP' as const };
       const useSms = !whatsappAllowed || previous?.status === 'FAILED';
       if (useSms ? !smsFallbackEnabled(smsConfig, account.organizationId) : !canUseWhatsApp)
         return null;
@@ -296,6 +304,11 @@ export async function processDueWhatsAppKhataReminders(
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    if (recipient.channel === 'DUPLICATE') {
+      if (recipient.claimedOn === 'SMS') countSmsOutcome(result.sms, 'DUPLICATE');
+      else result.duplicate += 1;
       continue;
     }
     const smsBody = SMS_TEMPLATES.khataReminder(smsConfig.language, {

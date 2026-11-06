@@ -112,7 +112,10 @@ export async function POST(request: Request) {
                           id: z.string().min(1).max(256),
                           status: z.string(),
                           timestamp: z.string().regex(/^\d+$/),
-                          errors: z.array(z.object({ code: z.number().int() })).max(50).optional(),
+                          errors: z
+                            .array(z.object({ code: z.number().int() }))
+                            .max(50)
+                            .optional(),
                         })
                       )
                       .max(500)
