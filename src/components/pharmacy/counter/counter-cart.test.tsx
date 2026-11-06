@@ -309,6 +309,40 @@ describe('CounterLotOverride', () => {
     expect(props.onChange).toHaveBeenLastCalledWith(null);
   });
 
+  it('asks an owner/manager to approve a non-FEFO lot with a PIN (#482)', () => {
+    const props = picker({
+      value: { inventoryLotId: 'lot-later', reason: 'x' },
+      approvers: [{ id: 'manager-profile', name: 'Manager' }],
+    });
+    expect(screen.getByLabelText('Manager PIN')).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Approving manager'), {
+      target: { value: 'manager-profile' },
+    });
+    expect(props.onChange).toHaveBeenLastCalledWith({
+      inventoryLotId: 'lot-later',
+      reason: 'x',
+      approverStaffProfileId: 'manager-profile',
+      approverPin: '',
+    });
+  });
+
+  it('keeps only digits in the manager PIN', () => {
+    const props = picker({
+      value: {
+        inventoryLotId: 'lot-later',
+        reason: 'x',
+        approverStaffProfileId: 'manager-profile',
+      },
+      approvers: [{ id: 'manager-profile', name: 'Manager' }],
+    });
+    const pin = screen.getByLabelText('Manager PIN');
+    expect(pin).toHaveAttribute('type', 'password');
+    fireEvent.change(pin, { target: { value: '12a34' } });
+    expect(props.onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ approverPin: '1234' })
+    );
+  });
+
   it('surfaces a load failure with a retry', () => {
     const props = picker({ state: 'error', error: 'Batches unavailable.', lots: [] });
     expect(screen.getByRole('alert')).toHaveTextContent('Batches unavailable.');

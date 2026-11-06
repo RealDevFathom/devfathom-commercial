@@ -276,10 +276,16 @@ export type CounterLotOption = {
  * An open override. `inventoryLotId` is null while the FEFO lot is selected —
  * choosing the recommended lot is not an override and records nothing.
  */
-export type CounterLotOverrideValue = { inventoryLotId: string | null; reason: string };
+export type CounterLotOverrideValue = {
+  inventoryLotId: string | null;
+  reason: string;
+  /** #482: the owner/manager approving the override, and their PIN (never persisted here). */
+  approverStaffProfileId?: string;
+  approverPin?: string;
+};
 
-/** The policy a counter override is recorded under: the pharmacist on duty decides. */
-export const COUNTER_OVERRIDE_APPROVAL_POLICY = 'PHARMACIST_ON_DUTY';
+/** An owner/manager who may approve a counter override with their PIN. */
+export type CounterApproverOption = { id: string; name: string };
 
 const BLOCK_LABEL: Record<string, string> = {
   EXPIRED: 'Expired',
@@ -302,6 +308,8 @@ export type CounterLotOverrideProps = {
   now?: Date;
   onChange: (value: CounterLotOverrideValue | null) => void;
   onRetry: () => void;
+  approvers?: readonly CounterApproverOption[];
+  approversState?: 'loading' | 'ready' | 'error';
 };
 
 /**
@@ -321,6 +329,8 @@ export function CounterLotOverride({
   now = new Date(),
   onChange,
   onRetry,
+  approvers = [],
+  approversState = 'ready',
 }: CounterLotOverrideProps) {
   const buttonClass =
     'inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50';
@@ -425,6 +435,67 @@ export function CounterLotOverride({
           <p id="counter-lot-override-hint" className="text-xs text-text-muted">
             Required. Recorded with your name against this bill.
           </p>
+          <fieldset disabled={disabled} className="space-y-1 pt-2">
+            <legend className="text-sm font-semibold text-text-strong">
+              Owner or manager approval
+            </legend>
+            <label
+              htmlFor="counter-lot-override-approver"
+              className="block text-xs font-semibold text-text-body"
+            >
+              Approving manager
+            </label>
+            <select
+              id="counter-lot-override-approver"
+              required
+              value={value.approverStaffProfileId ?? ''}
+              disabled={disabled || approversState !== 'ready'}
+              onChange={(event) =>
+                onChange({ ...value, approverStaffProfileId: event.target.value, approverPin: '' })
+              }
+              className="h-11 w-full rounded-md border border-border-subtle bg-surface-card px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              <option value="">Select manager</option>
+              {approvers.map((approver) => (
+                <option key={approver.id} value={approver.id}>
+                  {approver.name}
+                </option>
+              ))}
+            </select>
+            {approversState === 'loading' ? (
+              <p className="text-xs text-text-muted" role="status">
+                Loading managers…
+              </p>
+            ) : approversState === 'error' ? (
+              <p className="text-xs text-destructive" role="alert">
+                Managers could not be loaded.
+              </p>
+            ) : approvers.length === 0 ? (
+              <p className="text-xs text-text-muted" role="status">
+                No owner or manager with an active staff PIN is assigned to this branch.
+              </p>
+            ) : null}
+            <label
+              htmlFor="counter-lot-override-pin"
+              className="block text-xs font-semibold text-text-body"
+            >
+              Manager PIN
+            </label>
+            <input
+              id="counter-lot-override-pin"
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={8}
+              required
+              disabled={disabled || !value.approverStaffProfileId}
+              value={value.approverPin ?? ''}
+              onChange={(event) =>
+                onChange({ ...value, approverPin: event.target.value.replace(/\D/g, '') })
+              }
+              className="h-11 w-full rounded-md border border-border-subtle bg-surface-card px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            />
+          </fieldset>
         </div>
       ) : null}
 

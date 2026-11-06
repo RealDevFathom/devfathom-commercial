@@ -6,8 +6,15 @@ import {
   resolvePrescriptionReference,
 } from '@/lib/pharmacy/rx-prescription-reference';
 import { hasModule } from '@/lib/entitlements';
-import { manualPaymentSettingsSchema, isManualTender, manualMerchantPolicies } from '@/lib/pharmacy/manual-payments';
-import { readManualPaymentSettings, saveManualPaymentSettings } from '@/lib/pharmacy/manual-payment-settings';
+import {
+  manualPaymentSettingsSchema,
+  isManualTender,
+  manualMerchantPolicies,
+} from '@/lib/pharmacy/manual-payments';
+import {
+  readManualPaymentSettings,
+  saveManualPaymentSettings,
+} from '@/lib/pharmacy/manual-payment-settings';
 import {
   executeSandboxPayment,
   sandboxPaymentInput,
@@ -114,6 +121,12 @@ import {
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 
+import {
+  DISCOUNT_APPROVAL_POLICY,
+  FEFO_OVERRIDE_APPROVAL_POLICY,
+  listManagerApprovers,
+  verifyManagerApprovalDurably,
+} from '@/lib/pharmacy/manager-approval';
 import { assertInOrganization } from '../org-refs';
 import {
   adminProcedure,
@@ -132,13 +145,26 @@ const tenderInput = z
     saleId: z.string().min(1),
     deviceId: z.string().min(1),
     businessDate: z.date(),
-    type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT', 'KHATA', 'RAAST', 'JAZZCASH', 'EASYPAISA']),
+    type: z.enum([
+      'CASH',
+      'CARD',
+      'BANK_TRANSFER',
+      'WALLET',
+      'CREDIT',
+      'KHATA',
+      'RAAST',
+      'JAZZCASH',
+      'EASYPAISA',
+    ]),
     amountMinor: z.number().int().positive(),
     cashReceivedMinor: z.number().int().nonnegative().optional(),
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
-    providerRef: z.string().regex(/^\d{4,6}$/).optional(),
+    providerRef: z
+      .string()
+      .regex(/^\d{4,6}$/)
+      .optional(),
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
   })
@@ -507,21 +533,39 @@ async function requireCloseAccess(ctx: TRPCContext) {
 }
 
 export const pharmacySalesRouter = router({
-  manualPaymentSettings: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
-    const scope = ctx.session!.user.role === 'ADMIN'
-      ? await branchScopeOrForbidden(ctx, input.branchId)
-      : await requireCounterReceiptAccess(ctx, input.branchId, true);
-    return readManualPaymentSettings(ctx.db, scope);
-  }),
-  saveManualPaymentSettings: adminProcedure.input(z.object({
-    branchId, revision: z.number().int().nonnegative(), settings: manualPaymentSettingsSchema,
-  }).strict()).mutation(async ({ ctx, input }) => {
-    // QR and payer destinations must not be copied into request audit payloads.
-    annotateAudit(ctx, { skipInput: true, targetType: 'PharmacyBranch', targetId: input.branchId,
-      metadata: { revision: input.revision, manualMerchantPolicies: manualMerchantPolicies(input.settings) } });
-    const scope = await branchScopeOrForbidden(ctx, input.branchId);
-    return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
-  }),
+  manualPaymentSettings: protectedProcedure
+    .input(z.object({ branchId }))
+    .query(async ({ ctx, input }) => {
+      const scope =
+        ctx.session!.user.role === 'ADMIN'
+          ? await branchScopeOrForbidden(ctx, input.branchId)
+          : await requireCounterReceiptAccess(ctx, input.branchId, true);
+      return readManualPaymentSettings(ctx.db, scope);
+    }),
+  saveManualPaymentSettings: adminProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          settings: manualPaymentSettingsSchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // QR and payer destinations must not be copied into request audit payloads.
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacyBranch',
+        targetId: input.branchId,
+        metadata: {
+          revision: input.revision,
+          manualMerchantPolicies: manualMerchantPolicies(input.settings),
+        },
+      });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
+    }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {
@@ -1017,13 +1061,19 @@ export const pharmacySalesRouter = router({
           canonicalUnitsPerSaleUnit: z.number().int().positive(),
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
-          approvedByUserId: z.string().min(1).optional(),
-          approvalPolicy: z.string().trim().min(1).optional(),
+          // #482: an owner/manager PIN approving a discount or FEFO override. The approver
+          // is resolved server-side from the stored PIN credential, never taken from input.
+          managerApproval: z
+            .object({
+              staffProfileId: z.string().trim().min(1).max(128),
+              pin: z.string().regex(/^\d{4,8}$/),
+            })
+            .strict()
+            .optional(),
           override: z
             .object({
               inventoryLotId: z.string().min(1),
               reason: z.string().trim().min(1).max(500),
-              approvalPolicy: z.string().trim().min(1).max(200),
             })
             .strict()
             .optional(),
@@ -1050,14 +1100,83 @@ export const pharmacySalesRouter = router({
             medicineId: input.medicineId,
             selectedLotId: input.override.inventoryLotId,
             reason: input.override.reason,
-            approvalPolicy: input.override.approvalPolicy,
+            approvalPolicy: FEFO_OVERRIDE_APPROVAL_POLICY,
           },
         });
+      }
+      const needsDiscountApproval = (input.discountMinor ?? 0) > 0;
+      // Checked before any manager PIN attempt is spent on an operator who may not override.
+      if (
+        input.override &&
+        !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:safety', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+        }))
+      ) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Pharmacy safety permission is required for a FEFO override.',
+        });
+      }
+      let approverId: string | undefined;
+      if (needsDiscountApproval || input.override) {
+        const approvalScope = await scopeFor(ctx, input.branchId);
+        // Verified (and its lockout counters committed) in an independent transaction, so a
+        // refusal can be thrown — and audited as a FAILURE — without rolling back the attempt.
+        const approval = await verifyManagerApprovalDurably(approvalScope, input.managerApproval);
+        const approvalKinds = [
+          ...(needsDiscountApproval ? ['DISCOUNT'] : []),
+          ...(input.override ? ['FEFO_OVERRIDE'] : []),
+        ];
+        // Non-secret approval context only; the PIN never enters audit detail.
+        annotateAudit(ctx, {
+          ...(input.override
+            ? {}
+            : {
+                category: 'PHARMACY',
+                action: 'discount_approval',
+                targetType: 'PharmacySale',
+                targetId: input.saleId,
+                description: 'Counter discount needing owner/manager PIN approval.',
+              }),
+          metadata: {
+            branchId: input.branchId,
+            medicineId: input.medicineId,
+            ...(needsDiscountApproval ? { discountMinor: input.discountMinor } : {}),
+            managerApproval: {
+              kinds: approvalKinds,
+              outcome: approval.ok ? 'APPROVED' : 'REJECTED',
+              ...(approval.ok ? {} : { reason: approval.reason }),
+              approverStaffProfileId: approval.approverStaffProfileId,
+              ...(approval.ok ? { approvedByUserId: approval.approverUserId } : {}),
+            },
+          },
+        });
+        if (!approval.ok) {
+          throw new TRPCError({
+            code: approval.reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',
+            message:
+              approval.reason === 'LOCKED'
+                ? 'This manager PIN is locked after too many attempts. Try again later.'
+                : 'An active owner or manager must approve this with their PIN.',
+          });
+        }
+        approverId = approval.approverUserId;
       }
       try {
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           const scope = await scopeFor(ctx, input.branchId);
+          const { managerApproval: _managerApproval, ...lineInputWithoutSecret } = input;
+          void _managerApproval;
+          const approvedInput = {
+            ...lineInputWithoutSecret,
+            approvedByUserId: needsDiscountApproval ? approverId : undefined,
+            approvalPolicy: needsDiscountApproval ? DISCOUNT_APPROVAL_POLICY : undefined,
+            override: input.override
+              ? { ...input.override, approvalPolicy: FEFO_OVERRIDE_APPROVAL_POLICY }
+              : undefined,
+          };
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
@@ -1068,7 +1187,7 @@ export const pharmacySalesRouter = router({
               throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
-            const { prescription, ...lineInput } = input;
+            const { prescription, ...lineInput } = approvedInput;
             if (!prescription) return addSaleLine(db, scope, lineInput);
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
@@ -1206,7 +1325,7 @@ export const pharmacySalesRouter = router({
               return { blocked: 'Patient dispensing consent is required.' };
             }
             await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
-            const result = await addSaleLine(db, scope, input);
+            const result = await addSaleLine(db, scope, approvedInput);
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
@@ -1297,7 +1416,7 @@ export const pharmacySalesRouter = router({
           });
           if (!consent?.granted || consent.revokedAt)
             return { blocked: 'Patient dispensing consent is required.' };
-          const result = await addSaleLine(db, scope, input);
+          const result = await addSaleLine(db, scope, approvedInput);
           await db.prescriptionFill.create({
             data: {
               organizationId: scope.organizationId,
@@ -1770,6 +1889,17 @@ export const pharmacySalesRouter = router({
    * Read-only. Lots that cannot be sold stay listed with the reason, so the
    * operator sees why a batch on the shelf is refused rather than missing.
    */
+  /**
+   * #482 — owners/managers who may approve a counter discount or FEFO override at this
+   * branch with their stored PIN. Only ids and display names; credentials never leave.
+   */
+  counterApprovers: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) =>
+      // Same branch assignment + counter capability gate as cart/receipt reads.
+      // scopeFor alone is tenant-internal IDOR: any org member could enum approvers.
+      listManagerApprovers(ctx.db, await requireCounterReceiptAccess(ctx, input.branchId))
+    ),
   counterLotOptions: protectedProcedure
     .input(z.object({ branchId, medicineId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {

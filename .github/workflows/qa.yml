@@ -307,7 +307,11 @@ jobs:
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
           run lint bun run lint
 
-          git diff --name-only -z b20b577f..HEAD -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist
+          base_sha='${{ github.event.pull_request.base.sha || github.event.before }}'
+          if ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+            base_sha=$(git rev-parse HEAD^)
+          fi
+          git diff --name-only -z "${base_sha}..HEAD" -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist
           record prettier-file-list "$?"
           if [ -s gate/prettier-files.zlist ]; then
             xargs -0 bunx prettier --check < gate/prettier-files.zlist >gate/prettier-check.stdout.log 2>gate/prettier-check.stderr.log
