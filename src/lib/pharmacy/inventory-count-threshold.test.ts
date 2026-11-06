@@ -14,9 +14,14 @@ const scope = { organizationId: 'org', branchId: 'branch', actorId: 'maker' };
 const CAP = PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS;
 
 /** Minimal scoped-db double: one lot of 10 units/pack with 40 units on hand. */
-function createDb() {
+function createDb(organizationThreshold = 0) {
   const lines: Array<{ varianceUnits: number }> = [];
   const db = {
+    organization: {
+      findFirst: vi.fn(async () => ({
+        pharmacyCountVarianceThresholdUnits: organizationThreshold,
+      })),
+    },
     pharmacyInventoryCount: {
       create: vi.fn(async ({ data }) => ({ id: 'count', ...data })),
       update: vi.fn(async ({ data }) => ({ id: 'count', ...data, lines })),
@@ -73,11 +78,36 @@ beforeEach(() => {
 });
 
 describe('stock count co-authorization threshold is server-owned', () => {
-  it('caps a client-supplied threshold so a large variance still needs co-authorization', async () => {
-    const db = createDb();
+  it('ignores a client-supplied threshold: a large variance still needs co-authorization', async () => {
+    const db = createDb(0);
     const count = await createCount(db as never, scope, {
-      varianceThreshold: 1_000_000,
+      // Not part of the input type any more; a stale client sending it changes nothing.
+      ...({ varianceThreshold: 1_000_000 } as object),
       // 1 pack + 5 loose = 15 counted against 40 expected: a 25-unit shortfall.
+      readings: [
+        {
+          inventoryLotId: 'lot',
+          stockLocationId: 'store',
+          countedSealedPacks: 1,
+          countedLooseUnits: 5,
+        },
+      ],
+    });
+    expect(db.organization.findFirst).toHaveBeenCalledWith({
+      where: { id: 'org' },
+      select: { pharmacyCountVarianceThresholdUnits: true },
+    });
+    expect(db.pharmacyInventoryCount.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ varianceThreshold: 0 }),
+    });
+    expect(count.status).toBe('AWAITING_COAUTH');
+  });
+
+  it('caps a stored organization setting above server policy', async () => {
+    expect(effectiveCountVarianceThreshold(2)).toBe(2);
+    expect(effectiveCountVarianceThreshold(CAP + 1)).toBe(CAP);
+    const db = createDb(1_000_000);
+    const count = await createCount(db as never, scope, {
       readings: [
         {
           inventoryLotId: 'lot',
@@ -93,12 +123,9 @@ describe('stock count co-authorization threshold is server-owned', () => {
     expect(count.status).toBe('AWAITING_COAUTH');
   });
 
-  it('keeps a stricter client threshold and leaves within-threshold counts OPEN', async () => {
-    expect(effectiveCountVarianceThreshold(2)).toBe(2);
-    expect(effectiveCountVarianceThreshold(CAP + 1)).toBe(CAP);
-    const db = createDb();
+  it("leaves a count within the owner's threshold OPEN", async () => {
+    const db = createDb(5);
     const count = await createCount(db as never, scope, {
-      varianceThreshold: 5,
       // 3 packs + 5 loose = 35 counted: a 5-unit shortfall, at the threshold.
       readings: [
         {

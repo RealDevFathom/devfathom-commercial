@@ -503,8 +503,12 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         units: 40,
         label: 'count-coauth',
       });
+      // The threshold is owner policy on the organization, never createCount input.
+      await db.organization.update({
+        where: { id: scopeOf(fixture).organizationId },
+        data: { pharmacyCountVarianceThresholdUnits: 2 },
+      });
       return deps.operations.createCount(db, scopeOf(fixture), {
-        varianceThreshold: 2,
         readings: [
           {
             inventoryLotId: lot.id,
@@ -538,6 +542,43 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     expect(result.balance?.onHandUnits).toBe(35);
   });
 
+  it('snapshots the organization count threshold and never accepts a writer-supplied one', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'count-threshold-snapshot');
+    const count = await inOrg(ORG_A, async (db) => {
+      await db.organization.update({
+        where: { id: fixture.organizationId },
+        data: { pharmacyCountVarianceThresholdUnits: 3 },
+      });
+      // A writer that bypasses createCount still cannot choose the threshold.
+      return db.pharmacyInventoryCount.create({
+        data: {
+          organizationId: fixture.organizationId,
+          branchId: fixture.branchId,
+          varianceThreshold: 1_000_000,
+          createdById: ACTOR,
+        },
+      });
+    });
+    expect(count.varianceThreshold).toBe(3);
+    await expect(
+      inOrg(ORG_A, (db) =>
+        db.pharmacyInventoryCount.update({
+          where: { id: count.id },
+          data: { varianceThreshold: 1_000_000 },
+        })
+      )
+    ).rejects.toThrow(/Count variance threshold is immutable/);
+    // Owner settings above the server ceiling are refused by the database too.
+    await expect(
+      inOrg(ORG_A, (db) =>
+        db.organization.update({
+          where: { id: fixture.organizationId },
+          data: { pharmacyCountVarianceThresholdUnits: 11 },
+        })
+      )
+    ).rejects.toThrow(/organizations_pharmacy_count_variance_threshold_check/);
+  });
+
   it('serializes count approvals with different idempotency prefixes', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'count-approval-race');
     const count = await inOrg(ORG_A, async (db) => {
@@ -546,8 +587,12 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         units: 40,
         label: 'count-approval-race',
       });
+      // The threshold is owner policy on the organization, never createCount input.
+      await db.organization.update({
+        where: { id: scopeOf(fixture).organizationId },
+        data: { pharmacyCountVarianceThresholdUnits: 10 },
+      });
       return deps.operations.createCount(db, scopeOf(fixture), {
-        varianceThreshold: 10,
         readings: [
           {
             inventoryLotId: lot.id,

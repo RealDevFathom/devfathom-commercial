@@ -444,7 +444,9 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
             (await db.pharmacyPurchaseOrder.findUniqueOrThrow({ where: { id: po.id } })).status
           ).toBe('APPROVED');
           expect(
-            await db.auditLog.count({ where: { action: 'PHARMACY:SOLO_OWNER_PIN', targetId: po.id } })
+            await db.auditLog.count({
+              where: { action: 'PHARMACY:SOLO_OWNER_PIN', targetId: po.id },
+            })
           ).toBe(1);
           expect(
             await db.pharmacyPurchaseOrderApproval.count({
@@ -675,7 +677,9 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
             (await db.pharmacyPurchaseOrder.findUniqueOrThrow({ where: { id: po.id } })).status
           ).toBe('SUBMITTED');
           expect(
-            await db.auditLog.count({ where: { action: 'PHARMACY:SOLO_OWNER_PIN', targetId: po.id } })
+            await db.auditLog.count({
+              where: { action: 'PHARMACY:SOLO_OWNER_PIN', targetId: po.id },
+            })
           ).toBe(0);
         },
         { skipDrain: true }
@@ -732,7 +736,11 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
         withTenantDb(
           f.org,
           (db) =>
-            caller(db, f).approvePurchaseOrder({ purchaseOrderId: po.id, decision: 'APPROVED', pin }),
+            caller(db, f).approvePurchaseOrder({
+              purchaseOrderId: po.id,
+              decision: 'APPROVED',
+              pin,
+            }),
           { skipDrain: true }
         )
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -836,8 +844,12 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
           const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
             where: { branchId: f.branch },
           });
+          // The threshold is owner policy on the organization, never createCount input.
+          await db.organization.update({
+            where: { id: scope(f).organizationId },
+            data: { pharmacyCountVarianceThresholdUnits: 0 },
+          });
           return createCount(db, scope(f), {
-            varianceThreshold: 0,
             readings: [
               {
                 inventoryLotId: lot.id,
@@ -901,8 +913,12 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
           const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
             where: { branchId: f.branch },
           });
+          // The threshold is owner policy on the organization, never createCount input.
+          await db.organization.update({
+            where: { id: scope(f).organizationId },
+            data: { pharmacyCountVarianceThresholdUnits: 10 },
+          });
           const open = await createCount(db, scope(f), {
-            varianceThreshold: 100,
             readings: [
               {
                 inventoryLotId: lot.id,
@@ -962,7 +978,9 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
               role: 'ADMIN',
             },
           });
-          await db.pharmacyBranchAssignment.create({ data: { userId: user.id, branchId: f.branch } });
+          await db.pharmacyBranchAssignment.create({
+            data: { userId: user.id, branchId: f.branch },
+          });
           return user;
         },
         { skipDrain: true }
@@ -1040,7 +1058,9 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
       await withTenantDb(
         f.org,
         async (db) => {
-          const approved = await db.pharmacyPurchaseOrder.findUniqueOrThrow({ where: { id: po.id } });
+          const approved = await db.pharmacyPurchaseOrder.findUniqueOrThrow({
+            where: { id: po.id },
+          });
           expect(approved.approvedByUserId).toBe(second.id);
           expect(
             await db.pharmacyPurchaseOrderApproval.count({
@@ -1255,7 +1275,9 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
               organizationRoleId: role.id,
             },
           });
-          await db.pharmacyBranchAssignment.create({ data: { userId: user.id, branchId: f.other } });
+          await db.pharmacyBranchAssignment.create({
+            data: { userId: user.id, branchId: f.other },
+          });
           return user;
         };
         const buyer = await staff('buyer', 'pharmacy:procurement');
@@ -1272,7 +1294,9 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
           workspace.directPurchaseApprovers.find((u) => u.id === f.user)?.branchIds.sort()
         ).toEqual([f.branch, f.other].sort());
         expect(
-          workspace.directPurchaseApprovers.some((u) => u.id === dispenser.id || u.id === onLeave.id)
+          workspace.directPurchaseApprovers.some(
+            (u) => u.id === dispenser.id || u.id === onLeave.id
+          )
         ).toBe(false);
         expect(workspace.approvers.some((u) => u.id === buyer.id)).toBe(false);
         expect(
@@ -2159,7 +2183,11 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
           pharmacyPinRouter
             .createCaller({
               db,
-              entitlements: { organizationId: f.org, enabledModules: ['pharmacy-core'], modules: [] },
+              entitlements: {
+                organizationId: f.org,
+                enabledModules: ['pharmacy-core'],
+                modules: [],
+              },
               session: {
                 expires: 'later',
                 user: { id: f.user, organizationId: f.org, role: 'ADMIN', status: 'ACTIVE' },
@@ -2175,7 +2203,9 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
     await expect(rotate('9999', '5836')).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(await verifyPharmacyUserPin({ organizationId: f.org, actorId: f.user }, pin)).toBe(true);
     await expect(rotate(pin, '5836')).resolves.toEqual({ enrolled: true });
-    expect(await verifyPharmacyUserPin({ organizationId: f.org, actorId: f.user }, pin)).toBe(false);
+    expect(await verifyPharmacyUserPin({ organizationId: f.org, actorId: f.user }, pin)).toBe(
+      false
+    );
     expect(await verifyPharmacyUserPin({ organizationId: f.org, actorId: f.user }, '5836')).toBe(
       true
     );

@@ -1009,7 +1009,7 @@ export const pharmacyInventoryRouter = router({
       z
         .object({
           branchId,
-          varianceThreshold: z.number().int().nonnegative(),
+          // No varianceThreshold: it is the owner's tenant setting (countVarianceThreshold).
           readings: z
             .array(
               z

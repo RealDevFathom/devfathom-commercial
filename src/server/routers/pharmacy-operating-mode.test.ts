@@ -16,7 +16,10 @@ function fixture(mode = 'STAFFED', role = 'owner') {
     $queryRaw: vi.fn(async () => []),
     user: { findFirst: vi.fn(async () => ({ organizationRole: { key: role, isSystem: true } })) },
     organization: {
-      findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: mode })),
+      findFirstOrThrow: vi.fn(async () => ({
+        pharmacyOperatingMode: mode,
+        pharmacyCountVarianceThresholdUnits: 0,
+      })),
       update: vi.fn(async ({ data }) => data),
     },
     auditLog: { create: vi.fn() },
@@ -80,6 +83,48 @@ describe('owner-only operating-mode toggle', () => {
     await expect(f.caller.set({ mode: 'SOLO' } as never)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     });
+    expect(f.db.organization.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('owner-only count variance threshold', () => {
+  it.each(['cashier', 'pharmacist', 'manager'])(
+    'denies %s even with a correct PIN',
+    async (role) => {
+      const f = fixture('STAFFED', role);
+      await expect(
+        f.caller.setCountVarianceThreshold({ thresholdUnits: 10, pin: '4729' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.organization.update).not.toHaveBeenCalled();
+      expect(mocks.verify).not.toHaveBeenCalled();
+    }
+  );
+  it('requires the owner PIN', async () => {
+    const f = fixture();
+    await expect(
+      f.caller.setCountVarianceThreshold({ thresholdUnits: 5, pin: '0000' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.organization.update).not.toHaveBeenCalled();
+    expect(f.db.auditLog.create).not.toHaveBeenCalled();
+  });
+  it('audits the change without persisting the PIN', async () => {
+    const f = fixture();
+    await expect(
+      f.caller.setCountVarianceThreshold({ thresholdUnits: 5, pin: '4729' })
+    ).resolves.toEqual({ pharmacyCountVarianceThresholdUnits: 5 });
+    expect(f.db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'PHARMACY:COUNT_VARIANCE_THRESHOLD_CHANGED',
+        metadata: { from: 0, to: 5, reauthentication: 'PIN' },
+      }),
+    });
+    expect(JSON.stringify(f.db.auditLog.create.mock.calls)).not.toContain('4729');
+  });
+  it.each([-1, 1.5, 11])('rejects threshold %s at the input boundary', async (thresholdUnits) => {
+    const f = fixture();
+    await expect(
+      f.caller.setCountVarianceThreshold({ thresholdUnits, pin: '4729' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.db.organization.update).not.toHaveBeenCalled();
   });
 });

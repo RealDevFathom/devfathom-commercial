@@ -860,8 +860,12 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
         unitCostMinor: 700,
         expiresAt: EXPIRY_LATER,
       });
+      // The threshold is owner policy on the organization, never createCount input.
+      await db.organization.update({
+        where: { id: scopeOf(short).organizationId },
+        data: { pharmacyCountVarianceThresholdUnits: 10 },
+      });
       const count = await deps.operations.createCount(db, scopeOf(short), {
-        varianceThreshold: 100,
         readings: [
           {
             inventoryLotId: lot.id,
@@ -890,8 +894,12 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
         unitCostMinor: 700,
         expiresAt: EXPIRY_LATER,
       });
+      // The threshold is owner policy on the organization, never createCount input.
+      await db.organization.update({
+        where: { id: scopeOf(over).organizationId },
+        data: { pharmacyCountVarianceThresholdUnits: 10 },
+      });
       const count = await deps.operations.createCount(db, scopeOf(over), {
-        varianceThreshold: 100,
         readings: [
           {
             inventoryLotId: lot.id,
@@ -922,8 +930,12 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
         unitCostMinor: 700,
         expiresAt: EXPIRY_LATER,
       });
+      // The threshold is owner policy on the organization, never createCount input.
+      await db.organization.update({
+        where: { id: scopeOf(f).organizationId },
+        data: { pharmacyCountVarianceThresholdUnits: 10 },
+      });
       const count = await deps.operations.createCount(db, scopeOf(f), {
-        varianceThreshold: 100,
         readings: [
           {
             inventoryLotId: lot.id,
@@ -1377,8 +1389,12 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
         stockMovementId: written.movement.id,
         at: LATER,
       });
+      // The threshold is owner policy on the organization, never createCount input.
+      await db.organization.update({
+        where: { id: scopeOf(f).organizationId },
+        data: { pharmacyCountVarianceThresholdUnits: 10 },
+      });
       const count = await deps.operations.createCount(db, scopeOf(f), {
-        varianceThreshold: 100,
         readings: [
           {
             inventoryLotId: lot.id,

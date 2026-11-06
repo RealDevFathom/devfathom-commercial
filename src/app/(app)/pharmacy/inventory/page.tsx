@@ -24,7 +24,7 @@ import { hasModule } from '@/lib/entitlements';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
-import { PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS } from '@/lib/pharmacy/inventory-operations';
+import { countVarianceThreshold } from '@/lib/pharmacy/inventory-operations';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
@@ -134,6 +134,8 @@ export default async function PharmacyInventoryPage({
     select: { id: true, name: true, city: true },
   });
   const branch = branches.find((item) => item.id === query.branch) ?? branches[0] ?? null;
+  // Count approval tolerance is owner policy (Settings → Operating mode): shown, not editable.
+  const countThresholdUnits = await countVarianceThreshold(ctx.db, organizationId);
   if (!branch) {
     return (
       <main className="min-w-0 space-y-6">
@@ -301,7 +303,6 @@ export default async function PharmacyInventoryPage({
       else if (action === 'create-count')
         await actionCaller.createCount({
           branchId,
-          varianceThreshold: number(data, 'threshold'),
           readings: [
             {
               inventoryLotId: field(data, 'position').split(':')[0]!,
@@ -746,22 +747,13 @@ export default async function PharmacyInventoryPage({
                   ))}
                 </select>
               </label>
-              <label className="text-sm">
-                Variance threshold
-                <Input
-                  className="mt-1"
-                  defaultValue="0"
-                  max={PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS}
-                  min="0"
-                  name="threshold"
-                  required
-                  type="number"
-                />
-                <span className="mt-1 block text-xs text-text-muted">
-                  Variances above {PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS} units always need
-                  co-authorization.
-                </span>
-              </label>
+              <p className="text-sm text-text-muted sm:col-span-2">
+                Variances above{' '}
+                <span className="font-medium tabular-nums text-text-body">
+                  {countThresholdUnits} units
+                </span>{' '}
+                need co-authorization. The pharmacy owner sets this under Operating mode.
+              </p>
               <label className="text-sm">
                 Counted sealed packs
                 <Input className="mt-1" min="0" name="sealed" required type="number" />

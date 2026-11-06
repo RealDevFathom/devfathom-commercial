@@ -6,6 +6,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { arrangementFor, PharmacyInventoryError } from './inventory';
 import type { LedgerScope } from './stock-ledger';
+import { PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS } from './count-variance-policy';
 
 /** Serialize recall-authority decisions that can overlap at batch or medicine scope. */
 export async function lockRecallAuthority(db: ScopedDb, organizationId: string) {
@@ -185,15 +186,15 @@ async function removalArrangement(
 }
 
 /**
- * Server-owned ceiling on the per-count variance threshold. The count creator
- * may ask for a stricter (lower) threshold, but never a looser one: any line
- * whose absolute variance exceeds this many units always needs maker/checker
- * (or the audited SOLO owner PIN) before the adjustment posts, whatever the
- * client sent.
+ * Server-owned ceiling on the count variance threshold. The threshold itself is
+ * the owner's tenant setting (`pharmacyCountVarianceThresholdUnits`, never request
+ * input), and no setting can exceed this: any line whose absolute variance is
+ * above it always needs maker/checker (or the audited SOLO owner PIN) before the
+ * adjustment posts. The organizations CHECK constraint mirrors this value.
  */
-export const PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS = 10;
+export { PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS };
 
-/** The threshold that actually governs a count: the request, capped by server policy. */
+/** The threshold that actually governs a count: the stored value, capped by server policy. */
 export function effectiveCountVarianceThreshold(requested: number) {
   return Math.min(requested, PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS);
 }
@@ -206,11 +207,20 @@ function countNeedsCoauth(
   return lines.some((line) => Math.abs(line.varianceUnits ?? 0) > threshold);
 }
 
+/** Owner-configured count variance tolerance (units), capped. Read from storage only. */
+export async function countVarianceThreshold(db: ScopedDb, organizationId: string) {
+  const organization = await db.organization.findFirst({
+    where: { id: organizationId },
+    select: { pharmacyCountVarianceThresholdUnits: true },
+  });
+  if (!organization) throw new PharmacyInventoryError('NOT_FOUND');
+  return effectiveCountVarianceThreshold(organization.pharmacyCountVarianceThresholdUnits);
+}
+
 export async function createCount(
   db: ScopedDb,
   scope: LedgerScope,
   input: {
-    varianceThreshold: number;
     readings: ReadonlyArray<{
       inventoryLotId: string;
       stockLocationId: string;
@@ -219,11 +229,11 @@ export async function createCount(
     }>;
   }
 ) {
-  if (!Number.isSafeInteger(input.varianceThreshold) || input.varianceThreshold < 0)
-    throw new PharmacyInventoryError('INVALID_UNITS');
-  // Persist the effective (server-capped) threshold so reports and the approval
-  // gate both see the policy that governed this count, not the client's ask.
-  const varianceThreshold = effectiveCountVarianceThreshold(input.varianceThreshold);
+  // The approval threshold is tenant policy, never request input: a counter who could
+  // choose it could set it above any variance and skip second-person approval. The
+  // snapshot is persisted so reports and the approval gate see the governing policy
+  // (a database trigger enforces the same snapshot).
+  const varianceThreshold = await countVarianceThreshold(db, scope.organizationId);
   const count = await db.pharmacyInventoryCount.create({
     data: {
       organizationId: scope.organizationId,
@@ -317,7 +327,7 @@ export async function approveCount(
   // promoted to AWAITING_COAUTH needs maker/checker (or the SOLO owner's PIN)
   // before it can be approved. The variance is re-checked here against the
   // server-capped threshold too, so an OPEN count recorded with a loose
-  // client-chosen threshold (including rows written before the cap) cannot
+  // threshold (including client-chosen rows written before the cap) cannot
   // post an above-policy adjustment without co-authorization.
   if (
     count.status === 'AWAITING_COAUTH' ||

@@ -74,6 +74,9 @@ function makeContext() {
     db: {
       $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
       pharmacyBranch: { findMany: vi.fn().mockResolvedValue([branch]) },
+      organization: {
+        findFirst: vi.fn().mockResolvedValue({ pharmacyCountVarianceThresholdUnits: 4 }),
+      },
       pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([location]) },
       pharmacyInventoryLot: { findMany: lots },
       pharmacyInventoryCount: { findMany: vi.fn().mockResolvedValue([]) },
@@ -333,5 +336,19 @@ describe('Inventory pack-action integration', () => {
     expect(screen.getByText('Inventory module unavailable')).toBeVisible();
     expect(mocks.form).not.toHaveBeenCalled();
     expect(lots).not.toHaveBeenCalled();
+  });
+});
+
+describe('Stock count form', () => {
+  it('shows the owner-set variance threshold read-only, with no counter-editable input', async () => {
+    await show();
+    const form = screen.getByRole('button', { name: 'Freeze count scope' }).closest('form')!;
+    expect(within(form).queryByLabelText('Variance threshold')).toBeNull();
+    expect(form.querySelector('[name="threshold"]')).toBeNull();
+    expect(form).toHaveTextContent('Variances above 4 units need co-authorization.');
+    expect(ctx.db.organization.findFirst).toHaveBeenCalledWith({
+      where: { id: 'org' },
+      select: { pharmacyCountVarianceThresholdUnits: true },
+    });
   });
 });
