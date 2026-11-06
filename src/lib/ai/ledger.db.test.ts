@@ -16,6 +16,20 @@ const testModel = `test-model-${suffix}`;
 const unpricedModel = `unpriced-${suffix}`;
 let owner: Client;
 
+// Fixture setup and cleanup only. organizations forces RLS and the gate's runtime
+// role is not a superuser; the code under test never runs with this flag.
+async function asPlatformAdmin(run: () => Promise<void>) {
+  await owner.query('BEGIN');
+  try {
+    await owner.query(`SET LOCAL app.is_platform_admin = 'true'`);
+    await run();
+    await owner.query('COMMIT');
+  } catch (error) {
+    await owner.query('ROLLBACK');
+    throw error;
+  }
+}
+
 async function insertReservedUsage(requestId: string, model: string, occurredAt: Date) {
   await owner.query('BEGIN');
   try {
@@ -39,36 +53,44 @@ describeIfDatabase('AI ledger database integration', () => {
     vi.stubEnv('DATABASE_URL', DATABASE_URL);
     owner = new Client({ connectionString: DATABASE_URL });
     await owner.connect();
-    await owner.query(
-      `INSERT INTO "organizations"
-        ("id", "slug", "legalName", "displayName", "vertical", "status", "deploymentMode", "createdAt", "updatedAt")
-       VALUES ($1, $2, 'AI A', 'AI A', 'RESTAURANT', 'ACTIVE', 'SHARED', now(), now()),
-              ($3, $4, 'AI B', 'AI B', 'RESTAURANT', 'ACTIVE', 'SHARED', now(), now()),
-              ($5, $6, 'AI C', 'AI C', 'RESTAURANT', 'ACTIVE', 'SHARED', now(), now())`,
-      [orgA, `ai-a-${suffix}`, orgB, `ai-b-${suffix}`, orgC, `ai-c-${suffix}`]
-    );
-    await owner.query(
-      `INSERT INTO "ai_model_prices"
-        ("id", "provider", "model", "input_usd_per_mtok", "output_usd_per_mtok", "effective_from")
-       VALUES ($1, 'anthropic', $4, 2, 10, '2026-10-01T00:00:00Z'),
-              ($2, 'anthropic', $4, 4, 20, '2026-10-15T00:00:00Z'),
-              ($3, 'anthropic', $4, 100, 500, '2099-01-01T00:00:00Z')`,
-      [
-        `price_test_1001_${suffix}`,
-        `price_test_1015_${suffix}`,
-        `price_test_2099_${suffix}`,
-        testModel,
-      ]
-    );
+    await asPlatformAdmin(async () => {
+      await owner.query(
+        `INSERT INTO "organizations"
+          ("id", "slug", "legalName", "displayName", "vertical", "status", "deploymentMode", "createdAt", "updatedAt")
+         VALUES ($1, $2, 'AI A', 'AI A', 'RESTAURANT', 'ACTIVE', 'SHARED', now(), now()),
+                ($3, $4, 'AI B', 'AI B', 'RESTAURANT', 'ACTIVE', 'SHARED', now(), now()),
+                ($5, $6, 'AI C', 'AI C', 'RESTAURANT', 'ACTIVE', 'SHARED', now(), now())`,
+        [orgA, `ai-a-${suffix}`, orgB, `ai-b-${suffix}`, orgC, `ai-c-${suffix}`]
+      );
+      await owner.query(
+        `INSERT INTO "ai_model_prices"
+          ("id", "provider", "model", "input_usd_per_mtok", "output_usd_per_mtok", "effective_from")
+         VALUES ($1, 'anthropic', $4, 2, 10, '2026-10-01T00:00:00Z'),
+                ($2, 'anthropic', $4, 4, 20, '2026-10-15T00:00:00Z'),
+                ($3, 'anthropic', $4, 100, 500, '2099-01-01T00:00:00Z')`,
+        [
+          `price_test_1001_${suffix}`,
+          `price_test_1015_${suffix}`,
+          `price_test_2099_${suffix}`,
+          testModel,
+        ]
+      );
+    });
   });
 
   afterAll(async () => {
     if (!owner) return;
-    await owner.query('DELETE FROM "ai_model_prices" WHERE "model" = $1', [testModel]);
-    await owner.query('DELETE FROM "ai_usages" WHERE "organization_id" = ANY($1)', [
-      [orgA, orgB, orgC],
-    ]);
-    await owner.query('DELETE FROM "organizations" WHERE "id" = ANY($1)', [[orgA, orgB, orgC]]);
+    await asPlatformAdmin(async () => {
+      await owner.query('DELETE FROM "ai_model_prices" WHERE "model" = $1', [testModel]);
+      // ai_usages has no platform-admin bypass, so clear each tenant inside its own scope.
+      for (const organizationId of [orgA, orgB, orgC]) {
+        await owner.query("SELECT set_config('app.current_organization_id', $1, true)", [
+          organizationId,
+        ]);
+        await owner.query('DELETE FROM "ai_usages" WHERE "organization_id" = $1', [organizationId]);
+      }
+      await owner.query('DELETE FROM "organizations" WHERE "id" = ANY($1)', [[orgA, orgB, orgC]]);
+    });
     await owner.end();
     vi.unstubAllEnvs();
   });
