@@ -67,6 +67,8 @@ export default async function PharmacyFinancePage({
     ledgerAt?: string;
     ledgerBy?: string;
     journalPage?: string;
+    apOffset?: string;
+    apPaymentOffset?: string;
   }>;
 }) {
   const query = await searchParams;
@@ -112,6 +114,20 @@ export default async function PharmacyFinancePage({
   }
   const caller = pharmacyFinanceRouter.createCaller(ctx);
   let workspace: Awaited<ReturnType<typeof caller.workspace>>;
+  let nativeAp: Awaited<ReturnType<typeof caller.expenseAging>> | null = null;
+  let expenseSuppliers: Awaited<ReturnType<typeof caller.expenseSuppliers>> | null = null;
+  let expenseSettlements: Awaited<ReturnType<typeof caller.expenseSettlements>> | null = null;
+  const pageOffset = (value?: string) => value && /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : 0;
+  const apOffset = pageOffset(query.apOffset);
+  const apPaymentOffset = pageOffset(query.apPaymentOffset);
+  const apPageLink = (key: 'apOffset' | 'apPaymentOffset', offset: number) => {
+    const params = new URLSearchParams({ branch: branch.id });
+    for (const name of ['ledgerFrom', 'ledgerTo', 'ledgerAt', 'ledgerBy', 'marginFrom', 'marginTo', 'journalPage', 'apOffset', 'apPaymentOffset'] as const) {
+      if (query[name] !== undefined) params.set(name, query[name]);
+    }
+    params.set(key, String(offset));
+    return `${route}?${params}`;
+  };
   try {
     workspace = await caller.workspace({ branchId: branch.id });
   } catch {
@@ -131,6 +147,24 @@ export default async function PharmacyFinancePage({
     );
   }
 
+  // An optional AP reader must not replace the established Finance workspace.
+  // Omit asOf for a current snapshot anchored to the database clock.
+  try {
+    nativeAp = await caller.expenseAging({ branchId: branch.id, format: 'CSV', limit: 200, ...(apOffset ? { offset: apOffset } : {}) });
+  } catch (error) {
+    unstable_rethrow(error);
+  }
+  try {
+    expenseSuppliers = await caller.expenseSuppliers({ branchId: branch.id });
+  } catch (error) {
+    unstable_rethrow(error);
+  }
+  try {
+    expenseSettlements = await caller.expenseSettlements({ branchId: branch.id, offset: apPaymentOffset });
+  } catch (error) {
+    unstable_rethrow(error);
+  }
+
   async function perform(data: FormData) {
     'use server';
     const branchId = field(data, 'branchId');
@@ -140,6 +174,45 @@ export default async function PharmacyFinancePage({
       if (!actionCtx?.session?.user || actionCtx.session.user.role !== 'ADMIN')
         throw new Error('Administrator access is required.');
       const actionCaller = pharmacyFinanceRouter.createCaller(actionCtx);
+      if (action === 'void-expense-invoice' || action === 'reverse-expense-settlement') {
+        if (field(data, 'confirmed') !== 'yes') throw new Error('Confirm the correction.');
+        const correction = {
+          branchId, reason: field(data, 'reason'), at: new Date(), idempotencyKey: browserUuid(),
+        };
+        if (action === 'void-expense-invoice') {
+          await actionCaller.voidExpenseInvoice({ ...correction, invoiceId: field(data, 'invoiceId') });
+          redirect(destination(branchId, 'Invoice voided with an additive journal reversal.'));
+        }
+        await actionCaller.reverseExpenseSettlement({ ...correction, settlementId: field(data, 'settlementId') });
+        redirect(destination(branchId, 'Invoice payment reversed. The original payment remains in the audit trail.'));
+      }
+      if (action === 'create-expense-invoice') {
+        const amountMinor = moneyMinor(data, 'amount');
+        await actionCaller.createExpenseInvoice({
+          branchId,
+          supplierId: field(data, 'supplierId'),
+          supplierInvoiceRef: field(data, 'supplierInvoiceRef'),
+          description: field(data, 'description'),
+          issuedAt: new Date(`${field(data, 'issuedAt')}T12:00:00Z`),
+          dueAt: new Date(`${field(data, 'dueAt')}T12:00:00Z`),
+          amountMinor,
+          idempotencyKey: browserUuid(),
+          lines: [{ description: field(data, 'description'), amountMinor }],
+        });
+        redirect(destination(branchId, 'Supplier expense invoice posted to accounts payable.'));
+      }
+      if (action === 'settle-expense-invoice') {
+        await actionCaller.settleExpenseInvoice({
+          branchId,
+          invoiceId: field(data, 'invoiceId'),
+          amountMinor: moneyMinor(data, 'amount'),
+          occurredAt: new Date(`${field(data, 'occurredAt')}T12:00:00Z`),
+          reference: field(data, 'reference'),
+          idempotencyKey: browserUuid(),
+          fundingAccount: field(data, 'fundingAccount') === 'CASH' ? 'CASH' : 'BANK',
+        });
+        redirect(destination(branchId, 'Invoice payment posted and allocated.'));
+      }
       if (action === 'post') {
         const kind = field(data, 'transactionKind') as
           | 'SUPPLIER_PAYMENT'
@@ -360,6 +433,90 @@ export default async function PharmacyFinancePage({
             Switch branch
           </Button>
         </form>
+      </SectionCard>
+      <SectionCard title="Non-stock supplier invoices" eyebrow="Native accounts payable">
+        <div className="grid gap-5 xl:grid-cols-2">
+          <form action={perform} className="grid min-w-0 gap-3 sm:grid-cols-2">
+            <input type="hidden" name="action" value="create-expense-invoice" />
+            <input type="hidden" name="branchId" value={branch.id} />
+            <label className="min-w-0 text-sm text-text-body">
+              Supplier
+              <select className={inputClass} name="supplierId" required defaultValue="" disabled={!expenseSuppliers?.length} aria-describedby="expense-supplier-help">
+                <option value="" disabled>Select a supplier</option>
+                {expenseSuppliers?.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
+              </select>
+            </label>
+            <label className="text-sm">Supplier invoice reference<Input className="mt-1 min-h-11" name="supplierInvoiceRef" required /></label>
+            <p id="expense-supplier-help" className="text-sm text-text-muted sm:col-span-2" role={expenseSuppliers === null ? 'alert' : undefined}>
+              {expenseSuppliers === null ? 'Suppliers could not load. Refresh the page to try again.' : expenseSuppliers.length ? 'Choose an active, authorized supplier.' : 'Add and authorize a supplier in Purchasing before posting an invoice.'}
+            </p>
+            <label className="text-sm sm:col-span-2">Expense description<Input className="mt-1 min-h-11" name="description" required /></label>
+            <label className="text-sm">Invoice date<Input className="mt-1 min-h-11" name="issuedAt" type="date" required /></label>
+            <label className="text-sm">Due date<Input className="mt-1 min-h-11" name="dueAt" type="date" required /></label>
+            <label className="text-sm">Amount (PKR)<Input className="mt-1 min-h-11" name="amount" type="number" min="0.01" step="0.01" required /></label>
+            <Button type="submit" disabled={!expenseSuppliers?.length} className="min-h-11 self-end">Post invoice</Button>
+          </form>
+          {nativeAp ? <form action={perform} className="grid min-w-0 content-start gap-3 sm:grid-cols-2">
+            <input type="hidden" name="action" value="settle-expense-invoice" />
+            <input type="hidden" name="branchId" value={branch.id} />
+            <label className="text-sm sm:col-span-2">Open invoice<select className={inputClass} name="invoiceId" required disabled={!nativeAp.rows.length}>{nativeAp.rows.map(invoice => <option key={invoice.id} value={invoice.id}>{invoice.supplierInvoiceRef} · {money(invoice.outstandingMinor)}</option>)}</select></label>
+            <label className="text-sm">Payment reference<Input className="mt-1 min-h-11" name="reference" required /></label>
+            <label className="text-sm">Amount (PKR)<Input className="mt-1 min-h-11" name="amount" type="number" min="0.01" step="0.01" required /></label>
+            <label className="text-sm">Payment date<Input className="mt-1 min-h-11" name="occurredAt" type="date" defaultValue={today} required /></label>
+            <label className="text-sm">Pay from<select className={inputClass} name="fundingAccount"><option value="BANK">Bank</option><option value="CASH">Cash</option></select></label>
+            <Button type="submit" disabled={!nativeAp.rows.length} className="min-h-11 sm:col-span-2">Pay selected invoice</Button>
+          </form> : <p role="alert" className="text-sm text-text-muted">Supplier aging could not load. Refresh the page to view balances and pay invoices. No financial data was changed.</p>}
+        </div>
+        {nativeAp ? <>
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-text-muted">Native non-stock invoices only · all unpaid balances, oldest due first · up to {nativeAp.bounds.maxRows} rows per page</p>
+          {'csv' in nativeAp ? <a className="text-sm font-medium text-link underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" download="native-ap-aging.csv" href={`data:text/csv;charset=utf-8,${encodeURIComponent(nativeAp.csv)}`}>Download this page as CSV</a> : null}
+        </div>
+        <div className="mt-4 overflow-x-auto">
+          <Table>
+            <TableHeader><TableRow><TableHead>Invoice</TableHead><TableHead>Due date</TableHead><TableHead className="text-right">Outstanding</TableHead><TableHead className="text-right">Days past due</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {nativeAp.rows.map((invoice) => <TableRow key={invoice.id}><TableCell className="font-medium">{invoice.supplierInvoiceRef}</TableCell><TableCell>{dated(invoice.dueAt)}</TableCell><TableCell className="text-right tabular-nums">{money(invoice.outstandingMinor)}</TableCell><TableCell className="text-right tabular-nums">{invoice.daysPastDue}</TableCell></TableRow>)}
+              {!nativeAp.rows.length ? <TableRow><TableCell colSpan={4} className="text-center text-text-muted">No open native supplier invoices. Post an invoice to record a payable.</TableCell></TableRow> : null}
+            </TableBody>
+          </Table>
+        </div>
+        <nav aria-label="Supplier invoice pages" className="mt-4 flex flex-wrap gap-4 text-sm">
+          {apOffset > 0 ? <a className="underline focus-visible:ring-2 focus-visible:ring-ring" href={apPageLink('apOffset', Math.max(0, apOffset - 200))}>Previous invoices</a> : null}
+          {nativeAp.pagination.hasMore ? <a className="underline focus-visible:ring-2 focus-visible:ring-ring" href={apPageLink('apOffset', nativeAp.pagination.nextOffset!)}>Next invoices</a> : null}
+        </nav>
+        <details className="mt-5 border-t border-border-subtle pt-4">
+          <summary className="cursor-pointer text-sm font-medium focus-visible:ring-2 focus-visible:ring-ring">Void an unpaid invoice</summary>
+          <p className="mt-3 text-sm text-text-muted">Reverse all payments first. Voiding reverses the accrual and keeps its history.</p>
+          <form action={perform} className="mt-3 grid min-w-0 gap-3 sm:grid-cols-2">
+            <input type="hidden" name="action" value="void-expense-invoice" />
+            <input type="hidden" name="branchId" value={branch.id} />
+            <label className="text-sm">Invoice<select className={inputClass} name="invoiceId" required disabled={!nativeAp.rows.length}>{nativeAp.rows.map(invoice => <option key={invoice.id} value={invoice.id}>{invoice.supplierInvoiceRef}</option>)}</select></label>
+            <label className="text-sm">Reason<Input name="reason" className="mt-1 min-h-11" required /></label>
+            <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" name="confirmed" value="yes" required />I confirm this invoice should be voided.</label>
+            <Button type="submit" variant="destructive" className="min-h-11" disabled={!nativeAp.rows.length}>Void selected invoice</Button>
+          </form>
+        </details>
+        </> : null}
+        <details className="mt-5 border-t border-border-subtle pt-4">
+          <summary className="cursor-pointer text-sm font-medium focus-visible:ring-2 focus-visible:ring-ring">Reverse an invoice payment</summary>
+          {expenseSettlements ? <>
+            <p className="mt-3 text-sm text-text-muted">Posted native payments include payments on fully paid invoices. Reversing a payment restores the payable and preserves the original entry.</p>
+            <form action={perform} className="mt-3 grid min-w-0 gap-3 sm:grid-cols-2">
+              <input type="hidden" name="action" value="reverse-expense-settlement" />
+              <input type="hidden" name="branchId" value={branch.id} />
+              <label className="text-sm">Payment<select className={inputClass} name="settlementId" required disabled={!expenseSettlements.rows.length}>{expenseSettlements.rows.map(payment => <option key={payment.id} value={payment.id}>{payment.invoice.supplierInvoiceRef} · {payment.reference} · {money(payment.amountMinor)}</option>)}</select></label>
+              <label className="text-sm">Reason<Input name="reason" className="mt-1 min-h-11" required /></label>
+              <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" name="confirmed" value="yes" required />I confirm this payment should be reversed.</label>
+              <Button type="submit" variant="destructive" className="min-h-11" disabled={!expenseSettlements.rows.length}>Reverse selected payment</Button>
+            </form>
+            {!expenseSettlements.rows.length ? <p className="mt-3 text-sm text-text-muted">No posted native payments on this page.</p> : null}
+            <nav aria-label="Invoice payment pages" className="mt-4 flex flex-wrap gap-4 text-sm">
+              {apPaymentOffset > 0 ? <a className="underline focus-visible:ring-2 focus-visible:ring-ring" href={apPageLink('apPaymentOffset', Math.max(0, apPaymentOffset - 50))}>Previous payments</a> : null}
+              {expenseSettlements.hasMore ? <a className="underline focus-visible:ring-2 focus-visible:ring-ring" href={apPageLink('apPaymentOffset', apPaymentOffset + 50)}>Next payments</a> : null}
+            </nav>
+          </> : <p role="alert" className="mt-3 text-sm text-text-muted">Invoice payments could not load. Refresh the page to try again.</p>}
+        </details>
       </SectionCard>
       <ManualPaymentSettingsPanel key={branch.id} branchId={branch.id} />
       <SectionCard title="Create POS settlement batch" eyebrow="Card · Raast · wallet · bank transfer">

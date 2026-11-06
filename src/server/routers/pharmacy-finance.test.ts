@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn(),
+  supplierFindMany: vi.fn(),
+  settlementFindMany: vi.fn(),
+  queryRaw: vi.fn(),
   branchFindMany: vi.fn(),
   branchFindFirst: vi.fn(),
   reportFindFirst: vi.fn(),
@@ -47,6 +50,7 @@ function caller(role = 'ADMIN', context: Partial<TRPCContext> = {}) {
   return pharmacyFinanceRouter.createCaller({
     db: {
       $transaction: mocks.transaction,
+      $queryRaw: mocks.queryRaw,
       pharmacyBranch: { findMany: mocks.branchFindMany, findFirst: mocks.branchFindFirst },
       pharmacyPharmacovigilanceReport: {
         findFirst: mocks.reportFindFirst,
@@ -55,6 +59,8 @@ function caller(role = 'ADMIN', context: Partial<TRPCContext> = {}) {
       },
       pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
       pharmacyBankStatementLine: { create: mocks.bankLineCreate },
+      pharmacySupplier: { findMany: mocks.supplierFindMany },
+      pharmacySupplierExpenseSettlement: { findMany: mocks.settlementFindMany },
     },
     entitlements: {
       organizationId: 'org_1',
@@ -77,7 +83,7 @@ import { hasModule } from '@/lib/entitlements';
 const input = { branchId: 'branch_1', from: '2026-09-01T00:00:00Z', to: '2026-09-03T00:00:00Z' };
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.can.mockResolvedValue(true);
+  mocks.can.mockImplementation(async (subject, action) => action !== 'admin:access' || subject.role === 'ADMIN');
   vi.mocked(hasModule).mockReturnValue(true);
   mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
   mocks.transaction.mockImplementation(async (callback) => callback({ ledger: true }));
@@ -212,6 +218,7 @@ describe.each(ledgerCases)(
     it.each(['EMPLOYEE', 'HR', 'MANAGER'])(
       'denies %s even with allowed capabilities',
       async (role) => {
+        mocks.can.mockResolvedValue(true);
         await expect(invoke(caller(role), valid)).rejects.toMatchObject({ code: 'FORBIDDEN' });
         expect(mocks.branchFindFirst).not.toHaveBeenCalled();
         expect(reader).not.toHaveBeenCalled();
@@ -341,6 +348,7 @@ describe('finance comparison boundary', () => {
     expect(mocks.comparison).not.toHaveBeenCalled();
   });
   it('enforces owner role even when capability mock allows', async () => {
+    mocks.can.mockResolvedValue(true);
     await expect(caller('EMPLOYEE').marginComparison(input)).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
@@ -421,6 +429,74 @@ describe('finance comparison boundary', () => {
       code: 'BAD_REQUEST',
     });
     expect(mocks.comparison).not.toHaveBeenCalled();
+  });
+});
+
+describe('native AP supplier choices', () => {
+  it('returns only named active authorized suppliers inside the validated workspace', async () => {
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1' }]);
+    mocks.supplierFindMany.mockResolvedValue([{ id: 'supplier_1', name: 'Utilities' }]);
+    await expect(caller().expenseSuppliers({ branchId: 'branch_1' })).resolves.toEqual([{ id: 'supplier_1', name: 'Utilities' }]);
+    expect(mocks.supplierFindMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', active: true, authorized: true },
+      select: { id: true, name: true }, orderBy: [{ name: 'asc' }, { id: 'asc' }],
+    });
+  });
+
+  it('rejects a branch outside the workspace before reading suppliers', async () => {
+    mocks.branchFindMany.mockResolvedValue([]);
+    await expect(caller().expenseSuppliers({ branchId: 'foreign' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.supplierFindMany).not.toHaveBeenCalled();
+  });
+
+  it('requires the Finance entitlement before reading suppliers', async () => {
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(caller().expenseSuppliers({ branchId: 'branch_1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.supplierFindMany).not.toHaveBeenCalled();
+  });
+
+  it('requires an administrator before reading suppliers', async () => {
+    await expect(caller('EMPLOYEE').expenseSuppliers({ branchId: 'branch_1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.supplierFindMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('native AP read boundaries', () => {
+  it.each([
+    { from: '2026-10-27T00:00:00Z', asOf: '2026-10-26T00:00:00Z' },
+    { from: '2024-01-01T00:00:00Z', asOf: '2026-10-26T00:00:00Z' },
+    { asOf: '2026-10-28T00:00:00Z' },
+  ])('maps invalid aging windows to BAD_REQUEST: %j', async window => {
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1' }]);
+    mocks.queryRaw.mockResolvedValue([{ now: new Date('2026-10-26T12:00:00Z') }]);
+    await expect(caller().expenseAging({ branchId: 'branch_1', ...window })).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'INVALID_STATE' });
+    expect(mocks.queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('pages posted payments in the validated branch, including fully paid invoices', async () => {
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1' }]);
+    mocks.settlementFindMany.mockResolvedValue(Array.from({ length: 51 }, (_, index) => ({ id: `payment-${index}` })));
+    const result = await caller().expenseSettlements({ branchId: 'branch_1', offset: 50 });
+    expect(result.rows).toHaveLength(50);
+    expect(result.hasMore).toBe(true);
+    expect(mocks.settlementFindMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', invoice: { branchId: 'branch_1' }, status: 'POSTED' },
+      select: { id: true, reference: true, amountMinor: true, occurredAt: true, invoice: { select: { supplierInvoiceRef: true } } },
+      orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }], take: 51, skip: 50,
+    });
+  });
+
+  it('refuses payment reads outside the validated branch', async () => {
+    mocks.branchFindMany.mockResolvedValue([]);
+    await expect(caller().expenseSettlements({ branchId: 'foreign' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.settlementFindMany).not.toHaveBeenCalled();
+  });
+
+  it('requires administrator capability and Finance licensing for payment reads', async () => {
+    await expect(caller('EMPLOYEE').expenseSettlements({ branchId: 'branch_1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(caller().expenseSettlements({ branchId: 'branch_1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.settlementFindMany).not.toHaveBeenCalled();
   });
 });
 

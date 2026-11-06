@@ -1,6 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { bookkeepingJournalLines, createSettlementBatch, reconcileSettlementBankLine } from './bookkeeping';
+import {
+  bookkeepingJournalLines,
+  createSettlementBatch,
+  postBookkeepingTransaction,
+  reconcileSettlementBankLine,
+  reverseBookkeepingTransaction,
+} from './bookkeeping';
+
+const postJournalEntry = vi.fn();
+vi.mock('@/lib/finance/journal', () => ({
+  postJournalEntry: (...args: unknown[]) => postJournalEntry(...args),
+}));
 
 const base = {
   reference: 'REF-1',
@@ -25,6 +36,65 @@ describe('pharmacy bookkeeping journal mappings', () => {
       { accountCode: debit, side: 'DEBIT', amountMinor: 1250 },
       { accountCode: credit, side: 'CREDIT', amountMinor: 1250 },
     ]);
+  });
+
+  it('rejects a generic allocation to a native AP invoice before posting a journal', async () => {
+    const create = vi.fn();
+    const db = {
+      pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
+      pharmacySupplierExpenseInvoice: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'native-invoice-1' }]),
+      },
+      pharmacyBookkeepingTransaction: { findFirst: vi.fn(), create },
+    } as unknown as ScopedDb;
+
+    await expect(
+      postBookkeepingTransaction(
+        db,
+        { organizationId: 'org-a', branchId: 'branch-a', actorId: 'accountant-a' },
+        {
+          ...base,
+          kind: 'SUPPLIER_PAYMENT',
+          allocations: [
+            {
+              sourceKind: 'EXPENSE',
+              sourceId: 'native-invoice-1',
+              sourceReference: 'UTIL-42',
+              amountMinor: base.amountMinor,
+            },
+          ],
+        }
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    expect(create).not.toHaveBeenCalled();
+    expect(postJournalEntry).not.toHaveBeenCalled();
+  });
+
+  it('rejects a generic reversal of a native payment before canonical status or replay reads', async () => {
+    const findFirst = vi.fn();
+    const db = {
+      pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
+      pharmacySupplierExpenseSettlement: { findFirst: vi.fn().mockResolvedValue({ id: 'native-payment' }) },
+      pharmacyBookkeepingTransaction: { findFirst },
+    } as unknown as ScopedDb;
+    await expect(reverseBookkeepingTransaction(db, {
+      organizationId: 'org-a', branchId: 'branch-a', actorId: 'accountant-a',
+    }, { transactionId: 'transaction-a', at: base.occurredAt, reason: 'Mistake', idempotencyKey: 'reverse' }))
+      .rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('fails closed if the native payment delegate is absent', async () => {
+    const findFirst = vi.fn();
+    const db = {
+      pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
+      pharmacyBookkeepingTransaction: { findFirst },
+    } as unknown as ScopedDb;
+    await expect(reverseBookkeepingTransaction(db, {
+      organizationId: 'org-a', branchId: 'branch-a', actorId: 'accountant-a',
+    }, { transactionId: 'transaction-a', at: base.occurredAt, reason: 'Mistake', idempotencyKey: 'reverse' }))
+      .rejects.toThrow(TypeError);
+    expect(findFirst).not.toHaveBeenCalled();
   });
 });
 
