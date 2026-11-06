@@ -87,7 +87,7 @@ function fixture() {
     user: {
       findFirst: vi.fn(async () => ({ id: 'manager-1', status: 'ACTIVE' })),
       count: vi.fn(async () => 2),
-      findUnique: vi.fn(async () => ({
+      findUnique: vi.fn(async (_args?: { where: { id: string } }) => ({
         status: 'ACTIVE',
         organizationId: 'org-1',
         organizationRole: {
@@ -276,6 +276,8 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
   it('requires the authenticated operator to hold pharmacy safety permission', async () => {
     const f = fixture();
     f.db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-1',
       organizationRole: { permissions: [] },
       permissionOverrides: [],
     });
@@ -645,6 +647,8 @@ describe('pharmacySales.addLine manager PIN approval (#482)', () => {
   it('rejects an approver without pharmacy management permission', async () => {
     const f = fixture();
     f.db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-1',
       organizationRole: {
         permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
       },
@@ -661,6 +665,8 @@ describe('pharmacySales.addLine manager PIN approval (#482)', () => {
   it('does not spend a manager PIN attempt when the operator may not override', async () => {
     const f = fixture();
     f.db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-1',
       organizationRole: { permissions: [] },
       permissionOverrides: [],
     });
@@ -796,8 +802,8 @@ describe('pharmacySales.addLine four-role PIN gate (#482)', () => {
   function asRole(f: ReturnType<typeof fixture>, caps: RoleCaps) {
     // findUnique serves both the session actor (ABAC) and the PIN approver
     // (pharmacy:manage). Keep the manager-profile user eligible to approve.
-    f.db.user.findUnique.mockImplementation(async (args: { where: { id: string } }) => {
-      if (args.where.id === 'manager-1') {
+    f.db.user.findUnique.mockImplementation(async (args?: { where: { id: string } }) => {
+      if (args?.where.id === 'manager-1') {
         return {
           status: 'ACTIVE',
           organizationId: 'org-1',
