@@ -32,7 +32,12 @@ import type { OperatorSwitch } from './operator-switch';
 import type { Input } from '@/components/ui/input';
 import type { StatusPill } from '@/components/ui/status-pill';
 import type { RefundPanel } from './refund-panel';
-import type { OrderTicketPanel, OrderDetail, VoidItemInput } from './order-ticket-panel';
+import {
+  canCloseDeliveredOrder,
+  type OrderTicketPanel,
+  type OrderDetail,
+  type VoidItemInput,
+} from './order-ticket-panel';
 import { type OrderChannel } from '@/lib/restaurant/order-channels';
 import {
   createIndexedDbDriver,
@@ -40,7 +45,11 @@ import {
   isPosStoreSupported,
   type PosCatalogSnapshot,
 } from '@/lib/restaurant/pos-client-store';
-import { countQueuedCommands, type PosQueueSnapshot } from '@/lib/restaurant/pos-command-queue';
+import {
+  composerProofNeedsRenewal,
+  countQueuedCommands,
+  type PosQueueSnapshot,
+} from '@/lib/restaurant/pos-command-queue';
 import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
 import {
   type BranchCommercialTerms,
@@ -166,6 +175,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
   const [draftLines, setDraftLines] = useState<LocalDraftLine[]>([]);
   const [checkoutOrderId, setCheckoutOrderId] = useState<string | null>(null);
   const stateEpoch = useRef(0);
+  const closeInFlight = useRef(false);
   const deliveryCustomerBoundary = useRef<DeliveryCustomer | null>(null);
   const offlineRuntime = useRef<PosOfflineRuntime | null>(null);
   const [queue, setQueue] = useState<PosQueueSnapshot | null>(null);
@@ -265,11 +275,37 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     setQueue(offlineRuntime.current?.snapshot().queue ?? null);
   }, []);
 
+  // Read by replay notices only; a directory refresh must not re-trigger replay.
+  const operatorsRef = useRef(operators);
+  useEffect(() => {
+    operatorsRef.current = operators;
+  }, [operators]);
+
   const replayQueue = useCallback(
     async (activeRuntime: Runtime) => {
       const local = offlineRuntime.current;
       if (!local || !navigator.onLine || activeRuntime.state !== 'UNLOCKED') return;
-      const result = await local.replay(async (queued) => {
+      const staffProfileId = activeRuntime.operator?.staffProfileId;
+      if (!staffProfileId || !activeRuntime.composerProof) return;
+      await local.renewComposerProof(
+        staffProfileId,
+        async (originalProof) => {
+          const response = await fetch('/api/restaurant/terminal/renew-composer-proof', {
+            method: 'POST',
+            cache: 'no-store',
+            credentials: 'include',
+            headers: { ...authHeaders(activeRuntime, true), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ originalProof }),
+          });
+          if (!response.ok) return null;
+          const body = (await response.json().catch(() => null)) as {
+            composerProof?: unknown;
+          } | null;
+          return typeof body?.composerProof === 'string' ? body.composerProof : null;
+        },
+        (proof) => composerProofNeedsRenewal(proof, activeRuntime.sessionId, Date.now())
+      );
+      const result = await local.replay(staffProfileId, async (queued) => {
         try {
           const response = await fetch(queued.path, {
             method: queued.method,
@@ -304,6 +340,18 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         setNotice({
           tone: 'warning',
           message: 'Queued orders are paused. Reauthenticate to resume replay.',
+        });
+      }
+      if (result.state === 'REFUSED' && result.waitingComposers?.length) {
+        const names = result.waitingComposers.map(
+          (composer) =>
+            operatorsRef.current.find((operator) => operator.staffProfileId === composer)
+              ?.displayName ??
+            (composer ? 'another operator' : 'an unverified composer')
+        );
+        setNotice({
+          tone: 'warning',
+          message: `Queued orders from ${[...new Set(names)].join(', ')} wait for that operator to sign in on this terminal before they send.`,
         });
       }
       if (result.discarded) {
@@ -648,8 +696,12 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       }
       const local = offlineRuntime.current;
       if (!local) throw new Error('Local POS storage is unavailable.');
+      if (!runtime.operator || !runtime.composerProof)
+        throw new Error('Reauthenticate before saving offline work.');
       const enqueued = await local.enqueue({
         deviceId: runtime.deviceId,
+        composerStaffProfileId: runtime.operator.staffProfileId,
+        composerProof: runtime.composerProof,
         catalogVersion: draftMenu.version ?? '',
         clientOriginAt: new Date().toISOString(),
         open: body,
@@ -687,7 +739,19 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
 
   async function closeForPayment() {
     const activeOrder = order;
-    if (!activeOrder || pending) return;
+    if (!activeOrder || pending || closeInFlight.current) return;
+    const finalizingDeliveredOrder = canCloseDeliveredOrder(activeOrder);
+    if (finalizingDeliveredOrder) {
+      closeInFlight.current = true;
+      try {
+        if (await mutate('close', { orderId: activeOrder.id }, 'Order closed.', false)) {
+          startFreshDraft();
+        }
+      } finally {
+        closeInFlight.current = false;
+      }
+      return;
+    }
     if (activeOrder.status === 'PAYMENT_PENDING') {
       setCheckoutOrderId(activeOrder.id);
       return;
@@ -823,6 +887,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
           id: operator.staffProfileId,
           displayName: operator.displayName,
           role: operator.role,
+          canSelfApprove: operator.canSelfApprove,
         }))
         .filter((operator) =>
           operators.some((source) => source.staffProfileId === operator.id && source.canApprove)
@@ -839,6 +904,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
           id: operator.staffProfileId,
           displayName: operator.displayName,
           role: operator.role,
+          canSelfApprove: operator.canSelfApprove,
         })),
       disabled: busy || !online,
     } satisfies ComponentProps<typeof RefundPanel>,
@@ -1014,6 +1080,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         id: operator.staffProfileId,
         displayName: operator.displayName,
         role: operator.role,
+        canSelfApprove: operator.canSelfApprove,
       })),
       pending: busy || !online,
       tables: layout?.floors.flatMap((floor) =>
@@ -1057,6 +1124,15 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       orderId: checkoutOrderId,
       request: checkoutRequest,
       connected: online,
+      actingOperatorId: runtime.operator?.staffProfileId ?? '',
+      operators: operators
+        .filter((operator) => operator.canApprove)
+        .map((operator) => ({
+          id: operator.staffProfileId,
+          displayName: operator.displayName,
+          role: operator.role,
+          canSelfApprove: operator.canSelfApprove,
+        })),
       onClose: ({ settled }) => {
         setCheckoutOrderId(null);
         if (settled) startFreshDraft();

@@ -67,6 +67,11 @@ vi.mock('@/lib/trpc', () => ({
     pharmacySafety: {
       access: { useQuery: () => ({ data: { allowed: false } }) },
     },
+    pharmacySop: {
+      access: {
+        useQuery: () => ({ data: { canComplete: false, canVerify: false, canManage: false } }),
+      },
+    },
   },
 }));
 vi.mock('@/components/preferences-provider', () => ({
@@ -170,6 +175,32 @@ describe('TopNavigation vertical visibility', () => {
     expect(links('RESTAURANT', ['notes'])).toContain('/notes');
     cleanup();
     expect(links('RESTAURANT', [])).not.toContain('/notes');
+  });
+});
+
+describe.each(['ltr', 'rtl'])('%s mobile drawer placement', (dir) => {
+  it('anchors the visible sidebar and its inner border to the workspace direction', () => {
+    render(
+      <div dir={dir}>
+        <EntitlementsProvider
+          value={{
+            organizationId: 'org-1',
+            vertical: 'PHARMACY',
+            seatLimit: 10,
+            activeSeats: 1,
+            enabledModules: ['pharmacy-core'],
+            modules: [],
+            limits: {},
+          }}
+        >
+          <Sidebar collapsible={false} />
+        </EntitlementsProvider>
+      </div>
+    );
+
+    const sidebar = screen.getByRole('navigation', { name: 'Main navigation' });
+    expect(sidebar).toHaveClass('fixed', 'start-0', 'border-e');
+    expect(sidebar).not.toHaveClass('left-0', 'right-0', 'border-l', 'border-r');
   });
 });
 

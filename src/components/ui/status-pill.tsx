@@ -61,7 +61,10 @@ const STATUS_TONE: Record<string, StatusTone> = {
 };
 
 function normalize(status: string): string {
-  return status.trim().toLowerCase().replace(/[\s_]+/g, '-');
+  return status
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-');
 }
 
 interface StatusPillProps extends Omit<React.ComponentProps<'span'>, 'children'> {

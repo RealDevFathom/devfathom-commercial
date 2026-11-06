@@ -12,7 +12,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -63,7 +63,14 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
         { type: 'CARD', amount: D('30.00'), tipAmount: D('10.00') },
         { type: 'CASH', amount: D('20.00'), tipAmount: D('0') },
       ],
-      refunds: [{ amount: D('15.00'), deliveryFeeRefundAmount: D('3.00') }],
+      refunds: [
+        {
+          amount: D('15.00'),
+          taxRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('3.00'),
+        },
+      ],
       drawers: [{ status: 'CLOSED', expectedCash: D('180.00'), countedCash: D('178.00') }],
     });
     expect(aggregate.grossSales.toString()).toBe('100'); // OPEN bill excluded
@@ -71,10 +78,10 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
     expect(aggregate.deliveryFeeRefunds.toString()).toBe('3');
     expect(aggregate.compTotal.toString()).toBe('20');
     expect(aggregate.discountTotal.toString()).toBe('5');
-    expect(aggregate.netSales.toString()).toBe('60'); // 100 - 20 - 5 - 15 refunds
+    expect(aggregate.netSales.toString()).toBe('63'); // delivery is not sales principal
     expect(aggregate.voidTotal.toString()).toBe('12.5');
     expect(aggregate.tipTotal.toString()).toBe('15');
-    expect(aggregate.refundTotal.toString()).toBe('15');
+    expect(aggregate.refundTotal.toString()).toBe('12');
     expect(aggregate.cashExpected.toString()).toBe('180');
     expect(aggregate.cashCounted.toString()).toBe('178');
     expect(aggregate.cashVariance.toString()).toBe('-2');
@@ -89,7 +96,62 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
 });
 
 describe('resolveChainTip (pure)', () => {
-  it('deducts refunds from netSales and still reports them separately (WHA-1621 Q1)', () => {
+  it('reconciles a tax-and-service-inclusive cash refund with the drawer', () => {
+    const aggregate = computeCloseAggregate({
+      bills: [
+        {
+          status: 'SETTLED',
+          subtotal: D('100.00'),
+          deliveryFeeTotal: D('0'),
+          taxTotal: D('10.00'),
+          serviceChargeTotal: D('10.00'),
+          compTotal: D('0'),
+          discountTotal: D('0'),
+          grandTotal: D('120.00'),
+        },
+      ],
+      tenders: [{ type: 'CASH', amount: D('120.00'), tipAmount: D('0') }],
+      refunds: [
+        {
+          amount: D('60.00'),
+          taxRefundAmount: D('5.00'),
+          serviceChargeRefundAmount: D('5.00'),
+          deliveryFeeRefundAmount: D('0'),
+        },
+      ],
+      drawers: [{ status: 'CLOSED', expectedCash: D('60.00'), countedCash: D('60.00') }],
+    });
+
+    expect(aggregate.netSales.toFixed(2)).toBe('50.00');
+    expect(aggregate.taxTotal.toFixed(2)).toBe('5.00');
+    expect(aggregate.serviceChargeTotal.toFixed(2)).toBe('5.00');
+    expect(aggregate.refundTotal.toFixed(2)).toBe('60.00');
+    expect(
+      aggregate.netSales.plus(aggregate.taxTotal).plus(aggregate.serviceChargeTotal).toFixed(2)
+    ).toBe(aggregate.cashExpected.toFixed(2));
+  });
+
+  it('reports a delivery-fee-only refund separately without reducing sales or refundTotal', () => {
+    const aggregate = computeCloseAggregate({
+      bills: [],
+      tenders: [],
+      refunds: [
+        {
+          amount: D('12.00'),
+          taxRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('12.00'),
+        },
+      ],
+      drawers: [],
+    });
+
+    expect(aggregate.netSales.toFixed(2)).toBe('0.00');
+    expect(aggregate.refundTotal.toFixed(2)).toBe('0.00');
+    expect(aggregate.deliveryFeeRefunds.toFixed(2)).toBe('12.00');
+  });
+
+  it('deducts a zero-tax refund from netSales and still reports it separately', () => {
     const bill = {
       status: 'SETTLED' as const,
       subtotal: D('14.00'),
@@ -103,7 +165,14 @@ describe('resolveChainTip (pure)', () => {
     const aggregate = computeCloseAggregate({
       bills: [bill, bill],
       tenders: [],
-      refunds: [{ amount: D('14.00'), deliveryFeeRefundAmount: D('0') }],
+      refunds: [
+        {
+          amount: D('14.00'),
+          taxRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('0'),
+        },
+      ],
       drawers: [],
     });
     expect(aggregate.grossSales.toFixed(2)).toBe('28.00');
@@ -244,6 +313,8 @@ async function seedRefund(input: {
   originalTenderId: string;
   businessDate: string;
   amount: string;
+  taxRefundAmount?: string;
+  serviceChargeRefundAmount?: string;
   deliveryFeeRefundAmount?: string;
 }): Promise<string> {
   return deps.withTenantDb(orgId, async (tx) => {
@@ -261,6 +332,8 @@ async function seedRefund(input: {
         originalTenderId: input.originalTenderId,
         billId: input.billId,
         amount: input.amount,
+        taxRefundAmount: input.taxRefundAmount ?? '0',
+        serviceChargeRefundAmount: input.serviceChargeRefundAmount ?? '0',
         deliveryFeeRefundAmount: input.deliveryFeeRefundAmount ?? '0',
         kind: 'REFUND',
         businessDate: utcDate(input.businessDate),
@@ -356,6 +429,121 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('daily close (real DB)', () => {
+  afterEach(async () => {
+    await read((tx) =>
+      tx.restaurantBranch.update({
+        where: { id: ids.branch },
+        data: { timezone: 'UTC', businessDayCutoff: '00:00' },
+      })
+    );
+  });
+
+  it('honors the branch timezone and cutoff when rejecting future dates', async () => {
+    const currentBusinessDate = '2026-01-14';
+    const nextLocalDate = '2026-01-15';
+    const db = deps.createTenantDb(orgId);
+
+    await read((tx) =>
+      tx.restaurantBranch.update({
+        where: { id: ids.branch },
+        data: { timezone: 'America/Los_Angeles', businessDayCutoff: '04:00' },
+      })
+    );
+
+    const beforeCutoff = new Date('2026-01-15T11:59:59.000Z'); // 03:59:59 in Los Angeles
+    await expect(
+      deps.close.cutClose(
+        db,
+        {
+          branchId: ids.branch,
+          businessDate: currentBusinessDate,
+          actor: mActor(ids.seedDevice),
+        },
+        beforeCutoff
+      )
+    ).resolves.toMatchObject({ replayed: false });
+
+    await expect(
+      deps.close.cutClose(
+        db,
+        {
+          branchId: ids.branch,
+          businessDate: nextLocalDate,
+          actor: mActor(ids.seedDevice),
+        },
+        beforeCutoff
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+
+    const closeCountBeforeCutoff = await read((tx) =>
+      tx.restaurantDailyClose.count({
+        where: { branchId: ids.branch, businessDate: utcDate(nextLocalDate) },
+      })
+    );
+    expect(closeCountBeforeCutoff).toBe(0);
+
+    await expect(
+      deps.close.cutClose(
+        db,
+        {
+          branchId: ids.branch,
+          businessDate: nextLocalDate,
+          actor: mActor(ids.seedDevice),
+        },
+        new Date('2026-01-15T12:00:00.000Z') // 04:00:00 in Los Angeles
+      )
+    ).resolves.toMatchObject({ replayed: false });
+
+    const closeCountAtCutoff = await read((tx) =>
+      tx.restaurantDailyClose.count({
+        where: { branchId: ids.branch, businessDate: utcDate(nextLocalDate) },
+      })
+    );
+    expect(closeCountAtCutoff).toBe(1);
+  });
+
+  it('replays a completed close after a cutoff change makes its date future', async () => {
+    const businessDate = '2026-01-20';
+    const db = deps.createTenantDb(orgId);
+    const actor = mActor(ids.seedDevice);
+    const noonUtc = new Date('2026-01-20T12:00:00.000Z');
+
+    const first = await deps.close.cutClose(
+      db,
+      { branchId: ids.branch, businessDate, actor },
+      noonUtc
+    );
+    expect(first.replayed).toBe(false);
+
+    // With an 18:00 cutoff, 12:00 UTC now resolves to the previous business day.
+    await read((tx) =>
+      tx.restaurantBranch.update({
+        where: { id: ids.branch },
+        data: { businessDayCutoff: '18:00' },
+      })
+    );
+
+    await expect(
+      deps.close.cutClose(db, { branchId: ids.branch, businessDate, actor }, noonUtc)
+    ).resolves.toMatchObject({ dailyCloseId: first.dailyCloseId, replayed: true });
+
+    // A NEW request for the same date is still rejected as future.
+    await expect(
+      deps.close.cutClose(
+        db,
+        { branchId: ids.branch, businessDate, actor: mActor(ids.seedDevice) },
+        noonUtc
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+
+    const closeCount = await read((tx) =>
+      tx.restaurantDailyClose.count({
+        where: { branchId: ids.branch, businessDate: utcDate(businessDate) },
+      })
+    );
+    expect(closeCount).toBe(1);
+  });
+
   it('cross-business-date: a D2 refund of a D1 tender lands on D2, leaving D1 unchanged', async () => {
     const D1 = '2026-09-01';
     const D2 = '2026-09-02';
@@ -432,6 +620,126 @@ describeIfDatabase('daily close (real DB)', () => {
         actor: mActor(ids.seedDevice),
       })
     ).rejects.toMatchObject({ reason: 'UNSETTLED_BILL' });
+  });
+
+  it('blocks a cut while orders in any active state have not had bills cut', async () => {
+    const date = '2026-09-14';
+    const activeStatuses = [
+      'OPEN',
+      'SENT',
+      'IN_PREPARATION',
+      'READY',
+      'SERVED',
+      'PAYMENT_PENDING',
+    ] as const;
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOrder.createMany({
+        data: activeStatuses.map((status) => ({
+          branchId: ids.branch,
+          orderNumber: ++orderCounter,
+          businessDate: utcDate(date),
+          status,
+          channel: 'DINE_IN',
+          staffProfileId: ids.operator,
+          deviceId: ids.seedDevice,
+        })),
+      })
+    );
+
+    const db = deps.createTenantDb(orgId);
+    const preview = await deps.close.closePreview(db, {
+      branchId: ids.branch,
+      businessDate: date,
+    });
+    expect(preview.readiness).toMatchObject({
+      allBillsResolved: false,
+      openBillCount: 0,
+      unresolvedOrderCount: activeStatuses.length,
+    });
+    await expect(
+      deps.close.cutClose(db, {
+        branchId: ids.branch,
+        businessDate: date,
+        actor: mActor(ids.seedDevice),
+      })
+    ).rejects.toMatchObject({ reason: 'ACTIVE_ORDERS' });
+  });
+
+  it('blocks a correction for legacy active orders without appending a new close', async () => {
+    const date = '2026-09-16';
+    const db = deps.createTenantDb(orgId);
+    const cut = await deps.close.cutClose(db, {
+      branchId: ids.branch,
+      businessDate: date,
+      actor: mActor(ids.seedDevice),
+    });
+    // Simulate an order left on a day closed before the active-order guard existed.
+    await read((tx) =>
+      tx.restaurantOrder.create({
+        data: {
+          branchId: ids.branch,
+          orderNumber: ++orderCounter,
+          businessDate: utcDate(date),
+          status: 'OPEN',
+          channel: 'DINE_IN',
+          staffProfileId: ids.operator,
+          deviceId: ids.seedDevice,
+        },
+      })
+    );
+
+    await expect(
+      deps.close.correctClose(db, {
+        branchId: ids.branch,
+        businessDate: date,
+        supersedesCloseId: cut.dailyCloseId,
+        reason: 'Reconcile historical close',
+        approvingStaffProfileId: ids.manager,
+        actor: mActor(ids.seedDevice),
+      })
+    ).rejects.toMatchObject({ reason: 'ACTIVE_ORDERS' });
+    expect(
+      await read((tx) =>
+        tx.restaurantDailyClose.count({
+          where: { branchId: ids.branch, businessDate: utcDate(date) },
+        })
+      )
+    ).toBe(1);
+  });
+
+  it('does not block a cut for resolved orders without bills', async () => {
+    const date = '2026-09-15';
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOrder.createMany({
+        data: (['CLOSED', 'CANCELLED'] as const).map((status) => ({
+          branchId: ids.branch,
+          orderNumber: ++orderCounter,
+          businessDate: utcDate(date),
+          status,
+          channel: 'DINE_IN',
+          staffProfileId: ids.operator,
+          deviceId: ids.seedDevice,
+        })),
+      })
+    );
+
+    const db = deps.createTenantDb(orgId);
+    const preview = await deps.close.closePreview(db, {
+      branchId: ids.branch,
+      businessDate: date,
+    });
+    expect(preview.readiness).toMatchObject({
+      allBillsResolved: true,
+      openBillCount: 0,
+      unresolvedOrderCount: 0,
+    });
+    await expect(
+      deps.close.cutClose(db, {
+        branchId: ids.branch,
+        businessDate: date,
+        actor: mActor(ids.seedDevice),
+      })
+    ).resolves.toMatchObject({ replayed: false });
   });
 
   it('cuts an immutable close: snapshot totals + tender-type children in one txn', async () => {
@@ -709,7 +1017,7 @@ describeIfDatabase('daily close (real DB)', () => {
         select: { refundTotal: true, deliveryFeeRefunds: true, grossSales: true },
       })
     );
-    expect(d2?.refundTotal.toString()).toBe('15');
+    expect(d2?.refundTotal.toString()).toBe('12');
     expect(d2?.deliveryFeeRefunds.toString()).toBe('3');
     expect(d2?.grossSales.toString()).toBe('0');
 

@@ -54,11 +54,13 @@ async function unlockAs(
     data: { staffProfileId: staff.staffProfileId, type: 'PIN', secret: staff.pin },
   });
   expect(unlocked.status()).toBe(200);
+  const { composerProof } = (await unlocked.json()) as { composerProof: string };
+  expect(typeof composerProof).toBe('string');
   return {
     deviceId: fixture.delivery.pos.deviceId,
     deviceSecret: fixture.delivery.pos.secret,
     sessionToken,
-    headers,
+    headers: { ...headers, 'x-pos-composer-proof': composerProof },
   };
 }
 
@@ -315,6 +317,10 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
       data: { channel: 'DELIVERY', customerId: fixture.customer.id },
     });
     expect(rejected.status()).toBe(403);
+    // A valid composer proof is presented, so the 403 must come from the capability gate.
+    expect(((await rejected.json()) as { error: string }).error).toMatch(
+      /^This operator lacks the "[a-z-]+:[a-z-]+" capability\.$/
+    );
 
     const afterDenied = await tenantQuery<{ orders: string; keys: string; events: string }>(
       pool,

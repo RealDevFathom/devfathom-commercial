@@ -60,6 +60,30 @@ export const GROWTH_LIMITATIONS = {
   INCOMPLETE: 'Evidence coverage is incomplete.',
   ESTIMATED: 'Some facts are estimates, not posted financial outcomes.',
 } as const;
+/** Pharmacy has no catering surface; recipe cost is a restaurant concept. */
+export const PHARMACY_GROWTH_ACTION_KINDS = [
+  'RETAIL_REVIEW',
+  'LOYALTY_REVIEW',
+  'INVENTORY_COST_REVIEW',
+] as const;
+/** Server-owned evidence each pharmacy review must cite at least once. */
+export const PHARMACY_GROWTH_ACTION_EVIDENCE: Partial<
+  Record<keyof typeof GROWTH_ACTIONS, ReadonlyArray<keyof typeof GROWTH_METRICS>>
+> = {
+  LOYALTY_REVIEW: ['loyalty_eligible_count'],
+  INVENTORY_COST_REVIEW: ['wastage_minor', 'inventory_value_minor'],
+};
+/** Pharmacy wording for shared action tokens; restaurant presentation is unchanged. */
+export const PHARMACY_GROWTH_ACTIONS: Partial<Record<keyof typeof GROWTH_ACTIONS, string>> = {
+  LOYALTY_REVIEW:
+    'Open a loyalty programme review; consent and eligibility remain server-owned. No recipient selection, points or message changes.',
+  INVENTORY_COST_REVIEW:
+    'Open inventory write-off and valuation review; no automatic stock or price changes.',
+};
+export const PHARMACY_GROWTH_HYPOTHESES: Partial<Record<keyof typeof GROWTH_HYPOTHESES, string>> = {
+  REVIEW_INVENTORY_COST: 'Inventory write-off and valuation may merit human review.',
+  REVIEW_RETENTION: 'A consented loyalty retention review may merit a trial.',
+};
 const period = z.object({ from: z.iso.datetime(), cutoff: z.iso.datetime() }).strict();
 const metric = z.enum(
   Object.keys(GROWTH_METRICS) as [
@@ -110,8 +134,18 @@ export const growthInputSchema = z
     for (const list of [input.facts, input.actions])
       if (new Set(list.map((x) => x.ref)).size !== list.length)
         ctx.addIssue({ code: 'custom', message: 'Duplicate references.' });
-    if (input.vertical === 'PHARMACY' && input.actions.some((a) => a.kind !== 'RETAIL_REVIEW'))
+    if (
+      input.vertical === 'PHARMACY' &&
+      input.actions.some(
+        (a) => !(PHARMACY_GROWTH_ACTION_KINDS as readonly string[]).includes(a.kind)
+      )
+    )
       ctx.addIssue({ code: 'custom', message: 'Unsupported pharmacy action.' });
+    if (
+      input.vertical === 'PHARMACY' &&
+      new Set(input.actions.map((a) => a.kind)).size !== input.actions.length
+    )
+      ctx.addIssue({ code: 'custom', message: 'Duplicate pharmacy action.' });
   });
 export const growthOutputSchema = z
   .object({
@@ -195,6 +229,18 @@ export function validateGrowthOutput(raw: unknown, input: GrowthInput): GrowthOu
       )
     )
       throw new Error('Inventory review requires inventory or recipe-cost evidence.');
+    const required = input.vertical === 'PHARMACY' && PHARMACY_GROWTH_ACTION_EVIDENCE[action.kind];
+    if (
+      required &&
+      !rec.evidenceRefs.some((ref) =>
+        input.facts.some((f) => f.ref === ref && required.includes(f.metric))
+      )
+    )
+      throw new Error(
+        action.kind === 'LOYALTY_REVIEW'
+          ? 'Loyalty review requires loyalty cohort evidence.'
+          : 'Inventory review requires inventory write-off or valuation evidence.'
+      );
     seen.add(action.ref);
   }
   return output;
@@ -244,7 +290,7 @@ export async function generateGrowthRecommendations(raw: GrowthInput): Promise<G
   };
   try {
     checkDeadline();
-    const selected = createAIModel();
+    const selected = createAIModel(process.env, { feature: 'growth-recommendations' });
     for (let attempt = 0; attempt < 2; attempt++) {
       checkDeadline();
       let rawOutput: unknown;
@@ -259,11 +305,14 @@ export async function generateGrowthRecommendations(raw: GrowthInput): Promise<G
             prompt: JSON.stringify({
               ...input,
               definitions: GROWTH_METRICS,
-              constraints: GROWTH_ACTIONS,
+              constraints:
+                input.vertical === 'PHARMACY'
+                  ? { ...GROWTH_ACTIONS, ...PHARMACY_GROWTH_ACTIONS }
+                  : GROWTH_ACTIONS,
               ...(attempt === 1
                 ? {
                     repair:
-                      'The previous output failed validation. Return a fresh schema-valid object using only supplied evidence and action references, unique evidence references and actions, and the hypothesis matching each action. Inventory review requires inventory or recipe-cost evidence. Include only permitted fields and tokens.',
+                      'The previous output failed validation. Return a fresh schema-valid object using only supplied evidence and action references, unique evidence references and actions, and the hypothesis matching each action. Inventory review requires inventory or recipe-cost evidence; pharmacy inventory review requires write-off or valuation evidence and pharmacy loyalty review requires loyalty cohort evidence. Include only permitted fields and tokens.',
                   }
                 : {}),
             }),
@@ -320,9 +369,13 @@ export function presentGrowthRecommendation(
 ) {
   validateGrowthOutput({ recommendations: [rec] }, input);
   const facts = rec.evidenceRefs.map((ref) => input.facts.find((f) => f.ref === ref)!);
+  const kind = input.actions.find((a) => a.ref === rec.actionRef)!.kind;
+  const pharmacy = input.vertical === 'PHARMACY';
   return {
-    hypothesis: GROWTH_HYPOTHESES[rec.hypothesis],
-    action: GROWTH_ACTIONS[input.actions.find((a) => a.ref === rec.actionRef)!.kind],
+    kind,
+    hypothesis:
+      (pharmacy && PHARMACY_GROWTH_HYPOTHESES[rec.hypothesis]) || GROWTH_HYPOTHESES[rec.hypothesis],
+    action: (pharmacy && PHARMACY_GROWTH_ACTIONS[kind]) || GROWTH_ACTIONS[kind],
     facts: facts.map((f) => ({ ...f, definition: GROWTH_METRICS[f.metric] })),
     limitations: [
       ...new Set([

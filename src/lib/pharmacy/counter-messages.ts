@@ -22,6 +22,15 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   INSUFFICIENT_STOCK: 'There is not enough safe stock on hand for this quantity.',
   BLOCKED_STOCK:
     'This batch cannot be dispensed — it is expired, quarantined or recalled. Choose another batch.',
+  // #659: a batch on the bill changed after its line was added; payment is refused.
+  SALE_BATCH_RECALLED:
+    'A batch on this bill was recalled after it was added, so it cannot be sold. Void the bill and sell from a safe batch.',
+  SALE_BATCH_QUARANTINED:
+    'A batch on this bill was quarantined after it was added, so it cannot be sold. Void the bill and sell from a safe batch.',
+  SALE_BATCH_EXPIRED:
+    'A batch on this bill has expired since it was added, so it cannot be sold. Void the bill and sell from a safe batch.',
+  SALE_BATCH_BLOCKED:
+    'A batch on this bill can no longer be sold. Void the bill and sell from a safe batch.',
   OVERRIDE_EVIDENCE_MISSING: 'Dispensing this batch needs a recorded override reason.',
   COAUTH_REQUIRED: 'This action needs a second authorised pharmacist to countersign.',
   INVALID_UNITS: 'That quantity is not a whole number of units.',
@@ -34,6 +43,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   UNSAFE_STOCK: 'This batch cannot return to saleable stock. Choose quarantine instead.',
   RETURN_EXCEEDS_SOLD: 'The return is larger than the quantity originally sold.',
   CONSENT_REQUIRED: 'Recorded patient consent is required before dispensing this medicine.',
+  LOYALTY_CONSENT_REQUIRED:
+    'Loyalty consent is required before linking this customer or redeeming loyalty points.',
   INVALID_STATE: 'This bill has already moved on. Refresh the counter and try again.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',

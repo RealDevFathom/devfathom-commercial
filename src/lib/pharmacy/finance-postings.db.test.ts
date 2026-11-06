@@ -46,7 +46,7 @@ const ORG_B = `org_wha1183_b_${suffix}`;
 const branch = (label: string) => `branch_${label}_${suffix}`;
 const BRANCH_B = branch('org_b');
 const ACTOR = 'user_pharmacist';
-const WITNESS = 'user_manager';
+const WITNESS = `user_manager_${suffix}`;
 
 /** Fixed instants, so no case depends on the wall clock. */
 const RECEIVED_AT = new Date('2026-09-02T09:00:00.000Z');
@@ -185,6 +185,17 @@ async function fixture(organizationId: string, branchId: string, label: string):
       quarantineId: quarantine.id,
       supplierId: supplier.id,
     };
+  });
+}
+
+async function assignWriteOffWitness(db: ScopedDb, f: Fixture) {
+  await db.pharmacyBranchAssignment.create({
+    data: {
+      organizationId: f.organizationId,
+      branchId: f.branchId,
+      userId: WITNESS,
+      active: true,
+    },
   });
 }
 
@@ -342,7 +353,10 @@ async function completedSaleLine(
     approvalPolicy: options.discountMinor ? 'branch-manager' : undefined,
     idempotencyKey: `sale-${tag(options.label)}`,
   });
-  await deps.sales.changeSaleStatus(db, scopeOf(f), sale.id, 'complete');
+  await db.pharmacySale.update({
+    where: { id: sale.id },
+    data: { status: 'COMPLETED', completedAt: new Date() },
+  });
   return { sale, line, allocation };
 }
 
@@ -402,6 +416,22 @@ beforeAll(async () => {
       [ORG_A, ORG_B]
     )
   );
+  await inOrg(ORG_A, async (db) => {
+    await db.organizationDepartment.create({
+      data: { organizationId: ORG_A, key: 'pharmacy', name: 'Pharmacy' },
+    });
+    await db.user.create({
+      data: {
+        id: WITNESS,
+        organizationId: ORG_A,
+        name: 'Write-off witness',
+        email: `${WITNESS}@example.test`,
+        department: 'pharmacy',
+        title: 'Manager',
+        status: 'ACTIVE',
+      },
+    });
+  });
 }, 120_000);
 
 // ── FIN-01 — one balanced entry per event kind ──────────────────────────────
@@ -705,6 +735,7 @@ describeIfDatabase('FIN-01 — expiry/damage write-off', () => {
   it('posts a balanced write-off at the lot cost, traceable to the movement', async () => {
     const f = await fixture(ORG_A, branch('writeoff'), 'writeoff');
     const { entry, movementId } = await inOrg(ORG_A, async (db) => {
+      await assignWriteOffWitness(db, f);
       const { lot } = await stockLot(db, f, {
         label: 'writeoff',
         units: 20,
@@ -1316,6 +1347,7 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
   it('reports discount, write-off and shrinkage as separate leakage', async () => {
     const f = await fixture(ORG_A, branch('leakage'), 'leakage');
     const rows = await inOrg(ORG_A, async (db) => {
+      await assignWriteOffWitness(db, f);
       const { lot } = await stockLot(db, f, {
         label: 'leakage',
         units: 60,

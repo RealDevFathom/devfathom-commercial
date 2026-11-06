@@ -21,8 +21,16 @@ const mocks = vi.hoisted(() => ({
     .mockResolvedValue(undefined),
 }));
 
+// #659: the batch re-check has its own PostgreSQL suite (sale-batch-safety.db.test.ts); here
+// it records its place in the order and hands back the batch facts it checked under lock.
+const safety = vi.hoisted(() => ({
+  checked: new Map<string, { batchNumber: string; expiresAt: Date }>(),
+  assert: vi.fn(),
+}));
+
 vi.mock('server-only', () => ({}));
 vi.mock('./finance-postings', () => ({ postSaleLineEntry: mocks.post }));
+vi.mock('./sale-batch-safety', () => ({ assertSaleBatchesSellable: safety.assert }));
 vi.mock('./receipt-identity', () => {
   class PharmacyReceiptIdentityError extends Error {
     constructor() {
@@ -121,6 +129,11 @@ const complete = (s: ReturnType<typeof sale>) =>
 beforeEach(() => {
   order = [];
   db = makeDb();
+  safety.checked = new Map();
+  safety.assert.mockReset().mockImplementation(async () => {
+    order.push('batch-safety');
+    return safety.checked;
+  });
   mocks.validate.mockClear();
   mocks.post.mockClear().mockImplementation(async () => {
     order.push('posting');
@@ -279,7 +292,36 @@ describe('R2 a foreign fact anywhere refuses the receipt', () => {
     const s = sale();
     s.lines[1]!.allocations[0]!.branchId = 'branch_b';
     await expect(complete(s)).rejects.toBeInstanceOf(PharmacyReceiptIdentityError);
-    expect(order).toEqual(['sequence', 'sale-completed']);
+    expect(order).toEqual(['batch-safety', 'sequence', 'sale-completed']);
+  });
+
+  it('#659: re-checks the batches before drawing a number and prints the facts it checked', async () => {
+    safety.checked.set('lot_al_2', {
+      batchNumber: 'B-002',
+      expiresAt: new Date('2027-05-31T19:00:00.000Z'),
+    });
+    await expect(complete(sale())).resolves.toBe(41);
+    expect(safety.assert).toHaveBeenCalledWith(db, scope, 'sale_1');
+    expect(order[0]).toBe('batch-safety');
+    const snapshot = mocks.validate.mock.calls[0]![0] as {
+      lines: Array<{ allocations: Array<{ allocationId: string; expiresAt: string }> }>;
+    };
+    expect(snapshot.lines[0]!.allocations.map((row) => row.expiresAt)).toEqual([
+      '2027-01-31T00:00:00.000Z',
+      '2027-05-31T19:00:00.000Z',
+    ]);
+  });
+
+  it('#659: an unsafe batch refuses before any number, update, event or posting', async () => {
+    safety.assert.mockImplementationOnce(async () => {
+      order.push('batch-safety');
+      throw new Error('SALE_BATCH_RECALLED');
+    });
+    await expect(complete(sale())).rejects.toThrow('SALE_BATCH_RECALLED');
+    expect(order).toEqual(['batch-safety']);
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    expect(mocks.validate).not.toHaveBeenCalled();
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 });
 

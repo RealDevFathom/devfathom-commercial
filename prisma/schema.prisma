@@ -135,6 +135,7 @@ model JurisdictionRuleSet {
   pharmacistCoverageRule    Json
   recordRetentionByClass    Json
   createdAt                 DateTime  @default(now())
+  isPlaceholder             Boolean   @default(false)
 
   regulatoryProfiles BranchRegulatoryProfile[]
 
@@ -158,8 +159,10 @@ model BranchRegulatoryProfile {
   premises                         Json
   licenceCategory                  String
   licenceNumber                    String
+  licenceIssuingAuthority          String?
   licenceValidFrom                 DateTime
   licenceValidTo                   DateTime
+  licenceExpiryLabel               String?
   licenceEvidenceFileRef           String
   permittedSchedules               String[]
   qualifiedPersonRegistration      String
@@ -171,6 +174,7 @@ model BranchRegulatoryProfile {
   fiscalStatus                     String
   retentionPolicy                  Json
   createdAt                        DateTime  @default(now())
+  isPlaceholder                    Boolean   @default(false)
 
   jurisdictionRuleSet JurisdictionRuleSet @relation(fields: [jurisdictionRuleSetId], references: [id], onDelete: Restrict)
   branch              PharmacyBranch      @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
@@ -190,8 +194,11 @@ model BranchRegulatoryProfile {
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
   whatsappMessageLogs    PharmacyMessageLog[]
+  aiUsages               AIUsage[]
   receiptLayout          Json?
   receiptLayoutRevision  Int                  @default(0)
+  manualPaymentSettings  Json?
+  manualPaymentRevision  Int                  @default(0)
   id                     String               @id @default(cuid())
   organizationId         String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   code                   String
@@ -235,6 +242,11 @@ model PharmacyBranch {
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
   branchAssignments                        PharmacyBranchAssignment[]
+  sopSite                                  PharmacySopSite?
+  sopRecordLinks                           PharmacySopRecordLink[]
+  sopEvidenceCaptures                      PharmacySopEvidenceCapture[]
+  sopSiteSettings                          PharmacySopSiteSetting[]
+  sopReworkNotes                           PharmacySopReworkNote[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -259,6 +271,151 @@ model PharmacyBranchAssignment {
   @@unique([organizationId, branchId, userId], map: "pharmacy_branch_assignments_org_branch_user_key")
   @@index([organizationId, userId, active])
   @@map("pharmacy_branch_assignments")
+}
+
+/// DEV-751: binds one pharmacy branch to the shared SOP engine. The engine's
+/// tables key every assignment and occurrence to an engine branch row
+/// (`restaurant_branches`), which carries the timezone and business-day cutoff
+/// the recurrence engine needs. A pharmacy branch gets exactly one such "SOP
+/// site" row, created only when a manager explicitly enables SOPs there; nothing
+/// backfills it. `sopBranchId` references `restaurant_branches` through a
+/// composite (organizationId, id) foreign key expressed in SQL only, so the
+/// restaurant models stay untouched. Pharmacy authorization never reads the
+/// engine branch: scope always comes from `pharmacy_branch_assignments`.
+model PharmacySopSite {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  pharmacyBranchId String
+  sopBranchId      String
+  enabledByUserId  String
+  createdAt        DateTime @default(now())
+
+  pharmacyBranch PharmacyBranch @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_sop_sites_org_id_key")
+  @@unique([organizationId, pharmacyBranchId], map: "pharmacy_sop_sites_org_branch_key")
+  @@unique([organizationId, sopBranchId], map: "pharmacy_sop_sites_org_sop_branch_key")
+  @@map("pharmacy_sop_sites")
+}
+
+/// DEV-751: the existing pharmacy record an SOP occurrence step points at.
+enum PharmacySopRecordType {
+  TEMPERATURE_LOG
+  CONTROLLED_REGISTER_ENTRY
+  GOODS_RECEIPT
+  MANUFACTURING_BATCH
+  RECALL_NOTICE
+}
+
+/// DEV-751: APPEND-ONLY link from an SOP occurrence (and optionally one step) to
+/// an existing pharmacy record — a temperature log, controlled-register entry,
+/// goods receipt, batch or recall. The link is proof that the checklist was done
+/// against the real record; it never creates, posts or edits that record, and it
+/// is never a parallel ledger. `occurrenceId`/`occurrenceStepId` reference the
+/// shared engine tables through SQL-only foreign keys. DB-enforced append-only
+/// (SELECT+INSERT RLS, no updatedAt).
+model PharmacySopRecordLink {
+  id                     String                @id @default(cuid())
+  organizationId         String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  pharmacyBranchId       String
+  occurrenceId           String
+  occurrenceStepId       String?
+  recordType             PharmacySopRecordType
+  recordId               String
+  linkedByStaffProfileId String
+  linkedByUserId         String
+  note                   String?
+  createdAt              DateTime              @default(now())
+
+  pharmacyBranch PharmacyBranch @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_sop_record_links_org_id_key")
+  @@unique([organizationId, occurrenceId, recordType, recordId], map: "pharmacy_sop_record_links_identity_key")
+  @@index([organizationId, pharmacyBranchId, occurrenceId], map: "pharmacy_sop_record_links_occurrence_idx")
+  @@index([organizationId, recordType, recordId], map: "pharmacy_sop_record_links_record_idx")
+  @@map("pharmacy_sop_record_links")
+}
+
+/// DEV-751: how a pharmacy SOP capture receipt came to exist.
+enum PharmacySopCaptureSource {
+  /// Written by the pharmacy evidence route right after the engine stored the proof.
+  UPLOAD
+  /// Written by the one-off legacy backfill for proof whose HMAC-bound name
+  /// verified under the secret in force when the backfill ran.
+  LEGACY_HMAC_BACKFILL
+}
+
+/// DEV-751: APPEND-ONLY, server-issued receipt that one engine evidence row was
+/// captured through the pharmacy workspace. This is the durable provenance
+/// record: it does not depend on any secret, so rotating AUTH_SECRET never makes
+/// earlier pharmacy proof look foreign. Only server code writes it, from the
+/// evidence id the engine returned; no client-supplied receipt identity is ever
+/// accepted. `evidenceId`/`occurrenceId` reference the shared engine tables
+/// through SQL-only composite foreign keys, and a trigger checks the receipt
+/// matches its evidence row and the pharmacy branch's SOP site.
+model PharmacySopEvidenceCapture {
+  id                       String                   @id @default(cuid())
+  organizationId           String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  pharmacyBranchId         String
+  occurrenceId             String
+  evidenceId               String
+  contentHash              String
+  source                   PharmacySopCaptureSource
+  capturedByStaffProfileId String?
+  capturedByUserId         String?
+  createdAt                DateTime                 @default(now())
+
+  pharmacyBranch PharmacyBranch @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_sop_evidence_captures_org_id_key")
+  @@unique([organizationId, evidenceId], map: "pharmacy_sop_evidence_captures_org_evidence_key")
+  @@index([organizationId, pharmacyBranchId, occurrenceId], map: "pharmacy_sop_evidence_captures_occurrence_idx")
+  @@map("pharmacy_sop_evidence_captures")
+}
+
+/// DEV-751: APPEND-ONLY per-branch SOP settings history; the newest row for a
+/// pharmacy branch is in force. With no row, automatic scheduling is OFF: a
+/// branch opts in explicitly. Settings never gate any pharmacy workflow.
+model PharmacySopSiteSetting {
+  id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  pharmacyBranchId    String
+  autoScheduleEnabled Boolean
+  changedByUserId     String
+  reason              String?
+  createdAt           DateTime @default(now())
+
+  pharmacyBranch PharmacyBranch @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_sop_site_settings_org_id_key")
+  @@index([organizationId, pharmacyBranchId, createdAt], map: "pharmacy_sop_site_settings_branch_time_idx")
+  @@map("pharmacy_sop_site_settings")
+}
+
+/// DEV-751: APPEND-ONLY rework note. After a reviewer sends a procedure back,
+/// the engine keeps its steps completed (re-completing is a no-op), so what the
+/// worker changed in response is recorded here: one or more notes, optionally
+/// per step, written after the latest send-back. Resubmission requires at least
+/// one. `occurrenceId`, `occurrenceStepId` and `rejectionVerificationId`
+/// reference the shared engine tables through SQL-only foreign keys; the author
+/// is server-derived. Never gates any pharmacy workflow.
+model PharmacySopReworkNote {
+  id                      String   @id @default(cuid())
+  organizationId          String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  pharmacyBranchId        String
+  occurrenceId            String
+  occurrenceStepId        String?
+  rejectionVerificationId String
+  note                    String
+  authorStaffProfileId    String
+  authorUserId            String
+  createdAt               DateTime @default(now())
+
+  pharmacyBranch PharmacyBranch @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_sop_rework_notes_org_id_key")
+  @@index([organizationId, pharmacyBranchId, occurrenceId], map: "pharmacy_sop_rework_notes_occurrence_idx")
+  @@map("pharmacy_sop_rework_notes")
 }
 
 /// INV-10 — the deliberately narrow doorway into the chain purchasing view.
@@ -990,6 +1147,9 @@ enum PharmacyTenderType {
   WALLET
   CREDIT
   LOYALTY
+  RAAST
+  JAZZCASH
+  EASYPAISA
 }
 
 enum PharmacyLoyaltyEntryKind {
@@ -1138,6 +1298,7 @@ model PharmacyCustomer {
   orders                 PharmacyCustomerOrder[]
   whatsappOptIn          Boolean?
   whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
+  preferredLanguage      String                       @default("en") @db.VarChar(2)
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
@@ -1303,6 +1464,8 @@ model PharmacyTender {
   changeGivenMinor  Int?
   provider          String?
   providerRef       String?
+  payerName         String?
+  referenceSkipped  Boolean                      @default(false)
   drawerSessionId   String?
   businessDate      DateTime                     @db.Date
   actorId           String
@@ -1396,6 +1559,7 @@ model PharmacyDailyClose {
   cashVarianceMinor   Int
   controlledCountHook Json?
   sourceHash          String
+  tenderTotals        Json?
   actorId             String
   /// MIG-05 — whether this close is final. False while the branch is still
   /// switching: the first DevFathom close only becomes final once the
@@ -1458,18 +1622,22 @@ model PharmacySaleLine {
   canonicalUnitsPerSaleUnit Int
   canonicalUnits            Int
   unitPriceMinor            Int
+  grossMinor                Int
   proRataCeilingMinor       Int
   unitCostMinor             Int
   discountKind              PharmacyDiscountKind?
   discountMinor             Int                          @default(0)
   approvalPolicy            String?
   approvedByUserId          String?
+  prescriptionLineId        String?
+  prescriptionPatientId     String?
   idempotencyKey            String
   createdAt                 DateTime                     @default(now())
   sale                      PharmacySale                 @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
   medicine                  Medicine                     @relation(fields: [medicineId], references: [id], onDelete: Restrict)
   presentation              Presentation                 @relation(fields: [presentationId], references: [id], onDelete: Restrict)
   packLevel                 PackLevel                    @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
+  prescriptionLine          PrescriptionLine?            @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict)
   allocations               PharmacySaleLineAllocation[]
   returnLines               PharmacySaleReturnLine[]
   unidentifiedReturnHolds   PharmacyUnidentifiedReturnHold[]
@@ -1490,6 +1658,9 @@ model PharmacySaleLineAllocation {
   stockLocationId String
   canonicalUnits  Int
   stockMovementId String
+  /// Immutable charged/reversed money; null only on historical evidence.
+  grossMinor      Int?
+  discountMinor   Int?
   createdAt       DateTime             @default(now())
   saleLine        PharmacySaleLine     @relation(fields: [organizationId, saleLineId], references: [organizationId, id], onDelete: Restrict)
   lot             PharmacyInventoryLot @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
@@ -1546,6 +1717,9 @@ model PharmacySaleReturnLine {
   canonicalUnits    Int
   integrityDecision String
   stockMovementId   String
+  /// Immutable charged/reversed money; null only on historical evidence.
+  grossMinor      Int?
+  discountMinor   Int?
   createdAt         DateTime             @default(now())
   saleReturn        PharmacySaleReturn   @relation(fields: [organizationId, branchId, returnId], references: [organizationId, branchId, id], onDelete: Restrict)
   saleLine          PharmacySaleLine     @relation(fields: [organizationId, saleLineId], references: [organizationId, id], onDelete: Restrict)
@@ -1568,6 +1742,9 @@ model PharmacyUnidentifiedReturnHold {
   canonicalUnits       Int
   integrityDecision    String
   actorId              String
+  /// Immutable charged/reversed money; null only on historical evidence.
+  grossMinor      Int?
+  discountMinor   Int?
   createdAt            DateTime                        @default(now())
   saleReturn           PharmacySaleReturn              @relation(fields: [organizationId, branchId, returnId], references: [organizationId, branchId, id], onDelete: Restrict, map: "return_hold_return_fk")
   saleLine             PharmacySaleLine                @relation(fields: [organizationId, branchId, saleLineId], references: [organizationId, branchId, id], onDelete: Restrict, map: "return_hold_line_fk")
@@ -2376,6 +2553,7 @@ enum FinanceSourceKind {
   PHARMACY_GOODS_RECEIPT
   PHARMACY_SALE_LINE
   PHARMACY_SALE_RETURN_LINE
+  PHARMACY_UNIDENTIFIED_RETURN_HOLD
   PHARMACY_STOCK_WRITE_OFF
   PHARMACY_SUPPLIER_CLAIM
   PHARMACY_INTERBRANCH_TRANSFER_LINE
@@ -3380,7 +3558,8 @@ model TimeEntry {
 model Invoice {
   id             String        @id @default(cuid())
   organizationId String        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  invoiceNumber  String        @unique
+  // INV-<year>-<n>: a per-organization sequence, unique within the tenant only.
+  invoiceNumber  String
   clientId       String
   projectId      String?
   items          Json // [{description, quantity, rate, amount}]
@@ -3400,6 +3579,7 @@ model Invoice {
   project  Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
   payments Payment[] // IMP-FIN-04: partial payments recorded against this invoice
 
+  @@unique([organizationId, invoiceNumber])
   @@index([status])
   @@index([clientId])
   @@index([projectId])
@@ -3639,6 +3819,7 @@ model PharmacySettlementBatch {
   createdAt       DateTime           @default(now())
 
   tenders          PharmacySettlementTender[]
+  bankMatches      PharmacyBankReconciliation[]
   visibilityAnchor PharmacyBranch             @relation("PharmacySettlementBatchVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_settlement_batches_visibility_fkey")
 
   @@unique([organizationId, id])
@@ -3688,7 +3869,8 @@ model PharmacyBankReconciliation {
   id              String    @id @default(cuid())
   organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   statementLineId String
-  transactionId   String
+  transactionId   String?
+  settlementBatchId String?
   amountMinor     Int
   matchedByUserId String
   matchedAt       DateTime  @default(now())
@@ -3696,11 +3878,14 @@ model PharmacyBankReconciliation {
   reversalReason  String?
 
   statementLine PharmacyBankStatementLine      @relation(fields: [organizationId, statementLineId], references: [organizationId, id], onDelete: Restrict)
-  transaction   PharmacyBookkeepingTransaction @relation(fields: [organizationId, transactionId], references: [organizationId, id], onDelete: Restrict)
+  transaction   PharmacyBookkeepingTransaction? @relation(fields: [organizationId, transactionId], references: [organizationId, id], onDelete: Restrict)
+  settlementBatch PharmacySettlementBatch? @relation(fields: [organizationId, settlementBatchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_bank_reconciliations_settlement_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, statementLineId, transactionId])
   @@index([organizationId, transactionId])
+  @@unique([organizationId, statementLineId, settlementBatchId], map: "pharmacy_bank_reconciliations_org_line_batch_key")
+  @@index([organizationId, settlementBatchId], map: "pharmacy_bank_reconciliations_org_batch_idx")
   @@map("pharmacy_bank_reconciliations")
 }
 
@@ -4863,6 +5048,7 @@ model Organization {
   seatLimit                Int                        @default(1)
   isDemo                   Boolean                    @default(false)
   askFathomEnabled         Boolean                    @default(true)
+  aiDeepStrategyEnabled    Boolean                    @default(false)
   lastDemoResetAt          DateTime?
   gracePeriodDays          Int                        @default(0)
   activatedAt              DateTime?
@@ -4885,6 +5071,8 @@ model Organization {
   modules                                   OrganizationModule[]
   limits                                    OrganizationLimit[]
   usageCounters                             OrganizationUsageCounter[]
+  aiUsages                                  AIUsage[]
+  aiAssistantActions                        AIAssistantAction[]
   brand                                     OrganizationBrand?
   emailSettings                             OrganizationEmailSettings?
   domains                                   OrganizationDomain[]
@@ -6715,9 +6903,9 @@ model RestaurantPrintJob {
   @@map("restaurant_print_jobs")
 }
 
-/// M4: a routing rule targeting a station. Exactly one of `productId` or
-/// `categoryId` is set (a CHECK enforces the XOR in the migration). Resolution is
-/// most-specific-wins (product rule > category rule > branch default) with
+/// M4: a routing rule targeting a station. Exactly one of `productId`,
+/// `categoryId`, or `course` is set (a CHECK enforces the XOR in the migration). Resolution is
+/// most-specific-wins (product rule > category rule > course rule > branch default) with
 /// `priority` breaking ties within a level (src/lib/restaurant/station-routing.ts).
 model RestaurantStationRoutingRule {
   id             String   @id @default(cuid())
@@ -6725,6 +6913,7 @@ model RestaurantStationRoutingRule {
   stationId      String
   productId      String?
   categoryId     String?
+  course         Int?
   priority       Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -6737,6 +6926,7 @@ model RestaurantStationRoutingRule {
   @@index([stationId])
   @@index([productId])
   @@index([categoryId])
+  @@index([course])
   @@map("restaurant_station_routing_rules")
 }
 
@@ -6791,6 +6981,7 @@ model RestaurantOrder {
 
   @@unique([branchId, businessDate, orderNumber])
   @@unique([organizationId, branchId, id])
+  @@index([branchId, businessDate, status])
   @@index([organizationId])
   @@index([branchId])
   @@index([status])
@@ -6880,7 +7071,8 @@ model RestaurantOrderItemModifier {
 /// `linkReason` records why it was made (seated, moved, merged). Merge = several
 /// active table links under one order; combining two OPEN orders into one is
 /// deferred (BUILD-ASSUMPTIONS). At most one active link per (order, table) is
-/// enforced by a partial unique index in the migration.
+/// enforced by a partial unique index in the migration, and a second partial
+/// unique index permits only one active MOVE link per order.
 model RestaurantOrderTable {
   id             String                         @id @default(cuid())
   organizationId String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -8416,6 +8608,7 @@ model RestaurantJob {
   nextAttemptAt  DateTime            @default(now())
   claimedAt      DateTime?
   claimedBy      String?
+  claimToken     String?
   lastError      String?
   idempotencyKey String?
   createdAt      DateTime            @default(now())
@@ -10529,6 +10722,9 @@ model RestaurantShiftBreak {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  /// Database-maintained projection; raw endedAt stays absent after a repair.
+  closedByAdjustment Boolean @default(false)
+
   shift       RestaurantShift              @relation(fields: [shiftId], references: [id], onDelete: Cascade)
   adjustments RestaurantTimeAdjustment[]
   commands    RestaurantWorkforceCommand[]
@@ -10605,7 +10801,7 @@ model RestaurantTimeAdjustment {
   shiftId                  String
   breakId                  String?
   kind                     RestaurantTimeAdjustmentKind
-  originalAt               DateTime
+  originalAt               DateTime?
   correctedAt              DateTime
   reason                   String
   adjustedByUserId         String
@@ -10659,9 +10855,35 @@ model PlatformUser {
   sessions                             PlatformSession[]
   recoveryCodes                        PlatformRecoveryCode[]
   restaurantActivationAcknowledgements RestaurantActivationAcknowledgement[]
+  platformNotifications                 PlatformNotification[]
 
   @@index([role, active])
   @@map("platform_users")
+}
+
+model PlatformNotification {
+  id             String   @id @default(cuid())
+  platformUserId String
+  type           String
+  title          String
+  message        String
+  isRead         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  platformUser PlatformUser @relation(fields: [platformUserId], references: [id], onDelete: Cascade)
+
+  @@index([platformUserId, isRead, createdAt(sort: Desc)])
+  @@map("platform_notifications")
+}
+
+/// One claim per provider and Asia/Karachi month, so each spend-cap alert fans out once.
+model AIBudgetAlertMonth {
+  provider  String
+  month     String
+  createdAt DateTime @default(now())
+
+  @@id([provider, month])
+  @@map("ai_budget_alert_months")
 }
 
 model PlatformRecoveryCode {
@@ -10741,6 +10963,72 @@ model PlatformSetting {
 
   @@index([category])
   @@map("platform_settings")
+}
+
+enum AISettingsMode {
+  Auto
+  ForceAnthropic
+  ForceOpenAI
+  ForceBedrock
+  Disabled
+}
+
+/// Platform-wide AI routing policy set by a SUPER_ADMIN. The database enforces the
+/// singleton id. Every override is optional: an empty order and a null cap or model
+/// fall back to the environment, then to the code defaults (src/lib/ai/model-defaults.ts).
+model AISetting {
+  id                    String         @id @default("default")
+  mode                  AISettingsMode @default(Auto)
+  /// Fallback order; empty means AI_PROVIDER_ORDER / the default order.
+  providerOrder         String[]       @default([])
+  fallbackEnabled       Boolean        @default(true)
+  anthropicMonthlyCapUsd Decimal?      @db.Decimal(12, 4)
+  openaiMonthlyCapUsd   Decimal?       @db.Decimal(12, 4)
+  bedrockMonthlyCapUsd  Decimal?       @db.Decimal(12, 4)
+  cheapAnthropicModel   String?
+  standardAnthropicModel String?
+  deepAnthropicModel    String?
+  cheapOpenaiModel      String?
+  standardOpenaiModel   String?
+  deepOpenaiModel       String?
+  cheapBedrockModel     String?
+  standardBedrockModel  String?
+  deepBedrockModel      String?
+  updatedAt             DateTime       @updatedAt
+  updatedBy             String?
+
+  @@map("ai_settings")
+}
+
+model AIModelPrice {
+  id                String   @id @default(cuid())
+  provider          String
+  model             String
+  inputUsdPerMTok   Decimal  @db.Decimal(14, 6)
+  outputUsdPerMTok  Decimal  @db.Decimal(14, 6)
+  effectiveFrom     DateTime
+
+  @@unique([provider, model, effectiveFrom])
+  @@index([provider, model, effectiveFrom(sort: Desc)])
+  @@map("ai_model_prices")
+}
+
+/// Platform spend ledger: one row per billed provider attempt, priced in USD. Spend
+/// caps read it. Tenant attribution stays in AIUsage (ai_usage).
+model AIProviderUsage {
+  id             String   @id @default(cuid())
+  provider       String
+  tier           String
+  model          String
+  feature        String
+  organizationId String?
+  inputTokens    Int
+  outputTokens   Int
+  costUsd        Decimal  @db.Decimal(18, 8)
+  createdAt      DateTime @default(now())
+
+  @@index([provider, createdAt])
+  @@map("ai_provider_usage")
 }
 
 model PlatformModule {
@@ -10859,6 +11147,62 @@ model OrganizationUsageCounter {
   @@unique([organizationId, key, periodStart, periodEnd])
   @@index([organizationId, key])
   @@map("organization_usage_counters")
+}
+
+model AIUsage {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  feature        String
+  provider       String
+  model          String
+  inputTokens    Int
+  outputTokens   Int
+  createdAt      DateTime @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, branchId, createdAt])
+  @@map("ai_usage")
+}
+
+enum AIAssistantActionStatus {
+  PROPOSED
+  EXECUTING
+  SUCCEEDED
+  FAILED
+}
+
+/// DEV-576 — the confirmed-write ledger for Ask Fathom. One row per write the
+/// server proposed for approval (a `tool-approval-request` it emitted). The
+/// wrapped tool `execute` runs only against a matching row, so a forged or
+/// modified approval is refused, and a resent approval or a provider failover
+/// returns the stored result instead of running the write again.
+/// `id` is the idempotency key: SHA-256 (HMAC-SHA-256 when AUTH_SECRET is set)
+/// over organization, user, tool call id, tool name and the canonical input.
+/// The input itself is never stored; `result` is redacted, JSON-safe output.
+model AIAssistantAction {
+  id             String                  @id
+  organizationId String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  toolName       String
+  toolCallId     String
+  approvalId     String
+  payloadHash    String
+  status         AIAssistantActionStatus @default(PROPOSED)
+  result         Json?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @default(now()) @updatedAt
+  startedAt      DateTime?
+  completedAt    DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, toolCallId])
+  @@index([organizationId, createdAt])
+  @@map("ai_assistant_actions")
 }
 
 model OrganizationRole {
@@ -11505,6 +11849,8 @@ model PlatformAuditLog {
 enum PharmacyMigrationSourceKind {
   ABUZAR
   EXCEL_CSV
+  TALLY_XML
+  MARG_EXCEL
 }
 
 enum PharmacyMigrationBatchStatus {
@@ -11852,8 +12198,10 @@ model PharmacyQuoteLine {
   leadTimeDays          Int      @default(0)
   /// Shortest remaining shelf life the supplier will ship, in days.
   minimumExpiryDays     Int      @default(0)
-  canonicalUnitsPerPack Int
-  createdAt             DateTime @default(now())
+  /// Configured demand forecast through the offered expiry window.
+  forecastSellThroughPacks Int?
+  canonicalUnitsPerPack    Int
+  createdAt                DateTime @default(now())
 
   quote           PharmacyQuote           @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict)
   requisitionLine PharmacyRequisitionLine @relation(fields: [organizationId, requisitionLineId], references: [organizationId, id], onDelete: Restrict)
@@ -11926,7 +12274,11 @@ model PharmacyPurchaseOrderLine {
   taxBps                Int      @default(0)
   /// A creditable input tax is recovered and so is not stock cost.
   taxCreditable         Boolean  @default(false)
-  createdAt             DateTime @default(now())
+  /// Quote-time comparison assumptions retained on the draft for review.
+  forecastSellThroughPacks Int?
+  minimumExpiryDays        Int?
+  leadTimeDays             Int?
+  createdAt                DateTime @default(now())
 
   purchaseOrder       PharmacyPurchaseOrder        @relation(fields: [organizationId, purchaseOrderId], references: [organizationId, id], onDelete: Restrict)
   medicine            Medicine                     @relation(fields: [medicineId], references: [id], onDelete: Restrict)
@@ -12119,6 +12471,13 @@ enum PrescriptionCustodyState {
   TRANSFERRED
 }
 
+enum PatientConsentSource {
+  COUNTER_TABLET
+  QR
+  REPLY
+  LEGACY
+}
+
 enum PharmacyPharmacovigilanceKind {
   ADVERSE_DRUG_REACTION
   MEDICATION_ERROR
@@ -12172,6 +12531,8 @@ model PatientConsent {
   version          Int
   granted          Boolean
   recordedByUserId String
+  source           PatientConsentSource              @default(LEGACY)
+  staffId          String?
   recordedAt       DateTime                        @default(now())
   revokedAt        DateTime?
   supersedesId     String?
@@ -12274,6 +12635,7 @@ model PrescriptionLine {
   medicine                  Medicine                          @relation(fields: [medicineId], references: [id], onDelete: Restrict)
   presentation              Presentation                      @relation(fields: [presentationId], references: [id], onDelete: Restrict)
   fills                     PrescriptionFill[]
+  saleLines                 PharmacySaleLine[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, prescriptionId, lineNumber])
@@ -12540,6 +12902,10 @@ model PharmacyGoodsReceipt {
   /// are not saleable. Required on the row, not only at the router.
   supplierInvoiceRef     String
   supplierInvoiceDate    DateTime
+  /// Tax identity printed on this bill. These are snapshots: changing a
+  /// supplier later must not make an earlier input-tax claim look compliant.
+  distributorNtn         String?
+  distributorStrn        String?
   warrantyEvidenceRef    String
   receivedByUserId       String
   receivedAt             DateTime
@@ -13472,6 +13838,7 @@ enum PharmacyOfflineAction {
   SEARCH_CATALOG
   SCAN_BARCODE
   CASH_OTC_SALE
+  MANUAL_OTC_SALE
   KHATA_SALE_WITHIN_CACHED_LIMIT
   PERMITTED_REFUND
   PROVISIONAL_CLOSE
@@ -13826,7 +14193,9 @@ model PharmacyCampaignAttribution {
 enum PharmacyAnomalySignalKind {
   SHRINKAGE
   DISCOUNT_OVERRIDE
+  VOID_ABUSE
   GHOST_RETURN
+  TENDER_MISMATCH
   CASH_VARIANCE
   PURCHASE_PRICE_DRIFT
 }
@@ -14426,6 +14795,23 @@ model PharmacyMessageLog {
   @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
   @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
   @@map("pharmacy_message_logs")
+}
+
+/// Minimized consent evidence surviving tenant erasure for a bounded period.
+/// Fingerprints are keyed HMACs; this table intentionally has no organization
+/// foreign key or contact, message, customer, or patient data.
+model PharmacyWhatsAppConsentArchive {
+  id                          String   @id @default(cuid())
+  organizationFingerprint     String
+  customerFingerprint         String
+  optedIn                     Boolean
+  consentChangedAt            DateTime @db.Timestamp(3)
+  archivedAt                  DateTime @default(now()) @db.Timestamp(3)
+  expiresAt                   DateTime @db.Timestamp(3)
+
+  @@unique([organizationFingerprint, customerFingerprint, consentChangedAt], map: "pharmacy_wa_consent_archive_event_key")
+  @@index([expiresAt], map: "pharmacy_wa_consent_archive_expiry_idx")
+  @@map("pharmacy_whatsapp_consent_archives")
 }
 
 model PharmacyOrderDeliveryEvidence {

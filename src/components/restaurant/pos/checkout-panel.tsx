@@ -1,6 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
+
+import {
+  RestaurantStaffSelect,
+  type RestaurantStaffOption,
+} from '@/components/restaurant/restaurant-staff-select';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -15,6 +20,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
+import { Textarea } from '@/components/ui/textarea';
 
 import { ReceiptView } from './receipt-view';
 import { SplitBillDialog, type BillSplit } from './split-bill-dialog';
@@ -28,6 +34,9 @@ export type TerminalRequestOptions = {
 
 export type TerminalRequest = <T>(path: string, options?: TerminalRequestOptions) => Promise<T>;
 
+// Restore the comp control only when the public endpoint supports it after MVP.
+const COMPLIMENTARY_ITEMS_AVAILABLE = false;
+
 type CheckoutSummary = {
   orderId: string;
   settled: boolean;
@@ -36,6 +45,13 @@ type CheckoutSummary = {
   accountedTotal: string;
   deliveryFeeTotal: string | null;
   unbilledItemIds: string[];
+  unbilledItems: {
+    id: string;
+    name: string;
+    quantity: number;
+    seatNumber: number | null;
+    modifiers: string[];
+  }[];
   bills: {
     id: string;
     status: string;
@@ -46,6 +62,13 @@ type CheckoutSummary = {
     deliveryFeeTotal: string;
     compTotal: string;
     receiptNumber: number | null;
+    lines: {
+      id: string;
+      name: string;
+      quantity: number;
+      lineSubtotal: string;
+      compAmount: string;
+    }[];
   }[];
 };
 
@@ -55,9 +78,204 @@ type CheckoutPanelProps = {
   request: TerminalRequest;
   /** Checkout is server-authoritative: an already-open panel must also fail closed offline. */
   connected?: boolean;
+  operators?: RestaurantStaffOption[];
+  actingOperatorId?: string;
   /** `settled` reports whether the order was fully settled when the panel closed. */
   onClose: (result: { settled: boolean }) => void;
 };
+
+function CompControl({
+  billId,
+  lines,
+  request,
+  operators,
+  actingOperatorId,
+  disabled,
+  onComped,
+}: {
+  billId: string;
+  lines: CheckoutSummary['bills'][number]['lines'];
+  request: TerminalRequest;
+  operators: RestaurantStaffOption[];
+  actingOperatorId: string;
+  disabled: boolean;
+  onComped: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [lineId, setLineId] = useState('');
+  const [reason, setReason] = useState('');
+  const [managerId, setManagerId] = useState('');
+  const [managerPin, setManagerPin] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const eligibleLines = lines.filter((line) => Number(line.compAmount) === 0);
+  const managers = operators.filter(
+    (operator) => operator.id !== actingOperatorId || operator.canSelfApprove
+  );
+
+  function reset() {
+    setLineId('');
+    setReason('');
+    setManagerId('');
+    setManagerPin('');
+    setError(null);
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const trimmedReason = reason.trim();
+    if (!lineId || !trimmedReason || !managerId || !/^\d{4,8}$/.test(managerPin) || submitting) {
+      setError(
+        'Select an item and an eligible approver, enter a reason, and enter their 4–8 digit PIN.'
+      );
+      return;
+    }
+    const body = {
+      billId,
+      billLineId: lineId,
+      reason: trimmedReason,
+      approving: { staffProfileId: managerId, type: 'PIN' as const, secret: managerPin },
+    };
+    setSubmitting(true);
+    setError(null);
+    try {
+      await request('/api/restaurant/checkout/comp', {
+        method: 'POST',
+        body,
+        // Never retain a manager credential in the idempotency intent cache.
+        intent: `checkout-comp:${JSON.stringify({
+          billId,
+          billLineId: lineId,
+          reason: trimmedReason,
+          approvingStaffProfileId: managerId,
+        })}`,
+      });
+      setManagerPin('');
+      setOpen(false);
+      reset();
+      await onComped();
+    } catch (caught) {
+      setManagerPin('');
+      setError(errorDetails(caught).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (submitting) return;
+        setOpen(next);
+        if (!next) reset();
+      }}
+    >
+      <Button
+        type="button"
+        variant="outline"
+        className="mb-4 h-11"
+        disabled={disabled || eligibleLines.length === 0 || managers.length === 0}
+        onClick={() => setOpen(true)}
+      >
+        Comp item
+      </Button>
+      <DialogContent showCloseButton={false} className="sm:max-w-lg">
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>Comp bill item</DialogTitle>
+            <DialogDescription>
+              Select an item and verify the approving manager PIN. The original price remains in the
+              audit record.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="my-4 space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor={`comp-line-${billId}`}>Bill item</Label>
+              <select
+                id={`comp-line-${billId}`}
+                required
+                value={lineId}
+                onChange={(event) => setLineId(event.target.value)}
+                className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                <option value="">Select an item</option>
+                {eligibleLines.map((line) => (
+                  <option key={line.id} value={line.id}>
+                    {line.quantity} × {line.name} — {line.lineSubtotal}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`comp-reason-${billId}`}>Comp reason</Label>
+              <Textarea
+                id={`comp-reason-${billId}`}
+                required
+                maxLength={240}
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`comp-manager-${billId}`}>Approving manager</Label>
+              <RestaurantStaffSelect
+                id={`comp-manager-${billId}`}
+                required
+                staff={managers}
+                value={managerId}
+                onChange={setManagerId}
+                label="Approving manager"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`comp-pin-${billId}`}>Manager PIN</Label>
+              <Input
+                id={`comp-pin-${billId}`}
+                type="password"
+                required
+                inputMode="numeric"
+                pattern="[0-9]{4,8}"
+                minLength={4}
+                maxLength={8}
+                autoComplete="off"
+                value={managerPin}
+                onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))}
+              />
+            </div>
+            {error ? (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={submitting}
+              onClick={() => setOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              disabled={
+                submitting ||
+                !lineId ||
+                !reason.trim() ||
+                !managerId ||
+                !/^\d{4,8}$/.test(managerPin)
+              }
+            >
+              {submitting ? 'Comping…' : 'Confirm comp'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function errorDetails(error: unknown) {
   const status =
@@ -79,6 +297,19 @@ function billTone(status: string): StatusTone {
   if (status === 'OPEN') return 'warning';
   if (status === 'VOID') return 'danger';
   return 'neutral';
+}
+
+// A Map (not an object literal) so inherited keys such as `constructor` never resolve,
+// and unknown kinds fall back to fixed copy instead of exposing the raw server value.
+const splitKindLabels = new Map<string, string>([
+  ['NONE', 'Whole order'],
+  ['BY_ITEM', 'By item'],
+  ['BY_SEAT', 'By seat'],
+  ['FRACTIONAL', 'Fractional'],
+]);
+
+function billTitle(splitKind: string) {
+  return splitKindLabels.get(splitKind) ?? 'Bill details';
 }
 
 const blockerLabels: Record<Exclude<CheckoutSummary['blocker'], null>, string> = {
@@ -461,6 +692,8 @@ export function CheckoutPanel({
   orderId,
   request,
   connected = true,
+  operators = [],
+  actingOperatorId = '',
   onClose,
 }: CheckoutPanelProps) {
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
@@ -695,7 +928,7 @@ export function CheckoutPanel({
                     {busy ? 'Creating bill…' : 'Cut single bill'}
                   </Button>
                   <SplitBillDialog
-                    itemIds={summary.unbilledItemIds}
+                    items={summary.unbilledItems}
                     disabled={busy}
                     onSplit={cut}
                   />
@@ -718,7 +951,7 @@ export function CheckoutPanel({
                 title={
                   bill.receiptNumber !== null
                     ? `Receipt ${bill.receiptNumber}`
-                    : bill.splitKind.replaceAll('_', ' ')
+                    : billTitle(bill.splitKind)
                 }
                 actions={<StatusPill status={bill.status} tone={billTone(bill.status)} />}
               >
@@ -752,6 +985,17 @@ export function CheckoutPanel({
                 </dl>
                 {bill.status === 'OPEN' ? (
                   <>
+                    {COMPLIMENTARY_ITEMS_AVAILABLE ? (
+                      <CompControl
+                        billId={bill.id}
+                        lines={bill.lines ?? []}
+                        request={request}
+                        operators={operators}
+                        actingOperatorId={actingOperatorId}
+                        disabled={busy || tenderPending}
+                        onComped={loadSummary}
+                      />
+                    ) : null}
                     <TenderPad
                       billId={bill.id}
                       amountDue={bill.remainingDue}

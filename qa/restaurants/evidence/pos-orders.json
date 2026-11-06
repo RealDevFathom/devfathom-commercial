@@ -1,0 +1,62 @@
+[
+  {
+    "id": "establish",
+    "status": 201,
+    "note": "{\"sessionToken\":\"[redacted]\",\"session\":{\"id\":\"cmvhkt4ps0018chjsvcv6vifo\",\"state\":\"LOCKED\",\"establishedAt\":\"2026-10-21T03:52:18.974Z\"},\"device\":{\"id\":\"cmvhkt4et0015chjscuqj5ijy\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"branchId\":\"cmvhhcldp000m1yjs2sc9obnz\",\"name\":\"QA Orders\","
+  },
+  {
+    "id": "unlock",
+    "status": 200,
+    "note": "{\"session\":{\"id\":\"cmvhkt4ps0018chjsvcv6vifo\",\"state\":\"UNLOCKED\",\"activeStaffProfileId\":\"cmvhhclfk004o1yjs8ekhf7z5\"}}"
+  },
+  {
+    "id": "SEC-02",
+    "status": 400,
+    "note": "{\"error\":\"Missing Idempotency-Key header.\"}"
+  },
+  {
+    "id": "ORD-02-open",
+    "status": 201,
+    "note": "{\"orderId\":\"cmvhkt52y001cchjsuh40tmvw\",\"orderNumber\":1,\"businessDate\":\"2026-10-21\",\"replayed\":false}"
+  },
+  {
+    "id": "ORD-02-add",
+    "status": 201,
+    "note": "{\"itemId\":\"cmvhkt54w001hchjsgvpsnlqy\",\"replayed\":false}"
+  },
+  {
+    "id": "ORD-02-naan",
+    "status": 201,
+    "note": "{\"itemId\":\"cmvhkt56h001lchjsursjr29f\",\"replayed\":false}"
+  },
+  {
+    "id": "ORD-02-fire",
+    "status": 200,
+    "note": "{\"orderId\":\"cmvhkt52y001cchjsuh40tmvw\",\"itemIds\":[\"cmvhkt54w001hchjsgvpsnlqy\",\"cmvhkt56h001lchjsursjr29f\"],\"tickets\":[{\"ticketId\":\"cmvhkt57t001pchjske8hyc2g\",\"stationId\":\"cmvhjughs00gq1yjsrw6ss058\",\"ticketNumber\":1,\"createdAt\":\"2026-10-21T03:52:19.625Z\",\"matchedBy\":\"default\",\"ite"
+  },
+  {
+    "id": "ORD-03",
+    "status": 201,
+    "note": "{\"orderId\":\"cmvhkt599001wchjs6ddn5q2j\",\"orderNumber\":2,\"businessDate\":\"2026-10-21\",\"replayed\":false}"
+  },
+  {
+    "id": "ORD-05",
+    "status": 200,
+    "note": "{\"orderId\":\"cmvhkt52y001cchjsuh40tmvw\",\"replayed\":false}"
+  },
+  {
+    "id": "drawer",
+    "status": 200,
+    "note": "{\"drawerSessionId\":\"cmvhkt5c00024chjs1lkpdqib\",\"businessDate\":\"2026-10-21\",\"openingFloat\":\"500.00\",\"replayed\":false}"
+  },
+  {
+    "id": "PAY-01",
+    "status": 200,
+    "note": "{\"orderId\":\"cmvhkt52y001cchjsuh40tmvw\",\"billIds\":[\"cmvhkt5ds0027chjsijqnsxuk\"],\"replayed\":false}"
+  },
+  {
+    "id": "PAY-03",
+    "status": 400,
+    "note": "{\"error\":\"Invalid input\",\"details\":[{\"origin\":\"string\",\"code\":\"too_small\",\"minimum\":1,\"inclusive\":true,\"path\":[\"billId\"],\"message\":\"Too small: expected string to have >=1 characters\"},{\"origin\":\"string\",\"code\":\"invalid_format\",\"format\":\"regex\",\"pattern\":\"/^\\\\d+(\\\\.\\\\d{1,2})?$/\",\""
+  }
+]

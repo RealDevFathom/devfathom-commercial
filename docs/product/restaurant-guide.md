@@ -1,16 +1,17 @@
 # DevFathom restaurant guide
 
 > **Status:** Draft (PR 3, `docs/restaurant-guide`). Checked against `origin/main` 16a2a370 on 2026-10-22.
+> Co-authorization, comp and job-role wording rechecked against `develop` 616c8eb6 on 2026-11-06.
 > Items marked **TODO(confirm)** still need a product decision before this guide is final.
 > **Hotel is not covered.** Hotel is out of scope for now.
 
 This guide explains what DevFathom does for a restaurant, in plain words. It is for:
 
-| You are… | Start with |
-|---|---|
-| **Owner** | [What it does](#1-what-devfathom-does-for-a-restaurant), [Setting up](#2-setting-up-one-time), [Reports](#10-reports-and-insights), [Growth](#11-customers-loyalty-and-growth) |
-| **Manager** | [A normal day](#3-a-normal-day), [Menu](#7-menu-and-catalog), [Staff](#8-staff-shifts-and-sops), [Stock](#9-stock-and-purchasing) |
-| **Cashier** | [A normal day](#3-a-normal-day), [Orders and tables](#4-orders-and-tables), [Bills, payments and cash](#6-bills-payments-and-cash) |
+| You are…    | Start with                                                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Owner**   | [What it does](#1-what-devfathom-does-for-a-restaurant), [Setting up](#2-setting-up-one-time), [Reports](#10-reports-and-insights), [Growth](#11-customers-loyalty-and-growth) |
+| **Manager** | [A normal day](#3-a-normal-day), [Menu](#7-menu-and-catalog), [Staff](#8-staff-shifts-and-sops), [Stock](#9-stock-and-purchasing)                                              |
+| **Cashier** | [A normal day](#3-a-normal-day), [Orders and tables](#4-orders-and-tables), [Bills, payments and cash](#6-bills-payments-and-cash)                                             |
 
 Words in **bold** are explained in the [restaurant glossary](restaurant-glossary.md). General DevFathom words are in the main [glossary](glossary.md).
 
@@ -79,11 +80,13 @@ Related docs: [Restaurant administrator guide](restaurant-administrator-guide.md
 ## 3. A normal day
 
 **Opening**
+
 - Each terminal is already a registered device. Staff pick their name and enter their own PIN.
 - The cashier opens the **drawer** and records the opening cash (the opening float).
 - Staff follow the opening **SOP** checklist, if your restaurant uses one.
 
 **Service**
+
 - Take orders ([section 4](#4-orders-and-tables)).
 - The kitchen cooks from the KDS ([section 5](#5-kitchen-kds-and-printing)).
 - Take payments ([section 6](#6-bills-payments-and-cash)).
@@ -91,6 +94,7 @@ Related docs: [Restaurant administrator guide](restaurant-administrator-guide.md
 - Some actions need a manager to approve them with their own PIN (**co-authorization**). See [section 6](#6-bills-payments-and-cash).
 
 **Closing**
+
 - Settle all open bills.
 - Count the drawer and do the **close** ([section 6](#6-bills-payments-and-cash)).
 - Staff complete the closing SOP.
@@ -145,12 +149,17 @@ Related docs: [KDS](modules/kds.md), [Printing](modules/printing.md).
 - **Discounts and refunds** are supervisor powers. Cashiers do not have them by default.
 - A refund done after the day is closed goes into the current day and points back to the original bill.
 
-**Actions that need a second person (co-authorization).** A different manager must approve with their own PIN and give a reason:
-- voiding or giving away (comping) items after the kitchen has started them,
+**Actions that need a second person (co-authorization).** Another manager must approve with their own PIN and give a reason:
+
+- voiding items after the kitchen has started them,
 - refunds and corrections,
 - correcting a drawer close,
 - waiving an SOP,
 - removing (revoking) a registered device or a camera gateway.
+
+Giving items away free (comps) is not available in this version. Comp totals on older bills still show on bills and reports.
+
+Exception for one-person restaurants: if you are the owner and the only active staff member, you can approve your own void, refund, bill correction or close correction on the terminal by re-entering your own PIN (a badge does not count). The record notes that the owner approved by PIN. SOP waivers and removing a device or camera gateway are done in the back office and always need a second person.
 
 Managers check money in Restaurant → Money (bills, payments, drawers, daily close).
 
@@ -183,20 +192,20 @@ Related docs: [Menu import (OCR)](menu-import-ocr.md).
 
 Each staff member has one or more **job roles** at a branch. The standard roles are:
 
-| Job role | What it is for |
-|---|---|
-| Owner | Everything on the floor and in the branch |
-| Manager | Supervising plus running the branch |
-| Shift Supervisor | Supervising a shift, including discounts and refunds |
-| Cashier | Taking orders, payments and the drawer |
-| Server | Taking orders on the floor |
-| Host | Seeing orders and customers |
-| Kitchen / Line Cook | Working the KDS |
-| Barista | Taking orders and working a KDS |
-| Accountant | Money and financial reports |
-| Delivery Rider | Delivery orders |
+| Job role            | What it is for                                       |
+| ------------------- | ---------------------------------------------------- |
+| Owner               | Everything on the floor and in the branch            |
+| Manager             | Supervising plus running the branch                  |
+| Shift Supervisor    | Supervising a shift, including discounts and refunds |
+| Cashier             | Taking orders, payments and the drawer               |
+| Server              | Taking orders on the floor                           |
+| Host                | Seeing orders and customers                          |
+| Kitchen / Line Cook | Working the KDS                                      |
+| Barista             | Taking orders and working a KDS                      |
+| Accountant          | Money and financial reports                          |
+| Delivery Rider      | Delivery orders                                      |
 
-Every role can read the menu and complete SOPs. A job role has **capabilities** (things the person may do). You can give one person an extra capability (**capability grant**) or block one, and every change is recorded.
+Every role except Accountant can read the menu and complete SOPs. Accountant is not a floor role. A job role has **capabilities** (things the person may do). You can give one person an extra capability (**capability grant**) or block one, and every change is recorded.
 
 ### Who can do what
 

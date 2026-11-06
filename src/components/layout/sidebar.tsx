@@ -402,6 +402,17 @@ export const navigation: NavItem[] = [
     module: 'pharmacy-safety',
     pharmacyCapabilities: ['pharmacy:safety'],
   },
+  // DEV-751: pharmacy procedures on the shared SOP engine, licensed as Pharmacy
+  // Safety. Shown to whoever holds any SOP capability (complete, verify or
+  // manage) — the same three `pharmacySop.access` reports and the page checks.
+  {
+    label: 'Procedures',
+    href: '/pharmacy/sop',
+    icon: ClipboardList,
+    group: 'Pharmacy',
+    module: 'pharmacy-safety',
+    pharmacyCapabilities: ['pharmacy:sop'],
+  },
   {
     label: 'Regulatory profile',
     href: '/pharmacy/regulatory',
@@ -614,7 +625,18 @@ function useVisibleNavigation() {
     retry: false,
     staleTime: 30_000,
   });
-  const pharmacyCapabilities = safetyAccess.data?.allowed ? ['pharmacy:safety'] : [];
+  const sopAccess = trpc.pharmacySop.access.useQuery(undefined, {
+    enabled: safetyModule,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const pharmacyCapabilities = [
+    ...(safetyAccess.data?.allowed ? ['pharmacy:safety'] : []),
+    ...(sopAccess.data &&
+    (sopAccess.data.canComplete || sopAccess.data.canVerify || sopAccess.data.canManage)
+      ? ['pharmacy:sop']
+      : []),
+  ];
   const filteredNav = visibleNavigation(
     entitlements,
     session?.user?.role,
@@ -678,7 +700,7 @@ export function Sidebar({
       aria-label="Main navigation"
       data-collapsed={collapsed || undefined}
       className={cn(
-        'studio-drawer fixed left-0 top-0 z-40 flex h-dvh flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-out',
+        'studio-drawer fixed start-0 top-0 z-40 flex h-dvh flex-col border-e border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-out',
         collapsed ? 'w-16' : 'w-[min(20rem,88vw)]'
       )}
     >

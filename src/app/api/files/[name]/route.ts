@@ -12,6 +12,7 @@ import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { getUpload, StorageUnavailableError } from '@/lib/storage';
+import { pharmacySopEvidenceReadDecision } from '@/lib/pharmacy/sop-evidence';
 
 // Mirrors the upload allowlist — non-executable types served inline same-origin.
 const MIME: Record<string, string> = {
@@ -54,14 +55,51 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     return new Response('Not found', { status: 404 });
   }
   const organization = actor.organization;
+  const fileRef = '/api/files/' + name;
+
+  // Pharmacy licence evidence belongs to the admin-only regulatory profile.
+  // Look it up inside the tenant scope before touching storage, and use a 404
+  // for denials so a member cannot confirm that a guessed file reference exists.
+  const licenceEvidence = await withTenantDb(organization.id, (db) =>
+    db.branchRegulatoryProfile.findFirst({
+      where: { licenceEvidenceFileRef: fileRef },
+      select: { id: true },
+    })
+  );
+  if (licenceEvidence && session.user.role !== 'ADMIN') {
+    return new Response('Not found', { status: 404 });
+  }
 
   const sopEvidence = await withTenantDb(organization.id, (db) =>
     db.restaurantSopEvidence.findFirst({
-      where: { storageRef: '/api/files/' + name },
-      select: { occurrence: { select: { branchId: true } } },
+      where: { storageRef: fileRef },
+      select: {
+        uploaderStaffProfileId: true,
+        occurrence: {
+          select: {
+            branchId: true,
+            templateVersionId: true,
+            assignedStaffProfileId: true,
+            claimedByStaffProfileId: true,
+          },
+        },
+      },
     })
   );
-  if (sopEvidence && session.user.role !== 'ADMIN') {
+  // DEV-751: proof on a pharmacy SOP site is governed by pharmacy branch
+  // assignment and SOP capability, not by restaurant branch membership.
+  const pharmacyDecision =
+    sopEvidence && session.user.role !== 'ADMIN'
+      ? await withTenantDb(organization.id, (db) =>
+          pharmacySopEvidenceReadDecision(db, {
+            organizationId: organization.id,
+            user: session.user,
+            evidence: sopEvidence,
+          })
+        )
+      : null;
+  if (pharmacyDecision === 'DENY') return new Response('Not found', { status: 404 });
+  if (sopEvidence && session.user.role !== 'ADMIN' && pharmacyDecision === 'NOT_PHARMACY') {
     const branchAccess = await withTenantDb(organization.id, (db) =>
       db.restaurantBranchAssignment.findUnique({
         where: {
@@ -83,7 +121,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   // their own visibility model and aren't in this ticket's scope.
   const attachment = await withTenantDb(organization.id, (db) =>
     db.messageAttachment.findFirst({
-      where: { url: '/api/files/' + name },
+      where: { url: fileRef },
       select: { message: { select: { channelId: true } } },
     })
   );

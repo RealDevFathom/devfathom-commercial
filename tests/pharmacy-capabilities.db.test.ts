@@ -14,10 +14,25 @@ const suffix = randomUUID().replaceAll('-', '');
 const org = `qa130_${suffix}`;
 const other = `${org}_other`;
 const third = `${org}_third`;
+const restaurant = `${org}_restaurant`;
 const runtimeRole = `qa130_${suffix}`;
 const id = (key: string) => `${org}_${key}`;
 const migration = readFileSync(
   'prisma/migrations/20261021110000_canonical_pharmacy_capabilities/migration.sql',
+  'utf8'
+)
+  .replace(/^BEGIN;$/m, '')
+  .replace(/^COMMIT;$/m, '');
+const managerProcurementMigration = readFileSync(
+  'prisma/migrations/20261022100000_pharmacy_manager_procurement/migration.sql',
+  'utf8'
+);
+const administratorReportsMigration = readFileSync(
+  'prisma/migrations/20261029000258_pharmacy_administrator_reports/migration.sql',
+  'utf8'
+);
+const ownerPvSafetyMigration = readFileSync(
+  'prisma/migrations/20261101120000_pharmacy_owner_pv_safety/migration.sql',
   'utf8'
 )
   .replace(/^BEGIN;$/m, '')
@@ -42,6 +57,9 @@ const legacy: Record<string, string[]> = {
     await client.query('BEGIN');
     await client.query(`SELECT set_config('app.is_platform_admin','true',true)`);
     await client.query(`CREATE ROLE "${runtimeRole}" NOSUPERUSER NOBYPASSRLS`);
+    // PostgreSQL 16 no longer gives a CREATEROLE user an implicit right to SET ROLE
+    // to roles it creates. Make the test owner an explicit member before exercising RLS.
+    await client.query(`GRANT "${runtimeRole}" TO CURRENT_USER`);
     await client.query(`GRANT USAGE ON SCHEMA public TO "${runtimeRole}"`);
     await client.query(
       `GRANT SELECT ON organization_roles, organization_role_permissions, user_permission_overrides, users TO "${runtimeRole}"`
@@ -129,7 +147,43 @@ const legacy: Record<string, string[]> = {
       `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'reports:financial','DENY')`,
       [id('other_owner_deny'), other, id('other_owner')]
     );
+    // Legacy pharmacy bootstrap roles are not canonical Owner templates. Both historical keys
+    // need operational reports, while a tenant-authored lookalike and an explicit DENY stay put.
+    for (const [key, roleKey, isSystem, roleOrg] of [
+      ['administrator', 'administrator', true, org],
+      ['admin', 'admin', true, other],
+      ['custom_administrator', 'administrator', false, third],
+    ] as const) {
+      await client.query(
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$3,$4,now())`,
+        [id(key), roleOrg, roleKey, isSystem]
+      );
+    }
+    await client.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'reports:operational','DENY')`,
+      [id('admin_reports_deny'), other, id('admin')]
+    );
+    await client.query(
+      `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','RESTAURANT',now(),now())`,
+      [restaurant]
+    );
+    for (const key of ['owner', 'admin']) {
+      await client.query(
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$3,true,now())`,
+        [id(`restaurant_${key}`), restaurant, key]
+      );
+    }
+    // #479: an existing explicit pharmacy:safety DENY on a system bootstrap admin must
+    // survive the PV safety backfill; a non-pharmacy tenant's system owner/admin is never
+    // touched.
+    await client.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:safety','DENY')`,
+      [id('admin_safety_deny'), other, id('admin')]
+    );
     await client.query(migration);
+    await client.query(managerProcurementMigration);
+    await client.query(administratorReportsMigration);
+    await client.query(ownerPvSafetyMigration);
   }, 60_000);
   afterAll(async () => {
     await client.query('ROLLBACK');
@@ -184,9 +238,38 @@ const legacy: Record<string, string[]> = {
     );
     expect(ownerOther.rows).toEqual([
       { capability: 'pharmacy:*', effect: 'ALLOW' },
+      { capability: 'pharmacy:safety', effect: 'ALLOW' },
       { capability: 'reports:financial', effect: 'DENY' },
       { capability: 'reports:operational', effect: 'ALLOW' },
     ]);
+    const administrator = await client.query(
+      `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 ORDER BY capability`,
+      [id('administrator')]
+    );
+    expect(administrator.rows).toEqual([
+      { capability: 'pharmacy:safety', effect: 'ALLOW' },
+      { capability: 'reports:operational', effect: 'ALLOW' },
+    ]);
+    const deniedAdministrator = await client.query(
+      `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 ORDER BY capability`,
+      [id('admin')]
+    );
+    expect(deniedAdministrator.rows).toEqual([
+      // The PV safety backfill preserves an explicit DENY.
+      { capability: 'pharmacy:safety', effect: 'DENY' },
+      { capability: 'reports:operational', effect: 'DENY' },
+    ]);
+    // ...and never touches another vertical's system owner/admin roles.
+    const restaurantRoles = await client.query(
+      `SELECT capability FROM organization_role_permissions WHERE "organizationId"=$1`,
+      [restaurant]
+    );
+    expect(restaurantRoles.rows).toEqual([]);
+    const customAdministrator = await client.query(
+      `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
+      [id('custom_administrator')]
+    );
+    expect(customAdministrator.rows).toEqual([]);
     const custom = await client.query(
       `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
       [id('other_custom')]
@@ -219,6 +302,9 @@ const legacy: Record<string, string[]> = {
     expect(ownerOverride.rows).toHaveLength(7);
     await client.query('DROP TABLE pharmacy_capability_aliases');
     await client.query(migration);
+    await client.query(managerProcurementMigration);
+    await client.query(administratorReportsMigration);
+    await client.query(ownerPvSafetyMigration);
     expect(
       (
         await client.query(
@@ -274,6 +360,9 @@ const legacy: Record<string, string[]> = {
     expect(await can(subject('pharmacist'), 'pharmacy:dispense', undefined, { db })).toBe(true);
     expect(await can(subject('pharmacist'), 'pharmacy:safety', undefined, { db })).toBe(false);
     expect(await can(subject('owner'), 'reports:financial', undefined, { db })).toBe(true);
+    // #479: the default Owner role's exact grant lets it file and review PV.
+    expect(await can(subject('owner'), 'pharmacy:safety', undefined, { db })).toBe(true);
+    expect(await can(subject('manager'), 'pharmacy:procurement', undefined, { db })).toBe(true);
     expect(await can(subject('cashier'), 'pharmacy:orders', undefined, { db })).toBe(true);
     expect(await can(subject('cashier'), 'pharmacy:procurement', undefined, { db })).toBe(false);
     expect(await can(subject('auditor'), 'pharmacy:dispense', undefined, { db })).toBe(false);

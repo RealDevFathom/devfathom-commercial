@@ -24,12 +24,11 @@ import {
   isNegative,
   isZero,
   money,
-  multiply,
-  roundMoney,
   sub,
   sum,
   ZERO,
 } from './money';
+import { closeOrderAfterSettlement } from './orders';
 import { appendPaymentEvent, getPaymentProvider } from './payment-adapter';
 import {
   quoteTaxSettlement,
@@ -430,6 +429,7 @@ export async function applyTenderInTransaction(
     );
     settled = true;
     receiptNumber = result.receiptNumber;
+    await closeOrderAfterSettlement(tx, bill.orderId, input.actor, at);
   }
 
   if (input.tender.type === 'CARD' && input.tender.terminalConfirmation) {
@@ -583,7 +583,11 @@ async function loadSettlementContext(
   const fractionalItems =
     bill.splitKind === 'FRACTIONAL'
       ? await tx.restaurantOrderItem.findMany({
-          where: { orderId: bill.orderId, status: { not: 'VOIDED' } },
+          where: {
+            orderId: bill.orderId,
+            status: { not: 'VOIDED' },
+            remakeOfItemId: null,
+          },
           orderBy: { id: 'asc' },
           select: {
             id: true,
@@ -695,21 +699,10 @@ async function loadSettlementContext(
       line.unitPrice.plus(line.modifierTotal).minus(line.comp).minus(line.beforeTaxDiscount)
     )
   );
-  const order = await tx.restaurantOrder.findFirst({
-    where: { id: bill.orderId },
-    select: { channel: true },
-  });
-  const servicePolicy =
-    order?.channel === 'DINE_IN'
-      ? await tx.restaurantServiceChargePolicyVersion.findFirst({
-          where: { branchId: bill.branchId, ...effectiveWindow },
-          orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
-          select: { rate: true },
-        })
-      : null;
-  const serviceAmount = servicePolicy
-    ? formatMoney(roundMoney(multiply(merchandiseBasis, servicePolicy.rate.toString())))
-    : '0.00';
+  // Bill cutting freezes the order-pinned service policy, basis, rate, and resulting
+  // charge. Settlement must consume that evidence rather than repricing the charge
+  // against whichever policy happens to be effective when payment is collected.
+  const serviceAmount = formatMoney(bill.serviceChargeTotal);
   const taxablePriorTenders = allocateTaxableTenderPrincipals(priorTenders, merchandiseBasis);
   const taxableQuote = quoteTaxSettlement({
     lines: quoteLines,

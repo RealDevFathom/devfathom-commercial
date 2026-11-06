@@ -54,6 +54,8 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
   const subtotal = Number(invoice.subtotal);
   const tax = Number(invoice.tax);
   const total = Number(invoice.total);
+  const amountPaid = Number(invoice.amountPaid);
+  const balance = Number(invoice.balance);
   const primaryContact = invoice.client.contacts?.[0];
 
   return (
@@ -108,7 +110,9 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
               <p className="mt-1 text-xs text-slate-500">hub.devfathom.com</p>
             </div>
             <div className="text-right">
-              <p className="font-display text-xl font-bold tracking-tight text-slate-900">INVOICE</p>
+              <p className="font-display text-xl font-bold tracking-tight text-slate-900">
+                INVOICE
+              </p>
               <p className="mt-1 font-mono text-sm text-slate-700">{invoice.invoiceNumber}</p>
               <span
                 className={cn(
@@ -205,6 +209,18 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
                 <span>Total</span>
                 <span className="tabular-nums">{moneyLabel(total, currency)}</span>
               </div>
+              {amountPaid > 0 && (
+                <>
+                  <div className="flex justify-between text-slate-600">
+                    <span>Amount paid</span>
+                    <span className="tabular-nums">{moneyLabel(amountPaid, currency)}</span>
+                  </div>
+                  <div className="flex justify-between border-t border-slate-200 pt-2 text-base font-bold text-slate-900">
+                    <span>Balance due</span>
+                    <span className="tabular-nums">{moneyLabel(balance, currency)}</span>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 

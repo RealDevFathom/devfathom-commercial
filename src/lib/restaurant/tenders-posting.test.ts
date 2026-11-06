@@ -1,12 +1,13 @@
 // No DB client: exercise the real command, money arithmetic, replay and ledger
 // paths against in-memory delegates. DB rollback/RLS/concurrency require QA.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Prisma } from '@/generated/prisma/client';
+import { Prisma, type RestaurantPayment } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { finalizeBillSettlement } from './bills';
 import { getOrderSettlementForBranch } from './checkout-routes';
 import { closePreview } from './daily-close';
 import { appendMovement, closeDrawerSession, foldExpectedCash } from './drawer-sessions';
+import { reverseLoyaltyForRefund } from './loyalty';
 import { refundTender } from './refunds';
 import { applyTenderInTransaction, type ApplyTenderInput } from './tenders';
 
@@ -14,10 +15,12 @@ vi.mock('./bills', async (original) => ({
   ...(await original<typeof import('./bills')>()),
   finalizeBillSettlement: vi.fn(),
 }));
-vi.mock('./loyalty', async (original) => ({
-  ...(await original<typeof import('./loyalty')>()),
+vi.mock('./loyalty', () => ({
   reverseLoyaltyForRefund: vi.fn(),
+  earnLoyaltyForClosedOrder: vi.fn(),
 }));
+vi.mock('./inventory', () => ({ postOrderRecipeConsumption: vi.fn() }));
+vi.mock('./outbox', () => ({ appendOrderEvent: vi.fn() }));
 
 const D = (value: string) => new Prisma.Decimal(value);
 const D1 = new Date('2026-09-10T00:00:00Z');
@@ -41,6 +44,7 @@ type Tender = {
   tipAmount: Prisma.Decimal;
   businessDate: Date;
   createdAt: Date;
+  paymentId?: string | null;
 };
 
 function fixture() {
@@ -76,9 +80,12 @@ function fixture() {
   // lines resolve from id-keyed registries; unregistered ids fall back to the base bill.
   const defaultLine = {
     id: 'line',
+    billId: 'bill',
     orderItemId: 'item',
+    name: 'Item',
     quantity: 1,
     unitPrice: D('4000'),
+    lineSubtotal: D('4000'),
     compAmount: D('140'),
     orderItem: { modifiers: [] },
   };
@@ -149,6 +156,17 @@ function fixture() {
       ),
     },
     restaurantOrder: {
+      findUnique: vi.fn(async ({ where }: { where: Where }) =>
+        where.id === 'order'
+          ? {
+              id: 'order',
+              branchId: 'branch',
+              status: 'PAYMENT_PENDING',
+              channel: 'DINE_IN',
+              items: [{ id: 'item', status: 'SERVED' }],
+            }
+          : null
+      ),
       findFirst: vi.fn(async ({ where }: { where: Where }) =>
         matches({ id: 'order', branchId: 'branch' }, where)
           ? {
@@ -162,7 +180,9 @@ function fixture() {
             }
           : null
       ),
+      update: vi.fn(async () => undefined),
     },
+    restaurantOrderTable: { updateMany: vi.fn(async () => ({ count: 1 })) },
     restaurantBill: {
       findUnique: vi.fn(async ({ where }: { where: Where }) => billsById.get(where.id!) ?? bill),
       findMany: vi.fn(async ({ where }: { where: Where }) => (matches(bill, where) ? [bill] : [])),
@@ -171,7 +191,7 @@ function fixture() {
       findFirst: vi.fn(async ({ where }: { where: { id: string; bill: { branchId: string } } }) => {
         const row = tenders.find((tender) => tender.id === where.id);
         return row && where.bill.branchId === bill.branchId
-          ? { ...row, paymentId: null, bill }
+          ? { ...row, paymentId: row.paymentId ?? null, bill }
           : null;
       }),
       findMany: vi.fn(async ({ where }: { where: Where & { bill?: { branchId: string } } }) => {
@@ -243,10 +263,14 @@ function fixture() {
       ]),
     },
     restaurantBillLine: {
-      findMany: vi.fn(
-        async ({ where }: { where: { billId: string } }) =>
-          linesByBill.get(where.billId) ?? [defaultLine]
-      ),
+      findMany: vi.fn(async ({ where }: { where: { billId: string | { in: string[] } } }) => {
+        if (typeof where.billId === 'string') {
+          return linesByBill.get(where.billId) ?? [defaultLine];
+        }
+        return where.billId.in.flatMap((billId) =>
+          (linesByBill.get(billId) ?? []).map((line) => ({ ...line, billId }))
+        );
+      }),
     },
     restaurantPromotionBillApplicationSnapshot: { findMany: vi.fn(async () => []) },
     restaurantRefund: {
@@ -255,10 +279,22 @@ function fixture() {
       create: vi.fn(async () => ({ id: 'refund' })),
     },
     restaurantTaxTenderAllocationSnapshot: { findMany: vi.fn(async () => []) },
+    restaurantTaxRefundAllocation: { create: vi.fn(async () => ({ id: 'tax-refund' })) },
     restaurantTaxTransactionSnapshot: { findMany: vi.fn(async () => []) },
     restaurantCoAuthorization: { create: vi.fn(async () => ({ id: 'approval' })) },
-    restaurantPayment: { create: vi.fn(async () => ({ id: 'payment' })) },
+    restaurantPayment: {
+      create: vi.fn(async () => ({ id: 'payment' })),
+      findUnique: vi.fn(
+        async (): Promise<Pick<RestaurantPayment, 'id' | 'provider' | 'providerRef'> | null> => ({
+          id: 'payment',
+          provider: 'TERMINAL',
+          providerRef: 'terminal-payment',
+        })
+      ),
+      update: vi.fn(),
+    },
     restaurantPaymentEvent: { create: vi.fn(async () => ({ id: 'event' })) },
+    restaurantTerminalReconciliation: { create: vi.fn(async () => ({ id: 'reconciliation' })) },
   };
   const db = raw as unknown as ScopedDb;
   vi.mocked(finalizeBillSettlement).mockImplementation(async (_tx, input) => {
@@ -294,6 +330,32 @@ function fixture() {
 beforeEach(() => vi.clearAllMocks());
 
 describe('collection posting and authoritative recorded balances (no DB)', () => {
+  it('closes the order and releases its table as part of the final tender transaction', async () => {
+    const f = fixture();
+
+    await expect(f.collect()).resolves.toMatchObject({ settled: true });
+
+    expect(f.raw.restaurantOrder.update).toHaveBeenCalledWith({
+      where: { id: 'order' },
+      data: { status: 'CLOSED', closedAt: NOW },
+    });
+    expect(f.raw.restaurantOrderTable.updateMany).toHaveBeenCalledWith({
+      where: { orderId: 'order', active: true },
+      data: { active: false, unlinkedAt: NOW },
+    });
+  });
+
+  it('does not close or release the table for a partial tender', async () => {
+    const f = fixture();
+
+    await expect(
+      f.collect({ tender: { type: 'CASH', amount: '1000', cashReceived: '1000' } })
+    ).resolves.toMatchObject({ settled: false });
+
+    expect(f.raw.restaurantOrder.update).not.toHaveBeenCalled();
+    expect(f.raw.restaurantOrderTable.updateMany).not.toHaveBeenCalled();
+  });
+
   it('collects a prior-day bill on the drawer date; reconciles sales and collections on their own days', async () => {
     const f = fixture();
     const result = await f.collect();
@@ -301,6 +363,11 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(result.remainingDue.toFixed(2)).toBe('0.00');
     expect(f.bill.businessDate).toEqual(D1);
     expect(f.tenders[0].businessDate).toEqual(D2);
+    expect(f.locks.filter((key) => key.startsWith('tenant:'))).toEqual([
+      'tenant:branch:2026-09-10',
+      'tenant:branch:2026-09-11',
+      'tenant:branch:2026-09-11', // The drawer append independently guards its day.
+    ]);
     expect(f.movements.filter((row) => row.kind === 'CASH_SALE')).toMatchObject([
       { tenderId: result.tenderId, amount: D('3860') },
     ]);
@@ -360,7 +427,12 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     // Two live OPEN bills: one partially paid (0.01 of 3860), one fully comped (nets 0).
     // Each is re-quoted by id, so register its own bill row, lines and tenders (QA-143).
     f.billsById.set('partial', { ...f.bill, id: 'partial' });
-    f.billsById.set('comped', { ...f.bill, id: 'comped', compTotal: D('4000'), grandTotal: D('0') });
+    f.billsById.set('comped', {
+      ...f.bill,
+      id: 'comped',
+      compTotal: D('4000'),
+      grandTotal: D('0'),
+    });
     f.linesByBill.set('partial', [f.defaultLine]);
     f.linesByBill.set('comped', [{ ...f.defaultLine, compAmount: D('4000') }]);
     f.tenders.push(partialTender);
@@ -375,13 +447,28 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     ).toEqual(['3859.99', '0.00']);
   });
 
-  it('leaves same-day posting unchanged', async () => {
-    const f = fixture();
-    f.bill.businessDate = D2;
-    await f.collect();
-    expect(f.tenders[0].businessDate).toEqual(D2);
-    expect(f.raw.$executeRaw).toHaveBeenCalledTimes(1);
-  });
+  it.each(['CASH', 'CARD', 'OTHER'] as const)(
+    'leaves same-day %s posting unchanged and guards the drawer append for cash',
+    async (type) => {
+      const f = fixture();
+      f.bill.businessDate = D2;
+      await f.collect({
+        tender:
+          type === 'CASH'
+            ? { type, amount: '3860', cashReceived: '4000' }
+            : { type, amount: '3860' },
+      });
+      expect(f.tenders[0].businessDate).toEqual(D2);
+      // The tender deduplicates bill/posting days; a cash movement then takes
+      // the same transaction-scoped lock again through its own day guard.
+      expect(f.raw.$executeRaw).toHaveBeenCalledTimes(type === 'CASH' ? 2 : 1);
+      expect(f.locks.filter((key) => key.startsWith('tenant:'))).toEqual(
+        type === 'CASH'
+          ? ['tenant:branch:2026-09-11', 'tenant:branch:2026-09-11']
+          : ['tenant:branch:2026-09-11']
+      );
+    }
+  );
 
   it.each(['CARD', 'OTHER'] as const)(
     'posts next-day %s principal and tip on processing date',
@@ -462,6 +549,150 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(f.movements).toHaveLength(2);
   });
 
+  it.each([
+    ['REFUND', '1000'],
+    ['VOID_REVERSAL', '3860'],
+  ] as const)(
+    'rejects a terminal card %s instead of recording a MOCK reversal',
+    async (kind, amount) => {
+      const f = fixture();
+      const collected = await f.collect({
+        tender: {
+          type: 'CARD',
+          amount: '3860',
+          terminalConfirmation: {
+            configId: 'terminal-config',
+            branchId: 'branch',
+            externalEventId: 'terminal-event',
+            source: 'WEBHOOK',
+            externalReference: 'terminal-payment',
+            providerRef: 'terminal-provider-ref',
+          },
+        },
+      });
+      const writesBeforeRefund = {
+        idempotency: f.raw.restaurantMoneyIdempotencyKey.create.mock.calls.length,
+        paymentEvents: f.raw.restaurantPaymentEvent.create.mock.calls.length,
+        reconciliations: f.raw.restaurantTerminalReconciliation.create.mock.calls.length,
+        movements: f.raw.restaurantDrawerMovement.create.mock.calls.length,
+      };
+
+      await expect(
+        refundTender(f.db, {
+          originalTenderId: collected.tenderId,
+          amount,
+          kind,
+          reason: 'Terminal refund regression',
+          approvingStaffProfileId: 'manager',
+          actor: { ...actor, idempotencyKey: 'terminal-refund' },
+          now: NOW,
+        })
+      ).rejects.toMatchObject({ reason: 'UNSUPPORTED_PAYMENT_PROVIDER' });
+
+      expect(f.raw.restaurantPayment.findUnique).toHaveBeenCalledWith({
+        where: { id: 'payment' },
+        select: { id: true, provider: true, providerRef: true },
+      });
+      expect(f.raw.restaurantMoneyIdempotencyKey.create).toHaveBeenCalledTimes(
+        writesBeforeRefund.idempotency
+      );
+      expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantTaxRefundAllocation.create).not.toHaveBeenCalled();
+      expect(reverseLoyaltyForRefund).not.toHaveBeenCalled();
+      expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(
+        writesBeforeRefund.paymentEvents
+      );
+      expect(f.raw.restaurantPayment.update).not.toHaveBeenCalled();
+      expect(f.raw.restaurantTerminalReconciliation.create).toHaveBeenCalledTimes(
+        writesBeforeRefund.reconciliations
+      );
+      expect(f.raw.restaurantDrawerMovement.create).toHaveBeenCalledTimes(
+        writesBeforeRefund.movements
+      );
+    }
+  );
+
+  it('continues to refund card payments through their stored MOCK provider', async () => {
+    const f = fixture();
+    f.raw.restaurantPayment.findUnique.mockResolvedValueOnce({
+      id: 'payment',
+      provider: 'MOCK',
+      providerRef: 'mock-payment',
+    });
+    const collected = await f.collect({ tender: { type: 'CARD', amount: '3860' } });
+    const paymentEventsBeforeRefund = f.raw.restaurantPaymentEvent.create.mock.calls.length;
+
+    const result = await refundTender(f.db, {
+      originalTenderId: collected.tenderId,
+      amount: '1000',
+      reason: 'Supported provider regression',
+      approvingStaffProfileId: 'manager',
+      actor: { ...actor, idempotencyKey: 'mock-refund' },
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({
+      paymentId: 'payment',
+      paymentStatus: 'PARTIALLY_REFUNDED',
+      replayed: false,
+    });
+    expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(
+      paymentEventsBeforeRefund + 1
+    );
+    expect(f.raw.restaurantPayment.update).toHaveBeenCalledWith({
+      where: { id: 'payment' },
+      data: { status: 'PARTIALLY_REFUNDED' },
+    });
+  });
+
+  it.each(['missing payment link', 'deleted payment'] as const)(
+    'rejects a card refund with a %s before claiming idempotency or writing refund records',
+    async (failure) => {
+      const f = fixture();
+      const collected = await f.collect({ tender: { type: 'CARD', amount: '3860' } });
+      if (failure === 'missing payment link') {
+        f.tenders[0].paymentId = null;
+      } else {
+        f.raw.restaurantPayment.findUnique.mockResolvedValueOnce(null);
+      }
+      const idempotencyClaimsBeforeRefund =
+        f.raw.restaurantMoneyIdempotencyKey.create.mock.calls.length;
+      const paymentEventsBeforeRefund = f.raw.restaurantPaymentEvent.create.mock.calls.length;
+
+      await expect(
+        refundTender(f.db, {
+          originalTenderId: collected.tenderId,
+          amount: '1000',
+          reason: 'Missing payment regression',
+          approvingStaffProfileId: 'manager',
+          actor: { ...actor, idempotencyKey: 'missing-payment-refund' },
+          now: NOW,
+        })
+      ).rejects.toMatchObject({ reason: 'PAYMENT_NOT_FOUND' });
+
+      if (failure === 'missing payment link') {
+        expect(f.raw.restaurantPayment.findUnique).not.toHaveBeenCalled();
+      } else {
+        expect(f.raw.restaurantPayment.findUnique).toHaveBeenCalledWith({
+          where: { id: 'payment' },
+          select: { id: true, provider: true, providerRef: true },
+        });
+      }
+      expect(f.raw.restaurantMoneyIdempotencyKey.create).toHaveBeenCalledTimes(
+        idempotencyClaimsBeforeRefund
+      );
+      expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantTaxRefundAllocation.create).not.toHaveBeenCalled();
+      expect(reverseLoyaltyForRefund).not.toHaveBeenCalled();
+      expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(paymentEventsBeforeRefund);
+      expect(f.raw.restaurantPayment.update).not.toHaveBeenCalled();
+      expect(f.raw.restaurantTerminalReconciliation.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantDrawerMovement.create).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([D1, D2])(
     'rejects a closed bill or collection day %s before tender writes',
     async (day) => {
@@ -480,7 +711,46 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(f.tenders[0].businessDate).toEqual(D1);
     expect(f.locks.filter((key) => key.startsWith('tenant:'))).toEqual([
       'tenant:branch:2026-09-10',
+      'tenant:branch:2026-09-10', // Drawer guard uses the same cutoff-resolved day.
     ]);
+  });
+
+  it.each(['CASH_SALE', 'CASH_REFUND', 'PAID_IN', 'PAID_OUT', 'DROP', 'CLOSING_COUNT'] as const)(
+    'rejects a direct %s movement on a closed drawer day before locking or writing the drawer',
+    async (kind) => {
+      const f = fixture();
+      f.closedDays.add(D2.getTime());
+      await expect(
+        appendMovement(f.db, {
+          drawerSessionId: 'drawer',
+          kind,
+          amount: '1',
+          staffProfileId: 'operator',
+          deviceId: 'device',
+        })
+      ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+      expect(f.locks).toEqual(['tenant:branch:2026-09-11']);
+      expect(f.raw.$queryRaw).not.toHaveBeenCalled();
+      expect(f.raw.restaurantDrawerMovement.create).not.toHaveBeenCalled();
+      expect(f.movements).toHaveLength(1);
+    }
+  );
+
+  it('rejects a drawer close on a financially closed day before changing its ledger or counts', async () => {
+    const f = fixture();
+    f.closedDays.add(D2.getTime());
+    await expect(
+      closeDrawerSession(f.db, {
+        drawerSessionId: 'drawer',
+        countedCash: '100',
+        actor: { ...actor, idempotencyKey: 'close' },
+      })
+    ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+    expect(f.raw.$queryRaw).not.toHaveBeenCalled();
+    expect(f.raw.restaurantDrawerMovement.create).not.toHaveBeenCalled();
+    expect(f.raw.restaurantDrawerSession.update).not.toHaveBeenCalled();
+    expect(f.drawer.status).toBe('OPEN');
+    expect(f.movements).toHaveLength(1);
   });
 
   it.each(['branch', 'device', 'stale', 'closed'])(

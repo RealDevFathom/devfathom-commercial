@@ -14,7 +14,6 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 
 export type BillSplit =
   | { kind: 'BY_ITEM'; groups: string[][] }
@@ -22,18 +21,38 @@ export type BillSplit =
   | { kind: 'FRACTIONAL'; weights: number[] };
 
 type SplitBillDialogProps = {
-  itemIds: string[];
+  items: {
+    id: string;
+    name: string;
+    quantity: number;
+    seatNumber: number | null;
+    modifiers: string[];
+  }[];
   disabled?: boolean;
   onSplit: (split: BillSplit) => Promise<boolean>;
 };
 
-export function SplitBillDialog({ itemIds, disabled = false, onSplit }: SplitBillDialogProps) {
+function createAssignments(items: SplitBillDialogProps['items']) {
+  return Object.fromEntries(items.map((item, index) => [item.id, index + 1]));
+}
+
+export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillDialogProps) {
+  const itemIdentity = JSON.stringify(items.map((item) => item.id));
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<BillSplit['kind']>('BY_ITEM');
-  const [groups, setGroups] = useState(itemIds.join('\n'));
+  const [assignments, setAssignments] = useState<Record<string, number>>(() =>
+    createAssignments(items)
+  );
+  const [assignmentItemIdentity, setAssignmentItemIdentity] = useState(itemIdentity);
   const [weights, setWeights] = useState('1, 1');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (assignmentItemIdentity !== itemIdentity) {
+    setAssignmentItemIdentity(itemIdentity);
+    setAssignments(createAssignments(items));
+    setError(null);
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -41,26 +60,30 @@ export function SplitBillDialog({ itemIds, disabled = false, onSplit }: SplitBil
 
     let split: BillSplit;
     if (kind === 'BY_ITEM') {
-      const parsed = groups
-        .split('\n')
-        .map((group) =>
-          group
-            .split(',')
-            .map((id) => id.trim())
-            .filter(Boolean)
-        )
-        .filter((group) => group.length > 0);
-      const assigned = parsed.flat();
       if (
-        parsed.length < 2 ||
-        assigned.length !== itemIds.length ||
-        new Set(assigned).size !== assigned.length ||
-        assigned.some((id) => !itemIds.includes(id))
+        items.some(
+          (item) =>
+            !Number.isInteger(assignments[item.id]) ||
+            assignments[item.id] < 1 ||
+            assignments[item.id] > items.length
+        )
       ) {
-        setError('Use every unbilled item ID once across at least two lines.');
+        setError('Choose a valid guest bill for every order line.');
         return;
       }
-      split = { kind, groups: parsed };
+      const billNumbers = [...new Set(items.map((item) => assignments[item.id]))].sort(
+        (a, b) => a - b
+      );
+      if (billNumbers.length < 2) {
+        setError('Assign the order lines to at least two bills.');
+        return;
+      }
+      split = {
+        kind,
+        groups: billNumbers.map((billNumber) =>
+          items.filter((item) => assignments[item.id] === billNumber).map((item) => item.id)
+        ),
+      };
     } else if (kind === 'FRACTIONAL') {
       const parsed = weights.split(',').map((weight) => Number(weight.trim()));
       if (parsed.length < 2 || parsed.some((weight) => !Number.isInteger(weight) || weight <= 0)) {
@@ -90,7 +113,10 @@ export function SplitBillDialog({ itemIds, disabled = false, onSplit }: SplitBil
       >
         Split bill
       </DialogTrigger>
-      <DialogContent showCloseButton={false} className="sm:max-w-lg">
+      <DialogContent
+        showCloseButton={false}
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg"
+      >
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>Split bill</DialogTitle>
@@ -118,18 +144,71 @@ export function SplitBillDialog({ itemIds, disabled = false, onSplit }: SplitBil
             </div>
             {kind === 'BY_ITEM' ? (
               <div className="space-y-1.5">
-                <Label htmlFor="split-groups">Item groups</Label>
-                <Textarea
-                  id="split-groups"
-                  value={groups}
-                  disabled={pending}
-                  onChange={(event) => setGroups(event.target.value)}
-                  aria-describedby="split-groups-help"
-                  className="min-h-28 font-mono text-sm"
-                />
+                <p className="text-sm font-medium text-text-strong">Order lines</p>
                 <p id="split-groups-help" className="text-xs text-text-muted">
-                  One bill per line; separate item IDs on one bill with commas.
+                  Choose the guest bill for each item. Items assigned to the same bill stay
+                  together.
                 </p>
+                <div
+                  className="max-h-72 space-y-2 overflow-y-auto"
+                  aria-describedby="split-groups-help"
+                >
+                  {items.map((item, index) => (
+                    <div
+                      key={item.id}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-border-subtle bg-surface-sunken p-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-medium text-text-strong">
+                          {item.quantity} × {item.name}
+                        </p>
+                        <p className="text-xs text-text-muted">
+                          {[
+                            `Order line ${index + 1}`,
+                            item.seatNumber === null ? 'No seat' : `Seat ${item.seatNumber}`,
+                            ...item.modifiers,
+                          ].join(' · ')}
+                        </p>
+                      </div>
+                      <div className="w-24 shrink-0">
+                        <Label htmlFor={`split-item-${item.id}`} className="text-xs">
+                          Guest bill
+                        </Label>
+                        <select
+                          id={`split-item-${item.id}`}
+                          aria-label={`Guest bill for ${item.name}, order line ${index + 1}`}
+                          value={assignments[item.id]}
+                          disabled={pending}
+                          onChange={(event) => {
+                            const selectedBill = Number(event.target.value);
+                            setAssignments((current) => {
+                              const next = { ...current, [item.id]: selectedBill };
+                              const billNumbers = [...new Set(Object.values(next))].sort(
+                                (a, b) => a - b
+                              );
+                              // Checkout numbers bills by their submitted group position.
+                              // Show that same numbering before the operator submits.
+                              return Object.fromEntries(
+                                Object.entries(next).map(([id, billNumber]) => [
+                                  id,
+                                  billNumbers.indexOf(billNumber) + 1,
+                                ])
+                              );
+                            });
+                            setError(null);
+                          }}
+                          className="mt-1 h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                        >
+                          {items.map((_, index) => (
+                            <option key={index + 1} value={index + 1}>
+                              Bill {index + 1}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : null}
             {kind === 'BY_SEAT' ? (

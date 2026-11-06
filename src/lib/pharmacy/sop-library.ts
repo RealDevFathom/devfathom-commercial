@@ -1,145 +1,530 @@
 import 'server-only';
 
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { Prisma, type PharmacySopRecordType } from '@/generated/prisma/client';
+import { withOrganizationDefaults, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   installSopPackDefinition,
   type InstallPackResult,
   type SopPack,
+  type SopPackStep,
 } from '@/lib/restaurant/sop-template-packs';
+import type { PharmacySopRoleKey, PharmacySopTemperatureZone } from './sop-adapter';
 
-const daily = (dueTimeMinutes: number) => ({
-  frequency: 'DAILY' as const,
+/**
+ * DEV-751 — the pharmacy procedure library on the shared SOP engine.
+ *
+ * Each pack is an ordinary `SopPack` (so the shared installer materialises it
+ * unchanged) plus pharmacy metadata the engine does not model: which pharmacy
+ * role owns it, who may verify it, what starts it, a suggested schedule, and
+ * which steps must point at an existing pharmacy record.
+ *
+ * Wording stays operational. The checklists record what staff did against the
+ * branch's own records; they give no clinical or dosing advice and they do not
+ * claim that completing them satisfies any regulation.
+ *
+ * A procedure is an instruction to the person it is assigned to, plus the
+ * proof they send back ("Once closed, send a photo of the locked premises").
+ * It never performs, blocks, gates or changes opening, closing, selling,
+ * dispensing, receiving or any other pharmacy workflow, exactly as in
+ * restaurants. A step's photo, note, signature or linked record gates only
+ * that procedure's own submission. Step wording is phrased as follow-up
+ * ("after…", "once…", "confirm…", "note…", "send…"), never as the operation.
+ *
+ * Template names are the install identity and stay fixed. An organization that
+ * installed an earlier wording keeps it (install is idempotent by name); the
+ * router maps installed steps to pack metadata by title, then by position, and
+ * every step keeps its position and linked-record type.
+ *
+ * Install creates templates only. It never creates an assignment, a schedule or
+ * a role holding; a manager does that per branch after enabling SOPs there.
+ *
+ * Suggestions never assume a time of day. A pack suggests how often (frequency,
+ * weekdays, repeat interval) and how long (window, grace); the manager chooses
+ * every due, first-check and last-check time for their branch. There is no
+ * assumed opening or closing time anywhere in the library.
+ */
+
+/** What starts a pack: a shift boundary, a repeating interval, an event, or a named person. */
+export type PharmacySopTrigger = 'SHIFT' | 'INTERVAL' | 'EVENT' | 'ASSIGNED';
+
+/**
+ * A complete schedule in the engine's assignment shape, with the times a
+ * manager chose. INTERVAL schedules repeat every `interval` minutes from
+ * `dueTimeMinutes` to `intervalEndTimeMinutes` on `daysOfWeek`.
+ */
+export type PharmacySopScheduleRule = {
+  frequency: 'ONCE' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'INTERVAL';
+  interval: number;
+  daysOfWeek: number[];
+  monthDay: number | null;
+  /** Branch-local minutes past midnight. */
+  dueTimeMinutes: number;
+  /** INTERVAL only: the last branch-local minute an interval may start. */
+  intervalEndTimeMinutes: number | null;
+  windowMinutes: number;
+  graceMinutes: number;
+};
+
+/**
+ * A pack's suggested schedule: how often and for how long, never when. The
+ * time fields are always null, so the schedule form starts them empty and the
+ * manager must choose. ONCE packs (events and named-person work) run once, on
+ * demand.
+ */
+export type PharmacySopRecurrence = Omit<
+  PharmacySopScheduleRule,
+  'dueTimeMinutes' | 'intervalEndTimeMinutes'
+> & {
+  dueTimeMinutes: null;
+  intervalEndTimeMinutes: null;
+};
+
+export type PharmacySopPackMeta = {
+  /** The pharmacy role that owes the work (for ASSIGNED packs, the usual candidates). */
+  roleKey: PharmacySopRoleKey;
+  /** ROLE: an unclaimed pool for holders of `roleKey`. PERSON: one named person. */
+  assigneeTarget: 'ROLE' | 'PERSON';
+  /** Roles allowed to verify a submitted occurrence (always independently). */
+  verifierRoleKeys: readonly PharmacySopRoleKey[];
+  trigger: PharmacySopTrigger;
+  suggestedRecurrence: PharmacySopRecurrence;
+};
+
+export type PharmacySopPackStep = SopPackStep & {
+  /** The step is complete only when it links an existing record of this type. */
+  requiredRecordType?: PharmacySopRecordType;
+  /**
+   * TEMPERATURE_LOG steps only: the storage zone the reading must come from.
+   * COLD_CHAIN is a location flagged cold-chain (a validated refrigerator
+   * zone); AMBIENT is any other location. Absent = any location (the opening
+   * check confirms that the opening readings were taken, wherever they were).
+   */
+  temperatureZone?: PharmacySopTemperatureZone;
+};
+
+/**
+ * A shared pack (installable by the shared installer) whose steps carry pharmacy
+ * record requirements. It has no engine-shape `suggestedRecurrence`: that shape
+ * requires a time of day, and pharmacy suggestions never assume one.
+ */
+export type PharmacySopPack = Omit<SopPack, 'steps' | 'suggestedRecurrence'> & {
+  steps: PharmacySopPackStep[];
+  pharmacy: PharmacySopPackMeta;
+};
+
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+/** Verifiers allowed for most packs. Controlled counts narrow this to the qualified person. */
+const STANDARD_VERIFIERS: readonly PharmacySopRoleKey[] = [
+  'pharmacy-qualified-person',
+  'pharmacy-manager',
+];
+
+/** No suggested time of day: the manager chooses every time. */
+const NO_TIMES = { dueTimeMinutes: null, intervalEndTimeMinutes: null } as const;
+
+const daily = (windowMinutes: number, graceMinutes: number): PharmacySopRecurrence => ({
+  frequency: 'DAILY',
   interval: 1,
   daysOfWeek: [],
   monthDay: null,
-  dueTimeMinutes,
-  windowMinutes: 1440,
-  graceMinutes: 30,
+  ...NO_TIMES,
+  windowMinutes,
+  graceMinutes,
 });
 
-export const PHARMACY_SOP_PACKS: readonly SopPack[] = [
-  [
-    'opening',
-    'Pharmacy — opening',
-    'Opening',
-    8 * 60,
-    [
-      'Verify licence and qualified-person coverage',
-      'Record fridge and ambient temperatures',
-      'Confirm controlled register handover balance',
-      'Open tills and inspect premises',
-    ],
-  ],
-  [
-    'closing',
-    'Pharmacy — closing',
-    'Closing',
-    20 * 60,
-    [
-      'Reconcile controlled register and tills',
-      'Secure prescriptions and controlled medicines',
-      'Record final temperatures',
-      'Lock premises and activate security',
-    ],
-  ],
-  [
-    'temperature-log',
-    'Pharmacy — temperature log',
-    'Storage',
-    9 * 60,
-    [
-      'Record refrigerator temperature',
-      'Record ambient storage temperature',
-      'Document excursion and corrective action',
-    ],
-  ],
-  [
-    'controlled-counts',
-    'Pharmacy — controlled counts',
-    'Controlled medicines',
-    10 * 60,
-    [
-      'Count controlled medicine stock',
-      'Reconcile count to register balance',
-      'Escalate and document any variance',
-    ],
-  ],
-  [
-    'expiry-pull',
-    'Pharmacy — expiry pull',
-    'Inventory',
-    11 * 60,
-    [
-      'Review near-expiry stock',
-      'Quarantine expired or damaged stock',
-      'Record disposal or supplier-return action',
-    ],
-  ],
-  [
-    'receiving',
-    'Pharmacy — receiving',
-    'Receiving',
-    12 * 60,
-    [
-      'Match delivery to approved purchase order',
-      'Verify batch, expiry and warranty evidence',
-      'Record cold-chain temperature and exceptions',
-    ],
-  ],
-  [
-    'hygiene',
-    'Pharmacy — hygiene',
-    'Hygiene',
-    8 * 60 + 30,
-    [
-      'Inspect dispensary cleanliness',
-      'Confirm hand-hygiene supplies',
-      'Record cleaning completion and exceptions',
-    ],
-  ],
-  [
-    'incident-capa',
-    'Pharmacy — incident and CAPA',
-    'Quality',
-    14 * 60,
-    [
-      'Record incident and immediate containment',
-      'Identify root cause and corrective action',
-      'Assign preventive action and verification',
-    ],
-  ],
-  [
-    'training-attestation',
-    'Pharmacy — training attestation',
-    'Training',
-    15 * 60,
-    [
-      'Review assigned policy or procedure',
-      'Confirm understanding',
-      'Attest completion with signature',
-    ],
-  ],
-].map(([key, name, category, due, steps]) => ({
-  key: String(key),
-  name: String(name),
-  category: String(category),
-  description: `${String(name)} checklist for pharmacy operations.`,
-  defaultJobRoleKey: 'manager',
-  suggestedRecurrence: daily(Number(due)),
-  steps: (steps as string[]).map((title, index) => ({
-    title,
-    requiresNote: index === (steps as string[]).length - 1,
-    requiresSignature: key === 'training-attestation' && index === 2,
-  })),
-}));
+const weekly = (
+  daysOfWeek: number[],
+  windowMinutes: number,
+  graceMinutes: number
+): PharmacySopRecurrence => ({
+  frequency: 'WEEKLY',
+  interval: 1,
+  daysOfWeek,
+  monthDay: null,
+  ...NO_TIMES,
+  windowMinutes,
+  graceMinutes,
+});
 
+/** On-demand work: one occurrence, created when the event happens or the person is named. */
+const once = (windowMinutes: number, graceMinutes = 0): PharmacySopRecurrence => ({
+  frequency: 'ONCE',
+  interval: 1,
+  daysOfWeek: [],
+  monthDay: null,
+  ...NO_TIMES,
+  windowMinutes,
+  graceMinutes,
+});
+
+/** Training attestation: a day to do it, a day's grace before it is missed. */
+const attestation = once(24 * 60, 24 * 60);
+
+/**
+ * The temperature round suggestion: a reading every four hours, every day,
+ * each reading getting the whole interval as its window so rounds never
+ * overlap. The first and last reading times are the manager's choice.
+ */
+const temperatureRound: PharmacySopRecurrence = {
+  frequency: 'INTERVAL',
+  interval: 4 * 60,
+  daysOfWeek: [...ALL_DAYS],
+  monthDay: null,
+  ...NO_TIMES,
+  windowMinutes: 4 * 60,
+  graceMinutes: 30,
+};
+
+export class PharmacySopRecurrenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PharmacySopRecurrenceError';
+  }
+}
+
+/**
+ * A temperature round the manager has timed: a reading every `everyMinutes`
+ * (default four hours) from `firstReadingMinutes` to `lastReadingMinutes` on
+ * the given days (default every day). Both times are required: there is no
+ * assumed opening or closing time. Each reading gets the whole interval as its
+ * window so rounds never overlap.
+ */
+export function temperatureLogRecurrence(options: {
+  firstReadingMinutes: number;
+  lastReadingMinutes: number;
+  everyMinutes?: number;
+  daysOfWeek?: readonly number[];
+}): PharmacySopScheduleRule {
+  const opening = options.firstReadingMinutes;
+  const closing = options.lastReadingMinutes;
+  const every = options.everyMinutes ?? temperatureRound.interval;
+  const days = [...new Set(options.daysOfWeek ?? ALL_DAYS)].sort((a, b) => a - b);
+  const minuteOfDay = (value: number) => Number.isInteger(value) && value >= 0 && value <= 1439;
+  if (!minuteOfDay(opening) || !minuteOfDay(closing) || closing <= opening) {
+    throw new PharmacySopRecurrenceError(
+      'Choose a last reading time later than the first reading time.'
+    );
+  }
+  if (!Number.isInteger(every) || every < 15 || every > closing - opening) {
+    throw new PharmacySopRecurrenceError(
+      'The reading interval must be at least 15 minutes and fit between the first and last readings.'
+    );
+  }
+  if (days.length === 0 || days.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) {
+    throw new PharmacySopRecurrenceError('Choose at least one weekday (0=Sunday … 6=Saturday).');
+  }
+  return {
+    frequency: 'INTERVAL',
+    interval: every,
+    daysOfWeek: days,
+    monthDay: null,
+    dueTimeMinutes: opening,
+    intervalEndTimeMinutes: closing,
+    windowMinutes: every,
+    graceMinutes: Math.min(temperatureRound.graceMinutes, every),
+  };
+}
+
+type PackDefinition = Omit<PharmacySopPack, 'defaultJobRoleKey'>;
+
+function pack(definition: PackDefinition): PharmacySopPack {
+  return { ...definition, defaultJobRoleKey: definition.pharmacy.roleKey };
+}
+
+/** The nine pharmacy packs. Names are the install identity and must stay stable. */
+export const PHARMACY_SOP_PACKS: readonly PharmacySopPack[] = [
+  pack({
+    key: 'opening',
+    name: 'Pharmacy — opening',
+    category: 'Opening',
+    description:
+      'After the branch opens: confirm who is in charge and send proof that storage was checked.',
+    pharmacy: {
+      roleKey: 'pharmacy-qualified-person',
+      assigneeTarget: 'ROLE',
+      verifierRoleKeys: STANDARD_VERIFIERS,
+      trigger: 'SHIFT',
+      suggestedRecurrence: daily(2 * 60, 30),
+    },
+    steps: [
+      {
+        title: 'Once the counter is open, sign to confirm you are the person in charge today',
+        requiresSignature: true,
+      },
+      {
+        title: 'Once the counter is open, confirm the opening temperatures were recorded',
+        instructions: 'Link the reading already recorded in the temperature log for this branch.',
+        requiredRecordType: 'TEMPERATURE_LOG',
+      },
+      { title: 'Note the controlled register balance you took over', requiresNote: true },
+      { title: 'After opening, confirm the premises, security and counter look right' },
+      { title: 'Note anything that was not right at opening, or confirm none', requiresNote: true },
+    ],
+  }),
+  pack({
+    key: 'closing',
+    name: 'Pharmacy — closing',
+    category: 'Closing',
+    description:
+      'After the day close: send proof that records were checked and stock was put away securely.',
+    pharmacy: {
+      roleKey: 'pharmacy-qualified-person',
+      assigneeTarget: 'ROLE',
+      verifierRoleKeys: STANDARD_VERIFIERS,
+      trigger: 'SHIFT',
+      suggestedRecurrence: daily(2 * 60, 30),
+    },
+    steps: [
+      {
+        title: 'After the day close, note the controlled register and till balances you checked',
+        requiresNote: true,
+      },
+      { title: 'Confirm prescriptions and controlled medicines were put away securely' },
+      {
+        title: 'After closing, confirm the last refrigerator temperature was recorded',
+        instructions: 'Link the reading already recorded in the temperature log for this branch.',
+        requiredRecordType: 'TEMPERATURE_LOG',
+        temperatureZone: 'COLD_CHAIN',
+      },
+      {
+        title: 'Once closed, send a photo of the locked premises',
+        requiresPhoto: true,
+      },
+    ],
+  }),
+  pack({
+    key: 'temperature-log',
+    name: 'Pharmacy — temperature log',
+    category: 'Storage',
+    description: 'Regular storage temperature readings through the opening hours.',
+    pharmacy: {
+      roleKey: 'pharmacy-assistant',
+      assigneeTarget: 'ROLE',
+      verifierRoleKeys: STANDARD_VERIFIERS,
+      trigger: 'INTERVAL',
+      suggestedRecurrence: temperatureRound,
+    },
+    steps: [
+      {
+        title: 'Confirm the refrigerator temperature was recorded',
+        instructions: 'Link the reading from the temperature log.',
+        requiredRecordType: 'TEMPERATURE_LOG',
+        temperatureZone: 'COLD_CHAIN',
+      },
+      {
+        title: 'Confirm the ambient storage temperature was recorded',
+        instructions: 'Link the reading from the temperature log.',
+        requiredRecordType: 'TEMPERATURE_LOG',
+        temperatureZone: 'AMBIENT',
+      },
+      {
+        title: 'Record any excursion and the corrective action taken, or confirm none',
+        instructions:
+          'If a reading is out of range, say what you did and who you told. Follow your branch procedure for affected stock.',
+        requiresNote: true,
+      },
+    ],
+  }),
+  pack({
+    key: 'controlled-counts',
+    name: 'Pharmacy — controlled counts',
+    category: 'Controlled medicines',
+    description:
+      'Weekly count of controlled medicines, with the result noted against the register.',
+    pharmacy: {
+      roleKey: 'pharmacy-qualified-person',
+      assigneeTarget: 'ROLE',
+      verifierRoleKeys: ['pharmacy-qualified-person'],
+      trigger: 'SHIFT',
+      suggestedRecurrence: weekly([1], 8 * 60, 60),
+    },
+    steps: [
+      { title: 'Count the controlled medicines on hand and note the totals', requiresNote: true },
+      {
+        title: 'Compare your count with the register running balance',
+        instructions: 'Link the register entry whose running balance you checked.',
+        requiresNote: true,
+        requiredRecordType: 'CONTROLLED_REGISTER_ENTRY',
+      },
+      { title: 'Note any difference and who you told, or confirm none', requiresNote: true },
+      { title: 'Sign the count', requiresSignature: true },
+    ],
+  }),
+  pack({
+    key: 'expiry-pull',
+    name: 'Pharmacy — expiry pull',
+    category: 'Inventory',
+    description: 'Weekly check for expired or damaged stock, with a note of what was set aside.',
+    pharmacy: {
+      roleKey: 'pharmacy-assistant',
+      assigneeTarget: 'ROLE',
+      verifierRoleKeys: STANDARD_VERIFIERS,
+      trigger: 'SHIFT',
+      suggestedRecurrence: weekly([1], 8 * 60, 60),
+    },
+    steps: [
+      { title: 'Look over stock nearing expiry' },
+      {
+        title: 'Note expired or damaged stock you set aside',
+        instructions: 'Link the batch you set aside.',
+        requiresNote: true,
+        requiredRecordType: 'MANUFACTURING_BATCH',
+      },
+      { title: 'Note what happens to it next (disposal or supplier return)', requiresNote: true },
+    ],
+  }),
+  pack({
+    key: 'receiving',
+    name: 'Pharmacy — receiving',
+    category: 'Receiving',
+    description: 'After a delivery is received, confirm it matched its goods receipt.',
+    pharmacy: {
+      roleKey: 'pharmacy-assistant',
+      assigneeTarget: 'ROLE',
+      verifierRoleKeys: STANDARD_VERIFIERS,
+      trigger: 'EVENT',
+      suggestedRecurrence: once(24 * 60),
+    },
+    steps: [
+      {
+        title: 'Confirm the delivery matched its goods receipt',
+        requiredRecordType: 'GOODS_RECEIPT',
+      },
+      { title: 'Confirm batch numbers, expiry dates and supplier warranty evidence were checked' },
+      { title: 'Note how cold-chain items arrived', requiresNote: true },
+      { title: 'Note any shortages, damage or rejections, or confirm none', requiresNote: true },
+    ],
+  }),
+  pack({
+    key: 'hygiene',
+    name: 'Pharmacy — hygiene',
+    category: 'Hygiene',
+    description: 'Daily cleanliness check of the counter and dispensing area.',
+    pharmacy: {
+      roleKey: 'pharmacy-assistant',
+      assigneeTarget: 'ROLE',
+      verifierRoleKeys: STANDARD_VERIFIERS,
+      trigger: 'SHIFT',
+      suggestedRecurrence: daily(3 * 60, 30),
+    },
+    steps: [
+      { title: 'Inspect counter and dispensing area cleanliness' },
+      { title: 'Confirm hand-hygiene supplies are stocked' },
+      { title: 'Record cleaning completion and exceptions', requiresNote: true },
+    ],
+  }),
+  pack({
+    key: 'incident-capa',
+    name: 'Pharmacy — incident and CAPA',
+    category: 'Quality',
+    description: 'Record an incident, its cause and the corrective and preventive actions.',
+    pharmacy: {
+      roleKey: 'pharmacy-manager',
+      assigneeTarget: 'ROLE',
+      verifierRoleKeys: STANDARD_VERIFIERS,
+      trigger: 'EVENT',
+      suggestedRecurrence: once(7 * 24 * 60),
+    },
+    steps: [
+      { title: 'Describe the incident and immediate containment', requiresNote: true },
+      { title: 'Record the root cause', requiresNote: true },
+      { title: 'Record the corrective and preventive actions', requiresNote: true },
+      { title: 'Name who will check the actions worked, and when', requiresNote: true },
+    ],
+  }),
+  pack({
+    key: 'training-attestation',
+    name: 'Pharmacy — training attestation',
+    category: 'Training',
+    description: 'A named person confirms they have read an assigned procedure.',
+    // A manager schedules this one through the schedule form, so it must fit
+    // the router's bounds (window and grace each at most a day): a day to do
+    // it on time, and a further day before it counts as missed.
+    pharmacy: {
+      roleKey: 'pharmacy-assistant',
+      assigneeTarget: 'PERSON',
+      verifierRoleKeys: STANDARD_VERIFIERS,
+      trigger: 'ASSIGNED',
+      suggestedRecurrence: attestation,
+    },
+    steps: [
+      { title: 'Read the assigned policy or procedure' },
+      { title: 'Note any questions for your manager, or confirm none', requiresNote: true },
+      { title: 'Attest completion with your signature', requiresSignature: true },
+    ],
+  }),
+];
+
+export function findPharmacySopPack(key: string): PharmacySopPack | undefined {
+  return PHARMACY_SOP_PACKS.find((candidate) => candidate.key === key);
+}
+
+/** The pack an installed template came from, by its install identity (exact name). */
+export function pharmacySopPackForTemplateName(name: string): PharmacySopPack | undefined {
+  return PHARMACY_SOP_PACKS.find((candidate) => candidate.name === name);
+}
+
+export class PharmacySopLibraryScopeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PharmacySopLibraryScopeError';
+  }
+}
+
+/**
+ * Install every pharmacy pack into one organization. Idempotent (a pack
+ * already present by name is left untouched) and serialized per organization:
+ * the shared installer is find-then-create, so two concurrent installs take a
+ * transaction advisory lock and the second sees the first's templates.
+ *
+ * The organization is `opts.organizationId` when given, else the transaction's
+ * `app.current_organization_id`; neither (a platform context with no explicit
+ * organization) throws before any read or write, and an explicit id that
+ * disagrees with a non-empty tenant setting throws too. The lock key always
+ * names that organization. The shared installer scopes its reads and its
+ * inserts by RLS and the column default, so unless the transaction is already
+ * plain tenant scope for that organization, the install runs inside
+ * `withOrganizationDefaults` — a platform-admin read would otherwise see every
+ * tenant's templates.
+ */
 export async function installPharmacySopLibrary(
   db: ScopedDb,
-  opts: { now?: Date } = {}
+  opts: { now?: Date; organizationId?: string } = {}
 ): Promise<InstallPackResult[]> {
-  const results: InstallPackResult[] = [];
-  for (const pack of PHARMACY_SOP_PACKS) {
-    results.push(await installSopPackDefinition(db, pack, opts));
-  }
-  return results;
+  const transaction = db.$transaction.bind(db) as unknown as <T>(
+    work: (tx: ScopedDb) => Promise<T>
+  ) => Promise<T>;
+  return transaction(async (tx) => {
+    const [setting] = await tx.$queryRaw<
+      { organizationId: string | null; platformAdmin: string | null }[]
+    >(
+      Prisma.sql`SELECT NULLIF(current_setting('app.current_organization_id', true), '') AS "organizationId", current_setting('app.is_platform_admin', true) AS "platformAdmin"`
+    );
+    const current = setting?.organizationId?.trim() || null;
+    const requested = opts.organizationId?.trim() || null;
+    if (requested && current && requested !== current) {
+      throw new PharmacySopLibraryScopeError(
+        'The organization to install into does not match the current tenant.'
+      );
+    }
+    const organizationId = requested ?? current;
+    if (!organizationId) {
+      throw new PharmacySopLibraryScopeError(
+        'Choose the organization to install the pharmacy procedure library into.'
+      );
+    }
+
+    const install = async (scoped: ScopedDb) => {
+      await scoped.$queryRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-sop-library:${organizationId}`}, 0))`
+      );
+      const results: InstallPackResult[] = [];
+      for (const definition of PHARMACY_SOP_PACKS) {
+        results.push(await installSopPackDefinition(scoped, definition, { now: opts.now }));
+      }
+      return results;
+    };
+    const tenantScoped = current === organizationId && setting?.platformAdmin !== 'true';
+    return tenantScoped ? install(tx) : withOrganizationDefaults(tx, organizationId, install);
+  });
 }

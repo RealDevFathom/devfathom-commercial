@@ -125,6 +125,29 @@ export const PATCH = withApiAuth(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    // Assignees must belong to the project that will own the task after this
+    // update. Validate before making any changes so a replace cannot delete the
+    // current assignees before discovering an invalid replacement.
+    const requestedAssigneeIds = [
+      ...new Set(assigneeIds !== undefined ? assigneeIds : (addAssigneeIds ?? [])),
+    ];
+    const assigneeProjectId =
+      isColumnMove && targetColumn ? targetColumn.board.project.id : projectId;
+    if (requestedAssigneeIds.length > 0) {
+      const memberCount = await authCtx.db.projectMember.count({
+        where: {
+          projectId: assigneeProjectId,
+          userId: { in: requestedAssigneeIds },
+        },
+      });
+      if (memberCount !== requestedAssigneeIds.length) {
+        return NextResponse.json(
+          { error: 'All assignees must be members of the project.' },
+          { status: 400 }
+        );
+      }
+    }
+
     // Do the mutation in a transaction so reorder + update + defaults are atomic.
     const updated = await (async (tx) => {
       // Assignee operations — process in order: full replace, then partial add, then partial remove.
@@ -133,7 +156,7 @@ export const PATCH = withApiAuth(
         await tx.taskAssignee.deleteMany({ where: { taskId: id } });
         if (assigneeIds.length > 0) {
           await tx.taskAssignee.createMany({
-            data: assigneeIds.map((userId) => ({ taskId: id, userId })),
+            data: requestedAssigneeIds.map((userId) => ({ taskId: id, userId })),
           });
         }
       }
@@ -175,12 +198,35 @@ export const PATCH = withApiAuth(
         },
       });
 
+      // A task moved to another project must not remain assigned to users who
+      // cannot access that project. Do this after all requested assignee edits
+      // so a PATCH cannot reintroduce a source-project-only assignee.
+      if (isColumnMove && targetColumn && targetColumn.board.project.id !== projectId) {
+        await tx.taskAssignee.deleteMany({
+          where: {
+            taskId: id,
+            user: {
+              projectMembers: { none: { projectId: targetColumn.board.project.id } },
+            },
+          },
+        });
+      }
+
       // Additive column default assignees on move (skipDuplicates keeps existing intact)
       if (isColumnMove && targetColumn && targetColumn.defaultAssignees.length > 0) {
-        await tx.taskAssignee.createMany({
-          data: targetColumn.defaultAssignees.map((d) => ({ taskId: id, userId: d.userId })),
-          skipDuplicates: true,
+        const destinationMembers = await tx.projectMember.findMany({
+          where: {
+            projectId: targetColumn.board.project.id,
+            userId: { in: targetColumn.defaultAssignees.map((assignee) => assignee.userId) },
+          },
+          select: { userId: true },
         });
+        if (destinationMembers.length > 0) {
+          await tx.taskAssignee.createMany({
+            data: destinationMembers.map((member) => ({ taskId: id, userId: member.userId })),
+            skipDuplicates: true,
+          });
+        }
       }
 
       return task;

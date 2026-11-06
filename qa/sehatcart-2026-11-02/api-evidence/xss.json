@@ -1,0 +1,54 @@
+{
+  "created": {
+    "supplier": "cmvzlr24t024s4oqrzig0vacm",
+    "patient": "cmvzlr26r024u4oqrptv2sms1",
+    "ingredient": "cmvzlr28h024w4oqrjls0hkja"
+  },
+  "results": [
+    {
+      "role": "owner",
+      "route": "/pharmacy/purchasing/suppliers",
+      "dialogs": [],
+      "xss": 0,
+      "injectedImg": 0,
+      "injectedSvg": 0,
+      "textShown": true
+    },
+    {
+      "role": "manager",
+      "route": "/pharmacy/purchasing/receiving",
+      "dialogs": [],
+      "xss": 0,
+      "injectedImg": 0,
+      "injectedSvg": 0,
+      "textShown": true
+    },
+    {
+      "role": "owner",
+      "route": "/pharmacy/prescriptions",
+      "dialogs": [],
+      "xss": 0,
+      "injectedImg": 0,
+      "injectedSvg": 0,
+      "textShown": true
+    },
+    {
+      "role": "owner",
+      "route": "/pharmacy/medicines",
+      "dialogs": [],
+      "xss": 0,
+      "injectedImg": 0,
+      "injectedSvg": 0,
+      "textShown": false
+    },
+    {
+      "role": "pharmacist",
+      "route": "/pharmacy/counter",
+      "dialogs": [],
+      "xss": 0,
+      "injectedImg": 0,
+      "injectedSvg": 0,
+      "textShown": true
+    }
+  ]
+}

@@ -1,33 +1,16 @@
-import { compLine } from '@/lib/restaurant/bills';
-import {
-  compBody,
-  moneyMutationRoute,
-  requireBillInDeviceBranch,
-  resolveApprover,
-} from '@/lib/restaurant/checkout-routes';
+import { NextResponse } from 'next/server';
 
 /**
  * POST /api/restaurant/checkout/comp
  *
- * Comp a bill line to zero (C4): the line keeps its snapshot price, its `compAmount` is
- * set so the effective total nets to zero, and the comp records a reason + an inline
- * manager co-authorization (verified here; the approver must hold `coauth:approve`). Only
- * an OPEN bill can be comped. Gated on `payments:collect`; idempotent on the money key.
+ * Complimentary items are outside the MVP scope. Keep the endpoint as an explicit,
+ * side-effect-free denial so stale clients and direct callers cannot reach the retained
+ * comp domain logic. Historical comp amounts remain available to read in receipts and
+ * reports.
  */
-export const POST = moneyMutationRoute({
-  schema: compBody,
-  capability: 'payments:collect',
-  run: async ({ ctx, data, actor, now }) => {
-    await requireBillInDeviceBranch(ctx.db, data.billId, ctx.device.branchId);
-    const approver = await resolveApprover(ctx, data.approving, now);
-    if (!approver.ok) return approver.response;
-    return compLine(ctx.db, {
-      billId: data.billId,
-      branchId: ctx.device.branchId,
-      billLineId: data.billLineId,
-      reason: data.reason,
-      approvingStaffProfileId: approver.staffProfileId,
-      actor,
-    });
-  },
-});
+export async function POST() {
+  return NextResponse.json(
+    { error: 'Complimentary items are not available in this version.' },
+    { status: 403 }
+  );
+}

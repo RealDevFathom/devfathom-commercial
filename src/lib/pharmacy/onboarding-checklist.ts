@@ -152,6 +152,15 @@ const DOWNGRADE_COPY: Record<NonNullable<PharmacyGateResult['downgradeReason']>,
     'You marked this done without an evidence reference, so it still counts as outstanding. Record one below.',
 };
 
+/**
+ * DEV-753: the supplier row while the owner has supplier checks off. The evaluator then
+ * counts any active supplier, so this asks for neither an authorization nor a licence.
+ */
+export const SUPPLIER_CHECKS_OFF_GUIDANCE = {
+  todo: 'Add at least one active supplier so purchasing and returns have a counterparty. Supplier checks are off.',
+  done: 'An active supplier is on file. Supplier checks are off, so it is not checked.',
+} as const;
+
 export function checklistItemForGate(gate: PharmacyGateResult): ReadinessChecklistItem {
   const guidance = PHARMACY_GATE_GUIDANCE[gate.gate];
   const done = gate.status === 'PASSED';
@@ -184,10 +193,41 @@ export type PharmacyOnboardingChecklist = {
   ready: boolean;
 };
 
+export type PharmacyChecklistContext = {
+  /** The end of the effective branch licence, when one is currently on file. */
+  licenceValidTo?: Date | null;
+  /** Shared clock for the evaluator and its explanatory copy. */
+  at?: Date;
+};
+
 export function pharmacyOnboardingChecklist(
-  readiness: PharmacyReadiness
+  readiness: PharmacyReadiness,
+  context: PharmacyChecklistContext = {}
 ): PharmacyOnboardingChecklist {
-  const items = readiness.gates.map(checklistItemForGate);
+  const items = readiness.gates.map((gate) => {
+    const item = checklistItemForGate(gate);
+    const at = context.at ?? new Date();
+    if (
+      gate.gate === 'PREMISES_AND_LICENCES' &&
+      gate.status !== 'PASSED' &&
+      context.licenceValidTo &&
+      at >= context.licenceValidTo
+    ) {
+      return {
+        ...item,
+        why: `The branch licence expired on ${context.licenceValidTo.toISOString().slice(0, 10)}. Record a current licence on the branch regulatory profile.`,
+      };
+    }
+    if (
+      gate.gate === 'PARTIES_AND_BALANCES' &&
+      readiness.supplierChecksEnabled === false &&
+      !gate.downgradeReason
+    ) {
+      const off = SUPPLIER_CHECKS_OFF_GUIDANCE;
+      return { ...item, why: item.state === 'DONE' ? off.done : off.todo };
+    }
+    return item;
+  });
   const blocking = items.filter((item) => item.blocksActivation);
   return {
     items,

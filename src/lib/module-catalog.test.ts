@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ACCOUNT_PROCEDURES,
+  alternativeModulesForProcedure,
   MODULE_CATALOG,
   PROCEDURE_MODULES,
   ROUTE_MODULES,
@@ -34,6 +36,9 @@ describe('module catalog routing', () => {
     ['projects.list', 'projects'],
     ['trelloImport.preview', 'projects'],
     ['team.updateRole', 'hr'],
+    ['team.getNotifications', null],
+    ['team.markNotificationRead', null],
+    ['team.markAllNotificationsRead', null],
     ['finance.summary', 'finance'],
     ['apiTokens.create', 'api'],
     ['restaurantStaff.issueCredential', 'restaurant-core'],
@@ -64,9 +69,33 @@ describe('module catalog routing', () => {
     ['restaurantDashboard.getPreferences', 'restaurant-core'],
     ['restaurantGrowth.read', 'restaurant-core'],
     ['restaurantGrowth.review', 'restaurant-core'],
+    ['pharmacyPrescriptions.counterPatients', 'pharmacy-counter'],
+    ['pharmacyPrescriptions.counterPatientPanel', 'pharmacy-counter'],
     ['unknown.list', null],
   ])('maps tRPC procedure %s to %s', (procedure, expected) => {
     expect(moduleForProcedure(procedure)).toBe(expected);
+  });
+
+  it('allows dispensing to license the counter patient prescription procedures', () => {
+    expect(alternativeModulesForProcedure('pharmacyPrescriptions.counterPatients')).toEqual([
+      'pharmacy-dispensing',
+    ]);
+    expect(alternativeModulesForProcedure('pharmacyPrescriptions.counterPatientPanel')).toEqual([
+      'pharmacy-dispensing',
+    ]);
+    expect(alternativeModulesForProcedure('pharmacyPrescriptions.workspace')).toEqual([]);
+    expect(alternativeModulesForProcedure('unknown.list')).toEqual([]);
+    expect(alternativeModulesForProcedure('toString')).toEqual([]);
+    expect(moduleForProcedure('toString')).toBeNull();
+  });
+
+  it('keeps the notification exception exact while the rest of team remains HR-gated', () => {
+    expect(moduleForProcedure('team.getNotifications')).toBeNull();
+    expect(moduleForProcedure('team.markNotificationRead')).toBeNull();
+    expect(moduleForProcedure('team.markAllNotificationsRead')).toBeNull();
+    expect(ACCOUNT_PROCEDURES.has('team.getNotifications')).toBe(false);
+    expect(moduleForProcedure('team.getNotifications.future')).toBe('hr');
+    expect(moduleForProcedure('team.deleteNotification')).toBe('hr');
   });
 
   it('pins every restaurant procedure namespace to its licensed module', () => {
@@ -135,6 +164,7 @@ describe('module catalog routing', () => {
   it.each([
     ['/pharmacy/reports', 'pharmacy-reports'],
     ['/pharmacy/reports/repeat-purchasing', 'pharmacy-reports'],
+    ['/pharmacy/accounts/balance-sheet', 'pharmacy-reports'],
     ['/pharmacy/finance', 'pharmacy-finance'],
     ['/pharmacy/inventory', 'pharmacy-inventory'],
     ['/pharmacy/purchasing', 'pharmacy-procurement'],
@@ -144,6 +174,8 @@ describe('module catalog routing', () => {
     ['/pharmacy/purchasing/suppliers', 'pharmacy-procurement'],
     ['/pharmacy/medicines', 'pharmacy-core'],
     ['/pharmacy/orders', 'pharmacy-counter'],
+    ['/pharmacy/sop', 'pharmacy-safety'],
+    ['/pharmacy/sop/occurrences', 'pharmacy-safety'],
   ])('resolves Pharmacy route %s to its existing licensed module %s', (route, module) => {
     for (const vertical of ['PHARMACY', 'RESTAURANT', 'AGENCY', undefined] as const) {
       expect(moduleForPath(route, vertical)).toBe(module);
@@ -162,6 +194,16 @@ describe('module catalog routing', () => {
     expect(moduleForPath(route)).toBeNull();
   });
 
+  it('licenses pharmacy SOPs as Pharmacy Safety, never as Restaurant SOP (DEV-751)', () => {
+    for (const procedure of ['pharmacySop.board', 'pharmacySop.submit', 'pharmacySop.verify']) {
+      expect(moduleForProcedure(procedure)).toBe('pharmacy-safety');
+    }
+    expect(moduleForPath('/pharmacy/sop')).toBe(moduleForProcedure('pharmacySop.board'));
+    expect(moduleForProcedure('restaurantSopExecution.start')).toBe('restaurant-sop');
+    expect(moduleForPath('/pharmacy/sop-archive')).toBeNull();
+    expect(isModuleGranted('pharmacy-safety', ['restaurant-sop'])).toBe(false);
+  });
+
   it('keeps purchasing returns under the existing purchasing procedure license', () => {
     expect(moduleForPath('/pharmacy/purchasing/returns')).toBe(
       moduleForProcedure('pharmacyPurchasing.workspace')
@@ -171,6 +213,7 @@ describe('module catalog routing', () => {
 
   it.each([
     ['/pharmacy/reports', 'pharmacy-reports'],
+    ['/pharmacy/accounts/balance-sheet', 'pharmacy-reports'],
     ['/pharmacy/finance', 'pharmacy-finance'],
     ['/pharmacy/inventory', 'pharmacy-inventory'],
     ['/pharmacy/purchasing/returns', 'pharmacy-procurement'],

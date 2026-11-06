@@ -232,7 +232,12 @@ export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
   },
 };
 
-export const ALL_VERTICALS: readonly OrganizationVertical[] = ['AGENCY', 'RESTAURANT', 'PHARMACY', 'HOSPITALITY'];
+export const ALL_VERTICALS: readonly OrganizationVertical[] = [
+  'AGENCY',
+  'RESTAURANT',
+  'PHARMACY',
+  'HOSPITALITY',
+];
 
 export type DepartmentDefinition = {
   key: string;
@@ -713,8 +718,10 @@ export type RoleTemplate = {
   isSystem: boolean;
   /** Capabilities granted by default. `['*']` = full administration, matching the
    * bootstrap admin role, except that wildcards (`*`, `pharmacy:*`) never grant
-   * pharmacy:dispense, pharmacy:safety or pharmacy:catalogue-review: those must be
-   * granted exactly (separation of duties). A wildcard DENY still revokes them.
+   * pharmacy:dispense, pharmacy:prescriptions, pharmacy:safety or
+   * pharmacy:catalogue-review: those must be granted exactly (separation of duties).
+   * A pharmacy:dispense grant also covers pharmacy:prescriptions. A wildcard DENY
+   * still revokes them.
    * All entries are provisional (Phase 0 / D10). */
   capabilities: readonly string[];
 };
@@ -727,24 +734,34 @@ export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
 export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:*',
   'pharmacy:dispense',
+  'pharmacy:prescriptions',
   'pharmacy:catalogue-review',
   'pharmacy:manage',
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:orders',
   'reports:operational',
   'reports:financial',
   'pharmacy:safety',
+  // DEV-751: pharmacy procedures run on the shared SOP engine and are gated on
+  // the generic SOP actions. `pharmacy:*` does not match these (other
+  // namespace), so they are listed for the role editor to grant explicitly.
+  'sop:manage',
+  'sop:complete',
+  'sop:verify',
 ];
 
 /** Canonical actions checked by pharmacy workflows, including shared report gates. */
 export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:dispense',
+  'pharmacy:prescriptions',
   'pharmacy:safety',
   'pharmacy:catalogue-review',
   'pharmacy:orders',
@@ -752,18 +769,37 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'reports:financial',
 ] as const;
 
-export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
+/**
+ * Exact grants added to a PHARMACY tenant's bootstrap `admin` role beside its `*`.
+ * The wildcard never reaches pharmacy:safety, and a new pharmacy's only user sits on
+ * that role, so without this a solo pharmacy could not file or review PV reports.
+ */
+export const PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS: readonly string[] = ['pharmacy:safety'];
+
+const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   {
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+    // `pharmacy:*` never reaches the exact-grant-only actions. The Owner holds an
+    // explicit `pharmacy:safety` so a solo pharmacy can still file and review
+    // pharmacovigilance reports (#479). It deliberately does NOT receive
+    // pharmacy:dispense or pharmacy:catalogue-review: clinical powers stay with the
+    // pharmacist and the opt-in owner-operator template.
+    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial', 'pharmacy:safety'],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
     // for business/cashier guards that require literal ADMIN; EMPLOYEE plus this
     // template is not equivalent. Provisioning does not assign it to existing owners.
     // These grants neither verify clinical qualifications nor permit self-review/signing.
+    // Sole exception: in a tenant with no other active staff, a pharmacovigilance report
+    // may be marked READY by its own maker only after fresh server-side PIN
+    // reauthentication, with a durable audit row (pharmacy-reports PV:SOLO_OWNER_PIN).
+    // #975: a proprietor runs the whole shop, so the template also grants the
+    // operational actions (Goods-in, stock, counter, day close, management). Every
+    // grant stays exact (no wildcard), so the separation-of-duties caps remain
+    // explicit and individually revocable by DENY.
     key: 'owner-operator',
     name: 'Owner / Operator',
     isSystem: true,
@@ -774,19 +810,26 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'pharmacy:dispense',
       'pharmacy:catalogue-review',
       'pharmacy:safety',
+      'pharmacy:procurement',
+      'pharmacy:inventory',
+      'pharmacy:counter',
+      'pharmacy:close',
+      'pharmacy:manage',
     ],
   },
   {
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
+    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
   },
   {
     key: 'manager',
     name: 'Manager',
     isSystem: true,
-    capabilities: ['pharmacy:manage', 'pharmacy:orders'],
+    // Managers retain the purchasing and Goods-in access that predates the
+    // explicit pharmacy capability model (#375).
+    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
   },
   {
     key: 'cashier',
@@ -804,6 +847,35 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['reports:financial'] },
   { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['reports:operational'] },
 ];
+
+/**
+ * DEV-751 — pharmacy procedure (SOP) grants for NEW tenants' role templates.
+ *
+ * Kept apart from the base templates on purpose: SOPs are follow-up checklists
+ * and proof, and they never add, remove or depend on a pharmacy operation
+ * capability (`pharmacy:close`, `pharmacy:counter`, …). Ownership of those
+ * operation grants stays with the base list above; this map only appends the
+ * generic `sop:*` actions (which `pharmacy:*` does not match).
+ *
+ * Templates are materialised only when an organization is created, so editing
+ * this map never changes an existing tenant's roles.
+ */
+export const PHARMACY_SOP_TEMPLATE_GRANTS: Readonly<Record<string, readonly string[]>> = {
+  owner: ['sop:manage', 'sop:complete', 'sop:verify'],
+  'owner-operator': ['sop:manage', 'sop:complete', 'sop:verify'],
+  manager: ['sop:manage', 'sop:complete', 'sop:verify'],
+  pharmacist: ['sop:complete', 'sop:verify'],
+  cashier: ['sop:complete'],
+  procurement: ['sop:complete'],
+  inventory: ['sop:complete'],
+};
+
+export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = PHARMACY_BASE_ROLE_TEMPLATES.map(
+  (role) => ({
+    ...role,
+    capabilities: [...role.capabilities, ...(PHARMACY_SOP_TEMPLATE_GRANTS[role.key] ?? [])],
+  })
+);
 
 /**
  * H1-01 — the nineteen hospitality capabilities of `06-roles-reports` §1, in the
@@ -1024,6 +1096,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'sop:complete',
       'sop:verify',
       'sop:manage',
+      'staff:manage',
       'customers:read',
       'customers:manage',
       'loyalty:redeem',
@@ -1065,6 +1138,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'purchasing:create',
       'sop:complete',
       'sop:verify',
+      'staff:manage',
       'customers:read',
       'customers:manage',
       'loyalty:redeem',
@@ -1601,11 +1675,15 @@ export function isRestaurantModuleKey(key: string): boolean {
 /** Commercial packages offered for a vertical (§2.3 onboarding filter). Agency
  * packages are not modeled here; only their compatibility rule is. */
 export function packagesForVertical(vertical: OrganizationVertical): readonly PackageDefinition[] {
-  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].filter((pkg) => pkg.vertical === vertical);
+  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].filter(
+    (pkg) => pkg.vertical === vertical
+  );
 }
 
 export function packageByKey(key: string): PackageDefinition | undefined {
-  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].find((pkg) => pkg.key === key);
+  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].find(
+    (pkg) => pkg.key === key
+  );
 }
 
 /** The §7 limit key that caps a vertical's licensed users. The `defaultSeats`

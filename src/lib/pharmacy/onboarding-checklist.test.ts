@@ -82,6 +82,31 @@ describe('pharmacy onboarding checklist', () => {
     expect(met.blocksActivation).toBe(false);
   });
 
+  it('names an expired licence date in the blocked premises and licences step', () => {
+    const readiness = evaluateReadiness('org_1', [], {});
+    const checklist = pharmacyOnboardingChecklist(readiness, {
+      at: new Date('2026-10-21T00:00:00.000Z'),
+      licenceValidTo: new Date('2026-10-20T00:00:00.000Z'),
+    });
+
+    expect(checklist.items.find((item) => item.key === 'PREMISES_AND_LICENCES')).toMatchObject({
+      state: 'NEEDS_YOU',
+      why: 'The branch licence expired on 2026-10-20. Record a current licence on the branch regulatory profile.',
+    });
+  });
+
+  it('names the date as soon as the licence reaches its exclusive valid-to boundary', () => {
+    const readiness = evaluateReadiness('org_1', [], {});
+    const checklist = pharmacyOnboardingChecklist(readiness, {
+      at: new Date('2026-10-21T00:00:00.000Z'),
+      licenceValidTo: new Date('2026-10-21T00:00:00.000Z'),
+    });
+
+    expect(checklist.items.find((item) => item.key === 'PREMISES_AND_LICENCES')?.why).toBe(
+      'The branch licence expired on 2026-10-21. Record a current licence on the branch regulatory profile.'
+    );
+  });
+
   it('tells the operator their own claim did not stand, rather than repeating the to-do', () => {
     // A PASSED claim on an evidence-backed gate the data contradicts.
     const evidenceAbsent = evaluateReadiness('org_1', [attested('MEDICINE_CATALOG_READINESS')], {

@@ -24,7 +24,16 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { parseGs1DataMatrix, type Gs1Warning } from './gs1-datamatrix';
 import { normalizeMedicineText } from './medicine';
 import { packConversions, type PackLevelNode } from './pack-conversion';
-import { assertSupplierEligible, PharmacyPurchasingError } from './purchasing';
+import { packConversionLabel } from './pack-conversion-label';
+import {
+  assertSupplierEligible,
+  PharmacyPurchasingError,
+  supplierLicenceStatus,
+  type SupplierCompliancePolicy,
+  type SupplierLicenceEvidence,
+  type SupplierLicenceStatus,
+} from './purchasing';
+import { readSupplierCompliancePolicy, supersededLicenceIds } from './supplier-compliance-policy';
 import { creditPosition } from './supplier-returns';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -69,6 +78,13 @@ export type SupplierSummary = {
   /** The licence the eligibility decision rests on, or the latest filing if none qualifies. */
   governingLicence: SupplierLicenceView | null;
   licences: SupplierLicenceView[];
+  /**
+   * DEV-753: the policy status, kept apart from the evidence above. `checked: false`
+   * means the owner has the supplier licence and trade-authorization checks off, so
+   * `eligibility` is orderable without anything about this supplier being verified.
+   * `licenceStatus` is what the licence evidence on file says either way.
+   */
+  compliance: { checked: boolean; policyVersion: number; licenceStatus: SupplierLicenceStatus };
 };
 
 const DAY_MS = 86_400_000;
@@ -79,11 +95,12 @@ export function daysBetween(from: Date, to: Date): number {
 
 function eligibility(
   supplier: { authorized: boolean },
-  licences: readonly { expiresAt: Date; verified: boolean }[],
-  at: Date
+  licences: readonly SupplierLicenceEvidence[],
+  at: Date,
+  policy: SupplierCompliancePolicy
 ): SupplierEligibility {
   try {
-    assertSupplierEligible({ authorized: supplier.authorized, licences, at });
+    assertSupplierEligible({ authorized: supplier.authorized, licences, at, policy });
     return { orderable: true, reason: null };
   } catch (error) {
     if (error instanceof PharmacyPurchasingError) {
@@ -146,18 +163,26 @@ function summarizeSupplier(
     creditLimitMinor: number;
     licences: LicenceRow[];
   },
-  at: Date
+  at: Date,
+  policy: SupplierCompliancePolicy,
+  supersededIds: ReadonlySet<string>
 ): SupplierSummary {
-  const licences = licenceViews(supplier.licences, at);
-  // `assertSupplierEligible` counts every verified, unexpired filing, including
-  // a superseded one; mirroring that here rather than pre-filtering keeps the
-  // badge and the refusal the same decision.
+  // DEV-466: supersession is read across the whole register, as the write gates read it,
+  // so a filing superseded from anywhere is marked here too.
+  const licences = licenceViews(supplier.licences, at).map((licence) =>
+    supersededIds.has(licence.id) ? { ...licence, superseded: true } : licence
+  );
+  // The same evidence and the same policy `assertSupplierEligible` decides on at every
+  // write, so the badge and the refusal stay one decision.
   const evidence = licences.map((licence) => ({
     expiresAt: licence.expiresAt,
     verified: licence.verified,
+    superseded: licence.superseded,
   }));
   const governing =
-    licences.find((licence) => licence.verified && licence.daysToExpiry >= 0) ??
+    licences.find(
+      (licence) => licence.verified && !licence.superseded && licence.daysToExpiry >= 0
+    ) ??
     licences[0] ??
     null;
   return {
@@ -171,9 +196,14 @@ function summarizeSupplier(
     contactPhone: supplier.contactPhone,
     paymentTermsDays: supplier.paymentTermsDays,
     creditLimitMinor: supplier.creditLimitMinor,
-    eligibility: eligibility(supplier, evidence, at),
+    eligibility: eligibility(supplier, evidence, at, policy),
     governingLicence: governing,
     licences,
+    compliance: {
+      checked: policy.checksEnabled !== false,
+      policyVersion: policy.version,
+      licenceStatus: supplierLicenceStatus(evidence, at),
+    },
   };
 }
 
@@ -191,7 +221,15 @@ export async function listSuppliers(
     include: { licences: true },
     orderBy: [{ name: 'asc' }, { id: 'asc' }],
   });
-  return suppliers.map((supplier) => summarizeSupplier(supplier, at));
+  const [policy, supersededIds] = await Promise.all([
+    readSupplierCompliancePolicy(db, scope.organizationId),
+    supersededLicenceIds(
+      db,
+      scope.organizationId,
+      suppliers.flatMap((supplier) => supplier.licences.map((licence) => licence.id))
+    ),
+  ]);
+  return suppliers.map((supplier) => summarizeSupplier(supplier, at, policy, supersededIds));
 }
 
 // ---------------------------------------------------------------------------
@@ -242,21 +280,6 @@ export type PurchasingWorkspace = {
   suppliers: SupplierSummary[];
   approvers: ApproverOption[];
 };
-
-function conversionLabel(
-  level: string,
-  chain: readonly { level: string; unitsPerParent: number }[],
-  units: number
-) {
-  if (chain.length <= 1) return `1 ${level} = ${units} units`;
-  const steps: string[] = [];
-  let running = 1;
-  for (const step of chain.slice(1)) {
-    running *= chain[steps.length]!.unitsPerParent;
-    steps.push(`${running} ${step.level}${running === 1 ? '' : 's'}`);
-  }
-  return `1 ${level} = ${steps.join(' = ')} = ${units} units`;
-}
 
 /**
  * Everything the four consoles need to render a picker, in one round trip.
@@ -350,8 +373,7 @@ export async function purchasingWorkspace(
     branches,
     stockLocations,
     suppliers,
-    approvers: eligibleApprovers
-      .map(({ id, name, email }) => ({ id, name, email })),
+    approvers: eligibleApprovers.map(({ id, name, email }) => ({ id, name, email })),
     medicines: medicines.map((medicine) => ({
       id: medicine.id,
       productName: medicine.productName,
@@ -364,7 +386,7 @@ export async function purchasingWorkspace(
           level: conversion.level,
           presentation: presentation.presentation,
           canonicalUnitsPerPack: conversion.canonicalUnitsPerPack,
-          conversionLabel: conversionLabel(
+          conversionLabel: packConversionLabel(
             conversion.level,
             conversion.chain,
             conversion.canonicalUnitsPerPack

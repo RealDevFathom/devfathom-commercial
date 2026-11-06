@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   // WHA-1206 — the pharmacy branch aggregate, a different table from the
   // restaurant branch above, so a test can tell which one provisioning wrote.
   pharmacyBranchCreate: vi.fn(),
+  pharmacyAssignmentCreate: vi.fn(),
   acknowledgementFindMany: vi.fn(),
   // WHA-1181 — restaurant onboarding and activation now also link each
   // organization administrator to a staff profile. Default implementations
@@ -154,6 +155,7 @@ const platformDb = {
     count: mocks.branchCount,
   },
   pharmacyBranch: { create: mocks.pharmacyBranchCreate },
+  pharmacyBranchAssignment: { create: mocks.pharmacyAssignmentCreate },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
   restaurantStaffProfile: {
     findFirst: mocks.staffFindFirst,
@@ -277,6 +279,8 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.roleCreate.mockResolvedValue({ id: 'role_x' });
     mocks.branchCreate.mockResolvedValue({ id: 'branch_1' });
     mocks.assignmentCreate.mockResolvedValue({ id: 'assign_1' });
+    mocks.pharmacyBranchCreate.mockResolvedValue({ id: 'pharmacy_branch_main' });
+    mocks.pharmacyAssignmentCreate.mockResolvedValue({ id: 'pharmacy_assign_1' });
     mocks.departmentCreateMany.mockResolvedValue({ count: 0 });
   });
 
@@ -284,6 +288,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -303,6 +308,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
     });
@@ -346,6 +352,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -379,6 +386,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
     });
@@ -418,6 +426,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
+      defaultSeats: 25,
       vertical: 'PHARMACY',
       moduleLinks: [{ moduleId: 'pharmacy-core', enabled: true }],
     });
@@ -439,6 +448,12 @@ describe('organization.create vertical + package compatibility', () => {
         city: 'Karachi',
         provinceCode: 'PK-SD',
       },
+    });
+    // #479 — the bootstrap administrator is assigned to MAIN so branch-scoped
+    // pharmacy work (PV filing/review) is not refused for a solo pharmacy.
+    expect(mocks.pharmacyAssignmentCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.pharmacyAssignmentCreate).toHaveBeenCalledWith({
+      data: { organizationId: 'org_new', branchId: 'pharmacy_branch_main', userId: 'user_admin' },
     });
     expect(mocks.branchCreate).not.toHaveBeenCalled();
     expect(mocks.assignmentCreate).not.toHaveBeenCalled();
@@ -469,6 +484,45 @@ describe('organization.create vertical + package compatibility', () => {
             'pharmacy:dispense',
             'pharmacy:catalogue-review',
             'pharmacy:safety',
+            'pharmacy:procurement',
+            'pharmacy:inventory',
+            'pharmacy:counter',
+            'pharmacy:close',
+            'pharmacy:manage',
+            'sop:manage',
+            'sop:complete',
+            'sop:verify',
+          ].map((capability) => ({ organizationId: 'org_new', capability, effect: 'ALLOW' })),
+        },
+      }),
+    });
+    // #479: the bootstrap admin keeps `*` and gains only the exact pharmacy:safety
+    // grant the wildcard cannot reach, so a solo pharmacy can file and review PV.
+    expect(mocks.roleCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        key: 'admin',
+        permissions: {
+          create: ['*', 'pharmacy:safety'].map((capability) => ({
+            organizationId: 'org_new',
+            capability,
+            effect: 'ALLOW',
+          })),
+        },
+      }),
+    });
+    expect(mocks.roleCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        key: 'owner',
+        permissions: {
+          // DEV-751 appends the generic SOP actions after the base Owner grants.
+          create: [
+            'pharmacy:*',
+            'reports:operational',
+            'reports:financial',
+            'pharmacy:safety',
+            'sop:manage',
+            'sop:complete',
+            'sop:verify',
           ].map((capability) => ({ organizationId: 'org_new', capability, effect: 'ALLOW' })),
         },
       }),
@@ -484,6 +538,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
+      defaultSeats: 25,
       vertical: 'PHARMACY',
       moduleLinks: [],
     });
@@ -514,6 +569,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
+      defaultSeats: 25,
       vertical: 'PHARMACY',
       moduleLinks: [],
     });
@@ -535,6 +591,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -553,6 +610,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_a',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -572,6 +630,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [],
     });
@@ -1113,6 +1172,7 @@ const VALID_PROFILE = {
   licenceCategory: 'PHARMACY',
   licenceValidFrom: new Date('2026-01-01'),
   licenceValidTo: new Date('2027-01-01'),
+  licenceEvidenceFileRef: 'evidence://pharmacy-licence',
   permittedSchedules: ['RX'],
   qualifiedPersonRegistration: 'QP-1',
   qualifiedPersonValidFrom: new Date('2026-01-01'),

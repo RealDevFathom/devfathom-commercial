@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { redirect } from 'next/navigation';
 import { HydrationBoundary } from '@tanstack/react-query';
 import { createSSRHelpers } from '@/lib/trpc-server';
 import { DashboardContent } from './dashboard-content';
@@ -16,12 +17,24 @@ export const metadata: Metadata = {
   title: 'Dashboard',
 };
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ landing?: string | string[] }>;
+}) {
+  const signInLanding = (await searchParams)?.landing === '1';
   const ssr = await createSSRHelpers();
   const helpers = ssr?.helpers;
   const restaurant = ssr?.entitlements.vertical === 'RESTAURANT';
   const pharmacy = ssr?.entitlements.vertical === 'PHARMACY';
   const hospitality = ssr?.entitlements.vertical === 'HOSPITALITY';
+
+  // Apply role-based routing only to a fresh sign-in. Explicit dashboard visits
+  // must retain the management overview, saved preferences and first-run checklist.
+  if (signInLanding && restaurant && ssr?.session?.user) {
+    redirect(ssr.session.user.role === 'ADMIN' ? '/restaurant' : '/pos');
+  }
+
   const firstRunVertical =
     ssr?.entitlements.vertical === 'RESTAURANT' || ssr?.entitlements.vertical === 'PHARMACY'
       ? ssr.entitlements.vertical

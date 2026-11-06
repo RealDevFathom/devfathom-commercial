@@ -12,11 +12,16 @@ import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
+  chunkReferenceRows,
   formulaSafeCell,
   ManualFileConnector,
   MEDICINE_REFERENCE_FIELDS,
+  REFERENCE_BATCH_MAX_ROWS,
+  REFERENCE_FILE_MAX_ROWS,
+  referenceFileRowLimitMessage,
   type ManualMappingTemplate,
   type NormalizedMedicineReferenceRow,
+  type ReferenceUploadChunk,
 } from '@/lib/pharmacy/reference-connectors';
 import { trpc } from '@/lib/trpc';
 
@@ -29,6 +34,19 @@ type ConnectorHealth = {
 };
 
 type ParsedFile = { name: string; headers: string[]; rows: Array<Record<string, unknown>> };
+
+type ChunkedUpload = {
+  fileName: string;
+  chunks: ReferenceUploadChunk[];
+  nextIndex: number;
+  failure: string | null;
+};
+
+const REFERENCE_FILE_MAX_BYTES = 10 * 1024 * 1024;
+const PREVIEW_DISPLAY_ROWS = 500;
+// Each request processes a server-side slice; a RUNNING result means the same part must be
+// re-sent to continue from the stored cursor. Bounded so a stuck run cannot loop forever.
+const MAX_CALLS_PER_PART = 20;
 
 function parseCsv(text: string): { headers: string[]; rows: Array<Record<string, unknown>> } {
   const matrix: string[][] = [];
@@ -72,10 +90,13 @@ function excelValue(value: unknown): unknown {
 }
 
 async function parseFile(file: File): Promise<ParsedFile> {
-  if (file.size > 5 * 1024 * 1024) throw new Error('Reference files are limited to 5 MB.');
+  if (file.size > REFERENCE_FILE_MAX_BYTES) {
+    throw new Error('Reference files are limited to 10 MB.');
+  }
   if (file.name.toLowerCase().endsWith('.csv')) {
     const parsed = parseCsv(await file.text());
-    if (parsed.rows.length > 500) throw new Error('A reference batch is limited to 500 rows.');
+    const limitMessage = referenceFileRowLimitMessage(parsed.rows.length);
+    if (limitMessage) throw new Error(limitMessage);
     return { name: file.name, ...parsed };
   }
   if (!file.name.toLowerCase().endsWith('.xlsx')) {
@@ -86,7 +107,9 @@ async function parseFile(file: File): Promise<ParsedFile> {
   await workbook.xlsx.load((await file.arrayBuffer()) as never);
   const worksheet = workbook.worksheets[0];
   if (!worksheet) throw new Error('The workbook has no worksheet.');
-  if (worksheet.actualRowCount > 501) throw new Error('A reference batch is limited to 500 rows.');
+  if (worksheet.actualRowCount > REFERENCE_FILE_MAX_ROWS + 1) {
+    throw new Error(referenceFileRowLimitMessage(worksheet.actualRowCount - 1)!);
+  }
   const matrix: unknown[][] = [];
   worksheet.eachRow({ includeEmpty: false }, (source) => {
     const values = Array.isArray(source.values) ? source.values.slice(1).map(excelValue) : [];
@@ -168,25 +191,38 @@ function assertionEnvelope(assertedValue: unknown) {
   };
 }
 
+function referenceProposalValues(payload: unknown): Record<string, string> {
+  if (!payload || typeof payload !== 'object' || !('values' in payload)) return {};
+  const values = payload.values;
+  if (!values || typeof values !== 'object' || Array.isArray(values)) return {};
+  return Object.fromEntries(
+    Object.entries(values).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string'
+    )
+  );
+}
+
 export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth[] }) {
   const [parsed, setParsed] = useState<ParsedFile | null>(null);
   const [mapping, setMapping] = useState<ManualMappingTemplate>({});
   const [batchId, setBatchId] = useState('');
   const [preview, setPreview] = useState<NormalizedMedicineReferenceRow[]>([]);
+  const [upload, setUpload] = useState<ChunkedUpload | null>(null);
+  const [uploadingPart, setUploadingPart] = useState<number | null>(null);
   const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(undefined, {
     retry: false,
   });
-  const importBatch = trpc.pharmacyMedicine.runReferenceConnectorNow.useMutation({
-    onSuccess: async (result) => {
-      toast.success(
-        result.noOp
-          ? `${result.rowsSkipped} rows unchanged; identical input was a no-op.`
-          : `${result.proposalRows} rows proposed; ${result.rowsApplied} rows had descriptive fields applied; ${result.rowsRejected} rejected.`
-      );
-      await candidates.refetch();
+  const proposals = trpc.pharmacyMedicine.referenceConnectorProposals.useQuery(undefined, {
+    retry: false,
+  });
+  const decideProposal = trpc.pharmacyMedicine.decideReferenceConnectorProposal.useMutation({
+    onSuccess: async () => {
+      toast.success('Reference proposal confirmed. Review its assertions before publication.');
+      await Promise.all([proposals.refetch(), candidates.refetch()]);
     },
     onError: (error) => toast.error(error.message),
   });
+  const importBatch = trpc.pharmacyMedicine.runReferenceConnectorNow.useMutation();
   const review = trpc.pharmacyMedicine.recordReviewDecision.useMutation({
     onSuccess: async () => {
       toast.success('Review decision recorded.');
@@ -211,8 +247,10 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
       setMapping(guessedMapping(next.headers));
       setBatchId(browserUuid());
       setPreview([]);
+      setUpload(null);
     } catch (error) {
       setParsed(null);
+      setUpload(null);
       toast.error(error instanceof Error ? error.message : 'The file could not be read.');
     }
   }
@@ -227,7 +265,82 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
       mapping,
     });
     setPreview(result.rows);
+    setUpload(null);
   }
+
+  async function sendChunks(state: ChunkedUpload) {
+    const totals = { proposed: 0, applied: 0, rejected: 0, unchanged: 0 };
+    let index = state.nextIndex;
+    try {
+      for (; index < state.chunks.length; index += 1) {
+        const chunk = state.chunks[index]!;
+        setUploadingPart(chunk.part);
+        let result: Awaited<ReturnType<typeof importBatch.mutateAsync>> | undefined;
+        for (let call = 0; call < MAX_CALLS_PER_PART; call += 1) {
+          result = await importBatch.mutateAsync({
+            connectorId: 'manual-file',
+            batchId: chunk.batchId,
+            fileName: state.fileName,
+            rows: chunk.rows,
+          });
+          totals.proposed += result.proposalRows;
+          if (result.status !== 'RUNNING') break;
+        }
+        if (!result || result.status !== 'COMPLETED') {
+          throw new Error(`Part ${chunk.part} did not finish processing.`);
+        }
+        if (result.noOp) totals.unchanged += result.rowsSkipped;
+        else {
+          totals.applied += result.rowsApplied;
+          totals.rejected += result.rowsRejected;
+          totals.unchanged += result.rowsSkipped;
+        }
+        setUpload({ ...state, nextIndex: index + 1, failure: null });
+      }
+      toast.success(
+        `${totals.proposed} rows proposed; ${totals.applied} rows had descriptive fields applied; ${totals.rejected} rejected; ${totals.unchanged} unchanged.`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The upload failed.';
+      const part = state.chunks[index]?.part ?? index + 1;
+      setUpload({
+        ...state,
+        nextIndex: index,
+        failure: `Part ${part} of ${state.chunks.length} failed: ${message}`,
+      });
+      toast.error(message);
+    } finally {
+      setUploadingPart(null);
+      await Promise.all([proposals.refetch(), candidates.refetch()]);
+    }
+  }
+
+  function startUpload() {
+    if (!parsed) return;
+    let chunks: ReferenceUploadChunk[];
+    try {
+      chunks = chunkReferenceRows(batchId.trim(), preview);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'The file could not be split.');
+      return;
+    }
+    if (chunks.length > 1) {
+      const seen = new Set<string>();
+      const duplicate = preview.find((row) => seen.size === seen.add(row.rowSourceKey).size);
+      if (duplicate) {
+        toast.error(
+          `Row source key ${duplicate.rowSourceKey} appears more than once. Keys must be unique across a file uploaded in parts.`
+        );
+        return;
+      }
+    }
+    const state: ChunkedUpload = { fileName: parsed.name, chunks, nextIndex: 0, failure: null };
+    setUpload(state);
+    void sendChunks(state);
+  }
+
+  const uploading = uploadingPart !== null;
+  const uploadComplete = upload !== null && upload.nextIndex >= upload.chunks.length;
 
   return (
     <div className="space-y-6">
@@ -278,7 +391,10 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
               <input
                 className="mt-1 min-h-11 w-full rounded-sm border border-border-default bg-surface-raised px-3 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 value={batchId}
-                onChange={(event) => setBatchId(event.target.value)}
+                onChange={(event) => {
+                  setBatchId(event.target.value);
+                  setUpload(null);
+                }}
                 required
               />
             </label>
@@ -299,12 +415,13 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                     <select
                       className="mt-1 min-h-11 w-full rounded-sm border border-border-default bg-surface-raised px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       value={mapping[field] ?? ''}
-                      onChange={(event) =>
+                      onChange={(event) => {
                         setMapping((current) => ({
                           ...current,
                           [field]: event.target.value || undefined,
-                        }))
-                      }
+                        }));
+                        setUpload(null);
+                      }}
                     >
                       <option value="">Not supplied</option>
                       {parsed.headers.map((header) => (
@@ -322,6 +439,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                 className="min-h-11"
                 type="button"
                 variant="secondary"
+                disabled={uploading}
                 onClick={() => void normalizePreview()}
               >
                 Preview normalized rows
@@ -329,24 +447,42 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
               <Button
                 className="min-h-11"
                 type="button"
-                disabled={!preview.length || !batchId.trim() || importBatch.isPending}
-                onClick={() =>
-                  importBatch.mutate({
-                    connectorId: 'manual-file',
-                    batchId,
-                    fileName: parsed.name,
-                    rows: preview,
-                  })
-                }
+                disabled={!preview.length || !batchId.trim() || uploading}
+                onClick={startUpload}
               >
-                {importBatch.isPending ? (
+                {uploading ? (
                   <Loader2 className="animate-spin" data-icon="inline-start" />
                 ) : (
                   <Upload data-icon="inline-start" />
                 )}
                 Run {preview.length || ''} rows now
               </Button>
+              {upload?.failure && !uploading ? (
+                <Button
+                  className="min-h-11"
+                  type="button"
+                  variant="outline"
+                  onClick={() => void sendChunks({ ...upload, failure: null })}
+                >
+                  Resume from part {upload.chunks[upload.nextIndex]?.part ?? upload.nextIndex + 1}
+                </Button>
+              ) : null}
             </div>
+            {uploading && upload ? (
+              <p role="status" className="text-sm text-text-muted">
+                Uploading part {uploadingPart} of {upload.chunks.length}
+              </p>
+            ) : null}
+            {upload?.failure && !uploading ? (
+              <p role="alert" className="text-sm text-destructive">
+                {upload.failure} Parts already uploaded will not be sent again.
+              </p>
+            ) : null}
+            {upload && uploadComplete && upload.chunks.length > 1 ? (
+              <p role="status" className="text-sm text-text-muted">
+                All {upload.chunks.length} parts uploaded.
+              </p>
+            ) : null}
           </div>
         ) : (
           <p className="mt-5 rounded-md bg-surface-sunken px-4 py-5 text-sm text-text-muted">
@@ -368,7 +504,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle">
-                {preview.map((row) => (
+                {preview.slice(0, PREVIEW_DISPLAY_ROWS).map((row) => (
                   <tr key={row.rowSourceKey} className="hover:bg-surface-sunken/60">
                     <td className="px-3 py-3 font-mono text-xs">{row.rowSourceKey}</td>
                     <td className="px-3 py-3">{row.values.productName ?? 'Missing'}</td>
@@ -385,8 +521,84 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                 ))}
               </tbody>
             </table>
+            {preview.length > PREVIEW_DISPLAY_ROWS ? (
+              <p className="border-t border-border-subtle px-3 py-3 text-xs text-text-muted">
+                Showing the first {PREVIEW_DISPLAY_ROWS} of {preview.length} rows. All rows are
+                uploaded in parts of {REFERENCE_BATCH_MAX_ROWS}.
+              </p>
+            ) : null}
           </div>
         ) : null}
+      </SectionCard>
+
+      <SectionCard
+        title="Connector proposals"
+        titleLevel={2}
+        role="region"
+        aria-label="Connector proposals"
+      >
+        <p className="mb-4 text-sm text-text-muted">
+          Confirm the imported reference values to create a reviewable draft. Confirmation does not
+          make a medicine saleable.
+        </p>
+        {proposals.isPending ? (
+          <p role="status" className="text-sm text-text-muted">
+            Loading reference proposals…
+          </p>
+        ) : null}
+        {proposals.error ? (
+          <div role="alert" className="space-y-3 text-sm text-destructive">
+            <p>{proposals.error.message}</p>
+            <Button variant="outline" onClick={() => void proposals.refetch()}>
+              Retry proposals
+            </Button>
+          </div>
+        ) : null}
+        {!proposals.error && proposals.data?.length === 0 ? (
+          <p className="text-sm text-text-muted">No reference proposals await confirmation.</p>
+        ) : null}
+        {decideProposal.error ? (
+          <p role="alert" className="mb-3 text-sm text-destructive">
+            {decideProposal.error.message}
+          </p>
+        ) : null}
+        <div className="space-y-4">
+          {proposals.data?.map((proposal) => {
+            const values = referenceProposalValues(proposal.payload);
+            const name =
+              values.productName ?? proposal.targetMedicine?.productName ?? 'Reference update';
+            return (
+              <article
+                key={proposal.id}
+                className="min-w-0 space-y-4 rounded-md border border-border-subtle p-4"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <h3 className="font-semibold text-text-strong">{name}</h3>
+                  <StatusPill status="Pending confirmation" tone="warning" />
+                </div>
+                <dl className="grid min-w-0 gap-3 sm:grid-cols-2">
+                  {Object.entries(values).map(([field, value]) => (
+                    <div key={field} className="min-w-0 rounded-sm bg-surface-sunken p-3">
+                      <dt className="font-mono text-xs uppercase text-text-muted">
+                        {field.replace(/([a-z])([A-Z])/g, '$1 $2')}
+                      </dt>
+                      <dd className="mt-1 break-words text-sm text-text-body">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <Button
+                  className="min-h-11"
+                  disabled={decideProposal.isPending}
+                  onClick={() =>
+                    decideProposal.mutate({ proposalId: proposal.id, decision: 'CONFIRM' })
+                  }
+                >
+                  {decideProposal.isPending ? 'Confirming…' : 'Confirm reference proposal'}
+                </Button>
+              </article>
+            );
+          })}
+        </div>
       </SectionCard>
 
       <SectionCard

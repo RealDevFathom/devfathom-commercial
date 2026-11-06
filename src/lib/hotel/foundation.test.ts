@@ -22,9 +22,14 @@ import {
 
 const priorCatalogDigests = {
   AGENCY: '54e0ca2cb112bd14c7bde79c1aba7ceeb7875fc51c5a0e5dd05c0db326440769',
-  RESTAURANT: '8a4ca4af40ecbb1ab00e9211b2d6c234853e27956847561e5f24802c6e704eb9',
+  RESTAURANT: '94d6616c691e680b51b340e75547478e5fdd98e9aa208efc12ce64670dc950a7',
   // QA-130: canonical capability names and explicit Owner report grants.
-  PHARMACY: '7a327ac26f5268b8ec8dfbc7fd9faefc7e32637135e103a719a90189b3c2e44a',
+  // DEV-751: generic sop:* actions in the pharmacy capability catalog and the
+  // appended pharmacy SOP role-template grants, on top of #247's explicit
+  // pharmacy:safety grants (Owner template, bootstrap admin). The pin was
+  // already stale on develop before either change. If DEV-739 (#1413) lands
+  // later, it recomputes this pin with its day-close change and names it here.
+  PHARMACY: '81bdc13b242b07bea52d926a3adbf2fc4308dc61bc7b556a5a2739a49a591c01',
 };
 
 const property = {
@@ -108,6 +113,7 @@ function catalogDb(existing: string[] = []) {
     platformPackage: {
       findMany: vi.fn(async () => existing.map((key) => ({ key }))),
       findUnique: vi.fn(async () => null),
+      updateMany: vi.fn(async () => ({ count: 0 })),
       upsert: vi.fn(async (arg: { create: { key: string } }) => ({ id: arg.create.key })),
     },
     platformPackageModule: { upsert: vi.fn(async () => ({})) },

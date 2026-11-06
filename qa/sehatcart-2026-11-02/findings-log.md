@@ -1,0 +1,72 @@
+# Running findings log (scratch)
+
+## NEW
+
+- N1 [Sev3] Catalogue: Create pack accepts exact duplicate pack level (STRIP/10 twice on same presentation). owner. ev: qa-evidence/own-medicine-pack-created.png; API pharmacyMedicine.get packLevels cmvxpy8hn003t1xqr9az7aste (2026-11-01) + cmvzkrtdx01aw4oqrwe45y3zt (2026-11-02 18:11 UTC). Code TBD (createPackLevel no uniqueness).
+- N2 [Sev4] /pharmacy/orders: React #418 hydration error for all roles (console pageerror). ev sweep desk results.
+- N3 [Sev3/UX] Pack form says "Available from this date at midnight UTC" (owner-facing UTC). ev own-medicine-pack-created.png
+
+## RE-VERIFIED (still reproduce)
+
+- #1013/#1046 dashboard for cashier/manager/pharmacist: Owner command centre + "Branches could not be loaded" (403 pharmacyReports.branches/catalog/getPreferences). ev sweep cashier__dashboard.png
+- #1018/#462/#979 nav shows Day close, Purchasing, Reports, Rx, Pharmacist queue, Substitution to cashier.
+- #1010 createSupplier/recordSupplierLicence/setSupplierAuthorization/createPO/approvePO no capability check (code). LIVE TBD.
+- #989/#1011 no pack ID/barcode/MRP in UI -> opening stock import dead end.
+- #1022/#1210 dashboard shows raw "REPORTS:FINANCIAL", "Source: pharmacy_sales + pharmacy_sale_lines".
+- #654 day close needs literal ADMIN: pharmacist sees "Sign in as a pharmacy administrator".
+- N4 [Sev1] Counter: unassigned non-admin can create bill + addLine (stock deducted) but counterCart/tender/transition 403 "Branch is outside your scope" -> can't pay or void; contradictory UI (SUCCESS added + BILL OPEN 0 LINES + bill could not be read). Live: onHand 80->50 after manager/pharmacist/cashier create+addLine 23:2x PKT. Code pharmacy-sales.ts:162-168 scopeFor (no cap/assignment) used by create (967) addLine; requireCounterReceiptAccess (381+) used by counterCart (1815), transition (1364). #509 CLOSED but reproduces (manager w/o counter cap created sale+line). ev cash-sale-cart2.png, out/rbac-sale.json
+- N5 [Sev3] Counter keyboard: Enter/ArrowDown in search can't select a result (counter-console.tsx:1910-1927 no arrow handling, Enter reruns search); F6 swallowed while focus in Quantity (counter-keymap.ts:286-309) -> silent no-op. ev cash-sale-selected.png
+- N6 [Sev3] Counter layout 1440x900: "Sale unit and quantity" card clips quantity stepper under next card; POS-04 "Workflow map" squashed. ev cash-sale-cart.png
+- N7 [Sev3] Goods-in: after "File receipt (draft)" no confirmation, form keeps values, button greys; draft only appears in Receipts list. ev mgr-grn-filed.png
+- RE #1010/#507 LIVE: cashier createSupplier+recordSupplierLicence(verified:true)+setSupplierAuthorization+createPO+submit; pharmacist approvePO 200; cashier send 200. 2026-11-02 ~23:1x PKT. out/rbac-purch-QA-RBAC-mvzktau8.json
+- RE #509 (closed) reproduces (see N4).
+- RE #520 discount approval caller-supplied (sales.ts:161-177).
+- Owner assigned cashier+pharmacist to MAIN at ~23:30 PKT (setup change).
+- N8 [Sev1/2] Counter: open bill lost on reload/failed tender (React state only, counter-console.tsx:309) AND its stock allocation persists; no list/resume/void UI; day close ignores OPEN bills (day-close.ts:32). Live: 6 abandoned bills held 90/100 units of QA-B1 -> "SHORT BY 10 UNITS" while shelf full. #420 CLOSED (sev3) reproduces + worse. 60 units still locked in 3 UI bills (ids unknown) 23:15-23:22 PKT.
+- N9 [Sev3] Drawer bound to browser-local device id (localStorage); new profile/incognito/other PC -> DRAWER_NOT_OPEN, old drawer left open; tender attempt fails only at payment, then whole counter locks incl. Open drawer until Refresh bill. ev cash-sale6-pay1.png. #1070 (one-click zero float) reproduces.
+- N10 [Sev3] After payment change due not visible (only in receipt preview below fold). ev cash-sale8-paid.png
+- N11 [Sev3] Printed receipt: "Tax breakdown unavailable in receipt source", "Canonical units: 10", "Invoice: Receipt 2", no pharmacy address/phone/licence/NTN/time/cashier. ev qa-evidence/cash-receipt-print-en.png(.html). Urdu: mixed English (Invoice/CASH/PKR), dev text translated, monospace font, bidi date flip. ev cash-receipt-print-ur.png
+- N12 [Sev3] Returns: sold STRIP labelled "1 BOX"/"One sold box contains 10 base units"; raw lot id + raw device id "counter-<uuid>" shown; "Receipt numbers can repeat" (per-device numbering). ev cash-return-lines.png cash-return-recorded.png
+- RE #1016 LIVE: cashier recorded return + CASH refund PKR 28.00 alone 23:3x PKT. ev cash-refund-done.png
+- RE #654 UI half: day-close-console.tsx:50 requires ADMIN; server requireCloseAccess allows pharmacy:close (pharmacist closePreview 200).
+- #1015 closeDay part FIXED (cashier/manager closePreview 403).
+- FEFO + MRP per batch OK: QA-B2 (exp 2027-01) sold at its MRP 28.00, change correct.
+- Concurrent tester on tenant: QA-20261102-FUNC-* + drawer device QA-20261102-FUNC-DEVICE using QA Cashier account (opened 23:12 PKT).
+- N13 [Sev1] Rx: no code path creates PharmacyPrescriber (only generated client) and no UI calls createPatient -> Prescriptions page Patient/Prescriber selects empty -> capture impossible -> every rx line has SAFETY_BLOCK RX_WITHOUT_PRESCRIPTION (counter-alerts.ts:146-167) -> no Rx medicine can be sold. Pharmacist live: "BLOCKED QA Amoxicillin ... requires a prescription". ev pharm-rx-add.png, pharm-rx-page.png. Related #1039 (copy only).
+- N14 [Sev3] Counter Rx panel shows controlled-drug PIN/register fields + "No independent pharmacist with an active staff PIN is available" for a NON-controlled Rx line (counter-console.tsx:2408-2418). ev pharm-rx-add.png
+- Rx gate for cashier works (403 needs pharmacist dispensing) -> #410 appears fixed; but cashier dead end, no handoff.
+- RE #1012 LIVE: cashier createMedicine saleable antibiotic flagged OTC (QA-RBAC Azithromycin 500mg, id cmvzld69001u54oqrrmp2w1rm) 23:27 PKT.
+- N15 [Sev2] PII: exportPatient (module-only, no capability) returns full unmasked phone (+923001234567) to Procurement user AND cashier, while readPatient masks it (*********4567). Live 23:30 PKT out/rbac2.json. Code pharmacy-prescriptions.ts:407.
+- N16 [Sev2] 500: pharmacyReports.createPharmacovigilanceReport returns INTERNAL_SERVER_ERROR for owner/pharmacist/cashier. Input {branchId, kind:ADVERSE_DRUG_REACTION, occurredAt:now, assertedDescription}. 2026-11-02 23:31:08 PKT. out/pv500.json. Code pharmacy-reports.ts:233-276.
+- N17 [Sev2] Cost price exposed to cashier: pharmacyInventory.expiryBoardLots rows include unitCostMinor (110), valueAtRiskMinor; pharmacyPurchasing.lotsFromReceipt includes inventoryLot.unitCostMinor; suppliers creditLimitMinor/paymentTermsDays. No reports:financial check. Live 23:31 PKT.
+- RE #412 LIVE: Procurement user openDrawer + PAID_IN/PAID_OUT 100 + closeDrawer 23:30 PKT.
+- RE #1036 LIVE: Procurement user createPatient + recordConsent(MARKETING, WHATSAPP, granted) 23:30 PKT.
+- RE #517 LIVE: Procurement user exportPharmacovigilanceDrap 200.
+- REPORT CHECK (23:47 PKT): commandCentre salesMinor 50598 == sum of 5 completed receipts (19998+5000+20000+2800+2800) OK. refundsMinor 42798 consistent. marginMinor 3600 = 64.00 margin - 28.00 refund (returned strip quarantined) -> plausible, not filed. Dashboard tile shows "Gross margin — Not available in this release" while API returns marginMinor (inconsistent copy).
+- N18 [Sev3] Receipt numbers repeat per device: three "Receipt 1" on MAIN 2026-11-02 (devices QA-20261102-CASHCHECK-DEVICE, counter-bbd93263…, QA-20261102-FUNC-DEVICE); printed receipt has no device/counter id -> customer copies indistinguishable; return lookup must pick by raw device id. out/receipts-recon.json
+- N19 [Sev3] Login throttle (10/account, 30/IP per 5 min, auth.ts:183-195) returns the same "Invalid email or password" during lockout (even with the right password) and keys on bare email -> anyone can lock a known user out for 5 min. Live: attempts 1-10 ~150 ms, 11-13 ~40 ms (throttled) with identical CredentialsSignin. out/ratelimit.json 23:3x PKT (fake account).
+- N20 [Sev3] Sign-out does not revoke the JWT: copied session cookie still returns 200 on tRPC + /api/auth/session sessionRevoked:false after /api/auth/signout (auth.ts:782-797 only audits; only "Sign out everywhere" bumps tokenVersion team.ts:840). Live 23:40:04-06 PKT out/session-revoke.json. Related #331 (cookie reissued on every read).
+- PASS XSS: payloads in supplier/patient/ingredient names rendered as text on suppliers, goods-in, prescriptions, counter patient search; receipt print escapes (counter-browser-print.ts:55-104); assistant uses react-markdown w/o rehype-raw.
+- PASS/SEV4 CSV injection: all pharmacy exporters neutralise =+-@; expiry-board csvCell (expiry-board.tsx:98-101) does not treat leading TAB/CR (accounts exporters do). Owner import rejects formulas.
+- PASS concurrency: 4 parallel addLine (80 units) vs 30-unit batch QA-B4 -> 20+10 from B4, rest from B2 (280->230), no oversell; void restored all. out/concurrency-*.json
+- FIXED #521/#636 (mixed-lot): 2-strip line across B4 (26.00) + B2 (28.00) charged 54.00 not 56.00. Receipt shows averaged "2 x 27.00" (Sev4 display).
+- N21 [Sev3] Offline: no offline indicator; cashier sees "Taking payment… Keep this bill open." while network down; payment completed when online again (good). Slow 3G: search 1.1 s, add 1.9 s. ev cash-counter-offline-pay.png
+- N22 [Sev2] Co-authorisation is a dropdown, not a second person: write-off posted with "Co-authorizing witness" = QA Cashier who never authenticated (QA-B3 300->290, 23:45 PKT, ev own-writeoff-cashier-witness.png). Dropdown also offers ineligible witnesses (QA Manager not branch-assigned) -> server COAUTH_REQUIRED; UI message says "second authorised pharmacist" though a cashier is accepted (counter-messages.ts:35, inventory-operations.ts:331-347). Same pattern: direct-purchase "Approved by" dropdown (#415), discount approver free text (#520).
+- N23 [Sev2] Opening-stock import: no sanity check cost vs MRP; template header says "Cost" but mapping is "Cost per base unit" while MRP is "per pack" -> cost 10.50/unit vs MRP 2.70/unit marked READY, valuation PKR 819.00 (10x). ev own-import-dryrun.png. Formula text shown as text (OK). Commit blocked once branch operating (#1029).
+- N24 [Sev2] No app-level Urdu: <html lang="en"> hard-coded (src/app/layout.tsx:217), no locale setting in /settings, no i18n lib; Urdu only on receipts/Z-report/medication card. ev cash-settings.png
+- N25 [Sev3] a11y /settings: aria-toggle-field-name x18 (serious), label x3 (critical, password fields), + global eyebrow contrast 2.64:1 (#1081/#1092 root cause = tenant brand #ff684f overriding --accent-brand, globals.css:528-530). Counter scrollable region not focusable (#427). Login clean.
+- RE #1032/#1069 responsive: tablet counter search box ~135px, Workflow map clipped, purchasing tabs cut; phone counter cards collapse/clip. No document-level horizontal overflow at 375/768. Cashier day close page has no H1.
+- DAY CLOSE (owner UI 23:48 PKT): expected 104.00 (verified by hand: 50+28+28+26-28), counted 100.00, variance -4.00 + note recorded; "Day closed. New tenders and drawer changes ... blocked". After close: cashier could still open a bill + add line (stock reserved), tender refused DAY_CLOSED (23:49:03 PKT); openDrawer DAY_CLOSED. No reopen exists.
+- N26 [Sev2] Day close: no reopen; counter cannot sell for rest of calendar day (until 00:00 PKT); counter shows no "day closed" state until payment fails, bill/stock already reserved. Late-night / 24h pharmacies blocked. ev own-dayclose-done.png, cash-after-close-pay.png
+- RECALL (API): cashier createRecall 403; pharmacist (safety override) createRecall by medicine 200 -> counter blocked RECALLED; closeRecall needs acknowledge first (INVALID_STATE) -> ack + close 200 -> stock available (190, 10 held by orphan Rx bill).
+- DARK: app ignores OS prefers-color-scheme (explicit toggle); toggled dark on counter/goods-in/dashboard/day close: readable. Controlled-medicine authorization panel shown to owner on counter with no controlled line (N14).
+- Billing/subscription: no tenant UI (plans only in code/platform).
+- New issues filed today by other session: #1214-#1222 (Ask Fathom UX, dark contrast, cashier dashboard) — dedupe.
+- DARK RE-RUN (after Codex fix, 2026-11-03 ~00:10 PKT): 34/34 pages data-theme=dark; no 5xx/pageerror/overflow; cashier day close NO-H1. axe dark: login 0; counter scrollable-region; receiving color-contrast x5 (PUR-xx tab codes opacity-70 4.24:1 + "Show resolved" link 1.21:1); day close aria-prohibited-attr (div aria-label="Tender totals").
+- N27 [Sev3] Dark mode: tenant brand tokens set inline on .studio-viewport (app-shell.tsx:190 tenantBrandTokens) in both themes: --primary:#111110 -> every text-primary link/button is #111110 on #242422 (1.21:1) in dark: onboarding step links, "Show resolved", Settings buttons (Edit/Dark/Default/Quiet). Related #1034 (left an unconfirmed dark link out of scope), #1081/#1092 (same override, light eyebrow). ev qa-evidence/dark-owner-goods-in-primary-link.png, api-evidence/axe-dark.json.
+- FOLLOW-UP LIVE (2026-11-03 00:39:59-00:40:00 PKT, api-evidence/verify-followups-qa-verify-mvzny1qg.json):
+  - N28 [Sev1] Default Pharmacist cannot take payment: tender 403 "You do not have permission" (tender requires canonical pharmacy:counter, pharmacy-sales.ts:827; Pharmacist template lacks it, vertical-catalog.ts:799-804). Cashier can't pay for a bill with an Rx line either (settlement.ts:322-326 assertRxSaleAllowed on payer). Only Owner/Operator can finish an Rx sale.
+  - N29 [Sev2] Prescription requirement enforced only in the browser: owner sold QA Amoxicillin (rx:true) with NO prescription via API -> settled receipt 1 (addLine pharmacy-sales.ts:1070-1072 has no prescription check; settlement checks only dispense).
+  - N30 [Sev2] Client-chosen businessDate: owner opened a drawer for 2026-11-05 and completed + refunded a sale on that future date (tender/openDrawer/refundTender take businessDate from input, pharmacy-sales.ts:134, :732).
+  - Cleanup: both completed test sales returned (quarantine) and refunded in full (verify-cleanup.json); pharmacist bill voided. Drawers opened for devices qa-verify-mvzny1qg-* remain open (incl. one dated 2026-11-05).
+- LOGOUT 75 s (00:40:40 -> 00:41:55 PKT): copied cookie still 200 / sessionRevoked:false 75 s after sign-out (api-evidence/session-revoke-75s.json) -> outside the 60 s revalidation window.

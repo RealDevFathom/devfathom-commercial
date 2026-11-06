@@ -4,6 +4,7 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import {
   listReceivingExceptions,
+  lockReceivablePurchaseOrder,
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
@@ -40,9 +41,10 @@ import {
   assertApprovalAllowed,
   assertPurchaseOrderTransition,
   assertRequisitionTransition,
-  assertSupplierEligible,
   compareQuotes,
+  effectiveCostPerSellableUnit,
   landedCost,
+  licenceEvidence,
   PharmacyPurchasingError,
   SEGREGATION_OF_DUTIES_POLICY,
   type QuoteCandidate,
@@ -64,6 +66,13 @@ import {
   receiptLineUnitCostMinor,
 } from '@/lib/pharmacy/receiving';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
+import {
+  enforceSupplierCompliance,
+  readSupplierCompliancePolicy,
+  recordSupplierComplianceSkip,
+  supersededLicenceIds,
+  type SupplierComplianceSubject,
+} from '@/lib/pharmacy/supplier-compliance-policy';
 import {
   allocateSupplierCredit,
   createPurchaseReturn,
@@ -317,23 +326,38 @@ function tenantScope(ctx: TRPCContext): { organizationId: string } {
  * PUR-01: refuse a supplier that may not be ordered from right now. `supplier`
  * is whatever the tenant-scoped client returned, so a row belonging to another
  * tenant arrives here as `null` and is refused on tenancy rather than licensing.
+ *
+ * DEV-753: the tenant owner's supplier-compliance policy, read on `db` (the same
+ * transaction as the write, where there is one), decides whether licence evidence
+ * and trade authorization are refusal reasons. With the checks on, supersession is
+ * read strictly (DEV-466). With them off, the write goes ahead and leaves an
+ * immutable evidence row. Tenancy is refused either way.
  */
-function assertOrderableSupplier(
+async function assertOrderableSupplier(
+  db: ScopedDb,
+  ctx: TRPCContext,
   supplier: {
+    id: string;
     authorized: boolean;
-    licences: { expiresAt: Date; verifiedAt: Date | null }[];
+    licences: { id: string; expiresAt: Date; verifiedAt: Date | null }[];
   } | null,
-  at: Date
+  at: Date,
+  subject: SupplierComplianceSubject,
+  options: { record?: boolean } = {}
 ) {
   if (!supplier) throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
-  assertSupplierEligible({
-    authorized: supplier.authorized,
-    licences: supplier.licences.map((licence) => ({
-      expiresAt: licence.expiresAt,
-      verified: licence.verifiedAt !== null,
-    })),
+  const actorId = ctx.session?.user?.id;
+  if (!actorId) {
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'No tenant actor on this request.' });
+  }
+  return enforceSupplierCompliance(
+    db,
+    { organizationId: tenantScope(ctx).organizationId, actorId },
+    supplier,
     at,
-  });
+    subject,
+    options
+  );
 }
 
 const WITH_LICENCES = { licences: true } as const;
@@ -435,22 +459,23 @@ const purchasingRouter = router({
       z
         .object({
           reference: z.string().trim().min(1).max(100),
-          branchId: z.string().min(1).optional(),
+          branchId: z.string().min(1).max(200).optional(),
           neededBy: z.date().optional(),
           note: z.string().trim().max(2000).optional(),
           lines: z
             .array(
               z
                 .object({
-                  medicineId: z.string().min(1),
-                  packLevelId: z.string().min(1),
+                  medicineId: z.string().min(1).max(200),
+                  packLevelId: z.string().min(1).max(200),
                   quantityPacks: z.number().int().positive(),
                   canonicalUnitsPerPack: z.number().int().positive(),
                   note: z.string().trim().max(500).optional(),
                 })
                 .strict()
             )
-            .min(1),
+            .min(1)
+            .max(100),
         })
         .strict()
     )
@@ -526,6 +551,7 @@ const purchasingRouter = router({
                   moqPacks: z.number().int().positive().default(1),
                   leadTimeDays: z.number().int().nonnegative().default(0),
                   minimumExpiryDays: z.number().int().nonnegative().default(0),
+                  forecastSellThroughPacks: z.number().int().positive(),
                   canonicalUnitsPerPack: z.number().int().positive(),
                 })
                 .strict()
@@ -583,15 +609,20 @@ const purchasingRouter = router({
           where: { requisitionLineId: requisitionLine.id },
           include: { quote: { include: { supplier: { include: { licences: true } } } } },
         });
+        // DEV-753 / DEV-466: the owner policy and strict supersession, read on the server.
+        const { organizationId } = tenantScope(ctx);
+        const superseded = await supersededLicenceIds(
+          ctx.db,
+          organizationId,
+          quoteLines.flatMap((line) => line.quote.supplier.licences.map((licence) => licence.id))
+        );
+        const policy = await readSupplierCompliancePolicy(ctx.db, organizationId);
         const candidates: QuoteCandidate[] = quoteLines.map((line) => ({
           quoteId: line.quoteId,
           supplierId: line.quote.supplierId,
           supplierName: line.quote.supplier.name,
           supplierAuthorized: line.quote.supplier.authorized,
-          supplierLicences: line.quote.supplier.licences.map((licence) => ({
-            expiresAt: licence.expiresAt,
-            verified: licence.verifiedAt !== null,
-          })),
+          supplierLicences: licenceEvidence(line.quote.supplier.licences, superseded),
           validUntil: line.quote.validUntil,
           pricePerPackMinor: line.pricePerPackMinor,
           canonicalUnitsPerPack: line.canonicalUnitsPerPack,
@@ -601,6 +632,9 @@ const purchasingRouter = router({
           moqPacks: line.moqPacks,
           leadTimeDays: line.leadTimeDays,
           minimumExpiryDays: line.minimumExpiryDays,
+          // A legacy quote has no recorded forecast; the comparison assumes it
+          // all sells and says so, rather than inventing one from the requisition.
+          forecastSellThroughPacks: line.forecastSellThroughPacks,
         }));
         return {
           requisitionLineId: requisitionLine.id,
@@ -610,7 +644,9 @@ const purchasingRouter = router({
             requiredPacks: requisitionLine.quantityPacks,
             candidates,
             at,
+            policy,
           }),
+          supplierChecksEnabled: policy.checksEnabled,
         };
       } catch (error) {
         domainError(error);
@@ -646,6 +682,9 @@ const purchasingRouter = router({
                   rebateBps: bps.default(0),
                   taxBps: bps.default(0),
                   taxCreditable: z.boolean().default(false),
+                  forecastSellThroughPacks: z.number().int().positive().optional(),
+                  minimumExpiryDays: z.number().int().nonnegative().optional(),
+                  leadTimeDays: z.number().int().nonnegative().optional(),
                 })
                 .strict()
             )
@@ -656,12 +695,20 @@ const purchasingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         // PUR-01: refuse an unauthorized or licence-expired supplier before anything is written.
-        assertOrderableSupplier(
+        // The gate is decided again below, in the transaction that writes the order.
+        await assertOrderableSupplier(
+          ctx.db,
+          ctx,
           await ctx.db.pharmacySupplier.findFirst({
             where: { id: input.supplierId },
             include: WITH_LICENCES,
           }),
-          new Date()
+          new Date(),
+          {
+            operation: 'PURCHASE_ORDER_CREATE',
+            reference: input.reference,
+          },
+          { record: false }
         );
         if (
           input.requisitionId &&
@@ -690,21 +737,86 @@ const purchasingRouter = router({
           otherChargesMinor: input.otherChargesMinor,
         });
 
-        const { lines, ...purchaseOrder } = input;
-        return await ctx.db.pharmacyPurchaseOrder.create({
-          data: {
-            ...purchaseOrder,
-            createdByUserId: ctx.session.user.id,
-            lines: {
-              create: lines.map((line, index) => ({
-                ...line,
-                lineNumber: index + 1,
-                orderedCanonicalUnits: line.orderedPacks * line.canonicalUnitsPerPack,
-                bonusCanonicalUnits: line.bonusPacks * line.canonicalUnitsPerPack,
-              })),
+        // The comparison assumptions retained on each line are quote facts, so
+        // they are copied from the stored quote lines and never trusted from the
+        // client. A line with no matching stored quote line carries none.
+        const quoteAssumptions = new Map<
+          string,
+          {
+            forecastSellThroughPacks: number | null;
+            minimumExpiryDays: number;
+            leadTimeDays: number;
+          }
+        >();
+        if (input.quoteId) {
+          const storedQuoteLines = await ctx.db.pharmacyQuoteLine.findMany({
+            where: {
+              quoteId: input.quoteId,
+              ...(input.requisitionId
+                ? { requisitionLine: { requisitionId: input.requisitionId } }
+                : {}),
             },
-          },
-          include: { lines: true },
+            include: { requisitionLine: { select: { medicineId: true } } },
+          });
+          for (const stored of storedQuoteLines) {
+            quoteAssumptions.set(stored.requisitionLine.medicineId, {
+              forecastSellThroughPacks: stored.forecastSellThroughPacks,
+              minimumExpiryDays: stored.minimumExpiryDays,
+              leadTimeDays: stored.leadTimeDays,
+            });
+          }
+        }
+
+        const { lines, ...purchaseOrder } = input;
+        // DEV-753: one transaction. The owner policy is share-locked while the order is
+        // written, and an order raised past the unchecked gate commits with its evidence,
+        // named by its own id, or not at all.
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const supplierGate = await assertOrderableSupplier(
+            db,
+            ctx,
+            await db.pharmacySupplier.findFirst({
+              where: { id: input.supplierId },
+              include: WITH_LICENCES,
+            }),
+            new Date(),
+            { operation: 'PURCHASE_ORDER_CREATE', reference: input.reference },
+            { record: false }
+          );
+          const created = await db.pharmacyPurchaseOrder.create({
+            data: {
+              ...purchaseOrder,
+              createdByUserId: ctx.session.user.id,
+              lines: {
+                create: lines.map((line, index) => ({
+                  ...line,
+                  forecastSellThroughPacks: undefined,
+                  minimumExpiryDays: undefined,
+                  leadTimeDays: undefined,
+                  ...quoteAssumptions.get(line.medicineId),
+                  lineNumber: index + 1,
+                  orderedCanonicalUnits: line.orderedPacks * line.canonicalUnitsPerPack,
+                  bonusCanonicalUnits: line.bonusPacks * line.canonicalUnitsPerPack,
+                })),
+              },
+            },
+            include: { lines: true },
+          });
+          if (!supplierGate.checked) {
+            await recordSupplierComplianceSkip(
+              db,
+              { organizationId: tenantScope(ctx).organizationId, actorId: ctx.session.user.id },
+              {
+                operation: 'PURCHASE_ORDER_CREATE',
+                supplierId: input.supplierId,
+                purchaseOrderId: created.id,
+                reference: input.reference,
+                outcome: supplierGate,
+              }
+            );
+          }
+          return created;
         });
       } catch (error) {
         domainError(error);
@@ -762,13 +874,39 @@ const purchasingRouter = router({
           });
           if (input.decision === 'APPROVED') {
             // Authorization can lapse between drafting and approval.
-            assertOrderableSupplier(
+            await assertOrderableSupplier(
+              txDb(tx),
+              ctx,
               await tx.pharmacySupplier.findFirst({
                 where: { id: order.supplierId },
                 include: WITH_LICENCES,
               }),
-              new Date()
+              new Date(),
+              { operation: 'PURCHASE_ORDER_APPROVE', purchaseOrderId: order.id }
             );
+          }
+
+          let updatedOrder;
+          try {
+            updatedOrder = await tx.pharmacyPurchaseOrder.update({
+              where: { id: order.id, status: 'SUBMITTED' },
+              data:
+                input.decision === 'APPROVED'
+                  ? {
+                      status: 'APPROVED',
+                      approvedAt: new Date(),
+                      approvedByUserId: ctx.session.user.id,
+                    }
+                  : { status: 'DRAFT' },
+            });
+          } catch (error) {
+            if ((error as { code?: unknown } | null)?.code === 'P2025') {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'Purchase order has already been reviewed.',
+              });
+            }
+            throw error;
           }
 
           await tx.pharmacyPurchaseOrderApproval.create({
@@ -782,17 +920,7 @@ const purchasingRouter = router({
               reason: input.reason,
             },
           });
-          return tx.pharmacyPurchaseOrder.update({
-            where: { id: order.id },
-            data:
-              input.decision === 'APPROVED'
-                ? {
-                    status: 'APPROVED',
-                    approvedAt: new Date(),
-                    approvedByUserId: ctx.session.user.id,
-                  }
-                : { status: 'DRAFT' },
-          });
+          return updatedOrder;
         });
       } catch (error) {
         domainError(error);
@@ -809,16 +937,24 @@ const purchasingRouter = router({
         if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
         assertPurchaseOrderTransition(order.status, 'SENT');
         // PUR-01 again: the supplier must still be orderable at the moment it is sent.
-        assertOrderableSupplier(
-          await ctx.db.pharmacySupplier.findFirst({
-            where: { id: order.supplierId },
-            include: WITH_LICENCES,
-          }),
-          new Date()
-        );
-        return await ctx.db.pharmacyPurchaseOrder.update({
-          where: { id: order.id },
-          data: { status: 'SENT', sentAt: new Date() },
+        // One transaction (DEV-753): the owner policy is share-locked for the send, and
+        // any unchecked-gate evidence commits with it.
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await assertOrderableSupplier(
+            db,
+            ctx,
+            await db.pharmacySupplier.findFirst({
+              where: { id: order.supplierId },
+              include: WITH_LICENCES,
+            }),
+            new Date(),
+            { operation: 'PURCHASE_ORDER_SEND', purchaseOrderId: order.id }
+          );
+          return db.pharmacyPurchaseOrder.update({
+            where: { id: order.id },
+            data: { status: 'SENT', sentAt: new Date() },
+          });
         });
       } catch (error) {
         domainError(error);
@@ -856,6 +992,15 @@ const purchasingRouter = router({
             ...line,
             purchaseOrderLineId: order.lines[index]!.id,
             medicineId: order.lines[index]!.medicineId,
+            ...(order.lines[index]!.forecastSellThroughPacks
+              ? effectiveCostPerSellableUnit({
+                  costMinor: line.landedCostMinor,
+                  paidPacks: order.lines[index]!.orderedPacks,
+                  bonusPacks: order.lines[index]!.bonusPacks,
+                  canonicalUnitsPerPack: order.lines[index]!.canonicalUnitsPerPack,
+                  forecastSellThroughPacks: order.lines[index]!.forecastSellThroughPacks!,
+                })
+              : {}),
           })),
         };
       } catch (error) {
@@ -884,6 +1029,8 @@ const purchasingRouter = router({
           purchaseOrderId: z.string().min(1).optional(),
           supplierInvoiceRef: z.string().trim().min(1).max(200),
           supplierInvoiceDate: z.date(),
+          distributorNtn: z.string().trim().min(1).max(60).optional(),
+          distributorStrn: z.string().trim().min(1).max(60).optional(),
           warrantyEvidenceRef: z.string().trim().min(1).max(500),
           receivedAt: z.date(),
           directPurchase: z
@@ -961,155 +1108,192 @@ const purchasingRouter = router({
       await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
-        // PUR-01: an unauthorized or licence-expired supplier cannot be
-        // received from, checked here and again when the receipt posts.
-        assertOrderableSupplier(
-          await ctx.db.pharmacySupplier.findFirst({
-            where: { id: input.supplierId },
-            include: WITH_LICENCES,
-          }),
-          input.receivedAt
-        );
-        if (input.directPurchase) {
-          assertDirectPurchaseAuthorized({
-            bypassReason: input.directPurchase.reason,
-            bypassApprovedByUserId: input.directPurchase.approvedByUserId,
-            receivedByUserId: scope.actorId,
-          });
-        }
-        if (
-          input.purchaseOrderId &&
-          !(await ctx.db.pharmacyPurchaseOrder.findFirst({
-            where: { id: input.purchaseOrderId, supplierId: input.supplierId },
-          }))
-        ) {
-          throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-        }
-
-        const ownOrderLines = input.purchaseOrderId
-          ? new Set(
-              (
-                await ctx.db.pharmacyPurchaseOrderLine.findMany({
-                  where: { purchaseOrderId: input.purchaseOrderId },
-                  select: { id: true },
-                })
-              ).map((line) => line.id)
-            )
-          : new Set<string>();
-
-        const lines = [];
-        const seenSerials = new Set<string>();
-        for (const [index, line] of input.lines.entries()) {
-          if (
-            !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
-          )
-            throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-          if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
-            throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
-          // An ordered line borrowed from another order — or from another
-          // tenant — would make the three-way match compare the goods against
-          // something they were never ordered on.
-          if (line.purchaseOrderLineId && !ownOrderLines.has(line.purchaseOrderLineId))
-            throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-
-          const quantities = receiptLineQuantities({
-            receivedPacks: line.receivedPacks,
-            bonusPacks: line.bonusPacks,
-            canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-            rejectedCanonicalUnits: line.rejectedCanonicalUnits,
-          });
-          const identity = await resolveReceiptLineIdentity(ctx.db, scope.organizationId, {
-            medicineId: line.medicineId,
-            batchNumber: line.batchNumber,
-            printedExpiry: line.printedExpiry,
-            expiryPrecision: line.expiryPrecision,
-            gtin: line.gtin,
-            serialNumber: line.serialNumber,
-            gs1Warnings: line.gs1Warnings,
-            gs1Payload: line.gs1Payload,
-            invoiceCorrection: line.invoiceCorrection,
-            acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
-            receivedAt: input.receivedAt,
-          });
-          if (identity.gtin && identity.serialKey) {
-            const token = `${identity.gtin}:${identity.serialKey}`;
-            if (seenSerials.has(token)) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
-            seenSerials.add(token);
-            const prior = await ctx.db.pharmacyGoodsReceiptLine.findFirst({
-              where: {
-                organizationId: scope.organizationId,
-                gtin: identity.gtin,
-                serialKey: identity.serialKey,
-              },
-              select: { id: true },
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          if (input.purchaseOrderId) {
+            // Lock the referenced order before validating any mutable data so
+            // cancellation cannot commit while the receipt is being checked.
+            await lockReceivablePurchaseOrder(db, scope, {
+              purchaseOrderId: input.purchaseOrderId,
+              supplierId: input.supplierId,
             });
-            if (prior) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
           }
-          // The tenant and branch are not repeated here: they travel in the
-          // composite key of the receipt this line is nested under, so Prisma
-          // supplies them and a payload could never disagree with the header.
-          lines.push({
-            lineNumber: index + 1,
-            purchaseOrderLineId: line.purchaseOrderLineId ?? null,
-            medicineId: line.medicineId,
-            packLevelId: line.packLevelId,
-            batchNumber: identity.batchNumber,
-            printedExpiry: identity.printedExpiry,
-            expiryPrecision: identity.expiryPrecision,
-            printedMrpMinor: line.printedMrpMinor,
-            canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-            receivedPacks: line.receivedPacks,
-            bonusPacks: line.bonusPacks,
-            receivedCanonicalUnits: quantities.receivedCanonicalUnits,
-            bonusCanonicalUnits: quantities.bonusCanonicalUnits,
-            acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
-            rejectedCanonicalUnits: quantities.rejectedCanonicalUnits,
-            rejectionReason: line.rejectionReason ?? null,
-            invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
-            discountBps: line.discountBps,
-            taxBps: line.taxBps,
-            taxCreditable: line.taxCreditable,
-            // PUR-03: bonus units divide the same money over more units, so a
-            // scheme lowers the landed cost and never adds revenue.
-            unitCostMinor: receiptLineUnitCostMinor({
+          // PUR-01: an unauthorized or licence-expired supplier cannot be
+          // received from, checked here and again when the receipt posts.
+          await assertOrderableSupplier(
+            db,
+            ctx,
+            await db.pharmacySupplier.findFirst({
+              where: { id: input.supplierId },
+              include: WITH_LICENCES,
+            }),
+            input.receivedAt,
+            {
+              operation: 'GOODS_RECEIPT_CREATE',
+              purchaseOrderId: input.purchaseOrderId ?? null,
+              reference: input.reference,
+            }
+          );
+          if (input.directPurchase) {
+            assertDirectPurchaseAuthorized({
+              bypassReason: input.directPurchase.reason,
+              bypassApprovedByUserId: input.directPurchase.approvedByUserId,
+              receivedByUserId: scope.actorId,
+            });
+          }
+          const ownOrderLines = new Map(
+            input.purchaseOrderId
+              ? (
+                  await db.pharmacyPurchaseOrderLine.findMany({
+                    where: { purchaseOrderId: input.purchaseOrderId },
+                    select: { id: true, medicineId: true, packLevelId: true },
+                  })
+                ).map((line) => [line.id, line] as const)
+              : []
+          );
+
+          const lines = [];
+          const seenSerials = new Set<string>();
+          for (const [index, line] of input.lines.entries()) {
+            if (!(await db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } })))
+              throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            if (!(await db.packLevel.findFirst({ where: { id: line.packLevelId } })))
+              throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
+            // An ordered line borrowed from another order — or from another
+            // tenant — would make the three-way match compare the goods against
+            // something they were never ordered on.
+            if (line.purchaseOrderLineId) {
+              const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
+              if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+              // The referenced order line is the authority for item identity. Without
+              // this check, unrelated goods could inherit its price and quantity terms,
+              // pass three-way matching, and close the wrong ordered line.
+              if (
+                orderLine.medicineId !== line.medicineId ||
+                orderLine.packLevelId !== line.packLevelId
+              ) {
+                throw new PharmacyReceivingError('PURCHASE_ORDER_LINE_ITEM_MISMATCH');
+              }
+            }
+
+            const quantities = receiptLineQuantities({
               receivedPacks: line.receivedPacks,
               bonusPacks: line.bonusPacks,
               canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+              rejectedCanonicalUnits: line.rejectedCanonicalUnits,
+            });
+            const identity = await resolveReceiptLineIdentity(db, scope.organizationId, {
+              medicineId: line.medicineId,
+              batchNumber: line.batchNumber,
+              printedExpiry: line.printedExpiry,
+              expiryPrecision: line.expiryPrecision,
+              gtin: line.gtin,
+              serialNumber: line.serialNumber,
+              gs1Warnings: line.gs1Warnings,
+              gs1Payload: line.gs1Payload,
+              invoiceCorrection: line.invoiceCorrection,
+              acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
+              receivedAt: input.receivedAt,
+            });
+            // GS1 AI(21) names ONE pack. A shared batch/expiry may cover many
+            // packs; a serial never does, so it cannot be cloned onto a count.
+            if (identity.serialKey && line.receivedPacks + line.bonusPacks !== 1) {
+              throw new PharmacyReceivingError('SERIALIZED_PACK_QUANTITY');
+            }
+            // Fail at draft time, not post time, when a shelf is not this branch's.
+            for (const locationId of [line.stockLocationId, line.quarantineLocationId]) {
+              if (!locationId) continue;
+              const location = await db.pharmacyStockLocation.findFirst({
+                where: { id: locationId, organizationId: scope.organizationId },
+                select: { branchId: true },
+              });
+              if (!location) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+              if (location.branchId !== scope.branchId) {
+                throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
+              }
+            }
+            if (identity.gtin && identity.serialKey) {
+              const token = `${identity.gtin}:${identity.serialKey}`;
+              if (seenSerials.has(token)) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
+              seenSerials.add(token);
+              const prior = await db.pharmacyGoodsReceiptLine.findFirst({
+                where: {
+                  organizationId: scope.organizationId,
+                  gtin: identity.gtin,
+                  serialKey: identity.serialKey,
+                },
+                select: { id: true },
+              });
+              if (prior) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
+            }
+            // The tenant and branch are not repeated here: they travel in the
+            // composite key of the receipt this line is nested under, so Prisma
+            // supplies them and a payload could never disagree with the header.
+            lines.push({
+              lineNumber: index + 1,
+              purchaseOrderLineId: line.purchaseOrderLineId ?? null,
+              medicineId: line.medicineId,
+              packLevelId: line.packLevelId,
+              batchNumber: identity.batchNumber,
+              printedExpiry: identity.printedExpiry,
+              expiryPrecision: identity.expiryPrecision,
+              printedMrpMinor: line.printedMrpMinor,
+              canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+              receivedPacks: line.receivedPacks,
+              bonusPacks: line.bonusPacks,
+              receivedCanonicalUnits: quantities.receivedCanonicalUnits,
+              bonusCanonicalUnits: quantities.bonusCanonicalUnits,
+              acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
+              rejectedCanonicalUnits: quantities.rejectedCanonicalUnits,
+              rejectionReason: line.rejectionReason ?? null,
               invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
               discountBps: line.discountBps,
               taxBps: line.taxBps,
               taxCreditable: line.taxCreditable,
-            }),
-            stockLocationId: line.stockLocationId,
-            quarantineLocationId: line.quarantineLocationId ?? null,
-            gtin: identity.gtin,
-            serialNumber: identity.serialNumber,
-            serialKey: identity.serialKey,
-            gs1Warnings: identity.gs1Warnings,
-          });
-        }
+              // PUR-03: bonus units divide the same money over more units, so a
+              // scheme lowers the landed cost and never adds revenue.
+              unitCostMinor: receiptLineUnitCostMinor({
+                receivedPacks: line.receivedPacks,
+                bonusPacks: line.bonusPacks,
+                canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+                invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+                discountBps: line.discountBps,
+                taxBps: line.taxBps,
+                taxCreditable: line.taxCreditable,
+              }),
+              stockLocationId: line.stockLocationId,
+              quarantineLocationId: line.quarantineLocationId ?? null,
+              gtin: identity.gtin,
+              serialNumber: identity.serialNumber,
+              serialKey: identity.serialKey,
+              gs1Warnings: identity.gs1Warnings,
+            });
+          }
 
-        return await ctx.db.pharmacyGoodsReceipt.create({
-          data: {
-            organizationId: scope.organizationId,
-            branchId: scope.branchId,
-            reference: input.reference,
-            supplierId: input.supplierId,
-            purchaseOrderId: input.purchaseOrderId ?? null,
-            supplierInvoiceRef: input.supplierInvoiceRef,
-            supplierInvoiceDate: input.supplierInvoiceDate,
-            warrantyEvidenceRef: input.warrantyEvidenceRef,
-            receivedByUserId: scope.actorId,
-            receivedAt: input.receivedAt,
-            directPurchase: Boolean(input.directPurchase),
-            bypassReason: input.directPurchase?.reason ?? null,
-            bypassApprovedByUserId: input.directPurchase?.approvedByUserId ?? null,
-            bypassApprovedAt: input.directPurchase ? new Date() : null,
-            note: input.note,
-            qualifiedPersonUserId: input.qualifiedPersonUserId ?? null,
-            lines: { create: lines },
-          },
-          include: { lines: { orderBy: { lineNumber: 'asc' } } },
+          return await db.pharmacyGoodsReceipt.create({
+            data: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              reference: input.reference,
+              supplierId: input.supplierId,
+              purchaseOrderId: input.purchaseOrderId ?? null,
+              supplierInvoiceRef: input.supplierInvoiceRef,
+              supplierInvoiceDate: input.supplierInvoiceDate,
+              distributorNtn: input.distributorNtn ?? null,
+              distributorStrn: input.distributorStrn ?? null,
+              warrantyEvidenceRef: input.warrantyEvidenceRef,
+              receivedByUserId: scope.actorId,
+              receivedAt: input.receivedAt,
+              directPurchase: Boolean(input.directPurchase),
+              bypassReason: input.directPurchase?.reason ?? null,
+              bypassApprovedByUserId: input.directPurchase?.approvedByUserId ?? null,
+              bypassApprovedAt: input.directPurchase ? new Date() : null,
+              note: input.note,
+              qualifiedPersonUserId: input.qualifiedPersonUserId ?? null,
+              lines: { create: lines },
+            },
+            include: { lines: { orderBy: { lineNumber: 'asc' } } },
+          });
         });
       } catch (error) {
         domainError(error);
@@ -1164,21 +1348,44 @@ const purchasingRouter = router({
       }
     }),
 
-  /** Qualified people who can enter a PIN when a controlled receipt is posted. */
-  controlledWitnesses: protectedProcedure.query(async ({ ctx }) => {
-    const actorId = ctx.session?.user?.id;
-    if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    const actor = subjectFromSession(ctx.session!.user);
-    if (
-      !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
-      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
-    ) {
-      throw new TRPCError({ code: 'FORBIDDEN' });
-    }
-    const organizationId = ctx.entitlements?.organizationId;
-    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    return listControlledPinWitnesses(ctx.db, organizationId, actorId);
-  }),
+  /** The receipt's qualified person, when they can enter a PIN to witness posting. */
+  controlledWitnesses: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          goodsReceiptId: z.string().min(1),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const actorId = ctx.session?.user?.id;
+      if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const actor = subjectFromSession(ctx.session!.user);
+      if (
+        !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
+        !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      const organizationId = ctx.entitlements?.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
+        where: {
+          id: input.goodsReceiptId,
+          organizationId,
+          branchId: input.branchId,
+        },
+        select: { qualifiedPersonUserId: true },
+      });
+      if (!receipt?.qualifiedPersonUserId || receipt.qualifiedPersonUserId === actorId) return [];
+      return listControlledPinWitnesses(
+        ctx.db,
+        organizationId,
+        actorId,
+        receipt.qualifiedPersonUserId
+      );
+    }),
 
   /**
    * PUR-04: undo a posting with linked compensating movements. Nothing that was
@@ -1196,6 +1403,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await ctx.db.$transaction((tx) =>

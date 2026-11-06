@@ -22,10 +22,25 @@ const mocks = vi.hoisted(() => ({
   closeOrder: vi.fn(),
   sendOrder: vi.fn(),
   voidItem: vi.fn(),
+  cancelOrder: vi.fn(),
+  staffFindMany: vi.fn(),
+  queryRawUnsafe: vi.fn(),
+  authenticateOperator: vi.fn(),
+  operatorHasCapability: vi.fn(),
+  withTenantDb: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+  withTenantDb: mocks.withTenantDb,
+}));
+vi.mock('@/lib/restaurant/terminal-auth', () => ({
+  authenticateOperator: mocks.authenticateOperator,
+}));
+vi.mock('@/lib/restaurant/checkout-routes', () => ({
+  operatorHasCapability: mocks.operatorHasCapability,
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
@@ -51,17 +66,21 @@ vi.mock('@/lib/restaurant/orders', async () => {
     closeOrder: mocks.closeOrder,
     sendOrder: mocks.sendOrder,
     voidItem: mocks.voidItem,
+    cancelOrder: mocks.cancelOrder,
   };
 });
 
 import { restaurantOrdersRouter } from './restaurant-orders';
 import { OrderCommandError } from '@/lib/restaurant/orders';
+import { buildCoAuthorizationRecord } from '@/lib/restaurant/co-authorization';
 import type { TRPCContext } from '../trpc';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const db = {
   restaurantOrder: { findMany: mocks.orderFindMany, findUnique: mocks.orderFindUnique },
   restaurantKitchenTicket: { findMany: mocks.ticketFindMany },
+  restaurantStaffProfile: { findMany: mocks.staffFindMany },
+  $queryRawUnsafe: mocks.queryRawUnsafe,
   restaurantBranch: {
     findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
       (where.id?.in ?? []).map((id) => ({ id }))
@@ -97,6 +116,15 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
   mocks.orderFindMany.mockResolvedValue([]);
   mocks.ticketFindMany.mockResolvedValue([]);
+  // The session user (`user_gm`) has exactly one ACTIVE staff profile.
+  mocks.staffFindMany.mockResolvedValue([{ id: 'staff_1' }]);
+  mocks.queryRawUnsafe.mockResolvedValue([]);
+  mocks.withTenantDb.mockImplementation(
+    async (_organizationId: string, work: (tx: unknown) => unknown) => work(db)
+  );
+  mocks.authenticateOperator.mockResolvedValue({ ok: true, staffProfileId: 'mgr_1' });
+  mocks.operatorHasCapability.mockResolvedValue(true);
+  mocks.orderFindUnique.mockResolvedValue({ branchId: 'branch_1' });
 });
 
 describe('read model (C10)', () => {
@@ -145,8 +173,17 @@ describe('read model (C10)', () => {
         }),
       })
     );
-    expect(result.orders[0].itemCount).toBe(2);
+    expect(result.orders[0].itemCount).toBe(3);
     expect(result.nextCursor).toBeNull();
+    expect(mocks.orderFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          items: expect.objectContaining({
+            where: { status: { not: 'VOIDED' }, remakeOfItemId: null },
+          }),
+        }),
+      })
+    );
   });
 
   it('returns a nextCursor when a full page + 1 is fetched', async () => {
@@ -208,6 +245,42 @@ describe('read model (C10)', () => {
             { id: 'm1', modifierOptionId: 'opt1', name: 'Cheese', priceDelta: D('1.50') },
           ],
         },
+        {
+          id: 'i1-remake-1',
+          course: 1,
+          seatNumber: null,
+          productId: 'p1',
+          variantId: null,
+          name: 'Burger',
+          unitPrice: D('10.00'),
+          quantity: 1,
+          taxAmount: D('0'),
+          serviceChargeAmount: D('0'),
+          status: 'QUEUED',
+          remakeOfItemId: 'i1',
+          voidedPostPrep: false,
+          wastageDisposition: null,
+          voidReason: null,
+          modifiers: [],
+        },
+        {
+          id: 'i1-remake-2',
+          course: 1,
+          seatNumber: null,
+          productId: 'p1',
+          variantId: null,
+          name: 'Burger',
+          unitPrice: D('10.00'),
+          quantity: 1,
+          taxAmount: D('0'),
+          serviceChargeAmount: D('0'),
+          status: 'QUEUED',
+          remakeOfItemId: 'i1-remake-1',
+          voidedPostPrep: false,
+          wastageDisposition: null,
+          voidReason: null,
+          modifiers: [],
+        },
       ],
       orderTables: [],
       events: [],
@@ -216,6 +289,7 @@ describe('read model (C10)', () => {
     const order = await caller().getOrder({ orderId: 'o1' });
     expect(order.items[0].unitPrice).toBe('10');
     expect(order.items[0].modifiers[0].priceDelta).toBe('1.5');
+    expect(order.items.map((item) => item.remakeOfItemId)).toEqual([null, 'i1', 'i1-remake-1']);
     expect(order.totals.subtotal).toBe('11.5');
     expect(order.totals.tax).toBe('0');
   });
@@ -332,10 +406,362 @@ describe('mutation wiring', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
+  it('maps opening an order on a closed day to CONFLICT', async () => {
+    mocks.openOrder.mockRejectedValueOnce(
+      new OrderCommandError('This business day is closed; no order can be opened.', 'DAY_CLOSED')
+    );
+    await expect(
+      caller().open({ branchId: 'b1', channel: 'DINE_IN', actor: ACTOR })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'This business day is closed; no order can be opened.',
+    });
+  });
+
   it('maps a terminal-state conflict to CONFLICT', async () => {
     mocks.closeOrder.mockRejectedValue(new OrderCommandError('already closed', 'ORDER_TERMINAL'));
     await expect(caller().close({ orderId: 'o1', actor: ACTOR })).rejects.toMatchObject({
       code: 'CONFLICT',
+    });
+  });
+
+  it('maps a post-cut item void to CONFLICT', async () => {
+    mocks.voidItem.mockRejectedValue(
+      new OrderCommandError('void and recut the bill first', 'BILL_ALREADY_CUT')
+    );
+    await expect(
+      caller().voidItem({ orderId: 'o1', itemId: 'i1', reason: 'changed mind', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+});
+
+// ── H5: back-office void/cancel maker-checker ─────────────────────────────────
+
+describe('void/cancel approver authentication (H5)', () => {
+  const POST_PREP_VOID = {
+    orderId: 'o1',
+    itemId: 'i1',
+    reason: 'Burnt',
+    wastageDisposition: 'WASTE' as const,
+    actor: ACTOR,
+  };
+  const PIN = { type: 'PIN' as const, secret: '4821' };
+
+  beforeEach(() => {
+    mocks.voidItem.mockResolvedValue({ itemId: 'i1', replayed: false });
+    mocks.cancelOrder.mockResolvedValue({ orderId: 'o1', replayed: false });
+  });
+
+  it('refuses a caller-supplied approver id with no credential', async () => {
+    await expect(
+      caller().voidItem({ ...POST_PREP_VOID, approvingStaffProfileId: 'mgr_1' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().cancel({
+        orderId: 'o1',
+        reason: 'Walkout',
+        approvingStaffProfileId: 'mgr_1',
+        actor: ACTOR,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.authenticateOperator).not.toHaveBeenCalled();
+    expect(mocks.voidItem).not.toHaveBeenCalled();
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it.each(['INVALID', 'LOCKED', 'REVOKED'])(
+    'refuses a %s approver credential with one uniform answer',
+    async (reason) => {
+      mocks.authenticateOperator.mockResolvedValue({ ok: false, reason });
+      await expect(
+        caller().voidItem({
+          ...POST_PREP_VOID,
+          approvingStaffProfileId: 'mgr_1',
+          approvingCredential: { type: 'PIN', secret: '0000' },
+        })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Approving credential is invalid or locked.',
+      });
+      expect(mocks.voidItem).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses an approver without coauth:approve at the order branch, with the same answer', async () => {
+    mocks.operatorHasCapability.mockResolvedValue(false);
+    await expect(
+      caller().cancel({
+        orderId: 'o1',
+        reason: 'Walkout',
+        approvingStaffProfileId: 'mgr_1',
+        approvingCredential: PIN,
+        actor: ACTOR,
+      })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Approving credential is invalid or locked.',
+    });
+    expect(mocks.operatorHasCapability).toHaveBeenCalledWith(
+      db,
+      'mgr_1',
+      'coauth:approve',
+      expect.any(Date),
+      'branch_1'
+    );
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('verifies the approver credential in an independent, row-locked tenant transaction', async () => {
+    await caller().voidItem({
+      ...POST_PREP_VOID,
+      approvingStaffProfileId: 'mgr_1',
+      approvingCredential: PIN,
+    });
+    expect(mocks.withTenantDb).toHaveBeenCalledWith('org_1', expect.any(Function));
+    expect(mocks.queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('FOR UPDATE'),
+      'mgr_1',
+      'PIN'
+    );
+    expect(mocks.authenticateOperator).toHaveBeenCalledWith(db, {
+      staffProfileId: 'mgr_1',
+      type: 'PIN',
+      secret: '4821',
+      now: expect.any(Date),
+    });
+  });
+
+  it('records the session actor and the credential-verified approver, ignoring a forged actor', async () => {
+    await caller().voidItem({
+      ...POST_PREP_VOID,
+      approvingStaffProfileId: 'mgr_1',
+      approvingCredential: PIN,
+      actor: { ...ACTOR, staffProfileId: 'victim' },
+    });
+    expect(mocks.voidItem).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        approvingStaffProfileId: 'mgr_1',
+        actor: { staffProfileId: 'staff_1', deviceId: 'dev_1', idempotencyKey: 'key_1' },
+      })
+    );
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), { skipInput: true });
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({ approvalMode: 'SECOND_OPERATOR' }),
+      })
+    );
+  });
+
+  it('cancels with a credential-verified approver attributed to the session actor', async () => {
+    await caller().cancel({
+      orderId: 'o1',
+      reason: 'Walkout',
+      approvingStaffProfileId: 'mgr_1',
+      approvingCredential: { type: 'BADGE', secret: 'badge-1' },
+      actor: { ...ACTOR, staffProfileId: 'victim' },
+    });
+    expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        approvingStaffProfileId: 'mgr_1',
+        actor: expect.objectContaining({ staffProfileId: 'staff_1' }),
+      })
+    );
+  });
+
+  it('attributes an unapproved (pre-prep) void to the session actor', async () => {
+    await caller().voidItem({
+      orderId: 'o1',
+      itemId: 'i1',
+      reason: 'Changed mind',
+      actor: { ...ACTOR, staffProfileId: 'victim' },
+    });
+    expect(mocks.voidItem).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        approvingStaffProfileId: null,
+        actor: expect.objectContaining({ staffProfileId: 'staff_1' }),
+      })
+    );
+    expect(mocks.authenticateOperator).not.toHaveBeenCalled();
+  });
+
+  it('fails closed without an active session staff profile', async () => {
+    mocks.staffFindMany.mockResolvedValue([]);
+    await expect(
+      caller().voidItem({
+        ...POST_PREP_VOID,
+        approvingStaffProfileId: 'mgr_1',
+        approvingCredential: PIN,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.voidItem).not.toHaveBeenCalled();
+  });
+
+  it("acts as a multi-branch employee's profile at the order branch", async () => {
+    mocks.staffFindMany.mockResolvedValue([
+      { id: 'staff_elsewhere', primaryBranchId: 'branch_2', jobRoles: [] },
+      { id: 'staff_here', primaryBranchId: 'branch_9', jobRoles: [{ jobRoleId: 'server' }] },
+    ]);
+    await caller().voidItem({
+      ...POST_PREP_VOID,
+      approvingStaffProfileId: 'mgr_1',
+      approvingCredential: PIN,
+    });
+    expect(mocks.staffFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: 'user_gm', organizationId: 'org_1', status: 'ACTIVE' },
+        orderBy: { id: 'asc' },
+      })
+    );
+    expect(mocks.voidItem).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        actor: expect.objectContaining({ staffProfileId: 'staff_here' }),
+      })
+    );
+  });
+
+  it('accepts a maker-checker actor envelope without a client-supplied staff id', async () => {
+    await caller().cancel({
+      orderId: 'o1',
+      reason: 'Walkout',
+      approvingStaffProfileId: 'mgr_1',
+      approvingCredential: PIN,
+      actor: { deviceId: 'dev_1', idempotencyKey: 'key_1' },
+    });
+    expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        actor: { staffProfileId: 'staff_1', deviceId: 'dev_1', idempotencyKey: 'key_1' },
+      })
+    );
+  });
+
+  it('returns NOT_FOUND for an order outside the tenant before checking credentials', async () => {
+    mocks.orderFindUnique.mockResolvedValue(null);
+    await expect(
+      caller().voidItem({
+        ...POST_PREP_VOID,
+        approvingStaffProfileId: 'mgr_1',
+        approvingCredential: PIN,
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mocks.authenticateOperator).not.toHaveBeenCalled();
+  });
+
+  describe('sole-owner self-approval', () => {
+    const owner = { id: 'staff_1', user: { organizationRole: { key: 'owner' } }, jobRoles: [] };
+    function staffRoster(roster: unknown[]) {
+      mocks.staffFindMany.mockImplementation(async (args: { select?: { user?: unknown } }) =>
+        // `isSoloOwner` selects the user's role; the session lookup selects only ids.
+        args?.select?.user ? roster : [{ id: 'staff_1' }]
+      );
+    }
+    let recorded: ReturnType<typeof buildCoAuthorizationRecord> | null;
+
+    beforeEach(() => {
+      recorded = null;
+      mocks.authenticateOperator.mockResolvedValue({ ok: true, staffProfileId: 'staff_1' });
+      // Run the real co-authorization primitive the command layer would call, so
+      // the test proves the solo proof reaches the persisted record.
+      mocks.voidItem.mockImplementation(
+        async (
+          _db: unknown,
+          input: {
+            approvingStaffProfileId: string;
+            reason: string;
+            itemId: string;
+            actor: { staffProfileId: string; deviceId: string };
+          }
+        ) => {
+          recorded = buildCoAuthorizationRecord({
+            actingStaffProfileId: input.actor.staffProfileId,
+            approvingStaffProfileId: input.approvingStaffProfileId,
+            capability: 'orders:void',
+            reason: input.reason,
+            targetType: 'RestaurantOrderItem',
+            targetId: input.itemId,
+            deviceId: input.actor.deviceId,
+          });
+          return { itemId: input.itemId, replayed: false };
+        }
+      );
+    });
+
+    it('lets the only active staff member, an owner, approve after a fresh PIN', async () => {
+      staffRoster([owner]);
+      await caller().voidItem({
+        ...POST_PREP_VOID,
+        approvingStaffProfileId: 'staff_1',
+        approvingCredential: PIN,
+      });
+      expect(recorded).toMatchObject({
+        actingStaffProfileId: 'staff_1',
+        approvingStaffProfileId: 'staff_1',
+        reason: 'Burnt [Owner PIN reauthentication]',
+        terminalSessionId: null,
+      });
+      expect(mocks.annotateAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          metadata: expect.objectContaining({ approvalMode: 'OWNER_PIN_REAUTHENTICATION' }),
+        })
+      );
+    });
+
+    it('refuses a solo owner whose PIN is wrong', async () => {
+      staffRoster([owner]);
+      mocks.authenticateOperator.mockResolvedValue({ ok: false, reason: 'INVALID' });
+      await expect(
+        caller().voidItem({
+          ...POST_PREP_VOID,
+          approvingStaffProfileId: 'staff_1',
+          approvingCredential: { type: 'PIN', secret: '0000' },
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.voidItem).not.toHaveBeenCalled();
+    });
+
+    it('refuses self-approval once a second active staff member exists', async () => {
+      staffRoster([owner, { id: 'staff_2', user: null, jobRoles: [] }]);
+      await expect(
+        caller().cancel({
+          orderId: 'o1',
+          reason: 'Walkout',
+          approvingStaffProfileId: 'staff_1',
+          approvingCredential: PIN,
+          actor: ACTOR,
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.cancelOrder).not.toHaveBeenCalled();
+    });
+
+    it('refuses self-approval by badge (a PIN re-entry is required)', async () => {
+      staffRoster([owner]);
+      await expect(
+        caller().voidItem({
+          ...POST_PREP_VOID,
+          approvingStaffProfileId: 'staff_1',
+          approvingCredential: { type: 'BADGE', secret: 'badge-1' },
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.authenticateOperator).not.toHaveBeenCalled();
+      expect(mocks.voidItem).not.toHaveBeenCalled();
+    });
+
+    it('refuses self-approval by a sole staff member who is not an owner', async () => {
+      staffRoster([{ ...owner, user: { organizationRole: { key: 'cashier' } } }]);
+      await expect(
+        caller().voidItem({
+          ...POST_PREP_VOID,
+          approvingStaffProfileId: 'staff_1',
+          approvingCredential: PIN,
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.voidItem).not.toHaveBeenCalled();
     });
   });
 });

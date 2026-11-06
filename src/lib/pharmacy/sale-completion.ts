@@ -4,7 +4,10 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
 import { postSaleLineEntry } from './finance-postings';
+import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
+import { assertRxSaleAllowed } from './rx-sale-gate';
+import { recordCompletedPrescriptionReference } from './rx-prescription-reference';
 
 export const completionSaleInclude = {
   lines: {
@@ -26,6 +29,15 @@ export async function completePaidPharmacySale(
   /** F2: a leased offline receipt number the caller already consumed in this transaction. */
   leasedReceiptNumber: number | null = null
 ) {
+  // #518: every completion path re-checks who may sell Rx/restricted non-controlled lines.
+  await assertRxSaleAllowed(
+    db,
+    scope,
+    sale.lines.map((line) => line.medicine)
+  );
+  // #659: re-check every batch under lock before a receipt number is drawn. The receipt
+  // snapshot below records these checked facts, not the ones loaded with the sale.
+  const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
   let receiptNumber = leasedReceiptNumber;
   if (receiptNumber === null) {
     // Reserved (leased) numbers never return to this online sequence.
@@ -48,6 +60,26 @@ export async function completePaidPharmacySale(
       businessDate: input.businessDate,
     },
   });
+  for (const line of sale.lines) {
+    if (line.prescriptionLineId) {
+      await recordCompletedPrescriptionReference(
+        db,
+        scope,
+        {
+          id: line.id,
+          organizationId: line.organizationId,
+          branchId: line.branchId,
+          medicineId: line.medicineId,
+          presentationId: line.presentationId,
+          canonicalUnits: line.canonicalUnits,
+          prescriptionLineId: line.prescriptionLineId,
+          prescriptionPatientId: line.prescriptionPatientId ?? null,
+          saleId: sale.id,
+        },
+        issuedAt
+      );
+    }
+  }
   for (const line of sale.lines) {
     if (
       line.organizationId !== scope.organizationId ||
@@ -92,13 +124,16 @@ export async function completePaidPharmacySale(
               .join(' + ')
           : null,
         presentation: line.presentation.presentation,
-        allocations: line.allocations.map((allocation) => ({
-          allocationId: allocation.id,
-          inventoryLotId: allocation.inventoryLotId,
-          batchNumber: allocation.lot.batch.batchNumber,
-          expiresAt: allocation.lot.batch.expiresAt.toISOString(),
-          canonicalUnits: allocation.canonicalUnits,
-        })),
+        allocations: line.allocations.map((allocation) => {
+          const batch = checkedBatches.get(allocation.inventoryLotId) ?? allocation.lot.batch;
+          return {
+            allocationId: allocation.id,
+            inventoryLotId: allocation.inventoryLotId,
+            batchNumber: batch.batchNumber,
+            expiresAt: batch.expiresAt.toISOString(),
+            canonicalUnits: allocation.canonicalUnits,
+          };
+        }),
       })),
     },
     {

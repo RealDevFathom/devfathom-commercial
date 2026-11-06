@@ -18,7 +18,7 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 
 import { bindSideEffects } from '@/lib/side-effects/scope';
-import { flushAuditWritesForTest, recordTrpcAudit } from './audit';
+import { flushAuditWritesForTest, recordTrpcAudit, toAuditJson } from './audit';
 import { createTRPCContext, protectedProcedure, router, type TRPCContext } from './trpc';
 
 const organizationId = 'org_demo_restaurant_seat_1';
@@ -129,6 +129,38 @@ describe('transaction-bound seed audits', () => {
     expect(mocks.outsideCreate).toHaveBeenCalledOnce();
   });
 
+  it.each(['SUCCESS', 'FAILURE'] as const)(
+    'redacts witness PINs in %s audit writes without hiding unrelated fields',
+    async (outcome) => {
+      const ctx = await context({} as ScopedDb, false);
+      recordTrpcAudit({
+        ctx,
+        path: 'pharmacyPurchasing.postGoodsReceipt',
+        type: 'mutation',
+        input: {
+          goodsReceiptId: 'receipt_a',
+          pin: '1234',
+          witnesses: [{ PIN: '5678', staffProfileId: 'staff_a' }],
+          shippingAddress: 'Test address',
+        },
+        outcome,
+      });
+      await flushAuditWritesForTest();
+
+      expect(mocks.outsideCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          input: {
+            goodsReceiptId: 'receipt_a',
+            pin: '[REDACTED]',
+            witnesses: [{ PIN: '[REDACTED]', staffProfileId: 'staff_a' }],
+            shippingAddress: 'Test address',
+          },
+          outcome,
+        }),
+      });
+    }
+  );
+
   it('rejects an audit transaction belonging to another context', async () => {
     const ctx = await context({} as ScopedDb);
     await expect(
@@ -139,5 +171,13 @@ describe('transaction-bound seed audits', () => {
         session: ctx.session,
       })
     ).rejects.toThrow('Audit transaction must match');
+  });
+});
+
+it('redacts owner PIN before resolver execution including validation and capability failures', () => {
+  expect(toAuditJson({ pin: '1234', nested: { PIN: '5678' }, reportId: 'pv_1' })).toEqual({
+    pin: '[REDACTED]',
+    nested: { PIN: '[REDACTED]' },
+    reportId: 'pv_1',
   });
 });

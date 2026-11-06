@@ -1114,13 +1114,22 @@ function RoomRow({
   const blockTrigger = useRef<HTMLButtonElement>(null);
   const lastTrigger = useRef<HTMLButtonElement | null>(null);
   const openKind = open?.kind ?? null;
+  const restoreFocus = useRef(false);
   useEffect(() => {
     // The editor closed and took the focused control with it: hand focus back
     // to the action that opened it rather than letting it fall to the body.
-    if (openKind !== null || typeof document === 'undefined') return;
+    // A saved change closes the editor while the refresh disables the row
+    // actions, and a disabled button cannot take focus, so wait until the row
+    // is idle again before handing focus back.
+    if (openKind !== null) {
+      restoreFocus.current = true;
+      return;
+    }
+    if (!restoreFocus.current || busy || typeof document === 'undefined') return;
+    restoreFocus.current = false;
     if (document.activeElement && document.activeElement !== document.body) return;
     lastTrigger.current?.focus();
-  }, [openKind]);
+  }, [openKind, busy]);
   const toggle = (
     trigger: { current: HTMLButtonElement | null },
     next: Exclude<RowEditor, null>

@@ -220,7 +220,7 @@ describe('OrdersConsole', () => {
     expect(within(channel).getByRole('option', { name: 'DELIVERY' })).toBeInTheDocument();
   });
 
-  it('cancels with exact attribution and a native idempotency key', () => {
+  it('cancels with session attribution, a verified approver credential, and a native idempotency key', () => {
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
       '00000000-0000-4000-8000-000000000045'
     );
@@ -230,9 +230,12 @@ describe('OrdersConsole', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel order' }));
 
     const dialog = screen.getByRole('dialog', { name: 'Cancel order #42?' });
-    fireEvent.change(within(dialog).getByLabelText('Acting staff member'), {
-      target: { value: 'staff_1' },
-    });
+    // The acting staff is the signed-in user; the console offers no actor picker.
+    expect(within(dialog).queryByLabelText('Acting staff member')).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/recorded as your own signed-in staff profile/i)).toBeVisible();
+    expect(
+      within(dialog).queryByLabelText('Approving PIN or badge secret')
+    ).not.toBeInTheDocument();
     fireEvent.change(within(dialog).getByLabelText('Device'), {
       target: { value: 'device_1' },
     });
@@ -247,6 +250,12 @@ describe('OrdersConsole', () => {
     fireEvent.change(within(dialog).getByLabelText('Approving staff member (optional)'), {
       target: { value: 'manager_1' },
     });
+    fireEvent.change(within(dialog).getByLabelText('Approving credential type'), {
+      target: { value: 'BADGE' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Approving PIN or badge secret'), {
+      target: { value: 'badge-77' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm cancellation' }));
 
     expect(mocks.cancel).toHaveBeenCalledWith({
@@ -254,8 +263,8 @@ describe('OrdersConsole', () => {
       reason: 'Guest left',
       wastageDisposition: 'WASTE',
       approvingStaffProfileId: 'manager_1',
+      approvingCredential: { type: 'BADGE', secret: 'badge-77' },
       actor: {
-        staffProfileId: 'staff_1',
         deviceId: 'device_1',
         idempotencyKey: '00000000-0000-4000-8000-000000000045',
       },

@@ -3,11 +3,18 @@ import { TRPCError } from '@trpc/server';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { router, capabilityProcedure } from '../trpc';
+import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { assertInOrganization } from '../org-refs';
 import { annotateAudit } from '../audit';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { CoAuthorizationError } from '@/lib/restaurant/co-authorization';
+import {
+  APPROVER_REFUSED_MESSAGE,
+  verifyBackOfficeApprover,
+  withBackOfficeApprovalScope,
+  type ApprovalMode,
+} from '@/lib/restaurant/back-office-approval';
+import { requireSessionStaffProfileId } from '@/lib/restaurant/session-staff';
 import { KitchenTicketError } from '@/lib/restaurant/kitchen-tickets';
 import { OrderPricingError } from '@/lib/restaurant/order-pricing';
 import { operationalOrderChannelSchema, orderChannelSchema } from '@/lib/restaurant/order-channels';
@@ -84,12 +91,17 @@ const ID = z.string().min(1);
 /** The attribution + idempotency envelope every mutating command carries (C6/C7).
  * The console supplies the acting operator, the registered terminal and a
  * device-scoped idempotency key; a replay of the same (deviceId, key) creates
- * nothing. */
+ * nothing. The maker-checker commands (`voidItem`, `cancel`) ignore the supplied
+ * `staffProfileId` and attribute the action to the session staff profile. */
 const ACTOR = z.object({
   staffProfileId: ID,
   deviceId: ID,
   idempotencyKey: ID,
 });
+
+/** Maker-checker envelope: the acting staff comes from the session, so the
+ * legacy `staffProfileId` is optional (accepted for older clients, never used). */
+const APPROVED_ACTOR = ACTOR.extend({ staffProfileId: ID.optional() });
 
 function toActor(actor: z.infer<typeof ACTOR>): CommandActor {
   return {
@@ -97,6 +109,96 @@ function toActor(actor: z.infer<typeof ACTOR>): CommandActor {
     deviceId: actor.deviceId,
     idempotencyKey: actor.idempotencyKey,
   };
+}
+
+/** The approving staff member's own credential, re-verified on the server. */
+const APPROVING_CREDENTIAL = z
+  .object({
+    type: z.enum(['PIN', 'BADGE']),
+    secret: z.string().min(1).max(256),
+  })
+  .strict();
+
+type ApproverInput = {
+  orderId: string;
+  approvingStaffProfileId?: string | null;
+  approvingCredential?: z.infer<typeof APPROVING_CREDENTIAL> | null;
+  actor: z.infer<typeof APPROVED_ACTOR>;
+};
+
+/**
+ * Back-office maker-checker for a void / cancel (H5 / C6). The acting staff is
+ * the caller's own session staff profile — the `actor.staffProfileId` in the
+ * input is ignored, so a caller cannot attribute the action to someone else.
+ * A named approver must prove who they are with their own PIN or badge, checked
+ * server-side with durable lockout, and must hold `coauth:approve` at the
+ * order's branch. A sole owner may approve their own request only after a
+ * fresh PIN (see `verifyBackOfficeApprover`). `work` runs inside the approval
+ * scope, so the co-authorization record written by the command carries the
+ * verified approver and, for the solo case, the owner-reauthentication stamp.
+ */
+async function withApprovedOrderCommand<T>(
+  ctx: TRPCContext,
+  input: ApproverInput,
+  work: (args: { actor: CommandActor; approvingStaffProfileId: string | null }) => Promise<T>
+): Promise<{ result: T; approvalMode: ApprovalMode | null }> {
+  const order = await ctx.db.restaurantOrder.findUnique({
+    where: { id: input.orderId },
+    select: { branchId: true },
+  });
+  // Resolved against the order's branch, so a multi-branch employee acts as their
+  // profile for that branch. A missing order on the unapproved path is reported
+  // by the command itself.
+  const actingStaffProfileId = await requireSessionStaffProfileId(ctx, {
+    branchId: order?.branchId,
+  });
+  const actor: CommandActor = {
+    staffProfileId: actingStaffProfileId,
+    deviceId: input.actor.deviceId,
+    idempotencyKey: input.actor.idempotencyKey,
+  };
+  const approvingStaffProfileId = input.approvingStaffProfileId?.trim() || null;
+  if (!approvingStaffProfileId) {
+    if (input.approvingCredential) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'An approving credential requires an approving staff member.',
+      });
+    }
+    return { result: await work({ actor, approvingStaffProfileId: null }), approvalMode: null };
+  }
+  if (!input.approvingCredential) {
+    // An approver id alone is not proof of approval.
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: "The approving staff member's PIN or badge is required.",
+    });
+  }
+  const credential = input.approvingCredential;
+  if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Order not found.' });
+
+  return withBackOfficeApprovalScope(
+    { actingStaffProfileId, deviceId: actor.deviceId },
+    async () => {
+      const approval = await verifyBackOfficeApprover(ctx.db, {
+        organizationId: ctx.entitlements.organizationId!,
+        actingStaffProfileId,
+        approvingStaffProfileId,
+        type: credential.type,
+        secret: credential.secret,
+        capability: 'coauth:approve',
+        branchId: order.branchId,
+        deviceId: actor.deviceId,
+      });
+      if (!approval.ok) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: APPROVER_REFUSED_MESSAGE });
+      }
+      return {
+        result: await work({ actor, approvingStaffProfileId: approval.staffProfileId }),
+        approvalMode: approval.mode,
+      };
+    }
+  );
 }
 
 const money = (value: Prisma.Decimal): string => value.toString();
@@ -110,6 +212,8 @@ function mapDomainError(err: unknown): never {
       err.reason === 'NOT_CLOSABLE' ||
       err.reason === 'NOTHING_TO_SEND' ||
       err.reason === 'NOTHING_TO_FIRE' ||
+      err.reason === 'BILL_ALREADY_CUT' ||
+      err.reason === 'DAY_CLOSED' ||
       err.reason === 'LIMIT_REACHED' ||
       err.reason === 'LIMIT_UNAVAILABLE';
     const notFound = err.reason.endsWith('_NOT_FOUND');
@@ -436,26 +540,31 @@ export const restaurantOrdersRouter = router({
           reason: z.string().min(1),
           wastageDisposition: DISPOSITION.optional(),
           approvingStaffProfileId: ID.nullish(),
-          actor: ACTOR,
+          approvingCredential: APPROVING_CREDENTIAL.nullish(),
+          actor: APPROVED_ACTOR,
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const result = await run(() =>
-        voidItem(ctx.db, {
-          orderId: input.orderId,
-          itemId: input.itemId,
-          reason: input.reason,
-          wastageDisposition: input.wastageDisposition,
-          approvingStaffProfileId: input.approvingStaffProfileId ?? null,
-          actor: toActor(input.actor),
-        })
+      // Never write the approver's secret into the audit trail.
+      annotateAudit(ctx, { skipInput: true });
+      const { result, approvalMode } = await run(() =>
+        withApprovedOrderCommand(ctx, input, ({ actor, approvingStaffProfileId }) =>
+          voidItem(ctx.db, {
+            orderId: input.orderId,
+            itemId: input.itemId,
+            reason: input.reason,
+            wastageDisposition: input.wastageDisposition,
+            approvingStaffProfileId,
+            actor,
+          })
+        )
       );
       annotateAudit(ctx, {
         targetType: 'RestaurantOrder',
         targetId: input.orderId,
         description: 'Voided an order item',
-        metadata: { itemId: input.itemId, replayed: result.replayed },
+        metadata: { itemId: input.itemId, replayed: result.replayed, approvalMode },
       });
       return result;
     }),
@@ -468,25 +577,30 @@ export const restaurantOrdersRouter = router({
           reason: z.string().min(1),
           wastageDisposition: DISPOSITION.optional(),
           approvingStaffProfileId: ID.nullish(),
-          actor: ACTOR,
+          approvingCredential: APPROVING_CREDENTIAL.nullish(),
+          actor: APPROVED_ACTOR,
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const result = await run(() =>
-        cancelOrder(ctx.db, {
-          orderId: input.orderId,
-          reason: input.reason,
-          wastageDisposition: input.wastageDisposition,
-          approvingStaffProfileId: input.approvingStaffProfileId ?? null,
-          actor: toActor(input.actor),
-        })
+      // Never write the approver's secret into the audit trail.
+      annotateAudit(ctx, { skipInput: true });
+      const { result, approvalMode } = await run(() =>
+        withApprovedOrderCommand(ctx, input, ({ actor, approvingStaffProfileId }) =>
+          cancelOrder(ctx.db, {
+            orderId: input.orderId,
+            reason: input.reason,
+            wastageDisposition: input.wastageDisposition,
+            approvingStaffProfileId,
+            actor,
+          })
+        )
       );
       annotateAudit(ctx, {
         targetType: 'RestaurantOrder',
         targetId: input.orderId,
         description: 'Cancelled an order',
-        metadata: { replayed: result.replayed },
+        metadata: { replayed: result.replayed, approvalMode },
       });
       return result;
     }),
@@ -622,7 +736,9 @@ async function listOrders(db: ScopedDb, input: ListOrdersInput) {
       serverStaffProfileId: true,
       createdAt: true,
       items: {
-        where: { status: { not: 'VOIDED' } },
+        // This list exposes the amount due and purchased-unit count. Kitchen
+        // workload, including remakes, is represented by tickets instead.
+        where: { status: { not: 'VOIDED' }, remakeOfItemId: null },
         select: {
           unitPrice: true,
           quantity: true,
@@ -655,7 +771,7 @@ async function listOrders(db: ScopedDb, input: ListOrdersInput) {
         id: t.tableId,
         code: t.table?.code ?? t.tableId,
       })),
-      itemCount: order.items.length,
+      itemCount: order.items.reduce((total, item) => total + item.quantity, 0),
       subtotal: money(deriveSubtotal(order.items)),
     })),
     nextCursor: hasMore ? page[page.length - 1]!.id : null,
@@ -763,7 +879,11 @@ async function getOrder(db: ScopedDb, orderId: string) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'The order does not exist.' });
   }
 
-  const activeItems = order.items.filter((i) => i.status !== 'VOIDED');
+  // Preserve remake rows in the operational history while excluding them from
+  // the guest's payable subtotal.
+  const purchasedItems = order.items.filter(
+    (item) => item.status !== 'VOIDED' && item.remakeOfItemId === null
+  );
   return {
     id: order.id,
     branchId: order.branchId,
@@ -815,7 +935,7 @@ async function getOrder(db: ScopedDb, orderId: string) {
       items: ticket.items,
     })),
     totals: {
-      subtotal: money(deriveSubtotal(activeItems)),
+      subtotal: money(deriveSubtotal(purchasedItems)),
       tax: money(new Prisma.Decimal(0)),
       serviceCharge: money(new Prisma.Decimal(0)),
     },

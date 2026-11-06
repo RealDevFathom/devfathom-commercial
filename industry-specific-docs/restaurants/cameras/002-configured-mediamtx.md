@@ -73,6 +73,11 @@ these fields (placeholders below are not usable credentials):
 ]
 ```
 
+An optional `"vertical"` field (`"restaurant"` or `"pharmacy"`) names the product surface a
+binding serves. Bindings without it remain restaurant-only, so existing restaurant
+configuration is unchanged; pharmacy live view (DEV-740) requires `"vertical": "pharmacy"`. See
+`industry-specific-docs/pharmacy/cameras/001-configured-gateway-live-view.md`.
+
 The path maps to `/<path>/index.m3u8` on MediaMTX. Keep one unique upstream path per
 camera binding. Unknown fields, duplicate mappings, malformed URLs and invalid addresses
 reject startup without reflecting configuration values. Missing reader credentials are

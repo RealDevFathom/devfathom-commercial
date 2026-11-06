@@ -9,7 +9,7 @@ import { signOut } from 'next-auth/react';
  * intent is invalidated server-side and its cookie cleared first, then the
  * session ends.
  *
- * The DELETE is best-effort: it 404s on a tenant host (where no intent exists),
+ * The DELETE is best-effort: it is a no-op on hosts where no intent can exist,
  * and a network failure must never leave the user stuck signed in.
  */
 export async function signOutEverything(callbackUrl = '/login') {

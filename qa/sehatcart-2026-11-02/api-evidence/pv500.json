@@ -1,0 +1,83 @@
+[
+  {
+    "role": "owner",
+    "input": {
+      "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+      "kind": "ADVERSE_DRUG_REACTION",
+      "occurredAt": "2026-11-02T18:31:07.784Z",
+      "assertedDescription": "QA probe - please ignore"
+    },
+    "status": 500,
+    "code": "INTERNAL_SERVER_ERROR",
+    "message": "Something went wrong on our side. Please try again.",
+    "at": "2026-11-02 23:31:08 PKT",
+    "raw": {
+      "error": {
+        "json": {
+          "message": "Something went wrong on our side. Please try again.",
+          "code": -32603,
+          "data": {
+            "code": "INTERNAL_SERVER_ERROR",
+            "httpStatus": 500,
+            "path": "pharmacyReports.createPharmacovigilanceReport",
+            "validation": null
+          }
+        }
+      }
+    }
+  },
+  {
+    "role": "pharmacist",
+    "input": {
+      "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+      "kind": "ADVERSE_DRUG_REACTION",
+      "occurredAt": "2026-11-02T18:31:08.062Z",
+      "assertedDescription": "QA probe - please ignore"
+    },
+    "status": 500,
+    "code": "INTERNAL_SERVER_ERROR",
+    "message": "Something went wrong on our side. Please try again.",
+    "at": "2026-11-02 23:31:08 PKT",
+    "raw": {
+      "error": {
+        "json": {
+          "message": "Something went wrong on our side. Please try again.",
+          "code": -32603,
+          "data": {
+            "code": "INTERNAL_SERVER_ERROR",
+            "httpStatus": 500,
+            "path": "pharmacyReports.createPharmacovigilanceReport",
+            "validation": null
+          }
+        }
+      }
+    }
+  },
+  {
+    "role": "cashier",
+    "input": {
+      "branchId": "cmvx5fc4p000cy5qrcgzjrc3b",
+      "kind": "ADVERSE_DRUG_REACTION",
+      "occurredAt": "2026-11-02T18:31:08.145Z",
+      "assertedDescription": "QA probe - please ignore"
+    },
+    "status": 500,
+    "code": "INTERNAL_SERVER_ERROR",
+    "message": "Something went wrong on our side. Please try again.",
+    "at": "2026-11-02 23:31:08 PKT",
+    "raw": {
+      "error": {
+        "json": {
+          "message": "Something went wrong on our side. Please try again.",
+          "code": -32603,
+          "data": {
+            "code": "INTERNAL_SERVER_ERROR",
+            "httpStatus": 500,
+            "path": "pharmacyReports.createPharmacovigilanceReport",
+            "validation": null
+          }
+        }
+      }
+    }
+  }
+]

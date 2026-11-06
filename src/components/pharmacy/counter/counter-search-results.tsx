@@ -1,5 +1,6 @@
 'use client';
 
+import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterSearchRow } from '@/lib/pharmacy/counter';
 import { formatMinor, formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
@@ -79,22 +80,25 @@ export function CounterSearchResults({
       <div className="space-y-3" role="alert">
         <p className="text-sm text-destructive">{error ?? 'Search failed.'}</p>
         <div className="flex flex-wrap gap-2">
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="touch"
             disabled={disabled}
             onClick={onRetry}
-            className="inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             Retry search
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="outline"
+            size="touch"
             disabled={disabled}
             onClick={onCaptureDemand}
-            className="inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            className="h-auto min-h-11 whitespace-normal"
           >
             Capture as unfulfilled demand
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -104,20 +108,24 @@ export function CounterSearchResults({
     return (
       <div className="space-y-3">
         <p className="text-sm text-text-muted">Nothing in this catalog matches “{query}”.</p>
-        <button
+        <Button
           type="button"
+          size="touch"
           disabled={disabled}
           onClick={onCaptureDemand}
-          className="inline-flex h-11 items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          className="h-auto min-h-11 whitespace-normal"
         >
           Capture as unfulfilled demand
-        </button>
+        </Button>
       </div>
     );
   }
 
   return (
-    <ul className="divide-y divide-border-subtle" aria-label="Search results">
+    <ul
+      className="min-w-0 divide-y divide-border-subtle rounded-xl border border-border-subtle bg-surface-card"
+      aria-label="Search results"
+    >
       {rows.map((row) => {
         const sellable = row.onHandUnits > 0 && row.saleableUnits.length > 0;
         const active = row.medicineId === activeMedicineId;
@@ -125,8 +133,11 @@ export function CounterSearchResults({
           ? `${LOCATION_LABEL[row.storage.locationKind] ?? row.storage.locationKind}${
               row.storage.locationCode ? ` ${row.storage.locationCode}` : ''
             }`
-          : null;
+          : (row.storage.locationName ?? row.storage.locationCode);
         const safety = [
+          !sellable
+            ? { status: 'not-sellable', tone: 'warning' as const, label: 'Not sellable' }
+            : null,
           row.restriction.controlled
             ? { status: 'controlled', tone: 'danger' as const, label: 'Controlled' }
             : null,
@@ -153,8 +164,7 @@ export function CounterSearchResults({
           !row.restriction.controlled
             ? 'Over the counter'
             : null,
-          location,
-          !sellable ? 'Not sellable' : null,
+          location ?? 'Location unavailable',
         ].filter(Boolean);
         return (
           <li key={row.medicineId}>
@@ -163,20 +173,26 @@ export function CounterSearchResults({
               disabled={disabled}
               aria-pressed={active}
               onClick={() => onSelect(row)}
-              className={`grid w-full min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] gap-x-2 px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
+              className={`grid min-h-11 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 px-4 py-3 text-start focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 ${
                 active ? 'bg-surface-sunken' : 'hover:bg-surface-sunken'
               }`}
             >
-              <span className="min-w-0 truncate text-sm font-semibold text-text-strong">
+              <span
+                dir="auto"
+                className="min-w-0 break-words text-sm font-semibold text-text-strong"
+              >
                 {row.displayName}
                 {row.strength ? (
-                  <span className="ml-1 font-normal text-text-body">{row.strength}</span>
+                  <span className="ms-1 font-normal text-text-body">
+                    <bdi dir="auto">{row.strength}</bdi>
+                  </span>
                 ) : null}
               </span>
-              <span className="w-full text-right font-mono text-sm tabular-nums text-text-strong">
+              <span className="w-full text-end font-mono text-sm tabular-nums text-text-strong">
+                <span className="sr-only">Pack MRP </span>
                 {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
               </span>
-              <span className="col-span-2 truncate text-xs text-text-muted">
+              <span className="col-span-2 min-w-0 break-words text-xs leading-relaxed text-text-muted">
                 {row.presentation}
                 {row.dosageForm ? ` · ${row.dosageForm}` : ''}
                 {` · Batch ${row.batchNumber ?? '—'}`}

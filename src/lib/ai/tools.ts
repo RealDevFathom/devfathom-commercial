@@ -40,6 +40,7 @@ import { buildMeetingsTools } from '@/lib/ai/tools/meetings';
 import { buildInsightsTools } from '@/lib/ai/tools/insights';
 import { buildPharmacyReportTools } from '@/lib/ai/tools/pharmacy-reports';
 import { buildRestaurantReportTools } from '@/lib/ai/tools/restaurant-reports';
+import { withActionLedger, type ActionLedgerContext } from '@/lib/ai/action-ledger';
 
 export type { AssistantContext } from '@/lib/ai/context';
 
@@ -66,6 +67,7 @@ const CORE_TOOLS = new Set([
   'askPharmacyReports',
   'askPharmacyBusinessInsights',
   'askPharmacyFinanceInsights',
+  'askPharmacyOwnerQuestion',
   'getOverview',
   'globalSearch',
   'getRecentActivity',
@@ -91,7 +93,7 @@ const SELF_LEAVE_REQUEST =
 const FINANCE_INTENT =
   /invoic|revenue|profit|expense|transaction|p&l|pnl|budget|\bpaid\b|owe|financ|money|billing|\bbill\b|payment|cash|margin/i;
 const PHARMACY_REPORT_INTENT =
-  /pharmacy|medicine|stock signal|expiry|quarantine|recall|pharmacist|dispensing|supplier claim/i;
+  /pharmacy|medicine|stock signal|expiry|quarantine|recall|pharmacist|dispensing|supplier claim|khata|lost demand|فروخت|سٹاک|کھاتہ|نہ مل/i;
 const PHARMACY_WORK_PACK_INTENT =
   /\bwork[ -]?packs?\b|\bsupplier[ -]+(?:credit[ -]+)?follow[ -]?up\b|\bfollow[ -]?up\b.{0,40}\bsupplier(?:s|[ -]+credits?)?\b|\b(?:outstanding|unmatched)[ -]+supplier[ -]+credits?\b/i;
 
@@ -153,8 +155,13 @@ function selectDomains(hint: string): Set<Domain> {
 /**
  * Build the toolset for one request. `opts.hint` is the recent user text used to
  * route which domains to load; omit it (or pass empty) to get the full set.
+ * `opts.ledger` puts every approval-gated write behind the confirmed-write ledger
+ * (see action-ledger.ts); the assistant route always passes it.
  */
-export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string } = {}): ToolSet {
+export function buildAssistantTools(
+  ctx: AssistantContext,
+  opts: { hint?: string; ledger?: ActionLedgerContext } = {}
+): ToolSet {
   const hint = (opts.hint ?? '').trim();
   if (hint && UNSUPPORTED_TOOL_INTENT.test(hint)) return {};
   if (
@@ -169,6 +176,10 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
   const h = createAssistantHelpers(ctx);
   const granted = (key: string) => assistantModuleGranted(ctx, key);
   const agency = assistantVertical(ctx.vertical) === 'AGENCY';
+  // Notes can resolve and link both project and client records, so the whole
+  // family must fail closed unless every data source it can reach is licensed.
+  const notesEnabled =
+    agency && ['notes', 'projects', 'clients'].every((module) => granted(module));
   // Mixed-domain insights read finance, projects, HR, notes and activity. Until
   // those builders can scope individual reads, require the complete dependency set.
   const insightsEnabled =
@@ -184,7 +195,7 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
     clients: agency && granted('clients') ? buildClientsTools(h) : {},
     finance: agency && granted('finance') ? buildFinanceTools(h) : {},
     chat: granted('chat') ? buildChatTools(h) : {},
-    notes: agency && granted('notes') && granted('projects') ? buildNotesTools(h) : {},
+    notes: notesEnabled ? buildNotesTools(h) : {},
     meetings: agency && granted('meetings') && granted('projects') ? buildMeetingsTools(h) : {},
     pharmacyReports:
       assistantVertical(ctx.vertical) === 'PHARMACY' && granted('pharmacy-reports')
@@ -199,6 +210,7 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
   if (!agency || !granted('projects')) delete perDomain.people.getTeamMember;
   // This owner-only adapter also rechecks report permissions at execution time.
   if (ctx.role !== 'ADMIN') delete perDomain.pharmacyReports.askPharmacyFinanceInsights;
+  if (ctx.role !== 'ADMIN') delete perDomain.pharmacyReports.askPharmacyOwnerQuestion;
   // Read-only preparation needs an explicit relevant hint, even in the full
   // approval-continuation set. Broad Pharmacy/finance hints keep their existing tools.
   if (!PHARMACY_WORK_PACK_INTENT.test(hint)) delete perDomain.pharmacyReports.askPharmacyWorkPacks;
@@ -234,5 +246,7 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
     };
   }
 
-  return tools;
+  // The ledger wraps outside the try/catch above, so a thrown write is recorded
+  // as FAILED with the same clean { error } the model sees.
+  return opts.ledger ? withActionLedger(tools, opts.ledger) : tools;
 }

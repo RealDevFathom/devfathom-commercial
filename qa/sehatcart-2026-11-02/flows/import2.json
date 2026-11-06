@@ -1,0 +1,15 @@
+[
+  { "goto": "/pharmacy/inventory/import" },
+  { "wait": 1200 },
+  { "select": { "label": "Branch" }, "value": "SehatCart Test Branch" },
+  { "wait": 1000 },
+  { "select": { "label": "Stock location" }, "index": 1 },
+  {
+    "upload": { "label": "CSV or XLSX file" },
+    "file": "/tmp/claude-0/-home-user-devfathom-commercial/bd6f7ae8-902c-5eda-9008-d081b386469b/scratchpad/import/opening.csv"
+  },
+  { "wait": 2500 },
+  { "click": { "role": "button", "name": "Run dry-run diff" } },
+  { "wait": 4000, "map": true, "max": 2500, "shot": "own-import-dryrun", "full": true },
+  { "text": "main", "max": 5000 }
+]

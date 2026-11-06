@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { TRPCContext } from '@/server/trpc';
+import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { seedDepartments } from '@/lib/test-support/departments';
 
 const mocks = vi.hoisted(() => ({
@@ -245,6 +246,7 @@ beforeAll(async () => {
     });
     await seedDepartments(tx, [orgId], ['QUALITY']);
   });
+  const managerCredentialHash = await hashOperatorCredential('PIN', '4821');
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({
       data: { id: ids.branch, name: 'New York Branch', timezone: 'America/New_York' },
@@ -277,9 +279,24 @@ beforeAll(async () => {
     });
   });
 
+  await deps.withTenantDb(orgId, async (tx) => {
+    await tx.restaurantOperatorCredential.create({
+      data: { staffProfileId: ids.manager, type: 'PIN', credentialHash: managerCredentialHash },
+    });
+    await tx.restaurantStaffCapabilityGrant.create({
+      data: {
+        staffProfileId: ids.manager,
+        branchId: ids.branch,
+        capability: 'sop:verify',
+        effect: 'ALLOW',
+      },
+    });
+  });
+
   const context = {
     db: scopedDb.createTenantDb(orgId),
     entitlements: {
+      organizationId: orgId,
       // WHA-264 gates SOP depth on the module set AND limit values. This battery
       // exercises co-authorized waivers and escalation chains, so the fixture
       // org is entitled to the depths those paths require.
@@ -343,7 +360,12 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
         );
         if (!job) return claimed;
         await deps.withTenantDb(orgId, (tx) =>
-          deps.scheduler.complete(tx, job.id, { workerId, now: T0 })
+          deps.scheduler.complete(tx, job.id, {
+            workerId,
+            attempt: job.attempts,
+            claimToken: job.claimToken,
+            now: T0,
+          })
         );
         claimed += 1;
       }
@@ -405,6 +427,8 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
         await deps.withTenantDb(orgId, (tx) =>
           deps.scheduler.fail(tx, dead.job.id, new Error('induced failure'), {
             workerId,
+            attempt: claimed!.attempts,
+            claimToken: claimed!.claimToken,
             now: attemptAt,
           })
         )
@@ -439,6 +463,8 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
     await deps.withTenantDb(orgId, (tx) =>
       deps.scheduler.complete(tx, requeued.jobId, {
         workerId: `requeue_worker_${suffix}`,
+        attempt: requeuedClaim!.attempts,
+        claimToken: requeuedClaim!.claimToken,
         now: new Date('2099-01-01T00:00:00.000Z'),
       })
     );
@@ -769,6 +795,10 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
 
     const detail = await api.execution.getOccurrence({ id: occurrence.id });
     expect(detail.status).toBe('VERIFIED');
+    expect(detail.verifications.map((row) => row.actorStaffProfileId)).toEqual([
+      ids.operator,
+      ids.operator,
+    ]);
     expect(detail.evidence.map((row) => row.contentHash)).toEqual(['1'.repeat(64), '2'.repeat(64)]);
   }, 60_000);
 
@@ -780,6 +810,8 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
         occurrenceId: occurrence.id,
         actorStaffProfileId: ids.operator,
         approvingStaffProfileId: ids.manager,
+        approvingType: 'PIN',
+        approvingSecret: '4821',
         reason: 'Caller lacks manager verification permission',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -789,7 +821,23 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
         occurrenceId: occurrence.id,
         actorStaffProfileId: ids.operator,
         approvingStaffProfileId: ids.operator,
+        approvingType: 'PIN',
+        approvingSecret: '4821',
         reason: 'Self approval is forbidden',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(api.execution.getOccurrence({ id: occurrence.id })).resolves.toMatchObject({
+      status: 'MISSED',
+    });
+
+    await expect(
+      api.execution.waive({
+        occurrenceId: occurrence.id,
+        actorStaffProfileId: 'forged-actor',
+        approvingStaffProfileId: ids.manager,
+        approvingType: 'PIN',
+        approvingSecret: '4822',
+        reason: 'Wrong credential must not approve',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(api.execution.getOccurrence({ id: occurrence.id })).resolves.toMatchObject({
@@ -800,6 +848,8 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
       occurrenceId: occurrence.id,
       actorStaffProfileId: ids.operator,
       approvingStaffProfileId: ids.manager,
+      approvingType: 'PIN',
+      approvingSecret: '4821',
       reason: 'Manager-approved operational waiver',
     });
     const persisted = await deps.withTenantDb(orgId, async (tx) => {
