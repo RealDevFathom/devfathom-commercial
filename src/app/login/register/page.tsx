@@ -22,7 +22,9 @@ export default async function RegisterPage({
       <h1 className="mt-3 text-[clamp(2.1rem,4vw,3.15rem)] font-semibold leading-tight tracking-[-0.055em]">
         {verticalCopy[vertical].setup}
       </h1>
-      <p className="mt-3 text-sm leading-6 text-text-muted">
+      <p
+        className={`${vertical === 'pharmacy' ? 'mt-2 max-w-md' : 'mt-3'} text-sm leading-6 text-text-muted`}
+      >
         {vertical === 'pharmacy'
           ? 'Tell us about the premises and the licence. We check both before the counter can sell.'
           : vertical === 'restaurant'

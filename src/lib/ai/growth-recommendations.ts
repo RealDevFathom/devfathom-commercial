@@ -290,7 +290,7 @@ export async function generateGrowthRecommendations(raw: GrowthInput): Promise<G
   };
   try {
     checkDeadline();
-    const selected = createAIModel();
+    const selected = createAIModel(process.env, { feature: 'growth-recommendations' });
     for (let attempt = 0; attempt < 2; attempt++) {
       checkDeadline();
       let rawOutput: unknown;
