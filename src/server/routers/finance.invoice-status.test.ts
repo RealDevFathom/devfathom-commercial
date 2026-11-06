@@ -120,7 +120,11 @@ describe('finance.updateInvoiceStatus', () => {
       data: { status: 'PAID', sentAt: expect.any(Date), paidAt: expect.any(Date) },
     });
     expect(mocks.emitInvoicePaid).toHaveBeenCalledOnce();
-    expect(mocks.emitInvoicePaid).toHaveBeenCalledWith(expect.anything(), expect.anything(), settled);
+    expect(mocks.emitInvoicePaid).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      settled
+    );
   });
 
   it('does not emit invoice.paid for an ordinary status change', async () => {
