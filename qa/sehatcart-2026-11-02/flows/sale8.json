@@ -1,0 +1,26 @@
+[
+  { "goto": "/pharmacy/counter" },
+  { "wait": 1200 },
+  { "click": { "role": "button", "name": "Open drawer" } },
+  { "wait": 1500, "map": true, "max": 800, "log": "drawer" },
+  { "press": "F2" },
+  { "type": { "label": "Scan or search" }, "value": "panadol", "delay": 30 },
+  { "wait": 1500 },
+  { "click": { "role": "button", "name": "Paracetamol 500mg Tablets" } },
+  { "wait": 800 },
+  { "fill": { "sel": "main input[type=number]" }, "value": "2" },
+  { "click": { "role": "button", "name": "Add to cart (F6)" } },
+  { "wait": 2500 },
+  { "fill": { "label": "Cash received" }, "value": "100" },
+  { "wait": 400 },
+  { "click": { "role": "button", "name": "Take payment" } },
+  {
+    "wait": 4000,
+    "map": true,
+    "max": 3000,
+    "shot": "cash-sale8-paid",
+    "full": false,
+    "log": "after pay"
+  },
+  { "text": "main", "max": 3500 }
+]

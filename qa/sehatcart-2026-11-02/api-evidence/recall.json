@@ -1,0 +1,94 @@
+{
+  "cashierRecall": {
+    "status": 403,
+    "ms": 306,
+    "ok": false,
+    "code": "FORBIDDEN",
+    "message": "You do not have permission for this action.",
+    "data": null,
+    "raw": {
+      "error": {
+        "json": {
+          "message": "You do not have permission for this action.",
+          "code": -32003,
+          "data": {
+            "code": "FORBIDDEN",
+            "httpStatus": 403,
+            "path": "pharmacyInventory.createRecall",
+            "validation": null
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:50:09 PKT"
+  },
+  "recall": {
+    "status": 200,
+    "ms": 113,
+    "ok": true,
+    "code": null,
+    "message": null,
+    "data": {
+      "id": "cmvzm5z7x02dl4oqr4lugtf19",
+      "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+      "batchId": null,
+      "medicineId": "cmvzld6dm01uc4oqrs4vn5m0a",
+      "reference": "QA-RCL-1",
+      "reason": "QA test recall of own test medicine",
+      "status": "OPEN",
+      "createdById": "cqaphrm7c1d2e3f4a5b6c7d8e9",
+      "createdAt": "2026-11-02T18:50:09.165Z",
+      "closedById": null,
+      "closedAt": null
+    },
+    "raw": {
+      "result": {
+        "data": {
+          "json": {
+            "id": "cmvzm5z7x02dl4oqr4lugtf19",
+            "organizationId": "cmvx5fc310002y5qrvcbv98h9",
+            "batchId": null,
+            "medicineId": "cmvzld6dm01uc4oqrs4vn5m0a",
+            "reference": "QA-RCL-1",
+            "reason": "QA test recall of own test medicine",
+            "status": "OPEN",
+            "createdById": "cqaphrm7c1d2e3f4a5b6c7d8e9",
+            "createdAt": "2026-11-02T18:50:09.165Z",
+            "closedById": null,
+            "closedAt": null
+          },
+          "meta": {
+            "values": {
+              "createdAt": ["Date"]
+            },
+            "v": 1
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:50:09 PKT"
+  },
+  "close": {
+    "status": 400,
+    "ms": 74,
+    "ok": false,
+    "code": "BAD_REQUEST",
+    "message": "INVALID_STATE",
+    "data": null,
+    "raw": {
+      "error": {
+        "json": {
+          "message": "INVALID_STATE",
+          "code": -32600,
+          "data": {
+            "code": "BAD_REQUEST",
+            "httpStatus": 400,
+            "path": "pharmacyInventory.closeRecall",
+            "validation": null
+          }
+        }
+      }
+    },
+    "at": "2026-11-02 23:50:09 PKT"
+  }
+}
