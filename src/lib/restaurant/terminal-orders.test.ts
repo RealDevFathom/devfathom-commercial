@@ -282,6 +282,56 @@ describe('canonicalJson', () => {
 });
 
 describe('resolveTerminalEffectiveMenu — POS modifier contract', () => {
+  it.each(['DINE_IN', 'TAKEAWAY', 'DELIVERY', 'ROOM_SERVICE'] as const)(
+    'resolves an implicit publication with no restrictions for the %s channel',
+    async (channel) => {
+      const publication = {
+        id: 'pub-all-channels',
+        channels: [],
+        priceListId: null,
+        branch: { id: 'branch-1', timezone: 'UTC' },
+        windows: [],
+        exceptions: [],
+        itemOverrides: [],
+        menu: {
+          id: 'menu-1',
+          name: 'All day',
+          nameLocalized: null,
+          sections: [],
+        },
+      };
+      const findPublication = vi.fn().mockImplementation(
+        async ({ where }: { where: { OR?: Array<{ channels?: { isEmpty?: boolean } }> } }) =>
+          where.OR?.some((condition) => condition.channels?.isEmpty === true) ? publication : null
+      );
+      const db = {
+        restaurantBranchMenuPublication: { findFirst: findPublication },
+        restaurantPriceList: { findFirst: vi.fn().mockResolvedValue(null) },
+      } as unknown as ScopedDb;
+
+      const menu = await resolveTerminalEffectiveMenu(db, {
+        branchId: 'branch-1',
+        channel,
+        at: new Date('2026-09-01T12:00:00.000Z'),
+      });
+
+      expect(menu).toMatchObject({
+        publicationId: 'pub-all-channels',
+        channel,
+        channelOpen: true,
+      });
+      expect(findPublication).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            branchId: 'branch-1',
+            status: 'PUBLISHED',
+            OR: [{ channels: { has: channel } }, { channels: { isEmpty: true } }],
+          },
+        })
+      );
+    }
+  );
+
   it('projects linked modifier groups and ordered options into the terminal payload', async () => {
     const findPublication = vi.fn().mockResolvedValue({
       id: 'pub-1',
