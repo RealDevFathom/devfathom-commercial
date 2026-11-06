@@ -1024,6 +1024,17 @@ const purchasingRouter = router({
             'A goods receipt is either against a purchase order or a direct purchase with a bypass, never both or neither.',
           path: ['purchaseOrderId'],
         })
+        .refine(
+          (value) =>
+            value.lines.every(
+              (line) => Boolean(line.purchaseOrderLineId) === Boolean(value.purchaseOrderId)
+            ),
+          {
+            message:
+              'Every purchase-order receipt line must identify its purchase-order line; direct-purchase lines must remain unlinked.',
+            path: ['lines'],
+          }
+        )
     )
     .mutation(async ({ ctx, input }) => {
       await assertProcurement(ctx);
