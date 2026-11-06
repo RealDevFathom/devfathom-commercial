@@ -1,13 +1,36 @@
 # HANDOFF — claude-labelled Linear batch
 
-Last updated: 2026-11-04 03:06 UTC · Branch: `saad/nice-thompson-99m17p` · PR:
+Last updated: 2026-11-06 23:10 UTC · Branch: `saad/nice-thompson-99m17p` · PR:
 [RealDevFathom/devfathom-commercial#1223](https://github.com/RealDevFathom/devfathom-commercial/pull/1223)
-(into `develop`, open, not merged, mergeable) · Head: `b135a982`
+(into `develop`, open) · Head: the merge `87fb5336` plus this docs commit
 
 ## Resume here
 
-DEV-576 is done: #1238 merged into develop at about 01:00 UTC on 2026-11-03 (not by me). Its log is
-the "HANDOFF — DEV-576" section below.
+- **Saad (2026-11-06):** finish this session's assigned work, run current-head QA, Security and
+  local checks here, then merge #1223 into develop and close only verified-resolved linked issues.
+  GitHub CI/CD stays disabled; no deploy, workflow change or force-push.
+- **Since 2026-11-04:**
+  - A Codex owner merged develop (`ba24c89f`) and resolved DEV-721/DEV-512 (`1acec91c`). My
+    local resolution of the same conflicts (`b3e0b84f`) was never pushed and is superseded.
+  - `87fb5336` merges develop `1906b530` (#1226 invoice numbering, #1120 inventory access, #1421,
+    #1010, #1418, #1415, #1430). It wraps the DEV-252 amounts in #1226's locked per-organization
+    numbering, and keeps #1120's gated read before DEV-594's advice lookup. Two DEV-252 tests use
+    develop's transaction fixtures.
+- **Checks on `1acec91c` merged with develop `11660b31` (tree `f481844b`):**
+  - Static: typecheck 0, lint 0 errors, build passes, test:rls passes. Prettier fails on develop
+    too, and this branch adds no new unformatted file.
+  - Every gate lane matched develop or improved it. Main lane: 68 failed, against 74 on develop;
+    the 6 fixed are the DEV-577 witness cases. No lane had a new failure.
+  - Platform-login a11y passes 16/16 once `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` names the
+    installed Chromium. Bicep and the browser gate were not run.
+  - The independent QA and Security review (6 areas, 2 skeptics per finding) found no blocking or
+    major issue. Its minor notes are in the PR comments.
+- **Next step:** rerun the gate on the final head and on develop `1906b530`; merge only if nothing
+  regresses. Then close only the issues the per-issue verification rated RESOLVED.
+- **Not this session's:** the rest of DEV-582 (delegated to Codex on 3 Nov); #1413's dashboard
+  expectations, for whichever of #1413 and #1223 lands second; #1165's flag line.
+
+### Earlier (2026-11-04)
 
 - **Since 2026-11-04 02:15 UTC:**
   - **`ef2719d5` (DEV-249):** the meetings form fields are 44px tall. The Studio visual QA matrix
@@ -69,8 +92,8 @@ OWNER_DATABASE_URL=postgresql://audit_gate_owner:audit-gate-owner-local@localhos
 
 ## Rules in force
 
-- PRs into `develop` only. Never merge. Never force-push or rewrite pushed commits. No
-  GitHub Actions runs.
+- PRs into `develop` only. Merge only as Saad authorized on 2026-11-06, after checks pass. Never
+  force-push or rewrite pushed commits. No GitHub Actions runs.
 - Commit messages are plain: no Co-Authored-By line, no model name, no Claude-Session
   link. This applies from `09c6e54b` onward; the 14 earlier commits keep their old
   trailers by instruction and are not rewritten.
