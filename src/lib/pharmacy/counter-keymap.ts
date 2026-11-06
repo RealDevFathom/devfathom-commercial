@@ -127,8 +127,7 @@ export const COUNTER_KEYMAP_PRESETS: Readonly<Record<CounterKeymapPresetKey, Cou
     legacySpeed: {
       key: 'legacySpeed',
       label: 'Legacy Speed',
-      description:
-        'Proposed muscle-memory map for Abuzar, Candela and MARS cashiers. To confirm in Phase 0 (D01).',
+      description: 'Familiar function-key layout under review; bindings may change.',
       confirmed: false,
       phaseZeroDecision: 'D01',
       bindings: LEGACY_SPEED_BINDINGS,
