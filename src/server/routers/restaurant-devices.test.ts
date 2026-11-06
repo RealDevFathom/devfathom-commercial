@@ -399,6 +399,7 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
     expect(directory).toEqual({
       actingStaff: { id: actingStaffId, displayName: 'Acting Admin' },
       approvers: [{ id: approvingStaffId, displayName: 'Shift Manager' }],
+      selfApprovalAllowed: false,
     });
     expect(JSON.stringify(directory)).not.toContain(unprivilegedStaffId);
     expect(JSON.stringify(directory)).not.toContain(inactiveStaffId);
@@ -414,6 +415,47 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
       undefined,
       expect.anything()
     );
+  });
+
+  it('offers the solo-owner PIN exception only where the owner is the sole staff', async () => {
+    const soloBranchId = `branch_solo_${suffix}`;
+    const ownerRoleId = await deps.withTenantDb(orgId, async (tx) => {
+      await tx.restaurantBranch.create({ data: { id: soloBranchId, name: 'Solo kiosk' } });
+      const ownerRole = await tx.restaurantJobRole.create({
+        data: { key: 'owner', name: 'Owner', active: true },
+      });
+      await tx.restaurantJobRoleCapability.createMany({
+        data: [
+          { jobRoleId: ownerRole.id, capability: 'devices:manage' },
+          { jobRoleId: ownerRole.id, capability: 'coauth:approve' },
+        ],
+      });
+      await tx.restaurantStaffJobRole.create({
+        data: { staffProfileId: actingStaffId, jobRoleId: ownerRole.id, branchId: soloBranchId },
+      });
+      return ownerRole.id;
+    });
+    try {
+      const api = caller();
+      const solo = await api.initiateEnrollment({ branchId: soloBranchId, name: 'POS-solo' });
+      await expect(api.listApprovers({ deviceId: solo.device.id })).resolves.toEqual({
+        actingStaff: { id: actingStaffId, displayName: 'Acting Admin' },
+        approvers: [],
+        selfApprovalAllowed: true,
+      });
+
+      // The owner is not alone at the shared branch, so no exception there.
+      const shared = await api.initiateEnrollment({ branchId, name: 'POS-shared-owner' });
+      await expect(api.listApprovers({ deviceId: shared.device.id })).resolves.toMatchObject({
+        selfApprovalAllowed: false,
+      });
+    } finally {
+      await deps.withTenantDb(orgId, async (tx) => {
+        await tx.restaurantStaffJobRole.deleteMany({ where: { jobRoleId: ownerRoleId } });
+        await tx.restaurantJobRoleCapability.deleteMany({ where: { jobRoleId: ownerRoleId } });
+        await tx.restaurantJobRole.delete({ where: { id: ownerRoleId } });
+      });
+    }
   });
 
   it('rejects a self-approval (approver must differ from actor) before any compare', async () => {

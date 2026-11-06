@@ -7,7 +7,7 @@ import { POS_CONCURRENT_REGISTERS_LIMIT, resolveEntitlementLimit } from '@/lib/e
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
-import { buildCoAuthorizationRecord } from './co-authorization';
+import { buildAuthenticatedCoAuthorizationRecord } from './co-authorization';
 import { add, isNegative, money, sub, ZERO } from './money';
 import { assertMoneyDayOpen } from './money-day';
 
@@ -220,9 +220,9 @@ export async function recordMoneyResult(
  * `co-authorization.ts`; `organizationId`/`createdAt` come from the DB. */
 export async function persistCoAuth(
   tx: ScopedDb,
-  request: Parameters<typeof buildCoAuthorizationRecord>[0]
+  request: Parameters<typeof buildAuthenticatedCoAuthorizationRecord>[1]
 ): Promise<string> {
-  const record = buildCoAuthorizationRecord(request);
+  const record = await buildAuthenticatedCoAuthorizationRecord(tx, request);
   const row = await tx.restaurantCoAuthorization.create({ data: record, select: { id: true } });
   return row.id;
 }

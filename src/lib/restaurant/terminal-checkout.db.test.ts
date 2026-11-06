@@ -440,11 +440,21 @@ beforeAll(async () => {
       },
     });
 
+    // The foreign-branch denial fixture must be branch-limited. Full-administration
+    // wildcard grants intentionally span every branch in this tenant.
+    const foreignManagerRole = await tx.organizationRole.create({
+      data: {
+        key: `branch_manager_${suffix}`,
+        name: 'Branch-limited manager',
+        permissions: { create: [{ capability: 'coauth:approve', effect: 'ALLOW' }] },
+      },
+    });
+
     // Users carry capabilities via their org role; staff profiles link to them (C11 gate).
     for (const [id, roleId, tag] of [
       [ctx.userA, ctx.roleFull, 'a'],
       [ctx.userMgr, ctx.roleFull, 'm'],
-      [ctx.userForeignMgr, ctx.roleFull, 'fm'],
+      [ctx.userForeignMgr, foreignManagerRole.id, 'fm'],
       [ctx.userNoCap, ctx.roleNone, 'n'],
     ] as const) {
       await tx.user.create({

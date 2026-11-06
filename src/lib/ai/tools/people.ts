@@ -12,14 +12,13 @@
  */
 import { tool } from 'ai';
 import { z } from 'zod';
-import { hash } from 'bcryptjs';
 import { Prisma } from '@/generated/prisma/client';
 import { matchScore, type AssistantHelpers, type ToolSet } from '@/lib/ai/context';
 import { appUrl, templates, sendEmail } from '@/lib/email';
 import { normalizeEmail } from '@/lib/email-address';
 import { assertSeatAvailable, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { generateInviteToken } from '@/lib/invite-token';
-import { passwordMeetsPolicy } from '@/lib/password-policy';
+import { initiateAdminPasswordReset } from '@/lib/auth/password-reset';
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin"; the acronym role stays as-is.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
@@ -991,54 +990,42 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
       },
     });
 
-    // Reset another member's password (mirrors team.adminResetPassword).
+    // Credentials stay between the server and the member's registered inbox.
     tools.resetMemberPassword = tool({
       description:
-        'Set a new password for another team member (admin password reset). Use for "reset <name>\'s password", "set a new password for <name>". The password is stored hashed and never echoed back. ADMIN only.',
+        'Send a password reset link to a team member’s registered email and revoke their existing sessions and tokens. The member chooses their own password outside the assistant. ADMIN only.',
       inputSchema: z.object({
         name: z.string().describe('The member whose password to reset, e.g. "Aisha Khan"'),
-        // AI-01: a bare min(8) string only — the policy regexes serialize to
-        // `allOf`/`pattern`, which Groq's strict validator 400s (taking the whole
-        // request, and every approval-continuation, down). Enforce the full policy
-        // inside execute via passwordMeetsPolicy() instead. Mirrors inviteMember.
-        newPassword: z
-          .string()
-          .min(8)
-          .describe('At least 8 chars with an uppercase letter, a lowercase letter, and a number'),
       }),
       needsApproval: true,
-      execute: async ({ name, newPassword }) => {
-        if (!h.isAdmin) return { error: 'Only admins can reset passwords.' };
-        if (!passwordMeetsPolicy(newPassword)) {
-          return {
-            error:
-              'Password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a number.',
-          };
-        }
+      execute: async ({ name }) => {
+        if (!h.isAdmin || !(await h.can('admin:access')))
+          return { error: 'Only admins can reset passwords.' };
         const r = await h.resolvePerson(name, { includeInactive: true });
         if (r.kind === 'notfound') return { error: `No team member matches "${name}".` };
         if (r.kind === 'ambiguous')
           return { needsClarification: `Which one — ${r.candidates.join(', ')}?` };
 
-        const hashed = await hash(newPassword, 12);
-        const user = await h.db.user.update({
-          where: { id: r.value.id },
-          data: { password: hashed },
-          select: { id: true, name: true },
-        });
+        const result = await initiateAdminPasswordReset(h.db, ctx.organizationId, r.value.id);
+        if (!result) return { error: 'Member not found.' };
+        const { user, emailSent } = result;
         h.audit({
           category: 'TEAM',
           operation: 'UPDATE',
           action: 'resetMemberPassword',
-          description: `Reset password for ${user.name}`,
+          description: `Initiated password reset for ${user.name} and revoked existing sessions`,
           targetType: 'User',
           targetId: user.id,
           targetLabel: user.name,
-          metadata: { passwordReset: true },
+          metadata: { passwordReset: true, emailSent },
         });
         return {
           name: user.name,
           success: true,
+          emailSent,
+          message: emailSent
+            ? 'Reset link sent to the registered email. Existing sessions and tokens revoked.'
+            : 'Existing sessions and tokens revoked. Email delivery failed; retry the reset.',
           scopeNote: r.interpreted ? `Interpreted "${name}" as ${user.name}.` : undefined,
         };
       },

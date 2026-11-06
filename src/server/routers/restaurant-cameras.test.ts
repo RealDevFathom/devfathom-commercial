@@ -11,7 +11,12 @@ describe('restaurant cameras router security contract', () => {
     expect(source).toContain('buildCoAuthorizationRecord');
     expect(source).toContain('actingStaffProfileId: input.actingStaffProfileId');
     expect(source).toContain('approvingStaffProfileId: input.approvingStaffProfileId');
-    expect(source).toContain('authenticateOperator');
+    expect(source).toContain('authenticateCoAuthorizationOperator');
+    expect(source).toContain('buildAuthenticatedCoAuthorizationRecord');
+    expect(source).toContain('await resolveRestaurantActor(ctx, [gateway.branchId])');
+    expect(source).toContain('input.actingStaffProfileId !== actor.staffProfileId');
+    const authSource = readFileSync('src/lib/restaurant/co-authorization.ts', 'utf8');
+    expect(authSource).toContain('await authenticateOperator(db,');
   });
   test('fails closed when persistent camera credential encryption is not configured', () => {
     expect(source).toContain('const key = process.env.CAMERA_CREDENTIAL_KEY;');

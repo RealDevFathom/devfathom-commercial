@@ -3,6 +3,7 @@
  * the organizations is revealed, and every failure looks identical.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DUMMY_PASSWORD_HASH } from '@/lib/auth/constants';
 
 const mocks = vi.hoisted(() => ({
   compare: vi.fn(),
@@ -34,14 +35,13 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 
 import { resolveSharedLogin } from './shared-login';
 
-const DUMMY_HASH = '$2b$10$7Jh22HC1lxzaVDwJSaJVp./wPe52BukW8KMrtnZfsoTMNsvJxWclS';
-
 function candidate(overrides: Record<string, unknown> = {}) {
   const index = (overrides.index as number) ?? 1;
   return {
     userId: `user_${index}`,
     organizationId: `org_${index}`,
     passwordHash: `$2b$10$hash${index}`,
+    tokenVersion: 3,
     userStatus: 'ACTIVE',
     organization: {
       id: `org_${index}`,
@@ -79,7 +79,7 @@ describe('resolveSharedLogin', () => {
     await expect(resolve()).resolves.toEqual({ outcome: 'failed' });
 
     expect(mocks.compare).toHaveBeenCalledTimes(1);
-    expect(mocks.compare).toHaveBeenCalledWith('correct', DUMMY_HASH);
+    expect(mocks.compare).toHaveBeenCalledWith('correct', DUMMY_PASSWORD_HASH);
   });
 
   it('performs one compare per candidate, including SSO-only members', async () => {
@@ -97,7 +97,7 @@ describe('resolveSharedLogin', () => {
     expect(mocks.compare).toHaveBeenCalledTimes(3);
     // The password-less member is compared against the dummy hash, so the number
     // of compares depends only on the candidate count.
-    expect(mocks.compare).toHaveBeenCalledWith('correct', DUMMY_HASH);
+    expect(mocks.compare).toHaveBeenCalledWith('correct', DUMMY_PASSWORD_HASH);
   });
 
   it('matches only the organizations whose stored hash the password satisfies', async () => {

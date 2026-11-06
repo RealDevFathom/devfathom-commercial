@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => ({
   jobRoleFindFirst: vi.fn(),
   stationFindFirst: vi.fn(),
   stationCreate: vi.fn(),
+  assignmentUpsert: vi.fn(),
+  staffJobRoleFindMany: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -66,6 +68,7 @@ import { RESTAURANT_JOB_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import type { TRPCContext } from '../trpc';
 
 const db = {
+  restaurantBranchAssignment: { upsert: mocks.assignmentUpsert },
   restaurantStaffProfile: {
     findFirst: mocks.staffFindFirst,
     findMany: mocks.staffFindMany,
@@ -80,6 +83,7 @@ const db = {
     findFirst: mocks.jobRoleFindFirst,
     create: mocks.jobRoleCreate,
   },
+  restaurantStaffJobRole: { findMany: mocks.staffJobRoleFindMany },
   restaurantKitchenStation: {
     findFirst: mocks.stationFindFirst,
     create: mocks.stationCreate,
@@ -141,6 +145,7 @@ beforeEach(() => {
   );
   mocks.jobRoleFindFirst.mockResolvedValue(null);
   mocks.stationFindFirst.mockResolvedValue({ id: 'station_1' });
+  mocks.staffJobRoleFindMany.mockResolvedValue([]);
 });
 
 describe('restaurantStaff.mySelfProfile', () => {
@@ -177,6 +182,8 @@ describe('restaurantStaff.provisionMyProfile', () => {
       userId: 'user_admin',
       roleProfileGranted: false,
     });
+    // Owner branch reach is derived; repair persists no generated assignments.
+    expect(mocks.assignmentUpsert).not.toHaveBeenCalled();
     expect(mocks.staffCreate).toHaveBeenCalledOnce();
     expect(mocks.staffCreate.mock.calls[0]![0].data).toMatchObject({
       organizationId: 'org_1',
@@ -459,4 +466,99 @@ describe('administrator repair authorization before writes', () => {
       expectNoWrites();
     }
   );
+});
+
+describe('owner job-role changes require an organization-wide administrator', () => {
+  const branchActor = {
+    id: 'staff_actor',
+    primaryBranchId: 'branch_default',
+    jobRoles: [{ branchId: 'branch_default' }],
+    directCapabilityGrants: [],
+  };
+
+  beforeEach(() => {
+    mocks.jobRoleFindMany.mockImplementation(async (args?: { where?: { key?: string } }) =>
+      args?.where?.key === 'owner'
+        ? [{ id: 'role_owner' }]
+        : RESTAURANT_JOB_ROLE_TEMPLATES.map((role) => ({ key: role.key }))
+    );
+    mocks.setStaffAccess.mockResolvedValue({ granted: [], revoked: [], overrides: [] });
+  });
+
+  function branchScoped() {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+    mocks.staffFindMany.mockResolvedValue([branchActor]);
+  }
+
+  it.each([
+    ['self', 'staff_actor'],
+    ['another member', 'staff_target'],
+  ])('denies a branch-scoped manager granting owner to %s', async (_label, staffProfileId) => {
+    branchScoped();
+    mocks.staffFindUnique.mockResolvedValue({ id: staffProfileId });
+    await expect(
+      caller().setStaffAccess({
+        branchId: 'branch_default',
+        staffProfileId,
+        jobRoleIds: ['role_owner'],
+        overrides: [],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.setStaffAccess).not.toHaveBeenCalled();
+  });
+
+  it('denies a branch-scoped manager revoking an existing owner holding', async () => {
+    branchScoped();
+    mocks.staffFindUnique.mockResolvedValue({ id: 'staff_target' });
+    mocks.staffJobRoleFindMany.mockResolvedValue([{ jobRoleId: 'role_owner' }]);
+    await expect(
+      caller().setStaffAccess({
+        branchId: 'branch_default',
+        staffProfileId: 'staff_target',
+        jobRoleIds: [],
+        overrides: [],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.setStaffAccess).not.toHaveBeenCalled();
+  });
+
+  it('still lets a branch-scoped manager save non-owner roles', async () => {
+    branchScoped();
+    mocks.staffFindUnique.mockResolvedValue({ id: 'staff_target' });
+    await caller().setStaffAccess({
+      branchId: 'branch_default',
+      staffProfileId: 'staff_target',
+      jobRoleIds: ['role_cashier'],
+      overrides: [],
+    });
+    expect(mocks.setStaffAccess).toHaveBeenCalledOnce();
+  });
+
+  it('denies an organization-wide administrator granting owner to themselves', async () => {
+    mocks.staffFindMany.mockResolvedValue([branchActor]);
+    mocks.staffFindUnique.mockResolvedValue({ id: 'staff_actor' });
+    await expect(
+      caller().setStaffAccess({
+        branchId: 'branch_default',
+        staffProfileId: 'staff_actor',
+        jobRoleIds: ['role_owner'],
+        overrides: [],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.setStaffAccess).not.toHaveBeenCalled();
+  });
+
+  it('lets an organization-wide administrator grant owner to another member', async () => {
+    mocks.staffFindMany.mockResolvedValue([branchActor]);
+    mocks.staffFindUnique.mockResolvedValue({ id: 'staff_target' });
+    await caller().setStaffAccess({
+      branchId: 'branch_default',
+      staffProfileId: 'staff_target',
+      jobRoleIds: ['role_owner'],
+      overrides: [],
+    });
+    expect(mocks.setStaffAccess).toHaveBeenCalledOnce();
+  });
 });

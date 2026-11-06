@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { buildCoAuthorizationRecord } from './co-authorization';
+import { buildAuthenticatedCoAuthorizationRecord } from './co-authorization';
 import { assertMoneyDayOpen } from './money-day';
 import { accrueLoyaltyForSettledBill, releaseLoyaltyRedemption } from './loyalty';
 import {
@@ -162,9 +162,9 @@ function requireReason(reason: string | null | undefined): string {
 
 async function persistCoAuth(
   tx: ScopedDb,
-  request: Parameters<typeof buildCoAuthorizationRecord>[0]
+  request: Parameters<typeof buildAuthenticatedCoAuthorizationRecord>[1]
 ): Promise<string> {
-  const record = buildCoAuthorizationRecord(request);
+  const record = await buildAuthenticatedCoAuthorizationRecord(tx, request);
   const row = await tx.restaurantCoAuthorization.create({ data: record, select: { id: true } });
   return row.id;
 }

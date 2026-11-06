@@ -17,7 +17,7 @@ import { randomBytes } from 'node:crypto';
 import { Client } from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { RESTAURANT_JOB_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import { RESTAURANT_CAPABILITIES, RESTAURANT_JOB_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 const OWNER_DATABASE_URL = process.env.M8_TEST_OWNER_DATABASE_URL;
@@ -209,6 +209,8 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
       return { holdings, resolution };
     });
 
+    // One holding at the primary branch; owner reach to other branches is derived
+    // at decision time, never persisted as generated per-branch rows.
     expect(owned.holdings).toEqual([{ branchId: ids.branchDefault, jobRole: { key: 'owner' } }]);
     // The owner's follow-up in full: every capability is INHERITED FROM ROLE,
     // and the direct-exception layer is empty.
@@ -237,9 +239,11 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
       roles: await tx.restaurantJobRole.count(),
       profiles: await tx.restaurantStaffProfile.count(),
       holdings: await tx.restaurantStaffJobRole.count(),
+      assignments: await tx.restaurantBranchAssignment.count(),
       stations: await tx.restaurantKitchenStation.count(),
     }));
 
+    expect(before.assignments).toBe(0);
     const second = await provisionAsPlatform();
 
     expect(second.jobRolesCreated).toEqual([]);
@@ -253,6 +257,7 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
         roles: await tx.restaurantJobRole.count(),
         profiles: await tx.restaurantStaffProfile.count(),
         holdings: await tx.restaurantStaffJobRole.count(),
+        assignments: await tx.restaurantBranchAssignment.count(),
         stations: await tx.restaurantKitchenStation.count(),
       }))
     ).resolves.toEqual(before);
@@ -298,5 +303,187 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
     await deps.withTenantDb(orgId, (tx) =>
       tx.restaurantJobRole.updateMany({ where: { key: 'owner' }, data: { active: true } })
     );
+  });
+  it('keeps every owner capability on all branches, preserves DENY, and persists nothing for new branches', async () => {
+    await provisionAsPlatform();
+    const { operatorHasCapability } = await import('./checkout-routes');
+    const { hasStaffBranchAccess } = await import('./branch-access');
+    await deps.withTenantDb(orgId, async (tx) => {
+      const profile = await tx.restaurantStaffProfile.findFirstOrThrow({
+        where: { userId: ids.admin },
+      });
+      // An owner is organization-wide without a local holding or assignment.
+      expect(
+        await tx.restaurantStaffJobRole.count({
+          where: { staffProfileId: profile.id, branchId: ids.branchSecond },
+        })
+      ).toBe(0);
+      for (const capability of RESTAURANT_CAPABILITIES) {
+        expect(
+          await operatorHasCapability(tx, profile.id, capability, new Date(), ids.branchSecond),
+          capability
+        ).toBe(true);
+      }
+      await deps.jobRoles.setStaffCapabilityOverride(tx, {
+        staffProfileId: profile.id,
+        branchId: ids.branchSecond,
+        capability: 'payments:refund',
+        effect: 'DENY',
+      });
+      expect(
+        await operatorHasCapability(tx, profile.id, 'payments:refund', new Date(), ids.branchSecond)
+      ).toBe(false);
+      expect(await hasStaffBranchAccess(tx, profile.id, 'foreign_branch')).toBe(false);
+      expect(
+        await deps.jobRoles.resolveStaffCapabilities(tx, profile.id, 'foreign_branch')
+      ).toEqual(new Set());
+      const branch = await tx.restaurantBranch.create({ data: { name: 'New owner branch' } });
+      expect(await hasStaffBranchAccess(tx, profile.id, branch.id)).toBe(true);
+      expect(
+        await tx.restaurantBranchAssignment.count({
+          where: { branchId: branch.id, userId: ids.admin },
+        })
+      ).toBe(0);
+      expect(
+        await tx.restaurantStaffJobRole.count({
+          where: { branchId: branch.id, staffProfileId: profile.id },
+        })
+      ).toBe(0);
+      await tx.restaurantBranch.update({ where: { id: branch.id }, data: { active: false } });
+      expect(await hasStaffBranchAccess(tx, profile.id, branch.id)).toBe(false);
+    });
+  });
+
+  it('allows a full-capability web administrator across branches without a floor owner role', async () => {
+    const { operatorHasCapability } = await import('./checkout-routes');
+    const { hasStaffBranchAccess } = await import('./branch-access');
+    await deps.withTenantDb(orgId, async (tx) => {
+      const role = await tx.organizationRole.create({
+        data: {
+          key: 'full-admin',
+          name: 'Full admin',
+          permissions: { create: { capability: '*', effect: 'ALLOW' } },
+        },
+      });
+      const user = await tx.user.create({
+        data: {
+          name: 'Full admin',
+          email: `full-${suffix}@h4.invalid`,
+          role: 'ADMIN',
+          department: 'LEADERSHIP',
+          title: 'Admin',
+          organizationRoleId: role.id,
+        },
+      });
+      const profile = await tx.restaurantStaffProfile.create({
+        data: { displayName: 'Full admin', userId: user.id, primaryBranchId: ids.branchDefault },
+      });
+      for (const capability of RESTAURANT_CAPABILITIES) {
+        expect(
+          await operatorHasCapability(tx, profile.id, capability, new Date(), ids.branchSecond),
+          capability
+        ).toBe(true);
+      }
+      // A coarse ADMIN with no actual capabilities still cannot cross branches.
+      await tx.user.update({ where: { id: user.id }, data: { organizationRoleId: null } });
+      expect(await hasStaffBranchAccess(tx, profile.id, ids.branchSecond)).toBe(false);
+      expect(
+        await operatorHasCapability(
+          tx,
+          profile.id,
+          'payments:collect',
+          new Date(),
+          ids.branchSecond
+        )
+      ).toBe(false);
+      const override = await tx.userPermissionOverride.create({
+        data: {
+          userId: user.id,
+          capability: '*',
+          effect: 'ALLOW',
+          reason: 'Regression full administration',
+        },
+      });
+      expect(await hasStaffBranchAccess(tx, profile.id, ids.branchSecond)).toBe(true);
+      expect(
+        await operatorHasCapability(
+          tx,
+          profile.id,
+          'payments:collect',
+          new Date(),
+          ids.branchSecond
+        )
+      ).toBe(true);
+      await tx.userPermissionOverride.update({
+        where: { id: override.id },
+        data: { expiresAt: new Date(0) },
+      });
+      expect(await hasStaffBranchAccess(tx, profile.id, ids.branchSecond)).toBe(false);
+      await tx.user.update({ where: { id: user.id }, data: { organizationRoleId: role.id } });
+      const { restaurantBranchesRouter } = await import('@/server/routers/restaurant-branches');
+      const branchCaller = restaurantBranchesRouter.createCaller({
+        db: tx,
+        session: {
+          user: { id: user.id, role: 'ADMIN', status: 'ACTIVE', organizationId: orgId },
+        },
+        organization: null,
+        support: null,
+        entitlements: {
+          organizationId: orgId,
+          enabledModules: ['restaurant-core'],
+          limits: { 'restaurant.locations.max': 10 },
+          modules: [],
+        },
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {} },
+      } as unknown as import('@/server/trpc').TRPCContext);
+      const created = await branchCaller.create({
+        name: 'Router created branch',
+        code: 'H4-NEW',
+        timezone: 'UTC',
+        businessDayCutoff: '04:00',
+        address: null,
+        shiftSignInEnforced: false,
+      });
+      const dormant = await tx.restaurantBranch.create({
+        data: { name: 'Dormant branch', active: false },
+      });
+      await branchCaller.setActive({ id: dormant.id, active: true });
+      expect(
+        await tx.restaurantBranchAssignment.count({
+          where: { branchId: dormant.id, userId: user.id },
+        })
+      ).toBe(0);
+      expect(
+        await tx.restaurantStaffJobRole.count({
+          where: { branchId: dormant.id, staffProfileId: profile.id },
+        })
+      ).toBe(0);
+      for (const userId of [user.id, ids.admin]) {
+        // Web-role and floor-owner reach both stay dynamic: branch creation
+        // persists no holdings or assignments that could outlive revocation.
+        expect(
+          await tx.restaurantBranchAssignment.count({ where: { branchId: created.id, userId } })
+        ).toBe(0);
+        expect(
+          await tx.restaurantStaffJobRole.count({
+            where: { branchId: created.id, staffProfile: { userId }, jobRole: { key: 'owner' } },
+          })
+        ).toBe(0);
+      }
+      for (const branchId of [created.id, dormant.id]) {
+        expect(await hasStaffBranchAccess(tx, profile.id, branchId)).toBe(true);
+        expect(
+          await operatorHasCapability(tx, profile.id, 'payments:refund', new Date(), branchId)
+        ).toBe(true);
+      }
+      await tx.user.update({ where: { id: user.id }, data: { organizationRoleId: null } });
+      for (const branchId of [created.id, dormant.id]) {
+        expect(await hasStaffBranchAccess(tx, profile.id, branchId)).toBe(false);
+        expect(
+          await operatorHasCapability(tx, profile.id, 'payments:refund', new Date(), branchId)
+        ).toBe(false);
+      }
+    });
   });
 });

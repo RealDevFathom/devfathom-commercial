@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
   roleFindFirst: vi.fn(),
   assertSeatAvailable: vi.fn(),
   annotateAudit: vi.fn(),
+  apiTokenDeleteMany: vi.fn(),
+  ticketDeleteMany: vi.fn(),
+  resetUpdateMany: vi.fn(),
+  invitationUpdateMany: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -39,6 +43,10 @@ import type { TRPCContext } from '../trpc';
 import { organizationAdminRouter } from './organization-admin';
 
 type MemberDb = {
+  apiToken: { deleteMany: typeof mocks.apiTokenDeleteMany };
+  tenantSsoTicket: { deleteMany: typeof mocks.ticketDeleteMany };
+  passwordResetToken: { updateMany: typeof mocks.resetUpdateMany };
+  invitation: { updateMany: typeof mocks.invitationUpdateMany };
   user: {
     findFirst: typeof mocks.userFindFirst;
     create: typeof mocks.userCreate;
@@ -54,6 +62,10 @@ type MemberDb = {
 };
 
 const db: MemberDb = {
+  apiToken: { deleteMany: mocks.apiTokenDeleteMany },
+  tenantSsoTicket: { deleteMany: mocks.ticketDeleteMany },
+  passwordResetToken: { updateMany: mocks.resetUpdateMany },
+  invitation: { updateMany: mocks.invitationUpdateMany },
   user: {
     findFirst: mocks.userFindFirst,
     create: mocks.userCreate,
@@ -124,6 +136,54 @@ describe('organization member creation', () => {
       email: 'ayesha@clifton.test',
       name: 'Ayesha Cashier',
     });
+  });
+
+  it('preserves manual admin reset and revokes all target credentials in the same tenant', async () => {
+    mocks.userFindFirst.mockResolvedValue({ id: 'member_a', email: 'member@example.test' });
+    expect(
+      await caller().resetMemberPassword({ id: 'member_a', password: input.password })
+    ).toEqual({ success: true });
+    expect(mocks.userUpdate).toHaveBeenCalledWith({
+      where: { id: 'member_a' },
+      data: {
+        password: 'hashed',
+        passwordChangedAt: null,
+        mustChangePassword: true,
+        tokenVersion: { increment: 1 },
+      },
+    });
+    const where = { organizationId: 'org_a', userId: 'member_a' };
+    expect(mocks.apiTokenDeleteMany).toHaveBeenCalledWith({ where });
+    expect(mocks.ticketDeleteMany).toHaveBeenCalledWith({ where });
+    expect(mocks.resetUpdateMany).toHaveBeenCalledWith({
+      where: { ...where, usedAt: null },
+      data: { usedAt: expect.any(Date) },
+    });
+    expect(mocks.invitationUpdateMany).toHaveBeenCalledWith({
+      where: { ...where, acceptedAt: null },
+      data: { expiresAt: new Date(0) },
+    });
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ targetId: 'member_a' })
+    );
+  });
+
+  it('refuses a manual reset for an invited member before touching credentials', async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'member_a',
+      email: 'member@example.test',
+      status: 'INVITED',
+    });
+    await expect(
+      caller().resetMemberPassword({ id: 'member_a', password: input.password })
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    // The pending invitation stays usable: nothing is updated, expired or revoked.
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+    expect(mocks.invitationUpdateMany).not.toHaveBeenCalled();
+    expect(mocks.resetUpdateMany).not.toHaveBeenCalled();
+    expect(mocks.apiTokenDeleteMany).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
   });
 
   it.each(['aaaaaaaaaaaa', 'AAAAAAAAAAAA', 'PasswordOnly'])(

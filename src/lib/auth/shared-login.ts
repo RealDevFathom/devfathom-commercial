@@ -24,6 +24,7 @@ import { recordAuthAudit } from '@/server/audit';
 export type EligibleOrganization = {
   organizationId: string;
   userId: string;
+  tokenVersion: number;
   slug: string;
   displayName: string;
   /** True when the organization enforces SSO, so no password path exists into it. */
@@ -154,6 +155,7 @@ export async function resolveSharedLogin(input: {
     organizations.push({
       organizationId: candidate.organizationId,
       userId: candidate.userId,
+      tokenVersion: candidate.tokenVersion,
       slug: candidate.organization.slug,
       displayName: candidate.organization.displayName,
       ssoEnforced: await ssoEnforcedFor(candidate.organizationId),

@@ -13,7 +13,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { loadBranchCommercialTerms } from './branch-commercial-terms';
 import { evaluateOrderSettlement } from './bills';
 import { reviveCommercialTerms } from './commercial-terms';
-import { CoAuthorizationError } from './co-authorization';
+import { CoAuthorizationError, authenticateCoAuthorizationOperator } from './co-authorization';
 import { quoteDraftCheckBreakdown } from './draft-check-total';
 import { operatorHasCapability } from './checkout-routes';
 import { KitchenTicketError } from './kitchen-tickets';
@@ -31,12 +31,7 @@ import { OrderPricingError } from './order-pricing';
 import { verifyPosComposerProof } from './pos-composer-proof';
 import { OrderInvariantError, OrderTransitionError } from './order-state-machine';
 import { pickEntry, resolveEffectiveEntries, type ResolvedPriceList } from './price-lists';
-import {
-  authenticateOperator,
-  withTerminalAuth,
-  type OperatorAuthResult,
-  type TerminalContext,
-} from './terminal-auth';
+import { withTerminalAuth, type OperatorAuthResult, type TerminalContext } from './terminal-auth';
 
 /**
  * M4-L4 — the POS-terminal transport glue over the L2 order command layer.
@@ -258,7 +253,7 @@ export async function authenticateApprover(
   approving: z.infer<typeof APPROVING>,
   now: Date
 ): Promise<{ ok: true; staffProfileId: string } | { ok: false; response: NextResponse }> {
-  const auth: OperatorAuthResult = await authenticateOperator(db, {
+  const auth: OperatorAuthResult = await authenticateCoAuthorizationOperator(db, {
     staffProfileId: approving.staffProfileId,
     deviceId,
     branchId,

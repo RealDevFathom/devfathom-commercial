@@ -19,7 +19,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { ensurePlatformModule } from '@/lib/test-support/departments';
+import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -654,7 +654,7 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
         approvingStaffProfileId: STAFF.A.id,
         deviceId,
         terminalSessionId: sessionId,
-        reason: 'Owner corrected duplicate [Owner PIN reauthentication]',
+        reason: `Owner corrected duplicate [Owner PIN reauthentication] [Solo owner; PIN re-authenticated; branch=${branchId}; active staff=1]`,
       });
       await deps.flushAuditWrites();
       const audits = await deps.withTenantDb(orgId, (tx) =>
@@ -682,4 +682,262 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
       });
     }
   });
+  it('permits sole-owner self-approval only after a fresh PIN and persists explicit audit evidence', async () => {
+    const soloBranch = `branch_solo_${suffix}`;
+    const soloStaff = `staff_solo_${suffix}`;
+    const { hashOperatorCredential } = await import('./operator-credentials');
+    const { ensureDefaultJobRoles, grantJobRole } = await import('./job-roles');
+    await deps.withTenantDb(orgId, async (tx) => {
+      await tx.restaurantBranch.create({ data: { id: soloBranch, name: 'Solo' } });
+      await tx.restaurantStaffProfile.create({
+        data: {
+          id: soloStaff,
+          displayName: 'Solo owner',
+          primaryBranchId: soloBranch,
+        },
+      });
+      await ensureDefaultJobRoles(tx);
+      const role = await tx.restaurantJobRole.findFirstOrThrow({ where: { key: 'owner' } });
+      await grantJobRole(tx, {
+        staffProfileId: soloStaff,
+        jobRoleId: role.id,
+        branchId: soloBranch,
+      });
+      await tx.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId: soloStaff,
+          type: 'PIN',
+          credentialHash: await hashOperatorCredential('PIN', '676767'),
+        },
+      });
+    });
+    const { secret } = await deps.withTenantDb(orgId, (tx) =>
+      deps.enrollDevice(tx, { branchId: soloBranch, name: 'Solo POS' })
+    );
+    const { token, sessionId } = await establish(secret);
+    expect(
+      (
+        await call(deps.routes.unlock, {
+          secret,
+          session: token,
+          body: {
+            staffProfileId: soloStaff,
+            type: 'PIN',
+            secret: '676767',
+          },
+        })
+      ).status
+    ).toBe(200);
+    const directory = await deps.routes.operators.GET(
+      new Request('https://tenant.test/api/restaurant/terminal/operators', {
+        headers: { authorization: `Bearer ${secret}`, 'x-terminal-session': token },
+      })
+    );
+    expect(directory.status).toBe(200);
+    expect(await directory.json()).toMatchObject({
+      operators: [{ staffProfileId: soloStaff, canApprove: true, canSelfApprove: true }],
+    });
+    const body = {
+      approvingStaffProfileId: soloStaff,
+      type: 'PIN',
+      secret: '676767',
+      capability: 'orders:void',
+      reason: 'Solo owner correction',
+    };
+    // Unlock is insufficient, and a badge never grants this exception.
+    expect(
+      (
+        await call(deps.routes.coAuthorize, {
+          secret,
+          session: token,
+          body: { ...body, secret: undefined },
+        })
+      ).status
+    ).toBe(400);
+    expect(
+      (
+        await call(deps.routes.coAuthorize, {
+          secret,
+          session: token,
+          body: { ...body, type: 'BADGE' },
+        })
+      ).status
+    ).toBe(400);
+    expect(
+      (
+        await call(deps.routes.coAuthorize, {
+          secret,
+          session: token,
+          body: { ...body, secret: '000000' },
+        })
+      ).status
+    ).toBe(401);
+    expect(
+      await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantCoAuthorization.count({ where: { terminalSessionId: sessionId } })
+      )
+    ).toBe(0);
+    const approved = await call(deps.routes.coAuthorize, { secret, session: token, body });
+    expect(approved.status).toBe(201);
+    const evidence = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantCoAuthorization.findFirstOrThrow({ where: { terminalSessionId: sessionId } })
+    );
+    expect(evidence).toMatchObject({
+      actingStaffProfileId: soloStaff,
+      approvingStaffProfileId: soloStaff,
+      capability: 'orders:void',
+    });
+    expect(evidence.reason).toContain(`PIN re-authenticated; branch=${soloBranch}; active staff=1`);
+    expect(evidence.reason).not.toContain('676767');
+    await deps.flushAuditWrites();
+    const audit = await deps.withTenantDb(orgId, (tx) =>
+      tx.auditLog.findFirst({
+        where: { actorStaffProfileId: soloStaff, action: 'restaurant.terminal.co-authorize' },
+      })
+    );
+    expect(audit).not.toBeNull();
+    // The same policy applies to the production back-office device mutation.
+    // PIN re-authentication there does not acquire a terminal roster requirement.
+    await deps.withTenantDb(orgId, async (tx) => {
+      await seedDepartments(tx, [orgId], ['LEADERSHIP']);
+      const role = await tx.organizationRole.create({
+        data: {
+          key: 'solo-web-owner',
+          name: 'Solo web owner',
+          permissions: { create: { capability: '*', effect: 'ALLOW' } },
+        },
+      });
+      const user = await tx.user.create({
+        data: {
+          name: 'Solo owner',
+          email: `solo-${suffix}@h4.invalid`,
+          department: 'LEADERSHIP',
+          title: 'Owner',
+          role: 'ADMIN',
+          organizationRoleId: role.id,
+        },
+      });
+      await tx.restaurantStaffProfile.update({
+        where: { id: soloStaff },
+        data: { userId: user.id },
+      });
+      await tx.restaurantBranch.update({
+        where: { id: soloBranch },
+        data: { shiftSignInEnforced: true },
+      });
+      const { device } = await deps.enrollDevice(tx, {
+        branchId: soloBranch,
+        name: 'Spare terminal',
+      });
+      const { restaurantDevicesRouter } = await import('@/server/routers/restaurant-devices');
+      await restaurantDevicesRouter
+        .createCaller({
+          db: tx,
+          session: {
+            user: { id: user.id, role: 'ADMIN', status: 'ACTIVE', organizationId: orgId },
+          },
+          organization: null,
+          support: null,
+          entitlements: {
+            organizationId: orgId,
+            enabledModules: ['restaurant-core'],
+            limits: {},
+            modules: [],
+          },
+          requestMeta: { ip: null, userAgent: null },
+          audit: { detail: {} },
+        } as unknown as import('@/server/trpc').TRPCContext)
+        .revoke({
+          deviceId: device.id,
+          approvingStaffProfileId: soloStaff,
+          approvingType: 'PIN',
+          approvingSecret: '676767',
+          reason: 'Replace spare terminal',
+        });
+      expect(
+        await tx.restaurantRegisteredDevice.findUnique({
+          where: { id: device.id },
+          select: { status: true },
+        })
+      ).toEqual({ status: 'REVOKED' });
+      const coAuth = await tx.restaurantCoAuthorization.findFirstOrThrow({
+        where: { targetId: device.id },
+      });
+      expect(coAuth.reason).toContain('Solo owner; PIN re-authenticated');
+      await tx.restaurantBranch.update({
+        where: { id: soloBranch },
+        data: { shiftSignInEnforced: false },
+      });
+    });
+    // Adding active staff immediately withdraws the exception, even for an owner.
+    const second = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantStaffProfile.create({
+        data: { displayName: 'Second operator', primaryBranchId: soloBranch },
+      })
+    );
+    expect((await call(deps.routes.coAuthorize, { secret, session: token, body })).status).toBe(
+      400
+    );
+    // Staff linked through a role or direct branch override also count, even
+    // when their primary branch is elsewhere.
+    await deps.withTenantDb(orgId, async (tx) => {
+      await tx.restaurantStaffProfile.update({
+        where: { id: second.id },
+        data: { primaryBranchId: branchId },
+      });
+      const role = await tx.restaurantJobRole.findFirstOrThrow({ where: { key: 'cashier' } });
+      await grantJobRole(tx, {
+        staffProfileId: second.id,
+        jobRoleId: role.id,
+        branchId: soloBranch,
+      });
+    });
+    expect((await call(deps.routes.coAuthorize, { secret, session: token, body })).status).toBe(
+      400
+    );
+    await deps.withTenantDb(orgId, async (tx) => {
+      await tx.restaurantStaffJobRole.deleteMany({ where: { staffProfileId: second.id } });
+      await tx.restaurantStaffCapabilityGrant.create({
+        data: {
+          staffProfileId: second.id,
+          branchId: soloBranch,
+          capability: 'coauth:approve',
+          effect: 'ALLOW',
+        },
+      });
+    });
+    expect((await call(deps.routes.coAuthorize, { secret, session: token, body })).status).toBe(
+      400
+    );
+    // A suspended second staff member does not turn a single-staff branch into a multi-staff branch.
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantStaffProfile.update({ where: { id: second.id }, data: { status: 'SUSPENDED' } })
+    );
+    expect((await call(deps.routes.coAuthorize, { secret, session: token, body })).status).toBe(
+      201
+    );
+    // A distinct approver remains supported in the multi-staff case.
+    await deps.withTenantDb(orgId, async (tx) => {
+      await tx.restaurantStaffProfile.update({
+        where: { id: second.id },
+        data: { status: 'ACTIVE' },
+      });
+      await tx.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId: second.id,
+          type: 'PIN',
+          credentialHash: await hashOperatorCredential('PIN', '787878'),
+        },
+      });
+    });
+    expect(
+      (
+        await call(deps.routes.coAuthorize, {
+          secret,
+          session: token,
+          body: { ...body, approvingStaffProfileId: second.id, secret: '787878' },
+        })
+      ).status
+    ).toBe(201);
+  }, 30_000);
 });

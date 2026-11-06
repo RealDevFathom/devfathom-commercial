@@ -24,6 +24,7 @@ function row(index: number, overrides: Record<string, unknown> = {}) {
     id: `user_${index}`,
     organizationId: `org_${index}`,
     password: `$2b$10$hash${index}`,
+    tokenVersion: 3,
     status: 'ACTIVE',
     organization: {
       id: `org_${index}`,
@@ -72,6 +73,7 @@ describe('findLoginCandidates', () => {
       id: true,
       organizationId: true,
       password: true,
+      tokenVersion: true,
       status: true,
       organization: { select: { id: true, slug: true, displayName: true, status: true } },
     });
@@ -89,6 +91,7 @@ describe('findLoginCandidates', () => {
         userId: 'user_1',
         organizationId: 'org_1',
         passwordHash: '$2b$10$hash1',
+        tokenVersion: 3,
         userStatus: 'ACTIVE',
         organization: {
           id: 'org_1',

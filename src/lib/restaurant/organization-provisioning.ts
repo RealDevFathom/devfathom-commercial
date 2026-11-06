@@ -150,8 +150,11 @@ export async function provisionRestaurantOrganization(
         email: administrator.email,
       });
       // Job-role holdings are per branch, and the administrator's is the branch
-      // their profile points at. A branch-less organization gets the profile and
-      // no holding — there is no branch to hold a role at.
+      // their profile points at. An owner holding already reaches every active
+      // branch at decision time (`resolveStaffCapabilityDecision`,
+      // `staffBranchMembership`), so no per-branch holding or branch assignment
+      // is persisted here: generated rows would outlive revocation of ownership.
+      // A branch-less organization gets the profile and no holding.
       const roleProfileGranted =
         ownerRole?.active && profile.primaryBranchId
           ? (

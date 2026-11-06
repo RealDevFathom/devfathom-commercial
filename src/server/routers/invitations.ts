@@ -84,6 +84,27 @@ export const invitationsRouter = router({
     // already rejects missing, accepted, and expired tokens without hashing,
     // so the work moved here is only ever spent on a token that looked usable.
     return ctx.db.$transaction(async (tx) => {
+      // Lock the same user before claiming a link as password recovery does.
+      // A reset that wins the lock expires this invitation; a failed claim
+      // rolls back this provisional password write.
+      //
+      // The invitee must still be awaiting onboarding at the instant we
+      // activate them. An administrator may have deactivated the account
+      // after the public read above; a conditional write prevents that stale
+      // request from undoing the administrator's decision.
+      const activated = await tx.user.updateMany({
+        where: { id: invitation.userId, status: 'INVITED' },
+        data: {
+          password: hashed,
+          status: 'ACTIVE',
+          phone: input.phone,
+          bio: input.bio ?? undefined,
+          ...(input.skills ? { skills: input.skills } : {}),
+        },
+      });
+
+      if (activated.count !== 1) throw invalidInvitation();
+
       // Fresh, and read once: the same instant decides whether the invitation
       // is still live and stamps the acceptance.
       const now = new Date();
@@ -104,23 +125,6 @@ export const invitationsRouter = router({
         data: { acceptedAt: now },
       });
       if (claimed.count !== 1) throw invalidInvitation();
-
-      // The invitee must still be awaiting onboarding at the instant we
-      // activate them. An administrator may have deactivated the account
-      // after the public read above; a conditional write prevents that stale
-      // request from undoing the administrator's decision.
-      const activated = await tx.user.updateMany({
-        where: { id: invitation.userId, status: 'INVITED' },
-        data: {
-          password: hashed,
-          status: 'ACTIVE',
-          phone: input.phone,
-          bio: input.bio ?? undefined,
-          ...(input.skills ? { skills: input.skills } : {}),
-        },
-      });
-
-      if (activated.count !== 1) throw invalidInvitation();
 
       return { email: invitation.user.email };
     });

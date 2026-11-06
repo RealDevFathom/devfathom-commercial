@@ -46,6 +46,7 @@ import {
   assertStaffProfileExists,
   denyStaffBranchAccess,
   resolveStaffBranchAuthorization,
+  type StaffBranchAuthorization,
 } from '@/lib/restaurant/staff-branch-authorization';
 
 /**
@@ -119,6 +120,41 @@ function mapJobRoleError(err: unknown): never {
 }
 
 const staffProcedure = capabilityProcedure('staff:manage');
+
+/**
+ * An `owner` holding reaches every active branch (see
+ * `resolveStaffCapabilityDecision`), so the per-branch `staff:manage` scope that
+ * guards ordinary role edits is not enough to grant or revoke it: a manager
+ * scoped to branch A must not be able to mint tenant-wide ownership by saving
+ * the branch-A tab. Only an organization-wide administrator may change an owner
+ * holding, and never on their own staff profile.
+ */
+async function assertOwnerRoleChangeAllowed(
+  db: ScopedDb,
+  authorization: StaffBranchAuthorization,
+  input: { staffProfileId: string; branchId: string; jobRoleIds: readonly string[] }
+) {
+  const ownerRoles = await db.restaurantJobRole.findMany({
+    where: { key: 'owner' },
+    select: { id: true },
+  });
+  if (ownerRoles.length === 0) return;
+  const ownerRoleIds = ownerRoles.map((role) => role.id);
+  const held = await db.restaurantStaffJobRole.findMany({
+    where: {
+      staffProfileId: input.staffProfileId,
+      branchId: input.branchId,
+      jobRoleId: { in: ownerRoleIds },
+    },
+    select: { jobRoleId: true },
+  });
+  const heldOwner = new Set(held.map((row) => row.jobRoleId));
+  const desired = new Set(input.jobRoleIds);
+  const changesOwner = ownerRoleIds.some((id) => heldOwner.has(id) !== desired.has(id));
+  if (!changesOwner) return;
+  if (!authorization.organizationWide) denyStaffBranchAccess();
+  if (authorization.actorStaffProfileId === input.staffProfileId) denyStaffBranchAccess();
+}
 
 // Resolve only an explicitly supplied account identity after branch authorization.
 // Enrollment must not require disclosing the tenant's unlinked-user directory.
@@ -838,6 +874,7 @@ export const restaurantStaffRouter = router({
         assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
+        await assertOwnerRoleChangeAllowed(ctx.db, authorization, input);
         const result = await setStaffJobRoles(ctx.db, {
           staffProfileId: input.staffProfileId,
           branchId: input.branchId,
@@ -898,6 +935,7 @@ export const restaurantStaffRouter = router({
         assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
+        await assertOwnerRoleChangeAllowed(ctx.db, authorization, input);
         const result = await setStaffAccess(ctx.db, {
           staffProfileId: input.staffProfileId,
           branchId: input.branchId,

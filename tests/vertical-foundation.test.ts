@@ -125,7 +125,7 @@ const platformDb = {
     findUnique: mocks.branchFindUnique,
     count: mocks.branchCount,
   },
-  restaurantBranchAssignment: { create: mocks.assignmentCreate },
+  restaurantBranchAssignment: { create: mocks.assignmentCreate, upsert: record() },
   restaurantStaffProfile: {
     findFirst: mocks.staffFindFirst,
     create: mocks.staffCreate,

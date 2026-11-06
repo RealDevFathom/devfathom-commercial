@@ -8,7 +8,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { evaluateOrderSettlement } from './bills';
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
-import { buildCoAuthorizationRecord } from './co-authorization';
+import { buildAuthenticatedCoAuthorizationRecord } from './co-authorization';
 import { assertMoneyDayOpen } from './money-day';
 import { postOrderRecipeConsumption } from './inventory';
 import {
@@ -1213,9 +1213,9 @@ export async function voidItem(db: ScopedDb, input: VoidItemInput): Promise<Item
 
 async function persistCoAuth(
   tx: ScopedDb,
-  request: Parameters<typeof buildCoAuthorizationRecord>[0]
+  request: Parameters<typeof buildAuthenticatedCoAuthorizationRecord>[1]
 ): Promise<string> {
-  const record = buildCoAuthorizationRecord(request);
+  const record = await buildAuthenticatedCoAuthorizationRecord(tx, request);
   const row = await tx.restaurantCoAuthorization.create({ data: record, select: { id: true } });
   return row.id;
 }

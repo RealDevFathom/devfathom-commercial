@@ -1,4 +1,3 @@
-import { recordOwnerPinReauthentication } from '@/lib/restaurant/owner-reauthentication';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -7,9 +6,12 @@ import { rateLimit } from '@/lib/rate-limit';
 import {
   CoAuthorizationError,
   buildCoAuthorizationRecord,
+  buildAuthenticatedCoAuthorizationRecord,
+  authenticateCoAuthorizationOperator,
+  isSoloBranchOwner,
 } from '@/lib/restaurant/co-authorization';
 import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
-import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
+import { withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 
 const bodySchema = z.object({
   approvingStaffProfileId: z.string().min(1),
@@ -28,8 +30,8 @@ const bodySchema = z.object({
  * operator (C6/C7). The approving manager proves their own credential; approval
  * ADDS their identity to the evidence record and never changes who is acting.
  * The record pins acting + approving staff, capability, target, reason, device
- * and terminal session, with a SERVER timestamp. A self-approval (approver ==
- * actor) requires a fresh PIN and server-verified sole-owner evidence.
+ * and terminal session, with a SERVER timestamp. Self-approval requires a sole
+ * active branch owner and fresh PIN re-authentication, recorded in the evidence.
  */
 export const POST = withTerminalAuth(async (ctx, request) => {
   const actingStaffProfileId = ctx.session.activeStaffProfileId;
@@ -64,13 +66,43 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     );
   }
 
+  // Validate the co-authorization invariants (distinct identities, etc.) BEFORE
+  // spending a bcrypt compare, so a self-approval fails fast and cheaply.
+  let record;
+  try {
+    const requestData = {
+      actingStaffProfileId,
+      approvingStaffProfileId,
+      capability,
+      reason,
+      targetType: targetType ?? null,
+      targetId: targetId ?? null,
+      deviceId: ctx.device.id,
+      terminalSessionId: ctx.session.id,
+    };
+    if (
+      actingStaffProfileId === approvingStaffProfileId &&
+      type === 'PIN' &&
+      (await isSoloBranchOwner(ctx.db, actingStaffProfileId, ctx.device.branchId))
+    ) {
+      record = requestData;
+    } else {
+      record = buildCoAuthorizationRecord(requestData);
+    }
+  } catch (err) {
+    if (err instanceof CoAuthorizationError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    throw err;
+  }
+
   const now = new Date();
-  const auth = await authenticateOperator(ctx.db, {
+  const auth = await authenticateCoAuthorizationOperator(ctx.db, {
+    branchId: ctx.device.branchId,
     staffProfileId: approvingStaffProfileId,
     deviceId: ctx.device.id,
     type,
     secret,
-    branchId: ctx.device.branchId,
     now,
   });
   if (!auth.ok) {
@@ -83,30 +115,13 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     return NextResponse.json({ error: 'Invalid approving credential.' }, { status: 401 });
   }
 
-  if (type === 'PIN')
-    await recordOwnerPinReauthentication(ctx.db, approvingStaffProfileId, ctx.device.branchId);
-
-  // Ordinary approval requires distinct identities. The sole-owner exception
-  // is available only after the PIN proof above has been verified on the server.
-  let record;
   try {
-    record = buildCoAuthorizationRecord({
-      actingStaffProfileId,
-      approvingStaffProfileId,
-      capability,
-      reason,
-      targetType: targetType ?? null,
-      targetId: targetId ?? null,
-      deviceId: ctx.device.id,
-      terminalSessionId: ctx.session.id,
-    });
+    record = await buildAuthenticatedCoAuthorizationRecord(ctx.db, record);
   } catch (err) {
-    if (err instanceof CoAuthorizationError) {
+    if (err instanceof CoAuthorizationError)
       return NextResponse.json({ error: err.message }, { status: 400 });
-    }
     throw err;
   }
-
   const created = await ctx.db.restaurantCoAuthorization.create({ data: record });
   // C7 attribution: the actor stays the ACTING operator (approval never changes
   // who acts); the approving manager and the evidence are pinned in metadata.

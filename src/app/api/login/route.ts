@@ -173,6 +173,7 @@ export async function POST(request: Request) {
     candidates: selectable.map((organization) => ({
       organizationId: organization.organizationId,
       userId: organization.userId,
+      tokenVersion: organization.tokenVersion,
     })),
     ip,
     userAgent,
