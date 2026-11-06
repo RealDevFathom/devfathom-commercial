@@ -44,6 +44,7 @@ import { annotateAudit } from '../audit';
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 
 const manageDevicesProcedure = capabilityProcedure('devices:manage');
+const revokeDevicesProcedure = capabilityProcedure('devices:revoke');
 const coAuthorizationApprovalCapability = 'coauth:approve';
 
 async function assertApproverCanCoAuthorize(
@@ -436,7 +437,7 @@ export const restaurantDevicesRouter = router({
    * atomically writes the co-authorization evidence and flips the device to
    * REVOKED. `skipInput` keeps the approving secret out of the audit log (C4).
    */
-  revoke: manageDevicesProcedure
+  revoke: revokeDevicesProcedure
     .input(
       z.object({
         deviceId: z.string().min(1),
@@ -454,7 +455,7 @@ export const restaurantDevicesRouter = router({
       const authorization = await resolveCapabilityBranchAuthorization(
         ctx.db,
         ctx.session!.user,
-        'devices:manage',
+        'devices:revoke',
         { organizationId: ctx.entitlements.organizationId, requireExactlyOneActiveActor: true }
       );
       const actingStaffProfileId = authorization.actorStaffProfileId;

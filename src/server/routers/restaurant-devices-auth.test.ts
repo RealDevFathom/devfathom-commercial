@@ -59,4 +59,23 @@ describe('restaurant device capability boundary', () => {
     );
     expect(mocks.list).not.toHaveBeenCalled();
   });
+
+  it('requires devices:revoke before attempting a device revocation', async () => {
+    await expect(
+      caller().revoke({
+        deviceId: 'device_1',
+        approvingStaffProfileId: 'staff_approver',
+        approvingType: 'PIN',
+        approvingSecret: '1234',
+        reason: 'lost device',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_admin' }),
+      'devices:revoke',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+  });
 });

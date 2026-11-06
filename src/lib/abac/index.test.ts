@@ -378,6 +378,8 @@ describe('custom ABAC decisions', () => {
       // WHA-863: browser enrollment and revocation use the narrower device
       // capability instead of inheriting broad administrator authority.
       'devices:manage',
+      // DEV-177: revocation is gated on its own capability, not devices:manage.
+      'devices:revoke',
       // Pharmacy RX-03/04 and RX-05: pharmacist dispense decisions, substitution
       // evidence, controlled register and incident approval. All three remain
       // exact-grant-only and are never inherited from an agency role.
@@ -388,7 +390,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:counter',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(48);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);

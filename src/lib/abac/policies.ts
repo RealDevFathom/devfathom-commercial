@@ -30,6 +30,7 @@ export const ALL_ACTIONS = [
   'resignation:review', // approve/decline a resignation (resource: { userId, status, targetRole })
   'staff:manage', // restaurant M2: back-office staff & operator-credential management (org-role driven)
   'devices:manage', // restaurant M2: terminal enrollment, listing, and two-person revocation
+  'devices:revoke', // restaurant M2: dedicated co-authorized device revocation gate (org-role driven)
   'menu:read', // restaurant M3-L2: read canonical catalog, recipes, and costing data
   'menu:write', // restaurant M3-L2: mutate canonical catalog, recipes, and costing data
   'floor:manage', // restaurant M4-L3: floor/table/section/station configuration (org-role driven)
@@ -154,6 +155,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   // capability.
   'staff:manage': [],
   'devices:manage': [],
+  'devices:revoke': [],
 
   // Restaurant M3-L2: canonical catalog + costing substrate. Granted through
   // an organization role carrying `menu:read` or `menu:write` (or `*`), evaluated
