@@ -7,7 +7,8 @@ export type TenderAttemptInput = inferRouterInputs<AppRouter>['pharmacySales']['
 export type TenderAttemptScope = { organizationId: string; accountId: string; branchId: string };
 export type TenderDraft = { amount: string; cashReceived: string };
 export type TenderAttempt = {
-  version: 1;
+  version: 1 | 2;
+  preparation?: { attemptId?: string };
   scope: TenderAttemptScope;
   input: TenderAttemptInput;
   draft: TenderDraft;
@@ -22,7 +23,8 @@ const amountText = z
   .regex(/^\s*(?:\d{1,12}(?:\.\d{1,2})?)?\s*$/);
 const storedSchema = z
   .object({
-    version: z.literal(1),
+    version: z.union([z.literal(1), z.literal(2)]),
+    preparation: z.object({ attemptId: id.optional() }).strict().optional(),
     scope: scopeSchema,
     input: z
       .object({
@@ -90,8 +92,21 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
   const stored = storedSchema.parse(JSON.parse(raw));
   const input = stored.input;
   const date = new Date(input.businessDate);
+  const preparing = stored.version === 2 && stored.preparation !== undefined;
+  if (
+    (stored.version === 1 && stored.preparation !== undefined) ||
+    (stored.version === 2 &&
+      (!preparing || !['BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA'].includes(input.type)))
+  )
+    throw new Error(TENDER_STORAGE_MESSAGE);
   if (
     isManualTender(input.type) &&
+    !(
+      preparing &&
+      input.payerName === undefined &&
+      input.providerRef === undefined &&
+      input.referenceSkipped === undefined
+    ) &&
     !(input.type === 'CARD' && input.providerRef === undefined && input.approvalCode === undefined)
   ) {
     manualTenderCaptureSchema.parse({
@@ -151,11 +166,40 @@ export function persistTenderAttempt(attempt: TenderAttempt): void {
   if (window.localStorage.getItem(key) !== raw) throw new Error(TENDER_STORAGE_MESSAGE);
 }
 
+/** Replace only the exact prior record; never overwrite another tab's request. */
+export function updateTenderAttempt(previous: TenderAttempt, next: TenderAttempt): void {
+  if (
+    !sameScope(previous.scope, next.scope) ||
+    previous.input.idempotencyKey !== next.input.idempotencyKey ||
+    previous.input.saleId !== next.input.saleId ||
+    previous.input.deviceId !== next.input.deviceId ||
+    previous.input.type !== next.input.type ||
+    previous.input.amountMinor !== next.input.amountMinor
+  )
+    throw new Error(TENDER_STORAGE_MESSAGE);
+  const key = tenderAttemptStorageKey(previous.scope);
+  const raw = window.localStorage.getItem(key);
+  if (
+    !raw ||
+    JSON.stringify(decode(raw, previous.scope)) !==
+      JSON.stringify(decode(JSON.stringify(previous), previous.scope))
+  )
+    throw new Error(TENDER_STORAGE_MESSAGE);
+  const updated = JSON.stringify(next);
+  decode(updated, next.scope);
+  window.localStorage.setItem(key, updated);
+  if (window.localStorage.getItem(key) !== updated) throw new Error(TENDER_STORAGE_MESSAGE);
+}
+
 /** Only call after server acceptance or a proven transactional rejection. */
 export function clearTenderAttempt(attempt: TenderAttempt): void {
   const key = tenderAttemptStorageKey(attempt.scope);
   const raw = window.localStorage.getItem(key);
-  if (raw !== null && JSON.stringify(decode(raw, attempt.scope)) !== JSON.stringify(attempt)) {
+  if (
+    raw !== null &&
+    JSON.stringify(decode(raw, attempt.scope)) !==
+      JSON.stringify(decode(JSON.stringify(attempt), attempt.scope))
+  ) {
     throw new Error(TENDER_STORAGE_MESSAGE);
   }
   window.localStorage.removeItem(key);

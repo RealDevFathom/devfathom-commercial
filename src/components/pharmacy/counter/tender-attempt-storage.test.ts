@@ -4,6 +4,7 @@ import type { AppRouter } from '@/server/routers/_app';
 import {
   clearTenderAttempt,
   persistTenderAttempt,
+  updateTenderAttempt,
   readTenderAttempt,
   tenderAttemptStorageKey,
   type TenderAttempt,
@@ -40,6 +41,27 @@ beforeEach(() => window.localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 
 describe('original tender attempt storage', () => {
+  it('preserves an uncollected preparation and its stable identity without persisting completion secrets', () => {
+    const attempt: TenderAttempt = { ...original(), version: 2, preparation: {} };
+    attempt.input.type = 'JAZZCASH';
+    delete attempt.input.cashReceivedMinor;
+    attempt.draft.cashReceived = '';
+    persistTenderAttempt(attempt);
+    expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
+    const prepared: TenderAttempt = { ...attempt, preparation: { attemptId: 'server-attempt' } };
+    updateTenderAttempt(attempt, prepared);
+    expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt: prepared });
+    expect(() =>
+      updateTenderAttempt(prepared, { ...prepared, input: { ...prepared.input, amountMinor: 1 } })
+    ).toThrow();
+    expect(() =>
+      updateTenderAttempt(prepared, {
+        ...prepared,
+        preparation: { attemptId: 'server-attempt', collectionToken: 'must-not-persist' },
+      } as unknown as TenderAttempt)
+    ).toThrow();
+    expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt: prepared });
+  });
   it('retains a manual card approval across reload', () => {
     const attempt = original();
     attempt.input.type = 'CARD';

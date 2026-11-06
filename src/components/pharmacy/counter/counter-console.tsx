@@ -1,6 +1,8 @@
 'use client';
 
 import { browserUuid } from '@/lib/browser-uuid';
+import { CounterPaymentRecovery } from './counter-payment-recovery';
+import type { ManualPaymentSettings } from '@/lib/pharmacy/manual-payments';
 
 import {
   useCallback,
@@ -23,6 +25,7 @@ import { isModuleGranted } from '@/lib/module-catalog';
 import {
   clearTenderAttempt,
   persistTenderAttempt,
+  updateTenderAttempt,
   readTenderAttempt,
   tenderAttemptStorageKey,
   TENDER_STORAGE_MESSAGE,
@@ -366,6 +369,25 @@ function ScopedPharmacyCounterConsole({
   const [storageError, setStorageError] = useState(false);
   const [attempt, setAttempt] = useState<TenderAttempt | null>(null);
   const attemptRef = useRef<TenderAttempt | null>(null);
+  const preparedRef = useRef<{
+    attemptId: string;
+    collectionToken: string;
+    type: CounterTenderType;
+    amountMinor: number;
+  } | null>(null);
+  const [preparedCollection, setPreparedCollection] = useState<{
+    attemptId: string;
+    merchant: NonNullable<ManualPaymentSettings['RAAST']> | null;
+    type: CounterTenderType;
+    amountMinor: number;
+  } | null>(null);
+  const [collectionRecovery, setCollectionRecovery] = useState<{
+    id: string;
+    state: string;
+    method: string;
+    canResolve: boolean;
+  } | null>(null);
+  const [serverCollectionMissing, setServerCollectionMissing] = useState(false);
   const [restoredAttempt, setRestoredAttempt] = useState<TenderAttempt | null>(null);
   const [checkingOutcome, setCheckingOutcome] = useState(false);
   const outcomeInFlight = useRef(false);
@@ -431,6 +453,12 @@ function ScopedPharmacyCounterConsole({
   useEffect(() => {
     if (!branchAuthorized) return;
     const discover = () => {
+      if (preparedRef.current)
+        setTenderOutcome({ status: 'unknown', message: UNKNOWN_TENDER_MESSAGE });
+      preparedRef.current = null;
+      setPreparedCollection(null);
+      setCollectionRecovery(null);
+      setServerCollectionMissing(false);
       let saved = readTenderAttempt(recoveryScope);
       // A normal reload has no sale/branch URL. Inspect only keys for branches
       // returned by this account's authorized query; never enumerate storage.
@@ -566,6 +594,16 @@ function ScopedPharmacyCounterConsole({
   const addLine = trpc.pharmacySales.addLine.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
+  const beginCollection = trpc.pharmacySales.beginManualCollection.useMutation({ retry: false });
+  const completeCollection = trpc.pharmacySales.completeManualCollection.useMutation({
+    retry: false,
+  });
+  const resolveCollection = trpc.pharmacySales.resolveManualCollection.useMutation({
+    retry: false,
+  });
+  const reportCollection = trpc.pharmacySales.reportUncertainManualCollection.useMutation({
+    retry: false,
+  });
   const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
     { branchId },
     { enabled: Boolean(branchId) }
@@ -593,6 +631,10 @@ function ScopedPharmacyCounterConsole({
       setTenderOutcome(null);
       setTenderReadRequired(false);
       setRestoredAttempt(null);
+      preparedRef.current = null;
+      setPreparedCollection(null);
+      setCollectionRecovery(null);
+      setServerCollectionMissing(false);
     },
     [discardReceiptIntent]
   );
@@ -708,7 +750,10 @@ function ScopedPharmacyCounterConsole({
     : 'Loyalty and khata · not linked';
   const currentBill = hasValidBill(cart, saleId);
   const balanceMinor = currentBill ? cart.totals.netMinor - cart.totals.tenderedMinor : null;
-  const unknownTender = tenderOutcome?.status === 'unknown';
+  const serverPaymentUncertain = Boolean(
+    cart?.pendingPaymentAttempt && cart.pendingPaymentAttempt.id !== preparedCollection?.attemptId
+  );
+  const unknownTender = tenderOutcome?.status === 'unknown' || serverPaymentUncertain;
   const recoveryReady = branchAuthorized && recoveryBranch === branchId && !storageError;
   const billState: CounterTenderBillState =
     !saleId || !branchId
@@ -813,6 +858,8 @@ function ScopedPharmacyCounterConsole({
             clearTenderAttempt(attemptRef.current);
             attemptRef.current = null;
             setAttempt(null);
+            preparedRef.current = null;
+            setPreparedCollection(null);
             setStorageError(false);
           } catch {
             setStorageError(true);
@@ -1239,6 +1286,112 @@ function ScopedPharmacyCounterConsole({
     [branchId, saleId, utils]
   );
 
+  const prepareManualPayment = useCallback(
+    async (
+      input: { type: 'BANK_TRANSFER' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA'; amountMinor: number },
+      draft: TenderDraft
+    ) => {
+      if (
+        !saleId ||
+        !recoveryReady ||
+        busy ||
+        blocked ||
+        billState !== 'ready' ||
+        !Number.isSafeInteger(cart?.paymentRevision)
+      )
+        return false;
+      tenderInFlight.current = true;
+      setPending('prepare-payment');
+      let original: TenderAttempt | null = null;
+      try {
+        original = {
+          version: 2,
+          preparation: {},
+          scope: recoveryScope,
+          draft,
+          input: {
+            branchId,
+            saleId,
+            deviceId: counterDeviceId(),
+            businessDate: todayBusinessDate(),
+            type: input.type,
+            amountMinor: input.amountMinor,
+            idempotencyKey: `counter-collection:${browserUuid()}`,
+          },
+        };
+        persistTenderAttempt(original);
+        attemptRef.current = original;
+        setAttempt(original);
+        const begun = await beginCollection.mutateAsync({
+          branchId,
+          saleId,
+          deviceId: original.input.deviceId,
+          requestKey: original.input.idempotencyKey,
+          method: input.type,
+          amountMinor: input.amountMinor,
+          expectedRevision: cart!.paymentRevision!,
+          businessDate: original.input.businessDate,
+        });
+        if (
+          begun.attempt.saleId !== saleId ||
+          begun.attempt.deviceId !== original.input.deviceId ||
+          begun.attempt.requestKey !== original.input.idempotencyKey ||
+          begun.attempt.method !== input.type ||
+          begun.attempt.amountMinor !== input.amountMinor ||
+          typeof begun.collectionToken !== 'string' ||
+          !/^[A-Za-z0-9_-]{43}$/.test(begun.collectionToken) ||
+          begun.attempt.state !== 'EXPOSED'
+        )
+          throw new Error('Payment preparation was not confirmed.');
+        if (
+          input.type !== 'BANK_TRANSFER' &&
+          (!begun.merchant ||
+            (!begun.merchant.destination.trim() && !begun.merchant.qrImageDataUrl))
+        )
+          throw new Error('Collection instructions were not confirmed.');
+        const saved: TenderAttempt = { ...original, preparation: { attemptId: begun.attempt.id } };
+        updateTenderAttempt(original, saved);
+        attemptRef.current = saved;
+        setAttempt(saved);
+        if (!begun.collectionToken || begun.attempt.state !== 'EXPOSED')
+          throw new Error('Recover the existing payment before collecting funds.');
+        preparedRef.current = {
+          attemptId: begun.attempt.id,
+          collectionToken: begun.collectionToken,
+          ...input,
+        };
+        setPreparedCollection({ ...input, attemptId: begun.attempt.id, merchant: begun.merchant });
+        setTenderOutcome(null);
+        return true;
+      } catch {
+        preparedRef.current = null;
+        setPreparedCollection(null);
+        if (!original || attemptRef.current === null) setStorageError(true);
+        setTenderOutcome({
+          status: 'unknown',
+          message:
+            'Payment preparation is unconfirmed. Do not collect funds. Check the saved payment with an Owner or Manager.',
+        });
+        return false;
+      } finally {
+        tenderInFlight.current = false;
+        setPending(null);
+      }
+    },
+    [
+      saleId,
+      recoveryReady,
+      busy,
+      blocked,
+      billState,
+      cart,
+      recoveryScope,
+      branchId,
+      todayBusinessDate,
+      beginCollection,
+    ]
+  );
+
   const takePayment = useCallback(
     async (
       input: {
@@ -1254,13 +1407,20 @@ function ScopedPharmacyCounterConsole({
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
+      const prepared = preparedRef.current;
+      const preparedMatches = Boolean(
+        prepared &&
+        prepared.type === input.type &&
+        prepared.amountMinor === input.amountMinor &&
+        attemptRef.current?.input.saleId === saleId
+      );
       if (
         !saleId ||
-        busy ||
+        (busy && !preparedMatches) ||
         blocked ||
         billState !== 'ready' ||
         tenderInFlight.current ||
-        attemptRef.current
+        (attemptRef.current && !preparedMatches)
       ) {
         return {
           status: 'rejected',
@@ -1277,7 +1437,7 @@ function ScopedPharmacyCounterConsole({
       let outcome: CounterTenderResult;
       try {
         const saved = readTenderAttempt(recoveryScope);
-        if (saved.status !== 'empty') {
+        if (!preparedMatches && saved.status !== 'empty') {
           setStorageError(true);
           throw new Error(TENDER_STORAGE_MESSAGE);
         }
@@ -1291,8 +1451,9 @@ function ScopedPharmacyCounterConsole({
           ...(input.cashReceivedMinor !== undefined
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
-          idempotencyKey:
-            input.familyAccountId || input.type === 'CARD' || input.payerName !== undefined
+          idempotencyKey: preparedMatches
+            ? attemptRef.current!.input.idempotencyKey
+            : input.familyAccountId || input.type === 'CARD' || input.payerName !== undefined
               ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
               : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId
@@ -1305,9 +1466,20 @@ function ScopedPharmacyCounterConsole({
             ? { referenceSkipped: input.referenceSkipped }
             : {}),
         };
-        const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
+        const original: TenderAttempt = preparedMatches
+          ? {
+              ...attemptRef.current!,
+              input: {
+                ...payload,
+                deviceId: attemptRef.current!.input.deviceId,
+                businessDate: attemptRef.current!.input.businessDate,
+              },
+              draft,
+            }
+          : { version: 1, scope: recoveryScope, input: payload, draft };
         // Persistence and read-back must succeed before any money write starts.
-        persistTenderAttempt(original);
+        if (preparedMatches) updateTenderAttempt(attemptRef.current!, original);
+        else persistTenderAttempt(original);
         attemptRef.current = original;
         setAttempt(original);
         const intent: ReceiptIntent = {
@@ -1320,7 +1492,19 @@ function ScopedPharmacyCounterConsole({
         };
         receiptIntent.current = intent;
         dispatched = true;
-        const result = await tender.mutateAsync(payload);
+        const result =
+          preparedMatches && prepared
+            ? await completeCollection.mutateAsync({
+                branchId,
+                attemptId: prepared.attemptId,
+                collectionToken: prepared.collectionToken,
+                ...(input.payerName !== undefined ? { payerName: input.payerName } : {}),
+                ...(input.providerRef !== undefined ? { providerRef: input.providerRef } : {}),
+                ...(input.referenceSkipped !== undefined
+                  ? { referenceSkipped: input.referenceSkipped }
+                  : {}),
+              })
+            : await tender.mutateAsync(payload);
         outcome = tenderAcknowledgement(result)
           ? { status: 'accepted', message: 'Payment recorded.' }
           : { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
@@ -1335,11 +1519,15 @@ function ScopedPharmacyCounterConsole({
         discardReceiptIntent();
         if (!dispatched) setStorageError(true);
         outcome =
-          !dispatched || tenderRejected(error)
+          !preparedMatches && (!dispatched || tenderRejected(error))
             ? { status: 'rejected', message: `Payment was not accepted. ${messageFrom(error)}` }
             : { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
       }
       setTenderOutcome(outcome);
+      if (preparedMatches) {
+        preparedRef.current = null;
+        setPreparedCollection(null);
+      }
       tenderInFlight.current = false;
       if (outcome.status === 'rejected' && dispatched && attemptRef.current) {
         try {
@@ -1367,6 +1555,7 @@ function ScopedPharmacyCounterConsole({
       refreshTenderBill,
       saleId,
       tender,
+      completeCollection,
       todayBusinessDate,
     ]
   );
@@ -1374,9 +1563,9 @@ function ScopedPharmacyCounterConsole({
   const checkPaymentOutcome = useCallback(async (): Promise<CounterTenderResult> => {
     const original = attemptRef.current;
     if (
-      !original ||
+      (!original && !cart?.pendingPaymentAttempt) ||
       !branchAuthorized ||
-      original.input.saleId !== saleId ||
+      (original && original.input.saleId !== saleId) ||
       tenderInFlight.current ||
       outcomeInFlight.current
     ) {
@@ -1388,7 +1577,64 @@ function ScopedPharmacyCounterConsole({
     try {
       // Use the actual typed read procedure, bypassing query-cache replay. The
       // original device, full Date, optional cash and key are never regenerated.
-      const result = await utils.client.pharmacySales.tenderOutcome.query(original.input);
+      const legacy =
+        original?.version === 1
+          ? await utils.client.pharmacySales.tenderOutcome.query(original.input)
+          : null;
+      const legacyAccepted = legacy?.status === 'ACCEPTED';
+      const externalRecord =
+        original &&
+        ['BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA', 'CARD', 'WALLET'].includes(
+          original.input.type
+        );
+      const collection =
+        !legacyAccepted &&
+        (original?.version === 2 || externalRecord || (!original && cart?.pendingPaymentAttempt))
+          ? await utils.client.pharmacySales.recoverPaymentCollection.query(
+              original
+                ? {
+                    branchId,
+                    saleId: original.input.saleId,
+                    deviceId: original.input.deviceId,
+                    requestKey: original.input.idempotencyKey,
+                  }
+                : { branchId, attemptId: cart!.pendingPaymentAttempt!.id }
+            )
+          : null;
+      if (
+        collection &&
+        (collection.saleId !== saleId ||
+          (original
+            ? collection.deviceId !== original.input.deviceId ||
+              collection.requestKey !== original.input.idempotencyKey ||
+              collection.amountMinor !== original.input.amountMinor ||
+              collection.method !== original.input.type
+            : collection.id !== cart?.pendingPaymentAttempt?.id))
+      )
+        throw new Error('Payment recovery scope mismatch');
+      if (collection) setCollectionRecovery(collection);
+      if (original && externalRecord)
+        setServerCollectionMissing(!legacyAccepted && collection === null);
+      if (collection?.state === 'RELEASED' && collection.result === null) {
+        outcome = {
+          status: 'rejected',
+          message:
+            'An Owner or Manager released this payment. Refresh the bill before collecting again.',
+        };
+        setTenderOutcome(outcome);
+        await refreshTenderBill('rejected');
+        return outcome;
+      }
+      const result =
+        legacy?.status === 'ACCEPTED'
+          ? legacy
+          : collection?.state === 'SETTLED'
+            ? {
+                status: 'ACCEPTED',
+                replayUnsafe: true,
+                result: { ...collection.result, replayed: true },
+              }
+            : (legacy ?? { status: 'UNKNOWN', replayUnsafe: true });
       if (
         result.status === 'ACCEPTED' &&
         result.replayUnsafe === true &&
@@ -1419,7 +1665,97 @@ function ScopedPharmacyCounterConsole({
       setCheckingOutcome(false);
     }
     return outcome;
-  }, [branchAuthorized, refreshTenderBill, saleId, tenderOutcome, utils]);
+  }, [branchAuthorized, branchId, cart, refreshTenderBill, saleId, tenderOutcome, utils]);
+
+  const resolvePayment = useCallback(
+    async (input: {
+      decision: 'CONFIRM' | 'RELEASE';
+      reason: string;
+      payerName?: string;
+      providerRef?: string;
+      referenceSkipped?: boolean;
+    }) => {
+      if (!collectionRecovery?.canResolve || tenderInFlight.current || outcomeInFlight.current)
+        return;
+      tenderInFlight.current = true;
+      setPending('resolve-payment');
+      try {
+        const result = await resolveCollection.mutateAsync({
+          branchId,
+          attemptId: collectionRecovery.id,
+          ...input,
+          businessDate: attemptRef.current?.input.businessDate ?? todayBusinessDate(),
+        });
+        if (
+          !(result.state === 'SETTLED' && tenderAcknowledgement(result.result)) &&
+          !(result.state === 'RELEASED' && result.result === null)
+        )
+          throw new Error('Resolution was not confirmed.');
+        const outcome: CounterTenderResult =
+          result.state === 'SETTLED'
+            ? { status: 'accepted', message: 'Payment recorded after authorized confirmation.' }
+            : {
+                status: 'rejected',
+                message:
+                  'Pending claim released after authorized review. No new payment was recorded.',
+              };
+        setTenderOutcome(outcome);
+        preparedRef.current = null;
+        setPreparedCollection(null);
+        setCollectionRecovery(null);
+        tenderInFlight.current = false;
+        await refreshTenderBill(outcome.status);
+      } finally {
+        tenderInFlight.current = false;
+        setPending(null);
+      }
+    },
+    [collectionRecovery, resolveCollection, branchId, todayBusinessDate, refreshTenderBill]
+  );
+
+  const reportPendingPayment = useCallback(async () => {
+    const original = attemptRef.current;
+    if (
+      !original ||
+      !['BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA', 'CARD', 'WALLET'].includes(
+        original.input.type
+      ) ||
+      pending ||
+      !serverCollectionMissing
+    )
+      return;
+    setPending('report-payment');
+    try {
+      await reportCollection.mutateAsync(original.input);
+      const recovered = await utils.client.pharmacySales.recoverPaymentCollection.query({
+        branchId,
+        saleId: original.input.saleId,
+        deviceId: original.input.deviceId,
+        requestKey: original.input.idempotencyKey,
+      });
+      if (
+        recovered &&
+        (recovered.saleId !== original.input.saleId ||
+          recovered.deviceId !== original.input.deviceId ||
+          recovered.requestKey !== original.input.idempotencyKey ||
+          recovered.method !== original.input.type ||
+          recovered.amountMinor !== original.input.amountMinor)
+      )
+        throw new Error('Payment recovery scope mismatch');
+      if (recovered) {
+        setCollectionRecovery(recovered);
+        setServerCollectionMissing(false);
+      }
+    } catch {
+      setTenderOutcome({
+        status: 'unknown',
+        message:
+          'The pending report could not be confirmed. Keep this bill locked and check its outcome again.',
+      });
+    } finally {
+      setPending(null);
+    }
+  }, [pending, serverCollectionMissing, reportCollection, utils, branchId]);
 
   const attachCustomer = useCallback(async () => {
     if (!patient || busy) return;
@@ -2372,7 +2708,10 @@ function ScopedPharmacyCounterConsole({
                       ? 'Refresh this bill to verify payment before taking more money.'
                       : 'Cash, card, bank transfer, wallet or khata.'}
             </p>
-            {billState !== 'ready' && billState !== 'settled' && saleId ? (
+            {((billState !== 'ready' && billState !== 'settled') ||
+              attempt ||
+              cart?.pendingPaymentAttempt) &&
+            saleId ? (
               <Button variant="outline" className="mt-2 min-h-11 w-full" onClick={openPayment}>
                 Review payment status
               </Button>
@@ -2484,9 +2823,20 @@ function ScopedPharmacyCounterConsole({
         <CounterTenderPanel
           key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
           ref={tenderRef}
-          manualSettings={manualSettings.data?.settings}
-          manualSettingsLoading={manualSettings.isLoading}
-          manualSettingsError={manualSettings.isError}
+          manualSettings={
+            preparedCollection?.merchant
+              ? {
+                  ...manualSettings.data?.settings,
+                  [preparedCollection.type]: preparedCollection.merchant,
+                }
+              : manualSettings.data?.settings
+          }
+          preparedCollection={preparedCollection}
+          onPrepareCollection={
+            Number.isSafeInteger(cart?.paymentRevision) ? prepareManualPayment : undefined
+          }
+          manualSettingsLoading={preparedCollection ? false : manualSettings.isLoading}
+          manualSettingsError={preparedCollection ? false : manualSettings.isError}
           onReloadManualSettings={() => void manualSettings.refetch()}
           loadKhataAccounts={loadKhataAccounts}
           reauthenticateOwner={reauthenticateOwner}
@@ -2495,7 +2845,7 @@ function ScopedPharmacyCounterConsole({
           state={billState}
           blocked={blocked}
           pending={pending === 'tender'}
-          disabled={busy || !saleId}
+          disabled={(busy && !preparedCollection) || !saleId}
           initialDraft={
             restoredAttempt
               ? {
@@ -2508,10 +2858,21 @@ function ScopedPharmacyCounterConsole({
                 }
               : undefined
           }
-          recoveryOutcome={tenderOutcome}
+          recoveryOutcome={
+            tenderOutcome ??
+            (serverPaymentUncertain
+              ? {
+                  status: 'unknown',
+                  message:
+                    'This bill has an unresolved payment. Check its outcome before collecting funds.',
+                }
+              : null)
+          }
           checkingOutcome={checkingOutcome}
           onCheckOutcome={
-            attempt && tenderOutcome?.status === 'unknown' ? checkPaymentOutcome : undefined
+            (attempt || cart?.pendingPaymentAttempt) && unknownTender
+              ? checkPaymentOutcome
+              : undefined
           }
           error={
             storageError
@@ -2527,6 +2888,31 @@ function ScopedPharmacyCounterConsole({
           onRetry={() => void refreshTenderBill()}
           onTender={takePayment}
         />
+        {collectionRecovery ? (
+          <CounterPaymentRecovery
+            key={collectionRecovery.id}
+            attempt={collectionRecovery}
+            settings={manualSettings.data?.settings}
+            pending={pending === 'resolve-payment'}
+            onResolve={resolvePayment}
+          />
+        ) : null}
+        {serverCollectionMissing ? (
+          <div className="space-y-2 text-sm text-text-body">
+            <p>
+              The saved request has no visible server record yet. Register it for Owner or Manager
+              review; this does not collect funds.
+            </p>
+            <Button
+              variant="outline"
+              className="min-h-11 w-full"
+              disabled={pending !== null}
+              onClick={() => void reportPendingPayment()}
+            >
+              Register pending payment for review
+            </Button>
+          </div>
+        ) : null}
 
         <Button variant="outline" className="h-11" onClick={() => setPaymentOpen(false)}>
           Back to bill

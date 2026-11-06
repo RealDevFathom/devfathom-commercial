@@ -47,6 +47,7 @@ export class PharmacySettlementError extends Error {
       | 'OPEN_DRAWER'
       | 'REOPEN_REASON_REQUIRED'
       | 'INVALID_MANUAL_CAPTURE'
+      | 'PAYMENT_ATTEMPT_REQUIRED'
   ) {
     super(reason);
   }
@@ -312,10 +313,12 @@ export async function applyPharmacyTender(
     payerName?: string;
     referenceSkipped?: boolean;
     idempotencyKey: string;
+    paymentAttemptId?: string;
     adapter?: PharmacyPaymentAdapter;
     leasedReceipt?: PharmacyLeasedReceipt;
   },
-  authentication?: PharmacyCommandAuthentication
+  authentication?: PharmacyCommandAuthentication,
+  options: { requirePreparedExternalPayment?: boolean } = {}
 ) {
   assertPositiveMinor(input.amountMinor);
   if (input.leasedReceipt) {
@@ -328,7 +331,7 @@ export async function applyPharmacyTender(
     );
     validateLeasedReceiptReplay(scope, input.deviceId, input.leasedReceipt);
   }
-  const payloadHash = hash(input);
+  const payloadHash = input.paymentAttemptId ? hash({ ...input, adapter: undefined }) : hash(input);
   const idem = await bindIdempotency(
     db,
     scope.organizationId,
@@ -338,6 +341,12 @@ export async function applyPharmacyTender(
     payloadHash
   );
   if (idem.resultPayload) return { ...(idem.resultPayload as object), replayed: true };
+  if (
+    options.requirePreparedExternalPayment &&
+    ['BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA'].includes(input.type) &&
+    !input.paymentAttemptId
+  )
+    throw new PharmacySettlementError('PAYMENT_ATTEMPT_REQUIRED');
   // Historical outcomes are replayable above, but a new card or online wallet
   // payment must never be recorded as externally received or replayed offline.
   if (input.type === 'CARD' || input.type === 'WALLET') {
@@ -360,10 +369,10 @@ export async function applyPharmacyTender(
     include: completionSaleInclude,
   });
   if (!sale || sale.status !== 'OPEN') throw new PharmacySettlementError('SALE_NOT_OPEN');
-  // A separately committed preparation survives this transaction rolling back.
-  // Until its settlement hand-off is implemented, block before any provider call.
-  await db.$executeRaw(Prisma.sql`SELECT pharmacy_assert_no_payment_attempt(
-    ${scope.organizationId}, ${scope.branchId}, ${input.saleId})`);
+  // The matching server-held claim permits this one financial transaction;
+  // bill edits and reversals continue to use the unconditional mutation gate.
+  await db.$executeRaw(Prisma.sql`SELECT pharmacy_assert_payment_settlement_allowed(
+    ${scope.organizationId}, ${scope.branchId}, ${input.saleId}, ${input.type}, ${input.amountMinor}, ${input.paymentAttemptId ?? null})`);
   // #518: a line added earlier cannot be paid for by someone who may not sell it.
   await assertRxSaleAllowed(
     db,
@@ -468,16 +477,43 @@ export async function applyPharmacyTender(
       throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
     }
   } else if (input.type === 'CARD' || input.type === 'WALLET') {
-    if (!input.adapter) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
-    const adapter = requireReleaseSafeAdapter(input.adapter);
-    const result = await adapter.execute({
-      capability: 'SALE',
-      amountMinor: input.amountMinor,
-      operationRef: input.idempotencyKey,
-    });
-    if (!result.approved) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
-    provider = adapter.name;
-    providerRef = result.providerRef;
+    if (!input.paymentAttemptId && input.adapter?.localSandbox === true) {
+      // Preserve the explicitly admitted local simulator. It has no external
+      // collection and remains unavailable in a release environment.
+      const simulator = requireReleaseSafeAdapter(input.adapter);
+      const simulated = await simulator.execute({
+        capability: 'SALE',
+        amountMinor: input.amountMinor,
+        operationRef: input.idempotencyKey,
+      });
+      if (!simulated.approved) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
+      provider = simulator.name;
+      providerRef = simulated.providerRef;
+    } else {
+      if (!input.paymentAttemptId) {
+        if (!input.adapter) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
+        requireReleaseSafeAdapter(input.adapter);
+        throw new PharmacySettlementError('PAYMENT_ATTEMPT_REQUIRED');
+      }
+      // Dispatch follows a durable claim. Consume its recorded approval;
+      // this path never calls an adapter a second time.
+      const confirmed = await db.pharmacyPaymentAttempt.findFirst({
+        where: {
+          id: input.paymentAttemptId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          saleId: sale.id,
+          state: 'CONFIRMED',
+          method: input.type,
+          amountMinor: input.amountMinor,
+        },
+        select: { providerName: true, providerRef: true },
+      });
+      if (!confirmed?.providerName || !confirmed.providerRef)
+        throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
+      provider = confirmed.providerName;
+      providerRef = confirmed.providerRef;
+    }
   }
 
   const tender = await db.pharmacyTender.create({
@@ -498,6 +534,7 @@ export async function applyPharmacyTender(
       businessDate: input.businessDate,
       actorId: scope.actorId,
       deviceId: input.deviceId,
+      paymentAttemptId: input.paymentAttemptId,
     },
   });
   await postTenderEntry(db, scope, { tenderId: tender.id, at: tender.createdAt });

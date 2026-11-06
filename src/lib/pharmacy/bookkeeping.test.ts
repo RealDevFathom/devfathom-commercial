@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { bookkeepingJournalLines, createSettlementBatch, reconcileSettlementBankLine } from './bookkeeping';
+import {
+  bookkeepingJournalLines,
+  createSettlementBatch,
+  reconcileSettlementBankLine,
+} from './bookkeeping';
 
 const base = {
   reference: 'REF-1',
@@ -62,10 +66,23 @@ describe('POS settlement batches', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           expectedMinor: 1000,
+          visibilityAnchor: {
+            connect: { organizationId_id: { organizationId: 'org-a', id: 'branch-a' } },
+          },
           tenders: {
             create: [
-              { organizationId: 'org-a', tenderId: 'tender-1', amountMinor: 700 },
-              { organizationId: 'org-a', tenderId: 'tender-2', amountMinor: 300 },
+              {
+                tender: {
+                  connect: { organizationId_id: { organizationId: 'org-a', id: 'tender-1' } },
+                },
+                amountMinor: 700,
+              },
+              {
+                tender: {
+                  connect: { organizationId_id: { organizationId: 'org-a', id: 'tender-2' } },
+                },
+                amountMinor: 300,
+              },
             ],
           },
         }),

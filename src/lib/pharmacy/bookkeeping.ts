@@ -397,8 +397,11 @@ export async function createSettlementBatch(
   const expectedMinor = tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
   return db.pharmacySettlementBatch.create({
     data: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
+      visibilityAnchor: {
+        connect: {
+          organizationId_id: { organizationId: scope.organizationId, id: scope.branchId },
+        },
+      },
       reference: input.reference,
       provider: input.provider,
       tenderType: input.tenderType,
@@ -407,8 +410,9 @@ export async function createSettlementBatch(
       createdByUserId: scope.actorId,
       tenders: {
         create: tenders.map((tender) => ({
-          organizationId: scope.organizationId,
-          tenderId: tender.id,
+          tender: {
+            connect: { organizationId_id: { organizationId: scope.organizationId, id: tender.id } },
+          },
           amountMinor: tender.amountMinor,
         })),
       },

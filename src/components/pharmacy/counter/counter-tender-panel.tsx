@@ -44,6 +44,11 @@ export type KhataAccount = {
   balanceMinor: number;
 };
 export type CounterTenderPanelProps = {
+  preparedCollection?: { type: CounterTenderType; amountMinor: number } | null;
+  onPrepareCollection?: (
+    input: { type: 'BANK_TRANSFER' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA'; amountMinor: number },
+    draft: TenderDraft
+  ) => Promise<boolean>;
   manualSettings?: ManualPaymentSettings;
   manualSettingsLoading?: boolean;
   manualSettingsError?: boolean;
@@ -128,6 +133,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       manualSettingsLoading = false,
       manualSettingsError = false,
       onReloadManualSettings,
+      preparedCollection,
+      onPrepareCollection,
     },
     ref
   ) {
@@ -149,11 +156,13 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [amount, setAmount] = useState(initialDraft?.amount ?? '');
     const [cashReceived, setCashReceived] = useState(initialDraft?.cashReceived ?? '');
     const [submitting, setSubmitting] = useState(false);
+    const [preparing, setPreparing] = useState(false);
     const [outcome, setOutcome] = useState<CounterTenderResult | null>(null);
     const submissionRef = useRef(false);
     const checkRef = useRef(false);
     const statusRef = useRef<HTMLParagraphElement>(null);
-    const takingPayment = pending || submitting;
+    const preparedReferenceRef = useRef<HTMLInputElement>(null);
+    const takingPayment = pending || submitting || preparing;
     const displayedOutcome = recoveryOutcome ?? outcome;
     const unknown = displayedOutcome?.status === 'unknown';
     const balanceKnown =
@@ -177,6 +186,13 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const selected = TENDER_TYPES.find((entry) => entry.value === type) ?? TENDER_TYPES[0];
     const isKhata = type === 'KHATA' || type === 'CREDIT';
     const manual = isManualTender(type) && type !== 'CARD';
+    const external = ['BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA'].includes(type);
+    const prepared =
+      preparedCollection?.type === type && preparedCollection.amountMinor === amountMinor;
+    useEffect(() => {
+      if (prepared && ['RAAST', 'JAZZCASH', 'EASYPAISA'].includes(type))
+        preparedReferenceRef.current?.focus();
+    }, [prepared, type]);
     const manualCard = type === 'CARD';
     const merchant = manual ? manualSettings?.[type] : undefined;
     const merchantReady = Boolean(merchant?.destination.trim() || merchant?.qrImageDataUrl);
@@ -228,6 +244,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       amountValid &&
       !cashShort &&
       !cashInvalid &&
+      (!external || prepared) &&
       (!manual ||
         (!manualSettingsLoading &&
           !manualSettingsError &&
@@ -308,6 +325,34 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       }
     }
 
+    async function prepareCollection() {
+      if (
+        !editable ||
+        !amountValid ||
+        amountMinor === null ||
+        !onPrepareCollection ||
+        preparing ||
+        prepared ||
+        !['BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA'].includes(type)
+      )
+        return;
+      setPreparing(true);
+      try {
+        await onPrepareCollection(
+          { type: type as 'BANK_TRANSFER' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA', amountMinor },
+          { amount, cashReceived: '' }
+        );
+      } catch {
+        setOutcome({
+          status: 'unknown',
+          message:
+            'Payment preparation could not be confirmed. Keep this bill and check its outcome before collecting money.',
+        });
+      } finally {
+        setPreparing(false);
+      }
+    }
+
     async function checkOutcome() {
       if (!onCheckOutcome || checkRef.current || checkingOutcome || takingPayment) return;
       checkRef.current = true;
@@ -351,13 +396,18 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
           <p className="space-y-2">
             <span className="block font-mono text-xs tracking-wide text-text-muted uppercase">
-              Balance due
+              {unknown && balanceKnown ? 'Last known balance' : 'Balance due'}
             </span>
             <span className="block text-3xl font-semibold tracking-tight tabular-nums text-text-strong">
-              {balanceKnown && (state === 'ready' || state === 'settled') && !unknown
+              {balanceKnown && (unknown || state === 'ready' || state === 'settled')
                 ? formatMinor(balanceMinor)
                 : 'Unavailable'}
             </span>
+            {unknown && balanceKnown ? (
+              <span className="block text-sm text-text-muted">
+                This payment may already be saved, so the balance may have changed.
+              </span>
+            ) : null}
           </p>
           <div className="flex flex-col items-end gap-2">
             <span className="font-mono text-xs text-text-muted">PKR</span>
@@ -429,7 +479,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           <select
             id="tender-type"
             value={type}
-            disabled={!editable}
+            disabled={!editable || Boolean(preparedCollection)}
             onChange={(event) => {
               setType(event.target.value as CounterTenderType);
               setProviderRef('');
@@ -461,7 +511,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             autoComplete="off"
             placeholder={balanceKnown ? formatMinor(balanceMinor) : undefined}
             value={amount}
-            disabled={!editable}
+            disabled={!editable || Boolean(preparedCollection)}
             aria-invalid={state === 'ready' && amount.trim() !== '' && !amountValid}
             aria-describedby="tender-status tender-error tender-amount-help tender-amount-error"
             onChange={(event) => setAmount(event.target.value)}
@@ -478,7 +528,52 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           ) : null}
         </div>
 
-        {manual ? (
+        {external && !prepared ? (
+          <div className="space-y-2 rounded-md border border-border-subtle bg-surface-sunken p-4 text-sm text-text-body">
+            <p>
+              Prepare this payment online before collecting funds. The bill stays locked until
+              payment is recorded or an Owner or Manager resolves it.
+            </p>
+            {!onPrepareCollection ? (
+              <>
+                <p>Refresh this bill before preparing payment.</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 w-full"
+                  onClick={onRetry}
+                >
+                  Refresh bill
+                </Button>
+              </>
+            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11 w-full"
+              disabled={
+                !editable ||
+                !amountValid ||
+                !onPrepareCollection ||
+                (manual && (!merchantReady || manualSettingsLoading || manualSettingsError))
+              }
+              onClick={() => void prepareCollection()}
+            >
+              {preparing ? 'Preparing payment…' : 'Prepare payment'}
+            </Button>
+            {manual && !manualSettingsLoading && !merchantReady ? (
+              <p role="status">
+                This method is not set up. Add the branch till, IBAN or QR before collecting funds.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        {prepared ? (
+          <p role="status" className="text-sm text-text-muted">
+            Payment prepared. Check that funds arrived before marking received.
+          </p>
+        ) : null}
+        {manual && prepared ? (
           <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
             {manualSettingsLoading ? <p role="status">Loading merchant details…</p> : null}
             {manualSettingsError ? <p role="alert">Merchant details could not be loaded.</p> : null}
@@ -543,6 +638,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 </Label>
                 <Input
                   id="manual-provider-reference"
+                  ref={preparedReferenceRef}
                   className="min-h-11"
                   inputMode={manualCard ? 'text' : 'numeric'}
                   value={providerRef}
@@ -746,7 +842,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           }
           onClick={() => void submitTender()}
         >
-          {takingPayment ? 'Taking payment…' : 'Take payment'}
+          {takingPayment ? 'Taking payment…' : external ? 'Mark received' : 'Take payment'}
         </Button>
       </div>
     );

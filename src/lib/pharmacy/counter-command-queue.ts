@@ -207,7 +207,12 @@ export type CounterMatrixInputs = {
 };
 
 export type CounterEnqueueResult =
-  | { ok: true; snapshot: CounterQueueSnapshot; command: CounterQueuedCommand }
+  | {
+      ok: true;
+      snapshot: CounterQueueSnapshot;
+      command: CounterQueuedCommand;
+      pendingPayment?: true;
+    }
   | {
       ok: false;
       reason: OfflineDenialReason | 'DEVICE_MISMATCH' | 'DEVICE_REVOKED' | 'QUEUE_FULL';
@@ -235,6 +240,9 @@ export function enqueueCounterCommand(
   matrix: CounterMatrixInputs,
   newId: () => string = defaultId
 ): CounterEnqueueResult {
+  // New manual work is always a hold. Retain the old action only when reading
+  // historical documents; never issue another offline finalized wallet sale.
+  if (input.action === 'MANUAL_OTC_SALE') input = { ...input, action: 'MANUAL_PAYMENT_HOLD' };
   if (input.deviceId !== snapshot.deviceId) {
     return {
       ok: false,
@@ -320,6 +328,7 @@ export function enqueueCounterCommand(
 
   return {
     ok: true,
+    ...(input.action === 'MANUAL_PAYMENT_HOLD' ? { pendingPayment: true as const } : {}),
     command,
     snapshot: {
       ...snapshot,
@@ -391,6 +400,29 @@ export async function buildCounterReplayRequest(
   command: CounterQueuedCommand,
   sign: CounterReplaySigner
 ): Promise<CounterReplayRequest> {
+  if (command.action === 'MANUAL_PAYMENT_HOLD') {
+    const body: Record<string, unknown> = {
+      sequence: command.sequence,
+      idempotencyKey: command.idempotencyKey,
+      action: command.action,
+      clientOriginAt: command.clientOriginAt,
+      snapshots: command.payload.snapshots,
+      lines: command.payload.lines,
+      amountMinor: command.payload.amountMinor,
+      manualCapture: command.payload.manualCapture,
+    };
+    const signatures = await sign(body, {});
+    return {
+      path: '/api/pharmacy/counter/replay',
+      method: 'POST',
+      headers: {
+        'Idempotency-Key': command.idempotencyKey,
+        'X-Command-Signature': signatures.command,
+        'X-Receipt-Signature': '',
+      },
+      body,
+    };
+  }
   const leasedReceipt = command.payload.leasedReceipt;
   if (!leasedReceipt || typeof leasedReceipt !== 'object' || Array.isArray(leasedReceipt)) {
     throw new Error('A queued pharmacy sale cannot replay without its leased receipt.');

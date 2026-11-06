@@ -21,6 +21,17 @@ import {
   PharmacyPaymentSandboxError,
 } from '@/lib/pharmacy/payment-sandbox';
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
+import {
+  beginManualCollection,
+  beginManualCollectionSchema,
+  completeManualCollection,
+  completeManualCollectionSchema,
+  recoverPaymentCollection,
+  resolveManualCollection,
+  resolveManualCollectionSchema,
+  PaymentCollectionError,
+  registerUnpreparedManualCollection,
+} from '@/lib/pharmacy/payment-attempt-operations';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
 import { capabilityMatches } from '@/lib/abac/capabilities';
@@ -232,6 +243,16 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof PaymentCollectionError)
+    throw new TRPCError({
+      code:
+        error.reason === 'FORBIDDEN'
+          ? 'FORBIDDEN'
+          : error.reason === 'NOT_FOUND'
+            ? 'NOT_FOUND'
+            : 'CONFLICT',
+      message: error.message,
+    });
   if (error instanceof PharmacyRxSaleDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyRxReferenceError)
@@ -508,6 +529,19 @@ const closeDate = z
       date.getUTCMilliseconds() === 0,
     'Choose a date without a time.'
   );
+async function paymentScope(ctx: TRPCContext, branch: string) {
+  const scope = await branchScopeOrForbidden(ctx, branch);
+  if (
+    ctx.organization?.vertical !== 'PHARMACY' ||
+    ctx.organization.id !== scope.organizationId ||
+    ctx.session?.user.organizationId !== scope.organizationId ||
+    !hasModule(ctx.entitlements, 'pharmacy-counter')
+  )
+    throw new TRPCError({ code: 'FORBIDDEN' });
+  // The service re-reads stored membership, capabilities and branch assignment
+  // inside each preparation, claim and resolution transaction.
+  return scope;
+}
 async function requireCloseAccess(ctx: TRPCContext) {
   const user = ctx.session?.user;
   if (
@@ -842,7 +876,13 @@ export const pharmacySalesRouter = router({
       }
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
-    if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
+    if (
+      isManualTender(input.type) ||
+      input.payerName !== undefined ||
+      input.providerRef !== undefined ||
+      input.referenceSkipped !== undefined
+    )
+      annotateAudit(ctx, { skipInput: true });
     const scope =
       input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
         ? await khataScope(ctx, input.branchId, 'read')
@@ -851,8 +891,82 @@ export const pharmacySalesRouter = router({
           : await scopeFor(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
+  beginManualCollection: protectedProcedure
+    .input(beginManualCollectionSchema.extend({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
+      const { branchId: branch, ...request } = input;
+      try {
+        return await beginManualCollection(await paymentScope(ctx, branch), request);
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  completeManualCollection: protectedProcedure
+    .input(completeManualCollectionSchema.extend({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
+      const { branchId: branch, ...request } = input;
+      try {
+        return await completeManualCollection(await paymentScope(ctx, branch), request);
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  recoverPaymentCollection: protectedProcedure
+    .input(
+      z.union([
+        z.object({ branchId, attemptId: z.string().min(1).max(128) }).strict(),
+        z
+          .object({
+            branchId,
+            saleId: z.string().min(1).max(128),
+            deviceId: z.string().min(1).max(128),
+            requestKey: z.string().min(1).max(160),
+          })
+          .strict(),
+      ])
+    )
+    .query(async ({ ctx, input }) => {
+      const { branchId: branch, ...key } = input;
+      try {
+        return await recoverPaymentCollection(await paymentScope(ctx, branch), key);
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  reportUncertainManualCollection: protectedProcedure
+    .input(tenderInput)
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
+      try {
+        return await registerUnpreparedManualCollection(
+          await paymentScope(ctx, input.branchId),
+          ledgerTender(input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  resolveManualCollection: protectedProcedure
+    .input(resolveManualCollectionSchema.extend({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
+      const { branchId: branch, ...request } = input;
+      try {
+        return await resolveManualCollection(await paymentScope(ctx, branch), request);
+      } catch (error) {
+        fail(error);
+      }
+    }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
-    if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
+    if (
+      isManualTender(input.type) ||
+      input.payerName !== undefined ||
+      input.providerRef !== undefined ||
+      input.referenceSkipped !== undefined
+    )
+      annotateAudit(ctx, { skipInput: true });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
         if (input.familyAccountId !== undefined || input.ownerOverride !== undefined)
@@ -861,9 +975,34 @@ export const pharmacySalesRouter = router({
             message: 'Khata fields require Khata tender.',
           });
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction((tx) =>
-          applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
-        );
+        try {
+          return await ctx.db.$transaction((tx) =>
+            applyPharmacyTender(txDb(tx), scope, ledgerTender(input), undefined, {
+              requirePreparedExternalPayment: true,
+            })
+          );
+        } catch (error) {
+          if (
+            !(error instanceof PharmacySettlementError) ||
+            (error.reason !== 'PAYMENT_ATTEMPT_REQUIRED' &&
+              !(
+                error.reason === 'INVALID_MANUAL_CAPTURE' &&
+                ['CARD', 'WALLET'].includes(input.type) &&
+                (input.payerName !== undefined ||
+                  input.providerRef !== undefined ||
+                  input.referenceSkipped !== undefined)
+              ))
+          )
+            throw error;
+          await registerUnpreparedManualCollection(scope, ledgerTender(input));
+          // Older clients interpret a transactional 4xx as proof no funds moved.
+          // This report is uncertain and its separately committed lock survives.
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message:
+              'Payment is unconfirmed. An Owner or Manager must check the saved payment before collecting again.',
+          });
+        }
       }
       const scope = await khataScope(ctx, input.branchId, 'write');
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');

@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { useState } from 'react';
 
 import {
   CounterTenderPanel,
@@ -7,16 +8,35 @@ import {
   type CounterTenderResult,
 } from './counter-tender-panel';
 
+function Harness(props: CounterTenderPanelProps) {
+  const [prepared, setPrepared] = useState(props.preparedCollection ?? null);
+  return (
+    <CounterTenderPanel
+      {...props}
+      preparedCollection={prepared}
+      onPrepareCollection={async (input, draft) => {
+        const ready = await props.onPrepareCollection!(input, draft);
+        if (ready) setPrepared(input);
+        return ready;
+      }}
+    />
+  );
+}
+async function prepare() {
+  fireEvent.click(screen.getByRole('button', { name: 'Prepare payment' }));
+  await screen.findByText('Payment prepared. Check that funds arrived before marking received.');
+}
 function setup(overrides: Partial<CounterTenderPanelProps> = {}) {
   const props: CounterTenderPanelProps = {
     balanceMinor: 25000,
     state: 'ready',
     blocked: false,
     onRetry: vi.fn(),
+    onPrepareCollection: vi.fn().mockResolvedValue(true),
     onTender: vi.fn().mockResolvedValue({ status: 'accepted', message: 'Payment recorded.' }),
     ...overrides,
   };
-  const view = render(<CounterTenderPanel {...props} />);
+  const view = render(<Harness {...props} />);
   return { ...view, props };
 }
 
@@ -50,7 +70,7 @@ describe('DEV-618 payment panel', () => {
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: type } });
     expect(screen.getByText(/needs an online certified payment provider/)).toBeVisible();
     expect(screen.queryByLabelText('Approval code')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
     expect(props.onTender).not.toHaveBeenCalled();
   });
 
@@ -58,12 +78,13 @@ describe('DEV-618 payment panel', () => {
     const { props, rerender } = setup();
     enterCash();
     expect(screen.getByText('Change').parentElement).toHaveTextContent('74.50');
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
     await screen.findByText('Payment recorded.');
-    rerender(<CounterTenderPanel {...props} balanceMinor={12450} />);
+    rerender(<Harness {...props} balanceMinor={12450} />);
     expect(screen.getByText('Balance due').parentElement).toHaveTextContent('124.50');
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'BANK_TRANSFER' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await prepare();
+    fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
     await waitFor(() =>
       expect(props.onTender).toHaveBeenNthCalledWith(
         2,
@@ -78,7 +99,7 @@ describe('DEV-618 payment panel', () => {
     expect(screen.getByLabelText('Tender')).toBeDisabled();
     expect(screen.getByLabelText('Amount')).toBeDisabled();
     expect(screen.getByLabelText('Cash received')).toBeDisabled();
-    const button = screen.getByRole('button', { name: 'Take payment' });
+    const button = screen.getByRole('button', { name: /^(Take payment|Mark received)$/ });
     expect(button).toBeDisabled();
     fireEvent.click(button);
     expect(props.onTender).not.toHaveBeenCalled();
@@ -91,8 +112,8 @@ describe('#710 Raast / wallet counter controls', () => {
       manualSettings: { JAZZCASH: { destination: '', allowReferenceSkip: false } },
     });
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'JAZZCASH' } });
-    expect(screen.getByRole('alert')).toHaveTextContent('isn’t set up at this branch');
-    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(screen.getByText(/This method is not set up/)).toBeVisible();
+    expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
     expect(props.onTender).not.toHaveBeenCalled();
   });
   it.each(['RAAST', 'JAZZCASH', 'EASYPAISA'])(
@@ -112,27 +133,28 @@ describe('#710 Raast / wallet counter controls', () => {
         },
       });
       fireEvent.change(screen.getByLabelText('Tender'), { target: { value: type } });
+      await prepare();
       expect(screen.getByAltText(`${type} merchant QR`)).toBeVisible();
       expect(screen.getByText('PKR 250.00')).toBeVisible();
       expect(screen.getByText('PK00MERCHANT')).toBeVisible();
-      expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
       fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
       fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
         target: { value: '123' },
       });
-      expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
       fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
         target: { value: '1234567' },
       });
-      expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
       fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
         target: { value: '12ab' },
       });
-      expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
       fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
         target: { value: '001234' },
       });
-      fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+      fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
       await waitFor(() =>
         expect(onTender).toHaveBeenCalledWith(
           { type, amountMinor: 25000, payerName: 'Ayesha', providerRef: '001234' },
@@ -146,9 +168,10 @@ describe('#710 Raast / wallet counter controls', () => {
       manualSettings: { RAAST: { destination: 'Till 123', allowReferenceSkip: true } },
     });
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
+    await prepare();
     fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
     fireEvent.click(screen.getByLabelText('Skip reference under branch policy'));
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
     await waitFor(() =>
       expect(props.onTender).toHaveBeenCalledWith(
         { type: 'RAAST', amountMinor: 25000, payerName: 'Ayesha', referenceSkipped: true },
@@ -161,7 +184,7 @@ describe('#710 Raast / wallet counter controls', () => {
     (state) => {
       setup(state);
       fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
-      expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
     }
   );
 });
@@ -171,7 +194,7 @@ describe('CounterTenderPanel acknowledgement', () => {
     const onTender = vi.fn().mockResolvedValue({ status, message: `Payment ${status}.` });
     setup({ onTender });
     enterCash();
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
     await screen.findByText(`Payment ${status}.`);
     expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
     expect(screen.getByLabelText('Cash received')).toHaveValue('200.00');
@@ -185,7 +208,7 @@ describe('CounterTenderPanel acknowledgement', () => {
       { amount: '125.50', cashReceived: '200.00' }
     );
     if (status === 'unknown') {
-      expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
       expect(screen.getByLabelText('Tender')).toBeDisabled();
     }
   });
@@ -200,7 +223,7 @@ describe('CounterTenderPanel acknowledgement', () => {
     );
     setup({ onTender });
     enterCash();
-    const button = screen.getByRole('button', { name: 'Take payment' });
+    const button = screen.getByRole('button', { name: /^(Take payment|Mark received)$/ });
     fireEvent.click(button);
     fireEvent.click(button);
     expect(onTender).toHaveBeenCalledTimes(1);
@@ -218,11 +241,11 @@ describe('CounterTenderPanel acknowledgement', () => {
     const onTender = vi.fn().mockRejectedValue(new Error('Disconnected'));
     setup({ onTender });
     enterCash();
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
     await screen.findByText(/Payment outcome is unknown/);
     expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
     expect(screen.getByLabelText('Cash received')).toHaveValue('200.00');
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
     expect(onTender).toHaveBeenCalledTimes(1);
   });
 
@@ -231,7 +254,8 @@ describe('CounterTenderPanel acknowledgement', () => {
     setup({ onTender });
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: type } });
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await prepare();
+    fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
     await screen.findByText('Payment refused.');
     expect(screen.getByLabelText('Tender')).toHaveValue(type);
     expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
@@ -243,6 +267,28 @@ describe('CounterTenderPanel acknowledgement', () => {
 });
 
 describe('CounterTenderPanel bill and interaction states', () => {
+  it('shows a qualified last known balance while an uncertain payment stays locked', () => {
+    const { props } = setup({
+      state: 'error',
+      balanceMinor: 29400,
+      recoveryOutcome: { status: 'unknown', message: 'Check the saved payment.' },
+      onCheckOutcome: vi.fn(),
+    });
+    expect(screen.getByText('Last known balance').parentElement).toHaveTextContent('294.00');
+    expect(screen.getByText(/balance may have changed/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(props.onTender).not.toHaveBeenCalled();
+  });
+
+  it('does not invent a balance when an uncertain payment has no known balance', () => {
+    setup({
+      balanceMinor: null,
+      recoveryOutcome: { status: 'unknown', message: 'Check payment.' },
+    });
+    expect(screen.getByText('Balance due').parentElement).toHaveTextContent('Unavailable');
+    expect(screen.queryByText('Last known balance')).not.toBeInTheDocument();
+  });
+
   it('restores exact amounts read-only and uses a separate outcome check', async () => {
     const onCheckOutcome = vi
       .fn()
@@ -276,7 +322,7 @@ describe('CounterTenderPanel bill and interaction states', () => {
     await screen.findByText('Payment recorded.');
     expect(screen.getByLabelText('Amount')).toHaveValue('');
     expect(screen.getByLabelText('Cash received')).toHaveValue('');
-    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
     expect(screen.getByRole('status')).toHaveFocus();
   });
 
@@ -290,7 +336,7 @@ describe('CounterTenderPanel bill and interaction states', () => {
     await screen.findByText(/Payment outcome could not be checked/);
     expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
     expect(screen.getByLabelText('Cash received')).toHaveValue('200.00');
-    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
   });
 
   it.each(['idle', 'loading', 'error', 'stale', 'unavailable', 'ready'] as const)(
@@ -298,35 +344,35 @@ describe('CounterTenderPanel bill and interaction states', () => {
     (state) => {
       setup({ state, balanceMinor: 0 });
       expect(screen.queryByText('Settled')).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
     }
   );
 
   it('requires an explicit settled state and a known zero balance', () => {
     const { rerender, props } = setup({ state: 'settled', balanceMinor: null });
     expect(screen.queryByText('Settled')).not.toBeInTheDocument();
-    rerender(<CounterTenderPanel {...props} balanceMinor={0} />);
+    rerender(<Harness {...props} balanceMinor={0} />);
     expect(screen.getByText('Settled')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
   });
 
   it('preserves input through a failed read and only enables a known ready bill', () => {
     const { rerender, props } = setup();
     enterCash();
-    rerender(<CounterTenderPanel {...props} state="error" error="Access could not be verified." />);
+    rerender(<Harness {...props} state="error" error="Access could not be verified." />);
     fireEvent.click(screen.getByRole('button', { name: 'Refresh bill' }));
     expect(props.onRetry).toHaveBeenCalledTimes(1);
     expect(props.onTender).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
     expect(screen.getByLabelText('Amount')).toHaveAccessibleDescription(
       /Access could not be verified/
     );
-    rerender(<CounterTenderPanel {...props} state="loading" />);
-    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
-    rerender(<CounterTenderPanel {...props} />);
+    rerender(<Harness {...props} state="loading" />);
+    expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
+    rerender(<Harness {...props} />);
     expect(screen.getByLabelText('Amount')).toHaveValue('125.50');
     expect(screen.getByLabelText('Cash received')).toHaveValue('200.00');
-    expect(screen.getByRole('button', { name: 'Take payment' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeEnabled();
   });
 
   it.each(['100.00', 'abc', '200.001'])('rejects short or invalid entered cash %s', (cash) => {
@@ -334,7 +380,7 @@ describe('CounterTenderPanel bill and interaction states', () => {
     enterCash();
     fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: cash } });
     expect(screen.getByLabelText('Cash received')).toHaveAttribute('aria-invalid', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
     expect(props.onTender).not.toHaveBeenCalled();
   });
 
@@ -344,7 +390,7 @@ describe('CounterTenderPanel bill and interaction states', () => {
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'BANK_TRANSFER' } });
     expect(screen.getByText('Payment locked')).toBeVisible();
     expect(screen.getByRole('alert')).toHaveTextContent('unresolved safety block');
-    const button = screen.getByRole('button', { name: 'Take payment' });
+    const button = screen.getByRole('button', { name: /^(Take payment|Mark received)$/ });
     expect(button).toBeDisabled();
     expect(button).toHaveAccessibleDescription(/Payment locked.*unresolved safety block/);
     fireEvent.click(button);
@@ -354,7 +400,7 @@ describe('CounterTenderPanel bill and interaction states', () => {
   it.each(['Enter', ' '])('uses one native button activation for %s', async (key) => {
     const { props } = setup();
     enterCash();
-    const button = screen.getByRole('button', { name: 'Take payment' });
+    const button = screen.getByRole('button', { name: /^(Take payment|Mark received)$/ });
     button.focus();
     fireEvent.keyDown(button, { key });
     fireEvent.keyUp(button, { key });
@@ -380,12 +426,12 @@ describe('family Khata tender', () => {
     });
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
     await screen.findByText(/Ledger balance/);
-    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ })).toBeDisabled();
     fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
     fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
       target: { value: 'test-only-password' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
     await screen.findByText('Payment recorded.');
     expect(reauthenticateOwner).toHaveBeenCalledWith('test-only-password', '');
     expect(props.onTender).toHaveBeenCalledWith(
@@ -404,7 +450,7 @@ describe('family Khata tender', () => {
     fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
       target: { value: 'wrong' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
     await screen.findByText(/Owner re-authentication failed/);
     expect(props.onTender).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Owner password (current account)')).toHaveValue('');
@@ -420,7 +466,7 @@ describe('family Khata tender', () => {
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByRole('button', { name: 'Print Khata statement' }));
     await waitFor(() => expect(printKhataStatement).toHaveBeenCalledWith('family-a'));
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
     await screen.findByText('Payment recorded.');
     expect(props.onTender).toHaveBeenCalledWith(
       { type: 'KHATA', amountMinor: 500, familyAccountId: 'family-a', ownerOverride: false },

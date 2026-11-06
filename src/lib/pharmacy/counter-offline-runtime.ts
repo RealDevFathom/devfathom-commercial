@@ -330,18 +330,29 @@ export class PharmacyCounterRuntime {
     matrix: Omit<CounterMatrixInputs, 'snapshots'>
   ): Promise<CounterEnqueueResult> {
     let queuedInput = input;
-    if (input.action === 'MANUAL_OTC_SALE') {
+    if (input.action === 'MANUAL_OTC_SALE' || input.action === 'MANUAL_PAYMENT_HOLD') {
       // Only the verified RULES snapshot supplies policy. Never accept a
       // caller-provided skip flag as permission to omit the reference.
       const rules = this.payloadFor('RULES') as { manualMerchantPolicies?: unknown } | null;
       try {
-        const manualCapture = validateManualTenderPolicy(rules?.manualMerchantPolicies, input.payload.manualCapture);
+        const manualCapture = validateManualTenderPolicy(
+          rules?.manualMerchantPolicies,
+          input.payload.manualCapture
+        );
+        if (manualCapture.type === 'CARD')
+          throw new Error('Card requires an online certified adapter.');
         // Sign the normalized name the replay schema will verify, including
         // when an operator entered surrounding whitespace.
         queuedInput = { ...input, payload: { ...input.payload, manualCapture } };
+      } catch {
+        return {
+          ok: false,
+          reason: 'DENIED_OFFLINE',
+          decision: null,
+          message:
+            'Check payer name, transaction reference and signed branch merchant details before queuing payment.',
+        };
       }
-      catch { return { ok: false, reason: 'DENIED_OFFLINE', decision: null,
-        message: 'Check payer name, transaction reference and signed branch merchant details before queuing payment.' }; }
     }
     const leaseState = this.safetyLeaseState();
     const leaseCheck = checkSafetyLease(leaseState, matrix.nowMs);
@@ -383,6 +394,68 @@ export class PharmacyCounterRuntime {
 
   async resume(): Promise<void> {
     await this.commit({ ...this.state, queue: resumeCounterAfterReauth(this.queue()) });
+  }
+
+  /** ACK means the held server draft exists; it is never a payment confirmation. */
+  pendingManualPayments() {
+    return this.queue()
+      .commands.filter((command) => command.action === 'MANUAL_PAYMENT_HOLD')
+      .map((command) => ({ ...command, paymentStatus: 'PENDING' as const }));
+  }
+
+  async checkManualPayment(
+    commandId: string,
+    read: (key: { saleId: string; deviceId: string; requestKey: string }) => Promise<{
+      saleId: string;
+      deviceId: string;
+      requestKey: string;
+      state: string;
+      result: {
+        tenderId: string;
+        settled: boolean;
+        receiptNumber: number | null;
+        remainingMinor: number;
+      } | null;
+    } | null>
+  ) {
+    const command = this.queue().commands.find(
+      (row) => row.commandId === commandId && row.action === 'MANUAL_PAYMENT_HOLD'
+    );
+    if (!command?.serverRef || command.status !== 'ACKNOWLEDGED') return null;
+    const outcome = await read({
+      saleId: command.serverRef,
+      deviceId: this.scope.deviceId,
+      requestKey: command.idempotencyKey,
+    });
+    if (
+      !outcome ||
+      outcome.saleId !== command.serverRef ||
+      outcome.deviceId !== this.scope.deviceId ||
+      outcome.requestKey !== command.idempotencyKey ||
+      !['SETTLED', 'RELEASED'].includes(outcome.state) ||
+      (outcome.state === 'RELEASED' && outcome.result !== null) ||
+      (outcome.state === 'SETTLED' &&
+        (typeof outcome.result?.tenderId !== 'string' ||
+          !outcome.result.tenderId.trim() ||
+          !Number.isSafeInteger(outcome.result.remainingMinor) ||
+          outcome.result.remainingMinor < 0 ||
+          (outcome.result.settled
+            ? !Number.isSafeInteger(outcome.result.receiptNumber) ||
+              (outcome.result.receiptNumber ?? 0) <= 0 ||
+              outcome.result.remainingMinor !== 0
+            : outcome.result.receiptNumber !== null || outcome.result.remainingMinor <= 0)))
+    )
+      return null;
+    const current = this.queue().commands.find((row) => row.commandId === commandId);
+    if (
+      this.queue().replay === 'STOPPED_REVOKED' ||
+      !current ||
+      current.serverRef !== command.serverRef
+    )
+      return null;
+    // Financial outcomes are checked online and never persisted as local proof.
+    // The terminal minimization boundary deliberately forbids payment values.
+    return outcome;
   }
 
   replay(

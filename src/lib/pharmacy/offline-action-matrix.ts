@@ -34,6 +34,7 @@ export type PharmacyOfflineAction =
   | 'SCAN_BARCODE'
   | 'CASH_OTC_SALE'
   | 'MANUAL_OTC_SALE'
+  | 'MANUAL_PAYMENT_HOLD'
   | 'KHATA_SALE_WITHIN_CACHED_LIMIT'
   | 'PERMITTED_REFUND'
   | 'PROVISIONAL_CLOSE'
@@ -95,10 +96,19 @@ export const OFFLINE_ACTION_MATRIX: readonly OfflineActionRule[] = [
   },
   {
     action: 'MANUAL_OTC_SALE',
-    allowedOffline: true,
+    allowedOffline: false,
     requiresSnapshots: ['CATALOG', 'PRICES', 'TAX', 'RULES', 'LOT_BALANCES'],
     requires: ['RECEIPT_NUMBER', 'STOCK_QUOTA'],
-    rationale: 'A manually confirmed Raast or wallet OTC sale uses signed branch merchant policy, a receipt lease and device stock quota. Its evidence queues for replay.',
+    rationale:
+      'Legacy manual-wallet finalization is unavailable. Keep funds pending and recover a server sale online before confirmation.',
+  },
+  {
+    action: 'MANUAL_PAYMENT_HOLD',
+    allowedOffline: true,
+    requiresSnapshots: ['CATALOG', 'PRICES', 'TAX', 'RULES', 'LOT_BALANCES'],
+    requires: [],
+    rationale:
+      'Hold the manual-wallet draft and evidence as pending. No receipt or stock is issued offline; online recovery creates a locked server sale for authorized review.',
   },
   {
     action: 'KHATA_SALE_WITHIN_CACHED_LIMIT',
@@ -264,6 +274,7 @@ export function decideOfflineAction(
   const saleOrDispense =
     action === 'CASH_OTC_SALE' ||
     action === 'MANUAL_OTC_SALE' ||
+    action === 'MANUAL_PAYMENT_HOLD' ||
     action === 'KHATA_SALE_WITHIN_CACHED_LIMIT' ||
     action === 'CONTROLLED_MEDICINE_SALE';
   if (saleOrDispense && context.medicineSale === true && context.safetyLeaseOk !== true) {

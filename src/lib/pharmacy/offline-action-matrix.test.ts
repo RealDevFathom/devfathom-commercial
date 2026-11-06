@@ -81,12 +81,24 @@ describe('PH-OFF OFF-02 — the offline action matrix is the database enum', () 
 });
 
 describe('PH-OFF OFF-02 — allowed rows', () => {
-  it('MANUAL_OTC_SALE: requires signed snapshots, a receipt lease, stock quota and safety lease', () => {
-    expect(decide('MANUAL_OTC_SALE', { requestedUnits: 1 })).toMatchObject({ allowed: true });
-    expect(decide('MANUAL_OTC_SALE', { receiptNumbersRemaining: 0 })).toMatchObject({ allowed: false, reason: 'NO_RECEIPT_NUMBER' });
-    expect(decide('MANUAL_OTC_SALE', { requestedUnits: 21 })).toMatchObject({ allowed: false, reason: 'QUOTA_EXCEEDED' });
-    expect(decide('MANUAL_OTC_SALE', { snapshots: [] })).toMatchObject({ allowed: false, reason: 'SNAPSHOT_MISSING' });
-    expect(decide('MANUAL_OTC_SALE', { medicineSale: true, safetyLeaseOk: false })).toMatchObject({ allowed: false, reason: 'SAFETY_LEASE_EXPIRED' });
+  it('MANUAL_OTC_SALE: refuses new offline finalization', () => {
+    expect(decide('MANUAL_OTC_SALE')).toMatchObject({ allowed: false, reason: 'DENIED_OFFLINE' });
+  });
+  it('MANUAL_PAYMENT_HOLD: keeps signed evidence pending without spending receipts or stock', () => {
+    expect(
+      decide('MANUAL_PAYMENT_HOLD', {
+        receiptNumbersRemaining: 0,
+        quotaUnitsAvailable: 0,
+        requestedUnits: 1,
+      })
+    ).toMatchObject({ allowed: true });
+    expect(decide('MANUAL_PAYMENT_HOLD', { snapshots: [] })).toMatchObject({
+      allowed: false,
+      reason: 'SNAPSHOT_MISSING',
+    });
+    expect(
+      decide('MANUAL_PAYMENT_HOLD', { medicineSale: true, safetyLeaseOk: false })
+    ).toMatchObject({ allowed: false, reason: 'SAFETY_LEASE_EXPIRED' });
   });
   it('SEARCH_CATALOG: allowed against a cached catalogue', () => {
     expect(decide('SEARCH_CATALOG')).toMatchObject({ allowed: true });

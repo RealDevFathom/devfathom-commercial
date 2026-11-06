@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentProps } from 'react';
 
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
+import type { ManualPaymentSettings } from '@/lib/pharmacy/manual-payments';
 import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
 import type { CounterRxPanel } from './counter-rx-panel';
 import type { CounterSearchResults } from './counter-search-results';
@@ -31,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   printReceipt: vi.fn(),
   queryOptions: vi.fn(),
   outcomeQuery: vi.fn(),
+  collectionQuery: vi.fn(),
   searchQuery: vi.fn(),
   searchSetData: vi.fn(),
   rxPanelProps: vi.fn<(props: ComponentProps<typeof CounterRxPanel>) => void>(),
@@ -83,6 +85,7 @@ vi.mock('@/lib/trpc', () => {
     client: {
       pharmacySales: {
         tenderOutcome: { query: mocks.outcomeQuery },
+        recoverPaymentCollection: { query: mocks.collectionQuery },
         khataAccounts: { query: mocks.khataAccounts },
         khataStatement: { query: mocks.khataStatement },
       },
@@ -120,6 +123,10 @@ vi.mock('@/lib/trpc', () => {
         'addLine',
         'transition',
         'tender',
+        'beginManualCollection',
+        'completeManualCollection',
+        'resolveManualCollection',
+        'reportUncertainManualCollection',
         'openDrawer',
         'captureDemand',
         'declineSubstitute',
@@ -179,6 +186,8 @@ function cart(overrides: Partial<CounterCart> = {}): CounterCart {
     saleId: 'sale-a',
     status: 'OPEN',
     receiptNumber: null,
+    paymentRevision: 0,
+    pendingPaymentAttempt: null,
     lines: [
       {
         saleLineId: 'line-a',
@@ -349,6 +358,10 @@ beforeEach(() => {
     'addLine',
     'transition',
     'tender',
+    'beginManualCollection',
+    'completeManualCollection',
+    'resolveManualCollection',
+    'reportUncertainManualCollection',
     'openDrawer',
     'captureDemand',
     'declineSubstitute',
@@ -358,6 +371,25 @@ beforeEach(() => {
   ])
     mocks.mutations[name] = vi.fn();
   mocks.mutations.tender!.mockResolvedValue(accepted());
+  mocks.mutations.beginManualCollection!.mockImplementation(
+    async (input: {
+      saleId: string;
+      deviceId: string;
+      requestKey: string;
+      method: string;
+      amountMinor: number;
+    }) => ({
+      attempt: { id: 'attempt-server', state: 'EXPOSED', ...input },
+      merchant:
+        (
+          mocks.queries.manualPaymentSettings?.data as
+            { settings?: ManualPaymentSettings } | undefined
+        )?.settings?.[input.method as keyof ManualPaymentSettings] ?? null,
+      collectionToken: 'C'.repeat(43),
+    })
+  );
+  mocks.mutations.completeManualCollection!.mockResolvedValue(accepted());
+  mocks.collectionQuery.mockReset().mockResolvedValue(null);
   mocks.searchFetch
     .mockReset()
     .mockImplementation((...args: unknown[]) => mocks.searchQuery(...args));
@@ -477,18 +509,20 @@ describe('PharmacyCounterConsole tender recovery', () => {
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare payment' }));
+    await screen.findByText('Payment prepared. Check that funds arrived before marking received.');
     fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
     fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
       target: { value: '001234' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mark received', hidden: true }));
     await waitFor(() =>
-      expect(mocks.mutations.tender).toHaveBeenCalledWith(
+      expect(mocks.mutations.completeManualCollection).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: 'RAAST',
+          attemptId: 'attempt-server',
+          collectionToken: 'C'.repeat(43),
           providerRef: '001234',
           payerName: 'Ayesha',
-          amountMinor: 12550,
         })
       )
     );
@@ -503,8 +537,6 @@ describe('PharmacyCounterConsole tender recovery', () => {
     ['BAD_REQUEST', 'DRAWER_NOT_OPEN', 'CASH'],
     ['FORBIDDEN', 'Access refused.', 'CASH'],
     ['UNAUTHORIZED', 'Sign in required.', 'CASH'],
-    ['BAD_REQUEST', 'UNCERTIFIED_PROVIDER', 'CARD'],
-    ['BAD_REQUEST', 'CONSENT_REQUIRED', 'BANK_TRANSFER'],
   ])('retains a %s / %s rejection on the same bill', async (code, message, type) => {
     mocks.mutations.tender!.mockRejectedValue(refused(code!, message));
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
@@ -2117,4 +2149,132 @@ it('keeps F10 printing available inside the receipt drawer', async () => {
   fireEvent.keyDown(drawer, { key: 'F10' });
   expect(mocks.printReceipt).toHaveBeenCalledExactlyOnceWith(receipt, 'en', 'THERMAL', false);
   expect(mocks.mutations.tender).not.toHaveBeenCalled();
+});
+
+describe('durable manual collection in the counter', () => {
+  const scope = { organizationId: 'org-a', accountId: 'account-a', branchId: 'branch-a' };
+  function savedPayment() {
+    const saved = readTenderAttempt(scope);
+    if (saved.status !== 'pending') throw new Error('Expected a saved payment');
+    return saved.attempt;
+  }
+  function view(canResolve: boolean) {
+    const { input } = savedPayment();
+    return {
+      id: 'attempt-server',
+      saleId: input.saleId,
+      deviceId: input.deviceId,
+      requestKey: input.idempotencyKey,
+      method: input.type,
+      amountMinor: input.amountMinor,
+      state: 'UNKNOWN',
+      canResolve,
+      result: null,
+    };
+  }
+  async function prepareBank() {
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'BANK_TRANSFER' } });
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare payment' }));
+    await screen.findByText('Payment prepared. Check that funds arrived before marking received.');
+  }
+  it('keeps lost preparation pending without exposing collection details or repeating a write', async () => {
+    mocks.mutations.beginManualCollection!.mockRejectedValue(new Error('Acknowledgement lost'));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'BANK_TRANSFER' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare payment' }));
+    await screen.findByText(/Payment preparation is unconfirmed/);
+    expect(savedPayment()).toMatchObject({
+      version: 2,
+      preparation: {},
+      input: { type: 'BANK_TRANSFER' },
+    });
+    expect(window.localStorage.getItem(tenderAttemptStorageKey(scope))).not.toContain(
+      'collectionToken'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Check payment outcome' }));
+    await screen.findByRole('button', { name: 'Register pending payment for review' });
+    mocks.collectionQuery.mockResolvedValue(view(false));
+    mocks.mutations.reportUncertainManualCollection!.mockResolvedValue(view(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Register pending payment for review' }));
+    await screen.findByText(/Only an authorized Owner or Manager/);
+    expect(mocks.mutations.beginManualCollection).toHaveBeenCalledTimes(1);
+    expect(mocks.mutations.completeManualCollection).not.toHaveBeenCalled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    expect(readTenderAttempt(scope).status).toBe('pending');
+  });
+  it('treats a failed completion as uncertain even for a typed transactional refusal, then clears only an authorized release', async () => {
+    mocks.mutations.completeManualCollection!.mockRejectedValue(
+      refused('BAD_REQUEST', 'INVALID_RECEIPT_IDENTITY')
+    );
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await prepareBank();
+    expect(screen.getByLabelText('Amount')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark received' }));
+    await screen.findByText(/Payment outcome is unknown/);
+    const original = savedPayment();
+    mocks.collectionQuery.mockResolvedValue(view(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Check payment outcome' }));
+    await screen.findByText('Owner or Manager review');
+    mocks.mutations.resolveManualCollection!.mockResolvedValue({ state: 'RELEASED', result: null });
+    fireEvent.change(screen.getByLabelText('Reason for decision'), {
+      target: { value: 'Verified no incoming funds' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Release pending claim' }));
+    await waitFor(() => expect(readTenderAttempt(scope).status).toBe('empty'));
+    expect(mocks.mutations.resolveManualCollection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attemptId: 'attempt-server',
+        decision: 'RELEASE',
+        reason: 'Verified no incoming funds',
+        businessDate: original.input.businessDate,
+      })
+    );
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+  it('rejects a malformed preparation acknowledgement before showing collection instructions', async () => {
+    mocks.queries.manualPaymentSettings = query({
+      settings: {
+        RAAST: { destination: 'Do not display before commit', allowReferenceSkip: false },
+      },
+      revision: 0,
+    });
+    mocks.mutations.beginManualCollection!.mockResolvedValue({
+      attempt: { id: 'wrong', state: 'EXPOSED' },
+      collectionToken: 'short',
+    });
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
+    expect(screen.queryByText('Do not display before commit')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare payment' }));
+    await screen.findByText(/Payment preparation is unconfirmed/);
+    expect(screen.queryByText('Do not display before commit')).not.toBeInTheDocument();
+    expect(mocks.mutations.completeManualCollection).not.toHaveBeenCalled();
+  });
+  it('preserves the lock after a foreign release result or malformed resolution acknowledgement', async () => {
+    mocks.mutations.completeManualCollection!.mockRejectedValue(new Error('Connection lost'));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await prepareBank();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark received' }));
+    await screen.findByText(/Payment outcome is unknown/);
+    mocks.collectionQuery.mockResolvedValue({
+      ...view(true),
+      saleId: 'foreign-sale',
+      state: 'RELEASED',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check payment outcome' }));
+    await screen.findByText(/Payment outcome could not be checked/);
+    expect(readTenderAttempt(scope).status).toBe('pending');
+    mocks.collectionQuery.mockResolvedValue(view(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Check payment outcome' }));
+    await screen.findByText('Owner or Manager review');
+    mocks.mutations.resolveManualCollection!.mockResolvedValue({});
+    fireEvent.change(screen.getByLabelText('Reason for decision'), {
+      target: { value: 'Review incomplete response' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Release pending claim' }));
+    await screen.findByText(/Resolution could not be confirmed/);
+    expect(readTenderAttempt(scope).status).toBe('pending');
+    expect(screen.getByRole('button', { name: 'Mark received' })).toBeDisabled();
+  });
 });

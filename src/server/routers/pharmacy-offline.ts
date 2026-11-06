@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -174,7 +174,7 @@ const leasedReceipt = z
     signature: z.string().min(1).max(200),
   })
   .strict();
-export const counterReplaySchema = z
+const legacyCounterReplaySchema = z
   .object({
     sequence: z.number().int().positive(),
     idempotencyKey: id,
@@ -210,6 +210,22 @@ export const counterReplaySchema = z
         : value.manualCapture === undefined && value.cashReceivedMinor !== undefined,
     'Manual sales require merchant capture; cash sales require cash received.'
   );
+const manualHoldReplaySchema = z
+  .object({
+    sequence: legacyCounterReplaySchema.shape.sequence,
+    idempotencyKey: legacyCounterReplaySchema.shape.idempotencyKey,
+    action: z.literal('MANUAL_PAYMENT_HOLD'),
+    clientOriginAt: z.string().datetime(),
+    snapshots: legacyCounterReplaySchema.shape.snapshots,
+    lines: legacyCounterReplaySchema.shape.lines,
+    amountMinor: legacyCounterReplaySchema.shape.amountMinor,
+    manualCapture: manualTenderCaptureSchema.refine(
+      (capture) => capture.type !== 'CARD',
+      'Card requires an online certified adapter.'
+    ),
+  })
+  .strict();
+export const counterReplaySchema = z.union([legacyCounterReplaySchema, manualHoldReplaySchema]);
 export type CounterReplay = z.infer<typeof counterReplaySchema>;
 export type PharmacyCounterContext = {
   db: ScopedDb;
@@ -217,6 +233,239 @@ export type PharmacyCounterContext = {
   deviceId: string;
   deviceSecret: string;
 };
+
+async function createReplayedOtcSale(
+  ctx: PharmacyCounterContext,
+  lines: z.infer<typeof legacyCounterReplaySchema>['lines'],
+  requestKey: string
+) {
+  const { db, scope, deviceId } = ctx;
+  const sale = await createSale(db, scope);
+  for (const [index, line] of lines.entries()) {
+    const medicine = await db.medicine.findFirst({
+      where: { id: line.medicineId, organizationId: scope.organizationId },
+      select: { controlled: true, rx: true, restricted: true },
+    });
+    if (!medicine || medicine.controlled || medicine.rx || medicine.restricted)
+      throw new CounterTransportError('medicine_not_offline_otc', 403);
+    const pack = await db.packLevel.findFirst({
+      where: {
+        id: line.packLevelId,
+        organizationId: scope.organizationId,
+        presentationId: line.presentationId,
+      },
+      select: { id: true },
+    });
+    const presentation = await db.presentation.findFirst({
+      where: {
+        id: line.presentationId,
+        organizationId: scope.organizationId,
+        medicineId: line.medicineId,
+      },
+      select: { id: true },
+    });
+    if (!pack || !presentation) throw new CounterTransportError('invalid_pack', 403);
+    const units = line.quantity * line.canonicalUnitsPerSaleUnit;
+    const quota = await openDeviceLotQuota(db, scope, { ...line, deviceId });
+    if (!quota || quota.quotaUnits - quota.consumedUnits < units)
+      throw new CounterTransportError('quota_exhausted', 409);
+    await consumeDeviceLotQuota(db, scope, { ...line, deviceId, units });
+    const created = await addSaleLine(db, scope, {
+      ...line,
+      saleId: sale.id,
+      idempotencyKey: `${requestKey}:${index}`,
+    });
+    const allocations = await db.pharmacySaleLineAllocation.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleLineId: created.line.id,
+      },
+    });
+    if (
+      allocations.some(
+        (a) =>
+          a.inventoryLotId !== line.inventoryLotId || a.stockLocationId !== line.stockLocationId
+      )
+    )
+      throw new CounterTransportError('offline_lot_changed', 409);
+  }
+  return sale;
+}
+
+/** A signed hold creates a server bill and lock, never a tender or receipt. */
+async function replayManualPaymentHold(
+  ctx: PharmacyCounterContext,
+  command: z.infer<typeof manualHoldReplaySchema>,
+  signature: string
+) {
+  const { db, scope, deviceId, deviceSecret } = ctx;
+  await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_registered_devices WHERE id=${deviceId}
+    AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
+  await authenticatePharmacyCommand(db, scope, deviceId, command, { deviceSecret, signature });
+  const originalMs = Date.parse(command.clientOriginAt);
+  if (
+    !Number.isFinite(originalMs) ||
+    originalMs > Date.now() ||
+    Date.now() - originalMs > 7 * 86_400_000
+  )
+    throw new CounterTransportError('replay_stale', 409);
+  const snapshots = command.snapshots.map((snapshot) => {
+    if (
+      !verifySnapshotSignature(snapshot.envelope, snapshot.signature) ||
+      !checkEnvelope({
+        envelope: snapshot.envelope,
+        scope: { ...scope, deviceId },
+        nowMs: originalMs,
+        heldVersion: null,
+        payloadHash: snapshotPayloadHash(snapshot.payload),
+      }).ok ||
+      !checkSafetyLease(
+        {
+          lease: snapshot.envelope.safetyLease,
+          appliedRecallVersion: snapshot.envelope.safetyLease.recallVersion,
+          recalledBatchIds: [],
+        },
+        originalMs
+      ).ok
+    )
+      throw new CounterTransportError('invalid_snapshot', 403);
+    return {
+      kind: snapshot.envelope.kind,
+      verified: true,
+      expiresAtMs: Date.parse(snapshot.envelope.expiresAt),
+    };
+  });
+  const recorded = await recordOfflineCommand(db, scope, {
+    deviceId,
+    sequence: command.sequence,
+    idempotencyKey: command.idempotencyKey,
+    action: command.action,
+    payload: command as Prisma.InputJsonValue,
+    clientOriginAt: new Date(command.clientOriginAt),
+    receiptNumber: null,
+  });
+  if (recorded.command.status === 'ACCEPTED')
+    return {
+      saleId: recorded.command.serverRef,
+      receiptNumber: null,
+      paymentStatus: 'PENDING' as const,
+      replayed: true,
+    };
+  if (recorded.command.status !== 'PENDING')
+    throw new CounterTransportError('command_rejected', 409);
+  authorizeReplayedCommand(command.action, {
+    nowMs: originalMs,
+    snapshots,
+    receiptNumbersRemaining: 0,
+    quotaUnitsAvailable: 0,
+    requestedUnits: 0,
+    requestedCreditMinor: 0,
+    cachedCreditRemainingMinor: 0,
+    controlledMedicinesPermittedOffline: false,
+    originalSaleAvailable: false,
+    deviceUsable: true,
+    medicineSale: true,
+    safetyLeaseOk: true,
+    batchRecalled: false,
+  });
+  const rules = command.snapshots.find((row) => row.envelope.kind === 'RULES')?.payload;
+  const settings =
+    rules && typeof rules === 'object' && !Array.isArray(rules)
+      ? rules.manualMerchantPolicies
+      : undefined;
+  let capture: z.infer<typeof manualTenderCaptureSchema>;
+  try {
+    capture = validateManualTenderPolicy(settings, command.manualCapture);
+  } catch {
+    throw new CounterTransportError('invalid_manual_capture', 409);
+  }
+  if (capture.type === 'CARD') throw new CounterTransportError('certified_adapter_required', 409);
+  const earlier = await db.pharmacyOfflineCommand.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      deviceId,
+      status: 'PENDING',
+      sequence: { lt: command.sequence },
+    },
+    select: { id: true },
+  });
+  if (earlier) throw new CounterTransportError('earlier_command_pending', 409);
+  const sale = await createReplayedOtcSale(ctx, command.lines, command.idempotencyKey);
+  const current = await db.pharmacySale.findFirstOrThrow({
+    where: { id: sale.id, organizationId: scope.organizationId, branchId: scope.branchId },
+    select: { paymentRevision: true },
+  });
+  const organization = await db.organization.findUniqueOrThrow({
+    where: { id: scope.organizationId },
+    select: { currency: true },
+  });
+  const request = {
+    saleId: sale.id,
+    deviceId,
+    requestKey: command.idempotencyKey,
+    method: capture.type,
+    amountMinor: command.amountMinor,
+    expectedRevision: current.paymentRevision,
+  };
+  const requestHash = createHash('sha256')
+    .update(
+      JSON.stringify({
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        actorId: scope.actorId,
+        ...request,
+      })
+    )
+    .digest('hex');
+  const attemptId = randomUUID();
+  const attempt = await db.pharmacyPaymentAttempt.create({
+    data: {
+      id: attemptId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleId: sale.id,
+      deviceId,
+      requestKey: command.idempotencyKey,
+      requestHash,
+      method: capture.type,
+      currency: organization.currency,
+      amountMinor: command.amountMinor,
+      billRevision: current.paymentRevision,
+      createdByUserId: scope.actorId,
+      source: 'OFFLINE_HOLD',
+      settlementInput: {
+        saleId: sale.id,
+        deviceId,
+        businessDate: new Date(command.clientOriginAt.slice(0, 10) + 'T00:00:00Z').toISOString(),
+        type: capture.type,
+        amountMinor: command.amountMinor,
+        idempotencyKey: command.idempotencyKey,
+        paymentAttemptId: attemptId,
+      } as Prisma.InputJsonValue,
+    },
+  });
+  // No collection occurs here. The bill remains PREPARED for Owner/Manager review.
+  await settleOfflineCommand(
+    db,
+    scope,
+    {
+      commandId: recorded.command.id,
+      outcome: 'ACCEPTED',
+      serverRef: sale.id,
+      receiptNumber: null,
+    },
+    new Date()
+  );
+  return {
+    saleId: sale.id,
+    attemptId: attempt.id,
+    receiptNumber: null,
+    paymentStatus: 'PENDING' as const,
+    replayed: false,
+  };
+}
 
 /** Called only inside the transport-owned tenant transaction; never catches a
  * business failure here, because a returned response would commit partial work. */
@@ -226,6 +475,8 @@ export async function replayCounterCommand(
   signature: string,
   receiptSignature: string
 ) {
+  if (command.action === 'MANUAL_PAYMENT_HOLD')
+    return replayManualPaymentHold(ctx, command, signature);
   const { db, scope, deviceId, deviceSecret } = ctx;
   // Take the exclusive lock before authentication's shared lock: concurrent
   // retries must not both hold SHARE and then deadlock upgrading to UPDATE.
@@ -269,21 +520,6 @@ export async function replayCounterCommand(
     (n, line) => n + line.quantity * line.canonicalUnitsPerSaleUnit,
     0
   );
-  authorizeReplayedCommand(command.action, {
-    nowMs: originalMs,
-    snapshots,
-    receiptNumbersRemaining: 1,
-    quotaUnitsAvailable: requestedUnits,
-    requestedUnits,
-    requestedCreditMinor: 0,
-    cachedCreditRemainingMinor: 0,
-    controlledMedicinesPermittedOffline: false,
-    originalSaleAvailable: false,
-    deviceUsable: true,
-    medicineSale: true,
-    safetyLeaseOk: true,
-    batchRecalled: false,
-  });
   const recorded = await recordOfflineCommand(db, scope, {
     deviceId,
     sequence: command.sequence,
@@ -299,21 +535,25 @@ export async function replayCounterCommand(
       receiptNumber: recorded.command.receiptNumber,
       replayed: true,
     };
+  if (command.action === 'MANUAL_OTC_SALE')
+    throw new CounterTransportError('manual_payment_pending_recovery', 423);
+  authorizeReplayedCommand(command.action, {
+    nowMs: originalMs,
+    snapshots,
+    receiptNumbersRemaining: 1,
+    quotaUnitsAvailable: requestedUnits,
+    requestedUnits,
+    requestedCreditMinor: 0,
+    cachedCreditRemainingMinor: 0,
+    controlledMedicinesPermittedOffline: false,
+    originalSaleAvailable: false,
+    deviceUsable: true,
+    medicineSale: true,
+    safetyLeaseOk: true,
+    batchRecalled: false,
+  });
   if (recorded.command.status !== 'PENDING')
     throw new CounterTransportError('command_rejected', 409);
-  if (command.action === 'MANUAL_OTC_SALE') {
-    const rules = command.snapshots.find((snapshot) => snapshot.envelope.kind === 'RULES')?.payload;
-    const settings =
-      rules && typeof rules === 'object' && !Array.isArray(rules)
-        ? rules.manualMerchantPolicies
-        : undefined;
-    try {
-      validateManualTenderPolicy(settings, command.manualCapture);
-    } catch {
-      throw new CounterTransportError('invalid_manual_capture', 409);
-    }
-    // applyPharmacyTender additionally checks current branch policy under lock.
-  }
   const earlier = await db.pharmacyOfflineCommand.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -325,56 +565,7 @@ export async function replayCounterCommand(
     select: { id: true },
   });
   if (earlier) throw new CounterTransportError('earlier_command_pending', 409);
-  const sale = await createSale(db, scope);
-  for (const [index, line] of command.lines.entries()) {
-    const medicine = await db.medicine.findFirst({
-      where: { id: line.medicineId, organizationId: scope.organizationId },
-      select: { controlled: true, rx: true, restricted: true },
-    });
-    if (!medicine || medicine.controlled || medicine.rx || medicine.restricted)
-      throw new CounterTransportError('medicine_not_offline_otc', 403);
-    const pack = await db.packLevel.findFirst({
-      where: {
-        id: line.packLevelId,
-        organizationId: scope.organizationId,
-        presentationId: line.presentationId,
-      },
-      select: { id: true },
-    });
-    const presentation = await db.presentation.findFirst({
-      where: {
-        id: line.presentationId,
-        organizationId: scope.organizationId,
-        medicineId: line.medicineId,
-      },
-      select: { id: true },
-    });
-    if (!pack || !presentation) throw new CounterTransportError('invalid_pack', 403);
-    const units = line.quantity * line.canonicalUnitsPerSaleUnit;
-    const quota = await openDeviceLotQuota(db, scope, { ...line, deviceId });
-    if (!quota || quota.quotaUnits - quota.consumedUnits < units)
-      throw new CounterTransportError('quota_exhausted', 409);
-    await consumeDeviceLotQuota(db, scope, { ...line, deviceId, units });
-    const created = await addSaleLine(db, scope, {
-      ...line,
-      saleId: sale.id,
-      idempotencyKey: `${command.idempotencyKey}:${index}`,
-    });
-    const allocations = await db.pharmacySaleLineAllocation.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        saleLineId: created.line.id,
-      },
-    });
-    if (
-      allocations.some(
-        (a) =>
-          a.inventoryLotId !== line.inventoryLotId || a.stockLocationId !== line.stockLocationId
-      )
-    )
-      throw new CounterTransportError('offline_lot_changed', 409);
-  }
+  const sale = await createReplayedOtcSale(ctx, command.lines, command.idempotencyKey);
   const result = await applyPharmacyTender(
     db,
     scope,
