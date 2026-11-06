@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   checkPackPhotoLot,
+  defaultReceivingLocationId,
+  findRepeatedLot,
   lotSlotKey,
   MAX_PACKS_PER_LOT,
   sameLotKey,
@@ -126,5 +128,69 @@ describe('lot identity', () => {
   it('keeps the first lot on the existing capture key', () => {
     expect(lotSlotKey('pol-1', 1)).toBe('pol-1');
     expect(lotSlotKey('pol-1', 2)).toBe('pol-1.lot2');
+  });
+});
+
+describe('defaultReceivingLocationId', () => {
+  const shelf = (id: string, kind = 'STORE') => ({ id, kind });
+
+  it("starts on the branch's own receiving default", () => {
+    expect(
+      defaultReceivingLocationId('b', [shelf('a'), shelf('b'), shelf('q', 'QUARANTINE')])
+    ).toBe('b');
+  });
+
+  it('falls back to the only receiving location when there is no valid default', () => {
+    expect(defaultReceivingLocationId(null, [shelf('a'), shelf('q', 'QUARANTINE')])).toBe('a');
+    expect(defaultReceivingLocationId('gone', [shelf('a')])).toBe('a');
+  });
+
+  it('never pre-selects a quarantine location, even when it is the branch default', () => {
+    expect(defaultReceivingLocationId('q', [shelf('q', 'QUARANTINE')])).toBeUndefined();
+    expect(defaultReceivingLocationId('q', [shelf('a'), shelf('q', 'QUARANTINE')])).toBe('a');
+  });
+
+  it('chooses nothing rather than guessing between several shelves', () => {
+    expect(defaultReceivingLocationId(null, [shelf('a'), shelf('b')])).toBeUndefined();
+    expect(defaultReceivingLocationId('other-branch', [shelf('a'), shelf('b')])).toBeUndefined();
+  });
+
+  it('fabricates nothing when the branch has no location', () => {
+    expect(defaultReceivingLocationId('a', [])).toBeUndefined();
+  });
+});
+
+describe('findRepeatedLot', () => {
+  const lot = (overrides: Record<string, unknown> = {}) => ({
+    purchaseOrderLineId: 'pol-1',
+    batchNumber: 'SYN-A1',
+    printedExpiry: new Date('2028-06-30T00:00:00.000Z'),
+    ...overrides,
+  });
+
+  it('refuses the same batch and expiry twice on one order line, case-insensitively', () => {
+    const repeated = lot({ batchNumber: 'syn-a1' });
+    expect(findRepeatedLot([lot(), repeated])).toBe(repeated);
+  });
+
+  it('accepts a mixed-lot split and the same lot on different order lines', () => {
+    expect(
+      findRepeatedLot([
+        lot(),
+        lot({ batchNumber: 'SYN-A2' }),
+        lot({ printedExpiry: new Date('2028-07-31T00:00:00.000Z') }),
+        lot({ purchaseOrderLineId: 'pol-2' }),
+      ])
+    ).toBeNull();
+  });
+
+  it('exempts serialized packs, which share a lot one pack per line', () => {
+    expect(
+      findRepeatedLot([
+        lot({ serialNumber: 'S1' }),
+        lot({ serialNumber: 'S2' }),
+        lot({ gs1Payload: ']d2010...|21S3' }),
+      ])
+    ).toBeNull();
   });
 });

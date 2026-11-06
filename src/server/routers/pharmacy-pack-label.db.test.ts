@@ -411,6 +411,110 @@ describeIfDatabase('DEV-752 pack-photo receiving against PostgreSQL', () => {
     ]);
   });
 
+  it('raises one shortage, on the last lot, when lots together fall short', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'shortage');
+    const drafted = await withTenantDb(ORG_A, (db) =>
+      purchasingCaller(db, ORG_A).createGoodsReceipt(
+        receipt(f, 'shortage', [
+          lot(f, `SYN-H1-${suffix}`, 3, '2028-06-30'),
+          lot(f, `SYN-H2-${suffix}`, 4, '2028-09-30'),
+        ])
+      )
+    );
+    await withTenantDb(ORG_A, (db) =>
+      purchasingCaller(db, ORG_A).postGoodsReceipt({
+        branchId: f.branchId,
+        goodsReceiptId: drafted.id,
+      })
+    );
+    const exceptions = await withTenantDb(ORG_A, (db) =>
+      db.pharmacyReceivingException.findMany({
+        where: { goodsReceiptId: drafted.id },
+        select: { kind: true, expectedUnits: true, observedUnits: true, goodsReceiptLineId: true },
+      })
+    );
+    expect(exceptions).toEqual([
+      {
+        kind: 'SHORTAGE',
+        expectedUnits: 100,
+        observedUnits: 70,
+        goodsReceiptLineId: drafted.lines[1]!.id,
+      },
+    ]);
+  });
+
+  it('keeps the branch default shelf, the order price and the order status the receipt left them', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'defaults');
+    await withTenantDb(ORG_A, (db) =>
+      db.pharmacyBranch.update({
+        where: { id: f.branchId },
+        data: { defaultStockLocationId: f.storeId },
+      })
+    );
+    const other = await withTenantDb(ORG_A, (db) => storeAt(db, ORG_A, BRANCH_A, 'override'));
+    const snapshot = () =>
+      withTenantDb(ORG_A, async (db) => ({
+        branchDefault: (
+          await db.pharmacyBranch.findFirstOrThrow({
+            where: { id: f.branchId },
+            select: { defaultStockLocationId: true },
+          })
+        ).defaultStockLocationId,
+        listPrice: (
+          await db.pharmacyPurchaseOrderLine.findFirstOrThrow({
+            where: { id: f.purchaseOrderLineId },
+            select: { listPricePerPackMinor: true },
+          })
+        ).listPricePerPackMinor,
+      }));
+    const before = await snapshot();
+    // The receiver overrode the shelf for this line only.
+    const drafted = await withTenantDb(ORG_A, (db) =>
+      purchasingCaller(db, ORG_A).createGoodsReceipt(
+        receipt(f, 'defaults', [
+          { ...lot(f, `SYN-D1-${suffix}`, 10, '2028-06-30'), stockLocationId: other.id },
+        ])
+      )
+    );
+    expect(
+      await withTenantDb(ORG_A, (db) =>
+        db.pharmacyPurchaseOrder.findFirstOrThrow({
+          where: { id: f.purchaseOrderId },
+          select: { status: true },
+        })
+      )
+    ).toEqual({ status: 'SENT' });
+    await withTenantDb(ORG_A, (db) =>
+      purchasingCaller(db, ORG_A).postGoodsReceipt({
+        branchId: f.branchId,
+        goodsReceiptId: drafted.id,
+      })
+    );
+    expect(await snapshot()).toEqual(before);
+    expect(before.branchDefault).toBe(f.storeId);
+    const posted = await withTenantDb(ORG_A, (db) =>
+      db.pharmacyGoodsReceiptLine.findFirstOrThrow({
+        where: { goodsReceiptId: drafted.id },
+        select: { stockLocationId: true },
+      })
+    );
+    expect(posted.stockLocationId).toBe(other.id);
+  });
+
+  it('refuses a duplicate submit of the same receipt and keeps exactly one', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'dup');
+    const input = receipt(f, 'dup', [lot(f, `SYN-U1-${suffix}`, 2, '2028-06-30')]);
+    await withTenantDb(ORG_A, (db) => purchasingCaller(db, ORG_A).createGoodsReceipt(input));
+    await expect(
+      withTenantDb(ORG_A, (db) => purchasingCaller(db, ORG_A).createGoodsReceipt(input))
+    ).rejects.toBeTruthy();
+    expect(
+      await withTenantDb(ORG_A, (db) =>
+        db.pharmacyGoodsReceipt.count({ where: { reference: input.reference } })
+      )
+    ).toBe(1);
+  });
+
   it('refuses a receiving shelf from another branch before writing anything', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'shelf-branch');
     const other = await withTenantDb(ORG_A, async (db) => {

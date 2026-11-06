@@ -111,6 +111,48 @@ export function checkPackPhotoLot(draft: PackPhotoLotDraft): PackPhotoLotCheck {
   };
 }
 
+/**
+ * The shelf a receiving line starts on: the branch's own default when it is a
+ * receiving (non-quarantine) location of this branch, else the branch's only
+ * receiving location, else none. It only pre-selects; it never writes a default.
+ */
+export function defaultReceivingLocationId(
+  branchDefaultId: string | null | undefined,
+  locations: readonly { id: string; kind: string }[]
+): string | undefined {
+  const receiving = locations.filter((location) => location.kind !== 'QUARANTINE');
+  return (
+    receiving.find((location) => location.id === branchDefaultId)?.id ??
+    (receiving.length === 1 ? receiving[0]!.id : undefined)
+  );
+}
+
+export type ReceivedLotIdentity = {
+  purchaseOrderLineId?: string | null;
+  batchNumber: string;
+  printedExpiry: Date;
+  serialNumber?: string | null;
+  gs1Payload?: string | null;
+};
+
+/**
+ * The first lot entered twice on one order line, or null. Serialized packs are
+ * exempt: they share a batch by design, one pack and one serial per line.
+ */
+export function findRepeatedLot<T extends ReceivedLotIdentity>(lines: readonly T[]): T | null {
+  const seen = new Set<string>();
+  for (const line of lines) {
+    if (line.serialNumber || line.gs1Payload) continue;
+    const key = `${line.purchaseOrderLineId ?? ''}|${sameLotKey(
+      line.batchNumber,
+      line.printedExpiry.toISOString().slice(0, 10)
+    )}`;
+    if (seen.has(key)) return line;
+    seen.add(key);
+  }
+  return null;
+}
+
 /** Same batch + same printed expiry is one lot; anything else is a separate line. */
 export function sameLotKey(batchNumber: string, printedExpiry: string): string {
   return `${batchNumber.trim().toUpperCase()}|${printedExpiry}`;

@@ -27,7 +27,12 @@ import type {
 } from '@/lib/pharmacy/purchasing-console';
 import { packConversionLabel } from '@/lib/pharmacy/pack-conversion-label';
 import { configuredPackLabelOcrAdapterName } from '@/lib/pharmacy/pack-label-ocr';
-import { EXTRA_LOT_SLOTS, lotSlotKey, sameLotKey } from '@/lib/pharmacy/pack-photo-receiving';
+import {
+  defaultReceivingLocationId,
+  EXTRA_LOT_SLOTS,
+  findRepeatedLot,
+  lotSlotKey,
+} from '@/lib/pharmacy/pack-photo-receiving';
 import {
   BranchPicker,
   ChooseBranchState,
@@ -173,9 +178,10 @@ export default async function PharmacyReceivingPage({
   // DEV-752: the receiving shelf starts on the branch's own default (or its only
   // receiving location). Nothing here writes a default; it only pre-selects one.
   const receiveLocations = locations.filter((location) => location.kind !== 'QUARANTINE');
-  const defaultLocationId =
-    receiveLocations.find((location) => location.id === scope.branch.defaultStockLocationId)?.id ??
-    (receiveLocations.length === 1 ? receiveLocations[0]!.id : undefined);
+  const defaultLocationId = defaultReceivingLocationId(
+    scope.branch.defaultStockLocationId,
+    locations
+  );
   const packPhotoEnabled = configuredPackLabelOcrAdapterName() !== null;
   // PUR-02 receives against an order that has left the building; a draft or
   // unapproved order has nothing to deliver.
@@ -248,23 +254,13 @@ export default async function PharmacyReceivingPage({
           ];
         })
       );
-      const lots = new Set<string>();
-      for (const line of lines) {
-        // Serialized packs share a lot by design, one pack and serial per line.
-        if (line.serialNumber || line.gs1Payload) continue;
-        const lot = `${line.purchaseOrderLineId}|${sameLotKey(
-          line.batchNumber,
-          line.printedExpiry.toISOString().slice(0, 10)
-        )}`;
-        if (lots.has(lot)) {
-          throw Object.assign(
-            new PurchasingValidationError(
-              'The same batch and expiry is entered twice on one order line. Enter the total packs once; a separate lot is only for a different batch or expiry.'
-            ),
-            { field: 'batchNumber' }
-          );
-        }
-        lots.add(lot);
+      if (findRepeatedLot(lines)) {
+        throw Object.assign(
+          new PurchasingValidationError(
+            'The same batch and expiry is entered twice on one order line. Enter the total packs once; a separate lot is only for a different batch or expiry.'
+          ),
+          { field: 'batchNumber' }
+        );
       }
       if (lines.length === 0) {
         throw Object.assign(
