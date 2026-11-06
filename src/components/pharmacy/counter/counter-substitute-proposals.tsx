@@ -82,7 +82,7 @@ export function CounterSubstituteProposals({
                 {formatMinor(proposal.priceDifferenceMinor)}
               </p>
             </div>
-            {prescriptionOnly ? (
+            {prescriptionOnly || proposal.requiresPharmacist !== false ? (
               <Link
                 href="/pharmacy/substitution"
                 className="inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"

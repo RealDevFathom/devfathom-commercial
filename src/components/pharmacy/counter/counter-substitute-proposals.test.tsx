@@ -16,6 +16,7 @@ const proposal = {
   priceMinor: 800,
   priceDifferenceMinor: 200,
   equivalenceBasis: 'Exact ingredient(s), strength component(s), dosage form and route',
+  requiresPharmacist: false,
 };
 
 describe('AI-05 counter suggestions', () => {
@@ -55,5 +56,38 @@ describe('AI-05 counter suggestions', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Patient declined substitutes' }));
     expect(onDecline).toHaveBeenCalledOnce();
+  });
+
+  it('routes a regulated candidate to pharmacist review even for an OTC source', () => {
+    render(
+      <CounterSubstituteProposals
+        proposals={[{ ...proposal, requiresPharmacist: true }]}
+        state="ready"
+        prescriptionOnly={false}
+        disabled={false}
+        onChoose={vi.fn()}
+        onDecline={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('link', { name: 'Pharmacist review' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review option' })).not.toBeInTheDocument();
+  });
+
+  it('fails closed when candidate restriction information is absent', () => {
+    const legacyProposal = { ...proposal, requiresPharmacist: undefined };
+    render(
+      <CounterSubstituteProposals
+        proposals={[legacyProposal as unknown as typeof proposal]}
+        state="ready"
+        prescriptionOnly={false}
+        disabled={false}
+        onChoose={vi.fn()}
+        onDecline={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('link', { name: 'Pharmacist review' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review option' })).not.toBeInTheDocument();
   });
 });

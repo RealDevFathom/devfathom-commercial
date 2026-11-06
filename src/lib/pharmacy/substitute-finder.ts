@@ -31,6 +31,7 @@ export type SubstituteProposal = {
   priceMinor: number;
   priceDifferenceMinor: number;
   equivalenceBasis: string;
+  requiresPharmacist: boolean;
 };
 
 function normalized(value: string | null | undefined) {
@@ -148,6 +149,14 @@ export async function findSubstituteProposals(
         priceMinor,
         priceDifferenceMinor: referencePriceMinor - priceMinor,
         equivalenceBasis: 'Exact ingredient(s), strength component(s), dosage form and route',
+        requiresPharmacist: Boolean(
+          requested.rx ||
+          requested.restricted ||
+          requested.controlled ||
+          medicine.rx ||
+          medicine.restricted ||
+          medicine.controlled
+        ),
       },
     ];
   });

@@ -42,6 +42,46 @@ function dbWith(lots: unknown[]) {
 }
 
 describe('AI-05 deterministic substitute finder', () => {
+  it.each(['rx', 'restricted', 'controlled'])(
+    'marks alternatives for a %s source for pharmacist review',
+    async (flag) => {
+      const db = {
+        ...dbWith([lot()]),
+        medicine: { findFirst: async () => ({ ...requested, [flag]: true }) },
+      };
+      const rows = await findSubstituteProposals(db as never, scope, {
+        medicineId: 'requested',
+        presentationId: 'presentation-requested',
+        quantityCanonicalUnits: 10,
+        referencePriceMinor: 1000,
+      });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.requiresPharmacist).toBe(true);
+    }
+  );
+  it.each(['rx', 'restricted', 'controlled'])(
+    'marks a %s alternative for pharmacist review',
+    async (flag) => {
+      const candidate = lot({
+        batch: {
+          medicine: {
+            id: 'alternate',
+            productName: 'Alternative',
+            strengths: strength(),
+            [flag]: true,
+          },
+        },
+      });
+      const rows = await findSubstituteProposals(dbWith([candidate]) as never, scope, {
+        medicineId: 'requested',
+        presentationId: 'presentation-requested',
+        quantityCanonicalUnits: 10,
+        referencePriceMinor: 1000,
+      });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.requiresPharmacist).toBe(true);
+    }
+  );
   it('never proposes a different ingredient or strength', async () => {
     const rows = await findSubstituteProposals(
       dbWith([
