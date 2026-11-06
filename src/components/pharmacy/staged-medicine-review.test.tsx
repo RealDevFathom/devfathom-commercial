@@ -25,6 +25,9 @@ vi.mock('@/server/routers/pharmacy-staged-review', () => ({
 vi.mock('@/components/pharmacy/medicine-reference-workbench', () => ({
   MedicineReferenceWorkbench: () => <div>Existing workbench</div>,
 }));
+vi.mock('@/components/pharmacy/catalogue-change-review', () => ({
+  CatalogueChangeReview: () => <div>Catalogue change review</div>,
+}));
 import MedicinePage from '@/app/(app)/pharmacy/medicines/page';
 import Page from '@/app/(app)/pharmacy/medicines/staged/page';
 import Loading from '@/app/(app)/pharmacy/medicines/staged/loading';

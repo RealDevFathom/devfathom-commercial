@@ -78,6 +78,7 @@ export const ALL_ACTIONS = [
   'pharmacy:prescriptions', // prescription workspace/files: pharmacist or tenant administrator
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
+  'pharmacy:catalogue-edit', // propose catalogue edits; they publish only after catalogue review
   'pharmacy:orders', // MKT-03/05: staff acceptance and fulfilment of customer proposals
   // H1-01: hospitality capabilities use explicit organization-role grants.
   // Property scope is enforced separately by the consuming procedures.
@@ -252,6 +253,11 @@ export const POLICIES: Record<Action, Policy[]> = {
   'pharmacy:prescriptions': [isAdmin],
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],
+  // Proposing a catalogue edit (it still waits for a catalogue reviewer). Tenant
+  // administrators without an organization role keep the ability they had before
+  // the capability existed; once a role is assigned, `can()` makes that role the
+  // boundary, exactly as for procurement.
+  'pharmacy:catalogue-edit': [isAdmin],
   'pharmacy:orders': [],
 
   // H1-01: no static agency-role policy grants hospitality capabilities.

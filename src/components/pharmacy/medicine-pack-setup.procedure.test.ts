@@ -38,10 +38,47 @@ beforeEach(() => {
   guards.hasModule.mockReturnValue(true);
 });
 
+/** The sole administrator of org-a: no organization role, no other members. */
+const soloAdmin = {
+  user: {
+    findUnique: vi.fn(async () => ({ organizationRole: null, permissionOverrides: [] })),
+    findMany: vi.fn(async () => []),
+  },
+};
+
+/** In-memory catalogue review queue. */
+function catalogueChanges() {
+  const rows: Array<Record<string, unknown>> = [];
+  return {
+    rows,
+    pharmacyCatalogueChange: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const row = { id: `change-${rows.length + 1}`, status: 'PENDING', ...data };
+        rows.push(row);
+        return row;
+      }),
+      findFirst: vi.fn(
+        async ({ where }: { where: { id: string } }) =>
+          rows.find((row) => row.id === where.id) ?? null
+      ),
+      updateMany: vi.fn(
+        async ({ where, data }: { where: { id: string; status: string }; data: object }) => {
+          const row = rows.find((item) => item.id === where.id && item.status === where.status);
+          if (row) Object.assign(row, data);
+          return { count: row ? 1 : 0 };
+        }
+      ),
+    },
+  };
+}
+
 describe('existing pack procedure to receiving options (in-memory delegates, no DB)', () => {
   it('makes the created effective pack selectable with the derived unit count', async () => {
     const packs: Array<object> = [];
+    const queue = catalogueChanges();
     const db = {
+      ...soloAdmin,
+      pharmacyCatalogueChange: queue.pharmacyCatalogueChange,
       presentation: { findFirst: vi.fn(async () => ({ id: input.presentationId })) },
       packLevel: {
         create: vi.fn(async ({ data }: { data: object }) => {
@@ -53,7 +90,7 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
       pharmacyBranch: { findMany: vi.fn(async () => []) },
       pharmacyStockLocation: { findMany: vi.fn(async () => []) },
       pharmacySupplier: { findMany: vi.fn(async () => []) },
-      user: { findMany: vi.fn(async () => []) },
+      user: { ...soloAdmin.user, findMany: vi.fn(async () => []) },
       medicine: {
         findMany: vi.fn(async () => [
           {
@@ -69,7 +106,16 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
         ]),
       },
     };
-    await caller(db).createPackLevel(input);
+    Object.assign(db, { $transaction: async (run: (tx: object) => unknown) => run(db) });
+    const change = await caller(db).createPackLevel(input);
+    // Proposed only: nothing reaches the catalogue until review.
+    expect(change).toMatchObject({ kind: 'PACK_LEVEL', status: 'PENDING' });
+    expect(db.packLevel.create).not.toHaveBeenCalled();
+    // The workspace's sole administrator may approve their own change.
+    await expect(
+      caller(db).decideCatalogueChange({ changeId: change.id, decision: 'APPROVE' })
+    ).resolves.toMatchObject({ status: 'APPROVED', reviewMode: 'SOLO_OWNER' });
+    expect(db.packLevel.create).toHaveBeenCalledOnce();
     const workspace = await purchasingWorkspace(
       db as unknown as Parameters<typeof purchasingWorkspace>[0],
       { organizationId: 'org-a', actorId: 'admin-a' },
@@ -94,7 +140,7 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
   it.each([0, -1, 1.5])('rejects invalid units %s before persistence', async (unitsPerParent) => {
     const create = vi.fn();
     await expect(
-      caller({ packLevel: { create } }).createPackLevel({ ...input, unitsPerParent })
+      caller({ ...soloAdmin, packLevel: { create } }).createPackLevel({ ...input, unitsPerParent })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(create).not.toHaveBeenCalled();
   });
@@ -103,6 +149,7 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
     const create = vi.fn();
     await expect(
       caller({
+        ...soloAdmin,
         presentation: { findFirst: vi.fn(async () => null) },
         packLevel: { create },
       }).createPackLevel(input)

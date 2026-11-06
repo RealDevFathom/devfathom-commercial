@@ -768,6 +768,53 @@ model PharmacyReferenceConnectorProposal {
   @@map("pharmacy_reference_connector_proposals")
 }
 
+enum PharmacyCatalogueChangeKind {
+  INGREDIENT
+  MEDICINE
+  PACK_LEVEL
+  PACK_REVISION
+  PRINTED_MRP
+  BARCODE
+  ALIAS
+}
+
+enum PharmacyCatalogueChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum PharmacyCatalogueReviewMode {
+  /// A different user holding pharmacy:catalogue-review decided the change.
+  SECOND_REVIEWER
+  /// The only possible reviewer in the workspace (its sole administrator) decided it.
+  SOLO_OWNER
+}
+
+/// Catalogue review queue. Every catalogue edit (ingredient, medicine, pack,
+/// pack revision, printed MRP, barcode, alias) is stored here as PENDING and is
+/// written to the catalogue only when a reviewer approves it. One decision per
+/// change; the database refuses to edit a decided row.
+model PharmacyCatalogueChange {
+  id                String                        @id @default(cuid())
+  organizationId    String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  kind              PharmacyCatalogueChangeKind
+  payload           Json
+  summary           String
+  status            PharmacyCatalogueChangeStatus @default(PENDING)
+  proposedBy        String
+  proposedAt        DateTime                      @default(now())
+  reviewedBy        String?
+  reviewedAt        DateTime?
+  reviewMode        PharmacyCatalogueReviewMode?
+  reviewNote        String?
+  publishedRecordId String?
+
+  @@unique([organizationId, id], map: "pharmacy_catalogue_changes_org_id_key")
+  @@index([organizationId, status, proposedAt], map: "pharmacy_catalogue_changes_org_status_idx")
+  @@map("pharmacy_catalogue_changes")
+}
+
 // ============================================
 // PH-INV — batch/lot stock ledger (INV-01..04)
 // ============================================

@@ -520,7 +520,16 @@ export async function freshPharmacyFirstSale(
     await page.getByLabel(/^Individual units per pack/).fill('10');
     await page.getByLabel(/^Effective from/).fill(today);
     await click(page.getByRole('button', { name: 'Create pack', exact: true }));
-    await expect(page.getByText('Pack created', { exact: false })).toBeVisible();
+    await expect(
+      page.getByText('Pack submitted for catalogue review', { exact: false })
+    ).toBeVisible();
+    // The pack waits in catalogue review. The workspace still has a single
+    // administrator here, so that owner approves (publishes) their own change.
+    const packChange = page
+      .locator('li')
+      .filter({ hasText: 'New STRIP pack of 10 units for 10 tablets' });
+    await click(packChange.getByRole('button', { name: 'Approve and publish', exact: true }));
+    await expect(packChange).toHaveCount(0);
     await setup(page);
     await expect(
       row(page, 'Medicine catalog readiness').getByText('Done', { exact: true })

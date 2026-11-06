@@ -16,12 +16,16 @@ const mocks = vi.hoisted(() => ({
   },
   mutation: { mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null as unknown },
   invalidateMedicine: vi.fn(),
+  invalidateCatalogueChanges: vi.fn(),
   onSuccess: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({
-      pharmacyMedicine: { get: { invalidate: mocks.invalidateMedicine } },
+      pharmacyMedicine: {
+        get: { invalidate: mocks.invalidateMedicine },
+        catalogueChanges: { invalidate: mocks.invalidateCatalogueChanges },
+      },
     }),
     pharmacyMedicine: {
       search: { useQuery: () => mocks.search },
@@ -143,8 +147,12 @@ describe('medicine pack setup', () => {
     expect(screen.getByRole('button', { name: 'Creating pack…' })).toBeDisabled();
     expect(screen.getByLabelText('Medicine')).toBeDisabled();
     await mocks.onSuccess?.();
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Pack created'));
+    // The pack is a catalogue change: it waits for a reviewer before it can be received.
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Pack submitted for catalogue review')
+    );
     expect(mocks.invalidateMedicine).toHaveBeenCalledWith({ id: 'medicine-secret' });
+    expect(mocks.invalidateCatalogueChanges).toHaveBeenCalledOnce();
   });
 
   it('provides loading, no-result and retry states', () => {

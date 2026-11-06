@@ -4,7 +4,7 @@ import type { AuthzDb } from '@/lib/authz';
 import { isAdmin } from '@/lib/authz';
 import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
-import { can, subjectFromSession } from '.';
+import { can, isExplicitlyDenied, subjectFromSession } from '.';
 import { ALL_ACTIONS, POLICIES, type Action } from './policies';
 
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
@@ -297,6 +297,52 @@ describe('custom ABAC decisions', () => {
     ).resolves.toBe(false);
   });
 
+  it('lets a tenant admin without a role propose catalogue edits', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:catalogue-edit', undefined, {
+        db: authorizationDb({}),
+      })
+    ).resolves.toBe(true);
+  });
+
+  it('does not let tenant admin authority add catalogue edit to a Cashier role', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:catalogue-edit', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('cashier') }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('grants catalogue edit via the Owner pharmacy:* template, never to a cashier', async () => {
+    await expect(
+      can(employee, 'pharmacy:catalogue-edit', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('owner') }),
+      })
+    ).resolves.toBe(true);
+    await expect(
+      can(employee, 'pharmacy:catalogue-edit', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('cashier') }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('reports an explicit catalogue-edit deny', async () => {
+    const db = authorizationDb({
+      rolePermissions: [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }],
+      overrides: [{ capability: 'pharmacy:catalogue-edit', effect: 'DENY' }],
+    });
+    await expect(isExplicitlyDenied(db, employee.id, 'pharmacy:catalogue-edit')).resolves.toBe(
+      true
+    );
+    await expect(
+      isExplicitlyDenied(
+        authorizationDb({ rolePermissions: pharmacyPermissionsFor('pharmacist') }),
+        employee.id,
+        'pharmacy:catalogue-edit'
+      )
+    ).resolves.toBe(false);
+  });
+
   it('allows exact and namespace wildcard capabilities from a custom role', async () => {
     const db = authorizationDb({
       rolePermissions: [
@@ -388,7 +434,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:counter',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(48);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);

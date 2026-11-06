@@ -90,9 +90,13 @@ export async function can(
     if (decision !== null) return decision;
     // Procurement's tenant-admin fallback exists only for legacy users who do
     // not yet have an organization role. Once a role is assigned, its
-    // capabilities are the boundary: an omitted procurement grant must not
-    // fall through to the coarse ADMIN policy.
-    if (action === 'pharmacy:procurement' && hasOrganizationRole) return false;
+    // capabilities are the boundary: an omitted procurement or catalogue-edit
+    // grant must not fall through to the coarse ADMIN policy.
+    if (
+      (action === 'pharmacy:procurement' || action === 'pharmacy:catalogue-edit') &&
+      hasOrganizationRole
+    )
+      return false;
   } catch (err) {
     console.error('[abac] custom permission lookup for "%s" threw:', action, err);
     return false;
@@ -106,6 +110,25 @@ export async function can(
     }
   }
   return false;
+}
+
+/**
+ * True iff the user's own rules (role permissions or personal overrides) DENY
+ * `action`. Lets a caller that accepts several capabilities as equivalent still
+ * honour an explicit revocation of the primary one. Fails closed.
+ */
+export async function isExplicitlyDenied(
+  db: AuthzDb,
+  userId: string,
+  action: Action,
+  now = new Date()
+): Promise<boolean> {
+  try {
+    return (await customDecision(db, userId, action, now)).decision === false;
+  } catch (err) {
+    console.error('[abac] custom permission lookup for "%s" threw:', action, err);
+    return true;
+  }
 }
 
 /** Convenience: derive the ABAC Subject from a session user. */
