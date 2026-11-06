@@ -4,13 +4,14 @@ Decision (Saad: DEV-32 2026-11-01, DEV-739 2026-11-04):
 
 - **Who closes:** daily finalization (`closePreview`, `closeDay`, `dailyClose`) belongs to
   owners, administrators and managers.
-- **No default grant for pharmacists or cashiers.** The Pharmacist and Cashier templates
-  do not carry `pharmacy:close`.
-- **The capability decides, not the person's profession.** A pharmacist whom the tenant
-  has given the Manager role, or any role or override that grants `pharmacy:close`,
-  closes with that authority, on the branches they are assigned to.
-- **Admins and DENYs:** a session administrator closes organization-wide while their
-  stored user row is an active ADMIN. An explicit DENY always wins.
+- **Assigned role decides eligibility.** System Owner, Owner / Operator, Manager and
+  Administrator roles are eligible. A stored legacy ADMIN without an organization role
+  is also eligible. Pharmacist, Cashier, other and unknown roles are refused even if a
+  role or user override grants `pharmacy:close`. An Owner or Manager is eligible based
+  on that assignment; their profession is not checked.
+- **Capability, scope and DENYs:** eligible non-admins need `pharmacy:close` and an
+  active branch assignment. A stored active ADMIN has organization-wide reach. Explicit
+  DENYs always win, and an assigned ineligible role blocks an ADMIN as well.
 - **Own drawer counts are separate.** Counting and closing one's own cash drawer
   (`closeDrawer`) is not day close. Its policy belongs to DEV-279 / DEV-659 (#1086) and is
   unchanged here.
@@ -42,23 +43,13 @@ Tell the affected pharmacies before phase 1, because it removes some access:
 | Owner, Owner / Operator (not session ADMIN)                                                                    | Any branch                 | Only branches they are actively assigned to                                           | Same              |
 | Existing system Manager                                                                                        | Cannot close               | Cannot close                                                                          | Assigned branches |
 | Existing system Pharmacist (provisioned since #654)                                                            | Any branch                 | Cannot close                                                                          | Cannot close      |
-| Anyone whose role or override grants `pharmacy:close` (any profession, e.g. a pharmacist given a closing role) | Any branch                 | Only branches they are actively assigned to                                           | Same              |
+| Other roles with a `pharmacy:close` grant | Any branch | Cannot close | Cannot close |
 | Cashier                                                                                                        | Cannot close               | Cannot close                                                                          | Cannot close      |
 
-A Pharmacist role that a previous revision provisions during the phase 1 deploy window
-still carries the old ALLOW, so it can close its assigned branches. That lasts until
-phase 2 removes the grant, or until a re-run of the phase 1 revoke does. The
-provisioning freeze prevents this case, and check A detects it.
-
-A pharmacy where a pharmacist closes the day today needs one of the following until
-phase 2:
-
-- a session ADMIN;
-- an assigned owner;
-- the tenant gives that pharmacist a custom role that grants `pharmacy:close`. Existing
-  system Manager roles gain it only in phase 2.
-
-Its managers can close after phase 2.
+A Pharmacist role provisioned by a previous revision may still carry an ALLOW, but the
+new gate refuses it. While old replicas serve, that grant can still permit close; keep
+the provisioning freeze and check A to cover the mixed-revision window. A pharmacy needs
+an eligible owner or administrator until existing Managers receive their phase 2 grants.
 
 ## Phase 1 deploy
 
@@ -155,7 +146,7 @@ SELECT count(*) FROM organization_roles r
 JOIN organizations o ON o.id = r."organizationId"
 WHERE o.vertical = 'PHARMACY' AND r."isSystem" AND r.key IN ('pharmacist', 'manager');
 
--- A. System Pharmacists that can still close: expect 0 after phase 1 and after phase 2.
+-- A. System Pharmacist roles with a close ALLOW: expect 0 after each phase.
 SELECT count(*) FROM organization_role_permissions p
 JOIN organization_roles r ON r.id = p."organizationRoleId"
 JOIN organizations o ON o.id = r."organizationId"

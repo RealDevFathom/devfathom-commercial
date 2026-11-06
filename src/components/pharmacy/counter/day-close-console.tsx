@@ -46,19 +46,21 @@ export function PharmacyDayCloseConsole() {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
   const user = session?.user;
-  if (
-    status !== 'authenticated' ||
-    !evaluateSessionUser(user).ok ||
-    user?.role !== 'ADMIN' ||
-    user.organizationId !== entitlements.organizationId ||
-    !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
-  ) {
+  const eligibleSession = status === 'authenticated' && evaluateSessionUser(user).ok &&
+    user?.organizationId === entitlements.organizationId &&
+    isModuleGranted('pharmacy-counter', entitlements.enabledModules);
+  const access = trpc.pharmacySales.dayCloseAccess.useQuery(undefined, {
+    enabled: eligibleSession, retry: false, staleTime: 0, refetchOnMount: 'always',
+  });
+  if (!eligibleSession || access.isFetching || access.isError || !access.data?.allowed ||
+      access.data.userId !== user?.id || access.data.organizationId !== user.organizationId) {
     return (
       <SectionCard title="Day close unavailable">
         <p role="status">
-          {status === 'loading'
+          {status === 'loading' || (eligibleSession && access.isFetching)
             ? 'Checking day-close access…'
-            : 'Sign in as a pharmacy administrator to reconcile and close a day.'}
+            : access.isError ? 'Could not check day-close access. Reload to retry.'
+            : 'Day close is available to owners and managers with permission.'}
         </p>
       </SectionCard>
     );

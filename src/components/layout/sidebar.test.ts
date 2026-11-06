@@ -216,6 +216,12 @@ describe('pharmacy navigation', () => {
     ).toBe(true);
   });
 
+  it('shows day close only after the server grants day-close access', () => {
+    const entitled = { vertical: 'PHARMACY' as const, enabledModules: ['pharmacy-core', 'pharmacy-counter'] };
+    expect(visibleNavigation(entitled, 'ADMIN').some((item) => item.href === '/pharmacy/counter/close')).toBe(false);
+    expect(visibleNavigation(entitled, 'EMPLOYEE', [], ['pharmacy:close']).some((item) => item.href === '/pharmacy/counter/close')).toBe(true);
+  });
+
   it('shows pharmacy routes to a Pharmacy admin with core and counter modules', () => {
     const visible = visibleNavigation(
       {

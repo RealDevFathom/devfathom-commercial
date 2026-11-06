@@ -64,6 +64,7 @@ vi.mock('@/lib/trpc', () => ({
         },
       },
     },
+    pharmacySales: { dayCloseAccess: { useQuery: () => ({ data: undefined }) } },
     pharmacySafety: {
       access: { useQuery: () => ({ data: { allowed: false } }) },
     },

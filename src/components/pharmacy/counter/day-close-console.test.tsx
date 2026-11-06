@@ -2,6 +2,7 @@ import { fireEvent, render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
+  access: true,
   loading: false,
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
@@ -37,6 +38,7 @@ vi.mock('@/components/entitlements-provider', () => ({
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     pharmacySales: {
+      dayCloseAccess: { useQuery: () => ({ data: { allowed: mocks.access, userId: 'owner', organizationId: 'org' }, isFetching: false, isError: false }) },
       counterBranches: {
         useQuery: () => ({
           data: { branches: [{ id: 'b', name: 'Main' }], currency: 'USD', timezone: mocks.zone },
@@ -86,6 +88,7 @@ afterEach(() => {
 beforeEach(() => {
   mocks.zone = WORKSPACE_ZONE;
   mocks.role = 'ADMIN';
+  mocks.access = true;
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
@@ -192,11 +195,17 @@ describe('day-close console', () => {
       );
     }
   );
-  it('shows permission denial for a non-administrator', () => {
-    mocks.role = 'MEMBER';
+  it('shows permission denial for a denied role', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.access = false;
     render(<PharmacyDayCloseConsole />);
-    expect(screen.getByText(/Sign in as a pharmacy administrator/)).toBeInTheDocument();
+    expect(screen.getByText(/Day close is available to owners and managers/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+  });
+  it('allows an employee with manager access', () => {
+    mocks.role = 'EMPLOYEE';
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
   });
   it('shows loading and retryable errors', () => {
     mocks.loading = true;

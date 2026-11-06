@@ -236,6 +236,7 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
   it.each(closeProcedures)(
     '%s keeps the day-close capability gate in front of the branch check',
     async (_name, run) => {
+      db.user.findUnique.mockResolvedValue({ ...memberWithoutCustomRules, role: 'EMPLOYEE' });
       await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject({
         code: 'FORBIDDEN',
         message: 'Day-close permission is required to reconcile and close a day.',
@@ -249,7 +250,8 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
     '%s lets a non-admin with pharmacy:close reach the normal branch scope check',
     async (_name, run, refusal) => {
       db.user.findUnique.mockResolvedValue({
-        organizationRole: {
+        role: 'EMPLOYEE', status: 'ACTIVE', organizationId: 'org-1',
+        organizationRole: { key: 'manager', isSystem: true,
           permissions: [{ capability: 'pharmacy:close', effect: 'ALLOW' }],
         },
         permissionOverrides: [],
@@ -263,8 +265,9 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
   // must also be an active member assigned to the branch being counted and cut.
   const closer = (status = 'ACTIVE') => ({
     status,
+    role: 'EMPLOYEE',
     organizationId: 'org-1',
-    organizationRole: { permissions: [{ capability: 'pharmacy:close', effect: 'ALLOW' }] },
+    organizationRole: { key: 'manager', isSystem: true, permissions: [{ capability: 'pharmacy:close', effect: 'ALLOW' }] },
     permissionOverrides: [],
   });
   const assignmentLookup = {
@@ -301,7 +304,7 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
       db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
       db.user.findUnique.mockResolvedValue(closer('SUSPENDED'));
       db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
-      await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(OUTSIDE);
+      await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Day-close permission is required to reconcile and close a day.' });
       expect(db.$transaction).not.toHaveBeenCalled();
     }
   );
@@ -346,12 +349,12 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
   const member = (
     rules: Array<{ capability: string; effect: string }>,
     overrides: Array<{ capability: string; effect: string }> = [],
-    stored: { role?: string; status?: string; organizationId?: string } = {}
+    stored: { role?: string; status?: string; organizationId?: string; key?: string; isSystem?: boolean } = {}
   ) => ({
     role: stored.role ?? 'EMPLOYEE',
     status: stored.status ?? 'ACTIVE',
     organizationId: stored.organizationId ?? 'org-1',
-    organizationRole: { permissions: rules },
+    organizationRole: { key: stored.key ?? 'manager', isSystem: stored.isSystem ?? true, permissions: rules },
     permissionOverrides: overrides,
   });
   const ADMIN_ROW = { role: 'ADMIN' };
@@ -373,7 +376,7 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
     '%s: the %s template, assigned to the branch, may close the day: %s',
     async (_name, role, allowed, run) => {
       db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
-      db.user.findUnique.mockResolvedValue(member(template(role)));
+      db.user.findUnique.mockResolvedValue(member(template(role), [], { key: role }));
       db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
       if (allowed) {
         await run(caller('EMPLOYEE')).catch((error: unknown) => {
@@ -506,23 +509,62 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
     }
   );
 
-  // A pharmacist is not barred by profession: one a tenant has given a role that
-  // grants pharmacy:close (Manager, or a custom closing role) closes as that role.
-  it.each(closeProcedures)(
-    '%s admits a pharmacist given a custom role that grants pharmacy:close, on an assigned branch',
-    async (_name, run) => {
-      db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
-      db.user.findUnique.mockResolvedValue(
-        member([...template('pharmacist'), { capability: 'pharmacy:close', effect: 'ALLOW' }])
-      );
-      db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
-      await run(caller('EMPLOYEE')).catch((error: unknown) => {
-        expect(error).not.toMatchObject(NO_CLOSE);
-        expect(error).not.toMatchObject(OUTSIDE);
-      });
-      expect(db.$transaction).toHaveBeenCalledOnce();
+  it.each(closeProcedures.flatMap(([name, run]) =>
+    ['pharmacist', 'cashier', 'staff', 'unknown'].map((key) => [name, run, key] as const)
+  ))('%s refuses the %s role even with an explicit close grant', async (_name, run, key) => {
+    db.user.findUnique.mockResolvedValue(member(
+      [{ capability: 'pharmacy:close', effect: 'ALLOW' }], [], { key }
+    ));
+    await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(NO_CLOSE);
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(closeProcedures)('%s refuses a Pharmacist with a user override', async (_name, run) => {
+    db.user.findUnique.mockResolvedValue(member([], [{ capability: 'pharmacy:close', effect: 'ALLOW' }], { key: 'pharmacist' }));
+    await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(NO_CLOSE);
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(closeProcedures)('%s rejects a missing or non-system role even with a grant', async (_name, run) => {
+    for (const organizationRole of [null, { key: 'manager', isSystem: false, permissions: [{ capability: 'pharmacy:close', effect: 'ALLOW' }] }]) {
+      db.user.findUnique.mockResolvedValue({ ...member([]), organizationRole, permissionOverrides: [{ capability: 'pharmacy:close', effect: 'ALLOW' }] });
+      await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(NO_CLOSE);
     }
-  );
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(closeProcedures)('%s refuses an unknown coarse role', async (_name, run) => {
+    db.user.findUnique.mockResolvedValue(member([{ capability: 'pharmacy:close', effect: 'ALLOW' }], [], { role: 'UNKNOWN' }));
+    await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(NO_CLOSE);
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(closeProcedures)('%s accepts the system admin role and rejects a denied owner', async (_name, run) => {
+    db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
+    db.user.findUnique.mockResolvedValue(member([{ capability: 'pharmacy:close', effect: 'ALLOW' }], [], { key: 'admin' }));
+    await run(caller('EMPLOYEE')).catch((error: unknown) => expect(error).not.toMatchObject(NO_CLOSE));
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    db.$transaction.mockClear();
+    db.user.findUnique.mockResolvedValue(member(template('owner'), [{ capability: '*', effect: 'DENY' }], { key: 'owner' }));
+    await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject(NO_CLOSE);
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('reports the role decision for the UI without touching branches', async () => {
+    db.user.findUnique.mockResolvedValue(member(template('manager')));
+    await expect(caller('EMPLOYEE').dayCloseAccess()).resolves.toMatchObject({ allowed: true, userId: 'actor-1', organizationId: 'org-1' });
+    db.user.findUnique.mockResolvedValue(member([{ capability: 'pharmacy:close', effect: 'ALLOW' }], [], { key: 'pharmacist' }));
+    await expect(caller('EMPLOYEE').dayCloseAccess()).resolves.toMatchObject({ allowed: false });
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+  });
+
+  it.each(closeProcedures)('%s refuses an ADMIN assigned the Pharmacist role', async (_name, run) => {
+    db.user.findUnique.mockResolvedValue(member([{ capability: 'pharmacy:close', effect: 'ALLOW' }], [], { role: 'ADMIN', key: 'pharmacist' }));
+    await expect(run(caller('ADMIN'))).rejects.toMatchObject(NO_CLOSE);
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
 
   // Counting one's own drawer is not day close: closeDrawer keeps its own policy
   // (DEV-279 / DEV-659, #1086) and is never refused by the day-close gate. Only that is
@@ -531,7 +573,7 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
     'lets the %s template reach closeDrawer without pharmacy:close',
     async (role) => {
       db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
-      db.user.findUnique.mockResolvedValue(member(template(role)));
+      db.user.findUnique.mockResolvedValue(member(template(role), [], { key: role }));
       await caller('EMPLOYEE')
         .closeDrawer({ branchId: BRANCH, drawerSessionId: 'drawer-1', countedCashMinor: 0 })
         .catch((error: unknown) => expect(error).not.toMatchObject(NO_CLOSE));

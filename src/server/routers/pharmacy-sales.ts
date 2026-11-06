@@ -490,91 +490,56 @@ const closeDate = z
       date.getUTCMilliseconds() === 0,
     'Choose a date without a time.'
   );
-/**
- * The close family (preview, close, re-cut) counts drawers, posts variances and
- * cuts the branch's day. Day close (daily finalization) is for owners,
- * administrators and managers (DEV-32, DEV-739): the Manager, Owner and Owner /
- * Operator templates carry `pharmacy:close`; the Pharmacist and Cashier templates do
- * not. The gate is the capability, not the person's profession: a pharmacist a
- * tenant has given the Manager role, or any role granting `pharmacy:close`, closes
- * as a manager. Counting one's own drawer (`closeDrawer`) is a separate procedure
- * with its own policy and is not gated here.
- *
- * Order: the day-close capability (deny-wins, for a session ADMIN too), then the
- * branch must be an active branch of the organization, then a non-admin closer
- * must be an active member assigned to THAT branch (as the counter's receipt
- * access requires). `pharmacy:close` is an organization-role grant, not a branch
- * grant, so without the assignment check a manager assigned to branch A could
- * count, close or re-cut branch B. A session ADMIN whose stored row is still an
- * active ADMIN and carries no explicit DENY keeps organization-wide reach, as before.
- */
-async function requireCloseAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+/** Day close is restricted to the assigned owner or manager role. */
+async function requireCloseIdentity(ctx: TRPCContext): Promise<boolean> {
   const user = ctx.session?.user;
-  const noCloseCapability = () =>
-    new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'Day-close permission is required to reconcile and close a day.',
-    });
-  if (!user) throw noCloseCapability();
-  // A session ADMIN closes organization-wide only while the stored user row still
-  // says so. An administrator suspended, removed or demoted inside the session
-  // revalidation window closes as the row now is (DEV-739 active identity).
-  let organizationWide = false;
-  // The role the capability check sees: the stored role when the row was read, so a
-  // demoted administrator is never judged on the stale session claim.
-  let subject = subjectFromSession(user);
-  if (user.role === 'ADMIN') {
-    const row = await ctx.db.user.findUnique({
-      where: { id: user.id },
-      select: {
-        role: true,
-        status: true,
-        organizationId: true,
-        organizationRole: {
-          select: { permissions: { select: { capability: true, effect: true } } },
-        },
-        permissionOverrides: {
-          where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
-          select: { capability: true, effect: true },
-        },
+  const refused = () => new TRPCError({
+    code: 'FORBIDDEN',
+    message: 'Day-close permission is required to reconcile and close a day.',
+  });
+  if (!user) throw refused();
+  const row = await ctx.db.user.findUnique({
+    where: { id: user.id },
+    select: {
+      role: true,
+      status: true,
+      organizationId: true,
+      organizationRole: {
+        select: { key: true, isSystem: true, permissions: { select: { capability: true, effect: true } } },
       },
-    });
-    // Fail closed like can(): without a readable, active row in the session's
-    // organization there is no proof that the administrator still exists or that no
-    // DENY applies.
-    if (
-      !row ||
-      row.organizationId !== user.organizationId ||
-      !row.status ||
-      !ACTIVE_STATUSES.has(row.status)
-    )
-      throw noCloseCapability();
-    if (row.role === 'ADMIN') {
-      // `can()` would answer ADMIN from the empty default policy, so apply only its
-      // deny-wins half here: an explicit DENY (exact, `pharmacy:*` or `*`) on the
-      // user or their role revokes day close for an administrator as well.
-      const denied = [
-        ...row.permissionOverrides,
-        ...(row.organizationRole?.permissions ?? []),
-      ].some(
-        (rule) =>
-          rule.effect === 'DENY' && capabilityMatches(rule.capability, 'pharmacy:close', 'DENY')
-      );
-      if (denied) throw noCloseCapability();
-      organizationWide = true;
-    } else {
-      subject = { ...subject, role: row.role, status: row.status };
-    }
-  }
-  if (
-    !organizationWide &&
-    !(await can(subject, 'pharmacy:close', undefined, {
-      db: ctx.db,
-      source: 'TRPC',
-    }))
-  ) {
-    throw noCloseCapability();
-  }
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  if (!row || row.organizationId !== user.organizationId || !row.status || !ACTIVE_STATUSES.has(row.status))
+    throw refused();
+
+  // The coarse ADMIN enum is the legacy owner/admin assignment when no
+  // organization role exists. If one is assigned, it must itself be an
+  // approved system role: an ADMIN with a Pharmacist role is still refused.
+  if (!['ADMIN', 'EMPLOYEE', 'HR'].includes(row.role)) throw refused();
+  const assigned = row.organizationRole;
+  const allowedRole = assigned
+    ? assigned.isSystem && ['owner', 'owner-operator', 'manager', 'admin'].includes(assigned.key)
+    : row.role === 'ADMIN';
+  if (!allowedRole) throw refused();
+
+  const denied = [...row.permissionOverrides, ...(assigned?.permissions ?? [])].some(
+    (rule) => rule.effect === 'DENY' && capabilityMatches(rule.capability, 'pharmacy:close', 'DENY')
+  );
+  if (denied) throw refused();
+  if (row.role === 'ADMIN') return true;
+  const subject = { ...subjectFromSession(user), role: row.role, status: row.status };
+  if (!(await can(subject, 'pharmacy:close', undefined, { db: ctx.db, source: 'TRPC' })))
+    throw refused();
+  return false;
+}
+
+async function requireCloseAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const user = ctx.session!.user;
+  const organizationWide = await requireCloseIdentity(ctx);
   const scope = await scopeFor(ctx, branch);
   const outside = () =>
     new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
@@ -608,6 +573,16 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string): Promise<Led
 }
 
 export const pharmacySalesRouter = router({
+  dayCloseAccess: protectedProcedure.query(async ({ ctx }) => {
+    try {
+      await requireCloseIdentity(ctx);
+      return { allowed: true, userId: ctx.session!.user.id, organizationId: ctx.session!.user.organizationId };
+    } catch (error) {
+      if (error instanceof TRPCError && error.code === 'FORBIDDEN')
+        return { allowed: false, userId: ctx.session!.user.id, organizationId: ctx.session!.user.organizationId };
+      throw error;
+    }
+  }),
   manualPaymentSettings: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
     const scope = ctx.session!.user.role === 'ADMIN'
       ? await branchScopeOrForbidden(ctx, input.branchId)
