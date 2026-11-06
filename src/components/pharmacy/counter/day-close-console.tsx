@@ -2,7 +2,7 @@
 
 import { tenderTotalsSchema } from '@/lib/pharmacy/manual-payments';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -17,6 +17,12 @@ import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-r
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import {
+  clearDayCloseDraft,
+  readDayCloseDraft,
+  writeDayCloseDraft,
+  type DayCloseDraftScope,
+} from './day-close-draft-storage';
 
 /**
  * "Opened 09:12 by Ayesha Karim", or just the time when the opener is no longer a
@@ -71,10 +77,22 @@ export function PharmacyDayCloseConsole() {
       </SectionCard>
     );
   }
-  return <DayCloseBranches key={`${user.organizationId}:${user.id}`} />;
+  return (
+    <DayCloseBranches
+      key={`${user.organizationId}:${user.id}`}
+      organizationId={user.organizationId}
+      userId={user.id}
+    />
+  );
 }
 
-function DayCloseBranches() {
+function DayCloseBranches({
+  organizationId,
+  userId,
+}: {
+  organizationId: string;
+  userId: string;
+}) {
   const branches = trpc.pharmacySales.counterBranches.useQuery();
   const [selected, setSelected] = useState('');
   const [picked, setPicked] = useState<string | null>(null);
@@ -135,6 +153,8 @@ function DayCloseBranches() {
       {branchId && currency && /^\d{4}-\d{2}-\d{2}$/.test(date) && (
         <DayCloseForm
           key={`${branchId}:${date}`}
+          organizationId={organizationId}
+          userId={userId}
           branchId={branchId}
           date={date}
           currency={currency}
@@ -145,10 +165,14 @@ function DayCloseBranches() {
 }
 
 function DayCloseForm({
+  organizationId,
+  userId,
   branchId,
   date,
   currency,
 }: {
+  organizationId: string;
+  userId: string;
   branchId: string;
   date: string;
   currency: string;
@@ -156,9 +180,22 @@ function DayCloseForm({
   const input = { branchId, businessDate: new Date(`${date}T00:00:00.000Z`) };
   const preview = trpc.pharmacySales.closePreview.useQuery(input, { refetchOnWindowFocus: false });
   const close = trpc.pharmacySales.closeDay.useMutation();
-  const [counts, setCounts] = useState<Record<string, string>>({});
-  const [note, setNote] = useState('');
+  const draftScope = useMemo<DayCloseDraftScope>(
+    () => ({ organizationId, userId, branchId, businessDate: date }),
+    [organizationId, userId, branchId, date]
+  );
+  // Restore counted cash / variance note after a full route remount (DEV-754).
+  const [counts, setCounts] = useState<Record<string, string>>(
+    () => readDayCloseDraft(draftScope)?.counts ?? {}
+  );
+  const [note, setNote] = useState(() => readDayCloseDraft(draftScope)?.note ?? '');
   const [confirmed, setConfirmed] = useState(false);
+  useEffect(() => {
+    writeDayCloseDraft(draftScope, { counts, note });
+  }, [draftScope, counts, note]);
+  useEffect(() => {
+    if (close.data) clearDayCloseDraft(draftScope);
+  }, [close.data, draftScope]);
   const [locale, setLocale] = useState<CounterReceiptLocale>('en');
   const [printMessage, setPrintMessage] = useState('');
   if (preview.isLoading)
@@ -371,7 +408,9 @@ function DayCloseForm({
                 disabled={busy}
                 onClick={() => {
                   setCounts({});
+                  setNote('');
                   setConfirmed(false);
+                  clearDayCloseDraft(draftScope);
                   close.reset();
                   void preview.refetch();
                 }}

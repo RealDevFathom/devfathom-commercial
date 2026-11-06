@@ -83,9 +83,11 @@ import { workspaceToday } from '@/lib/timezone';
 import { cashMinor, drawerOpenedLabel, PharmacyDayCloseConsole } from './day-close-console';
 afterEach(() => {
   cleanup();
+  window.sessionStorage.clear();
   vi.useRealTimers();
 });
 beforeEach(() => {
+  window.sessionStorage.clear();
   mocks.zone = WORKSPACE_ZONE;
   mocks.role = 'ADMIN';
   mocks.access = true;
@@ -266,5 +268,23 @@ describe('day-close console', () => {
         varianceNote: 'Short by one dollar',
       })
     );
+  });
+
+  it('keeps counted cash and variance note across a full remount (DEV-754)', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '12.34' },
+    });
+    fireEvent.change(screen.getByLabelText(/Variance note/), {
+      target: { value: 'still counting' },
+    });
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('12.34');
+    // Full route remount: unmount the tree and mount a fresh console.
+    view.unmount();
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('12.34');
+    expect(screen.getByLabelText(/Variance note/)).toHaveValue('still counting');
+    // Confirmation is never restored; the operator must re-check before lock.
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
   });
 });
