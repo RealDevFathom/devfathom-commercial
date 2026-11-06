@@ -100,7 +100,7 @@ export function EvidenceCapture({
         </p>
         <p className="mt-1 text-xs text-text-muted">Recorded under your linked staff profile.</p>
       </div>
-      <label className="text-sm text-text-body" htmlFor={`${id}-file`}>
+      <label className="text-sm text-text-body sm:col-span-2" htmlFor={`${id}-file`}>
         {purpose === 'photo' ? 'Take or choose photo' : 'Choose signature image'}
         <Input
           accept="image/jpeg,image/png,image/webp"
