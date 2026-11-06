@@ -1730,6 +1730,15 @@ const purchasingRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
+      // The list names PIN holders. Without the procurement module it is
+      // refused here too (#246): server pages call this router directly, where
+      // the path-based module gate cannot name the module.
+      if (!hasModule(ctx.entitlements, 'pharmacy-procurement')) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Pharmacy procurement access required.',
+        });
+      }
       const actorId = ctx.session.user.id;
       const actor = subjectFromSession(ctx.session.user);
       if (
