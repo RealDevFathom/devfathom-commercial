@@ -10,12 +10,13 @@ export type TemperatureReading = Readonly<{
   deviceIdentifier?: string | null;
 }>;
 
-export type TemperatureReadingSourceKind = 'MANUAL' | 'IMPORT';
+export type TemperatureReadingSourceKind = 'MANUAL' | 'IMPORT' | 'SENSOR';
 
 /**
- * The ingestion boundary shared by staff entry and data-logger files. It is
- * intentionally pull-only: live device connections, credentials and vendor
- * SDKs do not belong in this seam.
+ * The ingestion boundary shared by staff entry, data-logger files and (#732)
+ * enrolled live sensors. It stays pull-only: the sensor webhook authenticates
+ * and parses the push first (`./cold-chain-sensors`), then hands this seam an
+ * already-validated batch. Vendor SDKs and credentials never enter here.
  */
 export interface TemperatureReadingSource {
   readonly kind: TemperatureReadingSourceKind;
@@ -234,7 +235,9 @@ export async function ingestTemperatureReadings(
             : false,
         source: source.kind,
         deviceIdentifier:
-          source.kind === 'IMPORT' ? (reading.deviceIdentifier?.trim() ?? null) : null,
+          source.kind === 'IMPORT' || source.kind === 'SENSOR'
+            ? (reading.deviceIdentifier?.trim() ?? null)
+            : null,
       })),
     });
     // CAM-3: an excursion in a zone a cold-chain camera watches requests a

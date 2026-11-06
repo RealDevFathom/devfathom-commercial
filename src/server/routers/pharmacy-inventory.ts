@@ -76,8 +76,16 @@ import {
   loadTemperatureZoneStatuses,
   ManualTemperatureReadingSource,
 } from '@/lib/pharmacy/temperature-log';
+import {
+  enrollColdChainSensor,
+  listColdChainSensors,
+  PharmacyColdChainSensorError,
+  revokeColdChainSensor,
+  rotateColdChainSensorSecret,
+} from '@/lib/pharmacy/cold-chain-sensors';
 
 import {
+  adminProcedure,
   auditedProtectedProcedure,
   capabilityProcedure,
   protectedProcedure,
@@ -138,6 +146,17 @@ function domainError(error: unknown): never {
   if (error instanceof PharmacyStockSignalError) {
     throw new TRPCError({
       code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
+  if (error instanceof PharmacyColdChainSensorError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'DUPLICATE_DEVICE_IDENTIFIER' || error.reason === 'REVOKED'
+            ? 'CONFLICT'
+            : 'BAD_REQUEST',
       message: error.reason,
     });
   }
@@ -761,6 +780,60 @@ export const pharmacyInventoryRouter = router({
           temperatureExcursionDurationMinutes: input.temperatureExcursionDurationMinutes,
         },
       });
+    }),
+
+  /**
+   * #732 — live cold-chain sensors. Issuing or rotating a push credential is an
+   * admin act (as with counter enrollment); the secret is returned once and
+   * only its hash is stored. Listing and revoking belong to whoever runs the
+   * stock, so a lost or faulty sensor can be cut off without an admin.
+   */
+  coldChainSensors: inventoryControl
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) =>
+      listColdChainSensors(ctx.db, await scopeFor(ctx, input.branchId))
+    ),
+
+  enrollColdChainSensor: adminProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          stockLocationId: z.string().min(1).max(128),
+          name: z.string().trim().min(1).max(120),
+          deviceIdentifier: z.string().trim().min(1).max(120),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      try {
+        return await enrollColdChainSensor(ctx.db, scope, input);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  rotateColdChainSensorSecret: adminProcedure
+    .input(z.object({ branchId, sensorId: z.string().min(1).max(128) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      try {
+        return await rotateColdChainSensorSecret(ctx.db, scope, input.sensorId);
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  revokeColdChainSensor: inventoryControl
+    .input(z.object({ branchId, sensorId: z.string().min(1).max(128) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      try {
+        return await revokeColdChainSensor(ctx.db, scope, input.sensorId, new Date());
+      } catch (error) {
+        domainError(error);
+      }
     }),
 
   registerBatch: inventoryControl
