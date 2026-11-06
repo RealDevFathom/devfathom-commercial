@@ -2377,6 +2377,28 @@ describe('DEV-618 counter composition', () => {
     expect(screen.getByLabelText('Bill status')).toHaveTextContent('No open bill');
   });
 
+  it.each(['FORBIDDEN', 'branch denied', 'fetching'])(
+    'withholds cached patient history while access is %s',
+    (reason) => {
+      const stale = {
+        state: 'ready',
+        purchases: [
+          { saleId: 'old-sale', completedAt: null, medicines: ['Synthetic secret medicine'] },
+        ],
+      };
+      mocks.queries.counterPurchaseHistory = {
+        ...query(stale),
+        isError: reason !== 'fetching',
+        isFetching: reason === 'fetching',
+      };
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      fireEvent.click(screen.getByRole('button', { name: /No safety blocks/ }));
+      act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-a'));
+      expect(mocks.rxPanelProps.mock.lastCall![0].purchaseHistory).toBeUndefined();
+      expect(screen.queryByText('Synthetic secret medicine')).not.toBeInTheDocument();
+    }
+  );
+
   it('opens checks from context and Shift+F2 and keeps phone clearance', async () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     const search = screen.getByLabelText('Scan or search');

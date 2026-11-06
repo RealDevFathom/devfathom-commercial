@@ -404,6 +404,32 @@ describe('CounterRxPanel checks', () => {
     expect(screen.queryByText('03001111457')).not.toBeInTheDocument();
   });
 
+  it.each(['consent_needed', 'not_linked'] as const)(
+    'never renders medicine names in the %s state',
+    (state) => {
+      render(
+        <CounterRxPanel
+          {...props({
+            patient,
+            purchaseHistory: {
+              state,
+              purchases: [
+                { saleId: 'hidden', completedAt: null, medicines: ['Synthetic hidden purchase'] },
+              ],
+            },
+          })}
+        />
+      );
+      expect(
+        screen.queryByText('Synthetic hidden purchase', { exact: false })
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole('region', { name: 'Recent purchases' })).not.toHaveTextContent(
+        'Synthetic hidden purchase'
+      );
+      expect(screen.getByText('******0147')).toBeInTheDocument();
+    }
+  );
+
   it('stops controlled authorization when no independent pharmacist is available', () => {
     render(
       <CounterRxPanel {...props({ patient, controlled: authorization({ pharmacists: [] }) })} />
