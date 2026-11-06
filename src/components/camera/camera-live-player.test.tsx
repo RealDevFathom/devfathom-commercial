@@ -137,12 +137,16 @@ test('an initial denial never plays and has nothing to release', async () => {
   expect(onRelease).not.toHaveBeenCalled();
 });
 
-test('rejects an over-long or near-expired grant without playing it', async () => {
-  const { video, onRelease } = await open(
+test('rejects an over-long or near-expired grant without playing it, and revokes it', async () => {
+  const { video, onRelease, unmount } = await open(
     vi.fn(async () => ({ grantId: 'g_long', expiresAt: new Date(Date.now() + 10 * 60_000) }))
   );
   expect(video).not.toHaveAttribute('src');
-  expect(onRelease).not.toHaveBeenCalled();
+  // Valid on the server even though the session refused it; never left live.
+  expect(onRelease).toHaveBeenCalledTimes(1);
+  expect(onRelease).toHaveBeenCalledWith('g_long');
+  unmount();
+  expect(onRelease).toHaveBeenCalledTimes(1);
 });
 
 test('a 403 from the stream endpoint under hls.js stops immediately and releases', async () => {
@@ -162,7 +166,7 @@ test('a 403 from the stream endpoint under hls.js stops immediately and releases
 
 test.each([
   [3, 'codec is unsupported'],
-  [4, 'Run Check configured connection'],
+  [4, 'Close and reopen live view; if it persists, run Check configured connection'],
 ])('native media error %i shows an accurate stopped state and releases', async (code, text) => {
   const { video, onRelease } = await open();
   Object.defineProperty(video, 'error', { configurable: true, value: { code } });

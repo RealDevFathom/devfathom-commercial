@@ -10,7 +10,11 @@ export type CameraLivePlayerProps = {
   issue: (previousGrantId?: string) => Promise<CameraLiveGrant>;
   /** Same-origin authorized stream URL for a grant. Never a gateway or device URL. */
   streamUrl: (cameraId: string, grantId: string) => string;
-  /** Called once with the last grant when the view stops or unmounts. */
+  /**
+   * Called when the view stops or unmounts, once per grant it still holds: the
+   * current grant, the prior one still lapsing, and any grant issued but not
+   * accepted (closed in flight, or rejected by the session's validity check).
+   */
   onRelease?: (grantId: string) => void;
 };
 
@@ -46,11 +50,14 @@ export function CameraLivePlayer({
     // The current grant and the one it renewed (which lapses within 15 s).
     // Both are revoked when the view ends, so neither URL outlives the view.
     let held: string[] = [];
+    // Issued but not yet accepted by the session; revoked if the session rejects it.
+    let issued: string | undefined;
     let ended = false;
     const release = () => {
       ended = true;
-      const grants = held;
+      const grants = issued && !held.includes(issued) ? [...held, issued] : held;
       held = [];
+      issued = undefined;
       for (const grantId of grants) releaseRef.current?.(grantId);
     };
     const session: { current?: ReturnType<typeof startCameraLiveSession> } = {};
@@ -81,15 +88,16 @@ export function CameraLivePlayer({
         20_000
       );
     };
-    // Native HLS reports a refused or failed load (for example an unbound camera's
-    // 502) and an unsupported format alike as MEDIA_ERR_SRC_NOT_SUPPORTED (4), so
-    // only a decode error (3) is certainly a codec problem.
+    // Native HLS reports a refused or failed load (an ended grant's 401/403, an
+    // unbound camera's 502) and an unsupported format alike as
+    // MEDIA_ERR_SRC_NOT_SUPPORTED (4), so only a decode error (3) is certainly a
+    // codec problem.
     const mediaError = () =>
       stop(
         media.error?.code === 3
           ? 'This stream or codec is unsupported. Ask the gateway owner to check the video format.'
           : media.error?.code === 4
-            ? 'Video unavailable or its format is unsupported. Run Check configured connection, or ask the gateway owner to check the stream.'
+            ? 'Video unavailable: access may have ended, or the stream format is unsupported. Close and reopen live view; if it persists, run Check configured connection or ask the gateway owner.'
             : 'Video unavailable or access ended. Close and reopen live view to request access.'
       );
     media.addEventListener('playing', playing);
@@ -102,12 +110,14 @@ export function CameraLivePlayer({
         // Closed while the request was in flight: the session discards this
         // grant, so revoke it here rather than leave it live until expiry.
         if (ended && grant?.grantId) releaseRef.current?.(grant.grantId);
+        else if (grant?.grantId) issued = grant.grantId;
         return grant;
       },
       onStop: stop,
       onGrant: (grant) => {
         clearMedia();
         held = [held.at(-1), grant.grantId].filter((id): id is string => Boolean(id));
+        issued = undefined;
         const current = revision;
         waiting();
         const url = urlRef.current(cameraId, grant.grantId);

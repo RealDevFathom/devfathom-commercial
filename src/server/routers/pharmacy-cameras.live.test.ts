@@ -398,6 +398,17 @@ describe('configured gateway registration', () => {
     );
   });
 
+  it('never lets the simulator adopt a same-named configured gateway', async () => {
+    mocks.runtime.mode = 'simulated';
+    gateways = [gateway({ name: 'Main' } as never)];
+    await expect(
+      caller().enrollGateway({ branchId: 'branch_a', name: 'Main', retentionDays: 7 })
+    ).resolves.toMatchObject({ id: 'gw_new' });
+    expect(db.cameraGateway.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ baseUrl: 'http://127.0.0.1' }) })
+    );
+  });
+
   it('fails closed when no gateway is configured', async () => {
     mocks.runtime.available = false;
     mocks.runtime.mode = 'unavailable';
@@ -711,5 +722,16 @@ describe('configured camera settings', () => {
       active: true,
     });
     await expect(manager.configure(input)).resolves.toEqual({ id: 'cam_1' });
+  });
+
+  it('refuses support sessions and non-pharmacy organizations before any write', async () => {
+    const input = { cameraId: 'cam_1', preset: null, enabled: false };
+    await expect(caller({ support: { id: 'support' } }).configure(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller({ vertical: 'RESTAURANT' }).configure(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.camera.update).not.toHaveBeenCalled();
   });
 });

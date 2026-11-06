@@ -186,13 +186,16 @@ export const pharmacyCamerasRouter = router({
       await ctx.db.$executeRaw(
         Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${organizationId}), hashtext(${`camera-gateway:${input.branchId}:${input.name}`}))`
       );
-      // Idempotent by name, matching the lock key. A configured gateway never
-      // silently returns a same-named gateway that points somewhere else.
+      // The simulator keeps its original lookup (its fixed URL), so it never
+      // adopts a same-named configured gateway. Configured mode is idempotent by
+      // name, matching the lock key, and refuses a same-named gateway that points
+      // somewhere else instead of silently returning it.
       const prior = await ctx.db.cameraGateway.findFirst({
         where: {
           organizationId,
           branchId: input.branchId,
           name: input.name,
+          ...(mode === 'simulated' ? { baseUrl } : {}),
           status: 'ACTIVE',
           revokedAt: null,
         },
@@ -365,8 +368,11 @@ export const pharmacyCamerasRouter = router({
       const row = await camera(ctx.db, organizationId, input.cameraId);
       // Configured mode: enabling a camera exposes live video, so apply the live
       // branch rule. The simulator path keeps its existing organization-wide rule.
-      if (cameraGatewayRuntime.available && cameraGatewayRuntime.mode === 'mediamtx')
+      if (cameraGatewayRuntime.available && cameraGatewayRuntime.mode === 'mediamtx') {
+        if (ctx.organization?.vertical !== 'PHARMACY' || ctx.support)
+          throw new TRPCError({ code: 'FORBIDDEN' });
         await liveBranch(ctx, organizationId, row.branchId);
+      }
       try {
         // setCameraPreset sets counterEvidence exactly when the preset is COUNTER.
         await setCameraPreset(ctx.db, { organizationId, branchId: row.branchId }, input);
