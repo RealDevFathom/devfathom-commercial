@@ -451,6 +451,24 @@ describe('pharmacy owner digest capability boundary', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.branchFindMany).not.toHaveBeenCalled();
   });
+
+  it('scopes expiry advice and proposals to the server-resolved tenant and owner branch', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.expiryRead.mockResolvedValue([]);
+    mocks.createDraft.mockResolvedValue({ id: 'return_1' });
+    await caller().expiryAdvice({ from: '2026-09-01', to: '2026-09-04' });
+    expect(mocks.expiryRead).toHaveBeenCalledWith(expect.anything(), {
+      organizationId: 'org_1',
+      branchIds: ['branch_1'],
+    });
+    await caller().proposeExpiryReturn({ branchId: 'branch_1', lotId: 'lot_1' });
+    expect(mocks.createDraft).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org_1', branchId: 'branch_1', actorId: 'user_admin' },
+      'lot_1'
+    );
+  });
 });
 
 describe('RX-08 pharmacovigilance state boundaries', () => {

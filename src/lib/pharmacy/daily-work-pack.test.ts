@@ -183,7 +183,11 @@ describe('daily Pharmacy work pack source composition', () => {
       from: input.from,
       to: input.to,
     });
-    expect(mocks.expiry).toHaveBeenCalledWith(db, ['branch_1'], new Date(input.asOf));
+    expect(mocks.expiry).toHaveBeenCalledWith(
+      db,
+      { organizationId: 'org_1', branchIds: ['branch_1'] },
+      new Date(input.asOf)
+    );
     expect(mocks.returns).toHaveBeenCalledWith(
       db,
       { organizationId: 'org_1', branchId: 'branch_1' },

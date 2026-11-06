@@ -168,8 +168,10 @@ bun run dev
 grant its runtime role access to migrated tables and sequences as shown in
 [local setup](./docs/LOCAL_SETUP.md#3-install-and-initialize).
 
-For AI, set `AI_PROVIDER=groq`, `google` or `vertex`, a provider-specific `AI_MODEL`
-(no runtime default), and the corresponding credentials in `.env.example`.
+AI routes through Anthropic, OpenAI and Bedrock, with per-provider caps and a SuperAdmin
+switch. Keys come from AWS Secrets Manager at runtime. Every variable and the IAM policy are in
+[AI providers](./docs/ai-providers.md). The legacy `groq`, `google`, `vertex` and deprecated
+`azure` selectors still take a provider-specific `AI_MODEL`.
 For durable uploads, use `STORAGE_ADAPTER=s3` with `S3_UPLOADS_BUCKET` and
 `AWS_REGION`; credentials come from the runtime role. Unset/`disabled` disables
 uploads; `local` is permitted only in development/test. The legacy `azure` adapter

@@ -78,7 +78,6 @@ function makeDb() {
     pharmacyRecallQuarantineAction: {
       findMany: vi.fn().mockResolvedValue([]),
     },
-    pharmacyCustodyRecord: model(),
     pharmacyAllocationOverride: model(),
     pharmacyStockDiscrepancy: model(),
     pharmacyRecallAcknowledgement: model(),

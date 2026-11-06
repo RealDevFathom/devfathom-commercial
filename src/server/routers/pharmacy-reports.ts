@@ -736,7 +736,10 @@ export const pharmacyReportsRouter = router({
   }),
   expiryAdvice: reports.input(filters).query(async ({ ctx, input }) => {
     const bounded = await ownerFilters(ctx, input);
-    return readExpiryAdvice(ctx.db, bounded.branchIds);
+    return readExpiryAdvice(ctx.db, {
+      organizationId: ctx.entitlements.organizationId,
+      branchIds: bounded.branchIds,
+    });
   }),
   proposeExpiryReturn: reports
     .input(

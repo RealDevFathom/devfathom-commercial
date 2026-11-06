@@ -790,6 +790,10 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     // Sole exception: in a tenant with no other active staff, a pharmacovigilance report
     // may be marked READY by its own maker only after fresh server-side PIN
     // reauthentication, with a durable audit row (pharmacy-reports PV:SOLO_OWNER_PIN).
+    // #975: a proprietor runs the whole shop, so the template also grants the
+    // operational actions (Goods-in, stock, counter, day close, management). Every
+    // grant stays exact (no wildcard), so the separation-of-duties caps remain
+    // explicit and individually revocable by DENY.
     key: 'owner-operator',
     name: 'Owner / Operator',
     isSystem: true,
@@ -800,6 +804,11 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'pharmacy:dispense',
       'pharmacy:catalogue-review',
       'pharmacy:safety',
+      'pharmacy:procurement',
+      'pharmacy:inventory',
+      'pharmacy:counter',
+      'pharmacy:close',
+      'pharmacy:manage',
     ],
   },
   {

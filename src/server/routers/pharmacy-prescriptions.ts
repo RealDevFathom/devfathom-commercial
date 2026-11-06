@@ -390,7 +390,7 @@ export const pharmacyPrescriptionsRouter = router({
       });
     }),
 
-  readPatient: auditedProtectedProcedure
+  readPatient: capabilityProcedure('pharmacy:prescriptions')
     .input(z.object({ patientId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       const patient = await ctx.db.pharmacyPatient.findFirstOrThrow({
@@ -404,7 +404,7 @@ export const pharmacyPrescriptionsRouter = router({
       return maskedPatient(patient);
     }),
 
-  exportPatient: auditedProtectedProcedure
+  exportPatient: capabilityProcedure('pharmacy:prescriptions')
     .input(z.object({ patientId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       const patient = await ctx.db.pharmacyPatient.findFirstOrThrow({
@@ -420,7 +420,7 @@ export const pharmacyPrescriptionsRouter = router({
         patientId: patient.id,
         export: true,
       });
-      return patient;
+      return { ...patient, ...maskedPatient(patient) };
     }),
 
   // Recording a fill is a dispensing act: require the exact-grant-only
