@@ -90,6 +90,9 @@ brand logo mark keeps its original `#ff684f` because it is a graphic, not text.
 | `--destructive` via `--red-600` (light)      | `#904039` | `destructive/20` over sunken           | 4.63  |
 | `--success` (dark)                           | `#a3c8a6` | `success/20` over muted `#30302d`      | 4.65  |
 | `--destructive` (dark)                       | `#f0a89f` | `destructive/20` over raised `#2c2c29` | 4.71  |
+| `--text-muted`, `--muted-foreground` (dark)  | `#c0bfb9` | muted `#30302d`                        | 7.18  |
+| `--text-faint` (dark)                        | `#a6a59f` | muted `#30302d`                        | 5.36  |
+| `--text-link` (dark)                         | `#f7f7f4` | muted `#30302d`                        | 12.33 |
 
 Do not dim a text token with an opacity modifier (`text-muted-foreground/60`); it drops below AA
 on both themes. Use a semantic token (`text-success`) instead of a raw palette utility
@@ -100,6 +103,16 @@ A tenant brand (`tenantBrandTokens` in `src/lib/tenant-brand.ts`) overrides `--p
 are not contrast-checked. Chrome text that must stay readable for every tenant (the account
 avatar initials and the dashboard eyebrow) uses `text-foreground` / `text-text-muted`, not
 `text-primary` / `text-accent-brand`.
+
+Dark theme guards against a dark tenant primary (the default saved brand is the light ink
+`#111110`) at the token level, in the unlayered “Dark theme control contrast” rules of
+`globals.css`: every `text-primary` use re-points `--primary` to `--text-link`, and
+primary-filled buttons, links and the active navigation pill carry a 1px `--primary-edge`
+outline (3:1 on the card even at the 50% disabled opacity) that brightens on hover. A tenant
+primary's hover fill is the brand moved 16% toward its foreground, or 16% away from it when
+moving toward the label would drop the label below 4.5:1, so hover always changes. Dark borders
+keep `--input` / `--border-strong` at 3:1 on the card and card hairlines (`--border-subtle`) at
+1.75:1. Do not re-solve these per screen.
 
 ### Semantic color tokens
 

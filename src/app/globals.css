@@ -1006,13 +1006,20 @@
   --surface-inverse: #f7f7f4;
   --text-strong: #f7f7f4;
   --text-body: #dfdfda;
-  --text-muted: #aaa9a3;
-  --text-faint: #9a9993;
+  /* Muted and faint copy sit on card, raised and muted surfaces; keep both well
+     clear of AA so captions such as metric sources stay readable. */
+  --text-muted: #c0bfb9;
+  --text-faint: #a6a59f;
   --text-inverse: #111110;
   --text-on-accent: #ffffff;
-  --border-subtle: #343431;
-  --border-default: #44443f;
-  --border-strong: #5e5d57;
+  /* Text-role uses of --primary resolve here in dark (see DARK THEME CONTROL
+     CONTRAST below), so a dark tenant brand cannot hide links and icons. */
+  --text-link: #f7f7f4;
+  /* Hairlines must stay visible on the #242422 card: subtle 1.75:1 for card
+     edges and dividers, strong 3.87:1 for input boundaries (WCAG 1.4.11). */
+  --border-subtle: #4a4a46;
+  --border-default: #5a5954;
+  --border-strong: #807f78;
   --accent-brand: #ff745d;
   --accent-brand-hover: #ff8b78;
   --accent-quiet: #48231d;
@@ -1030,17 +1037,20 @@
   --secondary: #30302d;
   --secondary-foreground: #f7f7f4;
   --muted: #30302d;
-  --muted-foreground: #aaa9a3;
+  --muted-foreground: #c0bfb9;
   --accent: #30302d;
   --accent-foreground: #f7f7f4;
   --border: var(--border-subtle);
-  --input: var(--border-default);
+  --input: var(--border-strong);
   --ring: var(--accent-brand);
+  /* Edge drawn around primary-filled controls in dark. Strong enough to hold
+     3:1 on the card even under the 50% disabled opacity. */
+  --primary-edge: #c0bfb9;
   --sidebar: #242422;
   --sidebar-foreground: #dfdfda;
   --sidebar-accent: #30302d;
   --sidebar-accent-foreground: #f7f7f4;
-  --sidebar-border: #343431;
+  --sidebar-border: #4a4a46;
 }
 
 @layer base {
@@ -1702,6 +1712,54 @@
   }
 }
 
+/* ============================================================
+   DARK THEME CONTROL CONTRAST
+   A tenant brand overrides --primary inline on the shell in both themes
+   (tenantBrandTokens), and the default saved brand is the light-theme ink
+   #111110. In dark that paints primary buttons, the active navigation pill and
+   every `text-primary` link black on a #242422 card. These rules stay at the
+   token level: they re-point --primary for text-role uses and give
+   primary-filled controls a visible edge, without touching individual screens.
+   Unlayered so a component's `outline-none` utility cannot drop the edge.
+   ============================================================ */
+[data-theme='dark']
+  :is(
+    .text-primary,
+    .hover\:text-primary,
+    .group-hover\:text-primary,
+    .data-checked\:text-primary
+  ) {
+  --primary: var(--text-link);
+}
+
+/* A `text-primary` link that hovers to `text-primary-hover` would otherwise
+   fade to the dark brand's hover fill; keep it readable and still changing. */
+[data-theme='dark'] .hover\:text-primary-hover {
+  --primary-hover: var(--text-body);
+}
+
+[data-theme='dark']
+  :is(
+    button,
+    a,
+    [role='button'],
+    [data-slot='button'],
+    [aria-current='page'] > span
+  ).bg-primary:not(:focus-visible) {
+  outline: 1px solid var(--primary-edge);
+  outline-offset: -1px;
+}
+
+[data-theme='dark']
+  :is(button, a, [role='button'], [data-slot='button']).bg-primary:hover:not(
+    :disabled,
+    [aria-disabled='true'],
+    [data-disabled],
+    :focus-visible
+  ) {
+  outline-color: var(--text-strong);
+}
+
 /*
  * Keyboard focus is a product-wide accessibility guarantee. Keep this rule
  * unlayered and after component styles so bespoke controls cannot accidentally
@@ -1714,8 +1772,31 @@
   outline-offset: 3px;
 }
 
+/*
+ * Search fields built from InputGroup (the command palette search box among
+ * them) draw focus on the rounded group, not the bare inner input, so the ring
+ * follows the field's corners instead of squaring off inside it.
+ */
+[data-slot='input-group']
+  :is([data-slot='command-input'], [data-slot='input-group-control']):focus-visible {
+  outline: none;
+}
+
+[data-slot='input-group']:has(
+  :is([data-slot='command-input'], [data-slot='input-group-control']):focus-visible
+) {
+  outline: 2px solid var(--ring);
+  outline-offset: 0;
+}
+
 @media (forced-colors: active) {
   :focus-visible {
+    outline-color: Highlight;
+  }
+
+  [data-slot='input-group']:has(
+    :is([data-slot='command-input'], [data-slot='input-group-control']):focus-visible
+  ) {
     outline-color: Highlight;
   }
 }
