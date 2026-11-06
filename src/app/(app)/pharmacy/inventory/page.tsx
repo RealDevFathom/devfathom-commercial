@@ -497,7 +497,7 @@ export default async function PharmacyInventoryPage({
             role="region"
             aria-label="Pharmacy inventory batches"
             tabIndex={0}
-            className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&_[data-slot=table-container]]:overflow-visible"
           >
             <Table>
               <TableHeader>
