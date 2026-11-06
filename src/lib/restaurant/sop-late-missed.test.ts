@@ -424,6 +424,7 @@ describe('enqueueDueSopEscalations', () => {
         attempts: 1,
         maxAttempts: 5,
         claimedBy: 'worker_1',
+        claimToken: 'sop-escalation-quiet-claim-1',
         startedAt: new Date('2026-08-20T14:00:00.000Z'),
       },
     });
@@ -445,6 +446,7 @@ describe('enqueueDueSopEscalations', () => {
         attempts: 1,
         maxAttempts: 5,
         claimedBy: 'worker_1',
+        claimToken: 'sop-escalation-quiet-claim-2',
         startedAt: new Date('2026-08-20T15:00:00.000Z'),
       },
     });
