@@ -49,6 +49,8 @@ type WorkspaceCamera = {
   preset: 'COUNTER' | 'COLD_CHAIN' | 'KITCHEN' | null;
   temperatureZoneId: string | null;
   counterEvidence: boolean;
+  /** Server-decided: a snapshot binding exists for this exact camera scope. */
+  evidenceStills?: boolean;
 };
 type Zone = { id: string; name: string; branchId: string };
 
@@ -503,9 +505,9 @@ export function PharmacyCamerasConsole() {
                       </div>
                       <ConfiguredConnectionCheck cameraId={camera.id} />
                       <p role="note" className="mt-3 text-sm text-text-muted">
-                        New counter and cold-chain evidence stills are not supported by this live
-                        gateway yet; affected events record the still as unavailable. Earlier stills
-                        remain viewable.
+                        {camera.evidenceStills
+                          ? 'Evidence stills: a gateway snapshot service is configured for this camera. Capture still needs verification on the real device.'
+                          : 'Evidence stills: no gateway snapshot service is configured for this camera, so new counter and cold-chain events record the still as unavailable. Earlier stills remain viewable.'}
                       </p>
                     </>
                   ) : null}

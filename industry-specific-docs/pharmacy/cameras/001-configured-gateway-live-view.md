@@ -102,9 +102,12 @@ The simulator path (`CAMERA_GATEWAY_MODE=simulated`, development/test only) is u
 ## Not covered (tracked separately)
 
 - **Evidence stills from the real gateway.** HLS live view does not provide transaction or
-  cold-chain snapshot capture. In configured mode the snapshot adapter is absent, so new tender,
-  refund, daily-close and excursion evidence records the still as unavailable. The console says
-  so. Tracked in Linear **DEV-745**.
+  cold-chain stills. DEV-745 adds a separate gateway-side snapshot service and its own
+  server-only allowlist (`CAMERA_SNAPSHOT_BINDINGS`); see
+  `docs/pharmacy/camera-snapshot-evidence-DEV-745.md`. The camera card asks the server
+  whether this exact camera scope has a snapshot binding. It says so only when one exists;
+  otherwise new tender, refund, daily-close and excursion evidence records the still as
+  unavailable, and the card says that. Snapshot capture is also untested on hardware.
 - Recording playback, retention enforcement on the gateway, PTZ, audio and export.
 - Pharmacy gateway revocation UI. Use the camera's **Enabled** setting (owner) or
   `CAMERA_GATEWAY_MODE=unavailable` to stop viewing.
@@ -179,6 +182,7 @@ non-production environment. Record evidence (screenshots and timestamps), never 
 - [ ] Restaurant cameras on the same deployment still play, and their legacy bindings are
       unchanged.
 - [ ] H.265 channels: playback outcome recorded honestly (supported or unsupported message).
-- [ ] Evidence stills: confirm new events show the still unavailable (DEV-745 not implemented).
+- [ ] Evidence stills: without a DEV-745 snapshot binding, new events show the still
+      unavailable; with one, follow the DEV-745 acceptance checks.
 
 Until every item is recorded on a confirmed device, report hardware status as **pending**.

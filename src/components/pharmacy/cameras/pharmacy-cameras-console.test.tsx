@@ -457,7 +457,9 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
     // Every identifier the server binding matches on.
     expect(screen.getByText('Branch ID').nextSibling).toHaveTextContent('branch_a');
     expect(screen.getByText('Organization ID').nextSibling).toHaveTextContent('org_a');
-    expect(screen.getByRole('note')).toHaveTextContent('not supported by this live gateway');
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'no gateway snapshot service is configured for this camera'
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Check configured connection' }));
     expect(mocks.diagnose).toHaveBeenCalledWith({ cameraId: 'cam_1' });
   });
@@ -496,6 +498,15 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
     expect(screen.queryByLabelText('Counter camera playback panel')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open live view' })).toBeEnabled();
     expect(mocks.liveGrant).toHaveBeenCalledTimes(grantsBefore);
+  });
+
+  it('says evidence stills are configured only when the server reports a snapshot binding', () => {
+    mocks.workspace.mockReturnValue(ready(configured({ evidenceStills: true })));
+    render(<PharmacyCamerasConsole />);
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'a gateway snapshot service is configured for this camera'
+    );
+    expect(screen.getByRole('note')).toHaveTextContent('needs verification on the real device');
   });
 
   it('keeps a disabled camera out of live view', () => {

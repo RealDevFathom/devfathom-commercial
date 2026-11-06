@@ -765,3 +765,54 @@ describe('configured-mode evidence grants', () => {
     });
   });
 });
+
+describe('configured workspace', () => {
+  const rows = () => [
+    {
+      id: 'cam_1',
+      name: 'Counter',
+      branchId: 'branch_a',
+      gatewayId: 'gw_1',
+      sourceRef: 'counter-1',
+      enabled: true,
+      preset: null,
+      temperatureZoneId: null,
+      counterEvidence: false,
+      gateway: { branchId: 'branch_a', baseUrl: BASE },
+    },
+  ];
+
+  it('reports evidence stills unsupported without a snapshot binding and never returns the gateway URL', async () => {
+    db.camera.findMany.mockResolvedValueOnce(rows() as never);
+    const result = await caller().workspace();
+    expect(result.cameras[0]).toMatchObject({ id: 'cam_1', evidenceStills: false });
+    expect(result.cameras[0]).not.toHaveProperty('gateway');
+    expect(JSON.stringify(result)).not.toContain(BASE);
+    expect(result.organizationId).toBe('org_a');
+  });
+
+  it('reports evidence stills supported only for the exact bound scope', async () => {
+    const supports = vi.fn((scope: { cameraId: string }) => scope.cameraId === 'cam_1');
+    (mocks.runtime as unknown as { snapshots: unknown }).snapshots = {
+      supports,
+      readSnapshot: vi.fn(),
+    };
+    try {
+      db.camera.findMany.mockResolvedValueOnce([
+        ...rows(),
+        { ...rows()[0], id: 'cam_2', gateway: { branchId: 'branch_b', baseUrl: BASE } },
+      ] as never);
+      const result = await caller().workspace();
+      expect(result.cameras.map((c) => [c.id, c.evidenceStills])).toEqual([
+        ['cam_1', true],
+        ['cam_2', false],
+      ]);
+      expect(supports).toHaveBeenCalledWith(
+        expect.objectContaining({ vertical: 'pharmacy', cameraId: 'cam_1', baseUrl: BASE })
+      );
+      expect(JSON.stringify(result)).not.toContain(BASE);
+    } finally {
+      delete (mocks.runtime as unknown as { snapshots?: unknown }).snapshots;
+    }
+  });
+});

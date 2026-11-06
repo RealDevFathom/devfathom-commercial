@@ -15,6 +15,7 @@ import {
   canReadCameraEvidence,
   captureCameraEvidence,
   evidenceSnapshotAdapter,
+  evidenceSnapshotSupported,
 } from '@/lib/cameras/evidence';
 import { stillDataUrl } from '@/lib/pharmacy/counter-evidence';
 import { sealCameraCredential } from '@/lib/restaurant/camera-credentials';
@@ -148,6 +149,8 @@ export const pharmacyCamerasRouter = router({
           preset: true,
           temperatureZoneId: true,
           counterEvidence: true,
+          // Read only to decide still support below; never returned to the browser.
+          gateway: { select: { branchId: true, baseUrl: true } },
         },
         orderBy: { createdAt: 'asc' },
       }),
@@ -159,7 +162,19 @@ export const pharmacyCamerasRouter = router({
     return {
       branches,
       gateways,
-      cameras,
+      cameras: cameras.map(({ gateway, ...camera }) => ({
+        ...camera,
+        // DEV-745: true only when this exact camera scope has a snapshot binding
+        // (or the simulator is running). False is the honest unsupported state.
+        evidenceStills: evidenceSnapshotSupported(cameraGatewayRuntime, {
+          organizationId,
+          branchId: camera.branchId,
+          gatewayId: camera.gatewayId,
+          gatewayBranchId: gateway.branchId,
+          gatewayBaseUrl: gateway.baseUrl,
+          cameraId: camera.id,
+        }),
+      })),
       zones,
       presets: CAMERA_BRAND_PRESETS,
       availability: cameraGatewayPublicState(cameraGatewayRuntime),
