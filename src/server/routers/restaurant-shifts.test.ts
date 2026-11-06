@@ -275,6 +275,8 @@ function makeState() {
       originalAt: Date | null;
       correctedAt: Date;
       reason: string;
+      adjustedByUserId: string;
+      adjustedByStaffProfileId: string | null;
       createdAt: Date;
     }[],
     commands: [] as {
@@ -458,6 +460,9 @@ function makeDb() {
           shift: {
             ...shift,
             breaks: state.breaks
+              .filter((row) => row.shiftId === shift.id)
+              .map(({ id }) => ({ id })),
+            adjustments: state.adjustments
               .filter((row) => row.shiftId === shift.id)
               .map(({ id }) => ({ id })),
           },
@@ -1118,6 +1123,40 @@ describe('restaurantShifts.reviewSwap', () => {
         branchId: 'branch_1',
         decision: 'APPROVED',
         idempotencyKey: 'rv-historical-break',
+      })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining('recorded attendance'),
+    });
+
+    expect(state.shifts.find((shift) => shift.id === 'shift_emp')!.staffProfileId).toBe(
+      'staff_emp'
+    );
+    expect(state.decisions).toHaveLength(0);
+    expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
+  });
+
+  it('refuses to reassign attendance recorded only through a time adjustment', async () => {
+    const request = await pendingSwap();
+    state.adjustments.push({
+      id: 'adjustment_clock_in',
+      shiftId: 'shift_emp',
+      breakId: null,
+      kind: 'CLOCK_IN',
+      originalAt: null,
+      correctedAt: at('2026-09-20T09:00:00Z'),
+      reason: 'Reader was offline',
+      adjustedByUserId: USERS.MANAGER,
+      adjustedByStaffProfileId: 'staff_mgr',
+      createdAt: at('2026-09-20T09:30:00Z'),
+    });
+
+    await expect(
+      caller('MANAGER').reviewSwap({
+        requestId: request!.id,
+        branchId: 'branch_1',
+        decision: 'APPROVED',
+        idempotencyKey: 'rv-adjusted-attendance',
       })
     ).rejects.toMatchObject({
       code: 'CONFLICT',

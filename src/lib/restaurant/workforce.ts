@@ -494,7 +494,12 @@ export async function reviewShiftSwap(
       where: { id: input.requestId },
       include: {
         decision: true,
-        shift: { include: { breaks: { select: { id: true }, take: 1 } } },
+        shift: {
+          include: {
+            breaks: { select: { id: true }, take: 1 },
+            adjustments: { select: { id: true }, take: 1 },
+          },
+        },
         replacement: true,
       },
     });
@@ -508,7 +513,8 @@ export async function reviewShiftSwap(
       if (
         request.shift.clockedInAt ||
         request.shift.clockedOutAt ||
-        request.shift.breaks.length > 0
+        request.shift.breaks.length > 0 ||
+        request.shift.adjustments.length > 0
       ) {
         throw new WorkforceError(
           'A shift with recorded attendance cannot be reassigned.',
