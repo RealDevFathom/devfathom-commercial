@@ -736,7 +736,7 @@ describe('destructive lifecycle reason', () => {
     try {
       await renderDetail({ org: organization({ status: 'TERMINATED' }) });
       const form = screen.getByRole('button', { name: 'Schedule purge' }).closest('form')!;
-      const reason = within(form).getByRole('textbox', { name: 'Reason (required)' });
+      const reason = within(form).getByRole('textbox', { name: 'Operator reason' });
       expect(reason).toHaveValue('');
       fireEvent.submit(form);
       expect(fetchMock).not.toHaveBeenCalled();

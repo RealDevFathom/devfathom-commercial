@@ -162,7 +162,7 @@ test('activation checklist lists the unmet deployment gate and the shared defaul
   await page.getByLabel('Move to').selectOption('ACTIVE');
   await page
     .locator('#lifecycle')
-    .getByLabel('Reason (required)')
+    .getByLabel('Operator reason')
     .fill('E2E activation after shared deployment default');
   await page.getByRole('button', { name: 'Apply lifecycle change' }).click();
   await expect(page.getByText('ACTIVE', { exact: true }).first()).toBeVisible();

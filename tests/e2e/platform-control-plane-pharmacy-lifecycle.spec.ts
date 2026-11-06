@@ -197,7 +197,7 @@ async function transition(page: import('@playwright/test').Page, status: string,
       candidate.url().endsWith('/api/platform/control') && candidate.request().method() === 'POST'
   );
   await page.getByLabel('Move to').selectOption(status);
-  await page.locator('#lifecycle').getByLabel('Reason (required)').fill(reason);
+  await page.locator('#lifecycle').getByLabel('Operator reason').fill(reason);
   await page.getByRole('button', { name: 'Apply lifecycle change' }).click();
   return response;
 }

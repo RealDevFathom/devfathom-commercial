@@ -23,15 +23,19 @@ describe('sensitive command forms', () => {
         fields={[{ name: 'id', label: 'ID', type: 'hidden', defaultValue: 'target_1' }]}
       />
     );
-    const reason = screen.getByRole('textbox', { name: 'Reason (required)' });
+    const reason = screen.getByRole('textbox', { name: 'Operator reason' });
     expect(reason).toBeRequired();
     expect(reason).toHaveAttribute('minlength', '10');
+    expect(reason).toHaveAttribute('maxlength', '500');
     for (const value of ['', 'short', '          ']) {
       fireEvent.change(reason, { target: { value } });
       fireEvent.submit(reason.closest('form')!);
       expect(fetchMock).not.toHaveBeenCalled();
       expect(reason).toHaveFocus();
       expect(reason).toHaveAttribute('aria-invalid', 'true');
+      expect(screen.getByTestId('platform-field-error-reason')).toHaveTextContent(
+        'Operator reason must be at least 10 characters.'
+      );
     }
     fireEvent.change(reason, { target: { value: 'Verified owner request' } });
     fireEvent.submit(reason.closest('form')!);
@@ -53,6 +57,20 @@ describe('sensitive command forms', () => {
     expect(screen.getAllByRole('textbox')).toHaveLength(1);
     expect(screen.getByRole('textbox')).toBeRequired();
   });
+
+  it('rejects a reason longer than the server limit before submitting', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<PlatformCommandForm action="organization.scim.revoke" fields={[]} />);
+    const reason = screen.getByRole('textbox', { name: 'Operator reason' });
+    fireEvent.change(reason, { target: { value: 'x'.repeat(501) } });
+    fireEvent.submit(reason.closest('form')!);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(reason).toHaveFocus();
+    expect(screen.getByTestId('platform-field-error-reason')).toHaveTextContent(
+      'Operator reason must be at most 500 characters.'
+    );
+  });
 });
 
 it('requires a reason for the vertical-correction form', () => {
@@ -62,7 +80,7 @@ it('requires a reason for the vertical-correction form', () => {
       fields={[{ name: 'vertical', label: 'Vertical', type: 'hidden', defaultValue: 'RESTAURANT' }]}
     />
   );
-  expect(screen.getByRole('textbox', { name: 'Reason (required)' })).toBeRequired();
+  expect(screen.getByRole('textbox', { name: 'Operator reason' })).toBeRequired();
 });
 
 it('preserves destructive confirmation before submitting a reason', () => {

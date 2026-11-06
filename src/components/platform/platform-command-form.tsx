@@ -269,12 +269,19 @@ export function PlatformCommandForm({
     for (const field of fields) {
       const value = String(formData.get(field.name) ?? '').trim();
       if (field.minLength && value.length < field.minLength) {
-        clientFieldErrors[field.name] = `${field.label} must be at least ${field.minLength} characters.`;
+        clientFieldErrors[field.name] =
+          `${field.label} must be at least ${field.minLength} characters.`;
       }
       if (field.maxLength && value.length > field.maxLength) {
-        clientFieldErrors[field.name] = `${field.label} must be at most ${field.maxLength} characters.`;
+        clientFieldErrors[field.name] =
+          `${field.label} must be at most ${field.maxLength} characters.`;
       }
-      if (field.pattern && value && !new RegExp(`^(?:${field.pattern})$`).test(value)) {
+      const control = form.elements.namedItem(field.name);
+      if (
+        field.pattern &&
+        control instanceof HTMLInputElement &&
+        control.validity.patternMismatch
+      ) {
         clientFieldErrors[field.name] = `${field.label} has an invalid format.`;
       }
       if (field.format !== 'time24') continue;

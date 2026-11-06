@@ -77,6 +77,28 @@ describe('PlatformCommandForm', () => {
     expect(input).toHaveAttribute('placeholder', 'HH:MM');
   });
 
+  it('flags a value that does not match the field pattern inline', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <PlatformCommandForm
+        action="organization.update"
+        fields={[{ name: 'code', label: 'Region code', pattern: '[A-Z]{3}' }]}
+      />
+    );
+
+    const input = screen.getByLabelText('Region code');
+    expect(input).toHaveAttribute('pattern', '[A-Z]{3}');
+    fireEvent.change(input, { target: { value: 'abc' } });
+    fireEvent.submit(input.closest('form')!);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(input).toHaveFocus();
+    expect(screen.getByTestId('platform-field-error-code')).toHaveTextContent(
+      'Region code has an invalid format.'
+    );
+  });
+
   it('searches grouped timezones and preserves the selected IANA value', async () => {
     vi.stubGlobal(
       'ResizeObserver',
