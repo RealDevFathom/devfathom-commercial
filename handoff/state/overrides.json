@@ -242,5 +242,35 @@
    "verdict": "PASS",
    "details": "Commit 53af03e changes one line, in a test fixture only, and adds no production code, raw SQL or new mocks of gates. In the PR as a whole, commandCentre still checks branch IDs against the org's active branches before the read. It then runs readPharmacyOwnerCommandCentre in one ctx.db.$transaction, which goes through withTenantDb (org/user GUCs) or reuses the request transaction. The reports:operational gate and the reports:financial masking, including khataAgingMinor, are unchanged."
   }
+ },
+ "1117": {
+  "qa": {
+   "verdict": "FAIL",
+   "details": "First review FAIL on two counts. (1) The new coverage test used BigInt literals (TS2737 under the ES2017 target) and was unformatted: fixed in 404c9f9a5, which builds inputs with BigInt() via the same movement() helper as profit-loss.test.ts; tsc on the P&L files is clean, Prettier and ESLint pass, and vitest passes 9/9 with unchanged assertions. (2) Still open: develop already satisfies DEV-118 through #691 and nothing reads the new classificationCoverage field, so this PR should be closed as superseded"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix 404c9f9a5 only changes test inputs to BigInt() and wraps one line for Prettier; no logic, input, query, secret or data exposure changed. The P&L projection stays pure and is served only through financialStatements behind ledgerReportProcedure, which checks role, entitlement, capabilities, org and branch on the server"
+  }
+ },
+ "1002": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-checked fix c4cfcbe. The export route now maps only BAD_REQUEST, UNAUTHORIZED, FORBIDDEN and NOT_FOUND to their status codes. Every other failure is logged and returns a generic no-store 500. Period-summary validates filters first, so branch-limit and date errors stay 400 while reader failures become 500. The new tests fail on the old code. All 104 tests in 5 files pass, and prettier and eslint are clean"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Re-checked fix c4cfcbe. Internal error text is no longer sent to clients: unexpected and wrapped INTERNAL_SERVER_ERROR failures return a generic 500 marked private, no-store, and details are logged on the server only. The reports:financial check, organization branch scoping, owner checks, audit notes and the CSV formula guard are unchanged"
+  }
+ },
+ "1005": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Rechecked DEV-50 at 9d3baf2. The unknown-tenant 404 now offers a primary Go to sign-in link to the shared apex /login, keeping the vertical, and omits it when no base domain is set. The no-op pharmacy notification toggles are removed and the code matches develop again. ESLint and prettier are clean on the PR files, and 16 related test files pass. Browser visual QA (viewports, themes) was not run. No new problems found"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the 9d3baf2 changes. sharedSignInUrl builds the link only from deployment config and a fixed vertical value, URL-encoded. It never echoes the request host and cannot be used as an open redirect. The 404 is identical for every unknown address, so it does not reveal which workspaces exist. Removing the prefs keys keeps the schema strict. No auth, access-check or data-path changes"
+  }
  }
 }

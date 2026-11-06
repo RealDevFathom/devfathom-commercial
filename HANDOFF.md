@@ -1,6 +1,6 @@
 # PR review handoff log
 
-_Generated 2026-11-06 19:45 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
+_Generated 2026-11-06 19:50 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
 
 ## Resume here
 
@@ -532,7 +532,7 @@ _Generated 2026-11-06 19:45 UTC from the live run state by `handoff/scripts/gen-
 - Next step: re-check queued for fix 404c9f9a58; then `python3 handoff/scripts/compose.py 1117` and post comments/1117.md
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1117` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1117`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
-- Decisions: F1 (qa) confirmed by skeptics: The new test file uses BigInt literals. tsconfig targets ES2017, so tsc reports TS2737 and the PR adds new typecheck errors. Next build also type-checks the repo's .ts files unless NEXT_BUILD_SKIP_TYPECHECK=1, so the bui | F2 (qa) confirmed by skeptics: Develop already satisfies the issue on its own. The PR adds only a derived field that no caller reads, plus tests that repeat assertions develop already has, so it adds nothing the issue still needs.
+- Decisions: qa verdict set to FAIL by hand: First review FAIL on two counts. (1) The new coverage test used BigInt literals (TS2737 under the ES2017 target) and was unformatted: fixed in 404c9f9a5, which builds inputs with BigInt() via the same movement() helper as profit-loss.test.ts; tsc on the P&L files is clean, Prettier and ESLint pass,  | security verdict set to PASS by hand: Fix 404c9f9a5 only changes test inputs to BigInt() and wraps one line for Prettier; no logic, input, query, secret or data exposure changed. The P&L projection stays pure and is served only through financialStatements behind ledgerReportProcedure, which checks role, entitlement, capabilities, org an | F1 (qa) confirmed by skeptics: The new test file uses BigInt literals. tsconfig targets ES2017, so tsc reports TS2737 and the PR adds new typecheck errors. Next build also type-checks the repo's .ts files unless NEXT_BUILD_SKIP_TYPECHECK=1, so the bui | F2 (qa) confirmed by skeptics: Develop already satisfies the issue on its own. The PR adds only a derived field that no caller reads, plus tests that repeat assertions develop already has, so it adds nothing the issue still needs.
 
 ### #1116 · DEV-135 · done
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1116 · branch `codex/DEV-135-supplier-claim-journal` · head `7cf6f2fb1c` · group 3
@@ -669,12 +669,12 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 ### #1005 · DEV-50 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1005 · branch `fix/vertical-leak-404` · head `9d3baf26f6` · group 3
 - Title: fix(pharmacy): vertical gating in Settings and branded 404 for unknown tenant (QA batch 5)
-- Verdicts: machine pending · QA FAIL · Security PASS
+- Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: fix commit 9d3baf26f6 (unknown-tenant 404 links to sign-in, drop no-op pharmacy notification toggles; first run on 6b58b00b6c failed on the failures listed in the first review (see QA/Security)); QA+Security reviews complete
 - Next step: re-check queued for fix 9d3baf26f6; then `python3 handoff/scripts/compose.py 1005` and post comments/1005.md
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1005` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1005`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
-- Decisions: F1 (qa) confirmed by skeptics: The branded unknown-tenant 404 has no way back. DEV-50 explicitly expects a 'branded 404 with a way back', and the design contract (section 7, error states) requires 'the next available action'. | F2 (qa) confirmed by skeptics: The pharmacy Settings replaces the agency notification matrix with Stock, Expiry, Approvals and Refunds toggles, but nothing in the codebase sends notifications in those categories. These are new controls that do nothing | F3 (qa) refuted by skeptics: The command palette rewrite also changes non-pharmacy workspaces. Its shortcuts now come only from the sidebar's filteredNav. The old list came from routeLabels and included Email, API Access and Import, which have no si
+- Decisions: qa verdict set to PASS by hand: Rechecked DEV-50 at 9d3baf2. The unknown-tenant 404 now offers a primary Go to sign-in link to the shared apex /login, keeping the vertical, and omits it when no base domain is set. The no-op pharmacy notification toggles are removed and the code matches develop again. ESLint and prettier are clean  | security verdict set to PASS by hand: Checked the 9d3baf2 changes. sharedSignInUrl builds the link only from deployment config and a fixed vertical value, URL-encoded. It never echoes the request host and cannot be used as an open redirect. The 404 is identical for every unknown address, so it does not reveal which workspaces exist. Rem | F1 (qa) confirmed by skeptics: The branded unknown-tenant 404 has no way back. DEV-50 explicitly expects a 'branded 404 with a way back', and the design contract (section 7, error states) requires 'the next available action'. | F2 (qa) confirmed by skeptics: The pharmacy Settings replaces the agency notification matrix with Stock, Expiry, Approvals and Refunds toggles, but nothing in the codebase sends notifications in those categories. These are new controls that do nothing | F3 (qa) refuted by skeptics: The command palette rewrite also changes non-pharmacy workspaces. Its shortcuts now come only from the sidebar's filteredNav. The old list came from routeLabels and included Email, API Access and Import, which have no si
 
 ### #1004 · DEV-51 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1004 · branch `fix/dark-mode-tokens` · head `473ee7d33e` · group 3
@@ -699,12 +699,12 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 ### #1002 · DEV-61 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1002 · branch `feat/reports-csv-export` · head `c4cfcbebde` · group 3
 - Title: feat(reports): CSV export for reports, gated by reports:financial
-- Verdicts: machine pending · QA FAIL · Security PASS
+- Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: fix commit c4cfcbebde (return a generic 500 for unexpected report export failures; first run on 6aea99a22d failed on the failures listed in the first review (see QA/Security)); QA+Security reviews complete
 - Next step: re-check queued for fix c4cfcbebde; then `python3 handoff/scripts/compose.py 1002` and post comments/1002.md
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1002` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1002`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
-- Decisions: F1 (qa) confirmed by skeptics: Unexpected server failures are returned as HTTP 400 with the raw internal error message, not the generic 500 the PR promises. tRPC's createCaller wraps every non-TRPC error thrown inside the procedure as TRPCError({code:
+- Decisions: qa verdict set to PASS by hand: Re-checked fix c4cfcbe. The export route now maps only BAD_REQUEST, UNAUTHORIZED, FORBIDDEN and NOT_FOUND to their status codes. Every other failure is logged and returns a generic no-store 500. Period-summary validates filters first, so branch-limit and date errors stay 400 while reader failures be | security verdict set to PASS by hand: Re-checked fix c4cfcbe. Internal error text is no longer sent to clients: unexpected and wrapped INTERNAL_SERVER_ERROR failures return a generic 500 marked private, no-store, and details are logged on the server only. The reports:financial check, organization branch scoping, owner checks, audit note | F1 (qa) confirmed by skeptics: Unexpected server failures are returned as HTTP 400 with the raw internal error message, not the generic 500 the PR promises. tRPC's createCaller wraps every non-TRPC error thrown inside the procedure as TRPCError({code:
 
 ### #1001 · DEV-46 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1001 · branch `fix/reports-ops-screens` · head `d32c75456f` · group 3
