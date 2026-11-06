@@ -327,5 +327,12 @@
   "what": "map nontrade accrual, use Studio state tokens, cover voucher replay",
   "initialFailure": "no machine run (review findings only)",
   "noInitialRun": true
+ },
+ "949": {
+  "sha": "e250f60065db6e10926f5d24703f0b46c0f6ebf8",
+  "initialSha": "0c9fcd4793ba3105f866157b16001f28c34f772e",
+  "what": "857ab4287 keeps owner export PIN strikes durable and exports stored line gross; e250f6006 seeds a family member so the PR's data-export DB suite runs",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
  }
 }

@@ -480,5 +480,15 @@
    "verdict": "PASS",
    "details": "e7519476 changes no server logic: the security, router and general-journal source changes are byte-identical to prettier output of the parent. The only DB-test change sets app.is_platform_admin on the fixture owner client, used just for seeding and audit reads. Runtime assertions still run as a non-superuser, non-BYPASSRLS role, and the parent version fails with an RLS violation. Auth, scoping and RLS are unchanged; no new exposure found"
   }
+ },
+ "949": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "F1 and F2 are resolved at 857ab4287. Sales and sale-line gross now come from the stored grossMinor, and the PIN check runs in its own withTenantDb transaction. The 9 PR unit suites pass (137 tests), and the new tests fail on the old source. Prettier, eslint and tsc are clean on the changed files. The re-review then found that the PR's own data-export.db.test.ts failed all 6 tests on a migrated DB: its khata CHARGE seed had no memberId and broke pharmacy_khata_events_shape_check. Fixed in e250f6006, which seeds a family member (the payer, as in family-khata.db.test.ts) and sets memberId. All 6 DB tests now run and pass (re-import counts, tenant isolation, dedup and fifth daily slot, repeatable snapshot, upload cleanup), with no assertion changed. Merge note: the branch conflicts with develop in src/server/routers/_app.ts"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "SEC-1 is resolved at 857ab4287. verifyOwnerExportPin no longer takes a caller's client. It opens its own withTenantDb transaction for the owner's org and user and locks the credential row FOR UPDATE, so a /api/trpc rollback can no longer discard a wrong-PIN strike on request or download. The new test shows strikes 1-4 persist, the fifth locks, and the correct PIN is then refused, and it fails on the old code. Refusals are unchanged and fail closed. e250f6006 changes only test seed data"
+  }
  }
 }
