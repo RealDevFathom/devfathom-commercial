@@ -33,6 +33,11 @@ const mocks = vi.hoisted(() => ({
   outcomeQuery: vi.fn(),
   searchQuery: vi.fn(),
   searchSetData: vi.fn(),
+  queryInputs: vi.fn(),
+  searchCancel: vi.fn(),
+  cartSetData: vi.fn(),
+  scanSetData: vi.fn(),
+  cartInvalidate: vi.fn(),
   rxPanelProps: vi.fn<(props: ComponentProps<typeof CounterRxPanel>) => void>(),
   searchProps: vi.fn<(props: ComponentProps<typeof CounterSearchResults>) => void>(),
   khataAccounts: vi.fn(),
@@ -65,7 +70,8 @@ vi.mock('@/lib/trpc', () => {
         {
           useQuery: (_input: unknown, options?: unknown) => {
             mocks.queryOptions(name, options);
-            return mocks.queries[name];
+            mocks.queryInputs(name, _input, options);
+            return name === 'counterScan' ? mocks.queries.counterSearch : mocks.queries[name];
           },
           useMutation: (options: unknown) => {
             mocks.mutationOptions(name, options);
@@ -91,9 +97,19 @@ vi.mock('@/lib/trpc', () => {
       counterSearch: {
         setData: mocks.searchSetData,
         invalidate: vi.fn(),
+        cancel: mocks.searchCancel,
         fetch: (...args: unknown[]) => mocks.searchFetch(...args),
       },
-      counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
+      counterScan: {
+        setData: mocks.scanSetData,
+        cancel: vi.fn(),
+        fetch: (...args: unknown[]) => mocks.searchFetch(...args),
+      },
+      counterCart: {
+        cancel: mocks.cancel,
+        invalidate: mocks.cartInvalidate,
+        setData: mocks.cartSetData,
+      },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
       drawerStatus: { invalidate: mocks.drawerStatusInvalidate },
@@ -110,6 +126,7 @@ vi.mock('@/lib/trpc', () => {
         'counterKeymap',
         'counterSaveKeymap',
         'counterSearch',
+        'counterScan',
         'counterCart',
         'counterReceipt',
         'counterLotOptions',
@@ -1359,7 +1376,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     fireEvent.keyDown(search, { key: 'Enter' });
     await waitFor(() => expect(mocks.searchFetch).toHaveBeenCalled());
     expect(mocks.searchFetch).toHaveBeenCalledWith(
-      { branchId: 'branch-a', query: mode === 'gs1' ? '01234567890123' : '123456' },
+      { branchId: 'branch-a', barcode: mode === 'gs1' ? '01234567890123' : '123456' },
       { staleTime: 10_000 }
     );
     if (mode === 'unmount') {
@@ -1401,7 +1418,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     );
     await screen.findByText('1 × Paracetamol added.');
     expect(mocks.searchQuery).toHaveBeenCalledWith(
-      { branchId: 'branch-a', query: mode === 'gs1' ? '01234567890123' : '123456' },
+      { branchId: 'branch-a', barcode: mode === 'gs1' ? '01234567890123' : '123456' },
       { staleTime: 10_000 }
     );
 
@@ -1419,7 +1436,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       await Promise.resolve();
     });
     expect(mocks.searchQuery).toHaveBeenCalledWith(
-      { branchId: 'branch-a', query: '654321' },
+      { branchId: 'branch-a', barcode: '654321' },
       { staleTime: 10_000 }
     );
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
@@ -1515,7 +1532,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
     expect(mocks.searchQuery).toHaveBeenCalledExactlyOnceWith(
       {
         branchId: 'branch-a',
-        query: '123456',
+        barcode: '123456',
       },
       { staleTime: 10_000 }
     );
@@ -1663,7 +1680,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
     scan();
     await waitFor(() =>
       expect(mocks.searchQuery).toHaveBeenLastCalledWith(
-        { branchId: 'branch-b', query: '123456' },
+        { branchId: 'branch-b', barcode: '123456' },
         { staleTime: 10_000 }
       )
     );
@@ -1699,7 +1716,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
       scan(gs1);
       await screen.findByText('1 × Paracetamol added.');
       expect(mocks.searchQuery).toHaveBeenCalledExactlyOnceWith(
-        { branchId: 'branch-a', query: '01234567890128' },
+        { branchId: 'branch-a', barcode: '01234567890128' },
         { staleTime: 10_000 }
       );
       expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
@@ -2108,4 +2125,88 @@ it('keeps F10 printing available inside the receipt drawer', async () => {
   fireEvent.keyDown(drawer, { key: 'F10' });
   expect(mocks.printReceipt).toHaveBeenCalledExactlyOnceWith(receipt, 'en', 'THERMAL', false);
   expect(mocks.mutations.tender).not.toHaveBeenCalled();
+});
+
+it('debounces ordinary typing at 150ms and cancels only the previous query', () => {
+  vi.useFakeTimers();
+  try {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'Pan' } });
+    act(() => vi.advanceTimersByTime(149));
+    const inputs = () => mocks.queryInputs.mock.calls.filter((call) => call[0] === 'counterSearch');
+    expect(inputs().at(-1)?.[1]).toEqual({ branchId: 'branch-a', query: '' });
+    act(() => vi.advanceTimersByTime(1));
+    expect(inputs().at(-1)?.[1]).toEqual({ branchId: 'branch-a', query: 'Pan' });
+    expect(inputs().at(-1)?.[2]).toMatchObject({ enabled: true, trpc: { abortOnUnmount: true } });
+    expect(mocks.searchCancel).not.toHaveBeenCalledWith({ branchId: 'branch-a', query: 'Pan' });
+    fireEvent.change(search, { target: { value: 'Pana' } });
+    expect(mocks.searchCancel).toHaveBeenCalledWith({ branchId: 'branch-a', query: 'Pan' });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('reuses an uncertain scan intent until the cart confirms a change', async () => {
+  mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+  mocks.mutations.addLine!.mockResolvedValue({});
+  const view = render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  const scan = () => {
+    const field = screen.getByLabelText('Scan or search');
+    fireEvent.change(field, { target: { value: '123456' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+  };
+  scan();
+  await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(screen.getByLabelText('Scan or search')).toHaveValue(''));
+  const first = mocks.mutations.addLine!.mock.calls[0]![0] as { idempotencyKey: string };
+  scan();
+  await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.getByLabelText('Scan or search')).toHaveValue(''));
+  expect(mocks.mutations.addLine!.mock.calls[1]![0]).toMatchObject({
+    idempotencyKey: first.idempotencyKey,
+  });
+  const previous = cart();
+  mocks.queries.counterCart = {
+    ...query(
+      cart({
+        lines: [...previous.lines, { ...previous.lines[0]!, saleLineId: 'confirmed-second-line' }],
+      })
+    ),
+    refetch: mocks.refetch,
+  };
+  view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  scan();
+  await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(3));
+  expect(
+    (mocks.mutations.addLine!.mock.calls[2]![0] as { idempotencyKey: string }).idempotencyKey
+  ).not.toBe(first.idempotencyKey);
+});
+
+it('publishes the committed scan projection without a follow-up cart read and refreshes stock cache', async () => {
+  mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+  const committed = cart({
+    totals: { grossMinor: 50000, discountMinor: 0, netMinor: 50000, tenderedMinor: 0 },
+  });
+  const freshMedicine = barcodeRow({ onHandUnits: 9 });
+  mocks.mutations.addLine!.mockResolvedValue({
+    counterState: { cart: committed, medicine: freshMedicine },
+  });
+  render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  const scan = screen.getByLabelText('Scan or search');
+  fireEvent.change(scan, { target: { value: '123456' } });
+  fireEvent.keyDown(scan, { key: 'Enter' });
+  await waitFor(() => expect(scan).toHaveValue(''));
+  expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+    expect.objectContaining({ includeCounterState: true })
+  );
+  expect(mocks.cartSetData).toHaveBeenCalledWith(
+    { branchId: 'branch-a', saleId: 'sale-a' },
+    committed
+  );
+  expect(mocks.scanSetData).toHaveBeenCalledWith(
+    { branchId: 'branch-a', barcode: '123456' },
+    { rows: [freshMedicine], truncated: false }
+  );
+  expect(mocks.cartInvalidate).not.toHaveBeenCalled();
 });

@@ -503,6 +503,7 @@ model Medicine {
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
   @@map("pharmacy_medicines")
+  @@index([productName(ops: raw("gin_trgm_ops")), brandName(ops: raw("gin_trgm_ops")), manufacturer(ops: raw("gin_trgm_ops")), drapRegistrationNumber(ops: raw("gin_trgm_ops"))], type: Gin, map: "pharmacy_medicines_counter_search_trgm_idx")
 }
 
 model MedicineStrengthComponent {

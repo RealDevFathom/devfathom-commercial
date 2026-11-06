@@ -38,6 +38,7 @@ import {
   type CounterLotOverrideValue,
 } from './counter-cart';
 import { CounterKeymapLegend } from './counter-keymap-legend';
+import { CounterScanInput } from './counter-scan-input';
 import {
   CounterReceiptView,
   type CounterReceiptPresentationResult,
@@ -319,11 +320,24 @@ function ScopedPharmacyCounterConsole({
   const utils = trpc.useUtils();
 
   const [selectedBranchId, setSelectedBranchId] = useState(initialBranchId);
-  const [query, setQuery] = useState('');
-  const [submittedSearch, setSubmittedSearch] = useState({ text: '', query: '', branchId: '' });
+  const [query, setQueryValue] = useState('');
+  const [queryResetVersion, setQueryResetVersion] = useState(0);
+  const setQuery = useCallback((next: string) => {
+    setQueryValue(next);
+    setQueryResetVersion((version) => version + 1);
+  }, []);
+  const [submittedSearch, setSubmittedSearch] = useState({
+    text: '',
+    query: '',
+    branchId: '',
+    exactBarcode: false,
+  });
   const submittedQuery = submittedSearch.query;
   const scannerRevision = useRef(0);
+  const scanIntentKeys = useRef({ version: '', keys: new Map<string, string>() });
   const scannerInFlight = useRef<{ text: string; branchId: string; revision: number } | null>(null);
+  const lastSearchKeystrokeAt = useRef(0);
+  const scannerBurst = useRef(false);
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
@@ -490,22 +504,29 @@ function ScopedPharmacyCounterConsole({
   const scannerQuery = trimmedQuery.startsWith(']d2') || trimmedQuery.startsWith('(01)');
   const searchCurrent =
     branchAuthorized &&
+    !scannerBurst.current &&
     trimmedQuery.length >= 2 &&
     submittedSearch.text === trimmedQuery &&
     submittedSearch.branchId === branchId;
 
-  useEffect(() => {
-    if (!branchAuthorized || trimmedQuery.length < 2 || scannerQuery || searchCurrent) return;
-    const timer = window.setTimeout(() => {
-      setSubmittedSearch({ text: trimmedQuery, query: trimmedQuery, branchId });
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [branchAuthorized, branchId, scannerQuery, searchCurrent, trimmedQuery]);
-
-  const searchQuery = trpc.pharmacySales.counterSearch.useQuery(
+  const nameSearchQuery = trpc.pharmacySales.counterSearch.useQuery(
     { branchId, query: submittedQuery },
-    { enabled: searchCurrent && submittedQuery.length >= 2, staleTime: 10_000 }
+    {
+      enabled: searchCurrent && !submittedSearch.exactBarcode && submittedQuery.length >= 2,
+      staleTime: 10_000,
+      trpc: { abortOnUnmount: true },
+    }
   );
+
+  const scanSearchQuery = trpc.pharmacySales.counterScan.useQuery(
+    { branchId, barcode: submittedQuery },
+    {
+      enabled: searchCurrent && submittedSearch.exactBarcode && submittedQuery.length >= 2,
+      staleTime: 10_000,
+      trpc: { abortOnUnmount: true },
+    }
+  );
+  const searchQuery = submittedSearch.exactBarcode ? scanSearchQuery : nameSearchQuery;
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -878,24 +899,30 @@ function ScopedPharmacyCounterConsole({
   }, [paymentOpen]);
 
   const runSearch = useCallback(
-    async (submittedQuery?: string) => {
+    async (submittedQuery?: string, exactBarcode = false) => {
       if (!branchAuthorized || busy) return;
-      const trimmed = (submittedQuery ?? query).trim();
+      const trimmed = (submittedQuery ?? searchRef.current?.value ?? query).trim();
       if (trimmed.length < 2) {
         setNotice({ tone: 'warning', message: 'Type at least two characters to search.' });
         return;
       }
+      setQueryValue(trimmed);
       const revision = ++scannerRevision.current;
       const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
       if (!looksLikeGs1) {
-        setSubmittedSearch({ text: trimmed, query: trimmed, branchId });
+        setSubmittedSearch({ text: trimmed, query: trimmed, branchId, exactBarcode });
         return { query: trimmed, revision, blocked: false };
       }
       setPending('authenticatePack');
       try {
         const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
         if (revision !== scannerRevision.current) return;
-        setSubmittedSearch({ text: trimmed, query: verdict.parsed?.gtin ?? trimmed, branchId });
+        setSubmittedSearch({
+          text: trimmed,
+          query: verdict.parsed?.gtin ?? trimmed,
+          branchId,
+          exactBarcode,
+        });
         setNotice({
           tone:
             verdict.status === 'VERIFIED'
@@ -935,7 +962,7 @@ function ScopedPharmacyCounterConsole({
   }, [branchId, createSale, saleId, setActiveSale]);
 
   const addToCart = useCallback(
-    async (scannedRow?: CounterSearchRow, scanRevision?: number) => {
+    async (scannedRow?: CounterSearchRow, scanRevision?: number, scanIntent?: string) => {
       const scanIsCurrent = () =>
         scanRevision === undefined || scanRevision === scannerRevision.current;
       if (!scanIsCurrent()) return;
@@ -961,6 +988,28 @@ function ScopedPharmacyCounterConsole({
       setNotice(null);
       try {
         const activeSaleId = await ensureSale();
+        // Reuse an unchanged bill's intent after an uncertain response. A confirmed
+        // cart change allows the next intentional scan of the same pack.
+        let scannerKey: string | undefined;
+        if (scanIntent) {
+          const version = `${branchId}:${activeSaleId}:${cart?.saleId === activeSaleId ? cart.lines.map((line) => line.saleLineId).join(',') : ''}`;
+          if (scanIntentKeys.current.version !== version) {
+            scanIntentKeys.current = { version, keys: new Map() };
+          }
+          const signature = JSON.stringify([
+            row.medicineId,
+            option.packLevelId,
+            option.kind,
+            units,
+            overrideLotId,
+          ]);
+          scannerKey = scanIntentKeys.current.keys.get(signature);
+          if (!scannerKey) {
+            scannerKey = browserUuid();
+            scanIntentKeys.current.keys.set(signature, scannerKey);
+          }
+        }
+
         // Creating a bill can outlive this scan or the mounted counter.
         if (!scanIsCurrent()) return;
         const controlled = row.restriction.controlled;
@@ -989,6 +1038,12 @@ function ScopedPharmacyCounterConsole({
         }
         const refSerial = Number(controlledAuth.refSerial);
         const added = await addLine.mutateAsync({
+          ...(scanIntent &&
+          !row.restriction.controlled &&
+          !row.restriction.rx &&
+          !row.restriction.restricted
+            ? { includeCounterState: true as const }
+            : {}),
           controlledAuthorization:
             controlled && patient
               ? {
@@ -1014,7 +1069,9 @@ function ScopedPharmacyCounterConsole({
           canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
           // A stable key per (sale, medicine, unit, quantity) so a double-press of
           // the add chord cannot post the same line twice.
-          idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
+          idempotencyKey: scanIntent
+            ? `counter-scan:${activeSaleId}:${scannerKey}`
+            : `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
           ...(overrideLotId && batchOverride
             ? {
                 override: {
@@ -1025,11 +1082,32 @@ function ScopedPharmacyCounterConsole({
               }
             : {}),
         });
-        if ('blocked' in added) {
+        if ('blocked' in added && typeof added.blocked === 'string') {
           setNotice({ tone: 'warning', message: added.blocked });
           return;
         }
-        await refreshCart();
+        if (
+          'counterState' in added &&
+          added.counterState &&
+          hasValidBill(added.counterState.cart, activeSaleId)
+        ) {
+          // The projection is read inside the authorized write transaction. Cancel
+          // older reads before publishing it; keep stock/price cache fresh too.
+          await utils.pharmacySales.counterCart.cancel();
+          utils.pharmacySales.counterCart.setData(
+            { branchId, saleId: activeSaleId },
+            added.counterState.cart
+          );
+          if (scanIntent)
+            utils.pharmacySales.counterScan.setData(
+              { branchId, barcode: scanIntent },
+              {
+                rows: added.counterState.medicine ? [added.counterState.medicine] : [],
+                truncated: false,
+              }
+            );
+          if (scanIsCurrent()) setActiveRow(added.counterState.medicine);
+        } else await refreshCart();
         await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
         await utils.pharmacySafety.controlledRegister.invalidate();
         await utils.pharmacySales.counterSearch.invalidate();
@@ -1056,6 +1134,8 @@ function ScopedPharmacyCounterConsole({
     },
     [
       activeRow,
+      setQuery,
+      cart,
       addLine,
       controlledAuth,
       patient,
@@ -1096,14 +1176,14 @@ function ScopedPharmacyCounterConsole({
       scannerInFlight.current = scan;
       let revision: number | undefined;
       try {
-        const searching = runSearch(submittedQuery);
+        const searching = runSearch(submittedQuery, true);
         // runSearch claims its revision synchronously, before its first await.
         scan.revision = scannerRevision.current;
         const search = await searching;
         if (!search || search.blocked) return;
         revision = search.revision;
-        const result = await utils.pharmacySales.counterSearch.fetch(
-          { branchId, query: search.query },
+        const result = await utils.pharmacySales.counterScan.fetch(
+          { branchId, barcode: search.query },
           { staleTime: 10_000 }
         );
         if (revision !== scannerRevision.current || result.rows.length !== 1 || barcodeBusy.current)
@@ -1116,7 +1196,7 @@ function ScopedPharmacyCounterConsole({
           ? counterSelectionPreview(row, row.saleUnits[0] ?? null, 1)
           : preview;
         if (scanPreview?.sufficient) {
-          await addToCart(restage ? row : undefined, revision);
+          await addToCart(restage ? row : undefined, revision, search.query);
         }
       } catch (error) {
         if (revision === scannerRevision.current)
@@ -2040,20 +2120,43 @@ function ScopedPharmacyCounterConsole({
                     <Label htmlFor="counter-search" className="sr-only">
                       Scan or search
                     </Label>
-                    <Input
+                    <CounterScanInput
                       id="counter-search"
-                      ref={searchRef}
+                      inputRef={searchRef}
                       // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
                       data-counter-scan=""
                       autoFocus
                       autoComplete="off"
                       value={query}
+                      resetVersion={queryResetVersion}
+                      onDebouncedChange={(next) => {
+                        if (!branchAuthorized) return;
+                        scannerBurst.current = false;
+                        setQueryValue(next);
+                        const text = next.trim();
+                        setSubmittedSearch({ text, query: text, branchId, exactBarcode: false });
+                      }}
                       disabled={busy}
                       placeholder="Brand, generic or barcode"
                       aria-describedby="counter-search-help"
                       onChange={(event) => {
+                        void utils.pharmacySales.counterSearch.cancel({
+                          branchId,
+                          query: submittedQuery,
+                        });
+                        void utils.pharmacySales.counterScan.cancel({
+                          branchId,
+                          barcode: submittedQuery,
+                        });
+                        const now = performance.now();
+                        const next = event.target.value;
+                        scannerBurst.current =
+                          next.length > 1 &&
+                          now - lastSearchKeystrokeAt.current < 50 &&
+                          (/^\d+$/.test(next) || next.startsWith(']d2') || next.startsWith('(01)'));
+                        lastSearchKeystrokeAt.current = now;
                         scannerRevision.current += 1;
-                        setQuery(event.target.value);
+                        setQueryValue('');
                         setActiveRow(null);
                         setSaleUnit(null);
                         setQuantity(1);
@@ -2061,6 +2164,7 @@ function ScopedPharmacyCounterConsole({
                       onKeyDown={(event) => {
                         if (event.key !== 'Enter') return;
                         event.preventDefault();
+                        scannerBurst.current = false;
                         const trimmed = event.currentTarget.value.trim();
                         const barcode =
                           /^\d{6,}$/.test(trimmed) ||
@@ -2070,11 +2174,11 @@ function ScopedPharmacyCounterConsole({
                           void addBarcode(trimmed);
                           return;
                         }
-                        if (activeRow) {
+                        if (activeRow && query.trim() === trimmed) {
                           void addToCart();
                           return;
                         }
-                        void runSearch();
+                        void runSearch(trimmed);
                       }}
                       className="h-12"
                     />
@@ -2261,6 +2365,7 @@ function ScopedPharmacyCounterConsole({
                     text: proposal.displayName,
                     query: proposal.displayName,
                     branchId,
+                    exactBarcode: false,
                   });
                   setActiveRow(null);
                 }}
@@ -2280,6 +2385,7 @@ function ScopedPharmacyCounterConsole({
                 text: suggestion.displayName,
                 query: suggestion.displayName,
                 branchId,
+                exactBarcode: false,
               });
               setActiveRow(null);
             }}

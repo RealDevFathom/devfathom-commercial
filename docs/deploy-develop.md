@@ -42,6 +42,19 @@ restarts that same unit, then reports failure. Database migrations are forward-o
 not undo schema changes. Use backward-compatible expand/contract migrations. Initial deployments
 require an existing healthy predecessor, including its persistent uploads links.
 
+### Counter search index recovery
+
+An interrupted concurrent build of `pharmacy_medicines_counter_search_trgm_idx` can leave an
+invalid index and a failed Prisma migration. Stop automated retries and inspect `pg_index.indisvalid`
+and `_prisma_migrations` before acting. On the affected database, a database operator should run
+`DROP INDEX CONCURRENTLY IF EXISTS "pharmacy_medicines_counter_search_trgm_idx";` as a standalone
+statement outside a transaction, then mark the failed create migration rolled back with
+`prisma migrate resolve --rolled-back <exact-failed-migration-name>`. Retry the migration and verify
+the index is present and valid before resuming activation. Do not mark the failed migration applied.
+The later repair migrations intentionally drop and recreate this index once, including on databases
+where the earlier migration was already recorded as applied. Check catalogue size and index build
+capacity before scheduling the migration.
+
 The active release and predecessor plus three other newest directories are retained after success
 (about five), excluding `.staging`. Normal exits clean the temporary staging directory and archive.
 A SIGKILL can leave staging debris; an administrator may remove orphaned `.staging` entries while

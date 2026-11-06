@@ -113,7 +113,7 @@ type BalanceRow = {
 };
 
 const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 50;
+const MAX_LIMIT = 20;
 
 /**
  * A strength component as a counter reads it: `500 mg`, `2.5 mg`, `500 mg + 30 mg`.
@@ -156,17 +156,8 @@ async function matchMedicineIds(
     if (!matches.has(medicineId)) matches.set(medicineId, kind);
   };
 
-  const barcode = normalized
-    ? await db.medicineBarcode.findFirst({
-        where: {
-          organizationId: scope.organizationId,
-          normalizedCode: normalized,
-          presentation: { medicine: { saleable: true } },
-        },
-        select: { presentation: { select: { medicineId: true } } },
-      })
-    : null;
-  if (barcode) remember(barcode.presentation.medicineId, 'BARCODE');
+  const barcode = normalized ? await findBarcodeMedicine(db, scope, normalized) : null;
+  if (barcode?.presentation.medicine.saleable) remember(barcode.presentation.medicineId, 'BARCODE');
 
   if (normalized) {
     const aliases = await db.medicineAlias.findMany({
@@ -231,6 +222,18 @@ async function matchMedicineIds(
   return matches;
 }
 
+async function findBarcodeMedicine(db: ScopedDb, scope: CounterScope, normalizedCode: string) {
+  return db.medicineBarcode.findUnique({
+    // Backed by pharmacy_medicine_barcodes_organizationId_normalizedCode_key.
+    where: {
+      organizationId_normalizedCode: { organizationId: scope.organizationId, normalizedCode },
+    },
+    select: {
+      presentation: { select: { medicineId: true, medicine: { select: { saleable: true } } } },
+    },
+  });
+}
+
 function candidateFrom(scope: CounterScope, lot: LotRow, balance: BalanceRow): AllocationCandidate {
   return {
     inventoryLotId: lot.id,
@@ -256,20 +259,44 @@ function candidateFrom(scope: CounterScope, lot: LotRow, balance: BalanceRow): A
 export async function searchCounterCatalog(
   db: ScopedDb,
   scope: CounterScope,
-  input: { query: string; limit?: number; at?: Date }
+  input: { query: string; limit?: number; at?: Date; exactBarcode?: boolean; medicineId?: string }
 ): Promise<{ rows: CounterSearchRow[]; truncated: boolean }> {
   const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const at = input.at ?? new Date();
-  const matches = await matchMedicineIds(db, scope, input.query, limit);
+  const normalized = normalizeMedicineText(input.query.trim());
+  const matches = input.medicineId
+    ? new Map<string, CounterMatchKind>([[input.medicineId, 'BARCODE']])
+    : input.exactBarcode
+      ? new Map<string, CounterMatchKind>()
+      : await matchMedicineIds(db, scope, input.query, limit);
+  if (input.exactBarcode && normalized) {
+    const barcode = await findBarcodeMedicine(db, scope, normalized);
+    if (barcode?.presentation.medicine.saleable)
+      matches.set(barcode.presentation.medicineId, 'BARCODE');
+  }
   const medicineIds = [...matches.keys()].slice(0, limit);
   if (medicineIds.length === 0) return { rows: [], truncated: false };
 
   const [medicines, lots, packLevels, mrps] = await Promise.all([
     db.medicine.findMany({
       where: { organizationId: scope.organizationId, id: { in: medicineIds }, saleable: true },
-      include: {
-        strengths: { include: { ingredient: { select: { name: true } } } },
-        presentations: { orderBy: { createdAt: 'asc' } },
+      select: {
+        id: true,
+        productName: true,
+        brandName: true,
+        manufacturer: true,
+        rx: true,
+        otc: true,
+        restricted: true,
+        controlled: true,
+        highAlert: true,
+        lasa: true,
+        coldChain: true,
+        strengths: { select: { value: true, unit: true } },
+        presentations: {
+          select: { id: true, presentation: true, dosageForm: true, route: true, createdAt: true },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     }),
     db.pharmacyInventoryLot.findMany({
@@ -561,7 +588,59 @@ export async function readCounterCart(
   scope: CounterScope,
   saleId: string
 ): Promise<CounterCart> {
-  const sale = await saleInScope(db, scope, saleId);
+  const sale = await db.pharmacySale.findFirst({
+    where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+    select: {
+      id: true,
+      status: true,
+      receiptNumber: true,
+      tenders: { select: { amountMinor: true } },
+      lines: {
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          medicineId: true,
+          saleUnit: true,
+          quantity: true,
+          canonicalUnits: true,
+          unitPriceMinor: true,
+          proRataCeilingMinor: true,
+          discountMinor: true,
+          grossMinor: true,
+          medicine: {
+            select: {
+              productName: true,
+              rx: true,
+              controlled: true,
+              restricted: true,
+              highAlert: true,
+              lasa: true,
+              coldChain: true,
+              strengths: {
+                select: {
+                  value: true,
+                  unit: true,
+                  ingredientId: true,
+                  ingredient: { select: { name: true } },
+                },
+              },
+            },
+          },
+          presentation: { select: { presentation: true } },
+          allocations: {
+            orderBy: { id: 'asc' },
+            select: {
+              inventoryLotId: true,
+              stockLocationId: true,
+              canonicalUnits: true,
+              lot: { select: { batch: { select: { batchNumber: true, expiresAt: true } } } },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!sale) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
   const locationIds = [
     ...new Set(sale.lines.flatMap((line) => line.allocations.map((a) => a.stockLocationId))),
   ];
