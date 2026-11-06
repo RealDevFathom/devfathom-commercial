@@ -71,9 +71,11 @@ const subscribeToHydration = () => () => {};
 export function Topbar({
   onMenuClick,
   brand,
+  controlsOnly = false,
 }: {
   onMenuClick?: () => void;
   brand?: TenantBrand;
+  controlsOnly?: boolean;
 } = {}) {
   const [commandOpen, setCommandOpen] = useState(false);
   // Mount the lazily-rendered palette once it has first been opened, then keep
@@ -134,8 +136,10 @@ export function Topbar({
     router.push(href);
   };
 
-  // Cmd+K keyboard shortcut
+  // Cmd+K keyboard shortcut. The compact copy in the counter menu relies on
+  // the already-mounted main top bar's listener.
   useEffect(() => {
+    if (controlsOnly) return;
     const down = (e: KeyboardEvent) => {
       if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
@@ -144,7 +148,7 @@ export function Topbar({
     };
     document.addEventListener('keydown', down);
     return () => document.removeEventListener('keydown', down);
-  }, [commandOpen, handleCommandOpenChange]);
+  }, [commandOpen, handleCommandOpenChange, controlsOnly]);
 
   const getInitials = (name: string) =>
     name
@@ -157,69 +161,72 @@ export function Topbar({
   return (
     <>
       <header className="studio-topbar sticky top-0 z-30 flex min-h-[76px] items-center gap-3 border-b border-border-subtle bg-card/94 px-4 backdrop-blur-xl sm:px-6 xl:px-8">
-        {/* Mobile menu button */}
-        {onMenuClick && (
-          <button
-            onClick={onMenuClick}
-            className="studio-icon-button lg:hidden"
-            aria-label="Open menu"
-          >
-            <Menu className="h-5 w-5" />
-          </button>
-        )}
+        {!controlsOnly ? (
+          <>
+            {/* Mobile menu button */}
+            {onMenuClick && (
+              <button
+                onClick={onMenuClick}
+                className="studio-icon-button lg:hidden"
+                aria-label="Open menu"
+              >
+                <Menu className="h-5 w-5" />
+              </button>
+            )}
 
-        <Link
-          href="/dashboard"
-          aria-label="Open dashboard"
-          className="flex shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {brand?.markUrl || brand?.logoUrl ? (
-            <Image
-              src={brand.markUrl ?? brand.logoUrl ?? ''}
-              alt=""
-              width={40}
-              height={40}
-              unoptimized
-              className="h-10 w-10 rounded-xl object-contain"
-            />
-          ) : (
-            <FathomMark className="h-10 w-10" variant="brand" />
-          )}
-          <div className="hidden leading-tight sm:block">
-            <span className="block text-sm font-semibold tracking-[-0.03em] text-foreground">
-              {brand?.displayName ?? 'DevFathom'}
-            </span>
-            <span className="block text-xs text-muted-foreground">Company workspace</span>
-          </div>
-        </Link>
+            <Link
+              href="/dashboard"
+              aria-label="Open dashboard"
+              className="flex shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {brand?.markUrl || brand?.logoUrl ? (
+                <Image
+                  src={brand.markUrl ?? brand.logoUrl ?? ''}
+                  alt=""
+                  width={40}
+                  height={40}
+                  unoptimized
+                  className="h-10 w-10 rounded-xl object-contain"
+                />
+              ) : (
+                <FathomMark className="h-10 w-10" variant="brand" />
+              )}
+              <div className="hidden leading-tight sm:block">
+                <span className="block text-sm font-semibold tracking-[-0.03em] text-foreground">
+                  {brand?.displayName ?? 'DevFathom'}
+                </span>
+                <span className="block text-xs text-muted-foreground">Company workspace</span>
+              </div>
+            </Link>
 
-        <div className="hidden h-8 w-px bg-border-subtle md:block" />
+            <div className="hidden h-8 w-px bg-border-subtle md:block" />
 
-        <Link
-          href="/projects"
-          className="studio-icon-button hidden md:flex"
-          aria-label="Open projects"
-        >
-          <Plus className="h-4 w-4" />
-        </Link>
+            <Link
+              href="/projects"
+              className="studio-icon-button hidden md:flex"
+              aria-label="Open projects"
+            >
+              <Plus className="h-4 w-4" />
+            </Link>
 
-        <div className="hidden min-w-0 md:block">
-          <span className="block text-xs font-medium text-foreground">
-            {session?.user?.name ?? 'Workspace'}
-          </span>
-          <span className="block max-w-36 truncate text-[11px] text-muted-foreground">
-            {session?.user?.title ?? 'Team member'}
-          </span>
-        </div>
+            <div className="hidden min-w-0 md:block">
+              <span className="block text-xs font-medium text-foreground">
+                {session?.user?.name ?? 'Workspace'}
+              </span>
+              <span className="block max-w-36 truncate text-[11px] text-muted-foreground">
+                {session?.user?.title ?? 'Team member'}
+              </span>
+            </div>
 
-        {/* Breadcrumbs */}
-        <nav
-          aria-label="Breadcrumb"
-          className="ml-2 hidden min-w-0 items-center gap-1 overflow-hidden border-l border-border-subtle pl-4 text-xs xl:flex"
-        >
-          <TopbarBreadcrumbs />
-        </nav>
-
+            {/* Breadcrumbs */}
+            <nav
+              aria-label="Breadcrumb"
+              className="ml-2 hidden min-w-0 items-center gap-1 overflow-hidden border-l border-border-subtle pl-4 text-xs xl:flex"
+            >
+              <TopbarBreadcrumbs />
+            </nav>
+          </>
+        ) : null}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {/* Search */}
           <button
@@ -261,7 +268,7 @@ export function Topbar({
           {mounted && (
             <button
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="studio-icon-button hidden sm:flex"
+              className={cn('studio-icon-button', controlsOnly ? 'flex' : 'hidden sm:flex')}
               aria-label={theme === 'dark' ? 'Use light theme' : 'Use dark theme'}
             >
               {theme === 'dark' ? (

@@ -637,6 +637,7 @@ function useVisibleNavigation() {
 interface SidebarProps {
   brand?: TenantBrand;
   onNavigate?: () => void;
+  className?: string;
   collapsed?: boolean;
   onCollapsedChange?: (collapsed: boolean) => void;
   collapsible?: boolean;
@@ -645,6 +646,7 @@ interface SidebarProps {
 export function Sidebar({
   brand,
   onNavigate,
+  className,
   collapsed: controlledCollapsed,
   onCollapsedChange,
   collapsible = true,
@@ -679,7 +681,8 @@ export function Sidebar({
       data-collapsed={collapsed || undefined}
       className={cn(
         'studio-drawer fixed start-0 top-0 z-40 flex h-dvh flex-col border-e border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-out',
-        collapsed ? 'w-16' : 'w-[min(20rem,88vw)]'
+        collapsed ? 'w-16' : 'w-[min(20rem,88vw)]',
+        className
       )}
     >
       {/* Wordmark */}

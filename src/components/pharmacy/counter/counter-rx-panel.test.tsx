@@ -374,4 +374,24 @@ describe('CounterRxPanel checks', () => {
     expect(screen.queryByLabelText('Pharmacist PIN')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Patient address')).not.toBeInTheDocument();
   });
+
+  it('presents an unbilled controlled selection and delegates the explicit authorization action', () => {
+    const onAuthorizeControlled = vi.fn();
+    render(
+      <CounterRxPanel
+        {...props({
+          patient,
+          controlled: authorization(),
+          controlledOnly: true,
+          onAuthorizeControlled,
+        })}
+      />
+    );
+    expect(
+      screen.getByText('This medicine is not on the bill until authorised.')
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Safety blocks')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Authorise and add' }));
+    expect(onAuthorizeControlled).toHaveBeenCalledOnce();
+  });
 });

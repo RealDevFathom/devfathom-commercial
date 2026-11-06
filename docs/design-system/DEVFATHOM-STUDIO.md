@@ -174,6 +174,10 @@ cycle. `src/app/font-tokens.test.ts` guards both rules.
 - The top bar is 76px high.
 - Primary desktop navigation sits directly below the top bar and uses the same horizontal,
   rounded, active-pill grammar in tenant and platform modes.
+- Counter D02 remains open. The optional `NEXT_PUBLIC_COUNTER_IMMERSIVE_NAV=true` preview
+  replaces that row on the counter at tablet and desktop widths with a Menu control and the
+  existing navigation drawer. The default keeps Studio navigation; remove the preview or update
+  the contract when the Studio owners record the decision.
 - The canvas scrolls inside the shell; the browser page itself should not develop horizontal
   overflow.
 - Let operational pages use the available canvas. Do not force a narrow marketing-page max width

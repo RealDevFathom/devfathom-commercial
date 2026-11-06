@@ -492,6 +492,9 @@ function CounterRxPhotoCapture({
 }
 
 export type CounterRxPanelProps = {
+  controlledOnly?: boolean;
+  onAuthorizeControlled?: () => void;
+  controlledError?: string | null;
   attachableLines?: ReadonlyArray<{
     saleLineId: string;
     medicineId: string;
@@ -568,6 +571,9 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
   function CounterRxPanel(
     {
       controlled,
+      controlledOnly = false,
+      onAuthorizeControlled,
+      controlledError,
       attachableLines = [],
       onAttachPrescription,
       onRefreshVerification,
@@ -598,41 +604,43 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
         tabIndex={-1}
         className="min-w-0 space-y-5 rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
       >
-        <section aria-label="Safety blocks" className="space-y-3">
-          {attachmentError ? (
-            <p role="alert" className="text-sm text-destructive">
-              {attachmentError}
-            </p>
-          ) : null}
-          <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-            Safety blocks
-          </h4>
-          {blocks.length === 0 ? (
-            <p className="text-sm text-text-muted">
-              Safety checks run before payment. Any reported blocks appear here.
-            </p>
-          ) : (
-            <ul className="space-y-2">
-              {blocks.map((alert) => (
-                <li
-                  key={alert.key}
-                  role="alert"
-                  className="space-y-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3"
-                >
-                  <StatusPill status="blocked" tone="danger" label="Blocked" />
-                  <p className="text-sm font-semibold leading-relaxed text-text-strong">
-                    {alert.message}
-                  </p>
-                  {alert.remedy ? (
-                    <p className="mt-1 text-sm text-text-body">{alert.remedy}</p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        {!controlledOnly ? (
+          <section aria-label="Safety blocks" className="space-y-3">
+            {attachmentError ? (
+              <p role="alert" className="text-sm text-destructive">
+                {attachmentError}
+              </p>
+            ) : null}
+            <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+              Safety blocks
+            </h4>
+            {blocks.length === 0 ? (
+              <p className="text-sm text-text-muted">
+                Safety checks run before payment. Any reported blocks appear here.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {blocks.map((alert) => (
+                  <li
+                    key={alert.key}
+                    role="alert"
+                    className="space-y-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3"
+                  >
+                    <StatusPill status="blocked" tone="danger" label="Blocked" />
+                    <p className="text-sm font-semibold leading-relaxed text-text-strong">
+                      {alert.message}
+                    </p>
+                    {alert.remedy ? (
+                      <p className="mt-1 text-sm text-text-body">{alert.remedy}</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        ) : null}
 
-        {advice.length > 0 || commercial.length > 0 ? (
+        {!controlledOnly && (advice.length > 0 || commercial.length > 0) ? (
           <section
             aria-label="Counselling and notices"
             className="space-y-3 border-t border-border-subtle pt-5"
@@ -948,6 +956,21 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
             </div>
           )}
         </section>
+        {controlledOnly ? (
+          <p className="text-sm text-text-muted">
+            This medicine is not on the bill until authorised.
+          </p>
+        ) : null}
+        {controlledOnly && controlledError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {controlledError}
+          </p>
+        ) : null}
+        {controlledOnly && !controlled ? (
+          <p role="alert" className="text-sm text-text-muted">
+            A pharmacist must authorise this medicine.
+          </p>
+        ) : null}
         {controlled ? (
           <section
             aria-label="Controlled medicine authorization"
@@ -1105,6 +1128,16 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   onChange={(event) => controlled.onChange('pin', event.target.value)}
                 />
                 <p className="text-xs text-text-muted">The PIN is cleared after each attempt.</p>
+                {controlledOnly && onAuthorizeControlled ? (
+                  <Button
+                    type="button"
+                    className="h-11"
+                    disabled={disabled}
+                    onClick={onAuthorizeControlled}
+                  >
+                    Authorise and add
+                  </Button>
+                ) : null}
               </>
             )}
           </section>

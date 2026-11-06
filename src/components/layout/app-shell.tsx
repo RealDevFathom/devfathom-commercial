@@ -1,9 +1,21 @@
 'use client';
 
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import { Sidebar, TopNavigation } from './sidebar';
+import { CounterNavigationContext } from './counter-navigation-context';
+import { CounterMobileChromeContext, type CounterMobileChrome } from './counter-mobile-chrome';
+import { FathomMark } from '@/components/brand/logo';
+import Image from 'next/image';
+import {
+  Dialog,
+  DialogClose,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import { Topbar } from './topbar';
 import { PageTransition } from '@/components/motion/page-transition';
 import { isAssistantAvailable, useAssistant } from '@/lib/assistant-store';
@@ -12,7 +24,7 @@ import { cn } from '@/lib/utils';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { isModuleGranted, moduleForPath } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
-import { Box, Loader2, ShieldAlert } from 'lucide-react';
+import { Box, Loader2, Menu, MoreHorizontal, ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { isTenantIdentityMismatch, tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
@@ -178,6 +190,10 @@ export function AppShell({
   // before this renders. Here the live session is the moving part, so the check
   // below (after every hook) degrades to a notice rather than throwing.
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [counterMenuOpen, setCounterMenuOpen] = useState(false);
+  const [counterChrome, setCounterChrome] = useState<CounterMobileChrome | null>(null);
+  const counterMenuReturn = useRef<HTMLElement | null>(null);
+  const mobileMenuReturn = useRef<HTMLElement | null>(null);
   const pathname = usePathname();
   const { data: session, status: sessionStatus } = useSession();
   const entitlements = useEntitlements();
@@ -185,12 +201,23 @@ export function AppShell({
   const moduleEnabled =
     !currentModule || isModuleGranted(currentModule, entitlements.enabledModules);
   const counterPos = pathname === '/pharmacy/counter';
+  // D02 remains open. This opt-in preview can be removed or made the default
+  // once Studio's navigation decision is recorded; unset preserves Studio today.
+  const counterNavigationPreview =
+    counterPos && process.env.NEXT_PUBLIC_COUNTER_IMMERSIVE_NAV === 'true';
+  const counterPreviewActive = counterNavigationPreview && Boolean(counterChrome?.openMore);
   const immersive =
     counterPos || pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
   const brandStyle = tenantBrandTokens(brand) as CSSProperties;
 
+  const openMobileMenu = (trigger?: HTMLElement) => {
+    mobileMenuReturn.current =
+      trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    setMobileMenuOpen(true);
+  };
+
   useEffect(() => {
-    if (!mobileMenuOpen) return;
+    if (!mobileMenuOpen || counterPos) return;
 
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setMobileMenuOpen(false);
@@ -198,7 +225,7 @@ export function AppShell({
 
     document.addEventListener('keydown', closeOnEscape);
     return () => document.removeEventListener('keydown', closeOnEscape);
-  }, [mobileMenuOpen]);
+  }, [mobileMenuOpen, counterPos]);
 
   // WHA-276: enforce the invariant that displayed workspace identity can never
   // diverge from session.user.organizationId. Every hook above has already run,
@@ -216,26 +243,55 @@ export function AppShell({
         Skip to content
       </a>
       {/* Mobile overlay */}
-      {mobileMenuOpen && (
-        <>
-          <div
-            aria-hidden="true"
-            className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
-            onClick={() => setMobileMenuOpen(false)}
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Mobile navigation"
-            className="fixed inset-y-0 start-0 z-50 lg:hidden"
-          >
-            <Sidebar
-              brand={brand}
-              onNavigate={() => setMobileMenuOpen(false)}
-              collapsible={false}
+      {counterPos ? (
+        <Dialog open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+          <DialogPortal>
+            <DialogOverlay />
+            <DialogPrimitive.Popup
+              finalFocus={mobileMenuReturn}
+              className="fixed inset-x-0 bottom-0 z-50 h-[min(42rem,calc(100dvh-2rem))] overflow-hidden rounded-t-3xl bg-surface-card outline-none md:inset-y-0 md:end-auto md:w-[460px] md:h-dvh md:rounded-none"
+            >
+              <DialogTitle className="sr-only">Module navigation</DialogTitle>
+              <Sidebar
+                brand={brand}
+                onNavigate={() => setMobileMenuOpen(false)}
+                collapsible={false}
+                className="top-auto bottom-0 h-[min(42rem,calc(100dvh-2rem))] w-full rounded-t-3xl pb-20 md:top-0 md:bottom-auto md:h-dvh md:w-[460px] md:rounded-none md:pb-0"
+              />
+              <div
+                className="absolute inset-x-0 bottom-0 z-50 md:hidden"
+                aria-label="Workspace controls"
+              >
+                <Topbar brand={brand} controlsOnly />
+              </div>
+              <DialogClose className="absolute end-3 top-3 z-50 min-h-11 rounded-[var(--radius-sm)] bg-surface-card px-3 text-sm text-text-strong focus-visible:ring-3 focus-visible:ring-ring">
+                Close
+              </DialogClose>
+            </DialogPrimitive.Popup>
+          </DialogPortal>
+        </Dialog>
+      ) : (
+        mobileMenuOpen && (
+          <>
+            <div
+              aria-hidden="true"
+              className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
+              onClick={() => setMobileMenuOpen(false)}
             />
-          </div>
-        </>
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Mobile navigation"
+              className="fixed inset-y-0 start-0 z-50 lg:hidden"
+            >
+              <Sidebar
+                brand={brand}
+                onNavigate={() => setMobileMenuOpen(false)}
+                collapsible={false}
+              />
+            </div>
+          </>
+        )
       )}
 
       <div className="studio-shell flex h-full min-w-0 flex-1 flex-col overflow-hidden">
@@ -257,12 +313,91 @@ export function AppShell({
             <EndSupportAccessButton />
           </div>
         ) : null}
-        <Topbar brand={brand} onMenuClick={() => setMobileMenuOpen(true)} />
+        {counterPos && moduleEnabled ? (
+          <>
+            <header className="flex h-16 shrink-0 items-center gap-2 border-b border-border-subtle bg-surface-card px-4 md:hidden">
+              <button
+                type="button"
+                aria-label="Open menu"
+                onClick={(event) => openMobileMenu(event.currentTarget)}
+                className="flex size-11 shrink-0 items-center justify-center rounded-[var(--radius-sm)] focus-visible:ring-3 focus-visible:ring-ring"
+              >
+                <Menu aria-hidden="true" className="size-5" />
+              </button>
+              <Link
+                href="/dashboard"
+                aria-label="Open dashboard"
+                className="shrink-0 rounded-[var(--radius-sm)] focus-visible:ring-3 focus-visible:ring-ring"
+              >
+                {brand.markUrl || brand.logoUrl ? (
+                  <Image
+                    src={brand.markUrl ?? brand.logoUrl ?? ''}
+                    alt=""
+                    width={40}
+                    height={40}
+                    unoptimized
+                    className="size-10 rounded-[var(--radius-sm)] object-contain"
+                  />
+                ) : (
+                  <FathomMark className="size-10" variant="brand" />
+                )}
+              </Link>
+              <div className="min-w-0 flex-1 leading-tight">
+                <p className="text-base font-semibold text-text-strong">Counter</p>
+                <p className="truncate text-xs text-text-muted" aria-live="polite">
+                  {counterChrome?.connectionLabel ?? 'Checking network'}
+                  {counterChrome?.branchName ? ` · ${counterChrome.branchName}` : ''}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="More"
+                aria-haspopup="dialog"
+                aria-expanded={counterChrome?.moreOpen ?? false}
+                disabled={!counterChrome?.openMore}
+                onClick={(event) => counterChrome?.openMore?.(event.currentTarget)}
+                className="flex size-11 shrink-0 items-center justify-center rounded-[var(--radius-sm)] focus-visible:ring-3 focus-visible:ring-ring disabled:opacity-50"
+              >
+                <MoreHorizontal aria-hidden="true" className="size-5" />
+              </button>
+            </header>
+            <div className="hidden md:block">
+              <Topbar
+                brand={brand}
+                onMenuClick={counterPreviewActive ? undefined : () => openMobileMenu()}
+              />
+            </div>
+          </>
+        ) : (
+          <Topbar brand={brand} onMenuClick={() => openMobileMenu()} />
+        )}
         {/* WHA-1181 — a one-time setup step for a restaurant administrator whose
             organization activated before staff profiles were provisioned. Self-
             hiding, so it costs a healthy workspace nothing. */}
         <AdministratorStaffProfileCallout />
-        <TopNavigation />
+        <div className={counterPreviewActive ? 'md:hidden' : undefined}>
+          <TopNavigation />
+        </div>
+        <Dialog open={counterMenuOpen} onOpenChange={setCounterMenuOpen}>
+          <DialogPortal>
+            <DialogOverlay />
+            <DialogPrimitive.Popup
+              finalFocus={counterMenuReturn}
+              className="fixed inset-y-0 start-0 z-50 w-[min(20rem,88vw)] outline-none md:w-[460px] lg:w-[480px]"
+            >
+              <DialogTitle className="sr-only">Module navigation</DialogTitle>
+              <Sidebar
+                brand={brand}
+                className="md:w-[460px] lg:w-[480px]"
+                onNavigate={() => setCounterMenuOpen(false)}
+                collapsible={false}
+              />
+              <DialogClose className="absolute end-3 top-3 z-50 min-h-11 rounded-[var(--radius-sm)] bg-surface-card px-3 text-sm text-text-strong focus-visible:ring-3 focus-visible:ring-ring">
+                Close
+              </DialogClose>
+            </DialogPrimitive.Popup>
+          </DialogPortal>
+        </Dialog>
         <main
           id="main-content"
           tabIndex={-1}
@@ -282,7 +417,23 @@ export function AppShell({
             )}
           >
             {moduleEnabled ? (
-              children
+              <CounterMobileChromeContext.Provider value={counterPos ? setCounterChrome : null}>
+                <CounterNavigationContext.Provider
+                  value={
+                    counterNavigationPreview
+                      ? () => {
+                          counterMenuReturn.current =
+                            document.activeElement instanceof HTMLElement
+                              ? document.activeElement
+                              : null;
+                          setCounterMenuOpen(true);
+                        }
+                      : null
+                  }
+                >
+                  {children}
+                </CounterNavigationContext.Provider>
+              </CounterMobileChromeContext.Provider>
             ) : (
               <section className="mx-auto max-w-2xl border border-border-default bg-surface-card p-8">
                 <Box className="h-8 w-8 text-accent-brand" />
