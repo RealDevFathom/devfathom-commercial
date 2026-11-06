@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { Prisma } from '@/generated/prisma/client';
@@ -11,9 +12,89 @@ import {
 export class SupplierLinkError extends Error {
   constructor(
     public readonly reason:
-      'INVALID_LINK' | 'MISMATCH' | 'IDEMPOTENCY_CONFLICT' | 'INVALID_UPLOAD' | 'INVALID_CORRECTION'
+      | 'INVALID_LINK'
+      | 'MISMATCH'
+      | 'IDEMPOTENCY_CONFLICT'
+      | 'INVALID_UPLOAD'
+      | 'INVALID_CORRECTION'
+      | 'LINK_LIMIT_EXCEEDED'
   ) {
     super(reason);
+  }
+}
+
+// Lifetime budgets, shared by submissions, corrections, and document reservations.
+export const SUPPLIER_LINK_LIMITS = {
+  submissions: 100,
+  payloadBytes: 64 * 1024,
+  totalPayloadBytes: 1024 * 1024,
+  documents: 20,
+  documentBytes: 50 * 1024 * 1024,
+} as const;
+
+// A tRPC batch can share one transaction: PostgreSQL locks are reentrant there.
+// Queue those callbacks too; the row lock serializes independent requests/processes.
+const linkQueues = new WeakMap<object, Map<string, Promise<unknown>>>();
+async function withLinkWrite<T>(db: ScopedDb, token: string, run: (tx: ScopedDb) => Promise<T>) {
+  const id = supplierLinkId(token);
+  if (!id) throw new SupplierLinkError('INVALID_LINK');
+  let queues = linkQueues.get(db);
+  if (!queues) linkQueues.set(db, (queues = new Map()));
+  const previous = queues.get(id) ?? Promise.resolve();
+  const work = previous
+    .catch(() => undefined)
+    .then(() =>
+      db.$transaction(async (inner) => {
+        const tx = inner as ScopedDb;
+        await tx.$queryRaw`SELECT id FROM pharmacy_supplier_action_links WHERE id=${id} FOR UPDATE`;
+        return run(tx);
+      })
+    );
+  queues.set(id, work);
+  try {
+    return await work;
+  } finally {
+    if (queues.get(id) === work) queues.delete(id);
+  }
+}
+
+async function assertLinkBudget(
+  db: ScopedDb,
+  actionLinkId: string,
+  payload: Record<string, unknown>,
+  kind: string
+) {
+  const bytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+  if (bytes > SUPPLIER_LINK_LIMITS.payloadBytes) throw new SupplierLinkError('LINK_LIMIT_EXCEEDED');
+  const rows = await db.pharmacySupplierSubmission.findMany({
+    where: { actionLinkId, source: 'SIGNED_LINK' },
+    select: { kind: true, payload: true },
+    take: SUPPLIER_LINK_LIMITS.submissions + 1,
+  });
+  const documents = rows.filter((row) => row.kind === 'DOCUMENT');
+  const usedBytes = rows.reduce(
+    (sum, row) => sum + Buffer.byteLength(JSON.stringify(row.payload), 'utf8'),
+    0
+  );
+  // DOCUMENT submissions reserve bytes before storage is written. Failed/retried
+  // uploads cannot race a separate document-table count or escape the budget.
+  const reservedBytes = documents.reduce((sum, row) => {
+    const size = (row.payload as Record<string, unknown>).byteSize;
+    return typeof size === 'number' && Number.isSafeInteger(size) && size >= 0
+      ? sum + size
+      : Infinity;
+  }, 0);
+  if (
+    rows.length >= SUPPLIER_LINK_LIMITS.submissions ||
+    usedBytes + bytes > SUPPLIER_LINK_LIMITS.totalPayloadBytes ||
+    (kind === 'DOCUMENT' &&
+      (documents.length >= SUPPLIER_LINK_LIMITS.documents ||
+        typeof payload.byteSize !== 'number' ||
+        !Number.isSafeInteger(payload.byteSize) ||
+        payload.byteSize < 0 ||
+        reservedBytes + payload.byteSize > SUPPLIER_LINK_LIMITS.documentBytes))
+  ) {
+    throw new SupplierLinkError('LINK_LIMIT_EXCEEDED');
   }
 }
 
@@ -32,7 +113,8 @@ function signature(body: string) {
 
 export function supplierLinkId(token: string): string | null {
   const [id, secret, supplied] = token.split('.');
-  if (!id || !secret || !supplied || token.length > 512) return null;
+  if (token.split('.').length !== 3 || !id || !secret || !supplied || token.length > 512)
+    return null;
   const expected = Buffer.from(signature(`${id}.${secret}`));
   const candidate = Buffer.from(supplied);
   return expected.length === candidate.length && timingSafeEqual(expected, candidate) ? id : null;
@@ -144,7 +226,7 @@ function validatePayload(kind: string, payload: Record<string, unknown>, lineIds
     throw new SupplierLinkError('MISMATCH');
 }
 
-export async function submitSupplierEvidence(
+async function submitEvidence(
   db: ScopedDb,
   input: {
     token: string;
@@ -167,7 +249,9 @@ export async function submitSupplierEvidence(
     input.payload,
     new Set(link.purchaseOrder.lines.map((line) => line.id))
   );
-  const payloadHash = digest(JSON.stringify(input.payload));
+  // Compare JSON values, not property insertion order: PostgreSQL JSONB
+  // reorders keys, including the payload of a retried document upload.
+  const payload = JSON.parse(JSON.stringify(input.payload)) as Prisma.InputJsonValue;
   const existing = await db.pharmacySupplierSubmission.findUnique({
     where: {
       organizationId_actionLinkId_idempotencyKey: {
@@ -178,10 +262,15 @@ export async function submitSupplierEvidence(
     },
   });
   if (existing) {
-    if (existing.kind !== input.kind || digest(JSON.stringify(existing.payload)) !== payloadHash)
+    if (
+      existing.kind !== input.kind ||
+      !isDeepStrictEqual(existing.payload, payload) ||
+      (existing.supersedesId ?? null) !== (input.supersedesId ?? null)
+    )
       throw new SupplierLinkError('IDEMPOTENCY_CONFLICT');
     return existing;
   }
+  await assertLinkBudget(db, link.id, input.payload, input.kind);
   const prior = input.supersedesId
     ? await db.pharmacySupplierSubmission.findFirst({
         where: { id: input.supersedesId, actionLinkId: link.id, kind: input.kind },
@@ -201,9 +290,18 @@ export async function submitSupplierEvidence(
       kind: input.kind,
       source: 'SIGNED_LINK',
       idempotencyKey: input.idempotencyKey,
-      payload: input.payload as Prisma.InputJsonValue,
+      payload,
     },
   });
+}
+
+export async function submitSupplierEvidence(
+  db: ScopedDb,
+  input: Parameters<typeof submitEvidence>[1]
+) {
+  // Documents must pass the byte scanner and storage path, never a forged JSON reservation.
+  if (input.kind === 'DOCUMENT') throw new SupplierLinkError('INVALID_UPLOAD');
+  return withLinkWrite(db, input.token, (tx) => submitEvidence(tx, input));
 }
 
 export async function recordManualSupplierEvidence(
@@ -246,7 +344,7 @@ export async function recordManualSupplierEvidence(
   });
 }
 
-export async function uploadSupplierDocument(
+async function uploadDocument(
   db: ScopedDb,
   input: {
     token: string;
@@ -270,7 +368,7 @@ export async function uploadSupplierDocument(
     throw error;
   }
   const payload = { fileName: input.fileName, ...file };
-  const submission = await submitSupplierEvidence(db, {
+  const submission = await submitEvidence(db, {
     token: input.token,
     kind: 'DOCUMENT',
     idempotencyKey: `document:${input.idempotencyKey}`,
@@ -278,7 +376,6 @@ export async function uploadSupplierDocument(
     now: input.now,
   });
   const objectName = `supplier-po/${link.id}/${file.sha256}`;
-  await putUpload(link.organizationId, objectName, input.content, file.mimeType);
   const existing = await db.pharmacySupplierDocument.findUnique({
     where: {
       organizationId_submissionId_sha256: {
@@ -289,16 +386,25 @@ export async function uploadSupplierDocument(
     },
   });
   if (existing) return existing;
+  await putUpload(link.organizationId, objectName, input.content, file.mimeType);
+  const { mode, ...document } = file;
   return db.pharmacySupplierDocument.create({
     data: {
       organizationId: link.organizationId,
       branchId: link.branchId,
       submissionId: submission.id,
       fileName: input.fileName,
-      ...file,
+      ...document,
       storageUri: objectName,
-      scanMode: file.mode,
-      malwareChecked: file.mode === 'MALWARE_SCANNED',
+      scanMode: mode,
+      malwareChecked: mode === 'MALWARE_SCANNED',
     },
   });
+}
+
+export async function uploadSupplierDocument(
+  db: ScopedDb,
+  input: Parameters<typeof uploadDocument>[1]
+) {
+  return withLinkWrite(db, input.token, (tx) => uploadDocument(tx, input));
 }

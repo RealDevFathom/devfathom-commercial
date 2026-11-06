@@ -6,7 +6,10 @@ import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/actio
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
+import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
+import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner';
 import type { QuoteComparisonRow } from '@/lib/pharmacy/purchasing';
 import type {
   MedicineOption,
@@ -56,6 +59,11 @@ import {
   type Notice,
   type SearchQuery,
 } from '../_lib/console';
+import {
+  readPolicyForDisplay,
+  supplierChecksOn,
+  supplierComplianceCaller,
+} from '../suppliers/_lib/supplier-compliance';
 
 export const metadata: Metadata = { title: 'Requisitions & orders · Pharmacy purchasing' };
 
@@ -63,6 +71,9 @@ const ROUTE = `${PURCHASING_ROUTE}/orders`;
 const HEADING = 'Requisitions & orders';
 const DESCRIPTION =
   'Demand becomes a requisition, quotes are compared and explained, and an approved order is sent to a supplier that is still licensed at the moment it leaves.';
+/** DEV-753: the same page while the owner has supplier checks off. */
+const DESCRIPTION_CHECKS_OFF =
+  'Demand becomes a requisition, quotes are compared and explained, and an approved order is sent to a supplier. Supplier checks are off, so suppliers are not checked.';
 
 /** Five slots is enough for a hand-written order and needs no client script. */
 const LINE_SLOTS = [0, 1, 2, 3, 4] as const;
@@ -90,6 +101,25 @@ export default async function PharmacyOrdersPage({
       <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled={moduleEnabled} />
     );
   }
+  // #979: suppliers, requisitions and orders are procurement work, closed to a
+  // counter-only role exactly as Goods-in is.
+  if (!(await actorCanProcure(ctx.db, ctx.session.user.id))) {
+    return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
+  }
+  // PR J (#979): approving and sending are their own permission. Offer those
+  // actions only to the people the server will let through.
+  const sessionUser = ctx.session.user;
+  const canApprove = await can(
+    subjectFromSession(sessionUser),
+    'pharmacy:procurement-approve',
+    undefined,
+    { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta?.ip ?? null }
+  );
+  const soloOwner = await isSoloPharmacyOwner(ctx.db, {
+    organizationId: ctx.entitlements.organizationId,
+    actorId: sessionUser.id,
+    actorOrganizationId: sessionUser.organizationId,
+  });
   const caller = await purchasingCaller();
   if (!caller) {
     return (
@@ -410,11 +440,16 @@ export default async function PharmacyOrdersPage({
         await outcome.write(actionCaller.submitPurchaseOrder)({ purchaseOrderId });
         message = 'Order submitted for approval. Somebody else has to approve it.';
       } else if (action === 'approve' || action === 'reject') {
-        await outcome.write(actionCaller.approvePurchaseOrder)({
+        const decision = await outcome.write(actionCaller.approvePurchaseOrder)({
           purchaseOrderId,
           decision: action === 'approve' ? 'APPROVED' : 'REJECTED',
+          pin: optionalField(form, 'approvalPin'),
           reason: optionalField(form, 'reason'),
         });
+        if ('blocked' in decision)
+          throw Object.assign(new PurchasingValidationError(decision.blocked), {
+            field: 'approvalPin',
+          });
         message =
           action === 'approve'
             ? 'Order approved. Send it once you are ready.'
@@ -454,10 +489,18 @@ export default async function PharmacyOrdersPage({
 
   const orderable = workspace.suppliers.filter((supplier) => supplier.eligibility.orderable);
   const medicinesWithPacks = workspace.medicines.filter((medicine) => medicine.packs.length > 0);
+  // DEV-753: supplier checks are off. A summary without `compliance` reads as checked.
+  // Off when a listed supplier says so; with no supplier listed yet, ask the stored setting
+  // (read fail-closed: anything but a positive OFF reads as checks on).
+  const checksOff =
+    workspace.suppliers.length > 0
+      ? workspace.suppliers.some((supplier) => supplier.compliance?.checked === false)
+      : !supplierChecksOn(await readPolicyForDisplay(await supplierComplianceCaller()));
+  const description = checksOff ? DESCRIPTION_CHECKS_OFF : DESCRIPTION;
 
   return (
     <PurchasingOutcomeScope>
-      <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
+      <PurchasingHeader heading={HEADING} description={description} />
       <PurchasingTabs active={ROUTE} />
       <NoticeBanner notice={notice} />
       <PurchasingOutcomes />
@@ -476,7 +519,7 @@ export default async function PharmacyOrdersPage({
         <Stat
           label="Orderable suppliers"
           value={`${orderable.length} of ${workspace.suppliers.length}`}
-          sub="Authorized and licensed"
+          sub={checksOff ? 'Supplier checks off: not checked' : 'Authorized and licensed'}
         />
       </div>
 
@@ -626,6 +669,18 @@ export default async function PharmacyOrdersPage({
           {order ? (
             <OrderDetailPanel
               actorId={ctx.session.user.id}
+              canApprove={canApprove}
+              soloOwnerEligible={
+                soloOwner &&
+                workspace.procurementApprovers.some(
+                  (person) =>
+                    person.id === ctx.session!.user.id &&
+                    (order.branchId
+                      ? person.soloBranchIds?.includes(order.branchId)
+                      : person.soloOrganizationWide)
+                )
+              }
+              checksOff={checksOff}
               comparisons={orderComparisons}
               landed={landed}
               notice={notice}
@@ -647,8 +702,12 @@ export default async function PharmacyOrdersPage({
                 title="No supplier can be ordered from"
                 detail={
                   workspace.suppliers.length === 0
-                    ? 'There are no suppliers yet. Add one and file a verified licence before raising an order.'
-                    : 'Every supplier is either unauthorized or without an unexpired verified licence. PUR-01 refuses an order to any of them.'
+                    ? checksOff
+                      ? 'There are no suppliers yet. Add one in the supplier register; supplier checks are off, so it can be ordered from once added.'
+                      : 'There are no suppliers yet. Add one and file a verified licence before raising an order.'
+                    : checksOff
+                      ? 'No supplier can be ordered from right now. Open the supplier register to add or reactivate one.'
+                      : 'Every supplier is either unauthorized or without an unexpired verified licence. PUR-01 refuses an order to any of them.'
                 }
                 steps={[
                   {
@@ -672,7 +731,11 @@ export default async function PharmacyOrdersPage({
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <TextField label="Reference" name="reference" notice={notice} required />
                   <SelectField
-                    emptyHint="No orderable supplier — authorize one and file a licence first."
+                    emptyHint={
+                      checksOff
+                        ? 'No supplier yet — add one in the supplier register first.'
+                        : 'No orderable supplier — authorize one and file a licence first.'
+                    }
                     label="Supplier"
                     name="supplierId"
                     notice={notice}
@@ -1043,6 +1106,9 @@ function OrderDetailPanel({
   order,
   landed,
   actorId,
+  canApprove,
+  soloOwnerEligible,
+  checksOff,
   comparisons,
   notice,
   onAdvance,
@@ -1065,12 +1131,17 @@ function OrderDetailPanel({
     }[];
   } | null;
   actorId: string;
+  canApprove: boolean;
+  soloOwnerEligible: boolean;
+  /** DEV-753: supplier checks are off. */
+  checksOff: boolean;
   comparisons: LineComparison[];
   notice: Notice | null;
   onAdvance: (form: FormData) => Promise<string>;
 }) {
   // PUR-02 segregation of duties, stated before the button is pressed rather
   // than as a refusal afterwards.
+  // The solo owner is the one exception: there is nobody else to decide.
   const selfApproval =
     order.createdByUserId === actorId || order.requisition?.requestedByUserId === actorId;
   const costByLine = new Map(landed?.lines.map((line) => [line.purchaseOrderLineId, line]) ?? []);
@@ -1236,7 +1307,12 @@ function OrderDetailPanel({
         ) : null}
 
         {order.status === 'SUBMITTED' ? (
-          selfApproval ? (
+          !canApprove ? (
+            <p className="text-sm text-text-muted">
+              Approving an order needs the purchase-order approval permission, which a Manager or
+              the Owner holds. Ask one of them to decide.
+            </p>
+          ) : selfApproval && !soloOwnerEligible ? (
             <p className="text-sm text-text-muted">
               You raised this order, so you cannot approve it. That is the PUR-02 segregation of
               duties rule — ask a second person to decide.
@@ -1255,6 +1331,18 @@ function OrderDetailPanel({
                 notice={notice}
                 hint="Recorded with the decision, including a rejection."
               />
+              {selfApproval ? (
+                <TextField
+                  label="Owner PIN"
+                  name="approvalPin"
+                  notice={notice}
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  required
+                  hint="Sole active owners may approve with PIN reauthentication. The exception is audited."
+                />
+              ) : null}
               <SubmitButton name="action" value="approve">
                 Approve
               </SubmitButton>
@@ -1265,7 +1353,14 @@ function OrderDetailPanel({
           )
         ) : null}
 
-        {order.status === 'APPROVED' ? (
+        {order.status === 'APPROVED' && !canApprove ? (
+          <p className="text-sm text-text-muted">
+            Sending an order to the supplier needs the purchase-order approval permission, which a
+            Manager or the Owner holds.
+          </p>
+        ) : null}
+
+        {order.status === 'APPROVED' && canApprove ? (
           <PurchasingActionForm
             operation={{ resource: `order:${order.id}`, action: 'send' }}
             action={onAdvance}
@@ -1274,8 +1369,9 @@ function OrderDetailPanel({
             <input name="action" type="hidden" value="send" />
             <SubmitButton>Send to supplier</SubmitButton>
             <p className="mt-2 text-sm text-text-muted">
-              The supplier&rsquo;s authorization and licence are checked again at this moment;
-              either can have lapsed since the order was drafted.
+              {checksOff
+                ? 'Supplier checks are off, so this supplier is not checked when the order is sent.'
+                : 'The supplier’s authorization and licence are checked again at this moment; either can have lapsed since the order was drafted.'}
             </p>
           </PurchasingActionForm>
         ) : null}

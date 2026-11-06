@@ -174,6 +174,8 @@ describe('module catalog routing', () => {
     ['/pharmacy/purchasing/suppliers', 'pharmacy-procurement'],
     ['/pharmacy/medicines', 'pharmacy-core'],
     ['/pharmacy/orders', 'pharmacy-counter'],
+    ['/pharmacy/sop', 'pharmacy-safety'],
+    ['/pharmacy/sop/occurrences', 'pharmacy-safety'],
   ])('resolves Pharmacy route %s to its existing licensed module %s', (route, module) => {
     for (const vertical of ['PHARMACY', 'RESTAURANT', 'AGENCY', undefined] as const) {
       expect(moduleForPath(route, vertical)).toBe(module);
@@ -190,6 +192,16 @@ describe('module catalog routing', () => {
     '/pharmacy/purchasing-returns',
   ])('preserves unmapped Pharmacy roots and lookalike siblings: %s', (route) => {
     expect(moduleForPath(route)).toBeNull();
+  });
+
+  it('licenses pharmacy SOPs as Pharmacy Safety, never as Restaurant SOP (DEV-751)', () => {
+    for (const procedure of ['pharmacySop.board', 'pharmacySop.submit', 'pharmacySop.verify']) {
+      expect(moduleForProcedure(procedure)).toBe('pharmacy-safety');
+    }
+    expect(moduleForPath('/pharmacy/sop')).toBe(moduleForProcedure('pharmacySop.board'));
+    expect(moduleForProcedure('restaurantSopExecution.start')).toBe('restaurant-sop');
+    expect(moduleForPath('/pharmacy/sop-archive')).toBeNull();
+    expect(isModuleGranted('pharmacy-safety', ['restaurant-sop'])).toBe(false);
   });
 
   it('keeps purchasing returns under the existing purchasing procedure license', () => {

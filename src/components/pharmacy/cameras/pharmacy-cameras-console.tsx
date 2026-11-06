@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 import { useEntitlements } from '@/components/entitlements-provider';
+import { CameraLivePlayer } from '@/components/camera/camera-live-player';
 import {
   CameraEvidenceViewer,
   type CameraEvidenceViewerState,
@@ -12,9 +13,15 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { CAMERA_PRESET_LABELS } from '@/lib/cameras/camera-preset';
+import { CAMERA_DIAGNOSTIC_MESSAGES } from '@/lib/cameras/diagnostic-messages';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { trpc } from '@/lib/trpc';
 import { PharmacyCameraWizard, type PharmacyCameraWizardValues } from './pharmacy-camera-wizard';
+import {
+  PharmacyConfiguredSetup,
+  type PharmacyConfiguredCameraValues,
+  type PharmacyConfiguredGatewayValues,
+} from './pharmacy-configured-setup';
 
 /** Pharmacy evidence subjects, including the owner-only daily close. */
 export const PHARMACY_EVIDENCE_SUBJECTS: Record<string, string> = {
@@ -42,8 +49,40 @@ type WorkspaceCamera = {
   preset: 'COUNTER' | 'COLD_CHAIN' | 'KITCHEN' | null;
   temperatureZoneId: string | null;
   counterEvidence: boolean;
+  /** Server-decided: a snapshot binding exists for this exact camera scope. */
+  evidenceStills?: boolean;
 };
 type Zone = { id: string; name: string; branchId: string };
+
+/** Same-origin authorized stream; the browser never receives a gateway or DVR URL. */
+export const pharmacyStreamUrl = (cameraId: string, grantId: string) =>
+  `/api/pharmacy/cameras/${encodeURIComponent(cameraId)}/stream?grant=${encodeURIComponent(grantId)}`;
+
+function ConfiguredConnectionCheck({ cameraId }: { cameraId: string }) {
+  const check = trpc.pharmacyCameras.configuredConnectionDiagnostics.useMutation({
+    retry: false,
+  });
+  return (
+    <div className="mt-3 space-y-2">
+      <Button
+        variant="secondary"
+        disabled={check.isPending}
+        onClick={() => check.mutate({ cameraId })}
+      >
+        Check configured connection
+      </Button>
+      <p role="status" className="text-sm text-text-muted">
+        {check.isPending
+          ? 'Checking gateway…'
+          : check.isError
+            ? 'Connection check failed. Check your access and gateway setup.'
+            : check.data
+              ? CAMERA_DIAGNOSTIC_MESSAGES[check.data.outcome]
+              : 'Connection not checked.'}
+      </p>
+    </div>
+  );
+}
 type Viewer = { cameraId: string; grantId: string };
 
 function CameraSettingsForm({
@@ -140,6 +179,7 @@ export function PharmacyCamerasConsole() {
   const [viewerOpening, setViewerOpening] = useState<string | null>(null);
   const [accessLost, setAccessLost] = useState<string | null>(null);
   const [enrollBranchId, setEnrollBranchId] = useState('');
+  const [liveCameraId, setLiveCameraId] = useState<string | null>(null);
 
   const workspace = trpc.pharmacyCameras.workspace.useQuery(undefined, {
     enabled,
@@ -154,8 +194,10 @@ export function PharmacyCamerasConsole() {
 
   const invalidate = () => void utils.pharmacyCameras.workspace.invalidate();
   const enroll = trpc.pharmacyCameras.enrollGateway.useMutation({
-    onSuccess: () => {
-      toast.success('Diagnostic gateway registered.');
+    onSuccess: (_gateway, variables) => {
+      toast.success(
+        variables.baseUrl ? 'Configured gateway registered.' : 'Diagnostic gateway registered.'
+      );
       invalidate();
     },
   });
@@ -177,6 +219,8 @@ export function PharmacyCamerasConsole() {
   });
   const grant = trpc.pharmacyCameras.issueViewerGrant.useMutation({ retry: false });
   const revoke = trpc.pharmacyCameras.revokeViewerGrant.useMutation({ retry: false });
+  const liveGrant = trpc.pharmacyCameras.issueLiveViewGrant.useMutation({ retry: false });
+  const releaseLive = trpc.pharmacyCameras.revokeViewerGrant.useMutation({ retry: false });
   const capture = trpc.pharmacyCameras.capturePending.useMutation({
     onSuccess: () => void evidence.refetch(),
     onError: () => toast.error('Pending stills could not be captured.'),
@@ -189,6 +233,12 @@ export function PharmacyCamerasConsole() {
     setAccessLost(viewer.cameraId);
     setViewer(null);
   }
+  // The player stops and releases its grant when it unmounts.
+  // A view whose camera is disabled or gone closes for good, so re-enabling the
+  // camera later never restarts video by itself.
+  const liveCamera = workspace.data?.cameras.find((camera) => camera.id === liveCameraId);
+  if (liveCameraId && (workspaceAccessLost || !enabled || (workspace.data && !liveCamera?.enabled)))
+    setLiveCameraId(null);
   useEffect(() => {
     if (!viewer || !enabled) void utils.pharmacyCameras.evidence.reset();
   }, [viewer, enabled, utils]);
@@ -230,6 +280,7 @@ export function PharmacyCamerasConsole() {
 
   const { branches, gateways, cameras, zones, availability } = workspace.data;
   const simulated = availability.available && availability.mode === 'simulated';
+  const configured = availability.available && availability.mode === 'mediamtx';
   const branchName = (id: string) =>
     branches.find((b) => b.id === id)?.name ?? 'Unavailable branch';
   const effectiveEnrollBranch = enrollBranchId || (branches.length === 1 ? branches[0]!.id : '');
@@ -239,6 +290,12 @@ export function PharmacyCamerasConsole() {
   }
   async function onSubmit(values: PharmacyCameraWizardValues) {
     await register.mutateAsync(values);
+  }
+  async function onEnrollConfigured(values: PharmacyConfiguredGatewayValues) {
+    await enroll.mutateAsync(values);
+  }
+  async function onRegisterConfigured(values: PharmacyConfiguredCameraValues) {
+    await register.mutateAsync({ ...values, registerAnyway: false });
   }
   async function openEvidence(cameraId: string) {
     setAccessLost(null);
@@ -284,7 +341,11 @@ export function PharmacyCamerasConsole() {
       <PageHeader
         eyebrow="Pharmacy devices"
         heading="Cameras"
-        description="Counter and cold-chain camera presets with private evidence stills. Live video and recordings are unavailable."
+        description={
+          configured
+            ? 'Live view through your owner-provisioned camera gateway. Recordings and new evidence stills are not supported by this gateway.'
+            : 'Counter and cold-chain camera presets with private evidence stills. Live video and recordings are unavailable.'
+        }
       />
       {!availability.available ? (
         <SectionCard eyebrow="Gateway" title="Camera gateway not configured" titleLevel={2}>
@@ -293,6 +354,14 @@ export function PharmacyCamerasConsole() {
             supported gateway. No camera footage is being simulated.
           </p>
         </SectionCard>
+      ) : configured ? (
+        <PharmacyConfiguredSetup
+          branches={branches}
+          gateways={gateways}
+          onEnrollGateway={onEnrollConfigured}
+          onRegisterCamera={onRegisterConfigured}
+          busy={enroll.isPending || register.isPending}
+        />
       ) : !simulated ? (
         <SectionCard eyebrow="Gateway" title="Setup unavailable for this gateway" titleLevel={2}>
           <p role="status" className="text-sm text-text-muted">
@@ -375,9 +444,25 @@ export function PharmacyCamerasConsole() {
                   key={camera.id}
                   className="rounded-md border border-border-subtle bg-surface-sunken p-4"
                 >
-                  <div className="flex aspect-video items-center justify-center rounded-sm bg-foreground/10 p-3 text-center text-sm text-text-muted">
-                    Live video unavailable. Recordings unavailable.
-                  </div>
+                  {configured && liveCameraId === camera.id && camera.enabled ? (
+                    <CameraLivePlayer
+                      cameraId={camera.id}
+                      name={camera.name}
+                      streamUrl={pharmacyStreamUrl}
+                      issue={(previousGrantId) =>
+                        liveGrant.mutateAsync({ cameraId: camera.id, previousGrantId })
+                      }
+                      onRelease={(grantId) => releaseLive.mutate({ cameraId: camera.id, grantId })}
+                    />
+                  ) : (
+                    <div className="flex aspect-video items-center justify-center rounded-sm bg-foreground/10 p-3 text-center text-sm text-text-muted">
+                      {configured
+                        ? camera.enabled
+                          ? 'Live view closed. Recordings unavailable.'
+                          : 'Disabled. Enable after the configured connection check passes.'
+                        : 'Live video unavailable. Recordings unavailable.'}
+                    </div>
+                  )}
                   <h3 className="mt-3 font-semibold text-text-strong">{camera.name}</h3>
                   <p className="text-sm text-text-muted">
                     {branchName(camera.branchId)} ·{' '}
@@ -385,6 +470,47 @@ export function PharmacyCamerasConsole() {
                     {camera.enabled ? 'Enabled' : 'Disabled'}
                     {camera.counterEvidence ? ' · Captures counter evidence' : ''}
                   </p>
+                  {configured ? (
+                    <>
+                      <dl className="mt-2 grid gap-1 font-mono text-xs text-text-muted">
+                        <div className="flex flex-wrap gap-x-2">
+                          <dt>Camera ID</dt>
+                          <dd className="break-all text-text-strong">{camera.id}</dd>
+                        </div>
+                        <div className="flex flex-wrap gap-x-2">
+                          <dt>Gateway ID</dt>
+                          <dd className="break-all text-text-strong">{camera.gatewayId}</dd>
+                        </div>
+                        <div className="flex flex-wrap gap-x-2">
+                          <dt>Branch ID</dt>
+                          <dd className="break-all text-text-strong">{camera.branchId}</dd>
+                        </div>
+                        <div className="flex flex-wrap gap-x-2">
+                          <dt>Organization ID</dt>
+                          <dd className="break-all text-text-strong">
+                            {workspace.data.organizationId}
+                          </dd>
+                        </div>
+                      </dl>
+                      <div className="mt-3 flex flex-wrap gap-3">
+                        <Button
+                          variant="secondary"
+                          disabled={!camera.enabled}
+                          onClick={() =>
+                            setLiveCameraId(liveCameraId === camera.id ? null : camera.id)
+                          }
+                        >
+                          {liveCameraId === camera.id ? 'Close live view' : 'Open live view'}
+                        </Button>
+                      </div>
+                      <ConfiguredConnectionCheck cameraId={camera.id} />
+                      <p role="note" className="mt-3 text-sm text-text-muted">
+                        {camera.evidenceStills
+                          ? 'Evidence stills: a gateway snapshot service is configured for this camera. Capture still needs verification on the real device.'
+                          : 'Evidence stills: no gateway snapshot service is configured for this camera, so new counter and cold-chain events record the still as unavailable. Earlier stills remain viewable.'}
+                      </p>
+                    </>
+                  ) : null}
                   <CameraSettingsForm
                     key={`${camera.id}:${camera.preset ?? ''}:${camera.temperatureZoneId ?? ''}:${camera.enabled}`}
                     camera={camera}

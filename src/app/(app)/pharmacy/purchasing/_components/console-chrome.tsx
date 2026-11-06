@@ -103,10 +103,13 @@ export function AccessState({
   moduleEnabled,
   heading,
   description,
+  requirement,
 }: {
   moduleEnabled: boolean;
   heading: string;
   description: string;
+  /** Names the missing permission when it is not the procurement capability. */
+  requirement?: string;
 }) {
   return (
     <main className="min-w-0 space-y-6">
@@ -121,7 +124,8 @@ export function AccessState({
       >
         <p className="text-sm text-text-muted">
           {moduleEnabled
-            ? 'Purchasing and receiving are restricted to users with the procurement capability. Ask a workspace administrator to add it to your role.'
+            ? (requirement ??
+              'Purchasing and receiving are restricted to users with the procurement capability. Ask a workspace administrator to add it to your role.')
             : 'This workspace does not include the Pharmacy Procurement module, so suppliers, orders and goods-in are unavailable. A workspace administrator can add it to the plan.'}
         </p>
         <p className="mt-3 text-sm text-text-muted">

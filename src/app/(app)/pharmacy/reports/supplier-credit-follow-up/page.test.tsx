@@ -99,7 +99,9 @@ function envelope<T>(
   };
 }
 const context = () => ({
-  session: { user: { id: 'user-1', role: 'ADMIN', status: 'ACTIVE' } },
+  session: {
+    user: { id: 'user-1', role: 'ADMIN', status: 'ACTIVE', organizationId: scope.organizationId },
+  },
   entitlements: { organizationId: scope.organizationId },
   organization: { id: scope.organizationId, currency: 'PKR' },
   requestMeta: { ip: null },
@@ -412,10 +414,25 @@ describe('supplier-credit Reports preparation', () => {
     const creditsRead = vi
       .fn()
       .mockResolvedValue([{ ...credit(), receivedAt: new Date('2026-08-01T00:00:00Z') }]);
+    const assignmentRead = vi.fn().mockResolvedValue({ id: 'assignment-1' });
     const caller = pharmacyPurchasingRouter.createCaller({
       ...context(),
       db: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'user-1',
+            status: 'ACTIVE',
+            organizationRole: {
+              permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }],
+            },
+            permissionOverrides: [],
+          }),
+        },
         pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: scope.branchId }) },
+        pharmacyBranchAssignment: {
+          findFirst: assignmentRead,
+          findMany: vi.fn().mockResolvedValue([{ branchId: scope.branchId }]),
+        },
         pharmacyPurchaseReturn: { findMany: returnsRead },
         pharmacySupplierCredit: { findMany: creditsRead },
       },
@@ -437,6 +454,11 @@ describe('supplier-credit Reports preparation', () => {
     );
     expect(creditsRead).toHaveBeenCalledWith(
       expect.objectContaining({ where: { ...scope, receivedAt: undefined }, take: 51 })
+    );
+    expect(assignmentRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { ...scope, userId: 'user-1', active: true },
+      })
     );
     expect(screen.getByText('DEBIT-ORIGINAL')).toBeVisible();
     expect(screen.getByText('PKR 75.01')).toBeVisible();

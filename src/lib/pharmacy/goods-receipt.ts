@@ -43,6 +43,12 @@ import {
   type OrderedTerms,
 } from './receiving';
 import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
+import { assertSupplierEligible } from './purchasing';
+import {
+  readSupplierCompliancePolicy,
+  recordSupplierComplianceSkip,
+  strictLicenceEvidence,
+} from './supplier-compliance-policy';
 import {
   expiryInstant,
   normalizeExpiryBoundary,
@@ -249,6 +255,19 @@ export async function postGoodsReceipt(
     throw new PharmacyReceivingError('CONTROLLED_WITNESS_REQUIRED');
   }
 
+  // PUR-01 / DEV-753: the owner's supplier-compliance policy at the moment of
+  // posting, under a share lock so a concurrent owner change waits for this
+  // posting to commit. Supersession is read strictly across the register (DEV-466).
+  // The policy covers supplier licence and authorization only, for every medicine. The
+  // controlled-drug witness PIN and register above are independent and never read it.
+  const supplierCompliance = await readSupplierCompliancePolicy(db, scope.organizationId, {
+    lock: 'share',
+  });
+  const supplierEvidence = {
+    authorized: receipt.supplier.authorized,
+    licences: await strictLicenceEvidence(db, scope.organizationId, receipt.supplier.licences),
+  };
+
   // Fail closed on the whole receipt before a single lot exists: a receipt that
   // posted three good lines and then refused the fourth would leave stock on
   // the shelf for a delivery the operator never finished accepting.
@@ -269,14 +288,26 @@ export async function postGoodsReceipt(
       warrantyEvidenceRef: receipt.warrantyEvidenceRef,
       canonicalUnitsPerPack: line.canonicalUnitsPerPack,
       printedMrpMinor: line.printedMrpMinor,
-      supplier: {
-        authorized: receipt.supplier.authorized,
-        licences: receipt.supplier.licences.map((licence) => ({
-          expiresAt: licence.expiresAt,
-          verified: licence.verifiedAt !== null,
-        })),
-      },
+      supplier: supplierEvidence,
+      supplierCompliance,
       at: input.at,
+    });
+  }
+  // With the checks off the receipt posts unchecked on supplier licence and trade
+  // authorization only; it says so, immutably, in this same transaction.
+  const supplierOutcome = assertSupplierEligible({
+    ...supplierEvidence,
+    at: input.at,
+    policy: supplierCompliance,
+  });
+  if (!supplierOutcome.checked) {
+    await recordSupplierComplianceSkip(db, scope, {
+      operation: 'GOODS_RECEIPT_POST',
+      supplierId: receipt.supplierId,
+      goodsReceiptId: receipt.id,
+      purchaseOrderId: receipt.purchaseOrderId,
+      reference: receipt.reference,
+      outcome: supplierOutcome,
     });
   }
 
@@ -337,8 +368,24 @@ export async function postGoodsReceipt(
       quarantineMovementId: posted.quarantineMovement?.id ?? null,
     });
 
+    // DEV-752: one order line may arrive as several lots on this receipt. The
+    // quantity leg is cumulative across them and judged once, on the last lot,
+    // so lots neither hide an over-receipt nor each report a false shortage.
+    const siblings = line.purchaseOrderLineId
+      ? receipt.lines.filter((other) => other.purchaseOrderLineId === line.purchaseOrderLineId)
+      : [];
+    const earlierOnReceipt = siblings
+      .filter((other) => other.lineNumber < line.lineNumber)
+      .reduce(
+        (total, other) => total + other.receivedCanonicalUnits + other.bonusCanonicalUnits,
+        0
+      );
+    const lastLotOfOrderLine = !siblings.some((other) => other.lineNumber > line.lineNumber);
+    const terms = await orderedTermsFor(db, scope, line.purchaseOrderLineId, receipt.id);
     for (const exception of matchReceiptLine({
-      ordered: await orderedTermsFor(db, scope, line.purchaseOrderLineId, receipt.id),
+      ordered: terms
+        ? { ...terms, previouslyReceivedUnits: terms.previouslyReceivedUnits + earlierOnReceipt }
+        : null,
       received: {
         canonicalUnitsPerPack: line.canonicalUnitsPerPack,
         arrivedCanonicalUnits: line.receivedCanonicalUnits + line.bonusCanonicalUnits,
@@ -346,7 +393,10 @@ export async function postGoodsReceipt(
         rejectionReason: line.rejectionReason,
         invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
       },
-    })) {
+    }).filter(
+      (exception) =>
+        lastLotOfOrderLine || (exception.kind !== 'SHORTAGE' && exception.kind !== 'OVERAGE')
+    )) {
       const created = await db.pharmacyReceivingException.create({
         data: {
           organizationId: scope.organizationId,

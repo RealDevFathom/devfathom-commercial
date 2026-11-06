@@ -165,7 +165,9 @@ async function main() {
     comments: await prisma.taskComment.count(),
     attachments: await prisma.taskAttachment.count(),
     dms: await prisma.channel.count({ where: { type: 'DM' } }),
-    invSentinel: await prisma.invoice.count({ where: { invoiceNumber: 'INV-2026-006' } }),
+    invSentinel: await prisma.invoice.count({
+      where: { organizationId: 'org_devfathom', invoiceNumber: 'INV-2026-006' },
+    }),
   };
 
   // ════════════════════════════════════════════════════════════════════════

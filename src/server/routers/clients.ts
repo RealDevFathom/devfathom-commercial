@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sortCurrencies } from '@/lib/finance/currency';
 import { computeInvoiceAmounts } from '@/lib/finance/invoice-amounts';
+import { createWithNextInvoiceNumber } from '@/lib/finance/invoice-number';
 import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import { router, protectedProcedure, adminProcedure } from '../trpc';
@@ -494,12 +495,6 @@ export const clientsRouter = router({
         });
       }
 
-      // FIN-09: scope the sequence to THIS year's invoices so it resets each Jan.
-      const year = new Date().getFullYear();
-      const count = await ctx.db.invoice.count({
-        where: { invoiceNumber: { startsWith: `INV-${year}-` } },
-      });
-      const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
       const dueDate = new Date(Date.now() + input.dueInDays * 24 * 60 * 60 * 1000);
 
       // #448: the one shared invoice calculation, so this single-line invoice
@@ -510,23 +505,26 @@ export const clientsRouter = router({
       if (!computed.ok) throw new TRPCError({ code: 'BAD_REQUEST', message: computed.message });
       const { items, subtotal, discount, tax, total } = computed.amounts;
 
-      const invoice = await ctx.db.invoice.create({
-        data: {
-          invoiceNumber,
-          clientId: contract.clientId,
-          projectId: contract.projectId,
-          items,
-          subtotal,
-          discount,
-          tax,
-          total,
-          currency: contract.currency,
-          status: 'DRAFT',
-          dueDate,
-          notes: `Generated from contract "${contract.title}"`,
-        },
-        include: { client: { select: { name: true } } },
-      });
+      // Same per-organization, per-year INV sequence as finance.createInvoice.
+      const invoice = await createWithNextInvoiceNumber(ctx.db, (tx, invoiceNumber) =>
+        tx.invoice.create({
+          data: {
+            invoiceNumber,
+            clientId: contract.clientId,
+            projectId: contract.projectId,
+            items,
+            subtotal,
+            discount,
+            tax,
+            total,
+            currency: contract.currency,
+            status: 'DRAFT',
+            dueDate,
+            notes: `Generated from contract "${contract.title}"`,
+          },
+          include: { client: { select: { name: true } } },
+        })
+      );
 
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'invoice_created',

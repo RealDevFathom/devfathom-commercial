@@ -6,8 +6,15 @@ import {
   resolvePrescriptionReference,
 } from '@/lib/pharmacy/rx-prescription-reference';
 import { hasModule } from '@/lib/entitlements';
-import { manualPaymentSettingsSchema, isManualTender, manualMerchantPolicies } from '@/lib/pharmacy/manual-payments';
-import { readManualPaymentSettings, saveManualPaymentSettings } from '@/lib/pharmacy/manual-payment-settings';
+import {
+  manualPaymentSettingsSchema,
+  isManualTender,
+  manualMerchantPolicies,
+} from '@/lib/pharmacy/manual-payments';
+import {
+  readManualPaymentSettings,
+  saveManualPaymentSettings,
+} from '@/lib/pharmacy/manual-payment-settings';
 import {
   executeSandboxPayment,
   sandboxPaymentInput,
@@ -132,13 +139,26 @@ const tenderInput = z
     saleId: z.string().min(1),
     deviceId: z.string().min(1),
     businessDate: z.date(),
-    type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT', 'KHATA', 'RAAST', 'JAZZCASH', 'EASYPAISA']),
+    type: z.enum([
+      'CASH',
+      'CARD',
+      'BANK_TRANSFER',
+      'WALLET',
+      'CREDIT',
+      'KHATA',
+      'RAAST',
+      'JAZZCASH',
+      'EASYPAISA',
+    ]),
     amountMinor: z.number().int().positive(),
     cashReceivedMinor: z.number().int().nonnegative().optional(),
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
-    providerRef: z.string().regex(/^\d{4,6}$/).optional(),
+    providerRef: z
+      .string()
+      .regex(/^\d{4,6}$/)
+      .optional(),
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
   })
@@ -320,7 +340,8 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
   });
 }
 
-// Canonical names (#163) beside the legacy dotted ones, which still cover un-migrated grants.
+// DEV-295: accept canonical colon-delimited grants beside legacy dotted grants so migrated
+// Cashier roles and un-migrated roles pass the same counter/receipt gate.
 const RECEIPT_READ_CAPABILITIES = [
   'pharmacy:dispense',
   'pharmacy.dispense',
@@ -507,21 +528,39 @@ async function requireCloseAccess(ctx: TRPCContext) {
 }
 
 export const pharmacySalesRouter = router({
-  manualPaymentSettings: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
-    const scope = ctx.session!.user.role === 'ADMIN'
-      ? await branchScopeOrForbidden(ctx, input.branchId)
-      : await requireCounterReceiptAccess(ctx, input.branchId, true);
-    return readManualPaymentSettings(ctx.db, scope);
-  }),
-  saveManualPaymentSettings: adminProcedure.input(z.object({
-    branchId, revision: z.number().int().nonnegative(), settings: manualPaymentSettingsSchema,
-  }).strict()).mutation(async ({ ctx, input }) => {
-    // QR and payer destinations must not be copied into request audit payloads.
-    annotateAudit(ctx, { skipInput: true, targetType: 'PharmacyBranch', targetId: input.branchId,
-      metadata: { revision: input.revision, manualMerchantPolicies: manualMerchantPolicies(input.settings) } });
-    const scope = await branchScopeOrForbidden(ctx, input.branchId);
-    return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
-  }),
+  manualPaymentSettings: protectedProcedure
+    .input(z.object({ branchId }))
+    .query(async ({ ctx, input }) => {
+      const scope =
+        ctx.session!.user.role === 'ADMIN'
+          ? await branchScopeOrForbidden(ctx, input.branchId)
+          : await requireCounterReceiptAccess(ctx, input.branchId, true);
+      return readManualPaymentSettings(ctx.db, scope);
+    }),
+  saveManualPaymentSettings: adminProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          settings: manualPaymentSettingsSchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // QR and payer destinations must not be copied into request audit payloads.
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacyBranch',
+        targetId: input.branchId,
+        metadata: {
+          revision: input.revision,
+          manualMerchantPolicies: manualMerchantPolicies(input.settings),
+        },
+      });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
+    }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {
@@ -736,9 +775,12 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          openPharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        // DEV-279: drawers hold cash, so they take the cash-tender gate before any
+        // lock or write: canonical `pharmacy:counter` through `can()`, then the
+        // counter family check, then an active branch assignment. Both checks are
+        // deny-wins: a role DENY or user DENY beats any ALLOW (DEV-659).
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return await ctx.db.$transaction(async (tx) => openPharmacyDrawer(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
@@ -757,8 +799,9 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          recordPharmacyCashMovement(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          recordPharmacyCashMovement(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -777,9 +820,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          closePharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return await ctx.db.$transaction(async (tx) => closePharmacyDrawer(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }

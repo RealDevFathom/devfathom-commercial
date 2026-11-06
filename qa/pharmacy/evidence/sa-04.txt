@@ -1,0 +1,835 @@
+Skip to platform content
+DevFathom
+Platform control
+Platform nominal
+Organizations
+
+Platform Administrator
+
+qa-platform-admin@devfathom.test
+
+PA
+01
+Control room
+02
+Organizations
+03
+Deployments
+04
+Support sessions
+05
+Jobs
+06
+Health
+07
+Sales CRM
+08
+Commercial
+09
+Modules & plans
+10
+Operators
+11
+Audit ledger
+12
+Platform settings
+ORGANIZATIONS / QA-CLIFTON
+QA Clifton Chemist
+
+QA Clifton Chemist (Private) Limited · Pharmacy · shared deployment · 1/10 seats
+
+ONBOARDING
+LIFECYCLE
+PROFILE
+MODULES
+LIMITS
+PEOPLE
+BRAND
+EMAIL
+DOMAINS
+IDENTITY
+SCIM
+DEPLOYMENT
+COMMERCIAL
+AUDIT
+Pharmacy readiness
+
+Activation requires the lifecycle checks below and all pharmacy onboarding gates.
+
+Review lifecycle requirements
+1. Organization type
+NOT STARTED
+2. Legal business
+NOT STARTED
+3. Launch jurisdiction
+NOT STARTED
+4. Premises and licences
+NOT STARTED
+5. Branches and locations
+NOT STARTED
+6. Commercial package
+PASSED
+7. Owner and role templates
+PASSED
+8. Medicine catalog readiness
+NOT STARTED
+9. Opening stock readiness
+NOT STARTED
+10. Parties and balances
+NOT STARTED
+11. Devices and documents
+NOT STARTED
+12. Readiness and parallel run
+NOT STARTED
+
+MANUAL CONTROL
+
+Lifecycle gate
+
+Activation validates package, modules, administrator, and production deployment.
+
+UNMET ACTIVATION GATES
+
+Add a ready production deployment.
+Use shared deployment
+Add deployment
+Move to
+ACTIVE
+SUSPENDED
+TERMINATED
+Reason (required)
+Explain why this change is needed (at least 10 characters).
+Apply lifecycle change
+
+IMMUTABLE
+
+Organization type
+
+The type is chosen once at onboarding. It governs which packages, modules, and workspace surfaces exist, and it cannot be changed after activation.
+
+Pharmacy
+
+PHARMACY
+
+Counters, dispensing, inventory, procurement, safety, and reporting.
+
+LOCKED
+
+EARLY ONBOARDING CORRECTION
+
+This organization is still in onboarding, has never been activated, and owns no branches or module overrides, so the type may still be corrected to Agency. The replacement package is required in the same command; the correction disappears as soon as setup starts.
+
+Agency package
+Agency Suite
+A correction must move the organization and its package together.
+Reason (required)
+Explain why this change is needed (at least 10 characters).
+Correct type to Agency
+Workspace profile
+
+Commercial assignment, locale, seats, and customer contact.
+
+Display name
+Legal name
+Commercial package
+Not set
+Pharmacy Chain
+Pharmacy Essentials
+Pharmacy Professional
+Only active Pharmacy packages can be assigned.
+Deployment mode
+Shared platform
+Dedicated enterprise
+Seat limit
+Grace period (days)
+Timezone
+Not set
+UTC
+Africa/Abidjan
+Africa/Accra
+Africa/Addis_Ababa
+Africa/Algiers
+Africa/Asmera
+Africa/Bamako
+Africa/Bangui
+Africa/Banjul
+Africa/Bissau
+Africa/Blantyre
+Africa/Brazzaville
+Africa/Bujumbura
+Africa/Cairo
+Africa/Casablanca
+Africa/Ceuta
+Africa/Conakry
+Africa/Dakar
+Africa/Dar_es_Salaam
+Africa/Djibouti
+Africa/Douala
+Africa/El_Aaiun
+Africa/Freetown
+Africa/Gaborone
+Africa/Harare
+Africa/Johannesburg
+Africa/Juba
+Africa/Kampala
+Africa/Khartoum
+Africa/Kigali
+Africa/Kinshasa
+Africa/Lagos
+Africa/Libreville
+Africa/Lome
+Africa/Luanda
+Africa/Lubumbashi
+Africa/Lusaka
+Africa/Malabo
+Africa/Maputo
+Africa/Maseru
+Africa/Mbabane
+Africa/Mogadishu
+Africa/Monrovia
+Africa/Nairobi
+Africa/Ndjamena
+Africa/Niamey
+Africa/Nouakchott
+Africa/Ouagadougou
+Africa/Porto-Novo
+Africa/Sao_Tome
+Africa/Tripoli
+Africa/Tunis
+Africa/Windhoek
+America/Adak
+America/Anchorage
+America/Anguilla
+America/Antigua
+America/Araguaina
+America/Argentina/La_Rioja
+America/Argentina/Rio_Gallegos
+America/Argentina/Salta
+America/Argentina/San_Juan
+America/Argentina/San_Luis
+America/Argentina/Tucuman
+America/Argentina/Ushuaia
+America/Aruba
+America/Asuncion
+America/Bahia
+America/Bahia_Banderas
+America/Barbados
+America/Belem
+America/Belize
+America/Blanc-Sablon
+America/Boa_Vista
+America/Bogota
+America/Boise
+America/Buenos_Aires
+America/Cambridge_Bay
+America/Campo_Grande
+America/Cancun
+America/Caracas
+America/Catamarca
+America/Cayenne
+America/Cayman
+America/Chicago
+America/Chihuahua
+America/Ciudad_Juarez
+America/Coral_Harbour
+America/Cordoba
+America/Costa_Rica
+America/Coyhaique
+America/Creston
+America/Cuiaba
+America/Curacao
+America/Danmarkshavn
+America/Dawson
+America/Dawson_Creek
+America/Denver
+America/Detroit
+America/Dominica
+America/Edmonton
+America/Eirunepe
+America/El_Salvador
+America/Fort_Nelson
+America/Fortaleza
+America/Glace_Bay
+America/Godthab
+America/Goose_Bay
+America/Grand_Turk
+America/Grenada
+America/Guadeloupe
+America/Guatemala
+America/Guayaquil
+America/Guyana
+America/Halifax
+America/Havana
+America/Hermosillo
+America/Indiana/Knox
+America/Indiana/Marengo
+America/Indiana/Petersburg
+America/Indiana/Tell_City
+America/Indiana/Vevay
+America/Indiana/Vincennes
+America/Indiana/Winamac
+America/Indianapolis
+America/Inuvik
+America/Iqaluit
+America/Jamaica
+America/Jujuy
+America/Juneau
+America/Kentucky/Monticello
+America/Kralendijk
+America/La_Paz
+America/Lima
+America/Los_Angeles
+America/Louisville
+America/Lower_Princes
+America/Maceio
+America/Managua
+America/Manaus
+America/Marigot
+America/Martinique
+America/Matamoros
+America/Mazatlan
+America/Mendoza
+America/Menominee
+America/Merida
+America/Metlakatla
+America/Mexico_City
+America/Miquelon
+America/Moncton
+America/Monterrey
+America/Montevideo
+America/Montserrat
+America/Nassau
+America/New_York
+America/Nome
+America/Noronha
+America/North_Dakota/Beulah
+America/North_Dakota/Center
+America/North_Dakota/New_Salem
+America/Ojinaga
+America/Panama
+America/Paramaribo
+America/Phoenix
+America/Port-au-Prince
+America/Port_of_Spain
+America/Porto_Velho
+America/Puerto_Rico
+America/Punta_Arenas
+America/Rankin_Inlet
+America/Recife
+America/Regina
+America/Resolute
+America/Rio_Branco
+America/Santarem
+America/Santiago
+America/Santo_Domingo
+America/Sao_Paulo
+America/Scoresbysund
+America/Sitka
+America/St_Barthelemy
+America/St_Johns
+America/St_Kitts
+America/St_Lucia
+America/St_Thomas
+America/St_Vincent
+America/Swift_Current
+America/Tegucigalpa
+America/Thule
+America/Tijuana
+America/Toronto
+America/Tortola
+America/Vancouver
+America/Whitehorse
+America/Winnipeg
+America/Yakutat
+Antarctica/Casey
+Antarctica/Davis
+Antarctica/DumontDUrville
+Antarctica/Macquarie
+Antarctica/Mawson
+Antarctica/McMurdo
+Antarctica/Palmer
+Antarctica/Rothera
+Antarctica/Syowa
+Antarctica/Troll
+Antarctica/Vostok
+Arctic/Longyearbyen
+Asia/Aden
+Asia/Almaty
+Asia/Amman
+Asia/Anadyr
+Asia/Aqtau
+Asia/Aqtobe
+Asia/Ashgabat
+Asia/Atyrau
+Asia/Baghdad
+Asia/Bahrain
+Asia/Baku
+Asia/Bangkok
+Asia/Barnaul
+Asia/Beirut
+Asia/Bishkek
+Asia/Brunei
+Asia/Calcutta
+Asia/Chita
+Asia/Colombo
+Asia/Damascus
+Asia/Dhaka
+Asia/Dili
+Asia/Dubai
+Asia/Dushanbe
+Asia/Famagusta
+Asia/Gaza
+Asia/Hebron
+Asia/Hong_Kong
+Asia/Hovd
+Asia/Irkutsk
+Asia/Jakarta
+Asia/Jayapura
+Asia/Jerusalem
+Asia/Kabul
+Asia/Kamchatka
+Asia/Karachi
+Asia/Katmandu
+Asia/Khandyga
+Asia/Krasnoyarsk
+Asia/Kuala_Lumpur
+Asia/Kuching
+Asia/Kuwait
+Asia/Macau
+Asia/Magadan
+Asia/Makassar
+Asia/Manila
+Asia/Muscat
+Asia/Nicosia
+Asia/Novokuznetsk
+Asia/Novosibirsk
+Asia/Omsk
+Asia/Oral
+Asia/Phnom_Penh
+Asia/Pontianak
+Asia/Pyongyang
+Asia/Qatar
+Asia/Qostanay
+Asia/Qyzylorda
+Asia/Rangoon
+Asia/Riyadh
+Asia/Saigon
+Asia/Sakhalin
+Asia/Samarkand
+Asia/Seoul
+Asia/Shanghai
+Asia/Singapore
+Asia/Srednekolymsk
+Asia/Taipei
+Asia/Tashkent
+Asia/Tbilisi
+Asia/Tehran
+Asia/Thimphu
+Asia/Tokyo
+Asia/Tomsk
+Asia/Ulaanbaatar
+Asia/Urumqi
+Asia/Ust-Nera
+Asia/Vientiane
+Asia/Vladivostok
+Asia/Yakutsk
+Asia/Yekaterinburg
+Asia/Yerevan
+Atlantic/Azores
+Atlantic/Bermuda
+Atlantic/Canary
+Atlantic/Cape_Verde
+Atlantic/Faeroe
+Atlantic/Madeira
+Atlantic/Reykjavik
+Atlantic/South_Georgia
+Atlantic/St_Helena
+Atlantic/Stanley
+Australia/Adelaide
+Australia/Brisbane
+Australia/Broken_Hill
+Australia/Darwin
+Australia/Eucla
+Australia/Hobart
+Australia/Lindeman
+Australia/Lord_Howe
+Australia/Melbourne
+Australia/Perth
+Australia/Sydney
+Europe/Amsterdam
+Europe/Andorra
+Europe/Astrakhan
+Europe/Athens
+Europe/Belgrade
+Europe/Berlin
+Europe/Bratislava
+Europe/Brussels
+Europe/Bucharest
+Europe/Budapest
+Europe/Busingen
+Europe/Chisinau
+Europe/Copenhagen
+Europe/Dublin
+Europe/Gibraltar
+Europe/Guernsey
+Europe/Helsinki
+Europe/Isle_of_Man
+Europe/Istanbul
+Europe/Jersey
+Europe/Kaliningrad
+Europe/Kiev
+Europe/Kirov
+Europe/Lisbon
+Europe/Ljubljana
+Europe/London
+Europe/Luxembourg
+Europe/Madrid
+Europe/Malta
+Europe/Mariehamn
+Europe/Minsk
+Europe/Monaco
+Europe/Moscow
+Europe/Oslo
+Europe/Paris
+Europe/Podgorica
+Europe/Prague
+Europe/Riga
+Europe/Rome
+Europe/Samara
+Europe/San_Marino
+Europe/Sarajevo
+Europe/Saratov
+Europe/Simferopol
+Europe/Skopje
+Europe/Sofia
+Europe/Stockholm
+Europe/Tallinn
+Europe/Tirane
+Europe/Ulyanovsk
+Europe/Vaduz
+Europe/Vatican
+Europe/Vienna
+Europe/Vilnius
+Europe/Volgograd
+Europe/Warsaw
+Europe/Zagreb
+Europe/Zurich
+Indian/Antananarivo
+Indian/Chagos
+Indian/Christmas
+Indian/Cocos
+Indian/Comoro
+Indian/Kerguelen
+Indian/Mahe
+Indian/Maldives
+Indian/Mauritius
+Indian/Mayotte
+Indian/Reunion
+Pacific/Apia
+Pacific/Auckland
+Pacific/Bougainville
+Pacific/Chatham
+Pacific/Easter
+Pacific/Efate
+Pacific/Enderbury
+Pacific/Fakaofo
+Pacific/Fiji
+Pacific/Funafuti
+Pacific/Galapagos
+Pacific/Gambier
+Pacific/Guadalcanal
+Pacific/Guam
+Pacific/Honolulu
+Pacific/Kiritimati
+Pacific/Kosrae
+Pacific/Kwajalein
+Pacific/Majuro
+Pacific/Marquesas
+Pacific/Midway
+Pacific/Nauru
+Pacific/Niue
+Pacific/Norfolk
+Pacific/Noumea
+Pacific/Pago_Pago
+Pacific/Palau
+Pacific/Pitcairn
+Pacific/Ponape
+Pacific/Port_Moresby
+Pacific/Rarotonga
+Pacific/Saipan
+Pacific/Tahiti
+Pacific/Tarawa
+Pacific/Tongatapu
+Pacific/Truk
+Pacific/Wake
+Pacific/Wallis
+Type while the list is open to search IANA timezones.
+Locale
+Currency
+Data residency
+Primary contact
+Primary email
+Operator notes
+Save changes
+
+ENTITLEMENTS
+
+Modules
+
+Only Pharmacy modules are listed. Each row shows where the effective entitlement comes from: a package default, a live contract, an organization override, or nothing at all.
+
+Dashboard
+
+Core · dashboard
+
+SOURCE: NONE · MANDATORY
+
+INACTIVE
+Enable
+
+Administration
+
+Core · admin
+
+SOURCE: NONE · MANDATORY
+
+INACTIVE
+Enable
+
+Notifications
+
+Communication · notifications
+
+SOURCE: NONE · MANDATORY
+
+INACTIVE
+Enable
+
+Chat
+
+Collaboration · chat
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+Meetings
+
+Collaboration · meetings
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+Notes
+
+Knowledge · notes
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+Email
+
+Communication · email
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+HR
+
+People · hr
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+Performance reviews
+
+People · reviews
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+API access
+
+Developer · api
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+Webhooks
+
+Developer · webhooks
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+Audit logs
+
+Security · audit
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+White-label branding
+
+Configuration · branding
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+Custom domains
+
+Configuration · domains
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+Enterprise SSO
+
+Security · identity
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+SCIM provisioning
+
+Security · scim
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+Data controls
+
+Governance · data
+
+SOURCE: NONE
+
+INACTIVE
+Enable
+
+Pharmacy Core
+
+Pharmacy · pharmacy-core
+
+SOURCE: PACKAGE · MANDATORY
+
+ACTIVE
+
+ALWAYS ENABLED
+
+Pharmacy Dispensing
+
+Pharmacy · pharmacy-dispensing
+
+SOURCE: PACKAGE
+
+ACTIVE
+Disable
+
+Pharmacy Counter
+
+Operations · pharmacy-counter
+
+SOURCE: PACKAGE
+
+ACTIVE
+Disable
+
+Pharmacy Inventory
+
+Inventory · pharmacy-inventory
+
+SOURCE: PACKAGE
+
+ACTIVE
+Disable
+
+Pharmacy Procurement
+
+Procurement · pharmacy-procurement
+
+SOURCE: PACKAGE
+
+ACTIVE
+Disable
+
+Pharmacy Safety
+
+Compliance · pharmacy-safety
+
+SOURCE: PACKAGE
+
+ACTIVE
+Disable
+
+Pharmacy Finance
+
+Finance · pharmacy-finance
+
+SOURCE: PACKAGE
+
+ACTIVE
+Disable
+
+Pharmacy Reports
+
+Reports · pharmacy-reports
+
+SOURCE: PACKAGE
+
+ACTIVE
+Disable
+
+Pharmacy CRM
+
+Customers · pharmacy-crm
+
+SOURCE: PACKAGE
+
+ACTIVE
+Disable
+Limits and usage
+
+SOP ENTITLEMENT CONFIGURATION
+
+Configuration fault: neither sop.templates.max nor restaurant-core.sop.templates.max is set. Set an explicit non-negative value; zero deliberately disables new templates.
+
+CONTRACT LIMITS
+
+No custom limits.
+
+Limit key
+Value
+Period
+Source
+Set limit
+
+ACCESS ADMINISTRATION
+
+People and roles
+
+Seat state, system ro

@@ -10,12 +10,14 @@ const mocks = vi.hoisted(() => ({
   writeOff: vi.fn(),
   release: vi.fn(),
   redirect: vi.fn(),
+  assigned: vi.fn(),
 }));
 vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.module }));
 vi.mock('@/server/routers/pharmacy-inventory', () => ({
+  admittedInventoryBranchIds: mocks.assigned,
   pharmacyInventoryRouter: { createCaller: mocks.caller },
 }));
 vi.mock('./break-pack-form', () => ({
@@ -97,6 +99,7 @@ beforeEach(() => {
   mocks.actor.mockResolvedValue(ctx);
   mocks.context.mockResolvedValue(ctx);
   mocks.module.mockReturnValue(true);
+  mocks.assigned.mockResolvedValue(new Set([branch.id]));
   mocks.caller.mockReturnValue({
     nearExpiryBoard: nearExpiry,
     temperatureZoneStatuses: vi.fn().mockResolvedValue([]),
@@ -323,5 +326,67 @@ describe('expiry advice entry point (DEV-594)', () => {
     grants('ADMIN', ['pharmacy:inventory', 'reports:operational']);
     await show();
     expect(screen.queryByRole('link', { name: 'Open expiry advice' })).not.toBeInTheDocument();
+  });
+});
+
+describe('DEV-660 — only assigned branches are offered', () => {
+  const other = { id: 'branch-other', name: 'Other', city: 'Lahore' };
+
+  it('explains a missing assignment and reads no stock', async () => {
+    mocks.assigned.mockResolvedValue(new Set());
+    await show();
+    expect(screen.getByText('Branch assignment required')).toBeVisible();
+    expect(screen.queryByRole('link', { name: 'Open branch assignments' })).toBeNull();
+    expect(nearExpiry).not.toHaveBeenCalled();
+    expect(lots).not.toHaveBeenCalled();
+  });
+
+  it('links an ADMIN session that is admitted to no branch to the assignment page', async () => {
+    mocks.assigned.mockResolvedValue(new Set());
+    Object.assign(ctx.session.user, { role: 'ADMIN' });
+    await show();
+    expect(screen.getByRole('link', { name: 'Open branch assignments' })).toHaveAttribute(
+      'href',
+      '/pharmacy/settings/branches'
+    );
+    expect(nearExpiry).not.toHaveBeenCalled();
+  });
+
+  it('reads no stock directly when the gated branch read refuses', async () => {
+    nearExpiry.mockRejectedValue(new Error('Branch is outside your scope.'));
+    await expect(
+      PharmacyInventoryPage({ searchParams: Promise.resolve({ branch: branch.id }) })
+    ).rejects.toThrow('Branch is outside your scope.');
+    expect(lots).not.toHaveBeenCalled();
+  });
+
+  it('offers to receive a transfer only at its destination branch', async () => {
+    ctx.db.pharmacyBranch.findMany.mockResolvedValue([branch, other]);
+    const lines = [{ id: 'line-1', quantityUnits: 5, receivedUnits: 0 }];
+    ctx.db.pharmacyInterbranchTransfer.findMany.mockResolvedValue([
+      {
+        id: 'outbound',
+        fromBranchId: branch.id,
+        toBranchId: other.id,
+        status: 'DISPATCHED',
+        lines,
+      },
+      { id: 'inbound', fromBranchId: other.id, toBranchId: branch.id, status: 'DISPATCHED', lines },
+    ]);
+    await show();
+    const receive = screen.getAllByRole('button', { name: 'Receive remaining' });
+    expect(receive).toHaveLength(1);
+    const form = receive[0]!.closest('form')!;
+    expect(form.querySelector('input[name="transferId"]')).toHaveValue('inbound');
+    expect(form.querySelector('input[name="branchId"]')).toHaveValue(branch.id);
+  });
+
+  it('opens an assigned branch instead of an unassigned one named in the URL', async () => {
+    ctx.db.pharmacyBranch.findMany.mockResolvedValue([branch, other]);
+    render(await PharmacyInventoryPage({ searchParams: Promise.resolve({ branch: other.id }) }));
+    expect(nearExpiry).toHaveBeenCalledExactlyOnceWith({ branchId: branch.id });
+    const branchSelect = screen.getByRole('combobox', { name: 'Branch' });
+    expect(within(branchSelect).queryByRole('option', { name: /Other/ })).toBeNull();
+    expect(within(branchSelect).getByRole('option', { name: /Main/ })).toBeInTheDocument();
   });
 });

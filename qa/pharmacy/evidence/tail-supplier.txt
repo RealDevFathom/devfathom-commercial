@@ -1,0 +1,106 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Purchasing
+Suppliers
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY PROCUREMENT
+Suppliers
+
+Licensed distributors, their licence evidence, terms and credit. A supplier is orderable only while it is authorized and holds an unexpired verified licence.
+
+Overview
+PUR-01..06
+Suppliers
+PUR-01
+Requisitions & orders
+PUR-02/03
+Goods in
+PUR-02/04/05
+Returns & claims
+PUR-06
+
+QA Distributors added. Record a verified licence before ordering from it. Check the updated record before starting another change.
+
+View saved record
+
+Opening the record leaves this page. Save unrelated drafts first.
+
+PUR-01
+Register (1)
+Show inactive
+QA Distributors
+Karachi · Cash on delivery
+NOT AUTHORIZED
+No supplier selected
+Pick a supplier to see its licences
+
+Choose a row on the left. Its licence evidence, terms, credit limit and authorization control open here, beside the list.
+
+PUR-01
+Add a supplier
+Trading name
+
+What your team calls this distributor.
+
+Registered legal name
+Service area
+
+Districts or cities it delivers to.
+
+Contact name
+Contact phone
+Payment terms (days)
+
+0 is cash on delivery.
+
+Credit limit (PKR)
+
+Leave blank for no credit.
+
+Add supplier
+
+A new supplier starts unauthorized and unlicensed, so it cannot be ordered from until both are recorded. That is the PUR-01 gate, not a missing step.

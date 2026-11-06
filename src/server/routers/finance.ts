@@ -15,6 +15,7 @@ import {
   moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
+import { createWithNextInvoiceNumber } from '@/lib/finance/invoice-number';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
 import { readInvoiceIssuer } from '@/lib/finance/invoice-issuer';
 import { MAX_MONEY, roundMoney, sumMoney } from '@/lib/finance/money';
@@ -311,32 +312,27 @@ export const financeRouter = router({
     // or the paid/outstanding aggregates. Same calculation as REST and the AI tool.
     const { items: lineItems, subtotal, discount, tax, total } = invoiceAmountsOrThrow(input);
 
-    // Generate invoice number. FIN-09: scope the count to THIS year's invoices
-    // so the sequence resets to -001 each January (was a global count that never
-    // reset across years).
-    const year = new Date().getFullYear();
-    const count = await ctx.db.invoice.count({
-      where: { invoiceNumber: { startsWith: `INV-${year}-` } },
-    });
-    const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
-
-    const invoice = await ctx.db.invoice.create({
-      data: {
-        invoiceNumber,
-        clientId: input.clientId,
-        projectId: input.projectId || null,
-        items: lineItems,
-        subtotal,
-        discount,
-        tax,
-        total,
-        currency: input.currency,
-        status: 'DRAFT',
-        dueDate: input.dueDate,
-        notes: input.notes,
-      },
-      include: { client: { select: { name: true } } },
-    });
+    // INV-<year>-<n>, unique per organization and allocated under a per-tenant
+    // lock in the insert's transaction (FIN-09: the sequence resets each year).
+    const invoice = await createWithNextInvoiceNumber(ctx.db, (tx, invoiceNumber) =>
+      tx.invoice.create({
+        data: {
+          invoiceNumber,
+          clientId: input.clientId,
+          projectId: input.projectId || null,
+          items: lineItems,
+          subtotal,
+          discount,
+          tax,
+          total,
+          currency: input.currency,
+          status: 'DRAFT',
+          dueDate: input.dueDate,
+          notes: input.notes,
+        },
+        include: { client: { select: { name: true } } },
+      })
+    );
 
     logActivity(ctx.db, ctx.session.user.id, {
       type: 'invoice_created',

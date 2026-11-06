@@ -130,7 +130,7 @@ DevFathom follows your buying from start to finish:
 
 You can also link suppliers to your account. TODO(confirm): what supplier links let you do, for example sending orders directly.
 
-TODO(confirm): who can approve a purchase order.
+Approving and sending a purchase order, and authorizing a supplier, need the separate **purchase-order approval** permission. The Owner, Owner / Operator and Manager roles have it; the Procurement role raises orders but does not approve them. Nobody approves an order they raised themselves, except the only active member of a one-person workspace.
 
 ---
 

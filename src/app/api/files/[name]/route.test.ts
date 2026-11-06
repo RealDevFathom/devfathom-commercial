@@ -1,7 +1,16 @@
 // @vitest-environment node
 // Actor, scoped database and storage are explicit substitutes; no HTTP or provider access.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ actor: vi.fn(), tenantDb: vi.fn(), getUpload: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  actor: vi.fn(),
+  tenantDb: vi.fn(),
+  getUpload: vi.fn(),
+  granted: new Set<string>(),
+}));
+vi.mock('@/lib/abac', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/abac')>()),
+  can: vi.fn(async (_subject: unknown, action: string) => mocks.granted.has(action)),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.tenantDb }));
 vi.mock('@/lib/storage', async (importOriginal) => {
@@ -16,6 +25,11 @@ const db = {
   restaurantBranchAssignment: { findUnique: vi.fn() },
   messageAttachment: { findFirst: vi.fn() },
   channelMember: { findUnique: vi.fn() },
+  pharmacySopSite: { findFirst: vi.fn() },
+  pharmacyBranchAssignment: { findFirst: vi.fn() },
+  restaurantStaffProfile: { findMany: vi.fn() },
+  restaurantStaffJobRole: { findMany: vi.fn() },
+  restaurantSopTemplateVersion: { findFirst: vi.fn() },
 };
 function actor(role = 'EMPLOYEE') {
   return { session: { user: { id: 'user_1', role } }, organization: { id: 'org_a' } };
@@ -32,6 +46,8 @@ beforeEach(() => {
   db.branchRegulatoryProfile.findFirst.mockResolvedValue(null);
   db.restaurantSopEvidence.findFirst.mockResolvedValue(null);
   db.messageAttachment.findFirst.mockResolvedValue(null);
+  db.pharmacySopSite.findFirst.mockResolvedValue(null);
+  mocks.granted = new Set();
 });
 describe('private attachment delivery', () => {
   it.each([
@@ -91,6 +107,9 @@ describe('private attachment delivery', () => {
   it('keeps the SOP branch membership gate and admin exception', async () => {
     db.restaurantSopEvidence.findFirst.mockResolvedValue({ occurrence: { branchId: 'branch_a' } });
     expect((await read('sop.png')).status).toBe(404);
+    expect(db.pharmacySopSite.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_a', sopBranchId: 'branch_a' } })
+    );
     expect(mocks.getUpload).not.toHaveBeenCalled();
     expect(db.restaurantBranchAssignment.findUnique).toHaveBeenCalledWith({
       where: { branchId_userId: { branchId: 'branch_a', userId: 'user_1' } },
@@ -101,6 +120,92 @@ describe('private attachment delivery', () => {
     mocks.actor.mockResolvedValue(actor('ADMIN'));
     db.restaurantBranchAssignment.findUnique.mockResolvedValue(null);
     expect((await read('sop.png')).status).toBe(200);
+  });
+
+  describe('proof on a pharmacy SOP site', () => {
+    const OCCURRENCE = {
+      branchId: 'sop_branch_p',
+      templateVersionId: 'ver_1',
+      assignedStaffProfileId: 'staff_owner',
+      claimedByStaffProfileId: null,
+    };
+    beforeEach(() => {
+      db.restaurantSopEvidence.findFirst.mockResolvedValue({
+        uploaderStaffProfileId: 'staff_owner',
+        occurrence: OCCURRENCE,
+      });
+      db.pharmacySopSite.findFirst.mockResolvedValue({ pharmacyBranchId: 'pbranch_1' });
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'pba_1' });
+      db.restaurantStaffProfile.findMany.mockResolvedValue([{ id: 'staff_verifier' }]);
+      db.restaurantStaffJobRole.findMany.mockResolvedValue([
+        { jobRole: { key: 'pharmacy-qualified-person' } },
+      ]);
+      db.restaurantSopTemplateVersion.findFirst.mockResolvedValue({
+        template: { name: 'Pharmacy — opening' },
+      });
+    });
+
+    it('lets an assigned verifier with sop:verify and a verifier role read it', async () => {
+      mocks.granted = new Set(['sop:verify']);
+      expect((await read('pharmacy-sop-proof.png')).status).toBe(200);
+      expect(db.pharmacySopSite.findFirst).toHaveBeenCalledWith({
+        where: { organizationId: 'org_a', sopBranchId: 'sop_branch_p' },
+        select: { pharmacyBranchId: true },
+      });
+      expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            branchId: 'pbranch_1',
+            userId: 'user_1',
+            active: true,
+          }),
+        })
+      );
+      // The restaurant branch rule is not what decides a pharmacy site.
+      expect(db.restaurantBranchAssignment.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('hides it from someone not assigned to the pharmacy branch, whatever they hold', async () => {
+      mocks.granted = new Set(['sop:manage', 'sop:verify', 'sop:complete']);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      db.restaurantBranchAssignment.findUnique.mockResolvedValue({ id: 'restaurant_assignment' });
+      expect((await read('pharmacy-sop-proof.png')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+    });
+
+    it('hides it from an assigned verifier who holds no verifier role for the pack', async () => {
+      mocks.granted = new Set(['sop:verify']);
+      db.restaurantStaffJobRole.findMany.mockResolvedValue([
+        { jobRole: { key: 'pharmacy-assistant' } },
+      ]);
+      expect((await read('pharmacy-sop-proof.png')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+    });
+
+    it('hides it from assigned staff with no SOP capability', async () => {
+      db.restaurantStaffProfile.findMany.mockResolvedValue([{ id: 'staff_owner' }]);
+      expect((await read('pharmacy-sop-proof.png')).status).toBe(404);
+    });
+
+    it('lets the owner with sop:complete and a manager read it', async () => {
+      mocks.granted = new Set(['sop:complete']);
+      db.restaurantStaffProfile.findMany.mockResolvedValue([{ id: 'staff_owner' }]);
+      expect((await read('pharmacy-sop-proof.png')).status).toBe(200);
+
+      mocks.granted = new Set(['sop:complete']);
+      db.restaurantStaffProfile.findMany.mockResolvedValue([{ id: 'staff_someone_else' }]);
+      expect((await read('pharmacy-sop-proof.png')).status).toBe(404);
+
+      mocks.granted = new Set(['sop:manage']);
+      expect((await read('pharmacy-sop-proof.png')).status).toBe(200);
+    });
+
+    it('keeps the admin exception', async () => {
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      expect((await read('pharmacy-sop-proof.png')).status).toBe(200);
+      expect(db.pharmacySopSite.findFirst).not.toHaveBeenCalled();
+    });
   });
 
   it('hides pharmacy licence evidence from non-admin tenant members before storage', async () => {

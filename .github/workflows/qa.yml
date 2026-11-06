@@ -161,7 +161,7 @@ jobs:
       # Vitest's jsdom dependency currently resolves undici 8, which uses the
       # zstd API available in Node 22.20+. setup-bun alone leaves the runner's moving Node default in
       # place, and `bunx vitest` uses that Node runtime for worker processes.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22.20.0
       - uses: oven-sh/setup-bun@v2
@@ -421,7 +421,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22.20.0
       - uses: oven-sh/setup-bun@v2

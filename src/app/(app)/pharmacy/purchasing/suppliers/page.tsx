@@ -5,7 +5,10 @@ import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/actio
 
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
+import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner';
 import type { SupplierSummary } from '@/lib/pharmacy/purchasing-console';
 import {
   AccessState,
@@ -43,6 +46,17 @@ import {
   dateOnly,
   type SearchQuery,
 } from '../_lib/console';
+import {
+  SupplierComplianceSkipList,
+  SupplierCompliancePanel,
+  SupplierPolicyStanding,
+} from './_components/supplier-compliance-panel';
+import {
+  policyFailure,
+  readPolicyForDisplay,
+  supplierChecksOn,
+  supplierComplianceCaller,
+} from './_lib/supplier-compliance';
 
 export const metadata: Metadata = { title: 'Suppliers · Pharmacy purchasing' };
 
@@ -50,6 +64,9 @@ const ROUTE = `${PURCHASING_ROUTE}/suppliers`;
 const HEADING = 'Suppliers';
 const DESCRIPTION =
   'Licensed distributors, their licence evidence, terms and credit. A supplier is orderable only while it is authorized and holds an unexpired verified licence.';
+/** DEV-753: the same register while the owner has supplier checks off. */
+const DESCRIPTION_CHECKS_OFF =
+  'Distributors, their terms and credit, and any licence evidence on file. Supplier licence and authorization checks are off, so suppliers are shown as not checked.';
 
 /**
  * PUR-01 — the supplier register.
@@ -76,6 +93,29 @@ export default async function PharmacySuppliersPage({
       <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled={moduleEnabled} />
     );
   }
+  // #979: suppliers, requisitions and orders are procurement work, closed to a
+  // counter-only role exactly as Goods-in is.
+  if (!(await actorCanProcure(ctx.db, ctx.session.user.id))) {
+    return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
+  }
+  // PR J (#979): authorizing a supplier needs the approver capability as well,
+  // as approving a purchase order does. Offer the control only to the people the
+  // server will let through: Manager, Owner, and the solo owner.
+  // The solo owner may verify a licence they filed: there is nobody else to.
+  const sessionUser = ctx.session.user;
+  const [canAuthorize, soloOwner] = await Promise.all([
+    can(subjectFromSession(sessionUser), 'pharmacy:procurement-approve', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta?.ip ?? null,
+    }),
+    isSoloPharmacyOwner(ctx.db, {
+      organizationId: ctx.entitlements.organizationId,
+      actorId: sessionUser.id,
+      role: sessionUser.role,
+      actorOrganizationId: sessionUser.organizationId,
+    }),
+  ]);
 
   const caller = await purchasingCaller();
   if (!caller) {
@@ -97,6 +137,81 @@ export default async function PharmacySuppliersPage({
   const requested = param(query, 'supplier');
   const selected = suppliers?.find((supplier) => supplier.id === requested) ?? null;
 
+  // DEV-753: the owner's supplier-compliance policy. Shown as enforced unless the
+  // server positively says the checks are off.
+  const complianceCaller = await supplierComplianceCaller();
+  const policyRead = await readPolicyForDisplay(complianceCaller);
+  const checksOn = supplierChecksOn(policyRead, suppliers);
+  const [policyHistory, selectedSkips] = await Promise.all([
+    policyRead?.canManage && complianceCaller
+      ? complianceCaller.history({ limit: 5 }).catch(() => null)
+      : Promise.resolve(null),
+    selected && complianceCaller
+      ? complianceCaller.skips({ supplierId: selected.id, limit: 5 }).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  const description = checksOn ? DESCRIPTION : DESCRIPTION_CHECKS_OFF;
+
+  async function setSupplierCompliance(form: FormData) {
+    'use server';
+    const checksEnabled = field(form, 'checksEnabled') === 'true';
+    const keep = { supplier: optionalField(form, 'supplierId') };
+    // The server refuses this too; saying so here keeps the operator on the field.
+    if (!checksEnabled && form.get('acknowledged') !== 'on') {
+      return destination(
+        ROUTE,
+        {
+          message: 'Tick the acknowledgement before turning supplier checks off.',
+          kind: 'error',
+          outcome: 'rejected',
+          field: 'acknowledged',
+        },
+        keep
+      );
+    }
+    let next: string;
+    try {
+      const actionCaller = await supplierComplianceCaller();
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      const result = await actionCaller.setPolicy({
+        checksEnabled,
+        expectedVersion: optionalIntegerField(form, 'expectedVersion', 'Policy version', 0),
+        ...(checksEnabled
+          ? {}
+          : {
+              acknowledgement: {
+                accepted: form.get('acknowledged') === 'on',
+                warningVersion: field(form, 'warningVersion'),
+              },
+            }),
+      });
+      revalidatePath(PURCHASING_ROUTE, 'layout');
+      next = destination(
+        ROUTE,
+        {
+          message: !result.changed
+            ? checksEnabled
+              ? 'Supplier checks were already on. Nothing changed.'
+              : 'Supplier checks were already off. Nothing changed.'
+            : checksEnabled
+              ? 'Supplier checks are back on for every later order and receipt.'
+              : 'Supplier checks are off. Your acknowledgement is recorded.',
+          kind: 'success',
+        },
+        keep
+      );
+    } catch (error) {
+      next = destination(
+        ROUTE,
+        error instanceof PurchasingValidationError
+          ? { message: error.message, kind: 'error', outcome: 'rejected' }
+          : policyFailure(error),
+        keep
+      );
+    }
+    return next;
+  }
+
   async function createSupplier(form: FormData) {
     'use server';
     const outcome = purchasingOutcome();
@@ -116,10 +231,13 @@ export default async function PharmacySuppliersPage({
           : 0,
       });
       revalidatePath(ROUTE);
+      const checks = supplierChecksOn(await readPolicyForDisplay(await supplierComplianceCaller()));
       next = destination(
         ROUTE,
         {
-          message: `${supplier.name} added. Record a verified licence before ordering from it.`,
+          message: checks
+            ? `${supplier.name} added. Record a verified licence before ordering from it.`
+            : `${supplier.name} added. Supplier checks are off, so recording its licence is optional.`,
           kind: 'success',
         },
         { supplier: supplier.id }
@@ -168,6 +286,36 @@ export default async function PharmacySuppliersPage({
     return next;
   }
 
+  async function verifyLicence(form: FormData) {
+    'use server';
+    const supplierId = field(form, 'supplierId');
+    const outcome = purchasingOutcome();
+    let next: string;
+    try {
+      const actionCaller = await purchasingCaller();
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.verifySupplierLicence)({
+        licenceId: field(form, 'licenceId'),
+      });
+      revalidatePath(ROUTE);
+      next = destination(
+        ROUTE,
+        {
+          message: 'Licence verified. The unverified filing is kept as evidence.',
+          kind: 'success',
+        },
+        { supplier: supplierId }
+      );
+    } catch (error) {
+      next = destination(
+        ROUTE,
+        { ...outcome.failure(error, 'Could not verify the licence.'), kind: 'error' },
+        { supplier: supplierId }
+      );
+    }
+    return next;
+  }
+
   async function setAuthorization(form: FormData) {
     'use server';
     const supplierId = field(form, 'supplierId');
@@ -179,12 +327,17 @@ export default async function PharmacySuppliersPage({
       if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       await outcome.write(actionCaller.setSupplierAuthorization)({ supplierId, authorized });
       revalidatePath(ROUTE);
+      const checks = supplierChecksOn(await readPolicyForDisplay(await supplierComplianceCaller()));
       next = destination(
         ROUTE,
         {
-          message: authorized
-            ? 'Supplier authorized. It can be ordered from while its licence is valid.'
-            : 'Authorization withdrawn. New orders and receipts will be refused.',
+          message: !checks
+            ? authorized
+              ? 'Supplier authorized. Recorded as evidence; supplier checks are off, so orders do not depend on it right now.'
+              : 'Authorization withdrawn. Recorded as evidence; supplier checks are off, so orders and receipts are not refused for it right now.'
+            : authorized
+              ? 'Supplier authorized. It can be ordered from while its licence is valid.'
+              : 'Authorization withdrawn. New orders and receipts will be refused.',
           kind: 'success',
         },
         { supplier: supplierId }
@@ -201,10 +354,16 @@ export default async function PharmacySuppliersPage({
 
   return (
     <PurchasingOutcomeScope>
-      <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
+      <PurchasingHeader heading={HEADING} description={description} />
       <PurchasingTabs active={ROUTE} />
       <NoticeBanner notice={notice} />
       <PurchasingOutcomes />
+      <SupplierCompliancePanel
+        history={policyHistory}
+        notice={notice}
+        onSetPolicy={setSupplierCompliance}
+        read={policyRead}
+      />
 
       {loadError || !suppliers ? (
         <LoadFailure
@@ -229,7 +388,11 @@ export default async function PharmacySuppliersPage({
             {suppliers.length === 0 ? (
               <EmptyState
                 title="No suppliers yet"
-                detail="Add the distributor you buy from. A supplier needs a verified, unexpired licence on file before a purchase order can be raised against it, so record that next."
+                detail={
+                  checksOn
+                    ? 'Add the distributor you buy from. A supplier needs a verified, unexpired licence on file before a purchase order can be raised against it, so record that next.'
+                    : 'Add the distributor you buy from. Supplier checks are off, so it can be ordered from once added; recording its licence is optional.'
+                }
               />
             ) : (
               <ul className="space-y-2">
@@ -278,9 +441,14 @@ export default async function PharmacySuppliersPage({
           <div className="min-w-0 space-y-6">
             {selected ? (
               <SupplierDetail
+                canAuthorize={canAuthorize}
+                currentUserId={ctx.session.user.id}
+                soloOwner={soloOwner}
                 notice={notice}
                 onRecordLicence={recordLicence}
                 onSetAuthorization={setAuthorization}
+                onVerifyLicence={verifyLicence}
+                skips={selectedSkips}
                 supplier={selected}
               />
             ) : (
@@ -339,8 +507,9 @@ export default async function PharmacySuppliersPage({
                 </div>
               </PurchasingActionForm>
               <p className="mt-3 text-sm text-text-muted">
-                A new supplier starts unauthorized and unlicensed, so it cannot be ordered from
-                until both are recorded. That is the PUR-01 gate, not a missing step.
+                {checksOn
+                  ? 'A new supplier starts unauthorized and unlicensed, so it cannot be ordered from until both are recorded. That is the PUR-01 gate, not a missing step.'
+                  : 'A new supplier starts unauthorized and unlicensed. Supplier checks are off, so it can be ordered from straight away; recording its licence and authorization is optional and is kept as evidence.'}
               </p>
             </SectionCard>
           </div>
@@ -353,15 +522,28 @@ export default async function PharmacySuppliersPage({
 function SupplierDetail({
   supplier,
   notice,
+  canAuthorize,
+  currentUserId,
+  soloOwner,
   onRecordLicence,
   onSetAuthorization,
+  onVerifyLicence,
+  skips,
 }: {
   supplier: SupplierSummary;
   notice: ReturnType<typeof noticeFrom>;
+  canAuthorize: boolean;
+  currentUserId: string;
+  /** The workspace's only active member, who may verify their own filing. */
+  soloOwner: boolean;
   onRecordLicence: (form: FormData) => Promise<string>;
   onSetAuthorization: (form: FormData) => Promise<string>;
+  onVerifyLicence: (form: FormData) => Promise<string>;
+  skips: Parameters<typeof SupplierComplianceSkipList>[0]['skips'];
 }) {
   const supersedable = supplier.licences.filter((licence) => !licence.superseded);
+  // A summary without `compliance` reads as checked (fail closed).
+  const checked = supplier.compliance?.checked !== false;
   return (
     <>
       <SectionCard
@@ -387,29 +569,40 @@ function SupplierDetail({
         </dl>
 
         <div className="mt-5 rounded-[var(--radius-sm)] border border-border-subtle p-4">
-          <p className="text-sm text-text-body">
-            {supplier.eligibility.orderable
-              ? 'This supplier can be ordered from and received from right now.'
-              : supplier.eligibility.reason === 'NOT_AUTHORIZED'
-                ? 'Trade with this supplier is not authorized. Orders, sends and receipts are refused until it is.'
-                : 'No unexpired verified licence is on file, so orders, sends and receipts are refused. Authorization alone is not enough.'}
-          </p>
+          <SupplierPolicyStanding
+            checked={checked}
+            licenceStatus={supplier.compliance?.licenceStatus ?? 'NONE'}
+            orderable={supplier.eligibility.orderable}
+            reason={supplier.eligibility.reason}
+          />
           {/* UX rule 15: the control is one action and it is never greyed out
               while the operator is clearly acting on it. */}
-          <PurchasingActionForm
-            operation={{
-              resource: `supplier:${supplier.id}`,
-              action: supplier.authorized ? 'withdraw' : 'authorize',
-            }}
-            action={onSetAuthorization}
-            className="mt-3"
-          >
-            <input name="supplierId" type="hidden" value={supplier.id} />
-            <input name="authorized" type="hidden" value={supplier.authorized ? 'false' : 'true'} />
-            <SubmitButton variant={supplier.authorized ? 'destructive' : 'primary'}>
-              {supplier.authorized ? 'Withdraw authorization' : 'Authorize this supplier'}
-            </SubmitButton>
-          </PurchasingActionForm>
+          {!canAuthorize ? (
+            <p className="mt-3 text-sm text-text-muted">
+              Authorizing a supplier, or withdrawing it, needs the purchase-order approval
+              permission, which a Manager or the Owner holds. Ask one of them to decide.
+            </p>
+          ) : (
+            <PurchasingActionForm
+              operation={{
+                resource: `supplier:${supplier.id}`,
+                action: supplier.authorized ? 'withdraw' : 'authorize',
+              }}
+              action={onSetAuthorization}
+              className="mt-3"
+            >
+              <input name="supplierId" type="hidden" value={supplier.id} />
+              <input
+                name="authorized"
+                type="hidden"
+                value={supplier.authorized ? 'false' : 'true'}
+              />
+              <SubmitButton variant={supplier.authorized ? 'destructive' : 'primary'}>
+                {supplier.authorized ? 'Withdraw authorization' : 'Authorize this supplier'}
+              </SubmitButton>
+            </PurchasingActionForm>
+          )}
+          <SupplierComplianceSkipList skips={skips} />
         </div>
       </SectionCard>
 
@@ -421,7 +614,11 @@ function SupplierDetail({
         {supplier.licences.length === 0 ? (
           <EmptyState
             title="No licence on file"
-            detail="File the drug sale licence or distribution licence below. It must be verified and unexpired before this supplier can be ordered from."
+            detail={
+              checked
+                ? 'File the drug sale licence or distribution licence below. It must be verified and unexpired before this supplier can be ordered from.'
+                : 'Optional while supplier checks are off. A licence filed below is kept as evidence and is checked again if the checks are turned back on.'
+            }
           />
         ) : (
           <ul className="space-y-2">
@@ -465,6 +662,33 @@ function SupplierDetail({
                   <p className="mt-1 truncate font-mono text-xs text-text-muted">
                     Evidence: {licence.evidenceUri}
                   </p>
+                ) : null}
+                {/* PUR-01: verification is a second person's act. The server
+                    refuses the filer, and a filing whose filer was never
+                    recorded, except for the solo owner; this only says so
+                    before they try. */}
+                {!licence.verified && !licence.superseded ? (
+                  !soloOwner && licence.recordedByUserId === currentUserId ? (
+                    <p className="mt-2 text-xs text-text-muted">
+                      You filed this licence. A colleague with purchasing access verifies it.
+                    </p>
+                  ) : !soloOwner && licence.recordedByUserId === null ? (
+                    <p className="mt-2 text-xs text-text-muted">
+                      This licence was filed before DevFathom recorded who filed it, so nobody can
+                      confirm it was checked by a second person. File it again as a correction of
+                      this filing, and a colleague verifies the new filing.
+                    </p>
+                  ) : (
+                    <PurchasingActionForm
+                      operation={{ resource: `licence:${licence.id}`, action: 'verify' }}
+                      action={onVerifyLicence}
+                      className="mt-2"
+                    >
+                      <input name="supplierId" type="hidden" value={supplier.id} />
+                      <input name="licenceId" type="hidden" value={licence.id} />
+                      <SubmitButton variant="secondary">Verify licence</SubmitButton>
+                    </PurchasingActionForm>
+                  )
                 ) : null}
               </li>
             ))}
@@ -537,12 +761,20 @@ function SupplierDetail({
               </label>
             )}
           </Field>
+          <p className="text-xs text-text-muted sm:col-span-2">
+            Whoever files a licence cannot also verify it: a colleague verifies it from the list
+            above. Only the sole owner of a one-person workspace may tick this box.
+          </p>
           <div className="flex items-end">
             <SubmitButton>File licence</SubmitButton>
           </div>
           <Derived
             label="Gate"
-            value="Only a verified, unexpired licence makes a supplier orderable."
+            value={
+              checked
+                ? 'Only a verified, unexpired, current licence makes a supplier orderable.'
+                : 'Supplier checks are off: a licence is kept as evidence and does not gate ordering.'
+            }
           />
         </PurchasingActionForm>
       </SectionCard>

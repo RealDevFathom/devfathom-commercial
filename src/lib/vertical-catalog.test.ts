@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { capabilityMatches } from '@/lib/abac/capabilities';
+
 import {
+  PHARMACY_SOP_TEMPLATE_GRANTS,
   ALL_VERTICALS,
   AGENCY_MODULES,
   AGENCY_ROLE_TEMPLATES,
@@ -473,7 +476,7 @@ describe('M4-L1 capability reconciliation (additive-only)', () => {
 });
 
 describe('optional pharmacy Owner / Operator', () => {
-  it('offers exactly eleven explicit grants accepted by the pharmacy capability catalog', () => {
+  it('offers exactly fifteen explicit grants accepted by the pharmacy capability catalog', () => {
     const templates = roleTemplatesForVertical('PHARMACY').filter(
       (role) => role.key === 'owner-operator'
     );
@@ -494,12 +497,16 @@ describe('optional pharmacy Owner / Operator', () => {
           'pharmacy:counter',
           'pharmacy:close',
           'pharmacy:manage',
+          'pharmacy:procurement-approve',
+          'sop:manage',
+          'sop:complete',
+          'sop:verify',
         ],
       },
     ]);
     for (const capability of templates[0]!.capabilities) {
       expect(PHARMACY_CAPABILITIES).toContain(capability);
-      expect(capability).toMatch(/^(reports|pharmacy):[a-z-]+$/);
+      expect(capability).toMatch(/^(reports|pharmacy|sop):[a-z-]+$/);
     }
     for (const vertical of ['AGENCY', 'RESTAURANT'] as const) {
       expect(roleTemplatesForVertical(vertical).map((role) => role.key)).not.toContain(
@@ -512,17 +519,26 @@ describe('optional pharmacy Owner / Operator', () => {
     expect(
       PHARMACY_ROLE_TEMPLATES.filter((role) => role.key !== 'owner-operator').map((role) => ({
         key: role.key,
-        capabilities: role.capabilities,
+        // DEV-751 SOP grants are appended separately and pinned below.
+        capabilities: role.capabilities.filter((grant) => !grant.startsWith('sop:')),
       }))
     ).toEqual([
-      { key: 'owner', capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'] },
+      {
+        key: 'owner',
+        capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial', 'pharmacy:safety'],
+      },
       {
         key: 'pharmacist',
         capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
       },
       {
         key: 'manager',
-        capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+        capabilities: [
+          'pharmacy:manage',
+          'pharmacy:orders',
+          'pharmacy:procurement',
+          'pharmacy:procurement-approve',
+        ],
       },
       { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders'] },
       { key: 'procurement', capabilities: ['pharmacy:procurement'] },
@@ -613,5 +629,59 @@ describe('package compatibility (§2.3 / D10)', () => {
     expect(() => assertPackageCompatibleWithVertical('AGENCY', 'RESTAURANT')).toThrow(
       /not compatible/
     );
+  });
+});
+
+describe('pharmacy SOP grants (DEV-751)', () => {
+  const SOP_ACTIONS = ['sop:manage', 'sop:complete', 'sop:verify'] as const;
+  const grants = (key: string) => PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!;
+
+  it('lists the generic SOP actions so pharmacy role editors can grant them', () => {
+    for (const action of SOP_ACTIONS) expect(PHARMACY_CAPABILITIES).toContain(action);
+  });
+
+  it('never relies on `pharmacy:*` to reach the generic SOP actions', () => {
+    for (const action of SOP_ACTIONS) {
+      expect(capabilityMatches('pharmacy:*', action)).toBe(false);
+      expect(capabilityMatches('*', action)).toBe(true);
+    }
+  });
+
+  it.each([
+    ['owner', ['sop:manage', 'sop:complete', 'sop:verify']],
+    ['owner-operator', ['sop:manage', 'sop:complete', 'sop:verify']],
+    ['manager', ['sop:manage', 'sop:complete', 'sop:verify']],
+    ['pharmacist', ['sop:complete', 'sop:verify']],
+    ['cashier', ['sop:complete']],
+    ['inventory', ['sop:complete']],
+    ['procurement', ['sop:complete']],
+    ['finance', []],
+    ['auditor', []],
+  ])('grants %s exactly %j of the SOP actions', (key, expected) => {
+    const role = grants(key);
+    expect(
+      SOP_ACTIONS.filter((action) =>
+        role.capabilities.some((grant) => capabilityMatches(grant, action))
+      )
+    ).toEqual(expected);
+  });
+
+  it('SOP grants are only sop:* and never add, remove or reorder a pharmacy operation grant', () => {
+    for (const grantsForRole of Object.values(PHARMACY_SOP_TEMPLATE_GRANTS)) {
+      for (const grant of grantsForRole) expect(grant).toMatch(/^sop:(manage|complete|verify)$/);
+    }
+    for (const role of PHARMACY_ROLE_TEMPLATES) {
+      const appended = PHARMACY_SOP_TEMPLATE_GRANTS[role.key] ?? [];
+      const base = role.capabilities.slice(0, role.capabilities.length - appended.length);
+      expect(role.capabilities.slice(base.length)).toEqual(appended);
+      // No operation grant (pharmacy:close, pharmacy:counter, …) comes from SOP.
+      expect(base.some((grant) => grant.startsWith('sop:'))).toBe(false);
+    }
+  });
+
+  it('grants no restaurant module or restaurant capability to a pharmacy role', () => {
+    for (const role of PHARMACY_ROLE_TEMPLATES) {
+      expect(role.capabilities.some((grant) => grant.startsWith('restaurant'))).toBe(false);
+    }
   });
 });

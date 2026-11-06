@@ -1,8 +1,10 @@
+import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import type { Metadata } from 'next';
 import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
 import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
+import { PackPhotoReader } from '../_components/pack-photo-reader';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -25,6 +27,13 @@ import type {
   StockLocationOption,
 } from '@/lib/pharmacy/purchasing-console';
 import { packConversionLabel } from '@/lib/pharmacy/pack-conversion-label';
+import { configuredPackLabelOcrAdapterName } from '@/lib/pharmacy/pack-label-ocr';
+import {
+  defaultReceivingLocationId,
+  EXTRA_LOT_SLOTS,
+  findRepeatedLot,
+  lotSlotKey,
+} from '@/lib/pharmacy/pack-photo-receiving';
 import {
   BranchPicker,
   ChooseBranchState,
@@ -71,6 +80,11 @@ import {
   type Notice,
   type SearchQuery,
 } from '../_lib/console';
+import {
+  readPolicyForDisplay,
+  supplierChecksOn,
+  supplierComplianceCaller,
+} from '../suppliers/_lib/supplier-compliance';
 
 export const metadata: Metadata = { title: 'Goods in · Pharmacy purchasing' };
 
@@ -128,6 +142,12 @@ export default async function PharmacyReceivingPage({
       </Frame>
     );
   }
+  // DEV-753: off when a listed supplier says so; with none listed, ask the stored setting
+  // (fail closed: anything but a positive OFF reads as checks on).
+  const checksOff =
+    workspace.suppliers.length > 0
+      ? workspace.suppliers.some((supplier) => supplier.compliance?.checked === false)
+      : !supplierChecksOn(await readPolicyForDisplay(await supplierComplianceCaller()));
 
   const scope = resolveBranch(workspace.branches, param(query, 'branch'));
   if (scope.kind === 'none') {
@@ -146,6 +166,11 @@ export default async function PharmacyReceivingPage({
   }
 
   const branchId = scope.branch.id;
+  const procurementApprovers = workspace.procurementApprovers.filter(
+    (person) =>
+      person.branchIds.includes(branchId) &&
+      (person.id !== ctx.session!.user.id || person.soloBranchIds?.includes(branchId))
+  );
   const exceptionStatus = param(query, 'exceptions') === 'resolved' ? 'RESOLVED' : 'OPEN';
 
   let receipts: GoodsReceiptDetail[];
@@ -167,6 +192,14 @@ export default async function PharmacyReceivingPage({
   }
 
   const locations = workspace.stockLocations.filter((location) => location.branchId === branchId);
+  // DEV-752: the receiving shelf starts on the branch's own default (or its only
+  // receiving location). Nothing here writes a default; it only pre-selects one.
+  const receiveLocations = locations.filter((location) => location.kind !== 'QUARANTINE');
+  const defaultLocationId = defaultReceivingLocationId(
+    scope.branch.defaultStockLocationId,
+    locations
+  );
+  const packPhotoEnabled = configuredPackLabelOcrAdapterName() !== null;
   // PUR-02 receives against an order that has left the building; a draft or
   // unapproved order has nothing to deliver.
   const receivable = orders.filter(
@@ -219,20 +252,33 @@ export default async function PharmacyReceivingPage({
       if (!order)
         throw new PurchasingValidationError('That order no longer exists. Reload the page.');
 
-      const lines = order.lines.flatMap((line) => {
-        // A line with no batch number was not delivered on this consignment.
-        // It stays outstanding rather than being filed as a zero receipt.
-        if (!field(form, `batchNumber:${line.id}`)) return [];
-        return [
-          {
-            ...readCaptureFields(form, line.id),
-            purchaseOrderLineId: line.id,
-            medicineId: line.medicineId,
-            packLevelId: line.packLevelId,
-            canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-          },
-        ];
-      });
+      const lines = order.lines.flatMap((line) =>
+        // DEV-752: one ordered line may arrive as several lots. Each different
+        // batch or expiry is its own receipt line against the same order line.
+        [1, ...EXTRA_LOT_SLOTS].flatMap((slot) => {
+          const key = lotSlotKey(line.id, slot);
+          // A lot with no batch number was not delivered on this consignment.
+          // It stays outstanding rather than being filed as a zero receipt.
+          if (!field(form, `batchNumber:${key}`)) return [];
+          return [
+            {
+              ...readCaptureFields(form, key),
+              purchaseOrderLineId: line.id,
+              medicineId: line.medicineId,
+              packLevelId: line.packLevelId,
+              canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+            },
+          ];
+        })
+      );
+      if (findRepeatedLot(lines)) {
+        throw Object.assign(
+          new PurchasingValidationError(
+            'The same batch and expiry is entered twice on one order line. Enter the total packs once; a separate lot is only for a different batch or expiry.'
+          ),
+          { field: 'batchNumber' }
+        );
+      }
       if (lines.length === 0) {
         throw Object.assign(
           new PurchasingValidationError(
@@ -256,6 +302,10 @@ export default async function PharmacyReceivingPage({
         qualifiedPersonUserId: optionalField(form, 'qualifiedPersonUserId'),
         lines,
       });
+      if ('blocked' in receipt)
+        throw Object.assign(new PurchasingValidationError(receipt.blocked), {
+          field: 'bypassApprovalPin',
+        });
       revalidatePath(ROUTE);
       next = destination(
         ROUTE,
@@ -316,11 +366,16 @@ export default async function PharmacyReceivingPage({
         directPurchase: {
           reason: field(form, 'bypassReason'),
           approvedByUserId: field(form, 'bypassApprovedByUserId'),
+          pin: field(form, 'bypassApprovalPin'),
         },
         note: optionalField(form, 'directNote'),
         qualifiedPersonUserId: optionalField(form, 'directQualifiedPersonUserId'),
         lines,
       });
+      if ('blocked' in receipt)
+        throw Object.assign(new PurchasingValidationError(receipt.blocked), {
+          field: 'bypassApprovalPin',
+        });
       revalidatePath(ROUTE);
       next = destination(
         ROUTE,
@@ -354,6 +409,7 @@ export default async function PharmacyReceivingPage({
         goodsReceiptId,
         staffProfileId: optionalField(form, 'witnessStaffProfileId'),
         pin: optionalField(form, 'witnessPin'),
+        approvalPin: optionalField(form, 'receiptApprovalPin'),
       });
       if (result && 'blocked' in result) {
         next = destination(
@@ -362,7 +418,7 @@ export default async function PharmacyReceivingPage({
             message: result.blocked,
             kind: 'error',
             outcome: 'rejected',
-            field: 'witnessPin',
+            field: result.blocked === APPROVAL_BLOCKED ? 'receiptApprovalPin' : 'witnessPin',
           },
           { branch, receipt: goodsReceiptId }
         );
@@ -714,31 +770,90 @@ export default async function PharmacyReceivingPage({
                       scan?.kind === 'gs1' && scan.medicineId
                         ? selectedOrder.lines.find((row) => row.medicineId === scan.medicineId)?.id
                         : undefined;
+                    const outstandingPacks =
+                      line.canonicalUnitsPerPack > 0
+                        ? Math.floor(remaining / line.canonicalUnitsPerPack)
+                        : null;
+                    const reader = (key: string, lotLabel: string) =>
+                      packPhotoEnabled ? (
+                        <PackPhotoReader
+                          branchId={branchId}
+                          defaultLocationId={defaultLocationId ?? null}
+                          fieldKey={key}
+                          locations={receiveLocations.map((location) => ({
+                            id: location.id,
+                            label: `${location.name} (${location.kind}${location.coldChain ? ', cold chain' : ''})`,
+                          }))}
+                          lotLabel={lotLabel}
+                          medicineName={line.medicine.productName}
+                          outstandingPacks={outstandingPacks}
+                          packLevel={line.packLevel.level}
+                          purchaseOrderId={selectedOrder.id}
+                          purchaseOrderLineId={line.id}
+                          siblingFieldKeys={[1, ...EXTRA_LOT_SLOTS]
+                            .map((slot) => lotSlotKey(line.id, slot))
+                            .filter((sibling) => sibling !== key)}
+                          unitsPerPack={line.canonicalUnitsPerPack}
+                        />
+                      ) : null;
+                    const prefill = prefillId === line.id ? gs1Prefill(scan, scanTerm) : undefined;
                     return (
-                      <CaptureFieldset
-                        highlighted={
-                          scan?.kind !== 'unresolved' &&
-                          scan?.kind !== 'manual' &&
-                          scan?.medicineId === line.medicineId
-                        }
-                        prefill={prefillId === line.id ? gs1Prefill(scan, scanTerm) : undefined}
-                        key={line.id}
-                        keyPrefix={line.id}
-                        locations={locations}
-                        notice={notice}
-                        subtitle={`Ordered ${line.orderedPacks} ${line.packLevel.level}${
-                          line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''
-                        } · ${units(orderedUnits)} · already received ${units(already?.receivedUnits ?? 0)} · outstanding ${units(remaining)}`}
-                        suggestedPacks={receivedPacksForScan(
-                          prefillId === line.id && scan?.kind === 'gs1' ? scan.serial : null,
-                          line.canonicalUnitsPerPack > 0
-                            ? Math.floor(remaining / line.canonicalUnitsPerPack)
-                            : 0
-                        )}
-                        suggestedPriceMinor={line.listPricePerPackMinor}
-                        title={line.medicine.productName}
-                        unitsPerPack={line.canonicalUnitsPerPack}
-                      />
+                      <div className="space-y-3" key={line.id}>
+                        <CaptureFieldset
+                          defaultLocationId={defaultLocationId}
+                          photoReader={
+                            // A scanned 2D code is the evidence for lot 1; a photo cannot replace it.
+                            prefill?.payload ? undefined : reader(line.id, 'Lot 1')
+                          }
+                          highlighted={
+                            scan?.kind !== 'unresolved' &&
+                            scan?.kind !== 'manual' &&
+                            scan?.medicineId === line.medicineId
+                          }
+                          prefill={prefill}
+                          keyPrefix={line.id}
+                          locations={locations}
+                          notice={notice}
+                          subtitle={`Ordered ${line.orderedPacks} ${line.packLevel.level}${
+                            line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''
+                          } · ${units(orderedUnits)} · already received ${units(already?.receivedUnits ?? 0)} · outstanding ${units(remaining)}`}
+                          suggestedPacks={receivedPacksForScan(
+                            prefillId === line.id && scan?.kind === 'gs1' ? scan.serial : null,
+                            line.canonicalUnitsPerPack > 0
+                              ? Math.floor(remaining / line.canonicalUnitsPerPack)
+                              : 0
+                          )}
+                          suggestedPriceMinor={line.listPricePerPackMinor}
+                          title={line.medicine.productName}
+                          unitsPerPack={line.canonicalUnitsPerPack}
+                        />
+                        <details className="rounded-[var(--radius-sm)] border border-border-subtle px-4 py-2">
+                          <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-text-body focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2">
+                            Another batch or expiry of {line.medicine.productName} arrived
+                          </summary>
+                          <p className="text-xs text-text-muted">
+                            Each different batch or expiry is its own lot. The same batch and expiry
+                            is one lot: enter its total packs once. Leave a lot&apos;s batch blank
+                            if it did not arrive.
+                          </p>
+                          <div className="mt-3 space-y-3 pb-2">
+                            {EXTRA_LOT_SLOTS.map((slot) => (
+                              <CaptureFieldset
+                                defaultLocationId={defaultLocationId}
+                                key={slot}
+                                keyPrefix={lotSlotKey(line.id, slot)}
+                                locations={locations}
+                                notice={notice}
+                                photoReader={reader(lotSlotKey(line.id, slot), `Lot ${slot}`)}
+                                subtitle={`A separate batch or expiry against the same order line · outstanding ${units(remaining)}`}
+                                suggestedPriceMinor={line.listPricePerPackMinor}
+                                title={`${line.medicine.productName} — lot ${slot}`}
+                                unitsPerPack={line.canonicalUnitsPerPack}
+                              />
+                            ))}
+                          </div>
+                        </details>
+                      </div>
                     );
                   })}
                 </div>
@@ -778,11 +893,11 @@ export default async function PharmacyReceivingPage({
           same as receiving against an order — the only difference is that a bypass reason and a
           named approver stand in place of the order.
         </p>
-        {workspace.approvers.length === 0 ? (
+        {procurementApprovers.length === 0 ? (
           <div className="mt-4">
             <EmptyState
-              title="No second person can approve a bypass"
-              detail="A direct purchase needs an approver who is not you, and this workspace has no other active user. Invite a colleague, or raise a purchase order instead."
+              title="No authorized approver is available"
+              detail="A direct purchase needs a procurement approver with an active PIN. A sole active owner may reauthenticate with their own PIN; other teams need a second approver. Configure staff access and a PIN before continuing."
               steps={[
                 { label: 'Invite a colleague', href: '/team' },
                 { label: 'Raise a purchase order', href: `${PURCHASING_ROUTE}/orders` },
@@ -804,7 +919,11 @@ export default async function PharmacyReceivingPage({
                 required
               />
               <SelectField
-                emptyHint="No orderable supplier. Authorize one and file a verified licence first."
+                emptyHint={
+                  checksOff
+                    ? 'No supplier yet. Add one in the supplier register first.'
+                    : 'No orderable supplier. Authorize one and file a verified licence first.'
+                }
                 label="Supplier"
                 name="supplierId"
                 notice={notice}
@@ -860,15 +979,24 @@ export default async function PharmacyReceivingPage({
                 hint="Recorded permanently with the receipt."
               />
               <SelectField
-                emptyHint="Nobody else is active in this workspace."
-                hint="You cannot approve your own bypass, so you are not on this list."
+                emptyHint="No authorized procurement approver is available."
+                hint="A second approver is required unless you are the sole active owner at this branch. The approver must enter their PIN."
                 label="Approved by"
                 name="bypassApprovedByUserId"
                 notice={notice}
-                options={workspace.approvers.map((approver) => ({
+                options={procurementApprovers.map((approver) => ({
                   value: approver.id,
                   label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
                 }))}
+                required
+              />
+              <TextField
+                label="Approver PIN"
+                name="bypassApprovalPin"
+                notice={notice}
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
                 required
               />
             </div>
@@ -1037,6 +1165,8 @@ function CaptureFieldset({
   suggestedPriceMinor,
   highlighted,
   prefill,
+  photoReader,
+  defaultLocationId,
 }: {
   keyPrefix: string;
   title: string;
@@ -1048,12 +1178,15 @@ function CaptureFieldset({
   suggestedPriceMinor?: number;
   highlighted?: boolean;
   prefill?: Gs1Prefill;
+  /** DEV-752: the pack-photo shortcut that fills this line's lot fields. */
+  photoReader?: React.ReactNode;
+  defaultLocationId?: string;
 }) {
   const stock = locations.filter((location) => location.kind !== 'QUARANTINE');
   const quarantine = locations.filter((location) => location.kind === 'QUARANTINE');
   return (
     <fieldset
-      className={`rounded-[var(--radius-sm)] border p-4 ${
+      className={`min-w-0 rounded-[var(--radius-sm)] border p-4 ${
         highlighted ? 'border-primary bg-primary/5' : 'border-border-subtle'
       }`}
     >
@@ -1065,6 +1198,7 @@ function CaptureFieldset({
       {unitsPerPack ? (
         <Derived label="Pack conversion" value={packConversionLabel('pack', [], unitsPerPack)} />
       ) : null}
+      {photoReader}
       <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <TextField
           defaultValue={prefill?.batchNumber}
@@ -1185,7 +1319,13 @@ function CaptureFieldset({
           ]}
         />
         <SelectField
+          defaultValue={defaultLocationId}
           emptyHint="This branch has no active stock location. Create one before receiving."
+          hint={
+            defaultLocationId
+              ? "Starts on this branch's receiving location. A change applies to this line only."
+              : undefined
+          }
           label="Receive into"
           name={`stockLocation:${keyPrefix}`}
           notice={notice}
@@ -1378,6 +1518,17 @@ function ReceiptDetail({
                   type="password"
                 />
               </div>
+            ) : null}
+            {receipt.directPurchase ? (
+              <TextField
+                label="Direct purchase approver PIN (existing drafts)"
+                name="receiptApprovalPin"
+                notice={notice}
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                hint="Required if this draft predates verified approval. The recorded approver must enter their PIN."
+              />
             ) : null}
             <SubmitButton>Post into stock</SubmitButton>
             <p className="mt-2 text-sm text-text-muted">

@@ -36,9 +36,16 @@ function setup() {
         client: { name: 'Acme', contacts: [] },
         project: null,
       }),
-      count: vi.fn().mockResolvedValue(0),
       create: vi.fn(),
     },
+    // createInvoice allocates its number under the organization's lock in one
+    // transaction (#1226); answer those statements as finance.create-invoice.test does.
+    $queryRaw: vi.fn(async (query: { sql: string }) => {
+      if (query.sql.includes('current_setting')) return [{ organizationId: 'agency-1' }];
+      if (query.sql.includes('pg_advisory_xact_lock')) return [];
+      return [{ sequence: BigInt(0) }];
+    }),
+    $transaction: vi.fn(async (work: (tx: unknown) => unknown) => work(db)),
   };
   const helpers = {
     db,

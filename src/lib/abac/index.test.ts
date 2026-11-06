@@ -48,6 +48,7 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     'pharmacy:counter',
     'pharmacy:close',
     'pharmacy:manage',
+    'pharmacy:procurement-approve',
   ] as const satisfies readonly Action[];
   const proprietor = { ...employee, role: 'ADMIN' };
   const permissionsFor = (key: string): Permission[] =>
@@ -297,6 +298,51 @@ describe('custom ABAC decisions', () => {
     ).resolves.toBe(false);
   });
 
+  describe('purchase-order approval (pharmacy:procurement-approve)', () => {
+    const approve = 'pharmacy:procurement-approve' as const;
+
+    it.each(['manager', 'owner', 'owner-operator'])('is held by the %s template', async (key) => {
+      await expect(
+        can(employee, approve, undefined, {
+          db: authorizationDb({ rolePermissions: pharmacyPermissionsFor(key) }),
+        })
+      ).resolves.toBe(true);
+    });
+
+    it.each(['cashier', 'procurement', 'pharmacist', 'inventory', 'finance', 'auditor'])(
+      'is not held by the %s template',
+      async (key) => {
+        await expect(
+          can(employee, approve, undefined, {
+            db: authorizationDb({ rolePermissions: pharmacyPermissionsFor(key) }),
+          })
+        ).resolves.toBe(false);
+      }
+    );
+
+    it('is held directly by the solo owner (tenant admin without a role)', async () => {
+      await expect(
+        can({ ...employee, role: 'ADMIN' }, approve, undefined, { db: authorizationDb({}) })
+      ).resolves.toBe(true);
+    });
+
+    it('does not let tenant admin authority bypass an assigned role without it', async () => {
+      await expect(
+        can({ ...employee, role: 'ADMIN' }, approve, undefined, {
+          db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('procurement') }),
+        })
+      ).resolves.toBe(false);
+    });
+
+    it('lets an explicit deny revoke it from the solo owner', async () => {
+      await expect(
+        can({ ...employee, role: 'ADMIN' }, approve, undefined, {
+          db: authorizationDb({ overrides: [{ capability: approve, effect: 'DENY' }] }),
+        })
+      ).resolves.toBe(false);
+    });
+  });
+
   it('allows exact and namespace wildcard capabilities from a custom role', async () => {
     const db = authorizationDb({
       rolePermissions: [
@@ -388,7 +434,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:counter',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(48);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);

@@ -7,23 +7,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
+import { CAMERA_DIAGNOSTIC_MESSAGES } from '@/lib/cameras/diagnostic-messages';
 import { trpc } from '@/lib/trpc';
 import { RestaurantCameraWizard, type CameraWizardValues } from './restaurant-camera-wizard';
 import { RestaurantCameraPlayer } from './restaurant-camera-player';
 
-const diagnostics = {
-  'not-configured':
-    'No server binding exists yet. Ask the gateway owner to bind this registered camera.',
-  'credentials-missing':
-    'Gateway reader credentials are missing. Ask the gateway owner to configure them.',
-  'auth-failed':
-    'Gateway reader authentication failed. Ask the gateway owner to check credentials.',
-  'gateway-unreachable':
-    'Gateway unreachable. Ask the gateway owner to check private routing and TLS.',
-  'unsupported-stream':
-    'Stream unavailable or unsupported. Ask the gateway owner to check the source and HLS format.',
-  ok: 'Supported manifest received. Live frames and codec compatibility still require playback verification.',
-};
+const diagnostics = CAMERA_DIAGNOSTIC_MESSAGES;
 
 function CameraConnectionCheck({ cameraId }: { cameraId: string }) {
   const check = trpc.restaurantCameras.configuredConnectionDiagnostics.useQuery(

@@ -107,4 +107,19 @@ describe('TopbarBreadcrumbs hydration', () => {
     }
     await act(async () => root.unmount());
   });
+
+  it('names the pharmacy SOP workspace "Procedures", not "Sop"', async () => {
+    navigation.pathname = '/pharmacy/sop';
+    const container = document.createElement('nav');
+    container.innerHTML = renderToString(<TopbarBreadcrumbs />);
+    document.body.appendChild(container);
+    let root: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(container, <TopbarBreadcrumbs />);
+    });
+    expect(container.querySelector('[aria-current="page"]')).toHaveTextContent('Procedures');
+    expect(container).toHaveTextContent('Pharmacy');
+    expect(container).not.toHaveTextContent('Sop');
+    await act(async () => root.unmount());
+  });
 });

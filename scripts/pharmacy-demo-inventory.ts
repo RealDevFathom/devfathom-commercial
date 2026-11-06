@@ -16,6 +16,7 @@ import type { Prisma } from '../src/generated/prisma/client';
 import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
 import {
   assertSupplierEligible,
+  ENFORCED_SUPPLIER_COMPLIANCE,
   costPurchaseOrderLine,
   assertApprovalAllowed,
   SEGREGATION_OF_DUTIES_POLICY,
@@ -139,13 +140,18 @@ export function planInventoryDemo(facts: InventoryDemoFacts) {
   if (facts.supplier.licences.some((licence) => !licence.id.trim()))
     unmet.push('LICENCE_REFERENCE_REQUIRED');
   try {
+    // A demo seed always needs a genuinely licensed supplier, whatever the tenant's
+    // owner policy (DEV-753). This is a preflight; the central order write that follows
+    // re-checks the same supplier with supersession read across the register (DEV-466).
     assertSupplierEligible({
       authorized: facts.supplier.authorized,
       at,
       licences: facts.supplier.licences.map((licence) => ({
         verified: licence.verified,
         expiresAt: new Date(licence.expiresAt),
+        superseded: false,
       })),
+      policy: ENFORCED_SUPPLIER_COMPLIANCE,
     });
   } catch {
     unmet.push('APPROVED_SUPPLIER_LICENCE_REQUIRED');

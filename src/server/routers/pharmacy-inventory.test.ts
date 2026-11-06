@@ -14,10 +14,19 @@ const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
   const postWriteOffEntry = vi.fn();
-  return { hasModule, postWriteOffEntry };
+  const afterTenantTransaction = vi.fn<(work: () => void) => void>();
+  const withTenantDb = vi.fn();
+  return { hasModule, postWriteOffEntry, afterTenantTransaction, withTenantDb };
 });
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+  withTenantDb: mocks.withTenantDb,
+}));
+vi.mock('@/lib/side-effects/scope', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/side-effects/scope')>()),
+  afterTenantTransaction: mocks.afterTenantTransaction,
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.hasModule,
@@ -34,7 +43,7 @@ vi.mock('@/lib/pharmacy/finance-postings', () => ({
 
 import { moduleForProcedure } from '@/lib/module-catalog';
 
-import { pharmacyInventoryRouter } from './pharmacy-inventory';
+import { admittedInventoryBranchIds, pharmacyInventoryRouter } from './pharmacy-inventory';
 import type { TRPCContext } from '../trpc';
 
 function model() {
@@ -95,6 +104,11 @@ function makeDb() {
     pharmacyInterbranchTransfer: model(),
     pharmacyPurchaseReturn: model(),
     pharmacyPurchaseReturnLine: model(),
+    auditLog: { create: vi.fn().mockResolvedValue({}) },
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'assignment_a' }),
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'branch_a' }]),
+    },
     pharmacyBranch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch_a' }),
       findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
@@ -109,6 +123,10 @@ function makeDb() {
 }
 
 let db = makeDb();
+/** The session role every caller() carries; reset to ADMIN before each test. */
+let sessionRole: 'ADMIN' | 'EMPLOYEE' = 'ADMIN';
+/** Extra session-user fields, e.g. a platform support session. Reset before each test. */
+let sessionExtras: Record<string, unknown> = {};
 function caller(overrides: { enabledModules?: string[]; userId?: string | null } = {}) {
   return pharmacyInventoryRouter.createCaller({
     db,
@@ -125,7 +143,12 @@ function caller(overrides: { enabledModules?: string[]; userId?: string | null }
         ? null
         : {
             expires: 'later',
-            user: { id: overrides.userId ?? 'user_a', role: 'ADMIN', status: 'ACTIVE' },
+            user: {
+              id: overrides.userId ?? 'user_a',
+              role: sessionRole,
+              status: 'ACTIVE',
+              ...sessionExtras,
+            },
           },
     organization: null,
     support: null,
@@ -154,6 +177,10 @@ const CAPABILITY_REFUSAL = {
 
 beforeEach(() => {
   db = makeDb();
+  sessionRole = 'ADMIN';
+  sessionExtras = {};
+  mocks.afterTenantTransaction.mockReset();
+  mocks.withTenantDb.mockReset();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
   mocks.postWriteOffEntry.mockReset();
 });
@@ -714,6 +741,758 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
   });
 });
 
+// ── DEV-211 — an active assignment to the branch, not only tenant membership ──
+
+const OUTSIDE_SCOPE = { code: 'FORBIDDEN', message: 'Branch is outside your scope.' };
+
+/** The one assignment the session actor must hold for the requested branch. */
+const ASSIGNMENT_QUERY = {
+  where: {
+    organizationId: 'org_a',
+    branchId: 'branch_a',
+    userId: 'user_a',
+    active: true,
+    branch: { organizationId: 'org_a', active: true },
+  },
+  select: { id: true },
+};
+
+/** Every delegate call except the authorization lookups themselves. */
+function dataAccess(): string[] {
+  // Authorization lookups and the exception's own audit row are not stock access.
+  const authorization = new Set(['user', 'pharmacyBranch', 'pharmacyBranchAssignment', 'auditLog']);
+  const touched: string[] = [];
+  for (const [name, delegate] of Object.entries(db)) {
+    if (authorization.has(name) || name === '$transaction') continue;
+    if (vi.isMockFunction(delegate)) {
+      if (delegate.mock.calls.length > 0) touched.push(name);
+      continue;
+    }
+    for (const [method, fn] of Object.entries(delegate as Record<string, unknown>)) {
+      if (vi.isMockFunction(fn) && fn.mock.calls.length > 0) touched.push(`${name}.${method}`);
+    }
+  }
+  return touched;
+}
+
+const ASSIGNMENT_GATED: ReadonlyArray<{
+  name: string;
+  capability: string;
+  invoke: () => Promise<unknown>;
+}> = [
+  {
+    name: 'createLocation',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().createLocation({
+        branchId: 'branch_a',
+        code: 'MAIN',
+        name: 'Main store',
+        kind: 'STORE',
+      }),
+  },
+  {
+    name: 'receiveLot',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().receiveLot({
+        branchId: 'branch_a',
+        manufacturingBatchId: 'batch_1',
+        packLevelId: 'pack_1',
+        stockLocationId: 'location_1',
+        unitsPerPack: 10,
+        supplierName: 'Distributor Ltd',
+        supplierInvoiceRef: 'INV-1',
+        unitCostMinor: 1200,
+        printedMrpMinor: 2000,
+        printedExpiry: new Date('2027-06-15T00:00:00.000Z'),
+        expiryPrecision: 'DAY',
+        quantityUnits: 100,
+        idempotencyKey: 'receipt-1',
+      }),
+  },
+  {
+    name: 'createCount',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().createCount({
+        branchId: 'branch_a',
+        varianceThreshold: 0,
+        readings: [
+          {
+            inventoryLotId: 'lot_1',
+            stockLocationId: 'location_1',
+            countedSealedPacks: 1,
+            countedLooseUnits: 0,
+          },
+        ],
+      }),
+  },
+  {
+    name: 'writeOff',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().writeOff({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        witnessId: 'witness_1',
+        reason: 'Damaged',
+        evidenceRef: 'photo-1',
+        idempotencyKey: 'write-off-1',
+      }),
+  },
+  // DEV-660 — the branch stock reads.
+  {
+    name: 'nearExpiryBoard',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().nearExpiryBoard({ branchId: 'branch_a' }),
+  },
+  {
+    name: 'onHand',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().onHand({ branchId: 'branch_a', medicineId: 'medicine_1' }),
+  },
+  {
+    name: 'temperatureZoneStatuses',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().temperatureZoneStatuses({ branchId: 'branch_a' }),
+  },
+  {
+    name: 'expiryBoardLots',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 90 }),
+  },
+  {
+    name: 'stockSignalDashboard',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().stockSignalDashboard({ branchId: 'branch_a' }),
+  },
+  {
+    name: 'stockSignalDigest',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().stockSignalDigest({ branchId: 'branch_a', ownerUserId: 'user_a' }),
+  },
+  {
+    name: 'transferBoard',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().transferBoard({ branchId: 'branch_a' }),
+  },
+  // DEV-660 — allocating stock for a sale.
+  {
+    name: 'allocateForSale',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().allocateForSale({
+        branchId: 'branch_a',
+        medicineId: 'medicine_1',
+        requiredUnits: 1,
+        idempotencyKeyPrefix: 'sale-1',
+      }),
+  },
+  // DEV-660 — every transfer step, at the branch the step acts for.
+  {
+    name: 'transfer',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().transfer({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        fromStockLocationId: 'location_1',
+        toStockLocationId: 'location_2',
+        units: 1,
+        idempotencyKeyPrefix: 'move-1',
+      }),
+  },
+  {
+    name: 'allocateTransfer',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().allocateTransfer({
+        branchId: 'branch_a',
+        toBranchId: 'branch_b',
+        lines: [
+          {
+            sourceLotId: 'lot_1',
+            sourceStockLocationId: 'location_1',
+            destinationStockLocationId: 'location_b',
+            quantityUnits: 1,
+          },
+        ],
+      }),
+  },
+  {
+    name: 'approveTransfer',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().approveTransfer({ branchId: 'branch_a', transferId: 'transfer_1' }),
+  },
+  {
+    name: 'dispatchTransfer',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().dispatchTransfer({
+        branchId: 'branch_a',
+        transferId: 'transfer_1',
+        idempotencyKeyPrefix: 'dispatch-1',
+      }),
+  },
+  {
+    name: 'receiveTransferLine',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().receiveTransferLine({
+        branchId: 'branch_a',
+        transferId: 'transfer_1',
+        lineId: 'line_1',
+        receivedUnits: 1,
+        idempotencyKeyPrefix: 'receive-1',
+      }),
+  },
+  {
+    name: 'receiveTransferWithVariance',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().receiveTransferWithVariance({
+        branchId: 'branch_a',
+        transferId: 'transfer_1',
+        lines: [{ lineId: 'line_1', receivedUnits: 1 }],
+        idempotencyKeyPrefix: 'receive-1',
+      }),
+  },
+];
+
+/** The user-record lookup that confirms a session ADMIN is a live ADMIN of this tenant. */
+const ADMIN_RECORD_QUERY = {
+  where: { id: 'user_a', organizationId: 'org_a', role: 'ADMIN', status: 'ACTIVE' },
+  select: { id: true },
+};
+
+/** The dedicated, awaited audit row each use of the ADMIN exception writes. */
+const ADMIN_EXCEPTION_AUDIT = expect.objectContaining({
+  id: expect.any(String),
+  createdAt: expect.any(Date),
+  operation: 'OTHER',
+  outcome: 'SUCCESS',
+  organizationId: 'org_a',
+  actorType: 'USER',
+  actorId: 'user_a',
+  source: 'TRPC',
+  action: 'pharmacy.inventory.admin_branch_exception',
+  targetType: 'PharmacyBranch',
+  targetId: 'branch_a',
+  metadata: {
+    branchId: 'branch_a',
+    reason: 'tenant-admin-inventory-access-without-branch-assignment',
+  },
+});
+
+/**
+ * The user record the database holds for user_a. `confirmAdmin()` makes it an
+ * ACTIVE ADMIN of `tenant`; any lookup asking for something else finds nothing.
+ */
+function confirmAdmin(tenant = 'org_a') {
+  db.user.findFirst.mockImplementation(
+    async ({
+      where,
+    }: {
+      where: { id?: string; organizationId?: string; role?: string; status?: string };
+    }) =>
+      where.id === 'user_a' &&
+      where.organizationId === tenant &&
+      where.role === 'ADMIN' &&
+      where.status === 'ACTIVE'
+        ? { id: 'user_a' }
+        : null
+  );
+}
+
+const asksForAdminRecord = () =>
+  db.user.findFirst.mock.calls.some(
+    (call) => (call[0] as { where?: { role?: string } } | undefined)?.where?.role === 'ADMIN'
+  );
+
+/** The branch stock reads carry no capability of their own on develop. */
+/**
+ * The exception schedules one after-transaction work item that re-writes the
+ * same row (same id) with skipDuplicates on its own connection.
+ */
+async function expectIdempotentReinsert() {
+  expect(mocks.afterTenantTransaction).toHaveBeenCalledTimes(1);
+  const reinsert = { auditLog: { createMany: vi.fn().mockResolvedValue({ count: 0 }) } };
+  mocks.withTenantDb.mockImplementation(async (_org: string, run: (tx: unknown) => unknown) =>
+    run(reinsert)
+  );
+  mocks.afterTenantTransaction.mock.calls[0]![0]();
+  await mocks.withTenantDb.mock.results[0]!.value;
+  expect(mocks.withTenantDb).toHaveBeenCalledWith('org_a', expect.any(Function), {
+    maxWait: 1_000,
+    timeout: 5_000,
+    skipDrain: true,
+  });
+  const written = (db.auditLog.create.mock.calls[0]![0] as { data: unknown }).data;
+  expect(reinsert.auditLog.createMany).toHaveBeenCalledWith({
+    data: [written],
+    skipDuplicates: true,
+  });
+}
+
+/**
+ * A reads procedure refuses at the branch rule today; PR #994 puts transferBoard
+ * behind pharmacy:inventory, after which it refuses at the capability check.
+ * Either is a refusal, so the read-side assertions accept both.
+ */
+const READ_REFUSAL = {
+  code: 'FORBIDDEN',
+  message: expect.stringMatching(
+    /^(Branch is outside your scope\.|You do not have permission for this action\.)$/
+  ),
+};
+
+const READS = new Set([
+  'nearExpiryBoard',
+  'onHand',
+  'temperatureZoneStatuses',
+  'expiryBoardLots',
+  'stockSignalDashboard',
+  'stockSignalDigest',
+  'transferBoard',
+]);
+
+describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', () => {
+  it.each(ASSIGNMENT_GATED)(
+    'refuses $name for an unassigned non-admin before any stock access',
+    async ({ capability, invoke }) => {
+      // The capability is held, so the refusal can only be the branch rule.
+      sessionRole = 'EMPLOYEE';
+      grant([allow(capability)]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+
+      await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith(ASSIGNMENT_QUERY);
+      expect(asksForAdminRecord()).toBe(false);
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
+    'admits a verified active tenant ADMIN to $name without an assignment, and audits it',
+    async ({ capability, invoke }) => {
+      grant([allow(capability)]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+
+      const outcome = await invoke().then(
+        () => null,
+        (error: { message?: string }) => error
+      );
+
+      // Past the branch rule; whatever the mocked ledger answers next is not a refusal of scope.
+      expect(outcome?.message).not.toBe(OUTSIDE_SCOPE.message);
+      expect(db.user.findFirst).toHaveBeenCalledWith(ADMIN_RECORD_QUERY);
+      // Written on the request's own client, awaited, exactly once per use ...
+      expect(db.auditLog.create).toHaveBeenCalledExactlyOnceWith({ data: ADMIN_EXCEPTION_AUDIT });
+      // ... and the same row is re-written idempotently after the transaction ends.
+      await expectIdempotentReinsert();
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
+    'refuses $name for an ADMIN session the user record does not confirm',
+    async ({ capability, invoke }) => {
+      // Demoted, deactivated or deleted since the session was issued: the record
+      // lookup (ADMIN + ACTIVE + this tenant) finds nothing, so no exception applies.
+      grant([allow(capability)]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+
+      await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(db.user.findFirst).toHaveBeenCalledWith(ADMIN_RECORD_QUERY);
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
+    'refuses $name for an ADMIN of another tenant',
+    async ({ capability, invoke }) => {
+      grant([allow(capability)]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin('org_b');
+
+      await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
+    'refuses $name for a non-admin holding the system Owner role and a * grant',
+    async ({ invoke }) => {
+      // Role labels and wildcard grants are not the ADMIN role.
+      sessionRole = 'EMPLOYEE';
+      db.user.findUnique.mockResolvedValue({
+        organizationRole: { key: 'owner', isSystem: true, permissions: [allow('*')] },
+        permissionOverrides: [],
+      });
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+
+      await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(asksForAdminRecord()).toBe(false);
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
+    'still refuses $name for a verified ADMIN whose inventory capability is explicitly denied',
+    async ({ name, capability, invoke }) => {
+      // Capability-gated procedures refuse at the capability check; the reads,
+      // which carry no capability, refuse because the exception itself needs it.
+      grant([allow(capability)], [deny(capability)]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+
+      await expect(invoke()).rejects.toMatchObject(
+        READS.has(name) ? READ_REFUSAL : CAPABILITY_REFUSAL
+      );
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED.filter((gated) => READS.has(gated.name)))(
+    'gives no exception on $name to a verified ADMIN without any inventory grant',
+    async ({ invoke }) => {
+      grant([]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+
+      await expect(invoke()).rejects.toMatchObject(READ_REFUSAL);
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
+    'fails $name closed, before any stock access, when the exception audit cannot be written',
+    async ({ capability, invoke }) => {
+      grant([allow(capability)]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+      db.auditLog.create.mockRejectedValue(new Error('audit store unavailable'));
+
+      // The refusal is the audit failure itself, not whatever the ledger answers later.
+      await expect(invoke()).rejects.toMatchObject({ message: 'audit store unavailable' });
+      expect(mocks.afterTenantTransaction).not.toHaveBeenCalled();
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
+    'checks the tenant branch before the assignment for $name, even for an ADMIN',
+    async ({ capability, invoke }) => {
+      grant([allow(capability)]);
+      db.pharmacyBranch.findMany.mockResolvedValue([]);
+      confirmAdmin();
+
+      await expect(invoke()).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'That record is not in this workspace.',
+      });
+      expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+      expect(asksForAdminRecord()).toBe(false);
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(ASSIGNMENT_GATED)(
+    'does not let an assignment to a sibling branch admit $name',
+    async ({ capability, invoke }) => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow(capability)]);
+      // The user's only assignment is to branch_b, so any lookup that is not pinned
+      // to the requested branch_a finds it. A check that asked "is this user
+      // assigned anywhere?" would therefore admit the request and fail here.
+      db.pharmacyBranchAssignment.findFirst.mockImplementation(
+        async ({ where }: { where: { branchId?: string } }) =>
+          where.branchId === 'branch_a' ? null : { id: 'assignment_b' }
+      );
+
+      await expect(invoke()).rejects.toMatchObject(OUTSIDE_SCOPE);
+      expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith(ASSIGNMENT_QUERY);
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it.each(['pharmacy:*', '*'])(
+    'treats a %s DENY like an inventory DENY for the exception',
+    async (denied) => {
+      grant([allow('pharmacy:inventory')], [deny(denied)]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+
+      await expect(caller().nearExpiryBoard({ branchId: 'branch_a' })).rejects.toMatchObject(
+        READ_REFUSAL
+      );
+      await expect(
+        caller().createLocation({ branchId: 'branch_a', code: 'X', name: 'X', kind: 'STORE' })
+      ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+      expect(dataAccess()).toEqual([]);
+    }
+  );
+
+  it('contains a failed after-transaction re-insert instead of crashing the process', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      grant([allow('pharmacy:inventory')]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+      mocks.withTenantDb.mockRejectedValue(new Error('pool exhausted'));
+
+      await caller().nearExpiryBoard({ branchId: 'branch_a' });
+      mocks.afterTenantTransaction.mock.calls[0]![0]();
+      await vi.waitFor(() =>
+        expect(errors).toHaveBeenCalledWith(
+          '[audit] failed to re-record',
+          'pharmacy.inventory.admin_branch_exception',
+          'Error'
+        )
+      );
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it.each([
+    ['flags', { id: 'placeholder_1' }, true],
+    ['does not flag', null, false],
+  ] as const)(
+    '%s the exception row by the placeholder regulatory rule set',
+    async (_label, profile, flagged) => {
+      grant([allow('pharmacy:inventory')]);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      confirmAdmin();
+      const findPlaceholder = vi.fn().mockResolvedValue(profile);
+      Object.assign(db, { branchRegulatoryProfile: { findFirst: findPlaceholder } });
+
+      await caller().nearExpiryBoard({ branchId: 'branch_a' });
+      // The same lookup recordAudit makes for every tenant audit row.
+      expect(findPlaceholder).toHaveBeenCalledWith({
+        where: { organizationId: 'org_a', isPlaceholder: true, effectiveTo: null },
+        select: { id: true },
+      });
+      const { metadata } = (
+        db.auditLog.create.mock.calls[0]![0] as {
+          data: { metadata: Record<string, unknown> };
+        }
+      ).data;
+      expect('placeholder' in metadata).toBe(flagged);
+      if (flagged) expect(metadata.placeholder).toBe(true);
+    }
+  );
+
+  it('names the platform support session on the exception row', async () => {
+    sessionExtras = {
+      isSupportSession: true,
+      supportSessionId: 'support_1',
+      platformUserId: 'platform_1',
+    };
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    confirmAdmin();
+
+    await caller().nearExpiryBoard({ branchId: 'branch_a' });
+    expect(db.auditLog.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        actorId: 'user_a',
+        metadata: {
+          branchId: 'branch_a',
+          reason: 'tenant-admin-inventory-access-without-branch-assignment',
+          supportSessionId: 'support_1',
+          platformUserId: 'platform_1',
+          actingAsTenantUserId: 'user_a',
+        },
+      }),
+    });
+  });
+
+  it('uses the assignment, not the exception, for an assigned ADMIN', async () => {
+    grant([allow('pharmacy:inventory')]);
+    confirmAdmin();
+
+    await expect(
+      caller().createLocation({ branchId: 'branch_a', code: 'MAIN', name: 'Main', kind: 'STORE' })
+    ).resolves.toMatchObject({ organizationId: 'org_a', branchId: 'branch_a' });
+    expect(asksForAdminRecord()).toBe(false);
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('lists only the active, assigned branches for a non-admin', async () => {
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([
+      { branchId: 'branch_a' },
+      { branchId: 'branch_c' },
+    ]);
+    const ctx = {
+      db,
+      entitlements: { organizationId: 'org_a' },
+      session: { user: { id: 'user_a', role: 'EMPLOYEE', status: 'ACTIVE' } },
+    } as unknown as TRPCContext;
+
+    await expect(admittedInventoryBranchIds(ctx)).resolves.toEqual(
+      new Set(['branch_a', 'branch_c'])
+    );
+    expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        userId: 'user_a',
+        active: true,
+        branch: { organizationId: 'org_a', active: true },
+      },
+      select: { branchId: true },
+    });
+  });
+
+  it('lists every active branch of the tenant for a verified ADMIN', async () => {
+    grant([allow('pharmacy:inventory')]);
+    confirmAdmin();
+    db.pharmacyBranch.findMany.mockResolvedValue([{ id: 'branch_a' }, { id: 'branch_b' }]);
+    const ctx = {
+      db,
+      entitlements: { organizationId: 'org_a' },
+      session: { user: { id: 'user_a', role: 'ADMIN', status: 'ACTIVE' } },
+    } as unknown as TRPCContext;
+
+    await expect(admittedInventoryBranchIds(ctx)).resolves.toEqual(
+      new Set(['branch_a', 'branch_b'])
+    );
+    expect(db.user.findFirst).toHaveBeenCalledWith(ADMIN_RECORD_QUERY);
+    expect(db.pharmacyBranch.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_a', active: true },
+      select: { id: true },
+    });
+    expect(db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['without any inventory grant', [] as Rule[], [] as Rule[]],
+    [
+      'with an explicit inventory DENY',
+      [allow('pharmacy:inventory')],
+      [deny('pharmacy:inventory')],
+    ],
+  ])('lists only assigned branches for a verified ADMIN %s', async (_label, role, overrides) => {
+    grant(role, overrides);
+    confirmAdmin();
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+    const ctx = {
+      db,
+      entitlements: { organizationId: 'org_a' },
+      session: { user: { id: 'user_a', role: 'ADMIN', status: 'ACTIVE' } },
+    } as unknown as TRPCContext;
+
+    await expect(admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set(['branch_a']));
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+  });
+
+  it('lists only assigned branches for an ADMIN session the record does not confirm', async () => {
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+    const ctx = {
+      db,
+      entitlements: { organizationId: 'org_a' },
+      session: { user: { id: 'user_a', role: 'ADMIN', status: 'ACTIVE' } },
+    } as unknown as TRPCContext;
+
+    await expect(admittedInventoryBranchIds(ctx)).resolves.toEqual(new Set(['branch_a']));
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses to list branches without a tenant actor', async () => {
+    const ctx = {
+      db,
+      entitlements: { organizationId: 'org_a' },
+      session: null,
+    } as unknown as TRPCContext;
+
+    await expect(admittedInventoryBranchIds(ctx)).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    expect(db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+  });
+
+  it('lets an assigned user create a location at that branch', async () => {
+    sessionRole = 'EMPLOYEE';
+    grant([allow('pharmacy:inventory')]);
+
+    await expect(
+      caller().createLocation({
+        branchId: 'branch_a',
+        code: 'MAIN',
+        name: 'Main store',
+        kind: 'STORE',
+      })
+    ).resolves.toMatchObject({ organizationId: 'org_a', branchId: 'branch_a' });
+    expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith(ASSIGNMENT_QUERY);
+  });
+});
+
+/**
+ * DEV-660 residual: branch-scoped procedures still on the tenant-only branch
+ * check. Each is a known gap tracked on DEV-660; moving one to admittedScopeFor
+ * moves it from here into ASSIGNMENT_GATED. A new procedure that takes a
+ * branchId must be placed in one of the two lists, so none skips the decision.
+ */
+const TENANT_ONLY_BRANCH_PROCEDURES = [
+  'recordTemperature',
+  'importTemperatureCsv',
+  'configureTemperatureMonitoring',
+  'breakPack',
+  'approveCount',
+  'quarantinePart',
+  'releaseQuarantinedPart',
+  'acknowledgeRecall',
+  'reserveSupplierClaim',
+  'approveSafetyStock',
+  'refreshStockSignals',
+  'markStaleSignals',
+  'acknowledgeSignal',
+  'snoozeSignal',
+  'dismissSignal',
+  'createDraftAction',
+  'draftExpiryMarkdown',
+  'draftExpiryReturn',
+  'quarantineExpiring',
+];
+
+function takesBranchId(schema: unknown): boolean {
+  const zod = schema as {
+    shape?: Record<string, unknown>;
+    def?: { type?: string; options?: unknown[] };
+  };
+  if (zod?.shape) return 'branchId' in zod.shape;
+  if (zod?.def?.type === 'union') return (zod.def.options ?? []).some(takesBranchId);
+  return false;
+}
+
+describe('DEV-660 — every branch-scoped procedure is classified', () => {
+  it('places each procedure that takes a branchId in exactly one list', () => {
+    const procedures = pharmacyInventoryRouter._def.procedures as unknown as Record<
+      string,
+      { _def: { inputs: unknown[] } }
+    >;
+    const branchScoped = Object.entries(procedures)
+      .filter(([, procedure]) => procedure._def.inputs.some(takesBranchId))
+      .map(([name]) => name)
+      .sort();
+    const classified = [
+      ...ASSIGNMENT_GATED.map((gated) => gated.name),
+      ...TENANT_ONLY_BRANCH_PROCEDURES,
+    ].sort();
+
+    expect(new Set(classified).size).toBe(classified.length);
+    expect(branchScoped).toEqual(classified);
+    expect(ASSIGNMENT_GATED).toHaveLength(18);
+  });
+});
+
 const LOCATION_ROW = {
   id: 'location_1',
   coldChain: false,
@@ -1132,5 +1911,22 @@ describe('PUR-07 — the stock action centre transport', () => {
       })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('PR J (#979) — the transfer board needs pharmacy:inventory', () => {
+  it('refuses the cashier before reading any transfer', async () => {
+    grant([allow('pharmacy:counter'), allow('pharmacy:orders')]);
+    await expect(caller().transferBoard({ branchId: 'branch_a' })).rejects.toMatchObject(
+      CAPABILITY_REFUSAL
+    );
+    expect(db.pharmacyInterbranchTransfer.findMany).not.toHaveBeenCalled();
+  });
+
+  it('reads the board for the inventory grant', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyInterbranchTransfer.findMany.mockResolvedValue([]);
+    Object.assign(db.user, { findMany: vi.fn().mockResolvedValue([]) });
+    await expect(caller().transferBoard({ branchId: 'branch_a' })).resolves.toEqual([]);
   });
 });

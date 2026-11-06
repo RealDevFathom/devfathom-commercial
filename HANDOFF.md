@@ -247,6 +247,74 @@ exceed 5s under heavy parallel load. 9/9 pass when run alone.
 - **Tooling:** a local `commit-msg` hook to enforce plain messages was denied by the
   permission classifier. The rule is enforced by hand with the scan above.
 
+---
+
+# Handoff log: DEV-258 (per-organization invoice numbers)
+
+Last updated: 2026-11-06 (UTC). Branch `saad/exciting-ramanujan-w973fo`, PR
+[#1226](https://github.com/RealDevFathom/devfathom-commercial/pull/1226) into `develop`. Linear:
+https://linear.app/devfathom/issue/DEV-258. GitHub issue: #441.
+
+## Resume here
+
+- **Status: complete. No further action for DEV-258.** All final checks passed on the code at `9246b61`
+  (`develop` @ `ea75045` merged in). PR #1226 is being merged into `develop`, after which DEV-258 and #441
+  are closed.
+  - Static checks: typecheck 0 errors, lint 0 errors, build passes.
+  - Database: migrations apply on a fresh DB and on a DB upgraded from `develop`, no new drift, seed
+    passes twice.
+  - Tests: the DB tests pass as an admin URL and as the restricted `gate_runtime` role, and the agency
+    seed test passes 14/14. The full suite has the same 48 failures as `develop`, none new.
+  - Runtime QA over HTTP passes, and the security review and the adversarial review found nothing.
+  - The PR #1226 description has the details.
+- GitHub CI/CD is disabled: no GitHub checks ran, and none are counted as passing.
+- **DEV-618:** PR #1240 was merged into `develop` by another owner on 2026-11-03 (`918d835`). This session
+  has no DEV-618 work outstanding.
+
+## What the PR does
+
+- `invoices.invoiceNumber` becomes unique per organization: `@@unique([organizationId, invoiceNumber])`.
+  Migration `20261106130000_invoice_number_per_organization` builds the new index and then drops the
+  global one. It was renamed from `20261102000000_…` so it sorts after every migration on `develop`,
+  the latest being `20261106120000_pharmacy_bootstrap_admin_branch_backfill`.
+- `src/lib/finance/invoice-number.ts` takes a per-organization `pg_advisory_xact_lock`, then reads the MAX
+  of the year's `INV-<year>-<n>` suffix and inserts, all in one transaction.
+  - The tenant comes from `app.current_organization_id`.
+  - Allocation fails closed outside a tenant transaction.
+- All four creators use the helper: `finance.createInvoice`, `clients.generateInvoiceFromContract`,
+  `POST /api/v1/invoices` and the assistant `createInvoice` tool.
+- The seed sentinels are scoped to `org_devfathom`.
+
+## History
+
+- 2026-11-02: first implementation, tests and PR. Codex code review found nothing and Codex security
+  review posted no findings. Paused for DEV-618 the same evening.
+- 2026-11-06 08:43 UTC: QA FAIL because the branch conflicted with `develop`. Saad merged `develop` into
+  the branch (`7aebac1`), resolving `HANDOFF.md` by keeping this log first and `develop`'s log after it.
+- 2026-11-06: resumed. Migration renamed. Final checks: clean typecheck, lint and Prettier, migrate,
+  drift, seed, the DB test as an admin URL and as the restricted `gate_runtime` role, the invoice unit
+  suites, the full suite, build, runtime QA over HTTP, and a security review. Results are in the PR
+  description.
+
+## How to rerun the checks
+
+Use a disposable Postgres 16 DB, for example
+`U=postgresql://qa_admin:qa_admin@localhost:5432/devfathom_test` (local throwaway credentials).
+
+```bash
+EXTENSION_ADMIN_DATABASE_URL=$U DATABASE_URL=$U MIGRATION_DATABASE_URL=$U bun prisma/prepare-extensions.ts
+DATABASE_URL=$U MIGRATION_DATABASE_URL=$U bunx prisma migrate deploy
+NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit
+bun run lint
+TEST_DATABASE_URL=$U bunx vitest run src/lib/finance/invoice-number.db.test.ts
+bunx vitest run src/lib/finance src/server/routers/finance src/server/routers/clients src/app/api/v1/invoices src/lib/ai/tools/finance
+NODE_OPTIONS=--max-old-space-size=8192 bun run build
+```
+
+---
+
+# Handoff log (from develop)
+
 # HANDOFF — DEV-576 (top priority)
 
 Last updated: 2026-11-04 03:06 UTC

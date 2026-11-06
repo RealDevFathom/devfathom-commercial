@@ -1,3 +1,10 @@
+import { can, subjectFromSession } from '@/lib/abac';
+import {
+  actorCanApprovePurchase,
+  procurementBranchIds,
+  procurementGrantedForUser,
+} from './procurement-access';
+import { soloOwnerApprovalAllowed } from './purchase-approval';
 /**
  * PH-PUR read models — PRD §6.3 PUR-01..PUR-06 as the purchasing consoles need
  * to show them.
@@ -20,17 +27,34 @@
  */
 
 import { z } from 'zod';
-import { can, subjectFromSession } from '@/lib/abac';
 import { parseGs1DataMatrix, type Gs1Warning } from './gs1-datamatrix';
 import { normalizeMedicineText } from './medicine';
 import { packConversions, type PackLevelNode } from './pack-conversion';
 import { packConversionLabel } from './pack-conversion-label';
-import { assertSupplierEligible, PharmacyPurchasingError } from './purchasing';
+import {
+  assertSupplierEligible,
+  PharmacyPurchasingError,
+  supplierLicenceStatus,
+  type SupplierCompliancePolicy,
+  type SupplierLicenceEvidence,
+  type SupplierLicenceStatus,
+} from './purchasing';
+import { readSupplierCompliancePolicy, supersededLicenceIds } from './supplier-compliance-policy';
 import { creditPosition } from './supplier-returns';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export type OrganizationScope = { organizationId: string };
 export type BranchScope = OrganizationScope & { branchId: string };
+type PurchasingOrderScope = OrganizationScope & { branchIds: string[]; includeUnscoped: boolean };
+
+function orderBranchFilter(scope: PurchasingOrderScope) {
+  return {
+    OR: [
+      { branchId: { in: scope.branchIds } },
+      ...(scope.includeUnscoped ? [{ branchId: null }] : []),
+    ],
+  };
+}
 
 /**
  * PUR-01 — why a supplier may or may not be ordered from *right now*, in the
@@ -50,6 +74,8 @@ export type SupplierLicenceView = {
   expiresAt: Date;
   evidenceUri: string | null;
   verified: boolean;
+  /** Who filed it (PUR-01); null for filings made before the filer was recorded. */
+  recordedByUserId: string | null;
   superseded: boolean;
   /** Negative once the licence has lapsed, so the console can say by how long. */
   daysToExpiry: number;
@@ -70,6 +96,13 @@ export type SupplierSummary = {
   /** The licence the eligibility decision rests on, or the latest filing if none qualifies. */
   governingLicence: SupplierLicenceView | null;
   licences: SupplierLicenceView[];
+  /**
+   * DEV-753: the policy status, kept apart from the evidence above. `checked: false`
+   * means the owner has the supplier licence and trade-authorization checks off, so
+   * `eligibility` is orderable without anything about this supplier being verified.
+   * `licenceStatus` is what the licence evidence on file says either way.
+   */
+  compliance: { checked: boolean; policyVersion: number; licenceStatus: SupplierLicenceStatus };
 };
 
 const DAY_MS = 86_400_000;
@@ -80,11 +113,12 @@ export function daysBetween(from: Date, to: Date): number {
 
 function eligibility(
   supplier: { authorized: boolean },
-  licences: readonly { expiresAt: Date; verified: boolean }[],
-  at: Date
+  licences: readonly SupplierLicenceEvidence[],
+  at: Date,
+  policy: SupplierCompliancePolicy
 ): SupplierEligibility {
   try {
-    assertSupplierEligible({ authorized: supplier.authorized, licences, at });
+    assertSupplierEligible({ authorized: supplier.authorized, licences, at, policy });
     return { orderable: true, reason: null };
   } catch (error) {
     if (error instanceof PharmacyPurchasingError) {
@@ -106,6 +140,7 @@ type LicenceRow = {
   expiresAt: Date;
   evidenceUri: string | null;
   verifiedAt: Date | null;
+  recordedByUserId: string | null;
   supersedesId: string | null;
 };
 
@@ -127,6 +162,7 @@ function licenceViews(rows: readonly LicenceRow[], at: Date): SupplierLicenceVie
       expiresAt: row.expiresAt,
       evidenceUri: row.evidenceUri,
       verified: row.verifiedAt !== null,
+      recordedByUserId: row.recordedByUserId,
       superseded: superseded.has(row.id),
       daysToExpiry: daysBetween(at, row.expiresAt),
     }))
@@ -147,18 +183,26 @@ function summarizeSupplier(
     creditLimitMinor: number;
     licences: LicenceRow[];
   },
-  at: Date
+  at: Date,
+  policy: SupplierCompliancePolicy,
+  supersededIds: ReadonlySet<string>
 ): SupplierSummary {
-  const licences = licenceViews(supplier.licences, at);
-  // `assertSupplierEligible` counts every verified, unexpired filing, including
-  // a superseded one; mirroring that here rather than pre-filtering keeps the
-  // badge and the refusal the same decision.
+  // DEV-466: supersession is read across the whole register, as the write gates read it,
+  // so a filing superseded from anywhere is marked here too.
+  const licences = licenceViews(supplier.licences, at).map((licence) =>
+    supersededIds.has(licence.id) ? { ...licence, superseded: true } : licence
+  );
+  // The same evidence and the same policy `assertSupplierEligible` decides on at every
+  // write, so the badge and the refusal stay one decision.
   const evidence = licences.map((licence) => ({
     expiresAt: licence.expiresAt,
     verified: licence.verified,
+    superseded: licence.superseded,
   }));
   const governing =
-    licences.find((licence) => licence.verified && licence.daysToExpiry >= 0) ??
+    licences.find(
+      (licence) => licence.verified && !licence.superseded && licence.daysToExpiry >= 0
+    ) ??
     licences[0] ??
     null;
   return {
@@ -172,9 +216,14 @@ function summarizeSupplier(
     contactPhone: supplier.contactPhone,
     paymentTermsDays: supplier.paymentTermsDays,
     creditLimitMinor: supplier.creditLimitMinor,
-    eligibility: eligibility(supplier, evidence, at),
+    eligibility: eligibility(supplier, evidence, at, policy),
     governingLicence: governing,
     licences,
+    compliance: {
+      checked: policy.checksEnabled !== false,
+      policyVersion: policy.version,
+      licenceStatus: supplierLicenceStatus(evidence, at),
+    },
   };
 }
 
@@ -192,7 +241,15 @@ export async function listSuppliers(
     include: { licences: true },
     orderBy: [{ name: 'asc' }, { id: 'asc' }],
   });
-  return suppliers.map((supplier) => summarizeSupplier(supplier, at));
+  const [policy, supersededIds] = await Promise.all([
+    readSupplierCompliancePolicy(db, scope.organizationId),
+    supersededLicenceIds(
+      db,
+      scope.organizationId,
+      suppliers.flatMap((supplier) => supplier.licences.map((licence) => licence.id))
+    ),
+  ]);
+  return suppliers.map((supplier) => summarizeSupplier(supplier, at, policy, supersededIds));
 }
 
 // ---------------------------------------------------------------------------
@@ -242,14 +299,19 @@ export type PurchasingWorkspace = {
   medicines: MedicineOption[];
   suppliers: SupplierSummary[];
   approvers: ApproverOption[];
+  procurementApprovers: (ApproverOption & {
+    branchIds: string[];
+    soloBranchIds?: string[];
+    soloOrganizationWide?: boolean;
+  })[];
 };
 
 /**
  * Everything the four consoles need to render a picker, in one round trip.
  *
- * `actorId` is excluded from the approver list on purpose: PUR-05 refuses a
- * bypass the receiver approved for themselves, and offering an option the
- * server will reject is UX rule 12's dead-end form.
+ * Clinical witnesses exclude the receiver. Procurement approvers include the
+ * owner only when eligible for the solo exception; mutations still require
+ * PIN reauthentication and authoritative scope checks.
  */
 export async function purchasingWorkspace(
   db: ScopedDb,
@@ -307,16 +369,35 @@ export async function purchasingWorkspace(
     db.user.findMany({
       where: {
         organizationId: scope.organizationId,
-        status: { not: 'INACTIVE' },
-        ...(scope.actorId ? { id: { not: scope.actorId } } : {}),
+        status: 'ACTIVE',
+        restaurantStaffProfiles: {
+          some: {
+            status: 'ACTIVE',
+            organizationId: scope.organizationId,
+            credentials: {
+              some: {
+                organizationId: scope.organizationId,
+                type: 'PIN',
+                revokedAt: null,
+                deviceId: null,
+              },
+            },
+          },
+        },
       },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
       select: {
         id: true,
         name: true,
         email: true,
+        role: true,
+        status: true,
         organizationRole: {
-          select: { permissions: { select: { capability: true, effect: true } } },
+          select: {
+            key: true,
+            isSystem: true,
+            permissions: { select: { capability: true, effect: true } },
+          },
         },
         permissionOverrides: {
           where: { OR: [{ expiresAt: null }, { expiresAt: { gt: at } }] },
@@ -327,9 +408,50 @@ export async function purchasingWorkspace(
   ]);
 
   const eligibleApprovers = [];
+  const procurementApprovers: PurchasingWorkspace['procurementApprovers'] = [];
   for (const user of approvers) {
-    if (await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db, now: at })) {
+    // Clinical witnesses and procurement approvers are different capabilities.
+    // Retain the existing clinical projection for controlled receipt callers.
+    if (
+      user.id !== scope.actorId &&
+      // Keep the clinical subject identical to its historical (ID-only) shape.
+      (await can(subjectFromSession({ id: user.id }), 'pharmacy:dispense', undefined, {
+        db,
+        now: at,
+      }))
+    )
       eligibleApprovers.push(user);
+    if (procurementGrantedForUser(user) && (await actorCanApprovePurchase(db, user.id, at))) {
+      const person = {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        branchIds: await procurementBranchIds(db, scope.organizationId, user.id),
+      };
+      if (user.id !== scope.actorId) {
+        procurementApprovers.push(person);
+      } else {
+        const soloOrganizationWide = await soloOwnerApprovalAllowed(
+          db,
+          scope.organizationId,
+          user.id
+        );
+        // Nobody else active in the tenant means nobody else at any branch.
+        const soloBranchIds = soloOrganizationWide
+          ? branches.map((branch) => branch.id)
+          : (
+              await Promise.all(
+                branches.map(async (branch) =>
+                  (await soloOwnerApprovalAllowed(db, scope.organizationId, user.id, branch.id))
+                    ? branch.id
+                    : null
+                )
+              )
+            ).filter((branchId): branchId is string => branchId !== null);
+        if (soloOrganizationWide || soloBranchIds.length) {
+          procurementApprovers.push({ ...person, soloOrganizationWide, soloBranchIds });
+        }
+      }
     }
   }
   return {
@@ -337,6 +459,7 @@ export async function purchasingWorkspace(
     stockLocations,
     suppliers,
     approvers: eligibleApprovers.map(({ id, name, email }) => ({ id, name, email })),
+    procurementApprovers,
     medicines: medicines.map((medicine) => ({
       id: medicine.id,
       productName: medicine.productName,
@@ -364,9 +487,9 @@ export async function purchasingWorkspace(
 // PUR-02 — requisitions, quotes, purchase orders
 // ---------------------------------------------------------------------------
 
-export async function listRequisitions(db: ScopedDb, scope: OrganizationScope) {
+export async function listRequisitions(db: ScopedDb, scope: PurchasingOrderScope) {
   return db.pharmacyRequisition.findMany({
-    where: { organizationId: scope.organizationId },
+    where: { organizationId: scope.organizationId, ...orderBranchFilter(scope) },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     include: {
       branch: { select: { id: true, name: true } },
@@ -381,16 +504,31 @@ export async function listRequisitions(db: ScopedDb, scope: OrganizationScope) {
           lines: { orderBy: { id: 'asc' } },
         },
       },
-      purchaseOrders: { select: { id: true, reference: true, status: true } },
+      purchaseOrders: {
+        where: orderBranchFilter(scope),
+        select: { id: true, reference: true, status: true },
+      },
     },
   });
 }
 
 export type RequisitionDetail = Awaited<ReturnType<typeof listRequisitions>>[number];
 
-export async function listPurchaseOrders(db: ScopedDb, scope: OrganizationScope) {
+export async function listPurchaseOrders(db: ScopedDb, scope: PurchasingOrderScope) {
   return db.pharmacyPurchaseOrder.findMany({
-    where: { organizationId: scope.organizationId },
+    where: {
+      organizationId: scope.organizationId,
+      ...orderBranchFilter(scope),
+      AND: [
+        {
+          OR: [
+            { requisitionId: null },
+            { requisition: { branchId: null } },
+            { requisition: { branchId: { in: scope.branchIds } } },
+          ],
+        },
+      ],
+    },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     include: {
       supplier: { select: { id: true, name: true, authorized: true } },

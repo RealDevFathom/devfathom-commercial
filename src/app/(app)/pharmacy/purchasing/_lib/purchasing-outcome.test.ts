@@ -59,3 +59,19 @@ describe('purchasingOutcome', () => {
     });
   });
 });
+
+it('allows retry after a refused approval PIN without claiming an unknown write', async () => {
+  const { APPROVAL_BLOCKED } = await import('@/lib/pharmacy/purchase-approval');
+  await expect(
+    fail(
+      Object.assign(new PurchasingValidationError(APPROVAL_BLOCKED), {
+        field: 'bypassApprovalPin',
+      }),
+      true
+    )
+  ).resolves.toEqual({
+    message: APPROVAL_BLOCKED,
+    field: 'bypassApprovalPin',
+    outcome: 'rejected',
+  });
+});

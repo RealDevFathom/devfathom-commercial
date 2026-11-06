@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { BranchAssignmentRequired } from '@/components/pharmacy/inventory/branch-assignment-required';
 import {
   ALLOCATE_ROWS,
   TransferAllocateForm,
@@ -21,9 +22,13 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
+import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
+import {
+  admittedInventoryBranchIds,
+  pharmacyInventoryRouter,
+} from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
 
 export const metadata: Metadata = { title: 'Stock transfers' };
@@ -73,7 +78,17 @@ export default async function PharmacyTransfersPage({
   const query = await searchParams;
   const ctx = await tenantContext();
   const moduleEnabled = ctx ? hasModule(ctx.entitlements, 'pharmacy-inventory') : false;
-  if (!ctx?.session?.user || !moduleEnabled) {
+  // PR J (#979): the page checks the permission the board and its actions need,
+  // not just the module, so a counter-only role is told why instead of erroring.
+  const permitted =
+    moduleEnabled && ctx?.session?.user
+      ? await can(subjectFromSession(ctx.session.user), 'pharmacy:inventory', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }).catch(() => false)
+      : false;
+  if (!ctx?.session?.user || !moduleEnabled || !permitted) {
     return (
       <main className="min-w-0 space-y-6">
         <PageHeader {...header} />
@@ -95,7 +110,21 @@ export default async function PharmacyTransfersPage({
     orderBy: { name: 'asc' },
     select: { id: true, name: true, city: true },
   });
-  const branch = branches.find((item) => item.id === query.branch) ?? branches[0] ?? null;
+  // DEV-660: the gated stock reads admit only a branch the actor is assigned to (or
+  // any branch, for a verified tenant ADMIN), so only those branches are offered.
+  // `branches` still names the other side of a transfer.
+  const admitted = await admittedInventoryBranchIds(ctx);
+  const workingBranches = branches.filter((item) => admitted.has(item.id));
+  const branch =
+    workingBranches.find((item) => item.id === query.branch) ?? workingBranches[0] ?? null;
+  if (!branch && branches.length > 0) {
+    return (
+      <main className="min-w-0 space-y-6">
+        <PageHeader {...header} />
+        <BranchAssignmentRequired canAssign={ctx.session.user.role === 'ADMIN'} />
+      </main>
+    );
+  }
   if (!branch) {
     return (
       <main className="min-w-0 space-y-6">
@@ -116,8 +145,10 @@ export default async function PharmacyTransfersPage({
   }
 
   const caller = pharmacyInventoryRouter.createCaller(ctx);
-  const [transfers, balances, destinationLocations, witnesses] = await Promise.all([
-    caller.transferBoard({ branchId: branch.id }),
+  // DEV-660: the gated read admits the branch (and, for a tenant ADMIN without an
+  // assignment, writes the exception's audit row) before any direct stock read.
+  const transfers = await caller.transferBoard({ branchId: branch.id });
+  const [balances, destinationLocations, witnesses] = await Promise.all([
     ctx.db.pharmacyStockBalance.findMany({
       where: {
         organizationId,
@@ -222,7 +253,7 @@ export default async function PharmacyTransfersPage({
           <label className="min-w-64 flex-1 text-sm text-text-body">
             Branch
             <select className={selectClass} defaultValue={branch.id} name="branch">
-              {branches.map((item) => (
+              {workingBranches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name} · {item.city}
                 </option>

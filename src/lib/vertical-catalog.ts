@@ -740,11 +740,18 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:counter',
   'pharmacy:close',
   'pharmacy:procurement',
+  'pharmacy:procurement-approve',
   'pharmacy:inventory',
   'pharmacy:orders',
   'reports:operational',
   'reports:financial',
   'pharmacy:safety',
+  // DEV-751: pharmacy procedures run on the shared SOP engine and are gated on
+  // the generic SOP actions. `pharmacy:*` does not match these (other
+  // namespace), so they are listed for the role editor to grant explicitly.
+  'sop:manage',
+  'sop:complete',
+  'sop:verify',
 ];
 
 /** Canonical actions checked by pharmacy workflows, including shared report gates. */
@@ -753,6 +760,7 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
+  'pharmacy:procurement-approve',
   'pharmacy:inventory',
   'pharmacy:dispense',
   'pharmacy:prescriptions',
@@ -763,18 +771,33 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'reports:financial',
 ] as const;
 
-export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
+/**
+ * Exact grants added to a PHARMACY tenant's bootstrap `admin` role beside its `*`.
+ * The wildcard never reaches pharmacy:safety, and a new pharmacy's only user sits on
+ * that role, so without this a solo pharmacy could not file or review PV reports.
+ */
+export const PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS: readonly string[] = ['pharmacy:safety'];
+
+const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   {
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+    // `pharmacy:*` never reaches the exact-grant-only actions. The Owner holds an
+    // explicit `pharmacy:safety` so a solo pharmacy can still file and review
+    // pharmacovigilance reports (#479). It deliberately does NOT receive
+    // pharmacy:dispense or pharmacy:catalogue-review: clinical powers stay with the
+    // pharmacist and the opt-in owner-operator template.
+    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial', 'pharmacy:safety'],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
     // for business/cashier guards that require literal ADMIN; EMPLOYEE plus this
     // template is not equivalent. Provisioning does not assign it to existing owners.
     // These grants neither verify clinical qualifications nor permit self-review/signing.
+    // Sole exception: in a tenant with no other active staff, a pharmacovigilance report
+    // may be marked READY by its own maker only after fresh server-side PIN
+    // reauthentication, with a durable audit row (pharmacy-reports PV:SOLO_OWNER_PIN).
     // #975: a proprietor runs the whole shop, so the template also grants the
     // operational actions (Goods-in, stock, counter, day close, management). Every
     // grant stays exact (no wildcard), so the separation-of-duties caps remain
@@ -794,6 +817,9 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'pharmacy:counter',
       'pharmacy:close',
       'pharmacy:manage',
+      // PUR-02: the proprietor approves and sends purchase orders and authorizes
+      // suppliers; self-approval stays refused outside the solo-owner exception.
+      'pharmacy:procurement-approve',
     ],
   },
   {
@@ -808,7 +834,13 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     isSystem: true,
     // Managers retain the purchasing and Goods-in access that predates the
     // explicit pharmacy capability model (#375).
-    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+    capabilities: [
+      'pharmacy:manage',
+      'pharmacy:orders',
+      'pharmacy:procurement',
+      // PUR-02: managers approve and send purchase orders others raised.
+      'pharmacy:procurement-approve',
+    ],
   },
   {
     key: 'cashier',
@@ -826,6 +858,35 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['reports:financial'] },
   { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['reports:operational'] },
 ];
+
+/**
+ * DEV-751 — pharmacy procedure (SOP) grants for NEW tenants' role templates.
+ *
+ * Kept apart from the base templates on purpose: SOPs are follow-up checklists
+ * and proof, and they never add, remove or depend on a pharmacy operation
+ * capability (`pharmacy:close`, `pharmacy:counter`, …). Ownership of those
+ * operation grants stays with the base list above; this map only appends the
+ * generic `sop:*` actions (which `pharmacy:*` does not match).
+ *
+ * Templates are materialised only when an organization is created, so editing
+ * this map never changes an existing tenant's roles.
+ */
+export const PHARMACY_SOP_TEMPLATE_GRANTS: Readonly<Record<string, readonly string[]>> = {
+  owner: ['sop:manage', 'sop:complete', 'sop:verify'],
+  'owner-operator': ['sop:manage', 'sop:complete', 'sop:verify'],
+  manager: ['sop:manage', 'sop:complete', 'sop:verify'],
+  pharmacist: ['sop:complete', 'sop:verify'],
+  cashier: ['sop:complete'],
+  procurement: ['sop:complete'],
+  inventory: ['sop:complete'],
+};
+
+export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = PHARMACY_BASE_ROLE_TEMPLATES.map(
+  (role) => ({
+    ...role,
+    capabilities: [...role.capabilities, ...(PHARMACY_SOP_TEMPLATE_GRANTS[role.key] ?? [])],
+  })
+);
 
 /**
  * H1-01 — the nineteen hospitality capabilities of `06-roles-reports` §1, in the

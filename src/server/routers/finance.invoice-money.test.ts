@@ -31,12 +31,18 @@ vi.mock('../audit', () => ({
 import type { TRPCContext } from '../trpc';
 import { financeRouter } from './finance';
 
+/** Answers the statements allocateInvoiceNumber sends: tenant, lock, latest sequence. */
+async function invoiceNumberingQuery(query: { sql: string }) {
+  if (query.sql.includes('current_setting')) return [{ organizationId: 'org-1' }];
+  if (query.sql.includes('pg_advisory_xact_lock')) return [];
+  return [{ sequence: null }];
+}
+
 function caller() {
   const db = {
     client: { findMany: vi.fn().mockResolvedValue([{ id: 'client-1' }]) },
     project: { findMany: vi.fn() },
     invoice: {
-      count: vi.fn().mockResolvedValue(0),
       create: mocks.create,
       findUnique: mocks.findUnique,
       update: mocks.update,
@@ -70,6 +76,7 @@ describe('finance.createInvoice money calculation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
+    mocks.queryRaw.mockImplementation(invoiceNumberingQuery);
     mocks.create.mockResolvedValue({
       id: 'invoice-1',
       invoiceNumber: 'INV-2026-001',
@@ -95,6 +102,7 @@ describe('finance.createInvoice money calculation', () => {
     expect(mocks.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
+          invoiceNumber: `INV-${new Date().getFullYear()}-001`,
           items: [
             { description: 'First', quantity: 1, rate: 1.005, amount: 1.01 },
             { description: 'Second', quantity: 3, rate: 0.335, amount: 1.01 },

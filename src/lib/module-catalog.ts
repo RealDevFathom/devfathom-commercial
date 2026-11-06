@@ -226,6 +226,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // mandatory medicine identity in Core — the registry key is
   // `pharmacy-procurement` (vertical-catalog), not `pharmacy-core`.
   pharmacyPurchasing: 'pharmacy-procurement',
+  // DEV-752: pack-photo batch/expiry suggestions on the receiving bench.
+  pharmacyPackLabel: 'pharmacy-procurement',
   // PH-INV (INV-01..04): the batch/lot stock ledger is licensed as Pharmacy
   // Inventory, separately from the mandatory medicine identity in Core.
   pharmacyInventory: 'pharmacy-inventory',
@@ -233,13 +235,22 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacyPrescriptions: 'pharmacy-dispensing',
   pharmacyDispensing: 'pharmacy-dispensing',
   pharmacySafety: 'pharmacy-safety',
+  // DEV-751: pharmacy procedures run on the shared SOP engine but are licensed
+  // as Pharmacy Safety. Never `restaurant-sop`: a restaurant licence must not
+  // open the pharmacy SOP surface, and a pharmacy package does not sell it.
+  pharmacySop: 'pharmacy-safety',
   pharmacySales: 'pharmacy-counter',
   pharmacyBranchAssignments: 'pharmacy-core',
+  // #979: the rail's capability read belongs to every pharmacy workspace.
+  pharmacyAccess: 'pharmacy-core',
   pharmacyCameras: 'pharmacy-core',
   pharmacyMarketing: 'pharmacy-crm',
   pharmacyFinance: 'pharmacy-finance',
   pharmacyOffline: 'pharmacy-counter',
   pharmacyOrdering: 'pharmacy-counter',
+  // DEV-753: the owner switch for supplier compliance checks belongs to the
+  // purchasing lane it governs.
+  pharmacySupplierCompliance: 'pharmacy-procurement',
   hotelProperty: 'hotel-core',
   // H1-07 (MEAL-01): the meal plans a property sells are commercial
   // configuration every hospitality tenant holds, so they gate on the mandatory
@@ -392,6 +403,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/marketing', 'pharmacy-crm'],
   ['/pharmacy/loyalty', 'pharmacy-crm'],
   ['/pharmacy/cameras', 'pharmacy-core'],
+  ['/pharmacy/sop', 'pharmacy-safety'],
   ['/pharmacy/orders', 'pharmacy-counter'],
   ['/restaurant/staff/roster', 'restaurant-core'],
   ['/restaurant/staff', 'restaurant-core'],

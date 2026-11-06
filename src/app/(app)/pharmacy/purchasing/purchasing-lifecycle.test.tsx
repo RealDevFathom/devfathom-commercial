@@ -15,6 +15,26 @@ vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.hasModule }));
+// DEV-753: the owner policy router, at its default (checks on, not the owner).
+vi.mock('@/server/routers/pharmacy-supplier-compliance', () => ({
+  pharmacySupplierComplianceRouter: {
+    createCaller: () => ({
+      policy: async () => ({
+        policy: {
+          checksEnabled: true,
+          version: 0,
+          source: 'DEFAULT',
+          updatedAt: null,
+          updatedByName: null,
+        },
+        canManage: false,
+        warningVersion: 'supplier-compliance-off@1',
+      }),
+      history: async () => [],
+      skips: async () => [],
+    }),
+  },
+}));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/navigation', () => ({ redirect: vi.fn(), useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock('@/server/routers/pharmacy-purchasing', () => ({
@@ -40,7 +60,14 @@ function contextStub(enabledModules = ['pharmacy-procurement']) {
       user: {
         findUnique: vi.fn().mockResolvedValue({
           organizationRole: {
-            permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
+            permissions: [
+              { capability: 'pharmacy.procurement', effect: 'ALLOW' },
+              // PR J: approving and sending is its own permission (Manager, Owner).
+              { capability: 'pharmacy:procurement-approve', effect: 'ALLOW' },
+              // PR J: the returns board books debit notes and credits, so it
+              // needs financial report access as well (Manager + Finance).
+              { capability: 'reports:financial', effect: 'ALLOW' },
+            ],
           },
           permissionOverrides: [],
         }),
@@ -70,6 +97,7 @@ const licensedSupplier = {
     expiresAt: new Date('2027-01-01T00:00:00.000Z'),
     evidenceUri: null,
     verified: true,
+    recordedByUserId: null,
     superseded: false,
     daysToExpiry: 300,
   },
@@ -134,6 +162,9 @@ const workspace = {
   ],
   suppliers: [licensedSupplier, lapsedSupplier],
   approvers: [{ id: 'user-2', name: 'Bilal', email: 'bilal@example.test' }],
+  procurementApprovers: [
+    { id: 'user-2', name: 'Bilal', email: 'bilal@example.test', branchIds: ['branch-1'] },
+  ],
 };
 
 function callerStub(overrides: Record<string, unknown> = {}) {

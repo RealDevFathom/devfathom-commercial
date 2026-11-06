@@ -25,13 +25,26 @@ const reads = {
   returnableLots: vi.fn(),
 };
 const params = () => Promise.resolve({ branch: 'branch' });
+const findUser = vi.fn();
+const procurementUser = (permissions: { capability: string; effect: 'ALLOW' | 'DENY' }[]) => ({
+  role: 'EMPLOYEE',
+  organizationRole: { permissions },
+  permissionOverrides: [],
+});
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.actor.mockResolvedValue({ session: { user: { id: 'user' } }, organization: { id: 'org' } });
   mocks.context.mockResolvedValue({
     session: { user: { id: 'user' } },
     entitlements: { organizationId: 'org' },
+    db: { user: { findUnique: findUser } },
   });
+  findUser.mockResolvedValue(
+    procurementUser([
+      { capability: 'pharmacy:procurement', effect: 'ALLOW' },
+      { capability: 'reports:financial', effect: 'ALLOW' },
+    ])
+  );
   mocks.module.mockReturnValue(true);
   mocks.caller.mockReturnValue(reads);
   reads.workspace.mockResolvedValue({
@@ -54,6 +67,28 @@ it('does not read or render priorities without module access', async () => {
   expect(reads.purchaseReturns).not.toHaveBeenCalled();
   expect(screen.queryByRole('heading', { name: 'Supplier-credit follow-up' })).toBeNull();
 });
+it('closes returns to a counter-only role without procurement (#979)', async () => {
+  findUser.mockResolvedValue(
+    procurementUser([
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+      { capability: 'pharmacy:orders', effect: 'ALLOW' },
+    ])
+  );
+  render(await ReturnsPage({ searchParams: params() }));
+  expect(screen.getByRole('heading', { name: 'You do not have purchasing access' })).toBeVisible();
+  expect(mocks.caller).not.toHaveBeenCalled();
+  expect(reads.purchaseReturns).not.toHaveBeenCalled();
+  expect(screen.queryByRole('heading', { name: 'Supplier-credit follow-up' })).toBeNull();
+});
+it('closes returns to a procurement role without financial access (PR J)', async () => {
+  findUser.mockResolvedValue(
+    procurementUser([{ capability: 'pharmacy:procurement', effect: 'ALLOW' }])
+  );
+  render(await ReturnsPage({ searchParams: params() }));
+  expect(screen.getByRole('heading', { name: 'You do not have purchasing access' })).toBeVisible();
+  expect(mocks.caller).not.toHaveBeenCalled();
+  expect(reads.purchaseReturns).not.toHaveBeenCalled();
+});
 it('does not render priorities after branch read denial', async () => {
   reads.purchaseReturns.mockRejectedValue(new Error('FORBIDDEN'));
   render(await ReturnsPage({ searchParams: params() }));
@@ -70,6 +105,41 @@ it('loads the queue from the existing authorized branch reads', async () => {
   expect(reads.supplierCredits).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' });
   expect(screen.getByRole('heading', { name: 'Supplier-credit follow-up' })).toBeVisible();
   expect(screen.getByText('No open issued debit notes in validated loaded records.')).toBeVisible();
+});
+it('says the operator is not assigned to a branch instead of failing to load (PR J)', async () => {
+  reads.workspace.mockResolvedValue({
+    branches: [{ id: 'branch', name: 'Branch', city: 'Karachi', code: 'B' }],
+    reachableBranchIds: [],
+    suppliers: [],
+    medicines: [],
+    approvers: [],
+  });
+  render(await ReturnsPage({ searchParams: Promise.resolve({}) }));
+  expect(
+    screen.getByRole('heading', { name: 'Returns & claims needs a branch assignment' })
+  ).toBeVisible();
+  expect(screen.queryByText('This surface could not load')).toBeNull();
+  expect(reads.purchaseReturns).not.toHaveBeenCalled();
+  expect(reads.returnableLots).not.toHaveBeenCalled();
+  expect(reads.supplierCredits).not.toHaveBeenCalled();
+});
+it('opens the only assigned branch and never reads an unassigned one (PR J)', async () => {
+  reads.workspace.mockResolvedValue({
+    branches: [
+      { id: 'branch', name: 'Branch', city: 'Karachi', code: 'B' },
+      { id: 'other', name: 'Other', city: 'Lahore', code: 'O' },
+    ],
+    reachableBranchIds: ['branch'],
+    suppliers: [],
+    medicines: [],
+    approvers: [],
+  });
+  render(await ReturnsPage({ searchParams: Promise.resolve({ branch: 'other' }) }));
+  expect(reads.purchaseReturns).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' });
+  expect(reads.returnableLots).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' });
+  expect(reads.supplierCredits).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' });
+  expect(screen.getByText(/the only branch you are assigned to/)).toBeVisible();
+  expect(screen.queryByText('This surface could not load')).toBeNull();
 });
 it('retains the descriptive route loading state', () => {
   render(<Loading />);

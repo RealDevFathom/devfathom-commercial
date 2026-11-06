@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { PHARMACY_CHECKED_CAPABILITIES, PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import {
+  PHARMACY_CHECKED_CAPABILITIES,
+  PHARMACY_ROLE_TEMPLATES,
+  PHARMACY_SOP_TEMPLATE_GRANTS,
+} from '@/lib/vertical-catalog';
 import { EXACT_GRANT_ONLY_ACTIONS, capabilityMatches } from './capabilities';
 import { ALL_ACTIONS } from './policies';
 
 export const intendedPharmacyGrants = {
-  owner: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+  owner: ['pharmacy:*', 'reports:operational', 'reports:financial', 'pharmacy:safety'],
   'owner-operator': [
     'reports:operational',
     'reports:financial',
@@ -17,9 +21,15 @@ export const intendedPharmacyGrants = {
     'pharmacy:counter',
     'pharmacy:close',
     'pharmacy:manage',
+    'pharmacy:procurement-approve',
   ],
   pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
-  manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+  manager: [
+    'pharmacy:manage',
+    'pharmacy:orders',
+    'pharmacy:procurement',
+    'pharmacy:procurement-approve',
+  ],
   cashier: ['pharmacy:counter', 'pharmacy:orders'],
   procurement: ['pharmacy:procurement'],
   inventory: ['pharmacy:inventory'],
@@ -29,8 +39,15 @@ export const intendedPharmacyGrants = {
 
 describe('canonical capability contract (#130)', () => {
   it('grants exactly the intended actions to every pharmacy template', () => {
+    // DEV-751: the SOP grants are a separate, append-only map (they never touch a
+    // pharmacy operation grant), so the contract is base grants + SOP grants.
     expect(Object.fromEntries(PHARMACY_ROLE_TEMPLATES.map((r) => [r.key, r.capabilities]))).toEqual(
-      intendedPharmacyGrants
+      Object.fromEntries(
+        Object.entries(intendedPharmacyGrants).map(([key, grants]) => [
+          key,
+          [...grants, ...(PHARMACY_SOP_TEMPLATE_GRANTS[key] ?? [])],
+        ])
+      )
     );
     for (const role of PHARMACY_ROLE_TEMPLATES) {
       for (const grant of role.capabilities) {
@@ -72,11 +89,21 @@ describe('canonical capability contract (#130)', () => {
     const owner = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner')!;
     for (const action of PHARMACY_CHECKED_CAPABILITIES) {
       expect(ALL_ACTIONS).toContain(action);
-      // The owner's pharmacy:* never reaches the exact-grant-only actions.
+      // The owner's pharmacy:* never reaches the exact-grant-only actions; only its
+      // explicit pharmacy:safety grant (#479 PV filing/review) does.
       expect(owner.capabilities.some((grant) => capabilityMatches(grant, action))).toBe(
-        !EXACT_GRANT_ONLY_ACTIONS.has(action)
+        !EXACT_GRANT_ONLY_ACTIONS.has(action) || action === 'pharmacy:safety'
       );
     }
+  });
+
+  it('gives the owner exact pharmacy:safety but never dispense or catalogue review', () => {
+    const owner = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner')!;
+    const holds = (action: string) =>
+      owner.capabilities.some((grant) => capabilityMatches(grant, action));
+    expect(holds('pharmacy:safety')).toBe(true);
+    expect(holds('pharmacy:dispense')).toBe(false);
+    expect(holds('pharmacy:catalogue-review')).toBe(false);
   });
 
   it.each([

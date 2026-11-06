@@ -24,7 +24,14 @@ const priorCatalogDigests = {
   AGENCY: '54e0ca2cb112bd14c7bde79c1aba7ceeb7875fc51c5a0e5dd05c0db326440769',
   RESTAURANT: '94d6616c691e680b51b340e75547478e5fdd98e9aa208efc12ce64670dc950a7',
   // QA-130: canonical capability names and explicit Owner report grants.
-  PHARMACY: '72ac46b3a8e9809a563bdb02d78774b4ba26260780dd1700992fd656ef092ff8',
+  // DEV-751: generic sop:* actions in the pharmacy capability catalog and the
+  // appended pharmacy SOP role-template grants, on top of #247's explicit
+  // pharmacy:safety grants (Owner template, bootstrap admin). The pin was
+  // already stale on develop before either change. If DEV-739 (#1413) lands
+  // later, it recomputes this pin with its day-close change and names it here.
+  // DEV-17 (#994): pharmacy:procurement-approve on the Manager and Owner /
+  // Operator templates; the hashed catalog data differs only by those grants.
+  PHARMACY: '259c422c8d031e258714eb533a8efe682deefd4361d8994fc69c8bcc272e95b0',
 };
 
 const property = {

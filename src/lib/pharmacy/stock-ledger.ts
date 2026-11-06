@@ -813,10 +813,14 @@ export type TransferInput = {
  * so the same units are never AVAILABLE in two places at once.
  */
 export async function transferStock(db: ScopedDb, scope: LedgerScope, input: TransferInput) {
+  // DEV-660: read and lock the source balance only within the acting branch, so a
+  // sibling branch's lot or location resolves to nothing rather than answering
+  // (and locking) as blocked stock.
   const rows = await db.$queryRaw<CandidateRow[]>(Prisma.sql`
     SELECT ${CANDIDATE_COLUMNS}
     ${CANDIDATE_JOINS}
     WHERE balance."organizationId" = ${scope.organizationId}
+      AND balance."branchId" = ${scope.branchId}
       AND balance."inventoryLotId" = ${input.inventoryLotId}
       AND balance."stockLocationId" = ${input.fromStockLocationId}
       AND balance."disposition" = 'AVAILABLE'
