@@ -1,0 +1,51 @@
+[
+  {
+    "url": "http://qa-clifton.localhost:3000/api/trpc/pharmacySales.counterBranches",
+    "method": "GET",
+    "status": 401,
+    "leak": false,
+    "body": "{\"error\":\"Unauthorized\"}"
+  },
+  {
+    "url": "http://qa-clifton.localhost:3000/api/trpc/pharmacySales.counterSearch",
+    "method": "POST",
+    "status": 401,
+    "leak": false,
+    "body": "{\"error\":\"Unauthorized\"}"
+  },
+  {
+    "url": "http://qa-clifton.localhost:3000/api/pharmacy/print",
+    "method": "GET",
+    "status": 400,
+    "leak": false,
+    "body": "{\"error\":\"Invalid receipt print request.\"}"
+  },
+  {
+    "url": "http://qa-clifton.localhost:3000/api/pharmacy/counter/replay",
+    "method": "POST",
+    "status": 403,
+    "leak": false,
+    "body": "{\"error\":\"origin_denied\"}"
+  },
+  {
+    "url": "http://qa-clifton.localhost:3000/api/pharmacy/whatsapp/webhook",
+    "method": "POST",
+    "status": 401,
+    "leak": false,
+    "body": "{\"error\":\"Invalid signature.\"}"
+  },
+  {
+    "url": "http://qa-clifton.localhost:3000/api/pharmacy/whatsapp/webhook",
+    "method": "GET",
+    "status": 403,
+    "leak": false,
+    "body": "{\"error\":\"Forbidden.\"}"
+  },
+  {
+    "url": "http://admin.localhost:3000/api/platform/control",
+    "method": "POST",
+    "status": 401,
+    "leak": false,
+    "body": "{\"error\":\"Platform authentication is required.\"}"
+  }
+]
