@@ -89,6 +89,7 @@ const mocks = vi.hoisted(() => ({
   gateStateFindMany: vi.fn(),
   roleCount: vi.fn(),
   publicationEntryCount: vi.fn(),
+  barcodedPackCount: vi.fn(),
   inventoryLotCount: vi.fn(),
   supplierCount: vi.fn(),
 }));
@@ -126,6 +127,7 @@ const platformDb = {
   organizationRole: { create: mocks.roleCreate, count: mocks.roleCount },
   pharmacyOnboardingGateState: { findMany: mocks.gateStateFindMany },
   medicinePublicationEntry: { count: mocks.publicationEntryCount },
+  packLevel: { count: mocks.barcodedPackCount },
   pharmacyInventoryLot: { count: mocks.inventoryLotCount },
   pharmacySupplier: { count: mocks.supplierCount },
   organizationDepartment: {
@@ -1193,6 +1195,7 @@ function noReadinessEvidence() {
   mocks.gateStateFindMany.mockResolvedValue([]);
   mocks.roleCount.mockResolvedValue(0);
   mocks.publicationEntryCount.mockResolvedValue(0);
+  mocks.barcodedPackCount.mockResolvedValue(0);
   mocks.inventoryLotCount.mockResolvedValue(0);
   mocks.supplierCount.mockResolvedValue(0);
 }
@@ -1202,6 +1205,7 @@ function allReadinessEvidence() {
   // Standard organizations need only the original eight pharmacy roles.
   mocks.roleCount.mockResolvedValue(8);
   mocks.publicationEntryCount.mockResolvedValue(1);
+  mocks.barcodedPackCount.mockResolvedValue(1);
   mocks.inventoryLotCount.mockResolvedValue(1);
   mocks.supplierCount.mockResolvedValue(1);
 }

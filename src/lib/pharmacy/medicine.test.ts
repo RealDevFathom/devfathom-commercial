@@ -5,6 +5,7 @@ import {
   deriveLooseUnitPrice,
   medicineDuplicateKey,
   normalizeMedicineText,
+  parseDefaultPackSize,
   parseSimpleMedicineStrength,
 } from './medicine';
 
@@ -14,6 +15,39 @@ describe('pharmacy medicine invariants', () => {
     expect(parseSimpleMedicineStrength('2.5%')).toEqual({ value: 2.5, unit: '%' });
     expect(parseSimpleMedicineStrength('500 mg / 5 mL')).toBeNull();
     expect(parseSimpleMedicineStrength('500 mg + 125 mg')).toBeNull();
+  });
+
+  it.each([
+    ['10 tablets', 'BOX', 10],
+    ["10's", 'BOX', 10],
+    ['Strip of 10', 'STRIP', 10],
+    ['Tablet, 10 per strip', 'STRIP', 10],
+    ['3 x 10', 'BOX', 30],
+    ['2x10 capsules', 'BOX', 20],
+    ['1 x 10 x 10 carton', 'CARTON', 100],
+    ['10 x 5ml ampoules', 'BOX', 10],
+    ['100 ml bottle', 'UNIT', 1],
+    ['60ml', 'UNIT', 1],
+    ['1 tablet', 'UNIT', 1],
+    ['Blister 10 x 10', 'BOX', 100],
+    ['1 x 10 strip', 'STRIP', 10],
+  ])('structures the default pack for %s', (pack, level, unitsPerParent) => {
+    expect(parseDefaultPackSize(pack)).toEqual({ level, unitsPerParent });
+  });
+
+  it.each([
+    '',
+    'Bottle',
+    'Box of 3 strips of 10',
+    '10 strips',
+    'Box of 10 strips',
+    '10 blisters',
+    'Carton of 12 boxes',
+    '0 tablets',
+    '2.5 tablets',
+    '99999999999 tablets',
+  ])('refuses to guess a default pack for %j', (pack) => {
+    expect(parseDefaultPackSize(pack)).toBeNull();
   });
 
   it('converts two cartons of 20 x 5 x 10 into 2,000 canonical units', () => {
