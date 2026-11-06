@@ -11,6 +11,33 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 - **To resume DEV-258:** PR #1226 is complete and waiting on QA's runtime retest and human review. Re-read
   the PR (checks, review threads, comments, mergeability against `develop`) and handle anything new.
   Re-arm a safety-net check-in. Never merge.
+- **QA FAIL (2026-11-06 08:43 UTC, comment 6680865760): merge blocked.** PR #1226 is CONFLICTING against
+  `develop` @ `fd4630b`. Still paused; nothing has been resolved. A dry run
+  (`git merge-tree --write-tree origin/saad/exciting-ramanujan-w973fo origin/develop`) shows:
+  - **The only conflict is `HANDOFF.md` (add/add).** `develop` now has its own root `HANDOFF.md`: other
+    sessions' logs arrived through merged PRs (#1390, #1238). `prisma/schema.prisma` auto-merges, and
+    `develop` did not touch the `Invoice` model.
+  - **Migration order:** `develop` added `20261102130000_ai_provider_routing`,
+    `20261102140000_organization_ai_deep_strategy` and `20261102140100_ai_assistant_actions`, all named
+    after this PR's `20261102000000_invoice_number_per_organization`. Rename this PR's migration to a
+    later timestamp when resuming, so it applies after them.
+  - **Resume steps:**
+    1. Merge `develop` into the branch (no rebase or force-push).
+    2. Resolve `HANDOFF.md`: keep `develop`'s file and move this log, which is a decision for Saad, see
+       below.
+    3. Rename the migration and re-run `prisma migrate deploy` plus the drift check.
+    4. Re-run the full typecheck (QA wants it fully clean; check whether `develop` still has the 8 errors),
+       lint, build and the invoice tests.
+    5. Ask QA and Security for a re-review.
+  - **QA item 2** ("reserved per `(organizationId, year)` in the same transaction"): every path calls
+    `createWithNextInvoiceNumber`. Its lock is per organization, which also covers each year; the sequence
+    read is per organization and year.
+- **DEV-618:** PR #1240 was merged into `develop` by WhatTheStack1 on 2026-11-03 01:50 UTC at `918d835`,
+  from work done outside this session. This session made no DEV-618 commits; it was interrupted while
+  reading the mockups. No DEV-618 work is pending here, and the PR cannot take more pushes.
+- **Open decision for Saad:** a per-branch root `HANDOFF.md` now collides with the root `HANDOFF.md` on
+  `develop` whenever a PR merges. Choose a per-item path (for example `handoff/DEV-258.md`) or another
+  location.
 - **Uncommitted / half-written:** nothing.
 - The safety-net check-in `trig_01NcrHjiUmWySt3ZTwjcHJyq` was deleted when DEV-258 was paused. This session
   is still subscribed to PR #1226, so GitHub events will still arrive.
@@ -77,7 +104,7 @@ Last updated: 2026-11-02 (UTC). Branch: `saad/exciting-ramanujan-w973fo` (based 
 | Machine checks | pending | Per your instruction no GitHub Actions were triggered from here; any checks that run on their own will be recorded here |
 | Codex code review | **pass, no findings** on `1afbacf` (completed 2026-11-02 19:04 UTC) | Ran when the PR opened. Later pushes have been docs only (`HANDOFF.md`) |
 | Codex security review | **completed, no findings posted** on `1afbacf` (19:05 UTC) | No review threads, reviews or extra comments on the PR. The summary's state field says `has_any_findings: null` rather than `false`. Blocking threshold is P0; the merge gate is off |
-| QA | queued | DEV-258 asks QA to retest at runtime |
+| QA | **FAIL: merge blocked** (2026-11-06 08:43 UTC) | CONFLICTING against `develop` @ `fd4630b`. Box checks were not run. Asks: merge `develop` (no force-push), re-confirm per-org/year reservation, a fully clean typecheck, lint, build and invoice tests, then ping for re-review |
 
 #### Checks (rerun commands and latest results)
 
