@@ -1,3 +1,5 @@
+import { requireSopActor } from '@/lib/restaurant/sop-actor';
+
 import crypto from 'node:crypto';
 
 import { NextResponse } from 'next/server';
@@ -106,12 +108,11 @@ export async function POST(request: Request) {
     const purpose = String(form.get('evidencePurpose') ?? '').trim();
     const occurrenceId = String(form.get('occurrenceId') ?? '').trim();
     const occurrenceStepId = String(form.get('occurrenceStepId') ?? '').trim();
-    const uploaderStaffProfileId = String(form.get('uploaderStaffProfileId') ?? '').trim();
     const { baseType, bytes, extension } = await readEvidenceFile(file);
     if (purpose !== 'photo' && purpose !== 'signature') {
       throw new Error('Choose whether this file is photo or signature proof.');
     }
-    if (!occurrenceId || !occurrenceStepId || !uploaderStaffProfileId) {
+    if (!occurrenceId || !occurrenceStepId) {
       throw new Error('Occurrence, checklist step, and uploader are required.');
     }
 
@@ -125,6 +126,15 @@ export async function POST(request: Request) {
       source: 'TRPC',
     });
     if (!allowed) throw new Error('You do not have permission to capture SOP proof.');
+
+    // Resolve the uploader against the occurrence's branch so a multi-branch
+    // employee uploads as that branch's profile. An unknown occurrence is left to
+    // `attachEvidence`, which reports NOT_FOUND (and owner checks still apply).
+    const target = await ctx.db.restaurantSopOccurrence.findUnique({
+      where: { id: occurrenceId },
+      select: { branchId: true },
+    });
+    const uploaderStaffProfileId = await requireSopActor(ctx, target?.branchId);
 
     const hash = crypto.createHash('sha256').update(bytes).digest('hex');
     storedFilename = `sop-${crypto.randomUUID()}.${extension}`;

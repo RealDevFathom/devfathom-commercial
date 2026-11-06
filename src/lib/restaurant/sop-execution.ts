@@ -22,7 +22,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * `restaurant_sop_evidence`). sha256 is computed server-side from the content
  * bytes supplied by the caller (base64-encoded body or a storageRef commitment).
  *
- * Actor attribution is best-effort: `completedByStaffProfileId` on steps and
+ * Actor IDs are trusted server inputs resolved from the authenticated session.
+ * Actor attribution storage: `completedByStaffProfileId` on steps and
  * `uploaderStaffProfileId` on evidence are nullable (per schema); this module
  * accepts them when provided.
  */
@@ -57,9 +58,6 @@ type OccurrenceOwner = {
 };
 
 function assertOccurrenceOwner(occurrence: OccurrenceOwner, actorStaffProfileId?: string | null) {
-  // Older unit fakes predate the owner columns. Real Prisma rows always include
-  // all three selected keys, including nulls, so this cannot bypass production.
-  if (!('assignedStaffProfileId' in occurrence)) return;
   if (!actorStaffProfileId) {
     throw new SopExecutionError('A completing staff profile is required.', 'NOT_OWNER');
   }

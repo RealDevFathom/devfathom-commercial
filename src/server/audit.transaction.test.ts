@@ -189,3 +189,11 @@ it('redacts nested purchasing PINs even when input validation refuses the reques
     metadata: { pinVerified: true },
   });
 });
+
+it('redacts owner PIN before resolver execution including validation and capability failures', () => {
+  expect(toAuditJson({ pin: '1234', nested: { PIN: '5678' }, reportId: 'pv_1' })).toEqual({
+    pin: '[REDACTED]',
+    nested: { PIN: '[REDACTED]' },
+    reportId: 'pv_1',
+  });
+});

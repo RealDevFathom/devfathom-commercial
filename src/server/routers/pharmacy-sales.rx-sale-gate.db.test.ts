@@ -349,8 +349,8 @@ beforeAll(async () => {
       },
     });
   });
-  for (const userId of [ids.cashier, ids.pharmacist, ids.userDenied, ids.roleDenied])
-    await act(userId, (api) =>
+  const openDrawer = (userId: string) =>
+    act(userId, (api) =>
       api.openDrawer({
         branchId: ids.branch,
         deviceId: deviceFor(userId),
@@ -358,6 +358,16 @@ beforeAll(async () => {
         openingFloatMinor: 0,
       })
     );
+  for (const userId of [ids.cashier, ids.pharmacist]) await openDrawer(userId);
+  // DEV-279 / DEV-659: a drawer takes the cash-tender gate. Its counter family
+  // check includes pharmacy:dispense, and an explicit DENY there (user over a role
+  // ALLOW, or role over a user ALLOW) revokes the family. So neither user can open
+  // a drawer, just as neither can tender cash below.
+  for (const userId of [ids.userDenied, ids.roleDenied])
+    await expect(openDrawer(userId)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
   // The customer earns real points: the pharmacist sells and is paid for four strips. A refused
   // redemption rolls back, so the balance covers every one-strip redemption below.
   const earning = await pharmacistSale({ customer: true, quantity: 4 });
