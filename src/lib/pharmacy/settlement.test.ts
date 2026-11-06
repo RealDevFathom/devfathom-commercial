@@ -428,6 +428,7 @@ describe('readPharmacyTenderOutcome', () => {
     const saleRead = vi.fn().mockResolvedValue(sale);
     const keyRead = vi.fn().mockResolvedValue(prior);
     const tenderRead = vi.fn().mockResolvedValue(tender);
+    const attemptRead = vi.fn().mockResolvedValue(null);
     // Any additional model operation, raw SQL, or transaction is observable even if caught.
     const only = (entries: Record<string, unknown>) =>
       new Proxy(entries, { get: (target, key) => target[String(key)] ?? unexpected });
@@ -435,8 +436,9 @@ describe('readPharmacyTenderOutcome', () => {
       pharmacySale: only({ findFirst: saleRead }),
       pharmacyMoneyIdempotencyKey: only({ findUnique: keyRead }),
       pharmacyTender: only({ findFirst: tenderRead }),
+      pharmacyPaymentAttempt: only({ findFirst: attemptRead }),
     });
-    return { db, input, sale, prior, tender, saleRead, keyRead, tenderRead };
+    return { db, input, sale, prior, tender, saleRead, keyRead, tenderRead, attemptRead };
   }
 
   it('#710 recovers the exact manual tender and rejects altered capture evidence', async () => {
@@ -703,6 +705,30 @@ describe('readPharmacyTenderOutcome', () => {
     expect(await invisible).toEqual({ status: 'NOT_FOUND', replayUnsafe: true });
     expect(committed).toEqual({ status: 'ACCEPTED', replayUnsafe: true, result: partial });
     expect(f.tenderRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a durable unresolved bill uncertain even when the tender key is absent', async () => {
+    const f = fixture();
+    f.keyRead.mockResolvedValue(null);
+    f.attemptRead.mockResolvedValue({ id: 'durable-attempt' });
+    expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toEqual({
+      status: 'UNKNOWN',
+      replayUnsafe: true,
+    });
+    expect(f.attemptRead).toHaveBeenCalledWith({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleId: f.input.saleId,
+        state: { notIn: ['SETTLED', 'RELEASED'] },
+      },
+      select: { id: true },
+    });
+    f.attemptRead.mockRejectedValue(new Error('sensitive database details'));
+    expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toEqual({
+      status: 'UNKNOWN',
+      replayUnsafe: true,
+    });
   });
 });
 

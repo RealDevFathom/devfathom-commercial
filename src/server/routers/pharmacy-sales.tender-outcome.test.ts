@@ -71,6 +71,7 @@ function fixture(raw: unknown = input) {
     branchId: parsed.branchId,
   });
   const keyRead = vi.fn().mockResolvedValue(prior);
+  const attemptRead = vi.fn().mockResolvedValue(null);
   const tenderRead = vi.fn().mockResolvedValue({
     id: 'tender-1',
     organizationId: 'org-1',
@@ -107,6 +108,7 @@ function fixture(raw: unknown = input) {
     }),
     pharmacySale: only({ findFirst: saleRead }),
     pharmacyMoneyIdempotencyKey: only({ findUnique: keyRead }),
+    pharmacyPaymentAttempt: only({ findFirst: attemptRead }),
     pharmacyTender: only({ findFirst: tenderRead }),
     // CAM-2: no evidence camera in this branch, so no still is requested.
     camera: only({ findFirst: vi.fn().mockResolvedValue(null) }),
@@ -138,6 +140,7 @@ function fixture(raw: unknown = input) {
     prior,
     saleRead,
     keyRead,
+    attemptRead,
     tenderRead,
     execute,
     transaction,
@@ -256,11 +259,15 @@ describe('pharmacySales.tenderOutcome', () => {
     f.noWrites();
   });
 
-  it.each(['absent', 'empty', 'malformed', 'missing-tender', 'read-failure'])(
+  it.each(['absent', 'prepared', 'empty', 'malformed', 'missing-tender', 'read-failure'])(
     'keeps %s evidence unsafe',
     async (kind) => {
       const f = fixture();
       if (kind === 'absent') f.keyRead.mockResolvedValue(null);
+      if (kind === 'prepared') {
+        f.keyRead.mockResolvedValue(null);
+        f.attemptRead.mockResolvedValue({ id: 'durable-attempt' });
+      }
       if (kind === 'empty') f.keyRead.mockResolvedValue({ ...f.prior, resultPayload: null });
       if (kind === 'malformed') f.keyRead.mockResolvedValue({ ...f.prior, resultPayload: {} });
       if (kind === 'missing-tender') f.tenderRead.mockResolvedValue(null);

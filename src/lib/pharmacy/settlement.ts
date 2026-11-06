@@ -159,8 +159,20 @@ export async function readPharmacyTenderOutcome(
         resultPayload: true,
       },
     });
-    // Rolled-back and in-flight attempts can both be invisible here.
-    if (!prior) return { status: 'NOT_FOUND', replayUnsafe: true };
+    // A committed preparation outlives a rolled-back tender transaction. Even
+    // a different device/key must see the unresolved bill as uncertain.
+    if (!prior) {
+      const unresolved = await db.pharmacyPaymentAttempt.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          saleId: input.saleId,
+          state: { notIn: ['SETTLED', 'RELEASED'] },
+        },
+        select: { id: true },
+      });
+      return unresolved ? unknown : { status: 'NOT_FOUND', replayUnsafe: true };
+    }
     if (
       prior.organizationId !== scope.organizationId ||
       prior.deviceId !== input.deviceId ||
@@ -348,6 +360,10 @@ export async function applyPharmacyTender(
     include: completionSaleInclude,
   });
   if (!sale || sale.status !== 'OPEN') throw new PharmacySettlementError('SALE_NOT_OPEN');
+  // A separately committed preparation survives this transaction rolling back.
+  // Until its settlement hand-off is implemented, block before any provider call.
+  await db.$executeRaw(Prisma.sql`SELECT pharmacy_assert_no_payment_attempt(
+    ${scope.organizationId}, ${scope.branchId}, ${input.saleId})`);
   // #518: a line added earlier cannot be paid for by someone who may not sell it.
   await assertRxSaleAllowed(
     db,
