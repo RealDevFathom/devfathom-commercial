@@ -103,10 +103,7 @@ export function GrowthPanel({
             <p className="break-words text-sm text-text-muted">
               {localTime(insight.snapshot.current.from, timeZone)} up to{' '}
               {localTime(insight.snapshot.current.cutoff, timeZone)} ({zone}). Saved{' '}
-              {localTime(insight.createdAt, timeZone)}.{' '}
-              {insight.provider && insight.model
-                ? `${insight.provider} / ${insight.model}`
-                : 'No model output.'}
+              {localTime(insight.createdAt, timeZone)}.
             </p>
             <section className="space-y-3" aria-label="Saved aggregate evidence">
               <h3 className="font-medium">Saved evidence</h3>

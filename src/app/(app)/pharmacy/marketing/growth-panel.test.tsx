@@ -50,14 +50,24 @@ it.each(['CONFIGURATION', 'PROVIDER', 'TIMEOUT', 'OUTPUT'] as const)(
   'shows safe owner guidance for %s without diagnostics',
   (code) => {
     const { container } = render(
-      <GrowthPanel branchId="synthetic-branch" history={history(code)} templates={[]} />
+      <GrowthPanel
+        branchId="synthetic-branch"
+        history={history(code)}
+        templates={[]}
+        timeZone="Asia/Karachi"
+        zone="PKT"
+        period={{ firstDay: '2026-10-03', lastDay: '2026-11-01' }}
+        sendDefault="2026-11-02T10:00"
+        ai={{ companyAiEnabled: true, providerReady: true, canManageAiSettings: true }}
+      />
     );
     expect(container).not.toHaveTextContent(
       /private-provider|private-model|CONFIGURATION|PROVIDER|TIMEOUT|OUTPUT/
     );
     expect(screen.queryByText(/Try again/i)).not.toBeInTheDocument();
     expect(container).toHaveTextContent('PKT');
-    expect(container).toHaveTextContent('03/11/2026');
+    // 2026-11-02T20:00:00Z is 2026-11-03 01:00 in Asia/Karachi
+    expect(container).toHaveTextContent('2026-11-03 01:00');
     if (code === 'CONFIGURATION') {
       expect(screen.getByText("AI suggestions aren't set up yet. Contact support.")).toBeVisible();
       expect(screen.queryByText(/not available right now/)).not.toBeInTheDocument();

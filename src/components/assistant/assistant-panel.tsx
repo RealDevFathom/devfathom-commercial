@@ -139,6 +139,15 @@ function createConversationTransport(canChat: boolean) {
         if (response.status === 401 || response.status === 403) {
           throw new Error('ASSISTANT_PERMISSION_DENIED');
         }
+        if (response.status === 503) {
+          const body = await response
+            .clone()
+            .json()
+            .catch(() => null);
+          if (body?.error === "Ask Fathom isn't set up yet, contact support.") {
+            throw new Error('ASSISTANT_NOT_CONFIGURED');
+          }
+        }
         return response;
       },
     }),
@@ -181,6 +190,7 @@ function AssistantConversation({
   // continuation settles, so a repeat Enter can never queue a second question.
   const [pending, setPending] = useState(false);
   const inFlight = useRef(false);
+  const lastSubmitted = useRef('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const reducedMotion = useReducedMotion();
@@ -194,15 +204,21 @@ function AssistantConversation({
       transport: conversation.transport,
       onError: (error) => {
         if (!conversation.isActive()) return;
+        // Log only a fixed event: SDK errors can carry provider or patient payloads.
+        console.error('ASSISTANT_REQUEST_FAILED');
         // The SDK reports provider errors through onError; sendMessage can resolve
-        // on failure. The question stays in its bubble for an explicit retry.
-        setRequestError(
+        // on failure. Configuration failures restore the draft so Send stays usable
+        // only after setup; other failures keep the question in its bubble for Retry.
+        const kind =
           error.message === 'ASSISTANT_PERMISSION_DENIED'
             ? 'permission'
             : error.message === 'ASSISTANT_NOT_CONFIGURED'
               ? 'configuration'
-              : 'provider'
-        );
+              : 'provider';
+        setRequestError(kind);
+        if (kind === 'configuration') {
+          setInput((draft) => draft || lastSubmitted.current);
+        }
       },
       onFinish: ({ isAbort, isError, message }) => {
         if (!conversation.isActive() || isAbort || isError) return;
@@ -282,6 +298,7 @@ function AssistantConversation({
       return;
     }
     if (busy || inFlight.current || denied || !entry.canChat) return;
+    lastSubmitted.current = question;
     setInput('');
     setEmptyHint(false);
     void run(() => sendMessage({ text: question }));
