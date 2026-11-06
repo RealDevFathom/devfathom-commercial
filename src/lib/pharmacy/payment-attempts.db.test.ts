@@ -7,6 +7,14 @@ import { addSaleLine, createSale } from './sales';
 import { receiveLot, reverseMovements } from './stock-ledger';
 import { applyPharmacyTender, readPharmacyTenderOutcome, refundPharmacyTender } from './settlement';
 import { prepareExternalPaymentAttempt, readExternalPaymentAttempt } from './payment-attempts';
+import {
+  beginManualCollection,
+  completeManualCollection,
+  resolveManualCollection,
+  recoverPaymentCollection,
+  collectProviderPayment,
+  registerUnpreparedManualCollection,
+} from './payment-attempt-operations';
 
 const url = process.env.WHA1364_RECEIPT_TEST_DATABASE_URL;
 if (url && !new URL(url).pathname.startsWith('/wha1364_')) {
@@ -21,7 +29,11 @@ const client = url ? db : null;
 const describeDatabase = url ? describe : describe.skip;
 const org = `org_${randomUUID()}`;
 const branch = `branch_${randomUUID()}`;
-const scope = { organizationId: org, branchId: branch, actorId: 'payment-attempt-test-actor' };
+const scope = { organizationId: org, branchId: branch, actorId: `actor_${randomUUID()}` };
+let manager: typeof scope;
+let owner: typeof scope;
+let unassignedManager: typeof scope;
+let unknownRole: typeof scope;
 const businessDate = new Date('2026-09-05T13:14:00.000Z');
 function transaction<T>(work: (db: ScopedDb) => Promise<T>, organizationId = org) {
   if (!client) throw new Error('Isolated receipt database required');
@@ -62,9 +74,81 @@ beforeAll(async () => {
         addressLine: 'Test',
         city: 'Test',
         provinceCode: 'PB',
+        manualPaymentSettings: {
+          JAZZCASH: { destination: 'Test till', allowReferenceSkip: false },
+          RAAST: { destination: 'Test IBAN', allowReferenceSkip: true },
+          EASYPAISA: { destination: 'Test till', allowReferenceSkip: false },
+        },
       },
     })
   );
+  await transaction(async (db) => {
+    await db.organizationDepartment.create({
+      data: { organizationId: org, key: 'payment-test', name: 'Payment test' },
+    });
+  });
+  const member = async (actorId: string, key: string | null, isSystem = true, assigned = true) =>
+    transaction(async (db) => {
+      const role = key
+        ? await db.organizationRole.create({
+            data: {
+              organizationId: org,
+              key: `${key}-${actorId}`,
+              name: key,
+              isSystem,
+              permissions: {
+                create: [
+                  { organizationId: org, capability: 'pharmacy:counter', effect: 'ALLOW' },
+                  { organizationId: org, capability: 'pharmacy:close', effect: 'ALLOW' },
+                ],
+              },
+            },
+          })
+        : null;
+      // Approved system keys are exact; keep them unique per tenant, with only
+      // the second manager sharing the same stored assigned role below.
+      if (role && ['manager', 'cashier'].includes(key!))
+        await db.organizationRole.update({ where: { id: role.id }, data: { key: key! } });
+      await db.user.create({
+        data: {
+          id: actorId,
+          organizationId: org,
+          name: actorId,
+          email: `${actorId}@example.invalid`,
+          department: 'payment-test',
+          title: 'Test',
+          role: key ? 'EMPLOYEE' : 'ADMIN',
+          organizationRoleId: role?.id,
+        },
+      });
+      if (assigned)
+        await db.pharmacyBranchAssignment.create({
+          data: { organizationId: org, branchId: branch, userId: actorId },
+        });
+      return { ...scope, actorId };
+    });
+  await member(scope.actorId, 'cashier');
+  manager = await member(`manager_${randomUUID()}`, 'manager');
+  owner = await member(`owner_${randomUUID()}`, null, true, false);
+  unknownRole = await member(`unknown_${randomUUID()}`, 'manager-looking-custom', false);
+  unassignedManager = { ...scope, actorId: `unassigned_${randomUUID()}` };
+  await transaction(async (db) => {
+    const role = await db.organizationRole.findUniqueOrThrow({
+      where: { organizationId_key: { organizationId: org, key: 'manager' } },
+    });
+    await db.user.create({
+      data: {
+        id: unassignedManager.actorId,
+        organizationId: org,
+        name: 'Unassigned',
+        email: `${unassignedManager.actorId}@example.invalid`,
+        department: 'payment-test',
+        title: 'Test',
+        role: 'EMPLOYEE',
+        organizationRoleId: role.id,
+      },
+    });
+  });
 });
 afterAll(() => client?.$disconnect());
 
@@ -375,7 +459,7 @@ describeDatabase('durable payment attempt foundation on restricted PostgreSQL', 
             data: { state: 'RELEASED' },
           });
         })
-      ).rejects.toThrow('PAYMENT_ATTEMPT_TRANSITION_UNAVAILABLE');
+      ).rejects.toThrow('PAYMENT_ATTEMPT_FORBIDDEN');
     }
     await expect(
       transaction((db) =>
@@ -450,13 +534,11 @@ describeDatabase('durable payment attempt foundation on restricted PostgreSQL', 
         return { approved: true, providerRef: 'synthetic-partial-approval' };
       },
     };
-    const paid = await transaction((db) =>
-      applyPharmacyTender(db, scope, {
-        ...f.input,
-        type: 'CARD',
-        amountMinor: 400,
-        adapter,
-      })
+    const request = await reservation(f, f.input.idempotencyKey, 400);
+    const paid = await collectProviderPayment(
+      scope,
+      { ...request, method: 'CARD', businessDate },
+      adapter
     );
     expect(providerCalls).toBe(1);
     if (!('tenderId' in paid) || typeof paid.tenderId !== 'string')
@@ -497,5 +579,553 @@ describeDatabase('durable payment attempt foundation on restricted PostgreSQL', 
     expect(
       await transaction((db) => db.pharmacyRefund.count({ where: { saleId: f.sale.id } }))
     ).toBe(0);
+  });
+});
+
+describeDatabase('authenticated collection hand-off and recovery on restricted PostgreSQL', () => {
+  const capture = { payerName: 'Ayesha', providerRef: '001234' };
+  it('retains historical manual-card uncertainty without permitting manual card resolution', async () => {
+    const f = await fixture();
+    const reported = await registerUnpreparedManualCollection(scope, {
+      ...f.input,
+      type: 'CARD',
+      providerRef: 'historic-external-reference',
+    });
+    expect(reported).toMatchObject({ state: 'UNKNOWN', method: 'CARD', canResolve: false });
+    for (const decision of ['CONFIRM', 'RELEASE'] as const) {
+      await expect(
+        resolveManualCollection(manager, {
+          attemptId: reported.id,
+          decision,
+          reason: 'Historical card requires certified reconciliation',
+        })
+      ).rejects.toThrow('PAYMENT_METHOD_NOT_SETUP');
+    }
+    await expect(
+      transaction((db) =>
+        db.pharmacySaleLine.updateMany({
+          where: { saleId: f.sale.id },
+          data: { discountMinor: 1 },
+        })
+      )
+    ).rejects.toThrow('PAYMENT_ATTEMPT_UNRESOLVED');
+    expect((await counts(f.sale.id)).tenders).toBe(0);
+  });
+
+  it('locks an older unprepared received report durably and requires authorized resolution', async () => {
+    const f = await fixture();
+    const input = { ...f.input, type: 'JAZZCASH', ...capture };
+    const first = await registerUnpreparedManualCollection(scope, input);
+    expect(first.state).toBe('UNKNOWN');
+    expect((await registerUnpreparedManualCollection(scope, input)).id).toBe(first.id);
+    await expect(
+      registerUnpreparedManualCollection(scope, { ...input, amountMinor: 949 })
+    ).rejects.toThrow('PAYMENT_REQUEST_CONFLICT');
+    await expect(
+      transaction((db) =>
+        db.pharmacySaleLine.updateMany({ where: { saleId: f.sale.id }, data: { discountMinor: 1 } })
+      )
+    ).rejects.toThrow('PAYMENT_ATTEMPT_UNRESOLVED');
+    await expect(
+      resolveManualCollection(scope, {
+        attemptId: first.id,
+        decision: 'CONFIRM',
+        reason: 'Cashier cannot resolve',
+        ...capture,
+      })
+    ).rejects.toThrow('PAYMENT_FORBIDDEN');
+    expect(
+      await resolveManualCollection(manager, {
+        attemptId: first.id,
+        decision: 'CONFIRM',
+        reason: 'Verified older reported funds',
+        ...capture,
+      })
+    ).toMatchObject({ state: 'SETTLED' });
+    expect((await counts(f.sale.id)).tenders).toBe(1);
+  });
+
+  it('retains an older stale overpayment report as uncertainty without changing settlement limits', async () => {
+    const f = await fixture();
+    const reported = await registerUnpreparedManualCollection(scope, {
+      ...f.input,
+      type: 'BANK_TRANSFER',
+      amountMinor: 1000,
+    });
+    expect(
+      await transaction((db) =>
+        db.pharmacyPaymentAttempt.findUnique({ where: { id: reported.id } })
+      )
+    ).toMatchObject({ source: 'LEGACY_CAPTURE', state: 'UNKNOWN', amountMinor: 1000 });
+    await expect(
+      resolveManualCollection(owner, {
+        attemptId: reported.id,
+        decision: 'CONFIRM',
+        reason: 'Reported funds exceed the bill',
+      })
+    ).rejects.toThrow('OVER_TENDER');
+    expect((await counts(f.sale.id)).tenders).toBe(0);
+    await expect(
+      transaction((db) =>
+        db.pharmacySaleLine.updateMany({ where: { saleId: f.sale.id }, data: { discountMinor: 1 } })
+      )
+    ).rejects.toThrow('PAYMENT_ATTEMPT_UNRESOLVED');
+  });
+
+  it('retains every distinct older uncertainty report and keeps the bill locked until all are resolved', async () => {
+    const f = await fixture();
+    const a = await registerUnpreparedManualCollection(scope, {
+      ...f.input,
+      type: 'BANK_TRANSFER',
+      amountMinor: 400,
+    });
+    const b = await registerUnpreparedManualCollection(scope, {
+      ...f.input,
+      type: 'BANK_TRANSFER',
+      amountMinor: 550,
+      idempotencyKey: randomUUID(),
+    });
+    expect(a.id).not.toBe(b.id);
+    expect(
+      await transaction((db) =>
+        db.pharmacyPaymentAttempt.count({ where: { saleId: f.sale.id, state: 'UNKNOWN' } })
+      )
+    ).toBe(2);
+    await resolveManualCollection(owner, {
+      attemptId: a.id,
+      decision: 'RELEASE',
+      reason: 'First report verified no funds',
+    });
+    await expect(
+      transaction((db) =>
+        db.pharmacySaleLine.updateMany({ where: { saleId: f.sale.id }, data: { discountMinor: 1 } })
+      )
+    ).rejects.toThrow('PAYMENT_ATTEMPT_UNRESOLVED');
+    await resolveManualCollection(owner, {
+      attemptId: b.id,
+      decision: 'RELEASE',
+      reason: 'Second report verified no funds',
+    });
+    await transaction((db) =>
+      db.pharmacySaleLine.updateMany({ where: { saleId: f.sale.id }, data: { discountMinor: 1 } })
+    );
+  });
+
+  it('relocks a released bill when its original collector reports late-arriving funds', async () => {
+    const f = await fixture();
+    const started = await beginManualCollection(scope, {
+      ...(await reservation(f)),
+      method: 'BANK_TRANSFER',
+      businessDate,
+    });
+    await resolveManualCollection(owner, {
+      attemptId: started.attempt.id,
+      decision: 'RELEASE',
+      reason: 'No funds at time of review',
+    });
+    await expect(
+      completeManualCollection(scope, {
+        attemptId: started.attempt.id,
+        collectionToken: started.collectionToken!,
+      })
+    ).rejects.toThrow('PAYMENT_UNRESOLVED');
+    expect(
+      await transaction((db) =>
+        db.pharmacyPaymentAttempt.findFirst({
+          where: { saleId: f.sale.id, source: 'LEGACY_CAPTURE' },
+        })
+      )
+    ).toMatchObject({ state: 'UNKNOWN' });
+    await expect(
+      transaction((db) =>
+        db.pharmacySaleLine.updateMany({ where: { saleId: f.sale.id }, data: { discountMinor: 1 } })
+      )
+    ).rejects.toThrow('PAYMENT_ATTEMPT_UNRESOLVED');
+  });
+  async function begin(f: Awaited<ReturnType<typeof fixture>>) {
+    return beginManualCollection(scope, { ...(await reservation(f)), businessDate });
+  }
+
+  it('commits collection permission once and records one tender across concurrent completion and acknowledgement recovery', async () => {
+    const f = await fixture();
+    const request = { ...(await reservation(f)), businessDate };
+    const first = await beginManualCollection(scope, request);
+    expect(first.attempt.state).toBe('EXPOSED');
+    expect(first.collectionToken).toHaveLength(43);
+    const duplicate = await beginManualCollection(scope, request);
+    expect(duplicate.collectionToken).toBeNull();
+    const input = {
+      attemptId: first.attempt.id,
+      collectionToken: first.collectionToken!,
+      ...capture,
+    };
+    const results = await Promise.allSettled([
+      completeManualCollection(scope, input),
+      completeManualCollection(scope, input),
+    ]);
+    expect(results.some((r) => r.status === 'fulfilled')).toBe(true);
+    expect((await counts(f.sale.id)).tenders).toBe(1);
+    const recovered = await recoverPaymentCollection(scope, { attemptId: first.attempt.id });
+    expect(recovered).toMatchObject({
+      state: 'SETTLED',
+      result: { settled: true, remainingMinor: 0 },
+    });
+    expect(recovered).not.toHaveProperty('collectionTokenHash');
+    expect(await completeManualCollection(scope, input)).toMatchObject({
+      tenderId: recovered!.result!.tenderId,
+      replayed: true,
+    });
+    const events = await transaction((db) =>
+      db.pharmacyPaymentAttemptEvent.findMany({
+        where: { attemptId: first.attempt.id },
+        orderBy: { createdAt: 'asc' },
+      })
+    );
+    expect(events.map((event) => event.toState)).toEqual(['EXPOSED', 'UNKNOWN', 'SETTLED']);
+  });
+
+  it('leaves a failed financial transaction uncertain, denies cashier resolution, and allows an assigned manager to confirm exactly once', async () => {
+    const f = await fixture();
+    const started = await begin(f);
+    await transaction((db) =>
+      db.medicine.update({ where: { id: f.medicine.id }, data: { productName: '' } })
+    );
+    await expect(
+      completeManualCollection(scope, {
+        attemptId: started.attempt.id,
+        collectionToken: started.collectionToken!,
+        ...capture,
+      })
+    ).rejects.toThrow('INVALID_RECEIPT_IDENTITY');
+    expect((await counts(f.sale.id)).tenders).toBe(0);
+    expect(await recoverPaymentCollection(scope, { attemptId: started.attempt.id })).toMatchObject({
+      state: 'UNKNOWN',
+      canResolve: false,
+    });
+    await transaction((db) =>
+      db.medicine.update({
+        where: { id: f.medicine.id },
+        data: { productName: 'Restored test medicine' },
+      })
+    );
+    await expect(
+      completeManualCollection(scope, {
+        attemptId: started.attempt.id,
+        collectionToken: started.collectionToken!,
+        ...capture,
+      })
+    ).rejects.toThrow('PAYMENT_UNRESOLVED');
+    await expect(
+      resolveManualCollection(scope, {
+        attemptId: started.attempt.id,
+        decision: 'CONFIRM',
+        reason: 'Cashier cannot resolve',
+        ...capture,
+      })
+    ).rejects.toThrow('PAYMENT_FORBIDDEN');
+    const resolved = await resolveManualCollection(manager, {
+      attemptId: started.attempt.id,
+      decision: 'CONFIRM',
+      reason: 'Verified branch wallet funds',
+      ...capture,
+    });
+    expect(resolved).toMatchObject({ state: 'SETTLED', result: { settled: true } });
+    expect((await counts(f.sale.id)).tenders).toBe(1);
+    expect(
+      await resolveManualCollection(manager, {
+        attemptId: started.attempt.id,
+        decision: 'CONFIRM',
+        reason: 'Verified branch wallet funds',
+        ...capture,
+      })
+    ).toMatchObject({ result: { replayed: true } });
+  });
+
+  it('enforces stored Owner/Manager identity, active branch assignment, deny precedence and missing roles', async () => {
+    const f = await fixture();
+    const started = await begin(f);
+    for (const actor of [
+      scope,
+      unknownRole,
+      unassignedManager,
+      { ...scope, actorId: 'missing-user' },
+    ]) {
+      await expect(
+        resolveManualCollection(actor, {
+          attemptId: started.attempt.id,
+          decision: 'RELEASE',
+          reason: 'No funds arrived',
+        })
+      ).rejects.toThrow('PAYMENT_FORBIDDEN');
+    }
+    await expect(
+      resolveManualCollection(
+        { ...manager, organizationId: 'foreign-org' },
+        { attemptId: started.attempt.id, decision: 'RELEASE', reason: 'Foreign tenant' }
+      )
+    ).rejects.toThrow('PAYMENT_FORBIDDEN');
+    await expect(
+      resolveManualCollection(
+        { ...manager, branchId: 'unknown-branch' },
+        { attemptId: started.attempt.id, decision: 'RELEASE', reason: 'Foreign branch' }
+      )
+    ).rejects.toThrow('PAYMENT_FORBIDDEN');
+    await transaction((db) =>
+      db.userPermissionOverride.create({
+        data: {
+          organizationId: org,
+          userId: manager.actorId,
+          capability: 'pharmacy:*',
+          effect: 'DENY',
+          reason: 'Test deny',
+        },
+      })
+    );
+    await expect(
+      resolveManualCollection(manager, {
+        attemptId: started.attempt.id,
+        decision: 'RELEASE',
+        reason: 'Denied manager',
+      })
+    ).rejects.toThrow('PAYMENT_FORBIDDEN');
+    await transaction((db) =>
+      db.userPermissionOverride.deleteMany({ where: { userId: manager.actorId } })
+    );
+    expect(
+      await resolveManualCollection(owner, {
+        attemptId: started.attempt.id,
+        decision: 'RELEASE',
+        reason: 'Owner verified no funds arrived',
+      })
+    ).toEqual({ state: 'RELEASED', result: null });
+    await transaction((db) =>
+      db.pharmacySaleLine.updateMany({ where: { saleId: f.sale.id }, data: { discountMinor: 51 } })
+    );
+  });
+
+  it('serializes confirmation against release without a second tender or an unlocked uncertain bill', async () => {
+    const f = await fixture();
+    const started = await begin(f);
+    await Promise.allSettled([
+      resolveManualCollection(manager, {
+        attemptId: started.attempt.id,
+        decision: 'CONFIRM',
+        reason: 'Funds verified',
+        ...capture,
+      }),
+      resolveManualCollection(owner, {
+        attemptId: started.attempt.id,
+        decision: 'RELEASE',
+        reason: 'No funds verified',
+      }),
+    ]);
+    const recovered = await recoverPaymentCollection(manager, { attemptId: started.attempt.id });
+    expect(['SETTLED', 'RELEASED']).toContain(recovered?.state);
+    expect((await counts(f.sale.id)).tenders).toBe(recovered?.state === 'SETTLED' ? 1 : 0);
+  });
+
+  it('keeps bank transfer amount-only and rejects collection tokens from another attempt', async () => {
+    const f = await fixture();
+    const started = await beginManualCollection(scope, {
+      ...(await reservation(f)),
+      method: 'BANK_TRANSFER',
+      businessDate,
+    });
+    await expect(
+      completeManualCollection(scope, {
+        attemptId: started.attempt.id,
+        collectionToken: started.collectionToken!,
+        ...capture,
+      })
+    ).rejects.toThrow('PAYMENT_INVALID_CAPTURE');
+    await expect(
+      completeManualCollection(scope, {
+        attemptId: started.attempt.id,
+        collectionToken: 'A'.repeat(43),
+      })
+    ).rejects.toThrow('PAYMENT_UNRESOLVED');
+    expect(
+      await completeManualCollection(scope, {
+        attemptId: started.attempt.id,
+        collectionToken: started.collectionToken!,
+      })
+    ).toMatchObject({ settled: true });
+  });
+
+  it('binds displayed merchant instructions and refuses a stale configuration at completion', async () => {
+    const f = await fixture();
+    const started = await beginManualCollection(scope, {
+      ...(await reservation(f)),
+      businessDate,
+    });
+    expect(started.merchant).toMatchObject({ destination: 'Test till' });
+    const prior = await transaction((db) =>
+      db.pharmacyBranch.findUniqueOrThrow({ where: { id: branch } })
+    );
+    try {
+      await transaction((db) =>
+        db.pharmacyBranch.update({
+          where: { id: branch },
+          data: {
+            manualPaymentSettings: {
+              JAZZCASH: { destination: 'Changed till', allowReferenceSkip: false },
+            },
+            manualPaymentRevision: { increment: 1 },
+          },
+        })
+      );
+      await expect(
+        completeManualCollection(scope, {
+          attemptId: started.attempt.id,
+          collectionToken: started.collectionToken!,
+          ...capture,
+        })
+      ).rejects.toThrow('PAYMENT_UNRESOLVED');
+      expect((await counts(f.sale.id)).tenders).toBe(0);
+      expect(
+        await recoverPaymentCollection(manager, { attemptId: started.attempt.id })
+      ).toMatchObject({
+        state: 'EXPOSED',
+        canResolve: true,
+      });
+      await expect(
+        transaction((db) =>
+          db.pharmacySaleLine.updateMany({
+            where: { saleId: f.sale.id },
+            data: { discountMinor: 1 },
+          })
+        )
+      ).rejects.toThrow('PAYMENT_ATTEMPT_UNRESOLVED');
+      expect(
+        await resolveManualCollection(manager, {
+          attemptId: started.attempt.id,
+          decision: 'CONFIRM',
+          reason: 'Checked funds against the original displayed till',
+          ...capture,
+        })
+      ).toMatchObject({ state: 'SETTLED' });
+    } finally {
+      await transaction((db) =>
+        db.pharmacyBranch.update({
+          where: { id: branch },
+          data: {
+            manualPaymentSettings: prior.manualPaymentSettings!,
+            manualPaymentRevision: { increment: 1 },
+          },
+        })
+      );
+    }
+  });
+
+  it('keeps batch recall locks across provider dispatch and releases them after settlement', async () => {
+    const f = await fixture();
+    const request = { ...(await reservation(f)), method: 'CARD' as const, businessDate };
+    const adapter = {
+      name: 'CERTIFIED_TEST_PROVIDER',
+      certified: true,
+      execute: async () => {
+        await expect(
+          transaction((db) =>
+            db.$queryRawUnsafe(
+              'SELECT id FROM pharmacy_manufacturing_batches WHERE id=$1 FOR UPDATE NOWAIT',
+              f.batches[0]!.id
+            )
+          )
+        ).rejects.toThrow('could not obtain lock');
+        return { approved: true, providerRef: 'batch-lock-test-response' };
+      },
+    };
+    expect(await collectProviderPayment(scope, request, adapter)).toMatchObject({ settled: true });
+    expect(
+      await transaction((db) =>
+        db.$queryRawUnsafe<Array<{ id: string }>>(
+          'SELECT id FROM pharmacy_manufacturing_batches WHERE id=$1 FOR UPDATE NOWAIT',
+          f.batches[0]!.id
+        )
+      )
+    ).toHaveLength(1);
+  });
+
+  it('never calls a provider again after an external success with lost acknowledgement', async () => {
+    const f = await fixture();
+    let calls = 0;
+    const request = { ...(await reservation(f)), method: 'CARD' as const, businessDate };
+    const adapter = {
+      name: 'CERTIFIED_TEST_PROVIDER',
+      certified: true,
+      execute: async () => {
+        calls++;
+        throw new Error('SYNTHETIC_SUCCESS_ACK_LOST');
+      },
+    };
+    await expect(collectProviderPayment(scope, request, adapter)).rejects.toThrow(
+      'SYNTHETIC_SUCCESS_ACK_LOST'
+    );
+    const recovered = await recoverPaymentCollection(scope, {
+      saleId: f.sale.id,
+      deviceId: request.deviceId,
+      requestKey: request.requestKey,
+    });
+    expect(recovered).toMatchObject({ state: 'UNKNOWN', canResolve: false });
+    await expect(collectProviderPayment(scope, request, adapter)).rejects.toThrow(
+      'PAYMENT_UNRESOLVED'
+    );
+    expect(calls).toBe(1);
+    expect((await counts(f.sale.id)).tenders).toBe(0);
+    await expect(
+      resolveManualCollection(manager, {
+        attemptId: recovered!.id,
+        decision: 'CONFIRM',
+        reason: 'Cannot manually confirm a card',
+      })
+    ).rejects.toThrow('PAYMENT_METHOD_NOT_SETUP');
+    await expect(
+      transaction((db) =>
+        db.pharmacySaleLine.updateMany({ where: { saleId: f.sale.id }, data: { discountMinor: 1 } })
+      )
+    ).rejects.toThrow('PAYMENT_ATTEMPT_UNRESOLVED');
+  });
+
+  it('recovers a committed certified approval after financial rollback without charging again', async () => {
+    const f = await fixture();
+    let calls = 0;
+    const request = { ...(await reservation(f)), method: 'WALLET' as const, businessDate };
+    const adapter = {
+      name: 'CERTIFIED_TEST_PROVIDER',
+      certified: true,
+      execute: async () => {
+        calls++;
+        await transaction((db) =>
+          db.medicine.update({ where: { id: f.medicine.id }, data: { productName: '' } })
+        );
+        return { approved: true, providerRef: 'real-test-adapter-response' };
+      },
+    };
+    await expect(collectProviderPayment(scope, request, adapter)).rejects.toThrow(
+      'INVALID_RECEIPT_IDENTITY'
+    );
+    expect((await counts(f.sale.id)).tenders).toBe(0);
+    const recovered = await recoverPaymentCollection(scope, {
+      saleId: f.sale.id,
+      deviceId: request.deviceId,
+      requestKey: request.requestKey,
+    });
+    expect(recovered?.state).toBe('CONFIRMED');
+    await transaction((db) =>
+      db.medicine.update({
+        where: { id: f.medicine.id },
+        data: { productName: 'Restored test medicine' },
+      })
+    );
+    expect(await collectProviderPayment(scope, request, adapter)).toMatchObject({
+      settled: true,
+      replayed: false,
+    });
+    expect(await collectProviderPayment(scope, request, adapter)).toMatchObject({
+      settled: true,
+      replayed: true,
+    });
+    expect(calls).toBe(1);
+    expect((await counts(f.sale.id)).tenders).toBe(1);
   });
 });

@@ -525,6 +525,8 @@ export type CounterCart = {
   saleId: string;
   status: string;
   receiptNumber: number | null;
+  paymentRevision?: number;
+  pendingPaymentAttempt?: { id: string; method: string; amountMinor: number; state: string } | null;
   lines: CounterCartLine[];
   totals: { grossMinor: number; discountMinor: number; netMinor: number; tenderedMinor: number };
 };
@@ -534,6 +536,11 @@ async function saleInScope(db: ScopedDb, scope: CounterScope, saleId: string) {
     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: {
       tenders: true,
+      paymentAttempts: {
+        where: { state: { notIn: ['SETTLED', 'RELEASED'] } },
+        select: { id: true, method: true, amountMinor: true, state: true },
+        take: 1,
+      },
       lines: {
         orderBy: { createdAt: 'asc' },
         include: {
@@ -635,6 +642,8 @@ export async function readCounterCart(
     saleId: sale.id,
     status: sale.status,
     receiptNumber: sale.receiptNumber,
+    paymentRevision: sale.paymentRevision,
+    pendingPaymentAttempt: sale.paymentAttempts?.[0] ?? null,
     lines,
     totals: {
       grossMinor,

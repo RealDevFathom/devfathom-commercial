@@ -1,92 +1,112 @@
-# Durable payment attempts: foundation and integration boundary
+# Durable payment preparation, settlement and recovery
 
-This change is the storage and shared mutation gate for counter v2 phase 3. It
-does **not** enable a new collection or resolution flow. The existing counter is
-not yet calling preparation, and this is not a complete fix for every legacy
-external-payment path. Keep the payment PR draft.
+Counter v2 phase 3 now commits a scoped payment attempt before exposing manual
+collection instructions or dispatching a certified provider. Keep the payment
+PRs draft: no real certified adapter or provider-status reconciler is configured,
+and historical offline fiscal commands still have a separate recovery boundary.
 
-## Committed preparation
+## Preparation and collection
 
-`prepareExternalPaymentAttempt` owns a separate `withTenantDb` transaction. Its
-caller must first validate the active tenant member, current counter capability
-and active branch assignment. The service is server-only and is not exposed as
-an endpoint in this slice. Do not call it while an outer transaction holds the
-sale lock, and do not dispatch a provider or show manual collection instructions
-until its promise resolves after commit.
+`beginManualCollection` authenticates current stored membership, counter grants,
+branch assignment and tenant before preparing a sale. The server validates the
+open day, prescription permission, current stock, method configuration, remaining
+balance and bill revision. Preparation owns a separate committed transaction;
+never call it from a transaction already holding the sale lock.
 
-Preparation binds the organization, branch, sale, actor, device/request key,
-method, server currency, amount and expected bill revision. An exact retry
-returns the original record. A changed payload cannot reuse the key. One
-unresolved attempt per sale is enforced in PostgreSQL, including concurrent
-devices. The amount cannot exceed the remaining balance after partial tenders.
+The immutable identity includes organization, branch, sale, actor, device/request
+key, method, currency, amount and bill revision. Exact request retries recover the
+same attempt; changed payloads cannot reuse the key. Concurrent new collections
+serialize on the sale. One unresolved precollection attempt is enforced by a
+partial unique index. Historical uncertainty reports are retained individually,
+even when they overlap or exceed a stale balance; they never create money.
 
-The row remains present when a later tender transaction rolls back. `PREPARED`
-is evidence of uncertainty; it is not evidence that collection did or did not
-happen. A missing tender or acknowledgement must never authorize collection
-again. The existing tender outcome reader returns `UNKNOWN` when it finds an
-unresolved preparation, including when the queried tender key is absent.
+Preparation commits `PREPARED`, then commits `EXPOSED` before returning a one-use
+secret and the current merchant instructions. Wallet instructions are bound to
+the settings revision and content hash; stale settings prevent ordinary
+completion. The counter stores request identity, never the secret. Replay,
+reload, malformed acknowledgement or lost preparation acknowledgement leads to
+recovery, never another collection.
 
-All state transitions and deletes are refused by database triggers in this
-slice. Same-tenant database access and a supplied actor/role cannot release a
-bill. Audited dispatch, settlement and authorized resolution will require a
-follow-up migration; no current caller may update `state` directly.
+Normal completion uses that token once to commit `UNKNOWN`, then records the
+tender and result atomically. A rollback cannot erase the claim. A cashier cannot
+retry an uncertain collection or confirm/release it. Exact completed historical
+idempotency results retain their existing replay behavior.
 
-## Contract for phases 2 and 4
+JazzCash, Easypaisa and Raast retain validated payer/reference capture and
+configured skip policy. Bank transfer is amount-only. Card and online wallet use
+only the internal certified, online adapter path; no public endpoint accepts an
+adapter, approval or manual card receipt. No new real adapter is introduced.
+The existing admitted local sandbox remains nonfinancial and development-only.
+
+The provider path commits its claim before dispatch, then retains existing batch
+locks across dispatch and financial settlement. Its stable operation reference is
+the attempt ID. A real approval followed by rollback is saved separately as
+`CONFIRMED`; recovery finishes without another provider call. A missing adapter
+acknowledgement remains `UNKNOWN` and cannot dispatch again. No status query or
+manual card override is fabricated.
+
+## Resolution and historical reports
+
+Resolution reads actual active stored membership and approved system
+Owner/Manager roles using the same role keys and deny precedence as day-close
+eligibility (#1413). Non-admin staff require an active branch assignment. Missing,
+unknown/custom roles, explicit denials and a cashier alone fail closed. An
+organization ADMIN without an assigned organization role retains the existing
+Owner fallback; an explicitly assigned unsupported role does not.
+
+An authorized resolver supplies an audit reason and, for supported manual
+methods, verifies funds or releases an unrecorded claim. Confirmation commits
+`CONFIRMED` before financial completion. A later failure retains confirmed
+funds and permits authorized recording retry, not release. Release never deletes
+evidence. State changes and retries are audited by immutable tenant-scoped rows.
+
+Older clients with no prepared token may explicitly report uncertain external
+funds. The report is persisted as `LEGACY_CAPTURE/UNKNOWN`; it is never a new
+tender or authorization to collect. Historical card/wallet reports also lock the
+bill but cannot be resolved manually. Late funds reported after a released claim
+create another stable uncertainty record and relock the bill. Multiple genuine
+claims, stale overpayment, disabled methods or a closed original business day
+remain locked if ordinary settlement cannot safely complete. No refund,
+compensation, business-date change or lost-money assumption is invented.
+
+## Offline holds
+
+New manual-wallet commands are pending holds, not offline completed sales. They
+consume no fiscal receipt number, produce no receipt and store no local payment
+confirmation. The existing signed device/snapshot and branch checks still apply.
+Online replay creates or recovers an OPEN server sale, reserved stock and a
+`PREPARED/OFFLINE_HOLD` attempt atomically, then acknowledges the held command.
+Only the separately authorized online resolution path can record funds.
+
+The local hold remains available for recovery; read-only status checks never
+cache financial confirmation. Historical accepted commands replay their known
+outcome. Unresolved older leased manual-sale commands are paused, not silently
+finalized, discarded or renumbered. Their recovery intersects #954, whose active
+ownership is unverified; that PR is not edited here.
+
+## Shared contract for phases 2 and 4
 
 `pharmacy_assert_no_payment_attempt(organizationId, branchId, saleId)` locks the
-scoped sale row and refuses any unresolved attempt. Call it in the **same
-transaction**, before bill edits or stock reversal, and keep the sale lock until
-commit. The line, allocation, sale-status, tender/refund-insert and linked stock-reversal
-triggers also enforce this boundary, so a forgotten application check rolls the
-transaction back. Tender and refund settlement check it before a provider call.
+scoped sale and refuses every unresolved attempt. Call it in the same transaction
+before edits, cancellation, refund or stock reversal, retaining the sale lock
+until commit. Database line, allocation, sale-status and linked stock-reversal
+triggers provide the same fail-closed boundary. Tender writes use the exact
+matching settlement claim and nonce; any other unresolved claim blocks them.
+A missing tender alone is never proof that a bill is unpaid.
 
-An absent attempt alone is not proof of non-payment. Preserve existing tender,
-sale-status, prescription, branch and stock checks. Historical tender records
-remain authoritative and recoverable. The revision increases on line,
-allocation, tender or relevant sale changes. A stale preparation is refused.
+Preserve existing tender, sale-status, prescription, branch and stock checks.
+Relevant changes increment paymentRevision. A future soft removal must preserve
+original allocation evidence, pass this gate and existing paid-sale checks, then
+update the active-line predicate, totals, revision and reversal atomically.
+Preparation and settlement must use the same active-line predicate. This branch
+has no soft-removed line field; it must not independently exclude rows.
 
-This branch has no soft-removed line field. A future removal must keep original
-allocation evidence, pass the lock and existing paid-sale checks, then update
-the active-line predicate, totals, stock reversal and revision atomically. Do
-not exclude a line merely because no tender row is visible. The aggregate in
-`pharmacy_payment_attempt_prepare_guard` must adopt the same active-line
-predicate when that schema lands; do not activate soft removal with different
-settlement and preparation totals. Prescription-only metadata changes are
-conservatively blocked while an attempt is unresolved.
+## Verification boundary
 
-## Next implementation step
-
-Add an authenticated preparation endpoint outside the tender transaction, then
-connect the counter's persisted request identity to it **before** external
-collection. Integrate an atomic, compare-and-set dispatch/settlement hand-off
-and recovery lookup using that attempt identity. The committed attempt must
-survive provider success followed by database failure, without a second charge
-or an unsafe stock reversal. Retain exact historical idempotency replay.
-
-Implement audited confirmation/release using the stored active assigned
-Owner/Manager policy from #1413, its deny precedence and branch checks. A cashier,
-missing role, unknown role or client-supplied role cannot resolve uncertainty.
-The foundation deliberately allows nobody to resolve it yet.
-
-Then replace new offline JazzCash/Easypaisa/Raast finalization with a durable
-pending hold that creates or recovers a server sale online before completion.
-Preserve signed historical queue recovery; do not silently discard or rewrite
-old commands. Test storage upgrade, lost acknowledgements and online recovery.
-Card and online wallet remain online certified-adapter paths only; no adapter
-is added by this foundation. Bank transfer remains amount-only.
-
-## Verification
-
-Apply migrations only to a new disposable PostgreSQL database. The new
-`payment-attempts.db.test.ts` uses the existing
-`WHA1364_RECEIPT_TEST_DATABASE_URL` convention and refuses a database whose name
-does not start with `wha1364_`. It asserts `NOSUPERUSER` and `NOBYPASSRLS` before
-running. It covers a committed preparation followed by rollback, synthetic
-external success/lost acknowledgement, exact and conflicting retries,
-concurrent devices, edit races, partial balances, mutation/reversal refusal,
-immutable identity, tenant/branch isolation and refusal of raw release.
-
-No production database, real provider or deployed application is exercised.
-These tests establish the foundation's invariants; they do not establish
-end-to-end provider dispatch, Owner/Manager resolution or offline pending
-recovery, which remain to be implemented above.
+Database tests require a new disposable `wha1364_*` PostgreSQL database and assert
+NOSUPERUSER/NOBYPASSRLS. They cover rollback, lost acknowledgement, approval
+recovery, idempotency, races, partial balances, merchant changes, batch locks,
+restricted roles, tenant/branch isolation, immutable audit, late reports and
+receipt-free offline holds. Unit/component tests cover persisted identity,
+malformed acknowledgements, preparation, uncertain recovery and local-store
+financial-data restrictions. No production data or real provider is exercised.

@@ -1129,27 +1129,59 @@ model PharmacySale {
 /// A committed reservation before external collection. No provider or cashier
 /// may infer non-payment from an absent tender while this record is unresolved.
 model PharmacyPaymentAttempt {
-  id              String       @id
-  organizationId  String       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId        String
-  saleId          String
-  deviceId        String
-  requestKey      String
-  requestHash     String
-  method          String
-  currency        String
-  amountMinor     Int
-  billRevision    Int
-  state           String       @default("PREPARED")
-  createdByUserId String
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-  sale            PharmacySale @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_payment_attempt_sale_fk")
+  id                         String                        @id
+  organizationId             String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                   String
+  saleId                     String
+  deviceId                   String
+  requestKey                 String
+  requestHash                String
+  method                     String
+  currency                   String
+  amountMinor                Int
+  billRevision               Int
+  state                      String                        @default("PREPARED")
+  source                     String                        @default("PRECOLLECTION")
+  createdByUserId            String
+  collectionTokenHash        String?
+  collectionPolicyRevision   Int?
+  collectionInstructionsHash String?
+  settlementTokenHash        String?
+  settlementActorId          String?
+  settlementInput            Json?
+  settlementResult           Json?
+  providerRef                String?
+  providerName               String?
+  resolvedByUserId           String?
+  resolutionReason           String?
+  settledTenderId            String?
+  createdAt                  DateTime                      @default(now())
+  updatedAt                  DateTime                      @updatedAt
+  sale                       PharmacySale                  @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_payment_attempt_sale_fk")
+  tenders                    PharmacyTender[]              @relation("PaymentAttemptTender")
+  events                     PharmacyPaymentAttemptEvent[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, deviceId, requestKey])
   @@index([organizationId, branchId, saleId, state], map: "pharmacy_payment_attempt_scope_state")
   @@map("pharmacy_payment_attempts")
+}
+
+model PharmacyPaymentAttemptEvent {
+  id             String                 @id @default(cuid())
+  organizationId String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  saleId         String
+  attemptId      String
+  fromState      String
+  toState        String
+  actorId        String
+  reason         String?
+  createdAt      DateTime               @default(now())
+  attempt        PharmacyPaymentAttempt @relation(fields: [organizationId, attemptId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([organizationId, branchId, saleId, createdAt], map: "pharmacy_payment_attempt_event_scope")
+  @@map("pharmacy_payment_attempt_events")
 }
 
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
@@ -1349,14 +1381,17 @@ model PharmacyTender {
   businessDate      DateTime                     @db.Date
   actorId           String
   deviceId          String
+  paymentAttemptId  String?
   createdAt         DateTime                     @default(now())
   sale              PharmacySale                 @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
   drawerSession     PharmacyDrawerSession?       @relation(fields: [organizationId, drawerSessionId], references: [organizationId, id], onDelete: Restrict)
   refunds           PharmacyRefund[]
   settlementMembers PharmacySettlementTender[]
   loyaltyEntries    PharmacyLoyaltyPointsEntry[]
+  paymentAttempt    PharmacyPaymentAttempt? @relation("PaymentAttemptTender", fields: [organizationId, paymentAttemptId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_tender_attempt_fk")
 
   @@unique([organizationId, id])
+  @@unique([organizationId, paymentAttemptId], map: "pharmacy_tender_one_payment_attempt")
   @@index([organizationId, branchId, businessDate])
   @@map("pharmacy_tenders")
 }
@@ -13716,6 +13751,7 @@ enum PharmacyOfflineAction {
   SCAN_BARCODE
   CASH_OTC_SALE
   MANUAL_OTC_SALE
+  MANUAL_PAYMENT_HOLD
   KHATA_SALE_WITHIN_CACHED_LIMIT
   PERMITTED_REFUND
   PROVISIONAL_CLOSE

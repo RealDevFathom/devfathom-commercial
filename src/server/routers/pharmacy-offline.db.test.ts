@@ -240,12 +240,22 @@ vi.mock('@/lib/rate-limit', () => ({
 }));
 
 async function setup(manualType?: ManualTenderType, allowReferenceSkip = false) {
-  const fixture = await scenario(ORG_A, manualType ? tag('merchant-branch') : BRANCH_A, 'transport');
-  if (manualType) await inOrg(ORG_A, (db) => db.pharmacyBranch.update({
-    where: { id: fixture.branchId }, data: { manualPaymentSettings: {
-      [manualType]: { destination: 'Merchant till', allowReferenceSkip },
-    } },
-  }));
+  const fixture = await scenario(
+    ORG_A,
+    manualType ? tag('merchant-branch') : BRANCH_A,
+    'transport'
+  );
+  if (manualType)
+    await inOrg(ORG_A, (db) =>
+      db.pharmacyBranch.update({
+        where: { id: fixture.branchId },
+        data: {
+          manualPaymentSettings: {
+            [manualType]: { destination: 'Merchant till', allowReferenceSkip },
+          },
+        },
+      })
+    );
   // A UNIT sale requires loose stock; sales never implicitly break a sealed pack.
   const { breakPack } = await import('@/lib/pharmacy/stock-ledger');
   await inOrg(ORG_A, (db) =>
@@ -327,19 +337,36 @@ async function setup(manualType?: ManualTenderType, allowReferenceSkip = false) 
     command.manualCapture = { type: manualType, providerRef: '001234', payerName: 'Ayesha' };
   }
   const { signPharmacyCommand } = await import('@/lib/pharmacy/sales');
-  async function replay(input = command, headers: Record<string, string> = {}) {
-    return call('replay', input, {
-      'idempotency-key': input.idempotencyKey,
+  async function replay(
+    input: CounterReplay = command,
+    headers: Record<string, string> = {},
+    preserveLegacy = false
+  ) {
+    const wire =
+      !preserveLegacy && input.action === 'MANUAL_OTC_SALE'
+        ? {
+            sequence: input.sequence,
+            idempotencyKey: input.idempotencyKey,
+            action: 'MANUAL_PAYMENT_HOLD' as const,
+            clientOriginAt: input.leasedReceipt.originalSaleAt,
+            snapshots: input.snapshots,
+            lines: input.lines,
+            amountMinor: input.amountMinor,
+            manualCapture: input.manualCapture!,
+          }
+        : input;
+    return call('replay', wire, {
+      'idempotency-key': wire.idempotencyKey,
       'x-command-signature': signPharmacyCommand(
         scopeOf(fixture),
         fixture.deviceId,
-        input,
+        wire,
         fixture.deviceSecret
       ),
       'x-receipt-signature': signPharmacyCommand(
         scopeOf(fixture),
         fixture.deviceId,
-        input.leasedReceipt,
+        'leasedReceipt' in wire ? wire.leasedReceipt : {},
         fixture.deviceSecret
       ),
       ...headers,
@@ -359,90 +386,277 @@ async function setup(manualType?: ManualTenderType, allowReferenceSkip = false) 
       ).nextNumber,
     }));
   }
-  return { fixture, command, call, replay, counts, lease };
+  return {
+    fixture,
+    command,
+    call,
+    replay,
+    replayLegacy: () => replay(command, {}, true),
+    counts,
+    lease,
+  };
+}
+
+async function holdOwner(branchId: string) {
+  const ownerId = tag('hold-owner');
+  await inOrg(ORG_A, async (db) => {
+    const department = await db.organizationDepartment.upsert({
+      where: { organizationId_key: { organizationId: ORG_A, key: 'hold-owner-test' } },
+      update: {},
+      create: { organizationId: ORG_A, key: 'hold-owner-test', name: 'Hold owner test' },
+    });
+    await db.user.create({
+      data: {
+        id: ownerId,
+        organizationId: ORG_A,
+        name: 'Hold owner',
+        email: `${ownerId}@example.invalid`,
+        role: 'ADMIN',
+        department: department.key,
+        title: 'Owner',
+      },
+    });
+  });
+  return { organizationId: ORG_A, branchId, actorId: ownerId };
 }
 
 describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
-  it.each(['RAAST', 'JAZZCASH', 'EASYPAISA'] as const)('#710 replays a %s sale exactly once with its leased receipt and capture', async (type) => {
-    const f = await setup(type);
-    const responses = await Promise.all([f.replay(), f.replay()]);
-    expect(responses.map((response) => response.status)).toEqual([200, 200]);
-    const results = await Promise.all(responses.map((response) => response.json()));
-    expect(results[0].saleId).toBe(results[1].saleId);
-    await inOrg(ORG_A, async (db) => {
-      const sale = await db.pharmacySale.findFirstOrThrow({ where: { id: results[0].saleId }, include: { tenders: true } });
-      expect(sale).toMatchObject({ status: 'COMPLETED', receiptNumber: f.lease.blockStart });
-      expect(sale.tenders).toHaveLength(1);
-      expect(sale.tenders[0]).toMatchObject({ type, amountMinor: 100, provider: 'MANUAL_MERCHANT', providerRef: '001234', payerName: 'Ayesha', referenceSkipped: false, drawerSessionId: null });
-      expect(await db.pharmacyDrawerMovement.count({ where: { drawerSession: { deviceId: f.fixture.deviceId }, kind: 'CASH_SALE' } })).toBe(0);
-    });
-    expect(await f.counts()).toMatchObject({ commands: 1, sales: 1, consumed: 1, nextNumber: f.lease.blockStart + 1 });
-  });
+  it.each(['RAAST', 'JAZZCASH', 'EASYPAISA'] as const)(
+    'recovers a %s hold once without finalizing payment or using a receipt',
+    async (type) => {
+      const f = await setup(type);
+      const responses = await Promise.all([f.replay(), f.replay()]);
+      expect(responses.map((response) => response.status)).toEqual([200, 200]);
+      const results = await Promise.all(responses.map((response) => response.json()));
+      expect(results[0].saleId).toBe(results[1].saleId);
+      await inOrg(ORG_A, async (db) => {
+        const sale = await db.pharmacySale.findFirstOrThrow({
+          where: { id: results[0].saleId },
+          include: { tenders: true },
+        });
+        expect(sale).toMatchObject({ status: 'OPEN', receiptNumber: null });
+        expect(sale.tenders).toHaveLength(0);
+        const attempt = await db.pharmacyPaymentAttempt.findFirstOrThrow({
+          where: { saleId: sale.id },
+        });
+        expect(attempt).toMatchObject({
+          state: 'PREPARED',
+          source: 'OFFLINE_HOLD',
+          method: type,
+          amountMinor: 100,
+        });
+        expect(
+          await db.pharmacyDrawerMovement.count({
+            where: { drawerSession: { deviceId: f.fixture.deviceId }, kind: 'CASH_SALE' },
+          })
+        ).toBe(0);
+      });
+      expect(await f.counts()).toMatchObject({
+        commands: 1,
+        sales: 1,
+        consumed: 1,
+        nextNumber: f.lease.blockStart,
+      });
+    }
+  );
   it('#710 records manual totals in the immutable close and matches expected receipts without posting twice', async () => {
     const f = await setup('RAAST');
     const response = await f.replay();
     expect(response.status).toBe(200);
     const { saleId } = await response.json();
+    const owner = await holdOwner(f.fixture.branchId);
+    const attempt = await inOrg(ORG_A, (db) =>
+      db.pharmacyPaymentAttempt.findFirstOrThrow({ where: { saleId } })
+    );
+    const { resolveManualCollection } = await import('@/lib/pharmacy/payment-attempt-operations');
+    await resolveManualCollection(owner, {
+      attemptId: attempt.id,
+      decision: 'CONFIRM',
+      reason: 'Owner checked branch wallet funds',
+      payerName: 'Ayesha',
+      providerRef: '001234',
+    });
     const scope = scopeOf(f.fixture);
     const businessDate = new Date(f.command.leasedReceipt.originalSaleAt.slice(0, 10));
     const close = await import('@/lib/pharmacy/day-close');
     const bookkeeping = await import('@/lib/pharmacy/bookkeeping');
     const preview = await inOrg(ORG_A, (db) => close.readPharmacyClose(db, scope, businessDate));
-    const report = await inOrg(ORG_A, (db) => close.closePharmacyDay(db, scope, {
-      businessDate, sourceHash: preview.totals.sourceHash, varianceNote: '',
-      counts: preview.drawers.filter((row) => row.status === 'OPEN').map((row) => ({ drawerSessionId: row.id, countedCashMinor: 0 })),
-    }));
+    const report = await inOrg(ORG_A, (db) =>
+      close.closePharmacyDay(db, scope, {
+        businessDate,
+        sourceHash: preview.totals.sourceHash,
+        varianceNote: '',
+        counts: preview.drawers
+          .filter((row) => row.status === 'OPEN')
+          .map((row) => ({ drawerSessionId: row.id, countedCashMinor: 0 })),
+      })
+    );
     expect(report.cashExpectedMinor).toBe(0);
-    expect(report.tenderTotals).toEqual([{ type: 'RAAST', amountMinor: 100, refundMinor: 0, netMinor: 100 }]);
+    expect(report.tenderTotals).toEqual([
+      {
+        type: 'RAAST',
+        amountMinor: 100,
+        refundMinor: 0,
+        netMinor: 100,
+        confirmedBy: ['Hold owner'],
+      },
+    ]);
     const batch = await inOrg(ORG_A, async (db) => {
       const tender = await db.pharmacyTender.findFirstOrThrow({ where: { saleId } });
-      return bookkeeping.createSettlementBatch(db, scope, { reference: tag('RAAST'), provider: 'Raast', tenderType: 'RAAST', businessDate, tenderIds: [tender.id] });
+      return bookkeeping.createSettlementBatch(db, scope, {
+        reference: tag('RAAST'),
+        provider: 'Raast',
+        tenderType: 'RAAST',
+        businessDate,
+        tenderIds: [tender.id],
+      });
     });
     expect(batch.expectedMinor).toBe(100);
-    const lines = await inOrg(ORG_A, async (db) => Promise.all([1, 2].map((number) => db.pharmacyBankStatementLine.create({ data: {
-      organizationId: ORG_A, branchId: scope.branchId, statementRef: tag('statement'), lineReference: `line-${number}`, bookedAt: new Date(), amountMinor: 100, description: 'Merchant receipt',
-    } }))));
+    const lines = await inOrg(ORG_A, async (db) =>
+      Promise.all(
+        [1, 2].map((number) =>
+          db.pharmacyBankStatementLine.create({
+            data: {
+              organizationId: ORG_A,
+              branchId: scope.branchId,
+              statementRef: tag('statement'),
+              lineReference: `line-${number}`,
+              bookedAt: new Date(),
+              amountMinor: 100,
+              description: 'Merchant receipt',
+            },
+          })
+        )
+      )
+    );
     const journalCount = await inOrg(ORG_A, (db) => db.financeJournalEntry.count());
-    const attempts = await Promise.allSettled(lines.map((line) => inOrg(ORG_A, (db) => bookkeeping.reconcileSettlementBankLine(db, scope, { statementLineId: line.id, settlementBatchId: batch.id, amountMinor: 100 }))));
+    const attempts = await Promise.allSettled(
+      lines.map((line) =>
+        inOrg(ORG_A, (db) =>
+          bookkeeping.reconcileSettlementBankLine(db, scope, {
+            statementLineId: line.id,
+            settlementBatchId: batch.id,
+            amountMinor: 100,
+          })
+        )
+      )
+    );
     expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
     expect(attempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
     await inOrg(ORG_A, async (db) => {
       expect(await db.financeJournalEntry.count()).toBe(journalCount);
-      expect(await db.pharmacySettlementBatch.findFirstOrThrow({ where: { id: batch.id } })).toMatchObject({ settledMinor: 100 });
-      expect(await db.pharmacyBankReconciliation.count({ where: { settlementBatchId: batch.id } })).toBe(1);
+      expect(
+        await db.pharmacySettlementBatch.findFirstOrThrow({ where: { id: batch.id } })
+      ).toMatchObject({ settledMinor: 100 });
+      expect(
+        await db.pharmacyBankReconciliation.count({ where: { settlementBatchId: batch.id } })
+      ).toBe(1);
     });
-    await expect(inOrg(ORG_A, (db) => bookkeeping.reconcileSettlementBankLine(db, { ...scope, branchId: BRANCH_A }, { statementLineId: lines[0].id, settlementBatchId: batch.id, amountMinor: 1 }))).rejects.toMatchObject({ reason: 'NOT_FOUND' });
-    expect(await deps.withTenantDb(`other-org-${suffix}`, (db) => db.pharmacyTender.findMany({ where: { saleId } }))).toEqual([]);
+    await expect(
+      inOrg(ORG_A, (db) =>
+        bookkeeping.reconcileSettlementBankLine(
+          db,
+          { ...scope, branchId: BRANCH_A },
+          { statementLineId: lines[0].id, settlementBatchId: batch.id, amountMinor: 1 }
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'NOT_FOUND' });
+    expect(
+      await deps.withTenantDb(`other-org-${suffix}`, (db) =>
+        db.pharmacyTender.findMany({ where: { saleId } })
+      )
+    ).toEqual([]);
   });
-  it.each([false, true])('#710 checks explicit reference skipping against signed and current policy (%s)', async (allowSkip) => {
-    const f = await setup('RAAST', allowSkip);
-    f.command.manualCapture = { type: 'RAAST', payerName: 'Ayesha', referenceSkipped: true };
-    const response = await f.replay();
-    expect(response.status).toBe(allowSkip ? 200 : 409);
-    expect((await f.counts()).consumed).toBe(allowSkip ? 1 : 0);
-  });
+  it.each([false, true])(
+    '#710 checks explicit reference skipping against signed and current policy (%s)',
+    async (allowSkip) => {
+      const f = await setup('RAAST', allowSkip);
+      f.command.manualCapture = { type: 'RAAST', payerName: 'Ayesha', referenceSkipped: true };
+      const response = await f.replay();
+      expect(response.status).toBe(allowSkip ? 200 : 409);
+      expect((await f.counts()).consumed).toBe(allowSkip ? 1 : 0);
+    }
+  );
   it('#710 database rejects missing references and forbidden skips even outside the service', async () => {
     const f = await setup('RAAST');
     const response = await f.replay();
     expect(response.status).toBe(200);
     const { saleId } = await response.json();
     const data = {
-      organizationId: ORG_A, branchId: f.fixture.branchId, saleId, type: 'RAAST' as const,
-      amountMinor: 1, provider: 'MANUAL_MERCHANT', payerName: 'Ayesha',
-      businessDate: new Date(f.command.leasedReceipt.originalSaleAt.slice(0, 10)), actorId: ACTOR, deviceId: f.fixture.deviceId,
+      organizationId: ORG_A,
+      branchId: f.fixture.branchId,
+      saleId,
+      type: 'RAAST' as const,
+      amountMinor: 1,
+      provider: 'MANUAL_MERCHANT',
+      payerName: 'Ayesha',
+      businessDate: new Date(f.command.leasedReceipt.originalSaleAt.slice(0, 10)),
+      actorId: ACTOR,
+      deviceId: f.fixture.deviceId,
     };
     await expect(inOrg(ORG_A, (db) => db.pharmacyTender.create({ data }))).rejects.toThrow();
-    await expect(inOrg(ORG_A, (db) => db.pharmacyTender.create({ data: { ...data, referenceSkipped: true } }))).rejects.toThrow();
-    expect(await inOrg(ORG_A, (db) => db.pharmacyTender.count({ where: { saleId } }))).toBe(1);
+    await expect(
+      inOrg(ORG_A, (db) => db.pharmacyTender.create({ data: { ...data, referenceSkipped: true } }))
+    ).rejects.toThrow();
+    expect(await inOrg(ORG_A, (db) => db.pharmacyTender.count({ where: { saleId } }))).toBe(0);
   });
-  it('#710 rejects references removed or policy revoked during an outage with no partial writes', async () => {
+  it('retains an offline hold if branch skip policy changes and requires valid current capture to confirm', async () => {
     const f = await setup('RAAST', true);
     f.command.manualCapture = { type: 'RAAST', payerName: 'Ayesha' };
     expect((await f.replay()).status).toBe(400);
     f.command.manualCapture = { type: 'RAAST', payerName: 'Ayesha', referenceSkipped: true };
-    await inOrg(ORG_A, (db) => db.pharmacyBranch.update({ where: { id: f.fixture.branchId }, data: { manualPaymentSettings: { RAAST: { destination: 'Merchant till', allowReferenceSkip: false } } } }));
-    expect((await f.replay()).status).toBe(409);
-    expect(await f.counts()).toMatchObject({ commands: 0, sales: 0, consumed: 0, nextNumber: f.lease.blockStart });
+    await inOrg(ORG_A, (db) =>
+      db.pharmacyBranch.update({
+        where: { id: f.fixture.branchId },
+        data: {
+          manualPaymentSettings: {
+            RAAST: { destination: 'Merchant till', allowReferenceSkip: false },
+          },
+        },
+      })
+    );
+    const response = await f.replay();
+    expect(response.status).toBe(200);
+    const { saleId } = await response.json();
+    const attempt = await inOrg(ORG_A, (db) =>
+      db.pharmacyPaymentAttempt.findFirstOrThrow({ where: { saleId } })
+    );
+    const owner = await holdOwner(f.fixture.branchId);
+    const { resolveManualCollection } = await import('@/lib/pharmacy/payment-attempt-operations');
+    await expect(
+      resolveManualCollection(owner, {
+        attemptId: attempt.id,
+        decision: 'CONFIRM',
+        reason: 'Review skipped reference',
+        payerName: 'Ayesha',
+        referenceSkipped: true,
+      })
+    ).rejects.toThrow('PAYMENT_INVALID_CAPTURE');
+    expect(await inOrg(ORG_A, (db) => db.pharmacyTender.count({ where: { saleId } }))).toBe(0);
+    expect(await f.counts()).toMatchObject({
+      commands: 1,
+      sales: 1,
+      consumed: 1,
+      nextNumber: f.lease.blockStart,
+    });
+    await resolveManualCollection(owner, {
+      attemptId: attempt.id,
+      decision: 'CONFIRM',
+      reason: 'Owner obtained transaction reference',
+      payerName: 'Ayesha',
+      providerRef: '001234',
+    });
+    expect(await inOrg(ORG_A, (db) => db.pharmacyTender.count({ where: { saleId } }))).toBe(1);
+  });
+  it('preserves an unresolved historical leased manual command without finalizing or renumbering it', async () => {
+    const f = await setup('RAAST');
+    expect((await f.replayLegacy()).status).toBe(423);
+    expect(await f.counts()).toMatchObject({
+      commands: 0,
+      sales: 0,
+      consumed: 0,
+      nextNumber: f.lease.blockStart,
+    });
   });
   it('replays identical concurrent Idempotency-Key requests into exactly one sale', async () => {
     const f = await setup();

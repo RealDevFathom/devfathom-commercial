@@ -44,6 +44,12 @@ export type KhataAccount = {
   balanceMinor: number;
 };
 export type CounterTenderPanelProps = {
+  preparedCollection?: { type: CounterTenderType; amountMinor: number } | null;
+  onPrepareCollection?: (
+    input: { type: 'BANK_TRANSFER' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA'; amountMinor: number },
+    draft: TenderDraft
+  ) => Promise<boolean>;
+
   manualSettings?: ManualPaymentSettings;
   manualSettingsLoading?: boolean;
   manualSettingsError?: boolean;
@@ -128,6 +134,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       manualSettingsLoading = false,
       manualSettingsError = false,
       onReloadManualSettings,
+      preparedCollection,
+      onPrepareCollection,
     },
     ref
   ) {
@@ -149,6 +157,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [amount, setAmount] = useState(initialDraft?.amount ?? '');
     const [cashReceived, setCashReceived] = useState(initialDraft?.cashReceived ?? '');
     const [submitting, setSubmitting] = useState(false);
+    const [preparing, setPreparing] = useState(false);
     const [outcome, setOutcome] = useState<CounterTenderResult | null>(null);
     const submissionRef = useRef(false);
     const checkRef = useRef(false);
@@ -157,7 +166,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const cashInputRef = useRef<HTMLInputElement>(null);
     const focusTenderInputRef = useRef(false);
     const statusRef = useRef<HTMLParagraphElement>(null);
-    const takingPayment = pending || submitting;
+    const takingPayment = pending || submitting || preparing;
     const displayedOutcome = recoveryOutcome ?? outcome;
     const unknown = displayedOutcome?.status === 'unknown';
     const balanceKnown =
@@ -199,6 +208,13 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     }, [type]);
     const isKhata = type === 'KHATA' || type === 'CREDIT';
     const manual = isManualTender(type) && type !== 'CARD';
+    const external = ['BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA'].includes(type);
+    const prepared =
+      preparedCollection?.type === type && preparedCollection.amountMinor === amountMinor;
+    useEffect(() => {
+      if (prepared && ['RAAST', 'JAZZCASH', 'EASYPAISA'].includes(type))
+        referenceInputRef.current?.focus();
+    }, [prepared, type]);
     const manualCard = type === 'CARD';
     const merchant = manual ? manualSettings?.[type] : undefined;
     const merchantReady = Boolean(merchant?.destination.trim() || merchant?.qrImageDataUrl);
@@ -250,6 +266,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       amountValid &&
       !cashShort &&
       !cashInvalid &&
+      (!external || prepared) &&
       (!manual ||
         (!manualSettingsLoading &&
           !manualSettingsError &&
@@ -327,6 +344,34 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       } finally {
         submissionRef.current = false;
         setSubmitting(false);
+      }
+    }
+
+    async function prepareCollection() {
+      if (
+        !editable ||
+        !amountValid ||
+        amountMinor === null ||
+        !onPrepareCollection ||
+        preparing ||
+        prepared ||
+        !['BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA'].includes(type)
+      )
+        return;
+      setPreparing(true);
+      try {
+        await onPrepareCollection(
+          { type: type as 'BANK_TRANSFER' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA', amountMinor },
+          { amount, cashReceived: '' }
+        );
+      } catch {
+        setOutcome({
+          status: 'unknown',
+          message:
+            'Payment preparation could not be confirmed. Keep this bill and check its outcome before collecting money.',
+        });
+      } finally {
+        setPreparing(false);
       }
     }
 
@@ -475,7 +520,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   type="button"
                   variant={type === entry.value ? 'default' : 'outline'}
                   aria-pressed={type === entry.value}
-                  disabled={!editable}
+                  disabled={!editable || Boolean(preparedCollection)}
                   className="min-h-11 rounded-sm"
                   onClick={() => {
                     focusTenderInputRef.current = entry.value !== type;
@@ -509,7 +554,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               autoComplete="off"
               placeholder={balanceKnown ? formatMinor(balanceMinor) : undefined}
               value={amount}
-              disabled={!editable}
+              disabled={!editable || Boolean(preparedCollection)}
               aria-invalid={state === 'ready' && amount.trim() !== '' && !amountValid}
               aria-describedby="tender-status tender-error tender-amount-help tender-amount-error"
               onChange={(event) => setAmount(event.target.value)}
@@ -526,7 +571,53 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             ) : null}
           </div>
 
-          {manual ? (
+          {external && !prepared ? (
+            <div className="space-y-2 rounded-md border border-border-subtle bg-surface-sunken p-4 text-sm text-text-body">
+              <p>
+                Prepare this payment online before collecting funds. The bill stays locked until
+                payment is recorded or an Owner or Manager resolves it.
+              </p>
+              {!onPrepareCollection ? (
+                <>
+                  <p>Refresh this bill before preparing payment.</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 w-full"
+                    onClick={onRetry}
+                  >
+                    Refresh bill
+                  </Button>
+                </>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                className="min-h-11 w-full"
+                disabled={
+                  !editable ||
+                  !amountValid ||
+                  !onPrepareCollection ||
+                  (manual && (!merchantReady || manualSettingsLoading || manualSettingsError))
+                }
+                onClick={() => void prepareCollection()}
+              >
+                {preparing ? 'Preparing payment…' : 'Prepare payment'}
+              </Button>
+              {manual && !manualSettingsLoading && !merchantReady ? (
+                <p role="status">
+                  This method is not set up. Add the branch till, IBAN or QR before collecting
+                  funds.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {prepared ? (
+            <p role="status" className="text-sm text-text-muted">
+              Payment prepared. Check that funds arrived before marking received.
+            </p>
+          ) : null}
+          {manual && prepared ? (
             <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
               {manualSettingsLoading ? <p role="status">Loading merchant details…</p> : null}
               {manualSettingsError ? (
@@ -581,7 +672,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         className="min-h-11"
                         value={payerName}
                         maxLength={100}
-                        disabled={!editable}
+                        disabled={!editable || Boolean(preparedCollection)}
                         onChange={(event) => setPayerName(event.target.value)}
                       />
                     </>
@@ -622,7 +713,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         className="min-h-11"
                         value={approvalCode}
                         maxLength={60}
-                        disabled={!editable}
+                        disabled={!editable || Boolean(preparedCollection)}
                         onChange={(event) => setApprovalCode(event.target.value)}
                       />
                     </>
@@ -632,7 +723,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       <input
                         type="checkbox"
                         checked={referenceSkipped}
-                        disabled={!editable}
+                        disabled={!editable || Boolean(preparedCollection)}
                         onChange={(event) => {
                           setReferenceSkipped(event.target.checked);
                           setProviderRef('');
@@ -689,7 +780,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     <input
                       type="checkbox"
                       checked={ownerOverride}
-                      disabled={!editable}
+                      disabled={!editable || Boolean(preparedCollection)}
                       onChange={(event) => setOwnerOverride(event.target.checked)}
                     />
                     Owner: authorize limit increase
@@ -702,7 +793,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         type="password"
                         autoComplete="current-password"
                         value={password}
-                        disabled={!editable}
+                        disabled={!editable || Boolean(preparedCollection)}
                         onChange={(event) => setPassword(event.target.value)}
                         className="h-11 rounded-sm"
                       />
@@ -713,7 +804,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         id="khata-totp"
                         autoComplete="one-time-code"
                         value={totp}
-                        disabled={!editable}
+                        disabled={!editable || Boolean(preparedCollection)}
                         onChange={(event) => setTotp(event.target.value)}
                         className="h-11 rounded-sm"
                       />
@@ -757,7 +848,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 inputMode="decimal"
                 autoComplete="off"
                 value={cashReceived}
-                disabled={!editable}
+                disabled={!editable || Boolean(preparedCollection)}
                 aria-invalid={cashShort || cashInvalid || undefined}
                 aria-describedby="tender-status tender-error tender-cash-error"
                 onChange={(event) => setCashReceived(event.target.value)}
@@ -830,7 +921,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               blocked ? 'tender-status tender-error tender-blocked' : 'tender-status tender-error'
             }
           >
-            {takingPayment ? 'Taking payment…' : 'Take payment'}
+            {takingPayment ? 'Taking payment…' : external ? 'Mark received' : 'Take payment'}
           </Button>
         </form>
       </div>
