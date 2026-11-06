@@ -18,8 +18,13 @@ const mocks = vi.hoisted(() => ({
   settings: vi.fn(),
   assist: vi.fn(),
   capture: vi.fn(),
+  approve: vi.fn(),
+  withTenantDb: vi.fn(),
 }));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(),
+  withTenantDb: mocks.withTenantDb,
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.licensed,
@@ -43,6 +48,7 @@ vi.mock('@/lib/pharmacy/marketing-service', async () => ({
   )),
   marketingHistory: mocks.history,
   captureMarketingCampaign: mocks.capture,
+  approveMarketingCampaign: mocks.approve,
 }));
 vi.mock('@/lib/pharmacy/growth-insights', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/growth-insights')>(
@@ -60,6 +66,7 @@ vi.mock('@/lib/ai/growth-recommendations', async () => ({
   generateGrowthRecommendations: mocks.growthGenerate,
 }));
 import { pharmacyMarketingRouter } from './pharmacy-marketing';
+let audit: TRPCContext['audit'];
 function caller(role = 'ADMIN') {
   const transactionDb = {
     user: { findFirst: mocks.actor, findUnique: mocks.permissions },
@@ -69,6 +76,7 @@ function caller(role = 'ADMIN') {
   };
   const db = { ...transactionDb, $transaction: mocks.transaction };
   mocks.transaction.mockImplementation((fn) => fn(transactionDb));
+  audit = { detail: {} };
   return pharmacyMarketingRouter.createCaller({
     db,
     entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-crm'], modules: [] },
@@ -79,7 +87,7 @@ function caller(role = 'ADMIN') {
     },
     support: null,
     requestMeta: { ip: null, userAgent: null },
-    audit: { detail: {} },
+    audit,
   } as unknown as TRPCContext);
 }
 beforeEach(() => {
@@ -105,6 +113,7 @@ beforeEach(() => {
   mocks.branch.mockResolvedValue({ id: 'branch-a' });
   mocks.history.mockResolvedValue({ campaigns: [] });
   mocks.capture.mockResolvedValue({ prepared: 1 });
+  mocks.approve.mockResolvedValue({ status: 'APPROVED' });
 });
 const input = { branchId: 'branch-a' };
 describe('marketing workflow authorization', () => {
@@ -171,6 +180,86 @@ describe('marketing workflow authorization', () => {
       expect.objectContaining({ organizationId: 'org-a' }),
       'campaign-a'
     );
+  });
+  it('passes the PIN to owner approval while keeping it out of audit input', async () => {
+    await caller().approve({ ...input, campaignId: 'campaign-a', pin: '4821' });
+    expect(mocks.approve).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ actorId: 'owner-a' }),
+      'campaign-a',
+      expect.any(Date),
+      '4821',
+      expect.any(Function)
+    );
+    expect(audit.detail).toMatchObject({
+      action: 'pharmacy_marketing_approval',
+      targetId: 'campaign-a',
+      skipInput: true,
+    });
+    expect(JSON.stringify(audit.detail)).not.toContain('4821');
+  });
+  it('rejects a refused PIN as FORBIDDEN with the campaign audit target', async () => {
+    const api = caller();
+    let committed = false;
+    mocks.transaction.mockImplementation(async (fn) => {
+      const result = await fn({});
+      committed = true;
+      return result;
+    });
+    mocks.approve.mockResolvedValue({
+      blocked: 'Enter your owner PIN to approve monetary vouchers.',
+    });
+    await expect(
+      api.approve({ ...input, campaignId: 'campaign-a', pin: '4822' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(committed).toBe(true);
+    expect(audit.detail).toMatchObject({ targetId: 'campaign-a', skipInput: true });
+  });
+  it('keeps failed PIN attempts committed when the request transaction rolls back', async () => {
+    const api = caller();
+    const credentialWrites: unknown[] = [];
+    const committedWrites: unknown[] = [];
+    // The request transaction discards its writes when the procedure refuses.
+    mocks.transaction.mockImplementation(async (fn) => {
+      const requestWrites: unknown[] = [];
+      try {
+        return await fn({ requestWrites });
+      } finally {
+        requestWrites.length = 0;
+      }
+    });
+    // An independent tenant transaction commits as soon as its callback resolves.
+    mocks.withTenantDb.mockImplementation(async (_organizationId, run) => {
+      const result = await run({ credentialWrites });
+      committedWrites.push(...credentialWrites);
+      return result;
+    });
+    mocks.approve.mockImplementation(
+      async (_db, _scope, _campaignId, _now, _pin, credentialTransaction) => {
+        await credentialTransaction(async (db: { credentialWrites: unknown[] }) =>
+          db.credentialWrites.push({ failedAttempts: 1 })
+        );
+        return { blocked: 'Enter your owner PIN to approve monetary vouchers.' };
+      }
+    );
+    await expect(
+      api.approve({ ...input, campaignId: 'campaign-a', pin: '4822' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.withTenantDb).toHaveBeenCalledWith('org-a', expect.any(Function), {
+      userId: 'owner-a',
+      skipDrain: true,
+      maxWait: 5_000,
+      timeout: 10_000,
+    });
+    expect(committedWrites).toEqual([{ failedAttempts: 1 }]);
+    expect(JSON.stringify(audit.detail)).not.toContain('4822');
+  });
+  it('redacts a malformed PIN before input validation refuses it', async () => {
+    await expect(
+      caller().approve({ ...input, campaignId: 'campaign-a', pin: 'invalid-secret' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(audit.detail.skipInput).toBe(true);
+    expect(mocks.approve).not.toHaveBeenCalled();
   });
   it('honors current AI-off policy without calling the provider', async () => {
     mocks.settings.mockResolvedValue({ askFathomEnabled: false });

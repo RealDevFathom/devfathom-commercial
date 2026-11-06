@@ -1017,6 +1017,7 @@ export const pharmacySalesRouter = router({
           canonicalUnitsPerSaleUnit: z.number().int().positive(),
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
+          voucherCampaignId: z.string().trim().min(1).max(128).optional(),
           approvedByUserId: z.string().min(1).optional(),
           approvalPolicy: z.string().trim().min(1).optional(),
           override: z
@@ -1033,6 +1034,22 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
+      // Keep credentials and clinical input redacted while retaining durable,
+      // identifiers-only evidence for successful and refused voucher attempts.
+      if (input.voucherCampaignId) {
+        annotateAudit(ctx, {
+          category: 'PHARMACY_GROWTH',
+          action: 'voucher_redemption',
+          targetType: 'PharmacySale',
+          targetId: input.saleId,
+          description: 'Voucher redemption attempted at the pharmacy counter.',
+          metadata: {
+            voucherCampaignId: input.voucherCampaignId,
+            branchId: input.branchId,
+            outcome: 'ATTEMPTED',
+          },
+        });
+      }
       // PH-A4 (F10): a batch taken out of FEFO order is a safety decision, so its
       // audit row is labelled as one — refused attempts included, since the
       // label is set before the domain runs. The override row itself is written
@@ -1356,8 +1373,27 @@ export const pharmacySalesRouter = router({
             },
           });
         }
+        if (input.voucherCampaignId && 'line' in outcome) {
+          annotateAudit(ctx, {
+            metadata: {
+              voucherCampaignId: input.voucherCampaignId,
+              voucherSaleLineId: outcome.line.id,
+              outcome: 'REDEEMED',
+            },
+          });
+        }
         return outcome;
       } catch (error) {
+        if (input.voucherCampaignId) {
+          annotateAudit(ctx, {
+            metadata: {
+              voucherCampaignId: input.voucherCampaignId,
+              outcome: 'REFUSED',
+              refusalReason:
+                error instanceof PharmacySaleError ? error.reason : 'TRANSACTION_FAILED',
+            },
+          });
+        }
         fail(error);
       }
     }),

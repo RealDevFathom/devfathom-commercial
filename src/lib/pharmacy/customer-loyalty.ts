@@ -19,6 +19,7 @@ export class PharmacyLoyaltyError extends Error {
       | 'LOYALTY_CONSENT_REQUIRED'
       | 'CUSTOMER_NOT_FOUND'
       | 'PRESCRIPTION_PATIENT_MISMATCH'
+      | 'VOUCHER_CUSTOMER_MISMATCH'
       | 'SALE_NOT_OPEN'
       | 'SALE_NOT_LINKED'
       | 'INSUFFICIENT_POINTS'
@@ -83,6 +84,16 @@ export async function linkCustomerToSale(
       phoneLast4: input.phoneLast4,
     },
   });
+  const voucher = await db.pharmacyVoucherRedemption.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleLine: { saleId: sale.id },
+      customerId: { not: customer.id },
+    },
+    select: { id: true },
+  });
+  if (voucher) throw new PharmacyLoyaltyError('VOUCHER_CUSTOMER_MISMATCH');
   await db.pharmacySale.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
     data: { customerId: customer.id },

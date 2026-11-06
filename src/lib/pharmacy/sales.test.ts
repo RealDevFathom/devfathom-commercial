@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   addSaleLine,
+  assertVoucherEligibility,
   addRestockInterest,
   captureSafeRestockArrival,
   changeSaleStatus,
@@ -12,6 +13,61 @@ import {
   returnSaleLine,
   validateDiscount,
 } from './sales';
+
+describe('voucher category enforcement', () => {
+  const voucherDb = (
+    eligibleCategoryAllowlist: unknown = ['FRONT_SHOP'],
+    redemption: { id: string } | null = null
+  ) =>
+    ({
+      pharmacyCampaign: {
+        findFirst: vi.fn(async () => ({
+          eligibleCategoryAllowlist,
+          voucherDiscountMinor: 250,
+        })),
+      },
+      pharmacyCampaignCapture: {
+        findFirst: vi.fn(async () => ({
+          id: 'capture-a',
+          voucherRedemptions: redemption ? [redemption] : [],
+        })),
+      },
+    }) as never;
+
+  it.each(['PHARMACEUTICAL', 'BIOLOGICAL', 'ALTERNATIVE', 'DEVICE'])(
+    'refuses a voucher for server-classified %s lines',
+    async (family) => {
+      await expect(
+        assertVoucherEligibility(voucherDb(), scope, 'voucher-a', family, 'customer-a', 250)
+      ).rejects.toThrow('VOUCHER_NOT_ELIGIBLE');
+    }
+  );
+
+  it('accepts only an allowlisted non-drug front-shop line', async () => {
+    await expect(
+      assertVoucherEligibility(voucherDb(), scope, 'voucher-a', 'FRONT_SHOP', 'customer-a', 250)
+    ).resolves.toEqual({ captureId: 'capture-a', customerId: 'customer-a' });
+    await expect(
+      assertVoucherEligibility(voucherDb([]), scope, 'voucher-a', 'FRONT_SHOP', 'customer-a', 250)
+    ).rejects.toThrow('VOUCHER_NOT_ELIGIBLE');
+  });
+
+  it('binds the fixed value and refuses an already redeemed customer capture', async () => {
+    await expect(
+      assertVoucherEligibility(voucherDb(), scope, 'voucher-a', 'FRONT_SHOP', 'customer-a', 249)
+    ).rejects.toThrow('VOUCHER_NOT_ELIGIBLE');
+    await expect(
+      assertVoucherEligibility(
+        voucherDb(['FRONT_SHOP'], { id: 'redemption-a' }),
+        scope,
+        'voucher-a',
+        'FRONT_SHOP',
+        'customer-a',
+        250
+      )
+    ).rejects.toThrow('VOUCHER_ALREADY_REDEEMED');
+  });
+});
 
 // Finance posting is outside these physical return-disposition assertions.
 vi.mock('./finance-postings', async () => ({

@@ -148,6 +148,8 @@ export class PharmacySaleError extends Error {
       | 'MARGIN_GUARDRAIL'
       | 'APPROVAL_REQUIRED'
       | 'REGULATED_DISCOUNT_REFUSED'
+      | 'VOUCHER_NOT_ELIGIBLE'
+      | 'VOUCHER_ALREADY_REDEEMED'
       | 'RETURN_EXCEEDS_SOLD'
       | 'IDEMPOTENCY_CONFLICT'
       | 'CONSENT_REQUIRED'
@@ -174,6 +176,69 @@ export function validateDiscount(input: {
     throw new PharmacySaleError('APPROVAL_REQUIRED');
   if (input.grossMinor - input.discountMinor < input.costMinor)
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
+}
+
+export async function assertVoucherEligibility(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  voucherCampaignId: string,
+  productFamily: string,
+  customerId: string | null,
+  discountMinor: number
+) {
+  const voucher = await db.pharmacyCampaign.findFirst({
+    where: {
+      id: voucherCampaignId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      voucherEnabled: true,
+      status: 'CAPTURED',
+      ownerApprovedByUserId: { not: null },
+      ownerApprovedAt: { not: null },
+      ownerApprovalPinCredentialId: { not: null },
+    },
+    select: { eligibleCategoryAllowlist: true, voucherDiscountMinor: true },
+  });
+  const eligible = Array.isArray(voucher?.eligibleCategoryAllowlist)
+    ? voucher.eligibleCategoryAllowlist
+    : [];
+  // Product family is server-owned. Rx, OTC, supplements/alternative products and
+  // devices can therefore never be made eligible by a counter request.
+  if (
+    !voucher ||
+    !customerId ||
+    productFamily !== 'FRONT_SHOP' ||
+    !eligible.includes('FRONT_SHOP') ||
+    voucher.voucherDiscountMinor !== discountMinor
+  )
+    throw new PharmacySaleError('VOUCHER_NOT_ELIGIBLE');
+  const capture = await db.pharmacyCampaignCapture.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      campaignId: voucherCampaignId,
+      customerId,
+    },
+    select: {
+      id: true,
+      voucherRedemptions: {
+        // The immutable VOIDED event releases an unpaid cart's reservation.
+        // Paid/part-paid sales keep consuming the voucher, including after a refund.
+        where: {
+          saleLine: {
+            sale: {
+              NOT: { status: 'VOID', tenders: { none: {} }, events: { some: { kind: 'VOIDED' } } },
+            },
+          },
+        },
+        select: { id: true },
+        take: 1,
+      },
+    },
+  });
+  if (!capture) throw new PharmacySaleError('VOUCHER_NOT_ELIGIBLE');
+  if (capture.voucherRedemptions.length) throw new PharmacySaleError('VOUCHER_ALREADY_REDEEMED');
+  return { captureId: capture.id, customerId };
 }
 
 export function priceMixedLotAllocation(
@@ -251,6 +316,7 @@ type AddSaleLineInput = {
   canonicalUnitsPerSaleUnit: number;
   discountKind?: 'DISCOUNT' | 'PROMOTION' | 'COMPLIMENTARY';
   discountMinor?: number;
+  voucherCampaignId?: string;
   approvedByUserId?: string;
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
@@ -310,6 +376,21 @@ async function addSaleLineWithAllocation(
     where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
+  const discountMinor = input.discountMinor ?? 0;
+  // Ordinary approved promotions remain available without a campaign. A voucher
+  // must use the promotional path and also pass the stricter campaign checks.
+  if (input.voucherCampaignId && input.discountKind !== 'PROMOTION')
+    throw new PharmacySaleError('VOUCHER_NOT_ELIGIBLE');
+  const voucher = input.voucherCampaignId
+    ? await assertVoucherEligibility(
+        db,
+        scope,
+        input.voucherCampaignId,
+        medicine.productFamily,
+        sale.customerId,
+        discountMinor
+      )
+    : null;
   const allocationInput = {
     medicineId: input.medicineId,
     requiredUnits: canonicalUnits,
@@ -348,7 +429,6 @@ async function addSaleLineWithAllocation(
     input.quantity,
     input.canonicalUnitsPerSaleUnit
   );
-  const discountMinor = input.discountMinor ?? 0;
   validateDiscount({
     regulated: medicine.rx || medicine.restricted || medicine.controlled,
     discountMinor,
@@ -380,6 +460,26 @@ async function addSaleLineWithAllocation(
       idempotencyKey: input.idempotencyKey,
     },
   });
+  if (voucher && input.voucherCampaignId) {
+    try {
+      await db.pharmacyVoucherRedemption.create({
+        data: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          campaignId: input.voucherCampaignId,
+          captureId: voucher.captureId,
+          customerId: voucher.customerId,
+          saleLineId: line.id,
+          discountMinor,
+          redeemedByUserId: scope.actorId,
+        },
+      });
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002')
+        throw new PharmacySaleError('VOUCHER_ALREADY_REDEEMED');
+      throw error;
+    }
+  }
   const allocationDiscountMinors = apportionDiscount(discountMinor, allocationGrossMinors);
   await Promise.all(
     allocation.allocations.map((part, index) =>

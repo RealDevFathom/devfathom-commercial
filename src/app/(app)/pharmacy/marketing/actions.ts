@@ -140,7 +140,7 @@ export async function marketingAction(
       case 'approve':
         if (form.get('reviewed') !== 'on')
           return { error: true, message: 'Confirm you reviewed the campaign.' };
-        await caller.approve(target);
+        await caller.approve({ ...target, ...(text('pin') ? { pin: text('pin') } : {}) });
         message = 'Campaign approved. Preview the audience before capture.';
         break;
       case 'preview': {

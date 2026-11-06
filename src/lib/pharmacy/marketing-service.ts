@@ -5,10 +5,19 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
+import {
+  clearLockout,
+  isLockedOut,
+  registerFailedAttempt,
+  verifyOperatorCredential,
+} from '@/lib/restaurant/operator-credentials';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
 export const marketingCampaignInput = marketingScopeInput.extend({ campaignId: id }).strict();
+export const marketingApprovalInput = marketingCampaignInput
+  .extend({ pin: z.string().regex(/^\d{4,8}$/).optional() })
+  .strict();
 const rule = z
   .object({
     field: z.enum(['receiptCount', 'daysSinceLastReceipt']),
@@ -23,6 +32,17 @@ const quietHours = z
 const frequencyCap = z
   .object({ max: z.number().int().min(1).max(10), windowDays: z.number().int().min(1).max(90) })
   .strict();
+export const VOUCHER_FOOTER = 'Medicines excluded / Adviyaat shamil nahin';
+const eligibleCategoryAllowlist = z
+  .array(z.literal('FRONT_SHOP'))
+  .min(1)
+  .max(1)
+  .default(['FRONT_SHOP']);
+
+export function renderMarketingBody(body: string, voucherEnabled: boolean) {
+  if (!voucherEnabled || body.includes(VOUCHER_FOOTER)) return body;
+  return `${body}\n\n${VOUCHER_FOOTER}`;
+}
 export const marketingDraftInput = marketingScopeInput
   .extend({
     name: z.string().trim().min(1).max(100),
@@ -32,8 +52,20 @@ export const marketingDraftInput = marketingScopeInput
     quietHours,
     frequencyCap,
     promotesRegulatedItem: z.literal(false),
+    voucherEnabled: z.boolean().default(false),
+    voucherDiscountMinor: z.number().int().positive().max(10_000_000).nullable().default(null),
+    eligibleCategoryAllowlist,
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.voucherEnabled !== (value.voucherDiscountMinor !== null))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['voucherDiscountMinor'],
+        message:
+          'Voucher campaigns require one fixed positive discount; other campaigns cannot set it.',
+      });
+  });
 export const marketingTemplateInput = marketingScopeInput
   .extend({
     name: z.string().trim().min(1).max(100),
@@ -121,6 +153,9 @@ export async function createMarketingDraft(
       quietHours: input.quietHours,
       frequencyCap: input.frequencyCap,
       promotesRegulatedItem: false,
+      voucherEnabled: input.voucherEnabled,
+      voucherDiscountMinor: input.voucherDiscountMinor,
+      eligibleCategoryAllowlist: input.eligibleCategoryAllowlist,
       status: 'DRAFT',
     },
   });
@@ -150,20 +185,86 @@ export async function reviewMarketingCampaign(
   };
 }
 
+/**
+ * Runs owner-PIN verification in a transaction that commits on its own. The tRPC
+ * request transaction rolls back when a refusal is raised, so a failed-attempt
+ * counter written there would vanish and the lockout could never trip.
+ */
+export type CredentialTransaction = <T>(run: (db: ScopedDb) => Promise<T>) => Promise<T>;
+
+/** Verify the acting owner's own PIN; returns the credential id, or null on refusal. */
+export async function verifyOwnerApprovalPin(
+  db: ScopedDb,
+  scope: MarketingScope,
+  pin: string,
+  now: Date
+): Promise<string | null> {
+  // Self-approval is allowed, but another person's PIN cannot authenticate this owner.
+  // NO KEY UPDATE serializes attempts without waiting on the key-share lock an approved
+  // campaign's foreign key holds in a still-open request transaction.
+  await db.$queryRaw`SELECT c.id FROM restaurant_operator_credentials c JOIN restaurant_staff_profiles s ON s.id=c."staffProfileId" AND s."organizationId"=c."organizationId" WHERE c."organizationId"=${scope.organizationId} AND s."userId"=${scope.actorId} AND c.type='PIN' AND c."revokedAt" IS NULL AND c."deviceId" IS NULL FOR NO KEY UPDATE OF c`;
+  const credential = await db.restaurantOperatorCredential.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      type: 'PIN',
+      revokedAt: null,
+      deviceId: null,
+      staffProfile: {
+        organizationId: scope.organizationId,
+        status: 'ACTIVE',
+        userId: scope.actorId,
+        user: { organizationId: scope.organizationId, status: 'ACTIVE', role: 'ADMIN' },
+      },
+    },
+  });
+  if (!credential || isLockedOut(credential, now)) return null;
+  if (!(await verifyOperatorCredential('PIN', pin, credential.credentialHash))) {
+    await db.restaurantOperatorCredential.update({
+      where: { id: credential.id },
+      data: registerFailedAttempt(credential, now),
+    });
+    return null;
+  }
+  await db.restaurantOperatorCredential.update({
+    where: { id: credential.id },
+    data: clearLockout(),
+  });
+  return credential.id;
+}
+
 export async function approveMarketingCampaign(
   db: ScopedDb,
   scope: MarketingScope,
   campaignId: string,
-  now = new Date()
+  now = new Date(),
+  pin?: string,
+  credentialTransaction: CredentialTransaction = (run) => run(db)
 ) {
+  await db.$queryRaw`SELECT id FROM pharmacy_campaigns WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${campaignId} FOR UPDATE`;
   const { campaign } = await reviewMarketingCampaign(db, scope, campaignId);
+  if (campaign.status !== 'DRAFT') throw new MarketingWorkflowError('Only a draft can be approved.');
   if (campaign.promotesRegulatedItem)
     throw new MarketingWorkflowError('Regulated outreach is unavailable.');
   quietHours.parse(campaign.quietHours);
   frequencyCap.parse(campaign.frequencyCap);
+  let ownerApprovalPinCredentialId: string | null = null;
+  if (campaign.voucherEnabled) {
+    const blocked = { blocked: 'Enter your owner PIN to approve monetary vouchers.' };
+    if (!pin || !/^\d{4,8}$/.test(pin)) return blocked;
+    // The failed-attempt counter commits independently of this approval transaction.
+    ownerApprovalPinCredentialId = await credentialTransaction((credentialDb) =>
+      verifyOwnerApprovalPin(credentialDb, scope, pin, now)
+    );
+    if (!ownerApprovalPinCredentialId) return blocked;
+  }
   const result = await db.pharmacyCampaign.updateMany({
     where: { ...whereScope(scope), id: campaignId, status: 'DRAFT' },
-    data: { status: 'APPROVED', ownerApprovedByUserId: scope.actorId, ownerApprovedAt: now },
+    data: {
+      status: 'APPROVED',
+      ownerApprovedByUserId: scope.actorId,
+      ownerApprovedAt: now,
+      ownerApprovalPinCredentialId,
+    },
   });
   if (result.count !== 1) throw new MarketingWorkflowError('Only a draft can be approved.');
   return { status: 'APPROVED' as const };
@@ -177,7 +278,8 @@ export function requireCaptureWindow(
   if (
     !['APPROVED', 'CAPTURED'].includes(campaign.status) ||
     !campaign.ownerApprovedByUserId ||
-    !campaign.ownerApprovedAt
+    !campaign.ownerApprovedAt ||
+    (campaign.voucherEnabled && !campaign.ownerApprovalPinCredentialId)
   )
     throw new MarketingWorkflowError('Owner approval is required before capture.');
   if (campaign.promotesRegulatedItem)
@@ -255,6 +357,8 @@ async function evaluateCampaign(
       Prisma.sql`SELECT id FROM pharmacy_campaigns WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId} AND id = ${campaignId} FOR UPDATE`
     );
   const { campaign, template, rules } = await reviewMarketingCampaign(db, scope, campaignId);
+  if (campaign.voucherEnabled && !campaign.ownerApprovalPinCredentialId)
+    throw new MarketingWorkflowError('Owner approval with a PIN is required before capture.');
   if (persist && campaign.status === 'CAPTURED')
     return {
       prepared: await db.pharmacyCampaignCapture.count({
@@ -262,7 +366,7 @@ async function evaluateCampaign(
       }),
       exclusions: {} as Record<string, number>,
       replay: true,
-      body: template.body,
+      body: renderMarketingBody(template.body, campaign.voucherEnabled),
     };
   requireCaptureWindow(campaign, scope, now);
   const cap = frequencyCap.parse(campaign.frequencyCap);
@@ -349,7 +453,12 @@ async function evaluateCampaign(
   }
   if (persist)
     await db.pharmacyCampaign.update({ where: { id: campaignId }, data: { status: 'CAPTURED' } });
-  return { prepared, exclusions, replay: false, body: template.body };
+  return {
+    prepared,
+    exclusions,
+    replay: false,
+    body: renderMarketingBody(template.body, campaign.voucherEnabled),
+  };
 }
 
 export const previewMarketingCampaign = (
