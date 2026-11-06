@@ -1,0 +1,1207 @@
+diff --git a/prisma/migrations/20261106110000_pharmacy_allocation_price_evidence/migration.sql b/prisma/migrations/20261106110000_pharmacy_allocation_price_evidence/migration.sql
+new file mode 100644
+index 00000000..1be571e3
+--- /dev/null
++++ b/prisma/migrations/20261106110000_pharmacy_allocation_price_evidence/migration.sql
+@@ -0,0 +1,69 @@
++-- Additive evidence only. It does not enable bill-line editing or stock release.
++-- Existing allocations are intentionally not backfilled from mutable lot data.
++CREATE TABLE "pharmacy_allocation_price_evidence" (
++  "organizationId" TEXT NOT NULL,
++  "branchId" TEXT NOT NULL,
++  "allocationId" TEXT NOT NULL,
++  "ordinal" INTEGER NOT NULL CHECK ("ordinal" >= 0),
++  "originalUnits" INTEGER NOT NULL CHECK ("originalUnits" > 0),
++  "priceNumerator" INTEGER NOT NULL CHECK ("priceNumerator" >= 0),
++  "denominator" INTEGER NOT NULL CHECK ("denominator" > 0),
++  "remainder" INTEGER NOT NULL CHECK ("remainder" >= 0 AND "remainder" < "denominator"),
++  "grossMinor" INTEGER NOT NULL CHECK ("grossMinor" >= 0),
++  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  PRIMARY KEY ("organizationId", "allocationId"),
++  FOREIGN KEY ("organizationId", "allocationId")
++    REFERENCES "pharmacy_sale_line_allocations" ("organizationId", "id") ON DELETE RESTRICT,
++  CHECK ((("remainder"::bigint + "originalUnits"::bigint * "priceNumerator") / "denominator") = "grossMinor")
++);
++
++ALTER TABLE "pharmacy_allocation_price_evidence" ENABLE ROW LEVEL SECURITY;
++ALTER TABLE "pharmacy_allocation_price_evidence" FORCE ROW LEVEL SECURITY;
++CREATE POLICY tenant_isolation ON "pharmacy_allocation_price_evidence"
++  USING ("organizationId" = current_setting('app.current_organization_id', true))
++  WITH CHECK ("organizationId" = current_setting('app.current_organization_id', true));
++
++CREATE FUNCTION pharmacy_guard_allocation_price_evidence() RETURNS trigger LANGUAGE plpgsql AS $$
++DECLARE allocation RECORD; line RECORD; lot RECORD; movement RECORD; previous_count bigint; previous_weight bigint;
++BEGIN
++  -- Snapshot only in the allocating transaction: later reconstruction would
++  -- guess at historical prices or at rounding that was never recorded.
++  SELECT a.*, a.xmin::text::bigint AS insert_xid INTO allocation
++    FROM pharmacy_sale_line_allocations a
++    WHERE a."organizationId" = NEW."organizationId" AND a."id" = NEW."allocationId";
++  IF NOT FOUND OR allocation."branchId" <> NEW."branchId" OR
++     allocation.insert_xid <> (txid_current() % 4294967296) OR
++     allocation."canonicalUnits" <> NEW."originalUnits" OR
++     allocation."grossMinor" IS DISTINCT FROM NEW."grossMinor" THEN
++    RAISE EXCEPTION 'ALLOCATION_PRICE_EVIDENCE_INVALID' USING ERRCODE = '23514';
++  END IF;
++  SELECT *, xmin::text::bigint AS insert_xid INTO line FROM pharmacy_sale_lines
++    WHERE "organizationId" = NEW."organizationId" AND "branchId" = NEW."branchId"
++      AND id = allocation."saleLineId" FOR UPDATE;
++  SELECT * INTO lot FROM pharmacy_inventory_lots
++    WHERE "organizationId" = NEW."organizationId" AND "branchId" = NEW."branchId"
++      AND id = allocation."inventoryLotId" FOR SHARE;
++  SELECT * INTO movement FROM pharmacy_stock_movements WHERE "organizationId" = NEW."organizationId"
++    AND "branchId" = NEW."branchId" AND id = allocation."stockMovementId";
++  SELECT count(*), coalesce(sum(e."originalUnits"::bigint * e."priceNumerator"), 0)
++    INTO previous_count, previous_weight FROM pharmacy_allocation_price_evidence e
++    JOIN pharmacy_sale_line_allocations a ON a."organizationId" = e."organizationId" AND a.id = e."allocationId"
++    WHERE e."organizationId" = NEW."organizationId" AND a."saleLineId" = line.id;
++  IF line.id IS NULL OR lot.id IS NULL OR movement.id IS NULL OR
++     line.insert_xid <> (txid_current() % 4294967296) OR
++     previous_count <> NEW."ordinal" OR
++     NEW."remainder" <> previous_weight % NEW."denominator" OR
++     movement."idempotencyKey" <> ('sale:' || line."idempotencyKey" || ':' || NEW."ordinal"::text) OR
++     NEW."denominator" <> line."canonicalUnitsPerSaleUnit" OR
++     NEW."denominator" > lot."unitsPerPack" OR
++     NEW."priceNumerator" <> (lot."printedMrpMinor"::bigint * NEW."denominator" / lot."unitsPerPack") THEN
++    RAISE EXCEPTION 'ALLOCATION_PRICE_EVIDENCE_INVALID' USING ERRCODE = '23514';
++  END IF;
++  RETURN NEW;
++END $$;
++CREATE TRIGGER pharmacy_allocation_price_evidence_guard
++  BEFORE INSERT ON pharmacy_allocation_price_evidence
++  FOR EACH ROW EXECUTE FUNCTION pharmacy_guard_allocation_price_evidence();
++CREATE TRIGGER pharmacy_allocation_price_evidence_immutable
++  BEFORE UPDATE OR DELETE ON pharmacy_allocation_price_evidence
++  FOR EACH ROW EXECUTE FUNCTION pharmacy_reject_mutation();
+diff --git a/prisma/migrations/20261106120000_pharmacy_allocation_partial_release/migration.sql b/prisma/migrations/20261106120000_pharmacy_allocation_partial_release/migration.sql
+new file mode 100644
+index 00000000..73819e32
+--- /dev/null
++++ b/prisma/migrations/20261106120000_pharmacy_allocation_partial_release/migration.sql
+@@ -0,0 +1,161 @@
++-- Review-only until all readers and the active-line contract are integrated.
++-- Requires pharmacy_assert_no_payment_attempt and the active-line migration.
++CREATE TABLE pharmacy_sale_line_edit_requests (
++  "organizationId" TEXT NOT NULL,
++  "branchId" TEXT NOT NULL,
++  "saleId" TEXT NOT NULL,
++  "saleLineId" TEXT NOT NULL,
++  "idempotencyKey" TEXT NOT NULL CHECK(length("idempotencyKey") BETWEEN 1 AND 160),
++  "actorId" TEXT NOT NULL,
++  "fromQuantity" INTEGER NOT NULL CHECK("fromQuantity">0),
++  "toQuantity" INTEGER NOT NULL CHECK("toQuantity">0 AND "toQuantity"<"fromQuantity"),
++  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  PRIMARY KEY ("organizationId", "idempotencyKey"),
++  FOREIGN KEY ("organizationId", "saleLineId") REFERENCES pharmacy_sale_lines ("organizationId", id) ON DELETE RESTRICT
++);
++ALTER TABLE pharmacy_sale_line_edit_requests ENABLE ROW LEVEL SECURITY;
++ALTER TABLE pharmacy_sale_line_edit_requests FORCE ROW LEVEL SECURITY;
++CREATE POLICY tenant_isolation ON pharmacy_sale_line_edit_requests
++ USING ("organizationId"=current_setting('app.current_organization_id',true))
++ WITH CHECK ("organizationId"=current_setting('app.current_organization_id',true));
++CREATE TRIGGER pharmacy_line_edit_request_immutable BEFORE UPDATE OR DELETE ON pharmacy_sale_line_edit_requests
++ FOR EACH ROW EXECUTE FUNCTION pharmacy_reject_mutation();
++
++CREATE TABLE pharmacy_allocation_partial_releases (
++  id TEXT PRIMARY KEY,
++  "organizationId" TEXT NOT NULL,
++  "branchId" TEXT NOT NULL,
++  "allocationId" TEXT NOT NULL,
++  "stockMovementId" TEXT NOT NULL,
++  "requestKey" TEXT NOT NULL,
++  "idempotencyKey" TEXT NOT NULL CHECK (length("idempotencyKey") BETWEEN 1 AND 160),
++  "actorId" TEXT NOT NULL CHECK (length("actorId") > 0),
++  "canonicalUnits" INTEGER NOT NULL CHECK ("canonicalUnits" > 0),
++  "grossMinor" INTEGER NOT NULL CHECK ("grossMinor" >= 0),
++  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  UNIQUE ("organizationId", "idempotencyKey"),
++  UNIQUE ("organizationId", "stockMovementId"),
++  FOREIGN KEY ("organizationId", "allocationId") REFERENCES
++    pharmacy_allocation_price_evidence ("organizationId", "allocationId") ON DELETE RESTRICT,
++  FOREIGN KEY ("organizationId", "requestKey") REFERENCES
++    pharmacy_sale_line_edit_requests ("organizationId", "idempotencyKey") ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
++  FOREIGN KEY ("organizationId", "stockMovementId") REFERENCES
++    pharmacy_stock_movements ("organizationId", id) ON DELETE RESTRICT
++);
++CREATE INDEX pharmacy_partial_release_allocation ON pharmacy_allocation_partial_releases ("organizationId", "allocationId");
++ALTER TABLE pharmacy_allocation_partial_releases ENABLE ROW LEVEL SECURITY;
++ALTER TABLE pharmacy_allocation_partial_releases FORCE ROW LEVEL SECURITY;
++CREATE POLICY tenant_isolation ON pharmacy_allocation_partial_releases
++ USING ("organizationId"=current_setting('app.current_organization_id',true))
++ WITH CHECK ("organizationId"=current_setting('app.current_organization_id',true));
++
++CREATE FUNCTION pharmacy_guard_allocation_partial_release() RETURNS trigger LANGUAGE plpgsql AS $$
++DECLARE a RECORD; snap RECORD; original RECORD; correction RECORD; line RECORD; bill RECORD;
++  already_units bigint; already_sealed bigint; already_loose bigint; remaining bigint; released_gross bigint;
++BEGIN
++ SELECT * INTO a FROM pharmacy_sale_line_allocations WHERE "organizationId"=NEW."organizationId" AND id=NEW."allocationId";
++ IF NOT FOUND OR a."branchId"<>NEW."branchId" THEN RAISE EXCEPTION 'RELEASE_SCOPE_INVALID'; END IF;
++ SELECT * INTO line FROM pharmacy_sale_lines WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId" AND id=a."saleLineId";
++ IF NOT FOUND THEN RAISE EXCEPTION 'RELEASE_LINE_INVALID'; END IF;
++ PERFORM pharmacy_assert_no_payment_attempt(NEW."organizationId",NEW."branchId",line."saleId");
++ SELECT * INTO bill FROM pharmacy_sales WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId" AND id=line."saleId" FOR UPDATE;
++ SELECT * INTO line FROM pharmacy_sale_lines WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId" AND id=a."saleLineId" FOR UPDATE;
++ -- Paid and partially settled sales remain blocked even when the attempt gate succeeds.
++ IF bill.status::text<>'OPEN' OR bill."receiptNumber" IS NOT NULL OR bill."completedAt" IS NOT NULL OR line."removedAt" IS NOT NULL OR
++    EXISTS(SELECT 1 FROM pharmacy_tenders WHERE "organizationId"=NEW."organizationId" AND "saleId"=bill.id) OR
++    EXISTS(SELECT 1 FROM pharmacy_refunds WHERE "organizationId"=NEW."organizationId" AND "saleId"=bill.id) OR
++    EXISTS(SELECT 1 FROM pharmacy_customer_orders WHERE "organizationId"=NEW."organizationId" AND "counterSaleId"=bill.id) OR
++    EXISTS(SELECT 1 FROM pharmacy_medicines WHERE "organizationId"=NEW."organizationId" AND id=line."medicineId" AND (rx OR restricted OR controlled OR "highAlert")) OR
++    EXISTS(SELECT 1 FROM pharmacy_sale_return_lines WHERE "organizationId"=NEW."organizationId" AND "saleLineId"=line.id) OR
++    EXISTS(SELECT 1 FROM pharmacy_unidentified_return_holds WHERE "organizationId"=NEW."organizationId" AND "saleLineId"=line.id) OR
++    EXISTS(SELECT 1 FROM pharmacy_pharmacist_review_items WHERE "organizationId"=NEW."organizationId" AND "saleLineId"=line.id) OR
++    EXISTS(SELECT 1 FROM pharmacy_substitution_records WHERE "organizationId"=NEW."organizationId" AND "saleLineId"=line.id) OR
++    EXISTS(SELECT 1 FROM pharmacy_prescription_fills WHERE "organizationId"=NEW."organizationId" AND "idempotencyKey" IN ('rx-reference:'||line.id,'controlled:'||line.id)) OR
++    line."prescriptionLineId" IS NOT NULL THEN
++   RAISE EXCEPTION 'RELEASE_NOT_ALLOWED';
++ END IF;
++ IF NULLIF(current_setting('app.current_user_id',true),'') IS DISTINCT FROM NEW."actorId" THEN RAISE EXCEPTION 'RELEASE_ACTOR_INVALID'; END IF;
++ SELECT * INTO snap FROM pharmacy_allocation_price_evidence WHERE "organizationId"=NEW."organizationId" AND "allocationId"=a.id;
++ IF NOT FOUND THEN RAISE EXCEPTION 'RELEASE_PRICE_EVIDENCE_MISSING'; END IF;
++ SELECT * INTO original FROM pharmacy_stock_movements WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId" AND id=a."stockMovementId";
++ SELECT *, xmin::text::bigint AS insert_xid INTO correction FROM pharmacy_stock_movements WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId" AND id=NEW."stockMovementId";
++ IF original.id IS NULL OR correction.id IS NULL OR original.kind::text<>'SALE' OR original.disposition::text<>'AVAILABLE' OR
++    original."inventoryLotId"<>a."inventoryLotId" OR original."stockLocationId"<>a."stockLocationId" OR
++    original."quantityUnits"<>-a."canonicalUnits" OR correction.kind::text<>'ADJUSTMENT' OR correction."reversesMovementId" IS NOT NULL OR
++    correction."inventoryLotId"<>original."inventoryLotId" OR correction."stockLocationId"<>original."stockLocationId" OR
++    correction.disposition<>original.disposition OR correction."quantityUnits"<>NEW."canonicalUnits" OR
++    correction.insert_xid <> (txid_current() % 4294967296) OR
++    correction."idempotencyKey"<>('partial-release:'||NEW."idempotencyKey") OR
++    correction."sealedPackDelta"<0 OR correction."looseUnitDelta"<0 OR correction."actorId"<>NEW."actorId" OR
++    EXISTS(SELECT 1 FROM pharmacy_stock_movements WHERE "organizationId"=NEW."organizationId" AND "reversesMovementId"=original.id) THEN
++   RAISE EXCEPTION 'RELEASE_MOVEMENT_INVALID';
++ END IF;
++ SELECT coalesce(sum(r."canonicalUnits"),0),coalesce(sum(m."sealedPackDelta"),0),coalesce(sum(m."looseUnitDelta"),0)
++ INTO already_units,already_sealed,already_loose FROM pharmacy_allocation_partial_releases r
++ JOIN pharmacy_stock_movements m ON m."organizationId"=r."organizationId" AND m.id=r."stockMovementId"
++ WHERE r."organizationId"=NEW."organizationId" AND r."allocationId"=a.id;
++ remaining:=snap."originalUnits"-already_units;
++ IF NEW."canonicalUnits">remaining OR already_sealed+correction."sealedPackDelta">-original."sealedPackDelta" OR
++    already_loose+correction."looseUnitDelta">-original."looseUnitDelta" THEN RAISE EXCEPTION 'RELEASE_EXCEEDS_ALLOCATION'; END IF;
++ IF EXISTS(SELECT 1 FROM pharmacy_allocation_price_evidence later
++   JOIN pharmacy_sale_line_allocations la ON la."organizationId"=later."organizationId" AND la.id=later."allocationId"
++   WHERE later."organizationId"=NEW."organizationId" AND la."saleLineId"=line.id AND later.ordinal>snap.ordinal
++     AND later."originalUnits">coalesce((SELECT sum(r."canonicalUnits") FROM pharmacy_allocation_partial_releases r WHERE r."organizationId"=later."organizationId" AND r."allocationId"=later."allocationId"),0))
++ THEN RAISE EXCEPTION 'RELEASE_ORDER_INVALID'; END IF;
++ released_gross:=((snap.remainder::bigint+remaining*snap."priceNumerator")/snap.denominator)-
++   ((snap.remainder::bigint+(remaining-NEW."canonicalUnits")*snap."priceNumerator")/snap.denominator);
++ IF NEW."grossMinor"<>released_gross THEN RAISE EXCEPTION 'RELEASE_MONEY_INVALID'; END IF;
++ RETURN NEW;
++END $$;
++CREATE TRIGGER pharmacy_partial_release_guard BEFORE INSERT ON pharmacy_allocation_partial_releases
++ FOR EACH ROW EXECUTE FUNCTION pharmacy_guard_allocation_partial_release();
++CREATE TRIGGER pharmacy_partial_release_immutable BEFORE UPDATE OR DELETE ON pharmacy_allocation_partial_releases
++ FOR EACH ROW EXECUTE FUNCTION pharmacy_reject_mutation();
++
++CREATE FUNCTION pharmacy_guard_line_edit_request() RETURNS trigger LANGUAGE plpgsql AS $$
++DECLARE line RECORD; released bigint;
++BEGIN
++ SELECT * INTO line FROM pharmacy_sale_lines WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId"
++   AND "saleId"=NEW."saleId" AND id=NEW."saleLineId";
++ SELECT coalesce(sum(r."canonicalUnits"),0) INTO released FROM pharmacy_allocation_partial_releases r
++ JOIN pharmacy_sale_line_allocations a ON a."organizationId"=r."organizationId" AND a.id=r."allocationId"
++ WHERE r."organizationId"=NEW."organizationId" AND r."branchId"=NEW."branchId" AND r."requestKey"=NEW."idempotencyKey"
++   AND r."actorId"=NEW."actorId" AND a."saleLineId"=NEW."saleLineId";
++ IF line.id IS NULL OR line.quantity<>NEW."toQuantity" OR
++    NULLIF(current_setting('app.current_user_id',true),'') IS DISTINCT FROM NEW."actorId" OR
++    released<>(NEW."fromQuantity"-NEW."toQuantity")::bigint*line."canonicalUnitsPerSaleUnit" THEN
++   RAISE EXCEPTION 'LINE_EDIT_REQUEST_MISMATCH';
++ END IF;
++ RETURN NEW;
++END $$;
++CREATE TRIGGER pharmacy_line_edit_request_guard BEFORE INSERT ON pharmacy_sale_line_edit_requests
++ FOR EACH ROW EXECUTE FUNCTION pharmacy_guard_line_edit_request();
++
++-- A release may only commit with a line whose canonical units and undiscounted
++-- gross match the remaining snapshot evidence. The mutation clears approval.
++CREATE FUNCTION pharmacy_check_release_line_at_commit() RETURNS trigger LANGUAGE plpgsql AS $$
++DECLARE line RECORD; totals RECORD;
++BEGIN
++ SELECT l.* INTO line FROM pharmacy_sale_lines l JOIN pharmacy_sale_line_allocations a ON a."organizationId"=l."organizationId" AND a."saleLineId"=l.id
++   WHERE a."organizationId"=NEW."organizationId" AND a.id=NEW."allocationId";
++ SELECT coalesce(sum(e."originalUnits"-coalesce(r.units,0)),0) AS units,
++   coalesce(sum((e.remainder::bigint+(e."originalUnits"-coalesce(r.units,0))*e."priceNumerator")/e.denominator),0) AS gross,
++   count(*) AS snapshots
++ INTO totals FROM pharmacy_sale_line_allocations a JOIN pharmacy_allocation_price_evidence e ON e."organizationId"=a."organizationId" AND e."allocationId"=a.id
++ LEFT JOIN LATERAL (SELECT sum("canonicalUnits") AS units FROM pharmacy_allocation_partial_releases WHERE "organizationId"=a."organizationId" AND "allocationId"=a.id) r ON true
++ WHERE a."organizationId"=NEW."organizationId" AND a."saleLineId"=line.id;
++ IF NOT EXISTS(SELECT 1 FROM pharmacy_sale_line_edit_requests q WHERE q."organizationId"=NEW."organizationId"
++    AND q."idempotencyKey"=NEW."requestKey" AND q."branchId"=NEW."branchId" AND q."saleId"=line."saleId"
++    AND q."saleLineId"=line.id AND q."actorId"=NEW."actorId") OR
++    totals.snapshots<>(SELECT count(*) FROM pharmacy_sale_line_allocations WHERE "organizationId"=NEW."organizationId" AND "saleLineId"=line.id) OR
++    totals.units<>line."canonicalUnits" OR totals.gross<>line."grossMinor" OR line."discountMinor"<>0 OR
++    line.quantity <= 0 OR line."canonicalUnitsPerSaleUnit" <= 0 OR
++    line.quantity::bigint * line."canonicalUnitsPerSaleUnit" <> line."canonicalUnits" OR
++    line."unitPriceMinor" <> (line."grossMinor" / line.quantity) OR
++    line."discountKind" IS NOT NULL OR line."approvedByUserId" IS NOT NULL OR line."approvalPolicy" IS NOT NULL THEN
++   RAISE EXCEPTION 'RELEASE_LINE_MISMATCH';
++ END IF;
++ RETURN NULL;
++END $$;
++CREATE CONSTRAINT TRIGGER pharmacy_release_line_consistency AFTER INSERT ON pharmacy_allocation_partial_releases
++ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION pharmacy_check_release_line_at_commit();
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index c271bee8..1ebbf282 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -1491,6 +1491,7 @@ model PharmacySaleLine {
+   allocations               PharmacySaleLineAllocation[]
+   returnLines               PharmacySaleReturnLine[]
+   unidentifiedReturnHolds   PharmacyUnidentifiedReturnHold[]
++  editRequests              PharmacySaleLineEditRequest[]
+ 
+   @@unique([organizationId, id])
+   @@unique([organizationId, branchId, id])
+@@ -1499,6 +1500,23 @@ model PharmacySaleLine {
+   @@map("pharmacy_sale_lines")
+ }
+ 
++model PharmacySaleLineEditRequest {
++  organizationId String
++  branchId       String
++  saleId         String
++  saleLineId     String
++  idempotencyKey String
++  actorId        String
++  fromQuantity   Int
++  toQuantity     Int
++  createdAt      DateTime         @default(now()) @db.Timestamp(3)
++  saleLine       PharmacySaleLine @relation(fields: [organizationId, saleLineId], references: [organizationId, id], onDelete: Restrict)
++  releases       PharmacyAllocationPartialRelease[]
++
++  @@id([organizationId, idempotencyKey])
++  @@map("pharmacy_sale_line_edit_requests")
++}
++
+ model PharmacySaleLineAllocation {
+   id              String               @id @default(cuid())
+   organizationId  String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+@@ -1514,6 +1532,7 @@ model PharmacySaleLineAllocation {
+   createdAt       DateTime             @default(now())
+   saleLine        PharmacySaleLine     @relation(fields: [organizationId, saleLineId], references: [organizationId, id], onDelete: Restrict)
+   lot             PharmacyInventoryLot @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
++  priceEvidence   PharmacyAllocationPriceEvidence?
+ 
+   @@unique([organizationId, id])
+   @@unique([organizationId, stockMovementId])
+@@ -1521,6 +1540,48 @@ model PharmacySaleLineAllocation {
+   @@map("pharmacy_sale_line_allocations")
+ }
+ 
++/// Original per-allocation pricing inputs, captured in the allocating transaction.
++model PharmacyAllocationPriceEvidence {
++  organizationId String
++  branchId       String
++  allocationId   String
++  ordinal        Int
++  originalUnits  Int
++  priceNumerator Int
++  denominator    Int
++  remainder      Int
++  grossMinor     Int
++  createdAt      DateTime                   @default(now()) @db.Timestamp(3)
++  allocation     PharmacySaleLineAllocation @relation(fields: [organizationId, allocationId], references: [organizationId, id], onDelete: Restrict)
++  releases       PharmacyAllocationPartialRelease[]
++
++  @@id([organizationId, allocationId])
++  @@map("pharmacy_allocation_price_evidence")
++}
++
++/// Append-only release evidence; each row names one compensating stock movement.
++model PharmacyAllocationPartialRelease {
++  id             String                          @id
++  organizationId String
++  branchId       String
++  allocationId   String
++  stockMovementId String
++  requestKey     String
++  idempotencyKey String
++  actorId        String
++  canonicalUnits Int
++  grossMinor     Int
++  createdAt      DateTime                        @default(now()) @db.Timestamp(3)
++  priceEvidence  PharmacyAllocationPriceEvidence @relation(fields: [organizationId, allocationId], references: [organizationId, allocationId], onDelete: Restrict)
++  request        PharmacySaleLineEditRequest     @relation(fields: [organizationId, requestKey], references: [organizationId, idempotencyKey], onDelete: Restrict)
++  stockMovement  PharmacyStockMovement           @relation(fields: [organizationId, stockMovementId], references: [organizationId, id], onDelete: Restrict)
++
++  @@unique([organizationId, idempotencyKey])
++  @@unique([organizationId, stockMovementId])
++  @@index([organizationId, allocationId], map: "pharmacy_partial_release_allocation")
++  @@map("pharmacy_allocation_partial_releases")
++}
++
+ model PharmacySaleEvent {
+   id             String                @id @default(cuid())
+   organizationId String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+@@ -2234,6 +2295,7 @@ model PharmacyStockMovement {
+   /// names, in the same lot, location and disposition, and each posting can be
+   /// reversed at most once.
+   reversesMovementId   String?
++  partialRelease       PharmacyAllocationPartialRelease?
+   occurredAt           DateTime                  @default(now())
+   createdAt            DateTime                  @default(now())
+ 
+diff --git a/src/lib/pharmacy/bill-line-allocation-plan.test.ts b/src/lib/pharmacy/bill-line-allocation-plan.test.ts
+new file mode 100644
+index 00000000..a7cec351
+--- /dev/null
++++ b/src/lib/pharmacy/bill-line-allocation-plan.test.ts
+@@ -0,0 +1,64 @@
++import { describe, expect, it } from 'vitest';
++import { planAllocationReduction } from './bill-line-allocation-plan';
++
++describe('bill-line allocation reduction planning', () => {
++  const rows = [
++    { allocationId: 'first', originalUnits: 3, remainingUnits: 3, priceNumerator: 100,
++      denominator: 3, remainder: 0, grossMinor: 100 },
++    { allocationId: 'second', originalUnits: 3, remainingUnits: 3, priceNumerator: 121,
++      denominator: 3, remainder: 0, grossMinor: 121 },
++  ];
++
++  it('releases newest units first and retains each lot’s original price', () => {
++    expect(planAllocationReduction(rows, 4)).toEqual({
++      releases: [{ allocationId: 'second', units: 2, grossMinor: 81 }],
++      retainedGrossMinor: 140,
++    });
++    expect(planAllocationReduction(rows, 2)).toEqual({
++      releases: [
++        { allocationId: 'second', units: 3, grossMinor: 121 },
++        { allocationId: 'first', units: 1, grossMinor: 34 },
++      ],
++      retainedGrossMinor: 66,
++    });
++  });
++
++  it('accounts for a prior partial release and the original rounding remainder', () => {
++    const row = { allocationId: 'a', originalUnits: 2, remainingUnits: 1,
++      priceNumerator: 4, denominator: 3, remainder: 2, grossMinor: 3 };
++    expect(planAllocationReduction([row], 1)).toEqual({ releases: [], retainedGrossMinor: 2 });
++  });
++
++  it('preserves money across successive partial reductions', () => {
++    const initial = planAllocationReduction(rows, 4);
++    const later = planAllocationReduction(
++      [rows[0]!, { ...rows[1]!, remainingUnits: 1 }],
++      2
++    );
++    const released = [...initial.releases, ...later.releases]
++      .reduce((sum, item) => sum + item.grossMinor, 0);
++    expect(released + later.retainedGrossMinor).toBe(221);
++    expect(later.releases).toEqual([
++      { allocationId: 'second', units: 1, grossMinor: 40 },
++      { allocationId: 'first', units: 1, grossMinor: 34 },
++    ]);
++  });
++
++  it('fails closed on invalid or incomplete price evidence and duplicate IDs', () => {
++    expect(() => planAllocationReduction([{ ...rows[0]!, grossMinor: 99 }], 1))
++      .toThrow('PRICE_EVIDENCE_INVALID');
++    expect(() => planAllocationReduction([rows[0]!, rows[0]!], 1))
++      .toThrow('PRICE_EVIDENCE_INVALID');
++    expect(() => planAllocationReduction(rows, 7)).toThrow('INVALID_TARGET');
++    expect(() => planAllocationReduction(rows, 0)).toThrow('INVALID_TARGET');
++  });
++
++  it('requires the original price snapshot because a rounded allocation total is ambiguous', () => {
++    const common = { allocationId: 'a', originalUnits: 3, remainingUnits: 3,
++      denominator: 10, remainder: 0, grossMinor: 1 };
++    const priceFour = planAllocationReduction([{ ...common, priceNumerator: 4 }], 2);
++    const priceFive = planAllocationReduction([{ ...common, priceNumerator: 5 }], 2);
++    expect(priceFour.retainedGrossMinor).toBe(0);
++    expect(priceFive.retainedGrossMinor).toBe(1);
++  });
++});
+diff --git a/src/lib/pharmacy/bill-line-allocation-plan.ts b/src/lib/pharmacy/bill-line-allocation-plan.ts
+new file mode 100644
+index 00000000..fdfd4945
+--- /dev/null
++++ b/src/lib/pharmacy/bill-line-allocation-plan.ts
+@@ -0,0 +1,73 @@
++/** Immutable pricing evidence for an allocation, ordered from oldest to newest.
++ * `remainder` is the cumulative pricing numerator modulo `denominator` at
++ * the start of this allocation. All values describe the original sale price,
++ * not the current catalogue or lot price.
++ */
++export type AllocationPriceEvidence = {
++  allocationId: string;
++  remainingUnits: number;
++  originalUnits: number;
++  priceNumerator: number;
++  denominator: number;
++  remainder: number;
++  grossMinor: number;
++};
++
++export type AllocationRelease = { allocationId: string; units: number; grossMinor: number };
++
++function whole(value: number, min: number): boolean {
++  return Number.isSafeInteger(value) && value >= min;
++}
++
++function grossForPrefix(row: AllocationPriceEvidence, units: number): number {
++  const value =
++    (BigInt(row.remainder) + BigInt(units) * BigInt(row.priceNumerator)) /
++    BigInt(row.denominator);
++  if (value > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('PRICE_EVIDENCE_INVALID');
++  return Number(value);
++}
++
++/**
++ * Plan a reduction without modifying the ledger. The caller must hold the sale
++ * lock, load authoritative evidence in allocation order, persist the releases
++ * atomically and verify stock, clinical and payment guards. This is not a sale
++ * mutation and must not be used to infer payment or authorization state.
++ */
++export function planAllocationReduction(
++  allocations: readonly AllocationPriceEvidence[],
++  targetCanonicalUnits: number
++): { releases: AllocationRelease[]; retainedGrossMinor: number } {
++  if (!whole(targetCanonicalUnits, 1) || !allocations.length)
++    throw new Error('INVALID_TARGET');
++  const ids = new Set<string>();
++  let currentUnits = 0;
++  for (const row of allocations) {
++    if (
++      !row.allocationId || ids.has(row.allocationId) || !whole(row.originalUnits, 1) ||
++      !whole(row.remainingUnits, 0) || row.remainingUnits > row.originalUnits ||
++      !whole(row.priceNumerator, 0) || !whole(row.denominator, 1) ||
++      !whole(row.remainder, 0) || row.remainder >= row.denominator ||
++      !whole(row.grossMinor, 0) || grossForPrefix(row, row.originalUnits) !== row.grossMinor
++    ) throw new Error('PRICE_EVIDENCE_INVALID');
++    ids.add(row.allocationId);
++    currentUnits += row.remainingUnits;
++    if (!Number.isSafeInteger(currentUnits)) throw new Error('INVALID_TARGET');
++  }
++  if (targetCanonicalUnits > currentUnits) throw new Error('INVALID_TARGET');
++  let toRelease = currentUnits - targetCanonicalUnits;
++  let retainedGrossMinor = 0;
++  const releases: AllocationRelease[] = [];
++  for (const row of [...allocations].reverse()) {
++    const released = Math.min(row.remainingUnits, toRelease);
++    const retained = row.remainingUnits - released;
++    if (released) releases.push({
++      allocationId: row.allocationId,
++      units: released,
++      grossMinor: grossForPrefix(row, row.remainingUnits) - grossForPrefix(row, retained),
++    });
++    retainedGrossMinor += grossForPrefix(row, retained);
++    if (!Number.isSafeInteger(retainedGrossMinor)) throw new Error('PRICE_EVIDENCE_INVALID');
++    toRelease -= released;
++  }
++  return { releases, retainedGrossMinor };
++}
+diff --git a/src/lib/pharmacy/bill-line-release-arrangement.test.ts b/src/lib/pharmacy/bill-line-release-arrangement.test.ts
+new file mode 100644
+index 00000000..ce5fd990
+--- /dev/null
++++ b/src/lib/pharmacy/bill-line-release-arrangement.test.ts
+@@ -0,0 +1,25 @@
++import { describe, expect, it } from 'vitest';
++import { planReleaseArrangement } from './bill-line-release-arrangement';
++
++describe('physical allocation release', () => {
++  it('restores the original loose and sealed arrangement', () => {
++    expect(planReleaseArrangement({ unitsPerPack: 10, sealedPacks: 2, looseUnits: 3 }, 13))
++      .toEqual({ sealedPacks: 1, looseUnits: 3 });
++    expect(planReleaseArrangement({ unitsPerPack: 10, sealedPacks: 2, looseUnits: 3 }, 23))
++      .toEqual({ sealedPacks: 2, looseUnits: 3 });
++  });
++
++  it('refuses to open a sealed pack or return more than was allocated', () => {
++    const remaining = { unitsPerPack: 10, sealedPacks: 1, looseUnits: 0 };
++    expect(() => planReleaseArrangement(remaining, 1)).toThrow('INVALID_RELEASE_ARRANGEMENT');
++    expect(() => planReleaseArrangement(remaining, 20)).toThrow('INVALID_RELEASE_ARRANGEMENT');
++    expect(() => planReleaseArrangement(remaining, 0)).toThrow('INVALID_RELEASE_ARRANGEMENT');
++  });
++
++  it('uses the remaining arrangement after previous releases', () => {
++    const first = planReleaseArrangement({ unitsPerPack: 10, sealedPacks: 2, looseUnits: 13 }, 13);
++    const second = planReleaseArrangement({ unitsPerPack: 10, sealedPacks: 2, looseUnits: 0 }, 20);
++    expect(first).toEqual({ sealedPacks: 0, looseUnits: 13 });
++    expect(second).toEqual({ sealedPacks: 2, looseUnits: 0 });
++  });
++});
+diff --git a/src/lib/pharmacy/bill-line-release-arrangement.ts b/src/lib/pharmacy/bill-line-release-arrangement.ts
+new file mode 100644
+index 00000000..51f7ce60
+--- /dev/null
++++ b/src/lib/pharmacy/bill-line-release-arrangement.ts
+@@ -0,0 +1,31 @@
++/** Remaining physical arrangement from the original sale movement. */
++export type ReleaseableArrangement = {
++  unitsPerPack: number;
++  sealedPacks: number;
++  looseUnits: number;
++};
++
++/**
++ * Return only physical stock represented by the original sale movement, less
++ * any prior releases. Never break a sealed pack implicitly. The caller must
++ * verify and lock the original movement and prior release evidence, then post
++ * the resulting adjustment and release record in one guarded transaction.
++ */
++export function planReleaseArrangement(
++  remaining: ReleaseableArrangement,
++  units: number
++): { sealedPacks: number; looseUnits: number } {
++  const valid = (n: number, min: number) => Number.isSafeInteger(n) && n >= min;
++  if (!valid(remaining.unitsPerPack, 1) || !valid(remaining.sealedPacks, 0) ||
++      !valid(remaining.looseUnits, 0) || !valid(units, 1)) {
++    throw new Error('INVALID_RELEASE_ARRANGEMENT');
++  }
++  const remainder = units % remaining.unitsPerPack;
++  const maxLoose = Math.min(units, remaining.looseUnits);
++  if (maxLoose < remainder) throw new Error('INVALID_RELEASE_ARRANGEMENT');
++  const looseUnits = remainder +
++    Math.floor((maxLoose - remainder) / remaining.unitsPerPack) * remaining.unitsPerPack;
++  const sealedPacks = (units - looseUnits) / remaining.unitsPerPack;
++  if (sealedPacks > remaining.sealedPacks) throw new Error('INVALID_RELEASE_ARRANGEMENT');
++  return { sealedPacks, looseUnits };
++}
+diff --git a/src/lib/pharmacy/edit-sale-line-quantity.ts b/src/lib/pharmacy/edit-sale-line-quantity.ts
+new file mode 100644
+index 00000000..1b4b4049
+--- /dev/null
++++ b/src/lib/pharmacy/edit-sale-line-quantity.ts
+@@ -0,0 +1,199 @@
++import { createHash, randomUUID } from 'node:crypto';
++import { Prisma } from '@/generated/prisma/client';
++import type { ScopedDb } from '@/lib/tenancy/scoped-db';
++import type { LedgerScope } from './stock-ledger';
++import { planAllocationReduction } from './bill-line-allocation-plan';
++import { planReleaseArrangement } from './bill-line-release-arrangement';
++
++type Evidence = {
++  allocationId: string;
++  originalUnits: number;
++  remainingUnits: number;
++  priceNumerator: number;
++  denominator: number;
++  remainder: number;
++  grossMinor: number;
++  inventoryLotId: string;
++  stockLocationId: string;
++  disposition: 'AVAILABLE';
++  originalSealed: number;
++  originalLoose: number;
++  releasedSealed: number;
++  releasedLoose: number;
++  unitsPerPack: number;
++};
++
++/**
++ * Internal reduction slice. The caller owns the transaction and must already
++ * have checked counter capability and branch assignment. It is intentionally
++ * not exposed by a router: active-allocation readers and pack scan binding must
++ * be integrated before any stock release can be enabled.
++ */
++export async function reduceSaleLineQuantity(
++  db: ScopedDb,
++  scope: LedgerScope,
++  input: {
++    saleId: string;
++    saleLineId: string;
++    fromQuantity: number;
++    toQuantity: number;
++    idempotencyKey: string;
++  }
++) {
++  if (
++    !Number.isSafeInteger(input.fromQuantity) ||
++    !Number.isSafeInteger(input.toQuantity) ||
++    input.toQuantity < 1 ||
++    input.toQuantity >= input.fromQuantity ||
++    !input.idempotencyKey.trim() ||
++    input.idempotencyKey.length > 160
++  )
++    throw new Error('INVALID_LINE_EDIT');
++  await db.$executeRaw(
++    Prisma.sql`SELECT pharmacy_assert_no_payment_attempt(${scope.organizationId},${scope.branchId},${input.saleId})`
++  );
++  await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_user_id',${scope.actorId},true)`);
++  const sale = await db.pharmacySale.findFirst({
++    where: {
++      id: input.saleId,
++      organizationId: scope.organizationId,
++      branchId: scope.branchId,
++    },
++    include: { tenders: true, refunds: true, customerOrder: true },
++  });
++  if (
++    !sale ||
++    sale.status !== 'OPEN' ||
++    sale.receiptNumber ||
++    sale.completedAt ||
++    sale.tenders.length ||
++    sale.refunds.length ||
++    sale.customerOrder
++  )
++    throw new Error('SALE_NOT_EDITABLE');
++  const previous = await db.$queryRaw<
++    Array<{
++      branchId: string;
++      saleId: string;
++      saleLineId: string;
++      actorId: string;
++      fromQuantity: number;
++      toQuantity: number;
++    }>
++  >(Prisma.sql`
++    SELECT "branchId","saleId","saleLineId","actorId","fromQuantity","toQuantity"
++    FROM pharmacy_sale_line_edit_requests WHERE "organizationId"=${scope.organizationId} AND "idempotencyKey"=${input.idempotencyKey}
++  `);
++  if (previous.length) {
++    const p = previous[0]!;
++    if (
++      p.branchId !== scope.branchId ||
++      p.saleId !== input.saleId ||
++      p.saleLineId !== input.saleLineId ||
++      p.actorId !== scope.actorId ||
++      p.fromQuantity !== input.fromQuantity ||
++      p.toQuantity !== input.toQuantity
++    )
++      throw new Error('EDIT_IDEMPOTENCY_CONFLICT');
++    return { saleLineId: input.saleLineId, quantity: input.toQuantity, replayed: true as const };
++  }
++  const [active] = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
++    SELECT id FROM pharmacy_sale_lines WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId}
++      AND "saleId"=${input.saleId} AND id=${input.saleLineId} AND "removedAt" IS NULL FOR UPDATE
++  `);
++  if (!active) throw new Error('LINE_NOT_EDITABLE');
++  const line = await db.pharmacySaleLine.findFirstOrThrow({
++    where: {
++      id: input.saleLineId,
++      organizationId: scope.organizationId,
++      branchId: scope.branchId,
++      saleId: input.saleId,
++    },
++    include: { medicine: true, returnLines: true, unidentifiedReturnHolds: true },
++  });
++  if (
++    line.quantity !== input.fromQuantity ||
++    line.medicine.rx ||
++    line.medicine.restricted ||
++    line.medicine.controlled ||
++    line.medicine.highAlert ||
++    line.prescriptionLineId ||
++    line.returnLines.length ||
++    line.unidentifiedReturnHolds.length
++  )
++    throw new Error('LINE_NOT_EDITABLE');
++  const targetUnits = input.toQuantity * line.canonicalUnitsPerSaleUnit;
++  if (!Number.isSafeInteger(targetUnits)) throw new Error('INVALID_LINE_EDIT');
++  const evidence = await db.$queryRaw<Evidence[]>(Prisma.sql`
++    SELECT e."allocationId",e."originalUnits",(e."originalUnits"-coalesce(r.units,0))::int AS "remainingUnits",
++      e."priceNumerator",e.denominator,e.remainder,e."grossMinor",a."inventoryLotId",a."stockLocationId",m.disposition,
++      -m."sealedPackDelta" AS "originalSealed",-m."looseUnitDelta" AS "originalLoose",
++      coalesce(r.sealed,0)::int AS "releasedSealed",coalesce(r.loose,0)::int AS "releasedLoose",lot."unitsPerPack"
++    FROM pharmacy_sale_line_allocations a JOIN pharmacy_allocation_price_evidence e ON e."organizationId"=a."organizationId" AND e."allocationId"=a.id
++    JOIN pharmacy_stock_movements m ON m."organizationId"=a."organizationId" AND m.id=a."stockMovementId"
++    JOIN pharmacy_inventory_lots lot ON lot."organizationId"=a."organizationId" AND lot.id=a."inventoryLotId"
++    LEFT JOIN LATERAL (SELECT sum(x."canonicalUnits") AS units,sum(sm."sealedPackDelta") AS sealed,sum(sm."looseUnitDelta") AS loose
++      FROM pharmacy_allocation_partial_releases x JOIN pharmacy_stock_movements sm ON sm."organizationId"=x."organizationId" AND sm.id=x."stockMovementId"
++      WHERE x."organizationId"=a."organizationId" AND x."allocationId"=a.id) r ON true
++    WHERE a."organizationId"=${scope.organizationId} AND a."branchId"=${scope.branchId} AND a."saleLineId"=${line.id} ORDER BY e.ordinal
++  `);
++  const count = await db.pharmacySaleLineAllocation.count({
++    where: { organizationId: scope.organizationId, saleLineId: line.id },
++  });
++  if (
++    evidence.length !== count ||
++    evidence.reduce((n, x) => n + x.remainingUnits, 0) !== line.canonicalUnits
++  )
++    throw new Error('ALLOCATION_EVIDENCE_MISSING');
++  const plan = planAllocationReduction(evidence, targetUnits);
++  for (const [index, part] of plan.releases.entries()) {
++    const row = evidence.find((x) => x.allocationId === part.allocationId)!;
++    if (row.disposition !== 'AVAILABLE') throw new Error('INVALID_STOCK_EVIDENCE');
++    const arrangement = planReleaseArrangement(
++      {
++        unitsPerPack: row.unitsPerPack,
++        sealedPacks: row.originalSealed - row.releasedSealed,
++        looseUnits: row.originalLoose - row.releasedLoose,
++      },
++      part.units
++    );
++    const key = createHash('sha256')
++      .update(JSON.stringify([scope.organizationId, input.idempotencyKey, index]))
++      .digest('hex');
++    const movement = await db.pharmacyStockMovement.create({
++      data: {
++        organizationId: scope.organizationId,
++        branchId: scope.branchId,
++        inventoryLotId: row.inventoryLotId,
++        stockLocationId: row.stockLocationId,
++        kind: 'ADJUSTMENT',
++        disposition: 'AVAILABLE',
++        quantityUnits: part.units,
++        sealedPackDelta: arrangement.sealedPacks,
++        looseUnitDelta: arrangement.looseUnits,
++        actorId: scope.actorId,
++        idempotencyKey: `partial-release:${key}`,
++      },
++    });
++    await db.$executeRaw(Prisma.sql`INSERT INTO pharmacy_allocation_partial_releases
++      (id,"organizationId","branchId","allocationId","stockMovementId","requestKey","idempotencyKey","actorId","canonicalUnits","grossMinor")
++      VALUES (${randomUUID()},${scope.organizationId},${scope.branchId},${part.allocationId},${movement.id},${input.idempotencyKey},${key},${scope.actorId},${part.units},${part.grossMinor})`);
++  }
++  await db.pharmacySaleLine.update({
++    where: { organizationId_id: { organizationId: scope.organizationId, id: line.id } },
++    data: {
++      quantity: input.toQuantity,
++      canonicalUnits: targetUnits,
++      grossMinor: plan.retainedGrossMinor,
++      unitPriceMinor: Math.floor(plan.retainedGrossMinor / input.toQuantity),
++      discountMinor: 0,
++      discountKind: null,
++      approvedByUserId: null,
++      approvalPolicy: null,
++    },
++  });
++  await db.$executeRaw(Prisma.sql`INSERT INTO pharmacy_sale_line_edit_requests
++    ("organizationId","branchId","saleId","saleLineId","idempotencyKey","actorId","fromQuantity","toQuantity")
++    VALUES (${scope.organizationId},${scope.branchId},${input.saleId},${input.saleLineId},${input.idempotencyKey},${scope.actorId},${input.fromQuantity},${input.toQuantity})`);
++  return { saleLineId: input.saleLineId, quantity: input.toQuantity, replayed: false as const };
++}
+diff --git a/src/lib/pharmacy/mixed-lot-money.db.test.ts b/src/lib/pharmacy/mixed-lot-money.db.test.ts
+index 1b57a2e9..c8dda718 100644
+--- a/src/lib/pharmacy/mixed-lot-money.db.test.ts
++++ b/src/lib/pharmacy/mixed-lot-money.db.test.ts
+@@ -1,5 +1,6 @@
+ // @vitest-environment node
+ import { randomUUID } from 'node:crypto';
++import { reduceSaleLineQuantity } from './edit-sale-line-quantity';
+ import { Prisma } from '@/generated/prisma/client';
+ import { growthReceiptMoney } from '@/lib/pharmacy/growth-evidence';
+ import { beforeAll, expect, it } from 'vitest';
+@@ -117,6 +118,373 @@ async function cart(prices = [100, 200], quantities = [1, 1], costs = prices.map
+     return { sale, line, lots };
+   });
+ }
++test('captures immutable tenant-scoped original mixed-lot price evidence', async () => {
++  const f = await cart([100, 101], [2, 1]);
++  const evidence = await tenant((db) =>
++    db.$queryRaw<
++      Array<{
++        allocationId: string;
++        ordinal: number;
++        originalUnits: number;
++        priceNumerator: number;
++        denominator: number;
++        remainder: number;
++        grossMinor: number;
++      }>
++    >(Prisma.sql`
++    SELECT e."allocationId", e.ordinal, e."originalUnits", e."priceNumerator", e.denominator,
++           e.remainder, e."grossMinor"
++    FROM pharmacy_allocation_price_evidence e
++    JOIN pharmacy_sale_line_allocations a ON a."organizationId"=e."organizationId" AND a.id=e."allocationId"
++    WHERE a."organizationId"=${org} AND a."saleLineId"=${f.line.id} ORDER BY e.ordinal
++  `)
++  );
++  expect(
++    evidence.map(
++      ({ ordinal, originalUnits, priceNumerator, denominator, remainder, grossMinor }) => ({
++        ordinal,
++        originalUnits,
++        priceNumerator,
++        denominator,
++        remainder,
++        grossMinor,
++      })
++    )
++  ).toEqual([
++    {
++      ordinal: 0,
++      originalUnits: 2,
++      priceNumerator: 100,
++      denominator: 1,
++      remainder: 0,
++      grossMinor: 200,
++    },
++    {
++      ordinal: 1,
++      originalUnits: 1,
++      priceNumerator: 101,
++      denominator: 1,
++      remainder: 0,
++      grossMinor: 101,
++    },
++  ]);
++  const first = evidence[0]!;
++  await expect(
++    tenant((db) =>
++      db.$executeRaw(Prisma.sql`
++    UPDATE pharmacy_allocation_price_evidence SET "grossMinor"=0
++    WHERE "organizationId"=${org} AND "allocationId"=${first.allocationId}
++  `)
++    )
++  ).rejects.toThrow();
++  const otherTenantRows = await withTenantDb(`${org}_other`, (db) =>
++    db.$queryRaw<Array<{ n: bigint }>>(
++      Prisma.sql`SELECT count(*) AS n FROM pharmacy_allocation_price_evidence WHERE "allocationId"=${first.allocationId}`
++    )
++  );
++  expect(Number(otherTenantRows[0]!.n)).toBe(0);
++  await expect(
++    tenant((db) =>
++      db.$executeRaw(Prisma.sql`
++    INSERT INTO pharmacy_allocation_price_evidence ("organizationId", "branchId", "allocationId", ordinal,
++      "originalUnits", "priceNumerator", denominator, remainder, "grossMinor")
++    SELECT ${org}, ${scope.branchId}, a.id, 0, a."canonicalUnits", 100, 1, 0, a."grossMinor"
++    FROM pharmacy_sale_line_allocations a WHERE a."organizationId"=${org} AND a.id=${first.allocationId}
++  `)
++    )
++  ).rejects.toThrow();
++  const retries = await Promise.allSettled(
++    [0, 1].map(() =>
++      tenant((db) =>
++        db.$executeRaw(Prisma.sql`
++        INSERT INTO pharmacy_allocation_price_evidence ("organizationId", "branchId", "allocationId", ordinal,
++          "originalUnits", "priceNumerator", denominator, remainder, "grossMinor")
++        VALUES (${org}, ${scope.branchId}, ${first.allocationId}, ${first.ordinal}, ${first.originalUnits},
++          ${first.priceNumerator}, ${first.denominator}, ${first.remainder}, ${first.grossMinor})
++      `)
++      )
++    )
++  );
++  expect(retries.every((result) => result.status === 'rejected')).toBe(true);
++  const count = await tenant((db) =>
++    db.$queryRaw<Array<{ n: bigint }>>(
++      Prisma.sql`SELECT count(*) AS n FROM pharmacy_allocation_price_evidence WHERE "organizationId"=${org} AND "allocationId"=${first.allocationId}`
++    )
++  );
++  expect(Number(count[0]!.n)).toBe(1);
++});
++
++test('serializes competing partial releases and restores stock only once', async () => {
++  const f = await cart([100], [2]);
++  const attempts = await Promise.allSettled(
++    [randomUUID(), randomUUID()].map((key) =>
++      tenant((db) =>
++        reduceSaleLineQuantity(db, scope, {
++          saleId: f.sale.id,
++          saleLineId: f.line.id,
++          fromQuantity: 2,
++          toQuantity: 1,
++          idempotencyKey: key,
++        })
++      )
++    )
++  );
++  expect(attempts.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
++  expect(attempts.filter((result) => result.status === 'rejected')).toHaveLength(1);
++  await tenant(async (db) => {
++    const rows = await db.$queryRaw<Array<{ n: bigint; units: bigint }>>(Prisma.sql`
++      SELECT count(*) AS n, sum(r."canonicalUnits") AS units FROM pharmacy_allocation_partial_releases r
++      JOIN pharmacy_sale_line_allocations a ON a."organizationId"=r."organizationId" AND a.id=r."allocationId"
++      WHERE a."organizationId"=${org} AND a."saleLineId"=${f.line.id}`);
++    expect(Number(rows[0]!.n)).toBe(1);
++    expect(Number(rows[0]!.units)).toBe(1);
++    expect(
++      (
++        await db.pharmacySaleLine.findFirstOrThrow({
++          where: { id: f.line.id, organizationId: org },
++        })
++      ).canonicalUnits
++    ).toBe(1);
++  });
++  const invalidKey = randomUUID();
++  await expect(
++    tenant(async (db) => {
++      await db.$executeRaw(
++        Prisma.sql`SELECT pharmacy_assert_no_payment_attempt(${org}, ${scope.branchId}, ${f.sale.id})`
++      );
++      await db.$queryRaw(
++        Prisma.sql`SELECT set_config('app.current_user_id', ${scope.actorId}, true)`
++      );
++      const allocation = await db.pharmacySaleLineAllocation.findFirstOrThrow({
++        where: { organizationId: org, saleLineId: f.line.id },
++      });
++      const original = await db.pharmacyStockMovement.findFirstOrThrow({
++        where: { organizationId: org, id: allocation.stockMovementId },
++      });
++      const movement = await db.pharmacyStockMovement.create({
++        data: {
++          organizationId: org,
++          branchId: scope.branchId,
++          inventoryLotId: original.inventoryLotId,
++          stockLocationId: original.stockLocationId,
++          kind: 'ADJUSTMENT',
++          disposition: original.disposition,
++          quantityUnits: 2,
++          sealedPackDelta: -original.sealedPackDelta,
++          looseUnitDelta: -original.looseUnitDelta,
++          actorId: scope.actorId,
++          idempotencyKey: `partial-release:${invalidKey}`,
++        },
++      });
++      await db.$executeRaw(Prisma.sql`INSERT INTO pharmacy_allocation_partial_releases
++      (id,"organizationId","branchId","allocationId","stockMovementId","requestKey","idempotencyKey","actorId","canonicalUnits","grossMinor")
++      VALUES (${randomUUID()},${org},${scope.branchId},${allocation.id},${movement.id},${invalidKey},${invalidKey},${scope.actorId},2,200)`);
++    })
++  ).rejects.toThrow();
++  await tenant(async (db) => {
++    expect(
++      await db.pharmacyStockMovement.count({
++        where: { organizationId: org, idempotencyKey: `partial-release:${invalidKey}` },
++      })
++    ).toBe(0);
++  });
++  const hidden = await withTenantDb(`${org}_other`, (db) =>
++    db.$queryRaw<Array<{ n: bigint }>>(
++      Prisma.sql`SELECT count(*) AS n FROM pharmacy_allocation_partial_releases WHERE "organizationId"=${org}`
++    )
++  );
++  expect(Number(hidden[0]!.n)).toBe(0);
++});
++
++test('replays a reduction once, clears discounts, and rejects cross-scope edits', async () => {
++  const f = await cart([100], [3]);
++  await tenant((db) =>
++    db.pharmacySaleLine.update({
++      where: { organizationId_id: { organizationId: org, id: f.line.id } },
++      data: {
++        discountMinor: 10,
++        discountKind: 'DISCOUNT',
++        approvedByUserId: scope.actorId,
++        approvalPolicy: 'test',
++      },
++    })
++  );
++  const input = {
++    saleId: f.sale.id,
++    saleLineId: f.line.id,
++    fromQuantity: 3,
++    toQuantity: 2,
++    idempotencyKey: randomUUID(),
++  };
++  expect(await tenant((db) => reduceSaleLineQuantity(db, scope, input))).toMatchObject({
++    replayed: false,
++    quantity: 2,
++  });
++  expect(await tenant((db) => reduceSaleLineQuantity(db, scope, input))).toMatchObject({
++    replayed: true,
++    quantity: 2,
++  });
++  await expect(
++    tenant((db) => reduceSaleLineQuantity(db, scope, { ...input, toQuantity: 1 }))
++  ).rejects.toThrow('EDIT_IDEMPOTENCY_CONFLICT');
++  await expect(
++    tenant((db) =>
++      reduceSaleLineQuantity(db, { ...scope, branchId: `${scope.branchId}_other` }, input)
++    )
++  ).rejects.toThrow();
++  await expect(
++    withTenantDb(`${org}_other`, (db) =>
++      reduceSaleLineQuantity(db, { ...scope, organizationId: `${org}_other` }, input)
++    )
++  ).rejects.toThrow();
++  await tenant(async (db) => {
++    const line = await db.pharmacySaleLine.findFirstOrThrow({
++      where: { organizationId: org, id: f.line.id },
++    });
++    expect(line).toMatchObject({
++      quantity: 2,
++      grossMinor: 200,
++      discountMinor: 0,
++      discountKind: null,
++      approvedByUserId: null,
++      approvalPolicy: null,
++    });
++    const count = await db.$queryRaw<Array<{ n: bigint }>>(Prisma.sql`
++      SELECT count(*) AS n FROM pharmacy_allocation_partial_releases r
++      JOIN pharmacy_sale_line_allocations a ON a."organizationId"=r."organizationId" AND a.id=r."allocationId"
++      WHERE a."organizationId"=${org} AND a."saleLineId"=${f.line.id}`);
++    expect(Number(count[0]!.n)).toBe(1);
++  });
++});
++
++test('serializes line reduction against payment preparation in both lock orders', async () => {
++  for (const first of ['edit', 'prepare'] as const) {
++    const f = await cart([100], [2]);
++    const [revision] = await tenant((db) =>
++      db.$queryRaw<Array<{ paymentRevision: number }>>(
++        Prisma.sql`SELECT "paymentRevision" FROM pharmacy_sales WHERE "organizationId"=${org} AND id=${f.sale.id}`
++      )
++    );
++    const input = {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 2,
++      toQuantity: 1,
++      idempotencyKey: randomUUID(),
++    };
++    let unlock!: () => void;
++    let signal!: () => void;
++    const held = new Promise<void>((resolve) => {
++      unlock = resolve;
++    });
++    const ready = new Promise<void>((resolve) => {
++      signal = resolve;
++    });
++    const edit = (db: ScopedDb) => reduceSaleLineQuantity(db, scope, input);
++    const prepare = (db: ScopedDb) =>
++      db.$executeRaw(Prisma.sql`
++      INSERT INTO pharmacy_payment_attempts (id,"organizationId","branchId","saleId","deviceId","requestKey","requestHash",method,currency,"amountMinor","billRevision","createdByUserId")
++      SELECT ${randomUUID()},${org},${scope.branchId},${f.sale.id},${randomUUID()},${randomUUID()},${'a'.repeat(64)},'JAZZCASH',o.currency,200,${revision!.paymentRevision},${scope.actorId}
++      FROM organizations o WHERE o.id=${org}
++    `);
++    const winner = tenant(async (db) => {
++      await (first === 'edit' ? edit(db) : prepare(db));
++      signal();
++      await held;
++    });
++    await ready;
++    const loser = tenant(async (db) => {
++      if (first === 'edit') await prepare(db);
++      else await edit(db);
++    });
++    const observed = loser.then(
++      () => 'finished',
++      () => 'finished'
++    );
++    expect(
++      await Promise.race([
++        observed,
++        new Promise((resolve) => setTimeout(() => resolve('blocked'), 50)),
++      ])
++    ).toBe('blocked');
++    unlock();
++    await winner;
++    await expect(loser).rejects.toThrow(
++      first === 'edit' ? /PAYMENT_BILL_CHANGED/ : /PAYMENT_ATTEMPT_UNRESOLVED/
++    );
++  }
++});
++
++test('refuses a partially paid bill and a clinically restricted line', async () => {
++  const paid = await cart([100], [2]);
++  await tenant((db) =>
++    applyPharmacyTender(db, scope, {
++      saleId: paid.sale.id,
++      deviceId: randomUUID(),
++      businessDate: day,
++      type: 'BANK_TRANSFER',
++      amountMinor: 50,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  await expect(
++    tenant((db) =>
++      reduceSaleLineQuantity(db, scope, {
++        saleId: paid.sale.id,
++        saleLineId: paid.line.id,
++        fromQuantity: 2,
++        toQuantity: 1,
++        idempotencyKey: randomUUID(),
++      })
++    )
++  ).rejects.toThrow('SALE_NOT_EDITABLE');
++  const clinical = await cart([100], [2]);
++  await tenant((db) =>
++    db.medicine.update({ where: { id: clinical.line.medicineId }, data: { rx: true } })
++  );
++  await expect(
++    tenant((db) =>
++      reduceSaleLineQuantity(db, scope, {
++        saleId: clinical.sale.id,
++        saleLineId: clinical.line.id,
++        fromQuantity: 2,
++        toQuantity: 1,
++        idempotencyKey: randomUUID(),
++      })
++    )
++  ).rejects.toThrow('LINE_NOT_EDITABLE');
++});
++
++test('retains earlier mixed-price stock and releases the latest allocation first', async () => {
++  const f = await cart([100, 200], [1, 2]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 3,
++      toQuantity: 2,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  await tenant(async (db) => {
++    const line = await db.pharmacySaleLine.findFirstOrThrow({
++      where: { organizationId: org, id: f.line.id },
++    });
++    expect(line).toMatchObject({
++      quantity: 2,
++      canonicalUnits: 2,
++      grossMinor: 300,
++      unitPriceMinor: 150,
++    });
++    const rows = await db.$queryRaw<
++      Array<{ inventoryLotId: string; canonicalUnits: number; grossMinor: number }>
++    >(Prisma.sql`
++      SELECT a."inventoryLotId",r."canonicalUnits",r."grossMinor" FROM pharmacy_allocation_partial_releases r
++      JOIN pharmacy_sale_line_allocations a ON a."organizationId"=r."organizationId" AND a.id=r."allocationId"
++      WHERE a."organizationId"=${org} AND a."saleLineId"=${f.line.id}`);
++    expect(rows).toEqual([{ inventoryLotId: f.lots[1]!.id, canonicalUnits: 1, grossMinor: 200 }]);
++  });
++});
+ test('charges the weighted amount, completes once, freezes receipt identity, and rolls back failed tender', async () => {
+   const f = await cart([100, 101], [2, 1]);
+   expect(f.line).toMatchObject({ grossMinor: 301, unitPriceMinor: 100 });
+diff --git a/src/lib/pharmacy/sales.ts b/src/lib/pharmacy/sales.ts
+index 996e69bf..233a137e 100644
+--- a/src/lib/pharmacy/sales.ts
++++ b/src/lib/pharmacy/sales.ts
+@@ -381,23 +381,35 @@ async function addSaleLineWithAllocation(
+     },
+   });
+   const allocationDiscountMinors = apportionDiscount(discountMinor, allocationGrossMinors);
+-  await Promise.all(
+-    allocation.allocations.map((part, index) =>
+-      db.pharmacySaleLineAllocation.create({
+-        data: {
+-          organizationId: scope.organizationId,
+-          branchId: scope.branchId,
+-          saleLineId: line.id,
+-          inventoryLotId: part.inventoryLotId,
+-          stockLocationId: part.stockLocationId,
+-          canonicalUnits: part.units,
+-          grossMinor: allocationGrossMinors[index]!,
+-          discountMinor: allocationDiscountMinors[index]!,
+-          stockMovementId: allocation.movementIds[index]!,
+-        },
+-      })
+-    )
+-  );
++  // Capture the pricing inputs in the allocation transaction, in the same
++  // order used for mixed-lot rounding. Old allocations cannot be reconstructed
++  // safely from rounded money or a lot's current price.
++  let priceRemainder = 0;
++  for (const [index, part] of allocation.allocations.entries()) {
++    const recorded = await db.pharmacySaleLineAllocation.create({
++      data: {
++        organizationId: scope.organizationId,
++        branchId: scope.branchId,
++        saleLineId: line.id,
++        inventoryLotId: part.inventoryLotId,
++        stockLocationId: part.stockLocationId,
++        canonicalUnits: part.units,
++        grossMinor: allocationGrossMinors[index]!,
++        discountMinor: allocationDiscountMinors[index]!,
++        stockMovementId: allocation.movementIds[index]!,
++      },
++    });
++    const price = pricedAllocations[index]!.unitPriceMinor;
++    await db.$executeRaw(Prisma.sql`
++        INSERT INTO pharmacy_allocation_price_evidence
++          ("organizationId", "branchId", "allocationId", "ordinal", "originalUnits",
++           "priceNumerator", "denominator", "remainder", "grossMinor")
++        VALUES (${scope.organizationId}, ${scope.branchId}, ${recorded.id}, ${index},
++                ${part.units}, ${price}, ${input.canonicalUnitsPerSaleUnit},
++                ${priceRemainder}, ${allocationGrossMinors[index]!})
++      `);
++    priceRemainder = (priceRemainder + part.units * price) % input.canonicalUnitsPerSaleUnit;
++  }
+   await event(db, scope, sale.id, 'LINE_ADDED', undefined, { saleLineId: line.id });
+   return { line, allocation };
+ }
