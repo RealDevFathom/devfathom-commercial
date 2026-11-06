@@ -30,11 +30,7 @@ import { useTheme } from '@/components/theme-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
 import { cn } from '@/lib/utils';
-import {
-  assistantAvailabilityMessage,
-  isAssistantAvailable,
-  useAssistant,
-} from '@/lib/assistant-store';
+import { isAssistantAvailable, useAssistant } from '@/lib/assistant-store';
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -87,9 +83,6 @@ export function Topbar({
   const openAssistant = useAssistant((s) => s.setOpen);
   const assistantAvailable = useAssistant((state) =>
     isAssistantAvailable(state, session?.user.organizationId)
-  );
-  const assistantMessage = useAssistant((state) =>
-    assistantAvailabilityMessage(state, session?.user.organizationId)
   );
   const mounted = useSyncExternalStore(
     subscribeToHydration,
@@ -170,9 +163,9 @@ export function Topbar({
 
         <Link
           href="/dashboard"
-          aria-label="Open dashboard"
           className="flex shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
+          <span className="sr-only">Open dashboard</span>
           {brand?.markUrl || brand?.logoUrl ? (
             <Image
               src={brand.markUrl ?? brand.logoUrl ?? ''}
@@ -227,10 +220,9 @@ export function Topbar({
             onPointerEnter={() => void preloadCommandPalette()}
             onFocus={() => void preloadCommandPalette()}
             className="studio-search"
-            aria-label="Search company hub"
           >
             <Search className="h-4 w-4 shrink-0" />
-            <span className="hidden min-w-0 flex-1 truncate whitespace-nowrap text-left lg:block">
+            <span className="sr-only min-w-0 flex-1 truncate whitespace-nowrap text-left lg:not-sr-only">
               Search workspace
             </span>
             <kbd className="pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-text-body xl:inline-flex">
@@ -239,22 +231,19 @@ export function Topbar({
           </button>
 
           {/* AI assistant */}
-          <button
-            type="button"
-            onClick={() => openAssistant(true)}
-            disabled={!assistantAvailable}
-            title={assistantAvailable ? 'Open Ask Fathom chat' : assistantMessage}
-            aria-describedby={!assistantAvailable ? 'topbar-chat-availability' : undefined}
-            className="studio-assistant-button disabled:cursor-not-allowed disabled:opacity-50 disabled:transform-none motion-reduce:transform-none motion-reduce:transition-none"
-            aria-label="Open AI assistant"
-          >
-            <Sparkles className="h-[18px] w-[18px] text-accent-brand" />
-            <span className="hidden text-xs font-semibold lg:inline">Ask Fathom</span>
-          </button>
-          {!assistantAvailable && (
-            <span id="topbar-chat-availability" className="sr-only">
-              {assistantMessage}
-            </span>
+          {assistantAvailable && (
+            <>
+              <button
+                type="button"
+                onClick={() => openAssistant(true)}
+                title="Open Ask Fathom chat"
+                className="studio-assistant-button disabled:cursor-not-allowed disabled:opacity-50 disabled:transform-none motion-reduce:transform-none motion-reduce:transition-none"
+                aria-label="Open Ask Fathom assistant"
+              >
+                <Sparkles className="h-[18px] w-[18px] text-accent-brand" />
+                <span className="hidden text-xs font-semibold lg:inline">Ask Fathom</span>
+              </button>
+            </>
           )}
 
           {/* Dark mode toggle */}
@@ -278,8 +267,9 @@ export function Topbar({
           {/* User dropdown */}
           {session?.user && (
             <DropdownMenu>
-              <DropdownMenuTrigger aria-label="Open account menu" className="studio-avatar-button">
-                <Avatar className="h-8 w-8">
+              <DropdownMenuTrigger className="studio-avatar-button">
+                <span className="sr-only">Open account menu for {session.user.name}</span>
+                <Avatar aria-hidden="true" className="h-8 w-8">
                   <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
                   <AvatarFallback className="bg-muted text-foreground text-xs font-medium">
                     {getInitials(session.user.name)}

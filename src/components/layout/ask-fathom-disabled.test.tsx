@@ -113,9 +113,10 @@ const brandFor = (organizationId: string): TenantBrand => ({
   accentColor: null,
 });
 const launchers = () => [
-  screen.getByRole('button', { name: 'Open AI assistant' }),
+  screen.getByRole('button', { name: 'Open Ask Fathom assistant' }),
   screen.getByRole('button', { name: /Ask Fathom anything/ }),
 ];
+const dashboardLauncher = () => screen.getByRole('button', { name: /Ask Fathom anything/ });
 function shell(organizationId = 'org-a') {
   return (
     <AppShell brand={brandFor(organizationId)}>
@@ -167,12 +168,41 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
-  it('disables both buttons while unknown and keeps the ordinary dashboard available', () => {
-    render(shell());
-    for (const button of launchers()) {
-      expect(button).toBeDisabled();
-      fireEvent.click(button);
+  it.each(['ADMIN', 'EMPLOYEE'])(
+    'DEV-512 hides unknown chrome for %s then restores a confirmed launcher',
+    (role) => {
+      mocks.session.data.user.role = role;
+      const view = render(shell());
+      expect(
+        screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+      ).not.toBeInTheDocument();
+      expect(dashboardLauncher()).toBeDisabled();
+      confirm(true, 50);
+      view.rerender(shell());
+      const launcher = screen.getByRole('button', { name: 'Open Ask Fathom assistant' });
+      expect(launcher).toBeEnabled();
+      fireEvent.click(launcher);
+      expect(useAssistant.getState().open).toBe(true);
+      confirm(true, 60, 'org-a', false);
+      view.rerender(shell());
+      expect(
+        screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+      ).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Chat draft')).not.toBeInTheDocument();
+      expect(dashboardLauncher()).toHaveTextContent(
+        "Ask Fathom isn't set up yet, contact support."
+      );
+      expect(dashboardLauncher()).not.toHaveTextContent(/provider|environment|AI_NOT_CONFIGURED/);
     }
+  );
+
+  it('hides the top-bar launcher and explains the dashboard while unknown and keeps the ordinary dashboard available', () => {
+    render(shell());
+    expect(
+      screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+    ).not.toBeInTheDocument();
+    expect(dashboardLauncher()).toBeDisabled();
+    fireEvent.click(dashboardLauncher());
     expect(useAssistant.getState().open).toBe(false);
     expect(screen.queryByLabelText('Chat draft')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Arrange' })).toBeEnabled();
@@ -201,11 +231,17 @@ describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
     expect(screen.getByLabelText('Chat draft')).toHaveValue('Private old chat');
     confirm(false, 20);
     view.rerender(shell());
-    for (const button of launchers()) expect(button).toBeDisabled();
+    expect(
+      screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+    ).not.toBeInTheDocument();
+    expect(dashboardLauncher()).toBeDisabled();
     expect(screen.queryByLabelText('Chat draft')).not.toBeInTheDocument();
     confirm(true, 10);
     view.rerender(shell());
-    for (const button of launchers()) expect(button).toBeDisabled();
+    expect(
+      screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+    ).not.toBeInTheDocument();
+    expect(dashboardLauncher()).toBeDisabled();
     confirm(true, 30);
     view.rerender(shell());
     expect(screen.queryByLabelText('Chat draft')).not.toBeInTheDocument();
@@ -216,11 +252,17 @@ describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
   it('fails closed for a mismatched response and for stale cache from an earlier mount', () => {
     confirm(true, 10, 'org-b');
     const view = render(shell());
-    for (const button of launchers()) expect(button).toBeDisabled();
+    expect(
+      screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+    ).not.toBeInTheDocument();
+    expect(dashboardLauncher()).toBeDisabled();
     confirm(true, 20);
     mocks.settings.isFetchedAfterMount = false;
     view.rerender(shell());
-    for (const button of launchers()) expect(button).toBeDisabled();
+    expect(
+      screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+    ).not.toBeInTheDocument();
+    expect(dashboardLauncher()).toBeDisabled();
   });
 
   it('clears open and hidden prior chat when organization identity changes', () => {
@@ -241,7 +283,10 @@ describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
       organizationId: null,
     });
     view.rerender(shell('org-b'));
-    for (const button of launchers()) expect(button).toBeDisabled();
+    expect(
+      screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+    ).not.toBeInTheDocument();
+    expect(dashboardLauncher()).toBeDisabled();
     confirm(true, 30, 'org-b');
     view.rerender(shell('org-b'));
     fireEvent.click(launchers()[0]);
@@ -265,10 +310,11 @@ describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
         <DashboardContent />
       </>
     );
-    for (const button of launchers()) {
-      expect(button).toBeDisabled();
-      fireEvent.click(button);
-    }
+    expect(
+      screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+    ).not.toBeInTheDocument();
+    expect(dashboardLauncher()).toBeDisabled();
+    fireEvent.click(dashboardLauncher());
     expect(useAssistant.getState().open).toBe(false);
   });
 
@@ -278,7 +324,10 @@ describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
       render(shell());
       act(() => vi.advanceTimersByTime(15_000));
       expect(screen.getAllByText(/availability could not be confirmed/).length).toBeGreaterThan(0);
-      for (const button of launchers()) expect(button).toBeDisabled();
+      expect(
+        screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+      ).not.toBeInTheDocument();
+      expect(dashboardLauncher()).toBeDisabled();
     } finally {
       vi.useRealTimers();
     }
@@ -291,7 +340,10 @@ describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
     mocks.settings = { ...mocks.settings, isError: true, errorUpdatedAt: 20 };
     view.rerender(shell());
     expect(screen.queryByLabelText('Chat draft')).not.toBeInTheDocument();
-    for (const button of launchers()) expect(button).toBeDisabled();
+    expect(
+      screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+    ).not.toBeInTheDocument();
+    expect(dashboardLauncher()).toBeDisabled();
     expect(screen.getAllByText(/availability could not be confirmed/).length).toBeGreaterThan(0);
     mocks.settingsQuery.mockClear();
     mocks.session.status = 'unauthenticated';
@@ -300,20 +352,18 @@ describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
     expect(useAssistant.getState().organizationId).toBeNull();
   });
 
-  it('disables both launchers with an accessible explanation when no AI provider is configured', () => {
+  it('hides unavailable chrome and explains setup on the dashboard', () => {
     confirm(true, 10, 'org-a', false);
     render(shell());
-    const message =
-      'Ask Fathom is unavailable because no AI provider is configured for this environment.';
-    const [topbar, dashboard] = launchers();
-    for (const button of [topbar, dashboard]) {
-      expect(button).toBeDisabled();
-      fireEvent.click(button);
-    }
+    const message = "Ask Fathom isn't set up yet, contact support.";
+    const dashboard = dashboardLauncher();
+    expect(
+      screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+    ).not.toBeInTheDocument();
+    expect(dashboard).toBeDisabled();
+    fireEvent.click(dashboard);
     expect(useAssistant.getState().open).toBe(false);
     expect(screen.queryByLabelText('Chat draft')).not.toBeInTheDocument();
-    expect(topbar).toHaveAttribute('title', message);
-    expect(topbar).toHaveAccessibleDescription(message);
     expect(dashboard).toHaveTextContent(message);
     // The ordinary workspace stays usable.
     expect(screen.getByRole('button', { name: 'Arrange' })).toBeEnabled();
@@ -322,7 +372,10 @@ describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
   it('re-enables the launcher once the provider is configured', () => {
     confirm(true, 10, 'org-a', false);
     const view = render(shell());
-    for (const button of launchers()) expect(button).toBeDisabled();
+    expect(
+      screen.queryByRole('button', { name: 'Open Ask Fathom assistant' })
+    ).not.toBeInTheDocument();
+    expect(dashboardLauncher()).toBeDisabled();
     confirm(true, 20);
     view.rerender(shell());
     for (const button of launchers()) expect(button).toBeEnabled();
