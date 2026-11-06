@@ -1102,6 +1102,8 @@ model PharmacySale {
   receiptDeviceId           String?
   businessDate              DateTime?                    @db.Date
   customerId                String?
+  paymentRevision           Int                          @default(0)
+  paymentAttempts           PharmacyPaymentAttempt[]
   createdAt                 DateTime                     @default(now())
   updatedAt                 DateTime                     @updatedAt
   originalSale              PharmacySale?                @relation("PharmacySaleOriginal", fields: [organizationId, branchId, originalSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
@@ -1122,6 +1124,32 @@ model PharmacySale {
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, status, createdAt])
   @@map("pharmacy_sales")
+}
+
+/// A committed reservation before external collection. No provider or cashier
+/// may infer non-payment from an absent tender while this record is unresolved.
+model PharmacyPaymentAttempt {
+  id              String       @id
+  organizationId  String       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  saleId          String
+  deviceId        String
+  requestKey      String
+  requestHash     String
+  method          String
+  currency        String
+  amountMinor     Int
+  billRevision    Int
+  state           String       @default("PREPARED")
+  createdByUserId String
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  sale            PharmacySale @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_payment_attempt_sale_fk")
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, deviceId, requestKey])
+  @@index([organizationId, branchId, saleId, state], map: "pharmacy_payment_attempt_scope_state")
+  @@map("pharmacy_payment_attempts")
 }
 
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
