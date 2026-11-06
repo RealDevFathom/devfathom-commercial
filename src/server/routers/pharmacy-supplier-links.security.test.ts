@@ -7,10 +7,12 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(),
 }));
 vi.mock('@/server/audit', () => ({
+  annotateAudit: vi.fn(),
   ipFromHeaders: () => null,
   isAuditExcludedPath: () => true,
   recordTrpcAudit: vi.fn(),
 }));
+import { annotateAudit } from '@/server/audit';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 import type { TRPCContext } from '../trpc';
 
@@ -258,6 +260,14 @@ describe.each(Object.keys(actions) as (keyof typeof actions)[])('%s owner access
         f.db.pharmacySupplierSubmission.findFirst.mockResolvedValue({ id: 'submission' });
         await expect(actions[name]()).resolves.toBeDefined();
         expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+        expect(annotateAudit).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            metadata: expect.objectContaining({
+              reason: 'owner-procurement-access-without-branch-assignment',
+            }),
+          })
+        );
       } finally {
         vi.unstubAllEnvs();
       }

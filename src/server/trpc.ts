@@ -310,6 +310,13 @@ async function assertCapabilities(
       message: 'You must be logged in to access this resource',
     });
   }
+  // Empty actor id must fail closed before any ABAC/DB lookup (#994 / DEV-17).
+  if (!session.user.id) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
   assertSessionUsable(session.user);
   assertTemporaryPasswordChanged(session.user, path);
   assertDemoProcedureAllowed(ctx, path, type);

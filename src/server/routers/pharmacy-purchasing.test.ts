@@ -599,7 +599,8 @@ describe.each(['purchaseReturns', 'supplierCredits'] as const)(
         );
         for (const page of [undefined, { limit: 5 }]) {
           await expect(reader[endpoint]({ branchId: 'branch_a', page })).rejects.toMatchObject({
-            code: reason === 'actor' ? 'UNAUTHORIZED' : 'FORBIDDEN',
+            // Empty session.user.id is refused in assertCapabilities before any DB lookup.
+            code: 'FORBIDDEN',
           });
         }
         expect(source().findMany).not.toHaveBeenCalled();
@@ -1242,25 +1243,44 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
-  it.each(['branch_a', 'branch_b', null])(
-    'looks the order up only at the receipt branch (stored order branch %s)',
-    async (orderBranch) => {
+  it.each([
+    ['branch_a', 'allow'],
+    ['branch_b', 'refuse'],
+    [null, 'allow'],
+  ] as const)(
+    'aligns goods-receipt order fixture with branch boundary (stored order branch %s → %s)',
+    async (orderBranch, outcome) => {
       db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment' });
       db.pharmacyBranchAssignment.findMany.mockResolvedValue([
         { branchId: 'branch_a' },
         { branchId: 'branch_b' },
       ]);
+      // lockReceivablePurchaseOrder requires SENT|RECEIVING and then refuses when a
+      // non-null stored order branch ≠ the receipt branch (CROSS_BRANCH_REFERENCE).
       db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
         id: 'po_a',
         supplierId: 'supplier_a',
         branchId: orderBranch,
+        status: 'SENT',
+        requisitionId: null,
       });
-      await caller().createGoodsReceipt(RECEIPT);
-      // A receipt may only close an order that belongs to its own branch.
-      expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
-        where: { id: 'po_a', supplierId: 'supplier_a', branchId: 'branch_a' },
-      });
-      expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalled();
+      if (outcome === 'refuse') {
+        await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'CROSS_BRANCH_REFERENCE',
+        });
+        expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+      } else {
+        await caller().createGoodsReceipt(RECEIPT);
+        expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
+          where: {
+            id: 'po_a',
+            organizationId: 'org_a',
+            supplierId: 'supplier_a',
+          },
+        });
+        expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalled();
+      }
     }
   );
 
@@ -2637,21 +2657,42 @@ describe('every purchasing read boundary', () => {
       expect(db.pharmacyGoodsReceipt.findMany).not.toHaveBeenCalled();
     }
   );
-  it.each(['pharmacy:procurement', '*', 'pharmacy:*'])(
-    'allows %s to read while retaining the financial gate',
+  it.each(['pharmacy:procurement', 'pharmacy:*'])(
+    'keeps financial follow-up closed for %s without reports:financial',
     async (capability) => {
       db.user.findUnique.mockResolvedValue({
         organizationRole: { permissions: [{ capability, effect: 'ALLOW' }] },
         permissionOverrides: [],
       });
       await expect(caller().suppliers()).resolves.toEqual([]);
-      await expect(caller().purchaseReturns({ branchId: 'branch_a' })).resolves.toEqual([]);
-      mocks.can.mockResolvedValue(false);
+      // purchaseReturns / supplierCredits are FINANCIAL_FOLLOW_UP (reports:financial only).
+      await expect(caller().purchaseReturns({ branchId: 'branch_a' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
       await expect(caller().supplierCredits({ branchId: 'branch_a' })).rejects.toMatchObject({
         code: 'FORBIDDEN',
       });
     }
   );
+  it('allows * to read purchasing and financial follow-up', async () => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    });
+    await expect(caller().suppliers()).resolves.toEqual([]);
+    await expect(caller().purchaseReturns({ branchId: 'branch_a' })).resolves.toEqual([]);
+    await expect(caller().supplierCredits({ branchId: 'branch_a' })).resolves.toEqual([]);
+  });
+  it('allows reports:financial to read purchaseReturns and supplierCredits', async () => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    });
+    await expect(caller().purchaseReturns({ branchId: 'branch_a' })).resolves.toEqual([]);
+    await expect(caller().supplierCredits({ branchId: 'branch_a' })).resolves.toEqual([]);
+  });
   it('refuses a write to an actor with receiving-view alone', async () => {
     db.user.findUnique.mockResolvedValue({
       organizationRole: {
