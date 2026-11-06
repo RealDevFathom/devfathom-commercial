@@ -190,9 +190,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const prepared =
       preparedCollection?.type === type && preparedCollection.amountMinor === amountMinor;
     useEffect(() => {
-      if (prepared && ['RAAST', 'JAZZCASH', 'EASYPAISA'].includes(type))
+      if (prepared && editable && ['RAAST', 'JAZZCASH', 'EASYPAISA'].includes(type))
         preparedReferenceRef.current?.focus();
-    }, [prepared, type]);
+    }, [prepared, editable, type]);
     const manualCard = type === 'CARD';
     const merchant = manual ? manualSettings?.[type] : undefined;
     const merchantReady = Boolean(merchant?.destination.trim() || merchant?.qrImageDataUrl);
