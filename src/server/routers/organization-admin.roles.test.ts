@@ -33,9 +33,7 @@ const db = {
   organizationRolePermission: { deleteMany: vi.fn(), createMany: vi.fn() },
   organizationScimToken: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
   $queryRaw: vi.fn(),
-  $transaction: vi.fn(
-    async (run: (tx: unknown) => Promise<unknown>): Promise<unknown> => run(db)
-  ),
+  $transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>): Promise<unknown> => run(db)),
 };
 
 function caller(enabledModules = ['identity']) {
@@ -161,40 +159,43 @@ beforeEach(() => {
 
 describe('organization role authorization with the real ABAC engine', () => {
   describe.each(['override', 'custom role'] as const)('DENY from %s', (source) => {
-    it.each(mutations)('refuses to $name before reading or writing target data', async ({ run }) => {
-      const deny = { capability: 'team:setRole', effect: 'DENY' };
-      db.user.findUnique.mockResolvedValue({
-        organizationRole: {
-          permissions: [
-            { capability: '*', effect: 'ALLOW' },
-            ...(source === 'custom role' ? [deny] : []),
-          ],
-        },
-        permissionOverrides: source === 'override' ? [deny] : [],
-      });
+    it.each(mutations)(
+      'refuses to $name before reading or writing target data',
+      async ({ run }) => {
+        const deny = { capability: 'team:setRole', effect: 'DENY' };
+        db.user.findUnique.mockResolvedValue({
+          organizationRole: {
+            permissions: [
+              { capability: '*', effect: 'ALLOW' },
+              ...(source === 'custom role' ? [deny] : []),
+            ],
+          },
+          permissionOverrides: source === 'override' ? [deny] : [],
+        });
 
-      await expect(run()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(run()).rejects.toMatchObject({ code: 'FORBIDDEN' });
 
-      // admin:access succeeds; the independent team:setRole decision denies.
-      expect(db.user.findUnique).toHaveBeenCalledTimes(2);
-      expect(db.user.findUnique).toHaveBeenLastCalledWith(
-        expect.objectContaining({ where: { id: 'admin_a' } })
-      );
-      expect(db.user.findFirst).not.toHaveBeenCalled();
-      expect(db.organizationDepartment.findFirst).not.toHaveBeenCalled();
-      expect(db.organizationRole.findFirst).not.toHaveBeenCalled();
-      expect(db.user.create).not.toHaveBeenCalled();
-      expect(db.user.update).not.toHaveBeenCalled();
-      expect(db.organizationRole.create).not.toHaveBeenCalled();
-      expect(db.organizationRole.update).not.toHaveBeenCalled();
-      expect(db.organizationRole.delete).not.toHaveBeenCalled();
-      expect(db.organizationRolePermission.deleteMany).not.toHaveBeenCalled();
-      expect(db.organizationRolePermission.createMany).not.toHaveBeenCalled();
-      expect(db.organizationScimToken.findFirst).not.toHaveBeenCalled();
-      expect(db.organizationScimToken.create).not.toHaveBeenCalled();
-      expect(db.organizationScimToken.update).not.toHaveBeenCalled();
-      expect(hash).not.toHaveBeenCalled();
-    });
+        // admin:access succeeds; the independent team:setRole decision denies.
+        expect(db.user.findUnique).toHaveBeenCalledTimes(2);
+        expect(db.user.findUnique).toHaveBeenLastCalledWith(
+          expect.objectContaining({ where: { id: 'admin_a' } })
+        );
+        expect(db.user.findFirst).not.toHaveBeenCalled();
+        expect(db.organizationDepartment.findFirst).not.toHaveBeenCalled();
+        expect(db.organizationRole.findFirst).not.toHaveBeenCalled();
+        expect(db.user.create).not.toHaveBeenCalled();
+        expect(db.user.update).not.toHaveBeenCalled();
+        expect(db.organizationRole.create).not.toHaveBeenCalled();
+        expect(db.organizationRole.update).not.toHaveBeenCalled();
+        expect(db.organizationRole.delete).not.toHaveBeenCalled();
+        expect(db.organizationRolePermission.deleteMany).not.toHaveBeenCalled();
+        expect(db.organizationRolePermission.createMany).not.toHaveBeenCalled();
+        expect(db.organizationScimToken.findFirst).not.toHaveBeenCalled();
+        expect(db.organizationScimToken.create).not.toHaveBeenCalled();
+        expect(db.organizationScimToken.update).not.toHaveBeenCalled();
+        expect(hash).not.toHaveBeenCalled();
+      }
+    );
   });
 
   it.each(mutations)('keeps admin:access required to $name', async ({ run }) => {
@@ -343,7 +344,9 @@ describe('organization role authorization with the real ABAC engine', () => {
   });
 
   it('allows an unrestricted admin to remove an unused custom role', async () => {
-    await expect(caller().removeRole({ id: 'role_restricted' })).resolves.toEqual({ success: true });
+    await expect(caller().removeRole({ id: 'role_restricted' })).resolves.toEqual({
+      success: true,
+    });
     expect(db.organizationRole.delete).toHaveBeenCalledWith({ where: { id: 'role_restricted' } });
   });
 

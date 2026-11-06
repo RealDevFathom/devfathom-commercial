@@ -18,6 +18,9 @@ vi.mock('next-auth/react', () => ({
   useSession: () => ({ data: { user: { id: 'viewer', role: state.viewerRole } } }),
 }));
 vi.mock('@/lib/breadcrumb-store', () => ({ useBreadcrumbLabel: vi.fn() }));
+vi.mock('@/components/entitlements-provider', () => ({
+  useEntitlements: () => ({ enabledModules: [], vertical: 'AGENCY' }),
+}));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({}),
@@ -33,6 +36,15 @@ vi.mock('@/lib/trpc', () => ({
       deletePerformanceNote: { useMutation: () => idleMutation },
     },
     teamStats: { getForUser: { useQuery: () => idle } },
+    organizationAdmin: {
+      departments: {
+        useQuery: () => ({
+          data: [{ key: 'ENGINEERING', name: 'Engineering', active: true }],
+          isFetching: false,
+          isError: false,
+        }),
+      },
+    },
   },
 }));
 import { MemberDetailContent } from './member-detail-content';

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   invitationUpsert: vi.fn(),
   departmentFindFirst: vi.fn(),
+  resolveEntitlements: vi.fn(),
   can: vi.fn<(action: string) => Promise<boolean>>(),
 }));
 
@@ -23,6 +24,10 @@ vi.mock('@/lib/email', () => ({
   templates: { inviteMember: vi.fn(() => ({ subject: 's', html: 'h', text: 't' })) },
 }));
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
+vi.mock('@/lib/entitlements', () => ({
+  resolveOrganizationEntitlements: mocks.resolveEntitlements,
+  assertSeatAvailable: vi.fn(),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 
 import { buildPeopleTools } from './people';
@@ -53,7 +58,7 @@ function tools() {
     isAdmin: true,
     isHr: false,
     isAdminOrHr: true,
-    ctx: { userId: 'user_admin', name: 'Admin' },
+    ctx: { userId: 'user_admin', name: 'Admin', organizationId: 'org_a' },
     can: mocks.can,
     audit: vi.fn(),
     activity: vi.fn(),
@@ -97,6 +102,7 @@ beforeEach(() => {
   mocks.create.mockResolvedValue({ id: 'user_new', name: 'Alex Carter' });
   mocks.update.mockResolvedValue({ ...casey, role: 'ADMIN' });
   mocks.invitationUpsert.mockResolvedValue({});
+  mocks.resolveEntitlements.mockResolvedValue({ activeSeats: 1, seatLimit: 10 });
 });
 
 describe('assistant member tools honor team:setRole', () => {
@@ -138,6 +144,7 @@ describe('assistant member tools honor team:setRole', () => {
     expect(result).toEqual(denied);
     expect(mocks.departmentFindFirst).not.toHaveBeenCalled();
     expect(mocks.findFirst).not.toHaveBeenCalled();
+    expect(mocks.resolveEntitlements).not.toHaveBeenCalled();
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.invitationUpsert).not.toHaveBeenCalled();
   });
