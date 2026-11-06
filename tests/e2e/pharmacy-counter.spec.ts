@@ -898,6 +898,44 @@ test('counter layout keeps the cart and payment visible while searching', async 
       }
     }
   }
+  // Desktop has one persistent scroll owner; search results may scroll only while open.
+  for (const width of [1024, 1280, 1440]) {
+    await page.setViewportSize({ width, height: 768 });
+    const bill = page.getByRole('region', { name: 'Bill workspace' });
+    const dimensions = await bill.evaluate((element) => ({
+      overflow: getComputedStyle(element).overflowY,
+      height: element.clientHeight,
+      content: element.scrollHeight,
+    }));
+    expect(dimensions.overflow).toBe('auto');
+    expect(dimensions.content).toBeGreaterThan(dimensions.height);
+    for (const region of [
+      page.locator('[aria-label="Counter bill"]'),
+      page.getByRole('region', { name: 'Next line' }),
+    ]) {
+      expect(await region.evaluate((element) => getComputedStyle(element).overflowY)).not.toMatch(
+        /^(auto|scroll)$/
+      );
+    }
+    await bill.evaluate((element) => (element.scrollTop = 0));
+    await bill.focus();
+    await expect(bill).toBeFocused();
+    await page.keyboard.press('PageDown');
+    await expect.poll(() => bill.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await expect(page.getByRole('button', { name: /^Take payment/ })).toBeInViewport();
+    await page.keyboard.press('F2');
+    await expect(page.getByLabel('Scan or search')).toBeFocused();
+  }
+  for (const width of [375, 768]) {
+    await page.setViewportSize({ width, height: 812 });
+    const consoleRegion = page.locator('[data-counter-console]');
+    await consoleRegion.evaluate((element) => (element.scrollTop = element.scrollHeight));
+    await expect(page.getByRole('button', { name: /^Take payment/ })).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true
+    );
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
   await pressControl(page.getByText('Bill breakdown', { exact: true }));
   await expect(page.getByText('Gross', { exact: true })).toBeVisible();
   await expect(page.getByText('Discount', { exact: true })).toBeVisible();

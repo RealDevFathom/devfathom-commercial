@@ -2161,7 +2161,7 @@ function ScopedPharmacyCounterConsole({
       ) : null}
       <div className="grid items-start gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_340px] lg:grid-rows-[auto_minmax(0,1fr)] lg:items-stretch xl:grid-cols-[minmax(0,1fr)_380px]">
         <SectionCard
-          className="overflow-hidden rounded-xl p-0 lg:col-start-1 lg:row-start-1 lg:max-h-[40dvh] lg:overflow-y-auto"
+          className="overflow-hidden rounded-xl p-0 lg:relative lg:z-10 lg:col-start-1 lg:row-start-1 lg:self-start lg:overflow-visible"
           aria-label="Counter bill"
         >
           <div className="border-b border-border-subtle p-4">
@@ -2253,212 +2253,231 @@ function ScopedPharmacyCounterConsole({
                 </div>
               </div>
 
-              <CounterSearchResults
-                rows={
-                  searchCurrent && !searchQuery.isPlaceholderData
-                    ? (searchQuery.data?.rows ?? [])
-                    : []
+              <div
+                data-counter-search-dropdown=""
+                className={
+                  trimmedQuery.length >= 2 && !scannerQuery
+                    ? 'lg:absolute lg:inset-x-4 lg:top-full lg:z-20 lg:max-h-[max(8rem,calc(100dvh-300px))] lg:overflow-y-auto lg:rounded-xl lg:bg-surface-card lg:shadow-md'
+                    : ''
                 }
-                state={
-                  !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
-                    ? 'idle'
-                    : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
-                      ? 'loading'
-                      : searchQuery.isError
-                        ? 'error'
-                        : 'ready'
-                }
-                query={trimmedQuery}
-                disabled={busy || !branchAuthorized}
-                activeMedicineId={activeRow?.medicineId ?? null}
-                error={searchQuery.error ? messageFrom(searchQuery.error) : null}
-                onSelect={stageRow}
-                onCaptureDemand={() => void captureShortfall()}
-                onRetry={() => {
-                  if (searchCurrent) void searchQuery.refetch();
-                }}
-              />
+              >
+                <CounterSearchResults
+                  rows={
+                    searchCurrent && !searchQuery.isPlaceholderData
+                      ? (searchQuery.data?.rows ?? [])
+                      : []
+                  }
+                  state={
+                    !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
+                      ? 'idle'
+                      : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
+                        ? 'loading'
+                        : searchQuery.isError
+                          ? 'error'
+                          : 'ready'
+                  }
+                  query={trimmedQuery}
+                  disabled={busy || !branchAuthorized}
+                  activeMedicineId={activeRow?.medicineId ?? null}
+                  error={searchQuery.error ? messageFrom(searchQuery.error) : null}
+                  onSelect={stageRow}
+                  onCaptureDemand={() => void captureShortfall()}
+                  onRetry={() => {
+                    if (searchCurrent) void searchQuery.refetch();
+                  }}
+                />
+              </div>
             </div>
           </div>
         </SectionCard>
-        {activeRow ? (
-          <section
-            aria-label="Next line"
-            className="rounded-lg border border-border-subtle bg-surface-sunken p-3 lg:col-start-2 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto"
-          >
-            <div className="grid items-start gap-4">
-              <div className="min-w-0">
-                <h2 className="font-mono text-[10px] uppercase tracking-widest text-text-muted">
-                  Next line
-                </h2>
-                <p className="mt-1 text-sm font-semibold text-text-strong">
-                  {activeRow.displayName}
-                  {activeRow.strength ? ` ${activeRow.strength}` : ''}
-                </p>
-                <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                  {[
-                    activeRow.presentation,
-                    activeRow.dosageForm,
-                    activeRow.batchNumber ? `Batch ${activeRow.batchNumber}` : null,
-                    activeRow.nearestSafeExpiry
-                      ? `Exp ${formatReceiptDate(activeRow.nearestSafeExpiry)}`
-                      : null,
-                    locationLabel,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </p>
-              </div>
-              <div className="counter-next-controls space-y-3">
-                <CounterUnitToggle
-                  inline
-                  options={activeRow.saleUnits}
-                  selected={saleUnit}
-                  quantity={quantity}
-                  preview={preview}
-                  disabled={busy}
-                  onSelect={setSaleUnit}
-                  onQuantityChange={setQuantity}
-                  chordFor={chordFor}
-                />
-                {activeRow.saleUnits.length === 0 ? (
-                  <div className="space-y-1.5">
-                    <Label htmlFor="counter-demand-units">Requested units</Label>
-                    <Input
-                      id="counter-demand-units"
-                      type="number"
-                      min={1}
-                      step={1}
-                      className="h-11 w-32"
-                      value={quantity}
-                      disabled={busy}
-                      onChange={(event) => {
-                        const next = Number(event.target.value);
-                        setQuantity(Number.isSafeInteger(next) && next > 0 ? next : 1);
-                      }}
-                    />
+        <div
+          data-counter-bill-scroll=""
+          role="region"
+          aria-label="Bill workspace"
+          tabIndex={0}
+          className="focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring lg:col-span-2 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto"
+        >
+          <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px]">
+            {activeRow ? (
+              <section
+                aria-label="Next line"
+                className="rounded-lg border border-border-subtle bg-surface-sunken p-3 lg:col-start-2 lg:row-start-1"
+              >
+                <div className="grid items-start gap-4">
+                  <div className="min-w-0">
+                    <h2 className="font-mono text-[10px] uppercase tracking-widest text-text-muted">
+                      Next line
+                    </h2>
+                    <p className="mt-1 text-sm font-semibold text-text-strong">
+                      {activeRow.displayName}
+                      {activeRow.strength ? ` ${activeRow.strength}` : ''}
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                      {[
+                        activeRow.presentation,
+                        activeRow.dosageForm,
+                        activeRow.batchNumber ? `Batch ${activeRow.batchNumber}` : null,
+                        activeRow.nearestSafeExpiry
+                          ? `Exp ${formatReceiptDate(activeRow.nearestSafeExpiry)}`
+                          : null,
+                        locationLabel,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
                   </div>
-                ) : null}
-                {shortfallUnits > 0 ? (
+                  <div className="counter-next-controls space-y-3">
+                    <CounterUnitToggle
+                      inline
+                      options={activeRow.saleUnits}
+                      selected={saleUnit}
+                      quantity={quantity}
+                      preview={preview}
+                      disabled={busy}
+                      onSelect={setSaleUnit}
+                      onQuantityChange={setQuantity}
+                      chordFor={chordFor}
+                    />
+                    {activeRow.saleUnits.length === 0 ? (
+                      <div className="space-y-1.5">
+                        <Label htmlFor="counter-demand-units">Requested units</Label>
+                        <Input
+                          id="counter-demand-units"
+                          type="number"
+                          min={1}
+                          step={1}
+                          className="h-11 w-32"
+                          value={quantity}
+                          disabled={busy}
+                          onChange={(event) => {
+                            const next = Number(event.target.value);
+                            setQuantity(Number.isSafeInteger(next) && next > 0 ? next : 1);
+                          }}
+                        />
+                      </div>
+                    ) : null}
+                    {shortfallUnits > 0 ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-auto min-h-11 whitespace-normal"
+                        disabled={busy || !branchAuthorized}
+                        onClick={() => void captureShortfall()}
+                      >
+                        {pending === 'captureDemand'
+                          ? 'Capturing…'
+                          : `Record ${shortfallUnits} unavailable units`}
+                      </Button>
+                    ) : null}
+                  </div>
+
                   <Button
                     type="button"
-                    variant="outline"
-                    className="h-auto min-h-11 whitespace-normal"
-                    disabled={busy || !branchAuthorized}
-                    onClick={() => void captureShortfall()}
+                    className="min-h-12 rounded-[var(--radius-sm)]"
+                    disabled={busy || !preview?.sufficient}
+                    onClick={() => void addToCart()}
                   >
-                    {pending === 'captureDemand'
-                      ? 'Capturing…'
-                      : `Record ${shortfallUnits} unavailable units`}
+                    {pending === 'addToCart'
+                      ? 'Adding…'
+                      : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
                   </Button>
-                ) : null}
-              </div>
-
-              <Button
-                type="button"
-                className="min-h-12 rounded-[var(--radius-sm)]"
-                disabled={busy || !preview?.sufficient}
-                onClick={() => void addToCart()}
-              >
-                {pending === 'addToCart'
-                  ? 'Adding…'
-                  : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
-              </Button>
-            </div>
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-text-muted">
-              <span>
-                {lotOverride?.inventoryLotId
-                  ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
-                  : activeRow.recommendedLotId && activeRow.batchNumber
-                    ? `FEFO batch ${activeRow.batchNumber} is used; additional batches are allocated if needed.`
-                    : 'No sellable FEFO batch is available.'}
-              </span>
-              <CounterLotOverride
-                value={lotOverride}
-                lots={lotOptionsQuery.data ?? []}
-                state={
-                  lotOptionsQuery.isError
-                    ? 'error'
-                    : lotOptionsQuery.isSuccess
-                      ? 'ready'
-                      : 'loading'
-                }
-                error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
-                disabled={busy}
-                onChange={setLotOverride}
-                onRetry={() => void lotOptionsQuery.refetch()}
-              />
-            </div>
-          </section>
-        ) : null}
-        <div className="min-w-0 space-y-3 lg:col-start-1 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto">
-          <section aria-label="Cart">
-            <SectionCard className="overflow-hidden rounded-xl p-0">
-              <div className="flex items-center justify-between px-4 pt-3 pb-2">
-                <h2 className="font-display text-sm font-semibold text-text-strong">Cart</h2>
-                <span className="text-xs text-text-muted">{lineCount} lines</span>
-              </div>
-              <CounterCartPanel
-                cart={cart}
-                alerts={alerts}
-                state={
-                  !saleId
-                    ? 'idle'
-                    : cartQuery.isLoading
-                      ? 'loading'
-                      : cartQuery.isError
+                </div>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-text-muted">
+                  <span>
+                    {lotOverride?.inventoryLotId
+                      ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
+                      : activeRow.recommendedLotId && activeRow.batchNumber
+                        ? `FEFO batch ${activeRow.batchNumber} is used; additional batches are allocated if needed.`
+                        : 'No sellable FEFO batch is available.'}
+                  </span>
+                  <CounterLotOverride
+                    value={lotOverride}
+                    lots={lotOptionsQuery.data ?? []}
+                    state={
+                      lotOptionsQuery.isError
                         ? 'error'
-                        : 'ready'
-                }
-                error={cartQuery.error ? messageFrom(cartQuery.error) : null}
-                onRetry={() => void refreshTenderBill()}
-              />
-            </SectionCard>
-          </section>
-          {substituteInput ? (
-            <SectionCard compact title="Exact substitute suggestions">
-              <CounterSubstituteProposals
-                proposals={substitutesQuery.data ?? []}
-                state={
-                  substitutesQuery.isLoading
-                    ? 'loading'
-                    : substitutesQuery.isError
-                      ? 'error'
-                      : 'ready'
-                }
-                prescriptionOnly={activeRow?.restriction.rx ?? false}
-                error={substitutesQuery.error ? messageFrom(substitutesQuery.error) : null}
-                disabled={busy}
-                onChoose={(proposal) => {
-                  setQuery(proposal.displayName);
-                  setSubmittedSearch({
-                    text: proposal.displayName,
-                    query: proposal.displayName,
-                    branchId,
-                  });
-                  setActiveRow(null);
-                }}
-                onDecline={() => void declineVisibleSubstitutes()}
-                onRetry={() => void substitutesQuery.refetch()}
-              />
-            </SectionCard>
-          ) : null}
+                        : lotOptionsQuery.isSuccess
+                          ? 'ready'
+                          : 'loading'
+                    }
+                    error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
+                    disabled={busy}
+                    onChange={setLotOverride}
+                    onRetry={() => void lotOptionsQuery.refetch()}
+                  />
+                </div>
+              </section>
+            ) : null}
+            <div className="min-w-0 space-y-3 lg:col-start-1 lg:row-start-1">
+              <section aria-label="Cart">
+                <SectionCard className="overflow-hidden rounded-xl p-0">
+                  <div className="flex items-center justify-between px-4 pt-3 pb-2">
+                    <h2 className="font-display text-sm font-semibold text-text-strong">Cart</h2>
+                    <span className="text-xs text-text-muted">{lineCount} lines</span>
+                  </div>
+                  <CounterCartPanel
+                    cart={cart}
+                    alerts={alerts}
+                    state={
+                      !saleId
+                        ? 'idle'
+                        : cartQuery.isLoading
+                          ? 'loading'
+                          : cartQuery.isError
+                            ? 'error'
+                            : 'ready'
+                    }
+                    error={cartQuery.error ? messageFrom(cartQuery.error) : null}
+                    onRetry={() => void refreshTenderBill()}
+                  />
+                </SectionCard>
+              </section>
+              {substituteInput ? (
+                <SectionCard compact title="Exact substitute suggestions">
+                  <CounterSubstituteProposals
+                    proposals={substitutesQuery.data ?? []}
+                    state={
+                      substitutesQuery.isLoading
+                        ? 'loading'
+                        : substitutesQuery.isError
+                          ? 'error'
+                          : 'ready'
+                    }
+                    prescriptionOnly={activeRow?.restriction.rx ?? false}
+                    error={substitutesQuery.error ? messageFrom(substitutesQuery.error) : null}
+                    disabled={busy}
+                    onChoose={(proposal) => {
+                      setQuery(proposal.displayName);
+                      setSubmittedSearch({
+                        text: proposal.displayName,
+                        query: proposal.displayName,
+                        branchId,
+                      });
+                      setActiveRow(null);
+                    }}
+                    onDecline={() => void declineVisibleSubstitutes()}
+                    onRetry={() => void substitutesQuery.refetch()}
+                  />
+                </SectionCard>
+              ) : null}
 
-          <div>
-            <CounterUpsellSuggestions
-              branchId={branchId}
-              medicineIds={currentBill ? cart.lines.map((line) => line.medicineId) : []}
-              disabled={busy || !branchAuthorized}
-              onChoose={(suggestion) => {
-                setQuery(suggestion.displayName);
-                setSubmittedSearch({
-                  text: suggestion.displayName,
-                  query: suggestion.displayName,
-                  branchId,
-                });
-                setActiveRow(null);
-              }}
-            />
+              <div>
+                <CounterUpsellSuggestions
+                  branchId={branchId}
+                  medicineIds={currentBill ? cart.lines.map((line) => line.medicineId) : []}
+                  disabled={busy || !branchAuthorized}
+                  onChoose={(suggestion) => {
+                    setQuery(suggestion.displayName);
+                    setSubmittedSearch({
+                      text: suggestion.displayName,
+                      query: suggestion.displayName,
+                      branchId,
+                    });
+                    setActiveRow(null);
+                  }}
+                />
+              </div>
+            </div>
           </div>
         </div>
         <aside
