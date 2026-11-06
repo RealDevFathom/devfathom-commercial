@@ -46,7 +46,7 @@ real card or wallet, or put credentials into chat, a ticket or a file until the 
 
 | Device class | What `develop` has | Evidence class | Physical acceptance |
 | --- | --- | --- | --- |
-| DVR / cameras (live view) | Pharmacy camera console works against a **simulator only**. Real HLS transport exists for Restaurant, not Pharmacy. | `SIMULATOR` (Pharmacy); `REAL-INTEGRATION` code present for Restaurant only | UNTESTED, BLOCKED by DEV-740 |
+| DVR / cameras (live view) | Pharmacy live view through the shared MediaMTX HLS gateway (DEV-740): configured-gateway registration, diagnostics, short-lived grants and a per-request authorized stream route. Tested with mocks, fixtures and a disposable-database browser run only. | `REAL-INTEGRATION` code (Pharmacy and Restaurant) | UNTESTED on hardware; needs a connected camera and an owner-provisioned gateway |
 | Camera still snapshots (transaction / cold-chain evidence) | Evidence capture works against the simulator. Real DVR snapshots are not wired. | `SIMULATOR` | UNTESTED, BLOCKED by DEV-745 |
 | Thermal 58 / 80 mm — raw ESC/POS | Server builds a validated ESC/POS byte job and returns it as JSON. Nothing dispatches it. | `GENERATED-FILE` | UNTESTED, BLOCKED by DEV-741 |
 | Thermal 58 / 80 mm and A4 — browser | Receipt HTML opened in a popup, then `window.print()`. Format choice is not saved. | `BROWSER-OS-DIALOG` | UNTESTED, saved settings BLOCKED by DEV-742 |
@@ -77,19 +77,23 @@ real card or wallet, or put credentials into chat, a ticket or a file until the 
   In `mediamtx` mode every legacy adapter method deliberately throws "unsupported"
   because those methods have no tenant or branch scope.
 - Pharmacy router (`src/server/routers/pharmacy-cameras.ts`): all admin procedures use the
-  `adminProcedure` base plus the `pharmacy-core` entitlement and organization match. The
-  `enrollGateway`, `testConnection`, `register` and `capturePending` call `simulated()`,
-  which returns `PRECONDITION_FAILED` ("Physical gateway activation is not supported here")
-  unless the runtime is the simulator. `issueViewerGrant` and `revokeViewerGrant` exist but
-  can only act on cameras that were registered through that simulator-only path, and no
-  Pharmacy stream route exists under `src/app/api/pharmacy/`. `sourceRef` is restricted to
-  `sim-camera-1 | sim-counter-1 | sim-fridge-1`. **Live viewing of a real DVR from Pharmacy
-  is therefore not implemented.**
+  `adminProcedure` base plus the `pharmacy-core` entitlement and organization match. In the
+  simulator, `sourceRef` is still restricted to `sim-camera-1 | sim-counter-1 | sim-fridge-1`.
+  In `mediamtx` mode (DEV-740), `enrollGateway` takes an exact `https://hostname/` URL,
+  `register` takes a gateway stream path and refuses DVR credentials, cameras start disabled,
+  and every camera-bound procedure also requires the pharmacy vertical, no platform support
+  session, and branch access (session ADMIN or an active branch assignment).
+  `configuredConnectionDiagnostics` reports a fixed outcome code only.
+  `issueLiveViewGrant` issues 55 s grants, and
+  `src/app/api/pharmacy/cameras/[cameraId]/stream/route.ts` re-authorizes every manifest and
+  segment request. See `industry-specific-docs/pharmacy/cameras/001-configured-gateway-live-view.md`.
+  **This is code, not a hardware pass.**
 - Restaurant has the hardened MediaMTX transport and a stream route
   (`src/lib/cameras/mediamtx.ts`, `src/app/api/restaurant/cameras/[cameraId]/stream/route.ts`):
   HTTPS-only base URL, per-camera bindings, flat resource names, 256 KiB manifest cap,
-  16 MiB segment cap, 10 s deadline. This is code, not a hardware pass, and it is not yet
-  reachable from Pharmacy.
+  16 MiB segment cap, 10 s deadline. Pharmacy reuses the same transport; bindings carry
+  `"vertical": "pharmacy"`, and bindings without it stay restaurant-only. This is code, not a
+  hardware pass.
 - Evidence snapshots: `evidenceSnapshotAdapter` returns an adapter only for the simulator
   runtime and `null` otherwise, so real snapshots fail closed
   (`src/lib/cameras/evidence.ts`). HLS playback does not provide a still. Real snapshot support
@@ -188,7 +192,7 @@ real card or wallet, or put credentials into chat, a ticket or a file until the 
 
 | Issue | Role for DEV-744 | State | Do not duplicate |
 | --- | --- | --- | --- |
-| DEV-740 | Real DVR live viewing via shared gateway | In Progress | Gateway registration, grants, player |
+| DEV-740 | Real DVR live viewing via shared gateway | Code merged (2026-11-06); hardware acceptance pending | Gateway registration, grants, player |
 | DEV-741 | Thermal transport, job ack, retry, dedupe | Backlog | Bridge, queue, delivery status |
 | DEV-742 | Printer settings and test print (thermal + A4) | Backlog | Saved format UI, test print |
 | DEV-743 | Provider-agnostic terminal seam | Backlog | Adapter, pending/timeout, refund/void |
@@ -281,13 +285,13 @@ delivered and deployed to the test environment.
 | --- | --- | --- | --- | --- | --- | --- |
 | HW-CAM-01 | Identify the DVR exactly | Read label and device UI | Model, firmware, channels, codec recorded | Photo of label (no serial if sensitive), screenshot of info page | Operator access | UNTESTED |
 | HW-CAM-02 | Read-only account exists and is least-privilege | Review device user list | Dedicated account, no admin | Screenshot with names only | Operator | UNTESTED |
-| HW-CAM-03 | Gateway reaches DVR on the private network only | Gateway-side diagnostic (DEV-740) | `ok` / `auth-failed` / `unreachable` only; no topology detail | Probe result record | [BLOCKED: DEV-740] | UNTESTED |
-| HW-CAM-04 | Live view of one channel in the supported browser | Open Pharmacy camera view | Video plays; no RTSP URL, host or password in page source, network tab, console or logs | Screen capture, HAR with secrets scrubbed | [BLOCKED: DEV-740] | UNTESTED |
-| HW-CAM-05 | Codec compatibility (H.264 and, if used, H.265) | Play main and sub stream | Plays, or fails with an honest message | Capture per codec | [BLOCKED: DEV-740] | UNTESTED |
-| HW-CAM-06 | Role access: admin allowed; cashier / pharmacist / read-only denied | Sign in as each role | Allowed roles only | Per-role result | [BLOCKED: DEV-740] | UNTESTED |
-| HW-CAM-07 | Branch isolation: branch A user cannot view branch B | Sign in as A, request B camera | Denied | Result + audit entry | [BLOCKED: DEV-740] | UNTESTED |
-| HW-CAM-08 | Viewer grant expiry and revocation | Revoke / wait for expiry while playing | Playback stops; reuse refused | Timestamps | [BLOCKED: DEV-740] | UNTESTED |
-| HW-CAM-09 | Failure: DVR unplugged / wrong credential / gateway down | Controlled fault at the DVR with owner approval | Honest error; no secret leak; recovery after restore | Before/after captures | [BLOCKED: DEV-740] + owner approval | UNTESTED |
+| HW-CAM-03 | Gateway reaches DVR on the private network only | Gateway-side diagnostic (DEV-740) | `ok` / `auth-failed` / `unreachable` only; no topology detail | Probe result record | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |
+| HW-CAM-04 | Live view of one channel in the supported browser | Open Pharmacy camera view | Video plays; no RTSP URL, host or password in page source, network tab, console or logs | Screen capture, HAR with secrets scrubbed | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |
+| HW-CAM-05 | Codec compatibility (H.264 and, if used, H.265) | Play main and sub stream | Plays, or fails with an honest message | Capture per codec | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |
+| HW-CAM-06 | Role access: admin allowed; cashier / pharmacist / read-only denied | Sign in as each role | Allowed roles only | Per-role result | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |
+| HW-CAM-07 | Branch isolation: branch A user cannot view branch B | Sign in as A, request B camera | Denied | Result + audit entry | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |
+| HW-CAM-08 | Viewer grant expiry and revocation | Revoke / wait for expiry while playing | Playback stops; reuse refused | Timestamps | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |
+| HW-CAM-09 | Failure: DVR unplugged / wrong credential / gateway down | Controlled fault at the DVR with owner approval | Honest error; no secret leak; recovery after restore | Before/after captures | DEV-740 code merged; needs connected camera, owner-provisioned gateway and owner approval | UNTESTED |
 | HW-CAM-10 | Still snapshot for a tender or cold-chain event | Trigger evidence capture | Image stored privately; failure shows `SNAPSHOT_UNAVAILABLE`, not a fake image | Stored object metadata, no pixels in ticket | [BLOCKED: DEV-745] | UNTESTED |
 | HW-CAM-11 | Retention purge of evidence stills | Wait for or simulate retention | Removed per policy | Purge record | [BLOCKED: DEV-745] | UNTESTED |
 | HW-CAM-12 | Privacy: consent / signage / who may view | Policy check | Documented per branch | Policy note | Owner | UNTESTED |
@@ -305,7 +309,7 @@ any such app is compatible with the gateway or with ONVIF on the DVR, is **unver
 | HW-PHN-01 | Approve the test plan | Owner written approval naming the iPhone, the app, the gateway host and the network | Approval recorded before anything else | Approval note | Owner | UNTESTED |
 | HW-PHN-02 | Pick a publisher app and record name and version | Owner chooses; review its permissions and data handling | App identity recorded; no account credentials in chat | Sheet | Owner approval; no install without approval | UNTESTED |
 | HW-PHN-03 | Owner-controlled gateway accepts a publish on a private network | Publisher to gateway; no ports opened to the internet | Stream appears at the gateway only | Gateway-side status, no URLs with credentials | Owner gateway; HW-PHN-01 | UNTESTED |
-| HW-PHN-04 | Live view through the app's gateway path | Open the Pharmacy camera view | Plays, with no RTSP URL or credential in page, network tab or logs | Capture | [BLOCKED: DEV-740] | UNTESTED |
+| HW-PHN-04 | Live view through the app's gateway path | Open the Pharmacy camera view | Plays, with no RTSP URL or credential in page, network tab or logs | Capture | DEV-740 code merged; needs the authorized phone feed and an owner-provisioned gateway | UNTESTED |
 | HW-PHN-05 | Codec and orientation | Record codec and rotation used by the app | Plays or fails honestly | Capture | HW-PHN-03 | UNTESTED |
 | HW-PHN-06 | Interruption and recovery | Lock the phone, switch app, drop Wi-Fi, restore | Honest status; resumes or fails clearly | Timestamps | HW-PHN-03 | UNTESTED |
 | HW-PHN-07 | Privacy | Point only at an agreed, non-patient scene | No patient or customer in frame | Test note | Owner | UNTESTED |

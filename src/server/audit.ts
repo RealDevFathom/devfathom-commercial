@@ -100,11 +100,14 @@ function isSensitiveKey(key: string): boolean {
   // Camera renewal input can be audited before its resolver runs (including
   // denied or invalid requests). Match the identifier exactly, not all grants.
   // Match PIN keys exactly or as a suffix (approvalPin) so unrelated keys such
-  // as shippingAddress remain useful.
+  // as shippingAddress remain useful. Camera gateway base URLs are rejected when
+  // they carry credentials or an address, but a rejected value is still audited;
+  // never retain it (DEV-740).
   return (
     k === 'pin' ||
     k.endsWith('pin') ||
     k === 'previousgrantid' ||
+    k === 'baseurl' ||
     SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
   );
 }
