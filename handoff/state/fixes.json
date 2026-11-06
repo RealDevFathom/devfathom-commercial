@@ -490,5 +490,26 @@
   "what": "d8fc3f540 adds a printed-invoice discount test and Prettier; b92a83317 runs the invoice-discount DB suite's setup on the superuser URL",
   "initialFailure": "no machine run (review findings only)",
   "noInitialRun": true
+ },
+ "146": {
+  "sha": "b1c6a2c2f7582b8ed88bdc6cdf1d6b3381399560",
+  "initialSha": "e2673832e41dd1c01e23a38efaab7444f47c06ef",
+  "what": "prisma.config.ts self-contained for release packaging; Prettier",
+  "initialFailure": "no machine run (QA finding and Prettier)",
+  "noInitialRun": true
+ },
+ "262": {
+  "sha": "815845dde10c5b8b0fa557cfdfbcc498c016eac3",
+  "initialSha": "3b4029472d1523997332746cccbf4c077cb99648",
+  "what": "base-field review semantics kept, variant review guards tested, Prettier",
+  "initialFailure": "no machine run (QA findings and Prettier)",
+  "noInitialRun": true
+ },
+ "144": {
+  "sha": "185b869cf4bb117c1d87438848488e0863b60f4f",
+  "initialSha": "ada54fa59eb283e1ca681a225206b5397461625e",
+  "what": "Studio leading and tracking-wide tokens restored",
+  "initialFailure": "no machine run (QA findings only)",
+  "noInitialRun": true
  }
 }

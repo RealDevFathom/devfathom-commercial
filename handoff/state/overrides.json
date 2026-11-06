@@ -830,5 +830,35 @@
    "verdict": "PASS",
    "details": "On tRPC, REST and the assistant, the discount must be 0..MAX_MONEY and at most the subtotal. Totals are recomputed on the server and client totals are ignored. Edits run under FOR UPDATE with a version guard and reject a total below payments. adminProcedure, finance:write and h.isAdmin on the RLS-scoped db are intact. The fix commits change only tests, whitespace and the test suite's setup connection; the code under test still runs as a non-bypassing role"
   }
+ },
+ "146": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "First review FAIL (prisma.config.ts depended on scripts/load-local-env.ts, which develop's release packager does not ship, so release prisma commands would break), fixed in b1c6a2c2f. Re-review: prisma.config.ts imports only dotenv and prisma/config. The merge with develop is clean and leaves package-develop.sh, Dockerfile.aws and deploy-develop.test.ts as on develop, and a copy of only prisma.config.ts and prisma/ validates. Env order (shell > .env.local > .env), the offline list and the error text are unchanged. Prettier is clean and vitest passes 36/36. Non-blocking: the seed/admin scripts still import scripts/load-local-env.js, which the develop release does not ship, but nothing in deploy runs them"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "At b1c6a2c2f, the inlined prisma.config.ts loader uses dotenv without override, so real shell, CI and platform variables always beat .env.local and .env (confirmed empirically). The missing-URL error names only DATABASE_URL and the files searched, never a value. Credentials are required only for database commands, the MIGRATION_DATABASE_URL and runtime role split is unchanged, and the Docker contexts still exclude .env files. No new secret exposure"
+  }
+ },
+ "144": {
+  "qa": {
+   "verdict": "FAIL",
+   "details": "First review FAIL on two counts. (1) Deleting the legacy :root block dropped its unlayered typography overrides, so line-height and letter-spacing changed across the product: fixed in 185b869cf, which restores --leading-tight 1.08, --leading-snug 1.22, --leading-relaxed 1.65 and --tracking-wide 0.04em to the Studio :root block, byte-identical to the merge-base values and unlayered as before, with a token test; compiled CSS now matches the merge-base. (2) Still open: develop added a new rounded-[3px] control (cheque-maturity, #697) after the merge-base that this PR does not migrate, so with develop merged the issue's radius rule is unmet and the PR's own guard test fails; the branch also conflicts with develop. That needs develop merged and the control migrated by the owner"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked all 26 changed files. The tsx changes only swap Tailwind class names, and globals.css only removes and merges tokens. Auth logic in platform-login-form, the MFA card, the support-access form and secret reveal in the command form, and requirePlatformRead, are unchanged. No new input handling, data access, raw SQL, HTML injection, secrets or logging. No security issue found. 185b869cf adds only CSS custom properties and a test"
+  }
+ },
+ "262": {
+  "qa": {
+   "verdict": "FAIL",
+   "details": "First review FAIL (the PR changed base-field review semantics DEV-175 did not ask for, three variant-review acceptance paths had no test, and the branch conflicts with develop), partly fixed in 815845dde: the out-of-scope OCR prefill and null-clearing are removed so a blank field keeps the extracted value again, tests now cover the review-time and commit-time variant length guards and commit importing the reviewed variant names and prices, and Prettier is applied. Still FAIL: the branch is 302 commits behind develop and conflicts in src/lib/restaurant/menu-import.ts with develop's #557 relabel and per-variant currency checks. Neither side can be taken whole, so the owner must merge develop and combine them (steps are in the fix spec). Non-blocking: the length guards are tested only in the .mjs fixture runtime, which CI does not run"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "At 815845dde, reviewLine and commit stay behind capabilityProcedure('menu:import') with the reviewer taken from the session. Variants pass a strict zod schema plus server-side regex checks, and the lookup and parameterized FOR UPDATE lock run in the tenant-scoped transaction, with RLS covering reviewedVariants. Commit fails closed on missing, malformed or wrong-length variant evidence. No vulnerability introduced"
+  }
  }
 }
