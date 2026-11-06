@@ -1,0 +1,1148 @@
+diff --git a/src/lib/pharmacy/sales.ts b/src/lib/pharmacy/sales.ts
+--- a/src/lib/pharmacy/sales.ts
++++ b/src/lib/pharmacy/sales.ts
+@@ -1,3 +1,7 @@
++import {
++  readEffectiveSaleAllocations,
++  projectSaleAllocations,
++} from './read-effective-sale-allocations';
+ import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import { createHmac, timingSafeEqual } from 'node:crypto';
+ import { Prisma } from '@/generated/prisma/client';
+@@ -21,7 +25,8 @@
+   type ControlledRestorationPin,
+ } from './controlled-restoration-authorization';
+ import { appendControlledRestorations } from './controlled-register';
+-import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
++import { allocateForSale, allocateReservedForSale } from './stock-ledger';
++import { restoreSaleAllocations } from './restore-sale-allocations';
+ import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
+ import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+ 
+@@ -423,6 +428,14 @@
+   reason?: string,
+   controlledWitness?: ControlledRestorationPin
+ ) {
++  if (action === 'void') {
++    await db.$executeRaw(
++      Prisma.sql`SELECT pharmacy_assert_no_payment_attempt(${scope.organizationId},${scope.branchId},${saleId})`
++    );
++    await db.$queryRaw(
++      Prisma.sql`SELECT id FROM pharmacy_sales WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${saleId} FOR UPDATE`
++    );
++  }
+   const sale = await saleInScope(db, scope, saleId);
+   const transitions = {
+     hold: ['OPEN', 'HELD', 'HELD'],
+@@ -436,54 +449,31 @@
+     action === 'void' && sale.lines.some((line) => line.medicine.controlled)
+       ? await authorizeControlledRestoration(db, scope, controlledWitness)
+       : undefined;
+-  const claimed = await db.pharmacySale.updateMany({
+-    where: {
+-      id: saleId,
+-      organizationId: scope.organizationId,
+-      branchId: scope.branchId,
+-      status: from,
+-    },
+-    data: { status: to },
+-  });
+-  if (claimed.count !== 1) throw new PharmacySaleError('INVALID_STATE');
+-
+   if (action === 'void') {
+-    const allocations = await db.pharmacySaleLineAllocation.findMany({
+-      where: {
+-        organizationId: scope.organizationId,
+-        branchId: scope.branchId,
+-        saleLine: { saleId, ...ACTIVE_SALE_LINE },
+-      },
+-      orderBy: { createdAt: 'asc' },
+-      select: { stockMovementId: true },
+-    });
+-    const reversals = await reverseMovements(db, scope, {
+-      movementIds: allocations.map((allocation) => allocation.stockMovementId),
+-      reason: reason ?? 'Sale voided',
+-      at: new Date(),
+-    });
+-    const movements = await db.pharmacyStockMovement.findMany({
+-      where: {
+-        organizationId: scope.organizationId,
+-        branchId: scope.branchId,
+-        id: { in: allocations.map((allocation) => allocation.stockMovementId) },
+-      },
+-      select: { id: true, quantityUnits: true },
++    const restorationLines = await restoreSaleAllocations(db, scope, {
++      saleId,
++      operation: 'void',
++      reason: reason?.trim() || 'Sale voided',
+     });
+     await appendControlledRestorations(db, {
+       organizationId: scope.organizationId,
+       branchId: scope.branchId,
+       recordedByUserId: scope.actorId,
+       witness,
+-      reason: reason ?? 'Sale voided',
+-      lines: movements.map((movement) => ({
+-        sourceMovementId: movement.id,
+-        restorationMovementId: reversals.find((row) => row.reversesMovementId === movement.id)!.id,
+-        quantityCanonicalUnits: -movement.quantityUnits,
+-        restoreSellable: true,
+-      })),
++      reason: reason?.trim() || 'Sale voided',
++      lines: restorationLines,
+     });
+   }
++  const claimed = await db.pharmacySale.updateMany({
++    where: {
++      id: saleId,
++      organizationId: scope.organizationId,
++      branchId: scope.branchId,
++      status: from,
++    },
++    data: { status: to },
++  });
++  if (claimed.count !== 1) throw new PharmacySaleError('INVALID_STATE');
+ 
+   await event(db, scope, saleId, kind, reason);
+   return saleInScope(db, scope, saleId);
+@@ -542,6 +532,7 @@
+     },
+   });
+   if (!sale) throw new PharmacySaleError('NOT_FOUND');
++  const projected = await readEffectiveSaleAllocations(db, scope, saleId);
+   const locations = await db.pharmacyStockLocation.findMany({
+     where: {
+       organizationId: scope.organizationId,
+@@ -551,7 +542,16 @@
+     },
+     select: { id: true, name: true },
+   });
+-  const lines = sale.lines.map((line) => {
++  const lines = sale.lines.map((original) => {
++    const line = {
++      ...original,
++      allocations: projectSaleAllocations(
++        original.allocations,
++        projected,
++        original.canonicalUnits,
++        original.discountMinor
++      ),
++    };
+     const unidentifiedUnits = line.unidentifiedReturnHolds.reduce(
+       (n, row) => n + row.canonicalUnits,
+       0
+@@ -662,7 +662,7 @@
+   );
+   await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sale_lines WHERE id=${input.saleLineId}
+     AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
+-  const line = await db.pharmacySaleLine.findFirst({
++  const storedLine = await db.pharmacySaleLine.findFirst({
+     where: {
+       ...ACTIVE_SALE_LINE,
+       id: input.saleLineId,
+@@ -677,7 +677,18 @@
+       unidentifiedReturnHolds: true,
+     },
+   });
+-  if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
++  if (!storedLine || storedLine.sale.status !== 'COMPLETED')
++    throw new PharmacySaleError('NOT_FOUND');
++  const projected = await readEffectiveSaleAllocations(db, scope, storedLine.saleId);
++  const line = {
++    ...storedLine,
++    allocations: projectSaleAllocations(
++      storedLine.allocations,
++      projected,
++      storedLine.canonicalUnits,
++      storedLine.discountMinor
++    ),
++  };
+   const witness = line.medicine.controlled
+     ? await authorizeControlledRestoration(db, scope, input.controlledWitness)
+     : undefined;
+diff --git a/src/lib/pharmacy/remove-sale-line.ts b/src/lib/pharmacy/remove-sale-line.ts
+--- a/src/lib/pharmacy/remove-sale-line.ts
++++ b/src/lib/pharmacy/remove-sale-line.ts
+@@ -1,7 +1,7 @@
+ import { Prisma } from '@/generated/prisma/client';
+ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+ import type { LedgerScope } from './stock-ledger';
+-import { reverseMovements } from './stock-ledger';
++import { restoreSaleAllocations } from './restore-sale-allocations';
+ import {
+   authorizeControlledRestoration,
+   type ControlledRestorationPin,
+@@ -69,6 +69,13 @@
+     },
+     orderBy: [{ inventoryLotId: 'asc' }, { stockLocationId: 'asc' }, { id: 'asc' }],
+   });
++  const [effective] = await db.$queryRaw<Array<{ units: number }>>(Prisma.sql`
++    SELECT COALESCE(SUM(a."canonicalUnits" - COALESCE(r.units,0)),0)::int AS units
++    FROM pharmacy_sale_line_allocations a
++    LEFT JOIN LATERAL (SELECT SUM(x."canonicalUnits") units FROM pharmacy_allocation_partial_releases x
++      WHERE x."organizationId"=a."organizationId" AND x."branchId"=a."branchId" AND x."allocationId"=a.id) r ON true
++    WHERE a."organizationId"=${scope.organizationId} AND a."branchId"=${scope.branchId} AND a."saleLineId"=${line.id}
++  `);
+   if (
+     movements.length !== line.allocations.length ||
+     movements.some((m) => {
+@@ -83,7 +90,7 @@
+         m.stockLocationId !== allocation.stockLocationId
+       );
+     }) ||
+-    line.allocations.reduce((sum, a) => sum + a.canonicalUnits, 0) !== line.canonicalUnits
++    effective?.units !== line.canonicalUnits
+   )
+     throw new SaleLineRemovalError('This line has inconsistent stock evidence.');
+   if (line.medicine.controlled) {
+@@ -102,10 +109,11 @@
+     )
+       throw new SaleLineRemovalError('Controlled stock evidence needs pharmacist review.');
+   }
+-  const reversals = await reverseMovements(db, scope, {
+-    movementIds: movements.map((m) => m.id),
++  const restorationLines = await restoreSaleAllocations(db, scope, {
++    saleId: input.saleId,
++    saleLineId: line.id,
++    operation: 'remove',
+     reason,
+-    at: new Date(),
+   });
+   await appendControlledRestorations(db, {
+     organizationId: scope.organizationId,
+@@ -113,12 +121,7 @@
+     recordedByUserId: scope.actorId,
+     witness,
+     reason,
+-    lines: movements.map((m) => ({
+-      sourceMovementId: m.id,
+-      restorationMovementId: reversals.find((r) => r.reversesMovementId === m.id)!.id,
+-      quantityCanonicalUnits: -m.quantityUnits,
+-      restoreSellable: true,
+-    })),
++    lines: restorationLines,
+   });
+   await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_user_id',${scope.actorId},true)`);
+   await db.pharmacySaleLine.update({
+diff --git a/src/lib/pharmacy/restore-sale-allocations.ts b/src/lib/pharmacy/restore-sale-allocations.ts
+new file mode 100644
+--- /dev/null
++++ b/src/lib/pharmacy/restore-sale-allocations.ts
+@@ -0,0 +1,62 @@
++import { Prisma } from '@/generated/prisma/client';
++import type { ScopedDb } from '@/lib/tenancy/scoped-db';
++import { restoreAllocationResidual } from './restore-allocation-residual';
++import { reverseMovements, type LedgerScope } from './stock-ledger';
++
++/** Caller owns the transaction and holds the scoped sale lock until finalization. */
++export async function restoreSaleAllocations(
++  db: ScopedDb,
++  scope: LedgerScope,
++  input: { saleId: string; saleLineId?: string; operation: 'void' | 'remove'; reason: string }
++) {
++  const allocations = await db.$queryRaw<
++    Array<{ id: string; saleLineId: string; stockMovementId: string; quantityUnits: number }>
++  >(Prisma.sql`
++    SELECT a.id,a."saleLineId",a."stockMovementId",m."quantityUnits"
++    FROM pharmacy_sale_line_allocations a
++    JOIN pharmacy_sale_lines l ON l."organizationId"=a."organizationId" AND l."branchId"=a."branchId" AND l.id=a."saleLineId"
++    JOIN pharmacy_stock_movements m ON m."organizationId"=a."organizationId" AND m."branchId"=a."branchId" AND m.id=a."stockMovementId"
++    WHERE a."organizationId"=${scope.organizationId} AND a."branchId"=${scope.branchId}
++      AND l."saleId"=${input.saleId} AND l."removedAt" IS NULL
++      AND (${input.saleLineId ?? null}::text IS NULL OR l.id=${input.saleLineId ?? null})
++    ORDER BY a."inventoryLotId",a."stockLocationId",a.id
++  `);
++  const full = [] as typeof allocations;
++  for (const allocation of allocations) {
++    const result = await restoreAllocationResidual(db, scope, {
++      saleId: input.saleId,
++      saleLineId: allocation.saleLineId,
++      allocationId: allocation.id,
++      idempotencyKey: `${input.operation}:${input.saleLineId ?? input.saleId}`,
++      reason: input.reason,
++    });
++    if (result.kind === 'FULL_REVERSAL_REQUIRED') full.push(allocation);
++  }
++  const reversals = await reverseMovements(db, scope, {
++    movementIds: full.map((a) => a.stockMovementId),
++    reason: input.reason,
++    at: new Date(),
++  });
++  const [check] = await db.$queryRaw<Array<{ complete: boolean }>>(Prisma.sql`
++    SELECT NOT EXISTS (
++      SELECT 1 FROM pharmacy_sale_lines l
++      WHERE l."organizationId"=${scope.organizationId} AND l."branchId"=${scope.branchId}
++        AND l."saleId"=${input.saleId} AND l."removedAt" IS NULL
++        AND (${input.saleLineId ?? null}::text IS NULL OR l.id=${input.saleLineId ?? null})
++        AND (NOT EXISTS (SELECT 1 FROM pharmacy_sale_line_allocations a WHERE a."organizationId"=l."organizationId" AND a."branchId"=l."branchId" AND a."saleLineId"=l.id)
++          OR EXISTS (SELECT 1 FROM pharmacy_sale_line_allocations a WHERE a."organizationId"=l."organizationId" AND a."branchId"=l."branchId" AND a."saleLineId"=l.id
++            AND NOT pharmacy_allocation_restoration_complete(a."organizationId",a."branchId",a.id)))
++    ) AS complete
++  `);
++  if (!check?.complete) throw new Error('RESTORATION_INCOMPLETE');
++  return full.map((a) => {
++    const reversal = reversals.find((r) => r.reversesMovementId === a.stockMovementId);
++    if (!reversal) throw new Error('RESTORATION_EVIDENCE_MISSING');
++    return {
++      sourceMovementId: a.stockMovementId,
++      restorationMovementId: reversal.id,
++      quantityCanonicalUnits: -a.quantityUnits,
++      restoreSellable: true,
++    };
++  });
++}
+diff --git a/src/lib/pharmacy/restore-sale-allocations.test.ts b/src/lib/pharmacy/restore-sale-allocations.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/lib/pharmacy/restore-sale-allocations.test.ts
+@@ -0,0 +1,57 @@
++import { beforeEach, describe, expect, it, vi } from 'vitest';
++import type { ScopedDb } from '@/lib/tenancy/scoped-db';
++const mocks = vi.hoisted(() => ({ residual: vi.fn(), reverse: vi.fn() }));
++vi.mock('./restore-allocation-residual', () => ({ restoreAllocationResidual: mocks.residual }));
++vi.mock('./stock-ledger', () => ({ reverseMovements: mocks.reverse }));
++import { restoreSaleAllocations } from './restore-sale-allocations';
++const scope = { organizationId: 'org', branchId: 'branch', actorId: 'actor' };
++const rows = [
++  { id: 'a', saleLineId: 'line', stockMovementId: 'm1', quantityUnits: -10 },
++  { id: 'b', saleLineId: 'line', stockMovementId: 'm2', quantityUnits: -8 },
++  { id: 'c', saleLineId: 'line', stockMovementId: 'm3', quantityUnits: -5 },
++];
++const input = { saleId: 'sale', operation: 'void' as const, reason: 'voided' };
++function fake(complete = true) {
++  const query = vi.fn().mockResolvedValueOnce(rows).mockResolvedValueOnce([{ complete }]);
++  return { query, db: { $queryRaw: query } as unknown as ScopedDb };
++}
++describe('restoring sale allocations', () => {
++  beforeEach(() => {
++    vi.resetAllMocks();
++  });
++  it('restores residuals separately, reverses untouched movements once, and checks every active allocation', async () => {
++    mocks.residual
++      .mockResolvedValueOnce({ kind: 'RESTORED', stockMovementId: 'r1', replayed: false })
++      .mockResolvedValueOnce({ kind: 'FULL_REVERSAL_REQUIRED' })
++      .mockResolvedValueOnce({ kind: 'ALREADY_RELEASED' });
++    mocks.reverse.mockResolvedValue([{ id: 'reverse-m2', reversesMovementId: 'm2' }]);
++    const { db, query } = fake();
++    await expect(restoreSaleAllocations(db, scope, input)).resolves.toEqual([
++      {
++        sourceMovementId: 'm2',
++        restorationMovementId: 'reverse-m2',
++        quantityCanonicalUnits: 8,
++        restoreSellable: true,
++      },
++    ]);
++    expect(mocks.reverse.mock.calls[0]![2].movementIds).toEqual(['m2']);
++    expect(mocks.residual).toHaveBeenCalledTimes(3);
++    expect(query).toHaveBeenCalledTimes(2);
++  });
++  it('fails the transaction if any allocation lacks complete restoration', async () => {
++    mocks.residual.mockResolvedValue({ kind: 'ALREADY_RELEASED' });
++    mocks.reverse.mockResolvedValue([]);
++    const { db } = fake(false);
++    await expect(restoreSaleAllocations(db, scope, input)).rejects.toThrow(
++      'RESTORATION_INCOMPLETE'
++    );
++  });
++  it('fails if a claimed full reversal is missing', async () => {
++    mocks.residual.mockResolvedValue({ kind: 'FULL_REVERSAL_REQUIRED' });
++    mocks.reverse.mockResolvedValue([]);
++    const { db } = fake();
++    await expect(restoreSaleAllocations(db, scope, input)).rejects.toThrow(
++      'RESTORATION_EVIDENCE_MISSING'
++    );
++  });
++});
+diff --git a/src/lib/pharmacy/effective-sale-allocation.ts b/src/lib/pharmacy/effective-sale-allocation.ts
+new file mode 100644
+--- /dev/null
++++ b/src/lib/pharmacy/effective-sale-allocation.ts
+@@ -0,0 +1,101 @@
++/**
++ * Project immutable allocation and release evidence into the units and gross
++ * still on a sale line. Callers must load all releases in the same transaction
++ * and hold the sale lock when using this projection for a mutation or issuance.
++ */
++export type AllocationEvidence = {
++  id: string;
++  organizationId: string;
++  branchId: string;
++  canonicalUnits: number;
++  grossMinor: number | null;
++  priceEvidence: null | {
++    organizationId: string;
++    branchId: string;
++    allocationId: string;
++    originalUnits: number;
++    priceNumerator: number;
++    denominator: number;
++    remainder: number;
++    grossMinor: number;
++  };
++  releases: readonly {
++    organizationId: string;
++    branchId: string;
++    allocationId: string;
++    canonicalUnits: number;
++    grossMinor: number;
++  }[];
++};
++
++export class InvalidAllocationEvidence extends Error {
++  constructor() {
++    super('INVALID_ALLOCATION_EVIDENCE');
++  }
++}
++
++const nonnegative = (n: number) => Number.isSafeInteger(n) && n >= 0;
++
++/** Returns null when no units remain; never changes the historical input rows. */
++export function effectiveSaleAllocation<T extends AllocationEvidence>(
++  allocation: T,
++  scope: { organizationId: string; branchId: string }
++): (T & { canonicalUnits: number; grossMinor: number | null }) | null {
++  const fail = (): never => {
++    throw new InvalidAllocationEvidence();
++  };
++  const scoped = (row: { organizationId: string; branchId: string }) =>
++    row.organizationId === scope.organizationId && row.branchId === scope.branchId;
++  if (
++    !scoped(allocation) ||
++    !Number.isSafeInteger(allocation.canonicalUnits) ||
++    allocation.canonicalUnits <= 0 ||
++    (allocation.grossMinor !== null && !nonnegative(allocation.grossMinor))
++  )
++    fail();
++  const evidence = allocation.priceEvidence;
++  if (!evidence) {
++    if (allocation.releases.length) fail();
++    return { ...allocation };
++  }
++  if (
++    !scoped(evidence) ||
++    evidence.allocationId !== allocation.id ||
++    evidence.originalUnits !== allocation.canonicalUnits ||
++    !nonnegative(evidence.priceNumerator) ||
++    !Number.isSafeInteger(evidence.denominator) ||
++    evidence.denominator <= 0 ||
++    !nonnegative(evidence.remainder) ||
++    evidence.remainder >= evidence.denominator ||
++    !nonnegative(evidence.grossMinor) ||
++    evidence.grossMinor !== allocation.grossMinor
++  )
++    fail();
++  const gross = (units: number) =>
++    (BigInt(evidence.remainder) + BigInt(units) * BigInt(evidence.priceNumerator)) /
++    BigInt(evidence.denominator);
++  if (gross(evidence.originalUnits) !== BigInt(evidence.grossMinor)) fail();
++  let units = evidence.originalUnits;
++  let releasedGross = BigInt(0);
++  for (const release of allocation.releases) {
++    if (
++      !scoped(release) ||
++      release.allocationId !== allocation.id ||
++      !Number.isSafeInteger(release.canonicalUnits) ||
++      release.canonicalUnits <= 0 ||
++      !nonnegative(release.grossMinor) ||
++      release.canonicalUnits > units
++    )
++      fail();
++    units -= release.canonicalUnits;
++    releasedGross += BigInt(release.grossMinor);
++  }
++  const remainingGross = gross(units);
++  if (
++    releasedGross !== BigInt(evidence.grossMinor) - remainingGross ||
++    remainingGross > BigInt(Number.MAX_SAFE_INTEGER)
++  )
++    fail();
++  if (!units) return null;
++  return { ...allocation, canonicalUnits: units, grossMinor: Number(remainingGross) };
++}
+diff --git a/src/lib/pharmacy/read-effective-sale-allocations.ts b/src/lib/pharmacy/read-effective-sale-allocations.ts
+new file mode 100644
+--- /dev/null
++++ b/src/lib/pharmacy/read-effective-sale-allocations.ts
+@@ -0,0 +1,74 @@
++import { Prisma } from '@/generated/prisma/client';
++import { apportionDiscount } from './sale-line-money';
++import type { ScopedDb } from '@/lib/tenancy/scoped-db';
++import {
++  effectiveSaleAllocation,
++  InvalidAllocationEvidence,
++  type AllocationEvidence,
++} from './effective-sale-allocation';
++
++/** Call within the caller's tenant transaction; mutations/issuance also hold the sale lock. */
++export async function readEffectiveSaleAllocations(
++  db: ScopedDb,
++  scope: { organizationId: string; branchId: string },
++  saleId: string
++) {
++  const rows = await db.$queryRaw<
++    Array<AllocationEvidence & { saleLineId: string; lineEdited: boolean }>
++  >(Prisma.sql`
++    SELECT a.id,a."organizationId",a."branchId",a."saleLineId",a."canonicalUnits",a."grossMinor",
++      EXISTS (SELECT 1 FROM pharmacy_sale_line_edit_requests q WHERE q."organizationId"=a."organizationId"
++        AND q."branchId"=a."branchId" AND q."saleLineId"=a."saleLineId") AS "lineEdited",
++      CASE WHEN e."allocationId" IS NULL THEN NULL ELSE jsonb_build_object(
++        'organizationId',e."organizationId",'branchId',e."branchId",'allocationId',e."allocationId",
++        'originalUnits',e."originalUnits",'priceNumerator',e."priceNumerator",'denominator',e.denominator,
++        'remainder',e.remainder,'grossMinor',e."grossMinor") END AS "priceEvidence",
++      COALESCE((SELECT jsonb_agg(jsonb_build_object('organizationId',r."organizationId",'branchId',r."branchId",
++        'allocationId',r."allocationId",'canonicalUnits',r."canonicalUnits",'grossMinor',r."grossMinor") ORDER BY r."createdAt",r.id)
++        FROM pharmacy_allocation_partial_releases r WHERE r."organizationId"=a."organizationId"
++          AND r."branchId"=a."branchId" AND r."allocationId"=a.id),'[]'::jsonb) AS releases
++    FROM pharmacy_sale_line_allocations a JOIN pharmacy_sale_lines l ON l."organizationId"=a."organizationId"
++      AND l."branchId"=a."branchId" AND l.id=a."saleLineId"
++    LEFT JOIN pharmacy_allocation_price_evidence e ON e."organizationId"=a."organizationId" AND e."branchId"=a."branchId" AND e."allocationId"=a.id
++    WHERE a."organizationId"=${scope.organizationId} AND a."branchId"=${scope.branchId}
++      AND l."saleId"=${saleId} AND l."removedAt" IS NULL
++    ORDER BY a."saleLineId",a."createdAt",a.id`);
++  return new Map(rows.map((row) => [row.id, effectiveSaleAllocation(row, scope)]));
++}
++
++/** Preserve rich allocation objects while replacing only effective quantity and gross. */
++export function projectSaleAllocations<
++  T extends { id: string; canonicalUnits: number; grossMinor: number | null },
++>(
++  rows: readonly T[],
++  projected: Awaited<ReturnType<typeof readEffectiveSaleAllocations>>,
++  expectedUnits: number,
++  lineDiscount: number = 0
++): T[] {
++  const result: T[] = [];
++  for (const row of rows) {
++    if (!projected.has(row.id)) throw new InvalidAllocationEvidence();
++    const effective = projected.get(row.id);
++    if (effective)
++      result.push({
++        ...row,
++        canonicalUnits: effective.canonicalUnits,
++        grossMinor: effective.grossMinor,
++      });
++  }
++  if (result.reduce((sum, row) => sum + row.canonicalUnits, 0) !== expectedUnits)
++    throw new InvalidAllocationEvidence();
++  const edited = rows.some((row) => projected.get(row.id)?.lineEdited);
++  if (!edited) return result;
++  if (
++    !Number.isSafeInteger(lineDiscount) ||
++    lineDiscount < 0 ||
++    result.some((row) => row.grossMinor === null)
++  )
++    throw new InvalidAllocationEvidence();
++  const gross = result.map((row) => row.grossMinor!);
++  if (lineDiscount > gross.reduce((sum, amount) => sum + amount, 0))
++    throw new InvalidAllocationEvidence();
++  const discounts = apportionDiscount(lineDiscount, gross);
++  return result.map((row, index) => ({ ...row, discountMinor: discounts[index]! }));
++}
+diff --git a/src/lib/pharmacy/sale-batch-safety.ts b/src/lib/pharmacy/sale-batch-safety.ts
+--- a/src/lib/pharmacy/sale-batch-safety.ts
++++ b/src/lib/pharmacy/sale-batch-safety.ts
+@@ -28,6 +28,7 @@
+   inventoryLotId: string;
+   stockLocationId: string;
+   canonicalUnits: number;
++  evidenceValid: boolean;
+ };
+ 
+ type LotRow = {
+@@ -79,16 +80,30 @@
+   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+   saleId: string
+ ): Promise<Map<string, CheckedSaleBatch>> {
+-  const allocations = await db.$queryRaw<AllocationRow[]>(Prisma.sql`
++  const rows = await db.$queryRaw<AllocationRow[]>(Prisma.sql`
+     SELECT allocation."saleLineId", allocation."inventoryLotId", allocation."stockLocationId",
+-           allocation."canonicalUnits"
++           (allocation."canonicalUnits" - COALESCE(released.units, 0))::int AS "canonicalUnits",
++           CASE WHEN COALESCE(released.units, 0) = 0 THEN true ELSE
++             COALESCE(evidence."allocationId" IS NOT NULL AND evidence."branchId" = allocation."branchId"
++               AND evidence."originalUnits" = allocation."canonicalUnits"
++               AND released.units <= allocation."canonicalUnits"
++               AND released.gross = evidence."grossMinor" -
++                 ((evidence.remainder::bigint + (allocation."canonicalUnits" - released.units) * evidence."priceNumerator"::bigint) / evidence.denominator), false)
++           END AS "evidenceValid"
+     FROM pharmacy_sale_line_allocations allocation
+-    JOIN pharmacy_sale_lines line
+-      ON line.id = allocation."saleLineId" AND line."organizationId" = allocation."organizationId"
++    JOIN pharmacy_sale_lines line ON line.id = allocation."saleLineId"
++      AND line."organizationId" = allocation."organizationId" AND line."branchId" = allocation."branchId"
++    LEFT JOIN pharmacy_allocation_price_evidence evidence ON evidence."organizationId"=allocation."organizationId"
++      AND evidence."branchId"=allocation."branchId" AND evidence."allocationId"=allocation.id
++    LEFT JOIN LATERAL (SELECT SUM(r."canonicalUnits") units, SUM(r."grossMinor") gross
++      FROM pharmacy_allocation_partial_releases r WHERE r."organizationId"=allocation."organizationId"
++        AND r."branchId"=allocation."branchId" AND r."allocationId"=allocation.id) released ON true
+     WHERE line."removedAt" IS NULL AND line."saleId" = ${saleId}
+-      AND line."organizationId" = ${scope.organizationId}
+-      AND line."branchId" = ${scope.branchId}
++      AND line."organizationId" = ${scope.organizationId} AND line."branchId" = ${scope.branchId}
+     ORDER BY allocation."saleLineId", allocation.id`);
++  if (rows.some((row) => !row.evidenceValid || row.canonicalUnits < 0))
++    throw new Error('INVALID_ALLOCATION_EVIDENCE');
++  const allocations = rows.filter((row) => row.canonicalUnits > 0);
+   const checked = new Map<string, CheckedSaleBatch>();
+   if (allocations.length === 0) return checked;
+ 
+diff --git a/src/lib/pharmacy/counter.ts b/src/lib/pharmacy/counter.ts
+--- a/src/lib/pharmacy/counter.ts
++++ b/src/lib/pharmacy/counter.ts
+@@ -1,3 +1,7 @@
++import {
++  readEffectiveSaleAllocations,
++  projectSaleAllocations,
++} from './read-effective-sale-allocations';
+ /**
+  * PH-POS — the counter's read side (POS-02 search, the FEFO cart, POS-08
+  * receipts).
+@@ -539,6 +543,7 @@
+     include: {
+       tenders: true,
+       lines: {
++        where: { removedAt: null },
+         orderBy: { createdAt: 'asc' },
+         include: {
+           medicine: {
+@@ -556,7 +561,19 @@
+     },
+   });
+   if (!sale) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
+-  return sale;
++  const projected = await readEffectiveSaleAllocations(db, scope, saleId);
++  return {
++    ...sale,
++    lines: sale.lines.map((line) => ({
++      ...line,
++      allocations: projectSaleAllocations(
++        line.allocations,
++        projected,
++        line.canonicalUnits,
++        line.discountMinor
++      ),
++    })),
++  };
+ }
+ 
+ /** The open bill, with the FEFO allocation each line actually drew. */
+diff --git a/src/lib/pharmacy/finance-postings.ts b/src/lib/pharmacy/finance-postings.ts
+--- a/src/lib/pharmacy/finance-postings.ts
++++ b/src/lib/pharmacy/finance-postings.ts
+@@ -1,3 +1,7 @@
++import {
++  readEffectiveSaleAllocations,
++  projectSaleAllocations,
++} from './read-effective-sale-allocations';
+ import { ACTIVE_SALE_LINE } from './active-sale-line';
+ /**
+  * PH-FIN / PRD §6.8 FIN-01 — the pharmacy posting adapters.
+@@ -169,12 +173,23 @@
+   scope: PostingScope,
+   input: { saleLineId: string; at: Date }
+ ) {
+-  const line = await db.pharmacySaleLine.findFirst({
++  const storedLine = await db.pharmacySaleLine.findFirst({
+     where: { ...ACTIVE_SALE_LINE, id: input.saleLineId, organizationId: scope.organizationId },
+     include: { allocations: { orderBy: { id: 'asc' } } },
+   });
+-  if (!line) throw new PharmacyFinanceError('NOT_FOUND');
+-  if (line.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
++  if (!storedLine) throw new PharmacyFinanceError('NOT_FOUND');
++  if (storedLine.branchId !== scope.branchId)
++    throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
++  const projected = await readEffectiveSaleAllocations(db, scope, storedLine.saleId);
++  const line = {
++    ...storedLine,
++    allocations: projectSaleAllocations(
++      storedLine.allocations,
++      projected,
++      storedLine.canonicalUnits,
++      storedLine.discountMinor
++    ),
++  };
+   if (line.allocations.length === 0) throw new PharmacyFinanceError('NOTHING_TO_POST');
+ 
+   const lots = await loadLots(
+diff --git a/src/lib/pharmacy/sale-completion.ts b/src/lib/pharmacy/sale-completion.ts
+--- a/src/lib/pharmacy/sale-completion.ts
++++ b/src/lib/pharmacy/sale-completion.ts
+@@ -1,3 +1,7 @@
++import {
++  readEffectiveSaleAllocations,
++  projectSaleAllocations,
++} from './read-effective-sale-allocations';
+ import { ACTIVE_SALE_LINE } from './active-sale-line';
+ import 'server-only';
+ import { randomUUID } from 'node:crypto';
+@@ -34,14 +38,24 @@
+   /** F2: a leased offline receipt number the caller already consumed in this transaction. */
+   leasedReceiptNumber: number | null = null
+ ) {
++  const projected = await readEffectiveSaleAllocations(db, scope, sale.id);
++  const effectiveLines = sale.lines.map((line) => ({
++    ...line,
++    allocations: projectSaleAllocations(
++      line.allocations,
++      projected,
++      line.canonicalUnits,
++      line.discountMinor
++    ),
++  }));
+   // #518: every completion path re-checks who may sell Rx/restricted non-controlled lines.
+   await assertRxSaleAllowed(
+     db,
+     scope,
+-    sale.lines.map((line) => line.medicine)
++    effectiveLines.map((line) => line.medicine)
+   );
+   // Defense in depth for non-tender completion callers.
+-  await assertVerifiedPrescriptionRelease(db, sale.lines);
++  await assertVerifiedPrescriptionRelease(db, effectiveLines);
+   // #633: re-check every batch under lock before a receipt number is drawn. The receipt
+   // snapshot below records these checked facts, not the ones loaded with the sale.
+   const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
+@@ -67,7 +81,7 @@
+       businessDate: input.businessDate,
+     },
+   });
+-  for (const line of sale.lines) {
++  for (const line of effectiveLines) {
+     if (line.prescriptionLineId) {
+       await recordCompletedPrescriptionReference(
+         db,
+@@ -87,7 +101,7 @@
+       );
+     }
+   }
+-  for (const line of sale.lines) {
++  for (const line of effectiveLines) {
+     if (
+       line.organizationId !== scope.organizationId ||
+       line.branchId !== scope.branchId ||
+@@ -114,7 +128,7 @@
+       deviceId: input.deviceId,
+       businessDate: input.businessDate.toISOString().slice(0, 10),
+       issuedAt: issuedAt.toISOString(),
+-      lines: sale.lines.map((line) => ({
++      lines: effectiveLines.map((line) => ({
+         saleLineId: line.id,
+         medicineId: line.medicineId,
+         presentationId: line.presentationId,
+@@ -145,6 +159,7 @@
+     },
+     {
+       ...sale,
++      lines: effectiveLines,
+       receiptNumber,
+       receiptDeviceId: input.deviceId,
+       businessDate: input.businessDate,
+@@ -162,7 +177,7 @@
+       payload: snapshot,
+     },
+   });
+-  for (const line of sale.lines) {
++  for (const line of effectiveLines) {
+     await postSaleLineEntry(db, scope, { saleLineId: line.id, at: issuedAt });
+   }
+ 
+diff --git a/src/lib/pharmacy/growth-evidence.ts b/src/lib/pharmacy/growth-evidence.ts
+--- a/src/lib/pharmacy/growth-evidence.ts
++++ b/src/lib/pharmacy/growth-evidence.ts
+@@ -9,7 +9,7 @@
+     SELECT COUNT(*) > 0 AND BOOL_AND(COALESCE(
+       posted.entries > 0 AND posted.gross = l."grossMinor"::bigint
+       AND posted.discount = l."discountMinor" AND posted.cost = allocated.cost
+-      AND allocated.units = l."canonicalUnits"
++      AND allocated.units = l."canonicalUnits" AND allocated.valid
+       AND NOT EXISTS (
+         SELECT 1 FROM pharmacy_sale_return_lines r
+         WHERE r."organizationId"=l."organizationId" AND r."branchId"=l."branchId" AND r."saleLineId"=l.id
+@@ -29,9 +29,15 @@
+     ,false)) AS complete, COALESCE(SUM(posted.sales),0) AS sales, COALESCE(SUM(posted.margin),0) AS margin
+     FROM pharmacy_sale_lines l
+     LEFT JOIN LATERAL (
+-      SELECT SUM(a."canonicalUnits") AS units, SUM(a."canonicalUnits"::bigint * lot."unitCostMinor") AS cost
++      SELECT SUM(a."canonicalUnits" - COALESCE(r.units,0)) AS units,
++        SUM((a."canonicalUnits" - COALESCE(r.units,0))::bigint * lot."unitCostMinor") AS cost,
++        BOOL_AND(COALESCE(r.units,0)=0 OR (e."allocationId" IS NOT NULL AND e."originalUnits"=a."canonicalUnits"
++          AND r.units <= a."canonicalUnits" AND r.gross=e."grossMinor"-((e.remainder::bigint+(a."canonicalUnits"-r.units)*e."priceNumerator"::bigint)/e.denominator))) AS valid
+       FROM pharmacy_sale_line_allocations a JOIN pharmacy_inventory_lots lot
+         ON lot."organizationId"=a."organizationId" AND lot."branchId"=a."branchId" AND lot.id=a."inventoryLotId"
++      LEFT JOIN pharmacy_allocation_price_evidence e ON e."organizationId"=a."organizationId" AND e."branchId"=a."branchId" AND e."allocationId"=a.id
++      LEFT JOIN LATERAL (SELECT SUM(x."canonicalUnits") units, SUM(x."grossMinor") gross FROM pharmacy_allocation_partial_releases x
++        WHERE x."organizationId"=a."organizationId" AND x."branchId"=a."branchId" AND x."allocationId"=a.id AND x."createdAt"<${cutoff}) r ON true
+       WHERE a."organizationId"=l."organizationId" AND a."branchId"=l."branchId" AND a."saleLineId"=l.id
+     ) allocated ON true
+     LEFT JOIN LATERAL (
+diff --git a/src/lib/pharmacy/expiry-advisor-operations.ts b/src/lib/pharmacy/expiry-advisor-operations.ts
+--- a/src/lib/pharmacy/expiry-advisor-operations.ts
++++ b/src/lib/pharmacy/expiry-advisor-operations.ts
+@@ -8,6 +8,7 @@
+   onHandUnits: number;
+   soldUnits: number;
+   historyDays: number;
++  evidenceValid: boolean;
+ };
+ 
+ /** Server-resolved tenant and report branches; never accept these from a client. */
+@@ -38,8 +39,13 @@
+         AND s."status"='COMPLETED' AND s."businessDate">=${historyFrom} AND s."businessDate"<${at}
+       GROUP BY s."branchId"
+     ), sold AS (
+-      SELECT a."inventoryLotId", COALESCE(sum(a."canonicalUnits"),0)::int AS "soldUnits"
++      SELECT a."inventoryLotId", COALESCE(sum(a."canonicalUnits" - COALESCE(r.units,0)),0)::int AS "soldUnits",
++        BOOL_AND(COALESCE(r.units,0)=0 OR COALESCE(e."allocationId" IS NOT NULL AND e."originalUnits"=a."canonicalUnits"
++          AND r.units <= a."canonicalUnits" AND r.gross=e."grossMinor"-((e.remainder::bigint+(a."canonicalUnits"-r.units)*e."priceNumerator"::bigint)/e.denominator),false)) AS valid
+       FROM "pharmacy_sale_line_allocations" a
++      LEFT JOIN pharmacy_allocation_price_evidence e ON e."organizationId"=a."organizationId" AND e."branchId"=a."branchId" AND e."allocationId"=a.id
++      LEFT JOIN LATERAL (SELECT SUM(x."canonicalUnits") units, SUM(x."grossMinor") gross FROM pharmacy_allocation_partial_releases x
++        WHERE x."organizationId"=a."organizationId" AND x."branchId"=a."branchId" AND x."allocationId"=a.id AND x."createdAt"<${at}) r ON true
+       JOIN "pharmacy_sale_lines" line ON line."removedAt" IS NULL AND line."organizationId"=a."organizationId" AND line."branchId"=a."branchId" AND line."id"=a."saleLineId"
+       JOIN "pharmacy_sales" s ON s."organizationId"=line."organizationId" AND s."branchId"=line."branchId" AND s."id"=line."saleId"
+       WHERE a."organizationId"=${organizationId} AND a."branchId" IN (${branches})
+@@ -65,6 +71,7 @@
+       batch."batchNumber", source."supplierId", lot."supplierName", available."stockLocationId",
+       available."onHandUnits", lot."unitCostMinor", batch."expiresAt",
+       COALESCE(sold."soldUnits",0)::int AS "soldUnits", COALESCE(branch_history."historyDays",0)::int AS "historyDays",
++      COALESCE(sold.valid,true) AS "evidenceValid",
+       relationship."expiryReturnWindowDays" AS "returnWindowDays", medicine."coldChain"
+     FROM available
+     JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=available."organizationId" AND lot."branchId"=available."branchId" AND lot."id"=available."inventoryLotId"
+@@ -78,7 +85,11 @@
+     WHERE lot."organizationId"=${organizationId} AND lot."branchId" IN (${branches})
+       AND batch."expiresAt">${at}
+   `);
+-  return adviseExpiryLots(rows, at);
++  const facts = rows.map(({ evidenceValid, ...fact }) => {
++    if (!evidenceValid) throw new Error('INVALID_ALLOCATION_EVIDENCE');
++    return fact;
++  });
++  return adviseExpiryLots(facts, at);
+ }
+ 
+ export async function proposeExpiryReturn(
+diff --git a/src/lib/pharmacy/drap-monitoring.ts b/src/lib/pharmacy/drap-monitoring.ts
+--- a/src/lib/pharmacy/drap-monitoring.ts
++++ b/src/lib/pharmacy/drap-monitoring.ts
+@@ -328,7 +328,7 @@
+       patientPhone: string | null;
+     }>
+   >(
+-    Prisma.sql`SELECT a."branchId",a."inventoryLotId",a."quantityUnits" AS "quarantinedUnits",p."displayName" AS "patientName",p.phone AS "patientPhone" FROM "pharmacy_recall_quarantine_actions" a LEFT JOIN "pharmacy_sale_line_allocations" la ON la."organizationId"=a."organizationId" AND la."inventoryLotId"=a."inventoryLotId" LEFT JOIN "pharmacy_sale_lines" sl ON sl."removedAt" IS NULL AND sl."organizationId"=la."organizationId" AND sl.id=la."saleLineId" LEFT JOIN "pharmacy_sales" s ON s."organizationId"=sl."organizationId" AND s.id=sl."saleId" AND s.status='COMPLETED' LEFT JOIN "pharmacy_customers" c ON c."organizationId"=s."organizationId" AND c.id=s."customerId" LEFT JOIN "pharmacy_patients" p ON p."organizationId"=c."organizationId" AND p.id=c."patientId" WHERE a."organizationId"=${scope.organizationId} AND a."recallNoticeId"=${recallNoticeId} ORDER BY a."branchId",a."inventoryLotId"`
++    Prisma.sql`SELECT a."branchId",a."inventoryLotId",a."quantityUnits" AS "quarantinedUnits",p."displayName" AS "patientName",p.phone AS "patientPhone" FROM "pharmacy_recall_quarantine_actions" a LEFT JOIN "pharmacy_sale_line_allocations" la ON la."organizationId"=a."organizationId" AND la."branchId"=a."branchId" AND la."inventoryLotId"=a."inventoryLotId" AND la."canonicalUnits">COALESCE((SELECT SUM(r."canonicalUnits") FROM "pharmacy_allocation_partial_releases" r WHERE r."organizationId"=la."organizationId" AND r."branchId"=la."branchId" AND r."allocationId"=la.id),0) LEFT JOIN "pharmacy_sale_lines" sl ON sl."removedAt" IS NULL AND sl."organizationId"=la."organizationId" AND sl.id=la."saleLineId" LEFT JOIN "pharmacy_sales" s ON s."organizationId"=sl."organizationId" AND s.id=sl."saleId" AND s.status='COMPLETED' LEFT JOIN "pharmacy_customers" c ON c."organizationId"=s."organizationId" AND c.id=s."customerId" LEFT JOIN "pharmacy_patients" p ON p."organizationId"=c."organizationId" AND p.id=c."patientId" WHERE a."organizationId"=${scope.organizationId} AND a."recallNoticeId"=${recallNoticeId} ORDER BY a."branchId",a."inventoryLotId"`
+   );
+ }
+ 
+diff --git a/src/lib/pharmacy/mixed-lot-money.db.test.ts b/src/lib/pharmacy/mixed-lot-money.db.test.ts
+--- a/src/lib/pharmacy/mixed-lot-money.db.test.ts
++++ b/src/lib/pharmacy/mixed-lot-money.db.test.ts
+@@ -1,3 +1,6 @@
++import { readExpiryAdvice } from './expiry-advisor-operations';
++import { readEffectiveSaleAllocations } from './read-effective-sale-allocations';
++import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
+ // @vitest-environment node
+ import { randomUUID } from 'node:crypto';
+ import { reduceSaleLineQuantity } from './edit-sale-line-quantity';
+@@ -7,7 +10,15 @@
+ import { growthReceiptMoney } from '@/lib/pharmacy/growth-evidence';
+ import { beforeAll, expect, it } from 'vitest';
+ import { withTenantDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
+-import { createSale, addSaleLine, readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
++import {
++  createSale,
++  addSaleLine,
++  readReturnHistory,
++  returnSaleLine,
++  changeSaleStatus,
++} from '@/lib/pharmacy/sales';
++import { removeSaleLine } from '@/lib/pharmacy/remove-sale-line';
++import { assertSaleBatchesSellable } from '@/lib/pharmacy/sale-batch-safety';
+ import { receiveLot, reverseMovements } from '@/lib/pharmacy/stock-ledger';
+ import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
+ import { readCounterReceipt, readCounterCart } from '@/lib/pharmacy/counter';
+@@ -1466,3 +1477,284 @@
+     )
+   ).rejects.toThrow();
+ });
++
++test('real void restores retained and untouched units after reduction without a second restoration on retry', async () => {
++  const f = await cart([100, 200], [2, 2]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 4,
++      toQuantity: 1,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  await tenant((db) => changeSaleStatus(db, scope, f.sale.id, 'void', 'integration void'));
++  await expect(
++    tenant((db) => changeSaleStatus(db, scope, f.sale.id, 'void', 'integration void'))
++  ).rejects.toThrow();
++  const balances = await tenant((db) =>
++    db.pharmacyStockBalance.findMany({
++      where: {
++        organizationId: org,
++        inventoryLotId: { in: f.lots.map((lot) => lot.id) },
++        disposition: 'AVAILABLE',
++      },
++    })
++  );
++  expect(balances.map((b) => b.onHandUnits).sort()).toEqual([2, 2]);
++});
++
++test('real removal after reduction is retry-safe and rejects another branch', async () => {
++  const f = await cart([100], [3]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 3,
++      toQuantity: 2,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  const input = { saleId: f.sale.id, saleLineId: f.line.id, reason: 'integration removal' };
++  await expect(
++    tenant((db) => removeSaleLine(db, { ...scope, branchId: scope.branchId + '_other' }, input))
++  ).rejects.toThrow();
++  expect(await tenant((db) => removeSaleLine(db, scope, input))).toMatchObject({ replayed: false });
++  expect(await tenant((db) => removeSaleLine(db, scope, input))).toMatchObject({ replayed: true });
++  const balance = await tenant((db) =>
++    db.pharmacyStockBalance.findFirstOrThrow({
++      where: { organizationId: org, inventoryLotId: f.lots[0]!.id, disposition: 'AVAILABLE' },
++    })
++  );
++  expect(balance.onHandUnits).toBe(3);
++});
++
++test('release competing with real void never restores more than the original stock', async () => {
++  const f = await cart([100], [3]);
++  const [reduction, voided] = await Promise.allSettled([
++    tenant((db) =>
++      reduceSaleLineQuantity(db, scope, {
++        saleId: f.sale.id,
++        saleLineId: f.line.id,
++        fromQuantity: 3,
++        toQuantity: 2,
++        idempotencyKey: randomUUID(),
++      })
++    ),
++    tenant((db) => changeSaleStatus(db, scope, f.sale.id, 'void', 'concurrent void')),
++  ]);
++  expect(voided.status).toBe('fulfilled');
++  expect(['fulfilled', 'rejected']).toContain(reduction.status);
++  const balance = await tenant((db) =>
++    db.pharmacyStockBalance.findFirstOrThrow({
++      where: { organizationId: org, inventoryLotId: f.lots[0]!.id, disposition: 'AVAILABLE' },
++    })
++  );
++  expect(balance.onHandUnits).toBe(3);
++});
++
++test('batch safety ignores a fully released unsafe batch and checks the retained batch', async () => {
++  const f = await cart([100, 200], [1, 1]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 2,
++      toQuantity: 1,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  await tenant((db) =>
++    db.pharmacyManufacturingBatch.update({
++      where: { id: f.lots[1]!.manufacturingBatchId },
++      data: { state: 'RECALLED', stateReason: 'synthetic recall', stateChangedAt: new Date() },
++    })
++  );
++  await expect(
++    tenant((db) => assertSaleBatchesSellable(db, scope, f.sale.id))
++  ).resolves.toBeInstanceOf(Map);
++  await tenant((db) =>
++    db.pharmacyManufacturingBatch.update({
++      where: { id: f.lots[0]!.manufacturingBatchId },
++      data: { state: 'RECALLED', stateReason: 'synthetic recall', stateChangedAt: new Date() },
++    })
++  );
++  await expect(tenant((db) => assertSaleBatchesSellable(db, scope, f.sale.id))).rejects.toThrow(
++    'SALE_BATCH_RECALLED'
++  );
++});
++
++test('counter cart shows only retained lots and quantities after reductions', async () => {
++  const f = await cart([100, 200], [2, 2]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 4,
++      toQuantity: 1,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  const result = await tenant((db) => readCounterCart(db, scope, f.sale.id));
++  expect(result.lines[0]!.canonicalUnits).toBe(1);
++  expect(
++    result.lines[0]!.allocations.map((row) => [row.inventoryLotId, row.canonicalUnits])
++  ).toEqual([[f.lots[0]!.id, 1]]);
++});
++
++test('receipt, financial posting and return read retained allocation after reduction', async () => {
++  const f = await cart([100, 200], [2, 2]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 4,
++      toQuantity: 1,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  await tenant((db) =>
++    db.pharmacySaleLine.update({
++      where: { organizationId_id: { organizationId: org, id: f.line.id } },
++      data: {
++        discountMinor: 10,
++        discountKind: 'DISCOUNT',
++        approvedByUserId: 'supervisor',
++        approvalPolicy: 'test',
++      },
++    })
++  );
++  await tenant(async (db) => {
++    await db.$queryRaw(
++      Prisma.sql`SELECT id FROM pharmacy_sales WHERE "organizationId"=${org} AND "branchId"=${scope.branchId} AND id=${f.sale.id} FOR UPDATE`
++    );
++    const sale = await db.pharmacySale.findFirstOrThrow({
++      where: { organizationId: org, branchId: scope.branchId, id: f.sale.id },
++      include: completionSaleInclude,
++    });
++    await completePaidPharmacySale(db, scope, sale, { deviceId: randomUUID(), businessDate: day });
++  });
++  const receipt = await tenant((db) =>
++    readCounterReceipt(db, scope, f.sale.id, { name: 'QA', currency: 'PKR' })
++  );
++  expect(receipt.lines[0]!.allocations).toHaveLength(1);
++  expect(receipt.lines[0]!.allocations![0]).toMatchObject({
++    inventoryLotId: f.lots[0]!.id,
++    canonicalUnits: 1,
++    grossMinor: 100,
++  });
++  const journal = await tenant((db) =>
++    db.financeJournalLine.findMany({
++      where: { sourceLineId: f.line.id, accountCode: { in: ['SALES_REVENUE', 'SALES_DISCOUNT'] } },
++    })
++  );
++  expect(journal.find((row) => row.accountCode === 'SALES_REVENUE')?.amountMinor).toBe(100);
++  expect(journal.find((row) => row.accountCode === 'SALES_DISCOUNT')?.amountMinor).toBe(10);
++  const growth = await tenant((db) =>
++    db.$queryRaw<Array<{ complete: boolean; sales: bigint }>>(
++      Prisma.sql`SELECT m.* FROM pharmacy_sales s CROSS JOIN LATERAL (${growthReceiptMoney(new Date('2035-01-01'))}) m WHERE s."organizationId"=${org} AND s.id=${f.sale.id}`
++    )
++  );
++  expect(growth[0]!.complete).toBe(true);
++  expect(Number(growth[0]!.sales)).toBe(90);
++  const advice = await tenant((db) =>
++    readExpiryAdvice(
++      db,
++      { organizationId: org, branchIds: [scope.branchId] },
++      new Date('2026-11-07T00:00:00Z')
++    )
++  );
++  expect(advice.find((row) => row.lotId === f.lots[0]!.id)?.soldUnits).toBe(1);
++  expect(advice.find((row) => row.lotId === f.lots[1]!.id)?.soldUnits).toBe(0);
++  const history = await tenant((db) => readReturnHistory(db, scope, f.sale.id));
++  expect(history.lines[0]!.lots.map((lot) => [lot.lotId, lot.returnableUnits])).toEqual([
++    [f.lots[0]!.id, 1],
++  ]);
++  await expect(
++    tenant((db) =>
++      returnSaleLine(db, scope, {
++        saleLineId: f.line.id,
++        lotId: f.lots[1]!.id,
++        canonicalUnits: 1,
++        disposition: 'RESTOCK',
++        reason: 'released lot',
++        integrityDecision: 'sealed',
++        idempotencyKey: randomUUID(),
++      })
++    )
++  ).rejects.toThrow();
++  await tenant((db) =>
++    returnSaleLine(db, scope, {
++      saleLineId: f.line.id,
++      lotId: f.lots[0]!.id,
++      canonicalUnits: 1,
++      disposition: 'RESTOCK',
++      reason: 'retained lot',
++      integrityDecision: 'sealed',
++      idempotencyKey: randomUUID(),
++    })
++  );
++});
++
++test('effective reader enforces tenant and branch isolation under a restricted database role', async () => {
++  const f = await cart([100], [2]);
++  await tenant((db) =>
++    reduceSaleLineQuantity(db, scope, {
++      saleId: f.sale.id,
++      saleLineId: f.line.id,
++      fromQuantity: 2,
++      toQuantity: 1,
++      idempotencyKey: randomUUID(),
++    })
++  );
++  const same = await tenant(async (db) => {
++    await db.$executeRawUnsafe('SET LOCAL ROLE phase2_reader_runtime');
++    return readEffectiveSaleAllocations(db, scope, f.sale.id);
++  });
++  expect(same.size).toBe(1);
++  const branch = await tenant(async (db) => {
++    await db.$executeRawUnsafe('SET LOCAL ROLE phase2_reader_runtime');
++    return readEffectiveSaleAllocations(
++      db,
++      { ...scope, branchId: scope.branchId + '_other' },
++      f.sale.id
++    );
++  });
++  expect(branch.size).toBe(0);
++  const foreign = await withTenantDb(`${org}_other`, async (db) => {
++    await db.$executeRawUnsafe('SET LOCAL ROLE phase2_reader_runtime');
++    return readEffectiveSaleAllocations(db, scope, f.sale.id);
++  });
++  expect(foreign.size).toBe(0);
++});
++
++test('release competing with real removal restores stock at most once', async () => {
++  const f = await cart([100], [3]);
++  const [reduction, removal] = await Promise.allSettled([
++    tenant((db) =>
++      reduceSaleLineQuantity(db, scope, {
++        saleId: f.sale.id,
++        saleLineId: f.line.id,
++        fromQuantity: 3,
++        toQuantity: 2,
++        idempotencyKey: randomUUID(),
++      })
++    ),
++    tenant((db) =>
++      removeSaleLine(db, scope, {
++        saleId: f.sale.id,
++        saleLineId: f.line.id,
++        reason: 'concurrent removal',
++      })
++    ),
++  ]);
++  expect(removal.status).toBe('fulfilled');
++  expect(['fulfilled', 'rejected']).toContain(reduction.status);
++  const balance = await tenant((db) =>
++    db.pharmacyStockBalance.findFirstOrThrow({
++      where: { organizationId: org, inventoryLotId: f.lots[0]!.id, disposition: 'AVAILABLE' },
++    })
++  );
++  expect(balance.onHandUnits).toBe(3);
++});
