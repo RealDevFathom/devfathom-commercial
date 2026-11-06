@@ -95,12 +95,26 @@ const SENSITIVE_SUBSTRINGS = [
   'cookie',
 ];
 
+// Operator/owner PINs (`pin`, `currentPin`, `owner_pin`, `PIN`). Matched on a
+// word boundary rather than as a substring so `shipping`, `mapping`, `pinned`
+// or `opinion` stay readable.
+const PIN_WORD_KEY = /(?:^|[_-])pin$/i;
+const PIN_CAMEL_KEY = /[a-z0-9]Pin$/;
+
+function isPinKey(key: string): boolean {
+  return PIN_WORD_KEY.test(key) || PIN_CAMEL_KEY.test(key);
+}
+
 function isSensitiveKey(key: string): boolean {
   const k = key.toLowerCase();
   // Camera renewal input can be audited before its resolver runs (including
   // denied or invalid requests). Match the identifier exactly, not all grants.
-  // Match PIN exactly so unrelated keys such as shippingAddress remain useful.
-  return k === 'pin' || k === 'previousgrantid' || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s));
+  // The raw tRPC input is captured before validation and authorization, so a
+  // rejected request must still never persist a PIN: redact it here, centrally.
+  // Match PIN keys on a word boundary so unrelated keys such as shippingAddress remain useful.
+  return (
+    k === 'previousgrantid' || isPinKey(key) || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
+  );
 }
 
 const MAX_STRING = 20_000;

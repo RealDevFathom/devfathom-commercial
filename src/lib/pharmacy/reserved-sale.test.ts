@@ -221,6 +221,36 @@ describe('internal reserved checkout allocation', () => {
     ).rejects.toThrow('MARGIN_GUARDRAIL');
     expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
   });
+  it('enforces a persisted minimum margin for reserved-order discounts too', async () => {
+    const db = {
+      ...fixture(),
+      pharmacySmartDiscountPolicy: {
+        findUnique: vi.fn(async () => ({ minimumMarginBps: 6000 })),
+      },
+    };
+    await expect(
+      addReservedSaleLine(
+        db as never,
+        scope,
+        {
+          saleId: 'sale',
+          medicineId: 'medicine',
+          presentationId: 'presentation',
+          packLevelId: 'pack',
+          saleUnit: 'UNIT',
+          quantity: 3,
+          canonicalUnitsPerSaleUnit: 1,
+          discountMinor: 3,
+          discountKind: 'DISCOUNT',
+          approvedByUserId: 'claimed-owner',
+          approvalPolicy: 'claimed-policy',
+          idempotencyKey: 'discounted-order-line',
+        },
+        reservation
+      )
+    ).rejects.toThrow('MARGIN_GUARDRAIL');
+    expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('mixed sealed and loose physical depletion', () => {

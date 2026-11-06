@@ -413,3 +413,89 @@ describe('camera renewal audit redaction before resolver suppression (F3-R1)', (
     expect(value.previousGrantId).toBe('synthetic');
   });
 });
+
+describe('owner PIN audit redaction before validation and authorization', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(true);
+    const actual = await vi.importActual<typeof import('./audit')>('./audit');
+    mocks.recordTrpcAudit.mockImplementation(actual.recordTrpcAudit);
+  });
+  afterEach(async () => {
+    const actual = await vi.importActual<typeof import('./audit')>('./audit');
+    await actual.flushAuditWritesForTest();
+    mocks.recordTrpcAudit.mockReset();
+  });
+
+  // Mirrors pharmacyMedicine.setSmartDiscountOwnerPin's input contract.
+  const pinRouter = router({
+    setOwnerPin: adminProcedure
+      .input(
+        z
+          .object({
+            branchId: z.string().min(1),
+            pin: z.string().regex(/^\d{4,8}$/),
+            currentPin: z
+              .string()
+              .regex(/^\d{4,8}$/)
+              .optional(),
+          })
+          .strict()
+      )
+      .mutation(() => ({ ok: true })),
+  });
+
+  it.each(['invalid-input', 'forbidden'] as const)(
+    'never stores the current or new PIN on a %s rejection',
+    async (denial) => {
+      const ctx = contextFor({ ...ADMIN, status: 'ACTIVE', organizationId: 'org-pin' });
+      if (denial === 'forbidden') mocks.can.mockResolvedValue(false);
+      const input = {
+        branchId: 'branch-1',
+        pin: denial === 'invalid-input' ? '12' : '86420',
+        currentPin: '97531',
+      };
+      await expect(pinRouter.createCaller(ctx).setOwnerPin(input)).rejects.toMatchObject({
+        code: denial === 'invalid-input' ? 'BAD_REQUEST' : 'FORBIDDEN',
+      });
+      const actual = await vi.importActual<typeof import('./audit')>('./audit');
+      await actual.flushAuditWritesForTest();
+      expect(mocks.auditCreate).toHaveBeenCalledOnce();
+      const row = mocks.auditCreate.mock.calls[0]![0] as { data: Record<string, unknown> };
+      expect(row.data).toMatchObject({
+        outcome: 'FAILURE',
+        input: { branchId: 'branch-1', pin: '[REDACTED]', currentPin: '[REDACTED]' },
+      });
+      expect(JSON.stringify(row)).not.toContain('97531');
+      expect(JSON.stringify(row)).not.toContain(input.pin);
+    }
+  );
+
+  it('redacts PIN keys on a word boundary only', async () => {
+    const { toAuditJson } = await vi.importActual<typeof import('./audit')>('./audit');
+    const value = {
+      pin: '1234',
+      PIN: '1234',
+      currentPin: '1234',
+      managerPin: '1234',
+      owner_pin: '1234',
+      nested: [{ witness: { staffProfileId: 'staff-1', pin: '1234' } }],
+      shipping: 'courier',
+      mapping: 'sku',
+      pinned: true,
+      isPinned: false,
+      opinion: 'fine',
+      spinner: 'on',
+    };
+    expect(toAuditJson(value)).toEqual({
+      ...value,
+      pin: '[REDACTED]',
+      PIN: '[REDACTED]',
+      currentPin: '[REDACTED]',
+      managerPin: '[REDACTED]',
+      owner_pin: '[REDACTED]',
+      nested: [{ witness: { staffProfileId: 'staff-1', pin: '[REDACTED]' } }],
+    });
+  });
+});

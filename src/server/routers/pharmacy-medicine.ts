@@ -26,6 +26,16 @@ import {
   REFERENCE_BATCH_MAX_ROWS,
   type ConnectorRights,
 } from '@/lib/pharmacy/reference-connectors';
+import { smartDiscountPolicySchema } from '@/lib/pharmacy/smart-discounting';
+import {
+  assertSmartDiscountOwner,
+  saveSmartDiscountPolicy,
+  recordCompetitorDiscountObservation,
+  readSmartDiscountSuggestion,
+} from '@/lib/pharmacy/smart-discount-operations';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { setSmartDiscountOwnerPin } from '@/lib/pharmacy/smart-discount-approval';
+import { annotateAudit } from '@/server/audit';
 import {
   adminProcedure,
   auditedProtectedProcedure,
@@ -244,6 +254,104 @@ function domainError(error: unknown): never {
 }
 
 export const pharmacyMedicineRouter = router({
+  setSmartDiscountOwnerPin: adminProcedure
+    .input(
+      z
+        .object({
+          branchId: z.string().min(1),
+          pin: z.string().regex(/^\d{4,8}$/),
+          currentPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
+      return ctx.db.$transaction(async (tx) => {
+        const scope = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+          actorId: ctx.session.user.id,
+        };
+        await assertSmartDiscountOwner(tx as ScopedDb, scope);
+        return setSmartDiscountOwnerPin(tx as ScopedDb, scope, input.pin, input.currentPin);
+      });
+    }),
+  smartDiscountPolicy: adminProcedure
+    .input(z.object({ branchId: z.string().min(1) }).strict())
+    .query(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const scope = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+          actorId: ctx.session.user.id,
+        };
+        await assertSmartDiscountOwner(tx as ScopedDb, scope);
+        return tx.pharmacySmartDiscountPolicy.findUnique({
+          where: {
+            organizationId_branchId: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+            },
+          },
+        });
+      })
+    ),
+  setSmartDiscountPolicy: adminProcedure
+    .input(z.object({ branchId: z.string().min(1), policy: smartDiscountPolicySchema }).strict())
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const scope = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+          actorId: ctx.session.user.id,
+        };
+        await assertSmartDiscountOwner(tx as ScopedDb, scope);
+        return saveSmartDiscountPolicy(tx as ScopedDb, scope, input.policy);
+      })
+    ),
+  recordCompetitorDiscountObservation: adminProcedure
+    .input(
+      z
+        .object({
+          branchId: z.string().min(1),
+          medicineId: z.string().min(1),
+          packLevelId: z.string().min(1),
+          competitor: z.string().trim().min(1).max(200),
+          competitorPriceMinor: z.number().int().positive().max(2147483647),
+          observedDemandUnits: z.number().int().positive().max(2147483647),
+          observedAt: z
+            .date()
+            .refine((date) => date.getTime() <= Date.now(), 'Observation cannot be in the future'),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const scope = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+          actorId: ctx.session.user.id,
+        };
+        await assertSmartDiscountOwner(tx as ScopedDb, scope);
+        return recordCompetitorDiscountObservation(tx as ScopedDb, scope, input);
+      })
+    ),
+  smartDiscountSuggestion: adminProcedure
+    .input(z.object({ branchId: z.string().min(1), inventoryLotId: z.string().min(1) }).strict())
+    .query(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const scope = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+          actorId: ctx.session.user.id,
+        };
+        await assertSmartDiscountOwner(tx as ScopedDb, scope);
+        return readSmartDiscountSuggestion(tx as ScopedDb, scope, input.inventoryLotId);
+      })
+    ),
   priceNotices: capabilityProcedure('pharmacy:safety').query(({ ctx }) =>
     priceIntelligence(ctx.db, {
       organizationId: ctx.entitlements.organizationId,

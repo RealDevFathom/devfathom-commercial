@@ -1,4 +1,5 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
+import { verifySmartDiscountOwner } from '@/lib/pharmacy/smart-discount-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
   PharmacyRxReferenceError,
@@ -1017,6 +1018,10 @@ export const pharmacySalesRouter = router({
           canonicalUnitsPerSaleUnit: z.number().int().positive(),
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
+          ownerAuthorization: z
+            .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
+            .strict()
+            .optional(),
           approvedByUserId: z.string().min(1).optional(),
           approvalPolicy: z.string().trim().min(1).optional(),
           override: z
@@ -1058,6 +1063,19 @@ export const pharmacySalesRouter = router({
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           const scope = await scopeFor(ctx, input.branchId);
+          const ownerProof = input.ownerAuthorization
+            ? await verifySmartDiscountOwner(scope, input.ownerAuthorization)
+            : undefined;
+          if (ownerProof && 'blocked' in ownerProof) return ownerProof;
+          const approvedInput =
+            ownerProof && 'approval' in ownerProof
+              ? {
+                  ...input,
+                  smartDiscountApproval: ownerProof.approval,
+                  approvedByUserId: ownerProof.approval.ownerId,
+                  approvalPolicy: 'smart-discount-owner-pin',
+                }
+              : input;
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
@@ -1068,7 +1086,7 @@ export const pharmacySalesRouter = router({
               throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
-            const { prescription, ...lineInput } = input;
+            const { prescription, ...lineInput } = approvedInput;
             if (!prescription) return addSaleLine(db, scope, lineInput);
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (

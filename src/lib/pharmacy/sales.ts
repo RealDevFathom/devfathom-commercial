@@ -23,6 +23,7 @@ import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import { isSmartDiscountApproval, type SmartDiscountApproval } from './smart-discount-approval';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -165,6 +166,7 @@ export function validateDiscount(input: {
   costMinor: number;
   approvedByUserId?: string;
   approvalPolicy?: string;
+  minimumMarginBps?: number;
 }) {
   if (input.discountMinor < 0 || input.discountMinor > input.grossMinor)
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
@@ -173,6 +175,12 @@ export function validateDiscount(input: {
   if (input.discountMinor > 0 && (!input.approvedByUserId || !input.approvalPolicy))
     throw new PharmacySaleError('APPROVAL_REQUIRED');
   if (input.grossMinor - input.discountMinor < input.costMinor)
+    throw new PharmacySaleError('MARGIN_GUARDRAIL');
+  if (
+    input.minimumMarginBps !== undefined &&
+    BigInt(input.grossMinor - input.discountMinor) * BigInt(10_000 - input.minimumMarginBps) <
+      BigInt(input.costMinor) * BigInt(10_000)
+  )
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
 }
 
@@ -253,6 +261,8 @@ type AddSaleLineInput = {
   discountMinor?: number;
   approvedByUserId?: string;
   approvalPolicy?: string;
+  /** In-process PIN proof; public schemas never accept this field. */
+  smartDiscountApproval?: SmartDiscountApproval;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
   idempotencyKey: string;
 };
@@ -349,6 +359,17 @@ async function addSaleLineWithAllocation(
     input.canonicalUnitsPerSaleUnit
   );
   const discountMinor = input.discountMinor ?? 0;
+  const discountPolicy =
+    discountMinor > 0
+      ? await db.pharmacySmartDiscountPolicy.findUnique({
+          where: {
+            organizationId_branchId: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+            },
+          },
+        })
+      : null;
   validateDiscount({
     regulated: medicine.rx || medicine.restricted || medicine.controlled,
     discountMinor,
@@ -356,7 +377,14 @@ async function addSaleLineWithAllocation(
     costMinor,
     approvedByUserId: input.approvedByUserId,
     approvalPolicy: input.approvalPolicy,
+    minimumMarginBps: discountPolicy?.minimumMarginBps,
   });
+  if (discountPolicy && !isSmartDiscountApproval(input.smartDiscountApproval, scope))
+    throw new PharmacySaleError('APPROVAL_REQUIRED');
+  const approvedByUserId = discountPolicy
+    ? input.smartDiscountApproval!.ownerId
+    : input.approvedByUserId;
+  const approvalPolicy = discountPolicy ? 'smart-discount-owner-pin' : input.approvalPolicy;
   const line = await db.pharmacySaleLine.create({
     data: {
       organizationId: scope.organizationId,
@@ -375,8 +403,8 @@ async function addSaleLineWithAllocation(
       unitCostMinor: Math.ceil(costMinor / input.quantity),
       discountKind: input.discountKind,
       discountMinor,
-      approvalPolicy: input.approvalPolicy,
-      approvedByUserId: input.approvedByUserId,
+      approvalPolicy,
+      approvedByUserId,
       idempotencyKey: input.idempotencyKey,
     },
   });
@@ -399,6 +427,29 @@ async function addSaleLineWithAllocation(
     )
   );
   await event(db, scope, sale.id, 'LINE_ADDED', undefined, { saleLineId: line.id });
+  if (discountPolicy)
+    await db.auditLog.create({
+      data: {
+        organizationId: scope.organizationId,
+        actorId: scope.actorId,
+        source: 'TRPC',
+        category: 'PHARMACY',
+        operation: 'CREATE',
+        action: 'pharmacySales.smartDiscountApproved',
+        targetType: 'PharmacySaleLine',
+        targetId: line.id,
+        changes: {
+          branchId: scope.branchId,
+          ownerId: approvedByUserId!,
+          signatureRef: input.smartDiscountApproval!.signatureRef,
+          grossMinor,
+          discountMinor,
+          costMinor,
+          netMinor: grossMinor - discountMinor,
+          minimumMarginBps: discountPolicy.minimumMarginBps,
+        },
+      },
+    });
   return { line, allocation };
 }
 

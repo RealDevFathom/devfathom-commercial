@@ -243,6 +243,9 @@ model PharmacyBranch {
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
   branchAssignments                        PharmacyBranchAssignment[]
 
+  smartDiscountObservations PharmacyCompetitorDiscountObservation[] @relation("PharmacySmartDiscountObservationBranch")
+  smartDiscountPolicy       PharmacySmartDiscountPolicy?            @relation("PharmacySmartDiscountPolicyBranch")
+
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
   @@index([organizationId, active], map: "pharmacy_branches_org_active_idx")
@@ -500,6 +503,8 @@ model Medicine {
   connectorProposals           PharmacyReferenceConnectorProposal[]
   customerOrderLines           PharmacyCustomerOrderLine[]
 
+  smartDiscountObservations PharmacyCompetitorDiscountObservation[] @relation("PharmacySmartDiscountObservationMedicine")
+
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
   @@map("pharmacy_medicines")
@@ -537,6 +542,9 @@ model Presentation {
   pharmacySaleLines  PharmacySaleLine[]
   customerOrderLines PharmacyCustomerOrderLine[]
 
+  smartDiscountObservations PharmacyCompetitorDiscountObservation[] @relation("PharmacySmartDiscountObservationMedicineIdentity")
+
+  @@unique([organizationId, id, medicineId], map: "pharmacy_discount_presentation_identity_key")
   @@index([organizationId, medicineId])
   @@map("pharmacy_presentations")
 }
@@ -571,7 +579,11 @@ model PackLevel {
   saleLines             PharmacySaleLine[]
   customerOrderLines    PharmacyCustomerOrderLine[]
 
+  smartDiscountObservations         PharmacyCompetitorDiscountObservation[] @relation("PharmacySmartDiscountObservationPack")
+  smartDiscountIdentityObservations PharmacyCompetitorDiscountObservation[] @relation("PharmacySmartDiscountObservationPackIdentity")
+
   @@unique([organizationId, id], map: "pharmacy_pack_levels_org_id_key")
+  @@unique([organizationId, id, presentationId], map: "pharmacy_discount_pack_identity_key")
   @@unique([organizationId, versionGroupId, version])
   @@index([organizationId, presentationId])
   @@map("pharmacy_pack_levels")
@@ -15550,6 +15562,48 @@ model PharmacyPackPrice {
   @@unique([organizationId, proposalId])
   @@index([organizationId, packLevelId, effectiveFrom])
   @@map("pharmacy_pack_prices")
+}
+
+/// Owner-recorded competitor price/demand evidence used by the advisory smart-discount model.
+/// It contains no customer or prescription data; RLS and foreign keys are migration enforced.
+model PharmacyCompetitorDiscountObservation {
+  id                  String   @id
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  medicineId           String
+  packLevelId          String
+  /// Filled from the pack by the database identity trigger; composite FKs preserve it.
+  presentationId       String   @default(dbgenerated())
+  competitor           String
+  competitorPriceMinor Int
+  observedDemandUnits  Int
+  observedAt           DateTime @db.Timestamptz(6)
+  actorId              String
+  createdAt            DateTime @default(now()) @db.Timestamptz(6)
+  branch               PharmacyBranch @relation("PharmacySmartDiscountObservationBranch", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_competitor_discount_observation_branch_fk")
+  medicine             Medicine       @relation("PharmacySmartDiscountObservationMedicine", fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_competitor_discount_observation_medicine_fk")
+  packLevel            PackLevel      @relation("PharmacySmartDiscountObservationPack", fields: [organizationId, packLevelId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_competitor_discount_observation_pack_fk")
+  /// Identity FKs: pack must belong to the presentation, and the presentation to the medicine.
+  packIdentity         PackLevel      @relation("PharmacySmartDiscountObservationPackIdentity", fields: [organizationId, packLevelId, presentationId], references: [organizationId, id, presentationId], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_discount_pack_identity_fk")
+  medicineIdentity     Presentation   @relation("PharmacySmartDiscountObservationMedicineIdentity", fields: [organizationId, presentationId, medicineId], references: [organizationId, id, medicineId], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_discount_medicine_identity_fk")
+
+  @@index([organizationId, branchId, medicineId, packLevelId, observedAt(sort: Desc)], map: "pharmacy_competitor_discount_observation_item_idx")
+  @@map("pharmacy_competitor_discount_observations")
+}
+
+/// Configurable guardrails for estimates and suggestions; deliberately has no seeded defaults.
+model PharmacySmartDiscountPolicy {
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  minimumMarginBps     Int
+  minimumObservations  Int
+  targetDemandLiftBps  Int
+  updatedById          String
+  updatedAt            DateTime @default(now()) @db.Timestamptz(6)
+  branch               PharmacyBranch @relation("PharmacySmartDiscountPolicyBranch", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_smart_discount_policy_branch_fk")
+
+  @@id([organizationId, branchId])
+  @@map("pharmacy_smart_discount_policies")
 }
 
 /// Cross-instance fixed-window counters. Not tenant data and not under RLS:
