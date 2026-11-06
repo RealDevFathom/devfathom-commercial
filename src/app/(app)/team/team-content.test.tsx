@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
@@ -10,13 +10,59 @@ const state = vi.hoisted(() => ({
   overview: vi.fn(() => ({
     data: {
       organization: {
+        roles: [
+          { id: 'role_cashier', name: 'Cashier' },
+          { id: 'role_pharmacist', name: 'Pharmacist' },
+        ],
         users: [
-          { id: 'u_owner', name: 'QA Owner', title: 'Owner', status: 'ACTIVE' },
-          { id: 'u_mgr', name: 'QA Manager', title: 'Procurement approver', status: 'ACTIVE' },
-          { id: 'u_cash', name: 'QA Cashier', title: 'Cashier', status: 'INVITED' },
-          { id: 'u_leave', name: 'On Leave Pharmacist', title: 'Pharmacist', status: 'ON_LEAVE' },
-          { id: 'u_rx', name: 'Second Pharmacist', title: 'Pharmacist', status: 'ACTIVE' },
-          { id: 'u_gone', name: 'Former Staff', title: 'Cashier', status: 'INACTIVE' },
+          {
+            id: 'u_owner',
+            name: 'QA Owner',
+            title: 'Owner',
+            role: 'ADMIN',
+            organizationRoleId: null,
+            status: 'ACTIVE',
+          },
+          {
+            id: 'u_mgr',
+            name: 'QA Manager',
+            title: 'Procurement approver',
+            role: 'HR',
+            organizationRoleId: null,
+            status: 'ACTIVE',
+          },
+          {
+            id: 'u_cash',
+            name: 'QA Cashier',
+            title: 'Counter',
+            role: 'EMPLOYEE',
+            organizationRoleId: 'role_cashier',
+            status: 'INVITED',
+          },
+          {
+            id: 'u_leave',
+            name: 'On Leave Pharmacist',
+            title: 'Pharmacist',
+            role: 'EMPLOYEE',
+            organizationRoleId: 'role_pharmacist',
+            status: 'ON_LEAVE',
+          },
+          {
+            id: 'u_rx',
+            name: 'Second Pharmacist',
+            title: 'Pharmacist',
+            role: 'EMPLOYEE',
+            organizationRoleId: 'role_pharmacist',
+            status: 'ACTIVE',
+          },
+          {
+            id: 'u_gone',
+            name: 'Former Staff',
+            title: 'Cashier',
+            role: 'EMPLOYEE',
+            organizationRoleId: 'role_cashier',
+            status: 'INACTIVE',
+          },
         ],
       },
     },
@@ -35,6 +81,10 @@ const state = vi.hoisted(() => ({
     isError: false,
   },
   invite: { mutate: vi.fn(), isPending: false },
+  utils: {
+    team: { getAll: { invalidate: vi.fn() } },
+    organizationAdmin: { overview: { invalidate: vi.fn() } },
+  },
 }));
 vi.mock('next-auth/react', () => ({
   useSession: () => ({ data: { user: { role: state.role } } }),
@@ -48,7 +98,7 @@ vi.mock('@/components/entitlements-provider', () => ({
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
-    useUtils: () => ({ team: { getAll: { invalidate: vi.fn() } } }),
+    useUtils: () => state.utils,
     organizationAdmin: {
       departments: { useQuery: () => state.departments },
       roles: { useQuery: () => state.roles },
@@ -251,6 +301,11 @@ describe('team page without the HR module (QA batch 3-5)', () => {
     expect(screen.getByText('QA Manager')).toBeInTheDocument();
     expect(screen.getByText('QA Cashier')).toBeInTheDocument();
     expect(screen.queryByText('Former Staff')).toBeNull();
+    const owner = within(list).getByText('QA Owner').closest('li')!;
+    expect(within(owner).getByText('Admin')).toBeInTheDocument();
+    const cashier = within(list).getByText('QA Cashier').closest('li')!;
+    expect(within(cashier).getByText('Staff · Cashier')).toBeInTheDocument();
+    expect(within(cashier).getByText('Counter')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Organization' })).toHaveAttribute(
       'href',
       '/organization'
@@ -264,6 +319,18 @@ describe('team page without the HR module (QA batch 3-5)', () => {
     expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Invite a colleague' }));
     expect(screen.getByText('Add Team Member')).toBeVisible();
+  });
+
+  it('refreshes the member list after an invite sent from the notice', () => {
+    render(<TeamContent />);
+    fireEvent.click(screen.getByRole('button', { name: 'Invite a colleague' }));
+    fill();
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+    act(() => state.invite.mutate.mock.calls[0][1].onSuccess({ inviteUrl: 'x' }));
+    expect(state.utils.organizationAdmin.overview.invalidate).toHaveBeenCalledOnce();
+    expect(state.utils.team.getAll.invalidate).toHaveBeenCalledOnce();
+    expect(screen.getByText('Invitation sent to second@e2e.invalid')).toBeVisible();
   });
 
   it('explains plainly to non-administrators without loading the member list', () => {

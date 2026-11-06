@@ -212,12 +212,18 @@ function StaffProfilesOffNotice({
   canManageMembers: boolean;
   onInvite: () => void;
 }) {
+  const copy = inviteCopyForVertical(useEntitlements().vertical);
   const people = trpc.organizationAdmin.overview.useQuery(undefined, {
     enabled: canManageMembers,
     retry: false,
   });
   const members = (people.data?.organization.users ?? []).filter((user) =>
     SEAT_STATUSES.has(user.status)
+  );
+  // The role template (e.g. Cashier, Pharmacist) controls counter and
+  // dispensing access, so it is shown beside the base role whenever assigned.
+  const roleNames = new Map(
+    (people.data?.organization.roles ?? []).map((role) => [role.id, role.name])
   );
 
   return (
@@ -233,22 +239,22 @@ function StaffProfilesOffNotice({
     >
       <div className="space-y-3 text-sm text-text-muted">
         <p>
-          Staff profiles add departments, skills, contact details and time off for each person.
-          Your plan does not include them yet, so this page shows how many people are in the
-          workspace but not their profiles.
+          Staff profiles add departments, skills, contact details and time off for each person. Your
+          plan does not include them yet, so this page shows how many people are in the workspace
+          but not their profiles.
         </p>
         {canManageMembers ? (
           <p>
-            Use Invite a colleague to send someone a sign-in link. To change a person&apos;s
-            access, open{' '}
+            Use Invite a colleague to send someone a sign-in link. To change a person&apos;s access,
+            open{' '}
             <Link
               href="/organization"
               className="font-medium text-primary underline-offset-4 hover:underline"
             >
               Organization
             </Link>{' '}
-            and use People and access. To turn on staff profiles, ask your platform operator to
-            add the HR module to your plan.
+            and use People and access. To turn on staff profiles, ask your platform operator to add
+            the HR module to your plan.
           </p>
         ) : (
           <p>
@@ -272,15 +278,24 @@ function StaffProfilesOffNotice({
             className="mt-4 divide-y divide-border/60 border-t border-border/60"
             aria-label="Workspace members"
           >
-            {members.map((user) => (
-              <li key={user.id} className="flex items-center justify-between gap-4 py-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-foreground">{user.name}</p>
-                  <p className="truncate text-xs text-muted-foreground">{user.title}</p>
-                </div>
-                <StatusPill status={user.status} label={statusLabel(user.status)} />
-              </li>
-            ))}
+            {members.map((user) => {
+              const template = user.organizationRoleId
+                ? roleNames.get(user.organizationRoleId)
+                : undefined;
+              return (
+                <li key={user.id} className="flex items-center justify-between gap-4 py-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-foreground">{user.name}</p>
+                    <p className="truncate text-xs text-foreground">
+                      {copy.baseRoleLabels[user.role]}
+                      {template ? ` · ${template}` : null}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">{user.title}</p>
+                  </div>
+                  <StatusPill status={user.status} label={statusLabel(user.status)} />
+                </li>
+              );
+            })}
           </ul>
         ) : null
       ) : null}
@@ -420,6 +435,9 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
       {
         onSuccess: (data) => {
           utils.team.getAll.invalidate();
+          // Without the HR module the Team page lists members from the
+          // Organization overview, which Organization's People list shares.
+          utils.organizationAdmin.overview.invalidate();
           setSent({ email: submittedEmail, inviteUrl: data.inviteUrl });
         },
         onError: (err) => setError(err.message),
