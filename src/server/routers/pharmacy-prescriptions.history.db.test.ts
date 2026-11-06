@@ -345,6 +345,13 @@ describe.skipIf(!enabled)('counter patient purchase history restricted database'
       expect((await read(actor, 'ADMIN', fixture.branchId, legacy)).state).toBe('not_linked');
     }
   );
+  it.skipIf(!process.env.PHARMACY_HISTORY_CLEAR_LEGACY_PATIENT_ID)(
+    'preserves unambiguous legacy grants without rerecording',
+    async () => {
+      const legacy = process.env.PHARMACY_HISTORY_CLEAR_LEGACY_PATIENT_ID!;
+      expect((await read(actor, 'ADMIN', fixture.branchId, legacy)).state).toBe('not_linked');
+    }
+  );
   it('denies cashiers and unassigned branches and never infers a patient link', async () => {
     await expect(read(fixture.cashierId, 'EMPLOYEE')).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(read(actor, 'ADMIN', otherBranch)).rejects.toMatchObject({ code: 'FORBIDDEN' });
