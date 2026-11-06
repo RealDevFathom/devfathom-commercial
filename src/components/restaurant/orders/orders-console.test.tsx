@@ -233,7 +233,9 @@ describe('OrdersConsole', () => {
     // The acting staff is the signed-in user; the console offers no actor picker.
     expect(within(dialog).queryByLabelText('Acting staff member')).not.toBeInTheDocument();
     expect(within(dialog).getByText(/recorded as your own signed-in staff profile/i)).toBeVisible();
-    expect(within(dialog).queryByLabelText('Approving PIN or badge secret')).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByLabelText('Approving PIN or badge secret')
+    ).not.toBeInTheDocument();
     fireEvent.change(within(dialog).getByLabelText('Device'), {
       target: { value: 'device_1' },
     });

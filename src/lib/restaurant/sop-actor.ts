@@ -8,9 +8,6 @@ import { requireSessionStaffProfileId } from './session-staff';
  * branch of the SOP record (derived server-side) so a multi-branch employee acts
  * as their profile for that branch.
  */
-export async function requireSopActor(
-  ctx: TRPCContext,
-  branchId?: string | null
-): Promise<string> {
+export async function requireSopActor(ctx: TRPCContext, branchId?: string | null): Promise<string> {
   return requireSessionStaffProfileId(ctx, { branchId });
 }
