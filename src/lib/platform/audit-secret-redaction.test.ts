@@ -199,10 +199,10 @@ describeIfDatabase('platform audit redaction, against PostgreSQL', () => {
     );
     expect(Object.values(stored)).not.toContain(issued.token);
 
-    const revoked = (await run('organization.scim.revoke', { id: issued.id, reason: 'Verify revocation remains redacted' })) as Record<
-      string,
-      unknown
-    >;
+    const revoked = (await run('organization.scim.revoke', {
+      id: issued.id,
+      reason: 'Verify revocation remains redacted',
+    })) as Record<string, unknown>;
     expect(Object.keys(revoked)).not.toContain('token');
     expect(JSON.stringify(revoked)).not.toContain(issued.token);
     expect(await occurrences(issued.token)).toBe(0);
@@ -291,7 +291,11 @@ describeIfDatabase('platform audit redaction, against PostgreSQL', () => {
 
     // Failed after the credential was generated: the organization does not exist.
     await expect(
-      run('organization.scim.token', { organizationId: id('missing_org'), name: 'Orphan', reason: 'Verify failed issuance is sanitized' })
+      run('organization.scim.token', {
+        organizationId: id('missing_org'),
+        name: 'Orphan',
+        reason: 'Verify failed issuance is sanitized',
+      })
     ).rejects.toThrow();
 
     const failures = await deps.withPlatformDb((db) =>

@@ -62,8 +62,17 @@ describeIfDatabase('organization.create duplicate slug on PostgreSQL', () => {
   const slug = `qa147-${suffix}`;
 
   beforeAll(async () => {
-    await withPlatformDb((tx) =>
-      tx.platformPackage.create({
+    await withPlatformDb(async (tx) => {
+      await tx.platformUser.create({
+        data: {
+          id: actor.id,
+          name: actor.name,
+          email: actor.email,
+          role: 'SUPER_ADMIN',
+          passwordHash: 'fixture',
+        },
+      });
+      await tx.platformPackage.create({
         data: {
           id: packageId,
           key: `qa147-${suffix}`,
@@ -72,8 +81,8 @@ describeIfDatabase('organization.create duplicate slug on PostgreSQL', () => {
           active: true,
           defaultSeats: 5,
         },
-      })
-    );
+      });
+    });
   });
 
   afterAll(async () => {

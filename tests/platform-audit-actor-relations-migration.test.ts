@@ -23,9 +23,7 @@ describe('platform audit actor relation migration', () => {
     expect(migration).toContain(
       'CREATE INDEX "platform_audit_logs_actorTenantUserId_createdAt_idx"'
     );
-    expect(migration).toContain(
-      'CONSTRAINT "platform_audit_logs_actorPlatformUserId_fkey"'
-    );
+    expect(migration).toContain('CONSTRAINT "platform_audit_logs_actorPlatformUserId_fkey"');
     expect(migration).toContain('REFERENCES "platform_users"("id")');
     expect(migration).toContain('CONSTRAINT "platform_audit_logs_actorTenantUserId_fkey"');
     expect(migration).toContain('FOREIGN KEY ("organizationId", "actorTenantUserId")');
