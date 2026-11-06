@@ -81,22 +81,29 @@ function fixture() {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
     },
     pharmacyInventoryLot: { findMany: lotRead },
     user: {
       findFirst: vi.fn(async () => ({ id: 'manager-1', status: 'ACTIVE' })),
       count: vi.fn(async () => 2),
       findUnique: vi.fn(async () => ({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
         organizationRole: {
           permissions: [
             { capability: 'pharmacy:safety', effect: 'ALLOW' },
             { capability: 'pharmacy:manage', effect: 'ALLOW' },
+            { capability: 'pharmacy:counter', effect: 'ALLOW' },
           ],
         },
         permissionOverrides: [],
       })),
     },
-    pharmacyBranchAssignment: { findFirst: vi.fn(async () => ({ id: 'assignment-1' })) },
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn(async () => ({ id: 'assignment-1' })),
+      findMany: vi.fn(async () => [{ branchId: 'branch-1' }]),
+    },
     restaurantOperatorCredential: {
       findFirst: vi.fn(async () => ({
         id: 'credential-1',
@@ -495,9 +502,7 @@ describe('pharmacySales.addLine manager PIN approval (#482)', () => {
     f.db.restaurantOperatorCredential.findFirst.mockImplementation(async () =>
       credentialRow({ ...state })
     );
-    f.db.restaurantOperatorCredential.update.mockImplementation(((args: {
-      data: typeof state;
-    }) => {
+    f.db.restaurantOperatorCredential.update.mockImplementation(((args: { data: typeof state }) => {
       state = { ...args.data };
       return { independent: independentTx.active };
     }) as never);
@@ -660,32 +665,53 @@ describe('pharmacySales.addLine manager PIN approval (#482)', () => {
       permissionOverrides: [],
     });
 
-    await expect(
-      f.caller.addLine({ ...line, override, managerApproval })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller.addLine({ ...line, override, managerApproval })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
     expect(withTenantDb).not.toHaveBeenCalled();
     expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
   });
 });
 
 describe('pharmacySales.counterApprovers (#482)', () => {
-  it('lists branch-assigned managers with a stored PIN, never credentials', async () => {
-    const f = fixture();
+  function withApproverProfiles(f: ReturnType<typeof fixture>) {
     const findMany = vi.fn(async () => [
       {
         id: 'manager-profile',
         displayName: 'Manager',
-        user: { id: 'manager-1', status: 'ACTIVE', organizationId: 'org-1' },
+        user: {
+          id: 'manager-1',
+          status: 'ACTIVE',
+          organizationId: 'org-1',
+          organizationRole: {
+            permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        },
       },
       {
         id: 'operator-profile',
         displayName: 'Operator',
-        user: { id: 'actor-1', status: 'ACTIVE', organizationId: 'org-1' },
+        user: {
+          id: 'actor-1',
+          status: 'ACTIVE',
+          organizationId: 'org-1',
+          organizationRole: {
+            permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        },
       },
     ]);
     (f.db as unknown as { restaurantStaffProfile: unknown }).restaurantStaffProfile = {
       findMany,
     };
+    return findMany;
+  }
+
+  it('lists branch-assigned managers with a stored PIN, never credentials', async () => {
+    const f = fixture();
+    const findMany = withApproverProfiles(f);
 
     await expect(f.caller.counterApprovers({ branchId: 'branch-1' })).resolves.toEqual([
       { id: 'manager-profile', name: 'Manager' },
@@ -699,6 +725,139 @@ describe('pharmacySales.counterApprovers (#482)', () => {
       })
     );
   });
+
+  it('refuses a caller without counter receipt capability (IDOR guard)', async () => {
+    const f = fixture();
+    withApproverProfiles(f);
+    f.db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-1',
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    });
+
+    await expect(f.caller.counterApprovers({ branchId: 'branch-1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it('refuses a caller with counter capability but no active branch assignment', async () => {
+    const f = fixture();
+    withApproverProfiles(f);
+    f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+
+    await expect(f.caller.counterApprovers({ branchId: 'branch-1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+});
+
+describe('pharmacySales.addLine four-role PIN gate (#482)', () => {
+  type RoleCaps = { capability: string; effect: 'ALLOW' }[];
+
+  const roles: Array<{ name: string; caps: RoleCaps; fefoReachesPin: boolean }> = [
+    {
+      name: 'owner',
+      caps: [
+        { capability: 'pharmacy:counter', effect: 'ALLOW' },
+        { capability: 'pharmacy:safety', effect: 'ALLOW' },
+        { capability: 'pharmacy:manage', effect: 'ALLOW' },
+      ],
+      fefoReachesPin: true,
+    },
+    {
+      name: 'manager',
+      caps: [
+        { capability: 'pharmacy:counter', effect: 'ALLOW' },
+        { capability: 'pharmacy:safety', effect: 'ALLOW' },
+        { capability: 'pharmacy:manage', effect: 'ALLOW' },
+      ],
+      fefoReachesPin: true,
+    },
+    {
+      name: 'pharmacist',
+      caps: [
+        { capability: 'pharmacy:counter', effect: 'ALLOW' },
+        { capability: 'pharmacy:safety', effect: 'ALLOW' },
+        { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+      ],
+      fefoReachesPin: true,
+    },
+    {
+      name: 'cashier',
+      caps: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+      // FEFO is a pharmacy:safety decision; cashier without safety is refused before PIN.
+      fefoReachesPin: false,
+    },
+  ];
+
+  function asRole(f: ReturnType<typeof fixture>, caps: RoleCaps) {
+    // findUnique serves both the session actor (ABAC) and the PIN approver
+    // (pharmacy:manage). Keep the manager-profile user eligible to approve.
+    f.db.user.findUnique.mockImplementation(async (args: { where: { id: string } }) => {
+      if (args.where.id === 'manager-1') {
+        return {
+          status: 'ACTIVE',
+          organizationId: 'org-1',
+          organizationRole: {
+            permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        };
+      }
+      return {
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: { permissions: caps },
+        permissionOverrides: [],
+      };
+    });
+  }
+
+  it.each(roles.map((r) => [r.name, r.caps] as const))(
+    '%s with discount reaches the manager PIN gate',
+    async (_name, caps) => {
+      const f = fixture();
+      asRole(f, caps);
+      vi.mocked(addSaleLine).mockResolvedValue({
+        line: { id: 'line-1' },
+        allocation: { movementIds: [] },
+      } as never);
+
+      await f.caller.addLine({ ...line, discountMinor: 1, managerApproval });
+      expect(verifyOperatorCredential).toHaveBeenCalled();
+      expect(addSaleLine).toHaveBeenCalled();
+    }
+  );
+
+  it.each(roles.map((r) => [r.name, r.caps, r.fefoReachesPin] as const))(
+    '%s FEFO override gate order (safety before PIN when required)',
+    async (_name, caps, reachesPin) => {
+      const f = fixture();
+      asRole(f, caps);
+      vi.mocked(addSaleLine).mockResolvedValue({
+        line: { id: 'line-1' },
+        allocation: { movementIds: [] },
+      } as never);
+
+      if (reachesPin) {
+        await f.caller.addLine({ ...line, override, managerApproval });
+        expect(verifyOperatorCredential).toHaveBeenCalled();
+        expect(addSaleLine).toHaveBeenCalled();
+      } else {
+        await expect(
+          f.caller.addLine({ ...line, override, managerApproval })
+        ).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'Pharmacy safety permission is required for a FEFO override.',
+        });
+        expect(verifyOperatorCredential).not.toHaveBeenCalled();
+        expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+      }
+    }
+  );
 });
 
 describe('pharmacySales.counterLotOptions (PH-A4)', () => {
