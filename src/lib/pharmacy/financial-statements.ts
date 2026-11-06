@@ -6,6 +6,22 @@ import { projectProfitAndLoss } from './accounts/profit-loss';
 export { projectProfitAndLoss } from './accounts/profit-loss';
 
 type Scope = { organizationId: string; branchId: string };
+const eventLabels: Record<string, string> = {
+  PHARMACY_GOODS_RECEIPT: 'Goods received',
+  PHARMACY_SALE_LINE: 'Sale',
+  PHARMACY_SALE_RETURN_LINE: 'Sale return',
+  PHARMACY_UNIDENTIFIED_RETURN_HOLD: 'Return on hold',
+  PHARMACY_STOCK_WRITE_OFF: 'Stock write-off',
+  PHARMACY_SUPPLIER_CLAIM: 'Supplier claim',
+  PHARMACY_INTERBRANCH_TRANSFER_LINE: 'Branch transfer',
+  PHARMACY_INVENTORY_COUNT_LINE: 'Inventory count',
+  PHARMACY_TENDER: 'Payment received',
+  PHARMACY_REFUND: 'Refund',
+  PHARMACY_DAILY_CLOSE: 'Daily close',
+  PHARMACY_OPENING_STOCK: 'Opening stock',
+  PHARMACY_OPENING_LEDGER: 'Opening balance',
+  PHARMACY_BOOKKEEPING_TRANSACTION: 'Bookkeeping transaction',
+};
 type AccountTotals = {
   accountCode: string;
   currency: string;
@@ -69,11 +85,37 @@ export async function financialStatements(
     }),
     db.financeJournalEntry.count({ where }),
   ]);
+  // The source identifiers refer to different tables. Resolve only the rows on
+  // this page, and require both tenant and branch at every operational join.
+  // A missing/deleted source or actor leaves a null display value, not an ID.
+  const details = journal.length
+    ? await db.$queryRaw<
+        Array<{ id: string; billNumber: number | null; actorDisplayName: string | null }>
+      >(Prisma.sql`
+      SELECT e.id, s."receiptNumber" AS "billNumber", u.name AS "actorDisplayName"
+      FROM finance_journal_entries e
+      LEFT JOIN users u ON u.id=e."actorId" AND u."organizationId"=${scope.organizationId}
+      LEFT JOIN pharmacy_sale_lines sl ON e."sourceKind"='PHARMACY_SALE_LINE' AND sl.id=e."sourceId" AND sl."organizationId"=${scope.organizationId} AND sl."branchId"=${scope.branchId}
+      LEFT JOIN pharmacy_sale_return_lines rl ON e."sourceKind"='PHARMACY_SALE_RETURN_LINE' AND rl.id=e."sourceId" AND rl."organizationId"=${scope.organizationId} AND rl."branchId"=${scope.branchId}
+      LEFT JOIN pharmacy_unidentified_return_holds h ON e."sourceKind"='PHARMACY_UNIDENTIFIED_RETURN_HOLD' AND h.id=e."sourceId" AND h."organizationId"=${scope.organizationId} AND h."branchId"=${scope.branchId}
+      LEFT JOIN pharmacy_sale_lines returned ON returned.id=COALESCE(rl."saleLineId", h."saleLineId") AND returned."organizationId"=${scope.organizationId} AND returned."branchId"=${scope.branchId}
+      LEFT JOIN pharmacy_tenders t ON e."sourceKind"='PHARMACY_TENDER' AND t.id=e."sourceId" AND t."organizationId"=${scope.organizationId} AND t."branchId"=${scope.branchId}
+      LEFT JOIN pharmacy_refunds r ON e."sourceKind"='PHARMACY_REFUND' AND r.id=e."sourceId" AND r."organizationId"=${scope.organizationId} AND r."branchId"=${scope.branchId}
+      LEFT JOIN pharmacy_sales s ON s.id=COALESCE(sl."saleId", returned."saleId", t."saleId", r."saleId") AND s."organizationId"=${scope.organizationId} AND s."branchId"=${scope.branchId}
+      WHERE e."organizationId"=${scope.organizationId} AND e.id IN (${Prisma.join(journal.map((entry) => entry.id))})
+        AND EXISTS (SELECT 1 FROM finance_journal_lines l WHERE l."entryId"=e.id AND l."organizationId"=${scope.organizationId} AND l."branchId"=${scope.branchId})`)
+    : [];
+  const detailsById = new Map(details.map((detail) => [detail.id, detail]));
   return {
     from: input.from,
     to: input.to,
     page: input.page,
-    journal,
+    journal: journal.map((entry) => ({
+      ...entry,
+      billNumber: detailsById.get(entry.id)?.billNumber ?? null,
+      actorDisplayName: detailsById.get(entry.id)?.actorDisplayName ?? null,
+      eventLabel: `${entry.reversesEntryId ? 'Reversal: ' : ''}${eventLabels[entry.sourceKind] ?? 'Journal entry'}`,
+    })),
     journalCount,
     profitAndLoss: projectProfitAndLoss(totals),
     accounts: totals.map((t) => ({

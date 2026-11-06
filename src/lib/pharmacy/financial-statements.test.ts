@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { projectProfitAndLoss } from './financial-statements';
+import { describe, expect, it, vi } from 'vitest';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { financialStatements, projectProfitAndLoss } from './financial-statements';
 
 const total = (accountCode: string, currency: string, debit: bigint, credit: bigint) => ({
   accountCode,
@@ -7,6 +8,65 @@ const total = (accountCode: string, currency: string, debit: bigint, credit: big
   opening: BigInt(0),
   debit,
   credit,
+});
+
+describe('journal display projection', () => {
+  it('enriches only scoped page entries and preserves journal evidence and amounts', async () => {
+    const entries = [
+      {
+        id: 'e1',
+        sourceKind: 'PHARMACY_SALE_LINE',
+        sourceId: 'line',
+        reversesEntryId: null,
+        lines: [{ amountMinor: 125 }],
+      },
+      {
+        id: 'e2',
+        sourceKind: 'PHARMACY_REFUND',
+        sourceId: 'refund',
+        reversesEntryId: 'original',
+        lines: [{ amountMinor: 75 }],
+      },
+      { id: 'e3', sourceKind: 'UNKNOWN', sourceId: 'missing', reversesEntryId: null, lines: [] },
+    ];
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { id: 'e1', billNumber: 42, actorDisplayName: 'Ayesha' },
+        { id: 'e2', billNumber: null, actorDisplayName: null },
+      ]);
+    const findMany = vi.fn().mockResolvedValue(entries);
+    const db = {
+      $queryRaw: query,
+      financeJournalEntry: { findMany, count: vi.fn().mockResolvedValue(3) },
+    } as unknown as ScopedDb;
+    const result = await financialStatements(
+      db,
+      { organizationId: 'org-a', branchId: 'branch-a' },
+      { from: new Date('2026-01-01'), to: new Date('2027-01-01'), page: 1 }
+    );
+    expect(result.journal).toEqual([
+      { ...entries[0], billNumber: 42, actorDisplayName: 'Ayesha', eventLabel: 'Sale' },
+      { ...entries[1], billNumber: null, actorDisplayName: null, eventLabel: 'Reversal: Refund' },
+      { ...entries[2], billNumber: null, actorDisplayName: null, eventLabel: 'Journal entry' },
+    ]);
+    const sql = query.mock.calls[2]![0];
+    expect(sql.values).toContain('org-a');
+    expect(sql.values).toContain('branch-a');
+    expect(sql.values).toEqual(expect.arrayContaining(['e1', 'e2', 'e3']));
+    expect(sql.sql).toContain('u."organizationId"=');
+    for (const alias of ['sl', 'rl', 'h', 'returned', 't', 'r', 's']) {
+      expect(sql.sql).toContain(`${alias}."organizationId"=`);
+      expect(sql.sql).toContain(`${alias}."branchId"=`);
+    }
+    expect(sql.sql).toContain('EXISTS (SELECT 1 FROM finance_journal_lines');
+    expect(findMany.mock.calls[0]![0].where).toMatchObject({
+      organizationId: 'org-a',
+      lines: { some: { organizationId: 'org-a', branchId: 'branch-a' } },
+    });
+  });
 });
 
 describe('canonical-ledger net P&L projection', () => {
