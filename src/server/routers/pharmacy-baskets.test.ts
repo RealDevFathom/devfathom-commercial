@@ -45,7 +45,21 @@ const generate = {
   },
 };
 
-function setup(role = 'ADMIN') {
+// Basket snapshots carry Finance evidence, so the growth gate (34502571, #939)
+// requires both report capabilities on the owner's current role, read through
+// can() -> db.user.findUnique. Grant exactly those two; an ADMIN without them is
+// refused (asserted below).
+const reportGrants = {
+  organizationRole: {
+    permissions: [
+      { capability: 'reports:operational', effect: 'ALLOW' },
+      { capability: 'reports:financial', effect: 'ALLOW' },
+    ],
+  },
+  permissionOverrides: [] as Array<{ capability: string; effect: string }>,
+};
+
+function setup(role = 'ADMIN', grants: typeof reportGrants = reportGrants) {
   let saved: { id: string; snapshot: unknown; output: unknown; createdAt: Date } | undefined;
   let review: { decision: string; campaignId: string | null; settings: unknown } | undefined;
   const template = {
@@ -70,7 +84,10 @@ function setup(role = 'ADMIN') {
       })),
     },
     pharmacyBranch: { findFirst: vi.fn(async () => ({ id: 'branch-a' })) },
-    user: { findFirst: vi.fn(async () => ({ id: 'owner-a' })) },
+    user: {
+      findFirst: vi.fn(async () => ({ id: 'owner-a' })),
+      findUnique: vi.fn(async () => grants),
+    },
     pharmacySale: {
       findMany: vi.fn(async () => [
         {
@@ -183,6 +200,25 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('reachable pharmacy basket workflow', () => {
+  it.each([
+    ['without report grants', { organizationRole: null, permissionOverrides: [] }],
+    [
+      'with an explicit reports:financial DENY',
+      {
+        organizationRole: reportGrants.organizationRole,
+        permissionOverrides: [{ capability: 'reports:financial', effect: 'DENY' }],
+      },
+    ],
+  ])('refuses an ADMIN %s before reading any receipt', async (_label, grants) => {
+    const { caller, db } = setup('ADMIN', grants as unknown as typeof reportGrants);
+    await expect(caller.generateBaskets(generate)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Financial report permission is required.',
+    });
+    expect(db.pharmacySale.findMany).not.toHaveBeenCalled();
+    expect(db.$executeRaw).not.toHaveBeenCalled();
+  });
+
   it('reads completed tenant/branch receipts, persists evidence, and lets the solo owner PIN-approve an audited generic draft', async () => {
     const { caller, db, ctx, approve, review } = setup();
     expect(await approve()).toEqual({ campaignId: 'campaign-a', replay: false });

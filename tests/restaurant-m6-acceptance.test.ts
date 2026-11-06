@@ -656,16 +656,18 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
             locationId: ids.receiptLocation,
           })
         ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        // Purchase-order-id entry points conceal records outside the caller's
+        // authorized branches as the same NOT_FOUND an unknown id gets (#546).
         await expect(
           denied.approvePurchaseOrder({ purchaseOrderId: order.id })
-        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Purchase order not found.' });
         await expect(
           denied.receivePurchaseOrder({
             purchaseOrderId: order.id,
             idempotencyKey: `denied_receipt_${userId}`,
             lines: [{ purchaseOrderLineId: order.lines[0]!.id, receivedQuantity: '1' }],
           })
-        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Purchase order not found.' });
         await expect(
           denied.createSupplierReturn({
             locationId: ids.receiptLocation,

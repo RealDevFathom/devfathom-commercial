@@ -2,6 +2,14 @@ import { fireEvent, render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
+  access: true,
+  /** The branches `dayCloseAccess` names (DEV-739). */
+  closable: ['b'] as string[],
+  /** A background `dayCloseAccess` refetch in flight. */
+  accessFetching: false,
+  /** Whose answer `dayCloseAccess` returns. */
+  identity: { userId: 'owner', organizationId: 'org' },
+  branches: [{ id: 'b', name: 'Main' }] as { id: string; name: string }[],
   loading: false,
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
@@ -37,9 +45,20 @@ vi.mock('@/components/entitlements-provider', () => ({
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     pharmacySales: {
+      dayCloseAccess: {
+        useQuery: () => ({
+          data: {
+            allowed: mocks.access,
+            branchIds: mocks.access ? mocks.closable : [],
+            ...mocks.identity,
+          },
+          isFetching: mocks.accessFetching,
+          isError: false,
+        }),
+      },
       counterBranches: {
         useQuery: () => ({
-          data: { branches: [{ id: 'b', name: 'Main' }], currency: 'USD', timezone: mocks.zone },
+          data: { branches: mocks.branches, currency: 'USD', timezone: mocks.zone },
           isSuccess: true,
         }),
       },
@@ -81,11 +100,18 @@ import { workspaceToday } from '@/lib/timezone';
 import { cashMinor, drawerOpenedLabel, PharmacyDayCloseConsole } from './day-close-console';
 afterEach(() => {
   cleanup();
+  window.sessionStorage.clear();
   vi.useRealTimers();
 });
 beforeEach(() => {
+  window.sessionStorage.clear();
   mocks.zone = WORKSPACE_ZONE;
   mocks.role = 'ADMIN';
+  mocks.access = true;
+  mocks.closable = ['b'];
+  mocks.identity = { userId: 'owner', organizationId: 'org' };
+  mocks.accessFetching = false;
+  mocks.branches = [{ id: 'b', name: 'Main' }];
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
@@ -192,11 +218,94 @@ describe('day-close console', () => {
       );
     }
   );
-  it('shows permission denial for a non-administrator', () => {
-    mocks.role = 'MEMBER';
+  it('offers only the branches the server lets this viewer close (DEV-739)', () => {
+    mocks.branches = [
+      { id: 'a', name: 'Airport' },
+      { id: 'b', name: 'Main' },
+    ];
+    mocks.closable = ['b'];
     render(<PharmacyDayCloseConsole />);
-    expect(screen.getByText(/Sign in as a pharmacy administrator/)).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Airport' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Main' })).toBeInTheDocument();
+    for (const [input] of mocks.previewInput.mock.calls)
+      expect(input).toEqual(expect.objectContaining({ branchId: 'b' }));
+  });
+  it('stops, rather than moving to another branch, when the chosen branch is no longer closable', () => {
+    mocks.branches = [
+      { id: 'a', name: 'Airport' },
+      { id: 'b', name: 'Main' },
+    ];
+    mocks.closable = ['a', 'b'];
+    const view = render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'b' } });
+    expect(mocks.previewInput).toHaveBeenLastCalledWith(expect.objectContaining({ branchId: 'b' }));
+    mocks.previewInput.mockClear();
+    mocks.closable = ['a'];
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(
+      screen.getByText(/You can no longer close the branch you were working on/)
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('never silently moves the default branch when closable branches change', () => {
+    mocks.branches = [
+      { id: 'a', name: 'Airport' },
+      { id: 'b', name: 'Main' },
+    ];
+    mocks.closable = ['b'];
+    const view = render(<PharmacyDayCloseConsole />);
+    expect(mocks.previewInput).toHaveBeenLastCalledWith(expect.objectContaining({ branchId: 'b' }));
+    mocks.previewInput.mockClear();
+    // Airport becomes closable and sorts first: the form stays on Main.
+    mocks.closable = ['a', 'b'];
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(mocks.previewInput).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'b' }));
+    for (const [input] of mocks.previewInput.mock.calls)
+      expect(input).toEqual(expect.objectContaining({ branchId: 'b' }));
+    // Main stops being closable: the form stops instead of moving to Airport.
+    mocks.previewInput.mockClear();
+    mocks.closable = ['a'];
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(
+      screen.getByText(/You can no longer close the branch you were working on/)
+    ).toBeInTheDocument();
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('keeps the form and the typed count while a background access check runs (d2e6c001)', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '124.00' },
+    });
+    mocks.accessFetching = true;
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('124.00');
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+  });
+  it('never opens on an answer for another user or workspace', () => {
+    mocks.identity = { userId: 'someone-else', organizationId: 'org' };
+    const view = render(<PharmacyDayCloseConsole />);
+    expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+    mocks.identity = { userId: 'owner', organizationId: 'other-org' };
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('shows permission denial for a denied role', () => {
+    mocks.role = 'EMPLOYEE';
+    mocks.access = false;
+    render(<PharmacyDayCloseConsole />);
+    expect(
+      screen.getByText(
+        /Day close is for owners, administrators and managers, on the branches they are assigned to/
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+  });
+  it('allows an employee with manager access', () => {
+    mocks.role = 'EMPLOYEE';
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
   });
   it('shows loading and retryable errors', () => {
     mocks.loading = true;
@@ -257,5 +366,51 @@ describe('day-close console', () => {
         varianceNote: 'Short by one dollar',
       })
     );
+  });
+
+  it('keeps counted cash and variance note across a full remount (DEV-754)', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '12.34' },
+    });
+    fireEvent.change(screen.getByLabelText(/Variance note/), {
+      target: { value: 'still counting' },
+    });
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('12.34');
+    // Full route remount: unmount the tree and mount a fresh console.
+    view.unmount();
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('12.34');
+    expect(screen.getByLabelText(/Variance note/)).toHaveValue('still counting');
+    // Confirmation is never restored; the operator must re-check before lock.
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+  });
+  it('drops the draft once the day shows a recorded close (closed in another tab)', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '12.34' },
+    });
+    const drafts = () =>
+      Object.keys(window.sessionStorage).filter((key) =>
+        key.startsWith('devfathom.pharmacy.day-close.draft:')
+      );
+    expect(drafts()).toHaveLength(1);
+    view.unmount();
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(
+      screen.getByText(
+        'Day closed. New tenders and drawer changes for this business date are blocked.'
+      )
+    ).toBeInTheDocument();
+    expect(drafts()).toEqual([]);
   });
 });

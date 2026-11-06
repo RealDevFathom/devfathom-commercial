@@ -1476,6 +1476,15 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       const drawerSessionId = open.json.drawerSessionId as string;
 
       const { orderId } = await seedOrder(ctx.branchDay, ctx.posDay.deviceId, dayDate, ['10.00']);
+      // The POS parks a served order for payment before checkout; the final tender then
+      // closes it. A SERVED order would remain active and block the day close (#538).
+      const parked = await call(deps.routes.orderClose, {
+        secret: ctx.posDay.secret,
+        session: token,
+        key: uniqueKey('dpark'),
+        body: { orderId },
+      });
+      expect(parked.status, JSON.stringify(parked.json)).toBe(200);
       const cut = await call(deps.routes.bill, {
         secret: ctx.posDay.secret,
         session: token,
@@ -1490,6 +1499,10 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         body: { billId, tender: { type: 'CASH', amount: '10.00', cashReceived: '10.00' } },
       });
       expect(tender.json.settled).toBe(true);
+      const closedOrder = await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantOrder.findUnique({ where: { id: orderId }, select: { status: true } })
+      );
+      expect(closedOrder?.status).toBe('CLOSED');
       const close = await call(deps.routes.drawerClose, {
         secret: ctx.posDay.secret,
         session: token,

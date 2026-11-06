@@ -55,6 +55,7 @@ const ids = {
 let deps: Deps;
 let registerA: Device;
 let registerB: Device;
+const composerProofs = new Map<string, string>();
 
 const key = (label: string) => `${label}_${suffix}_${randomBytes(3).toString('hex')}`;
 const utcDate = (date: string) => new Date(`${date}T00:00:00.000Z`);
@@ -74,6 +75,8 @@ async function call(
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (options.secret) headers.authorization = `Bearer ${options.secret}`;
   if (options.session) headers['x-terminal-session'] = options.session;
+  const composerProof = options.session ? composerProofs.get(options.session) : undefined;
+  if (composerProof) headers['x-pos-composer-proof'] = composerProof;
   if (options.key) headers['idempotency-key'] = options.key;
   const url = new URL('https://tenant.test/api/restaurant/probe');
   for (const [name, value] of Object.entries(options.query ?? {})) {
@@ -103,6 +106,7 @@ async function unlock(device: Device): Promise<string> {
     body: { staffProfileId: ids.operator, type: 'PIN', secret: PIN },
   });
   expect(unlocked.status).toBe(200);
+  composerProofs.set(session, unlocked.json.composerProof as string);
   return session;
 }
 
@@ -156,6 +160,7 @@ beforeAll(async () => {
     import('@/app/api/restaurant/cash/day/close/route'),
     import('@/app/api/restaurant/terminal/establish/route'),
     import('@/app/api/restaurant/terminal/unlock/route'),
+    import('@/app/api/restaurant/orders/close/route'),
   ]);
   const [
     bill,
@@ -167,13 +172,23 @@ beforeAll(async () => {
     dayClose,
     establish,
     unlockRoute,
+    orderClose,
   ] = routeModules as RouteModule[];
   deps = {
     withTenantDb: scopedDb.withTenantDb,
     withPlatformDb: scopedDb.withPlatformDb,
     enrollDevice: devices.enrollDevice,
     hashOperatorCredential: credentials.hashOperatorCredential,
-    routes: { bill, tender, refund, drawerOpen, drawerMovement, drawerClose, dayClose },
+    routes: {
+      bill,
+      tender,
+      refund,
+      drawerOpen,
+      drawerMovement,
+      drawerClose,
+      dayClose,
+      orderClose,
+    },
     terminal: { establish, unlock: unlockRoute },
   };
 
@@ -304,6 +319,15 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
     ];
 
     const cut = async (device: Device, session: string, orderId: string, split: unknown) => {
+      // The POS parks a served order for payment before checkout (closeForPayment); the
+      // final tender then closes it. A still-SERVED order would block the day close.
+      const parked = await call(deps.routes.orderClose, {
+        secret: device.secret,
+        session,
+        key: key('park'),
+        body: { orderId },
+      });
+      expect(parked.status, JSON.stringify(parked.json)).toBe(200);
       const response = await call(deps.routes.bill, {
         secret: device.secret,
         session,

@@ -405,9 +405,11 @@ export async function createSettlementBatch(
       businessDate: input.businessDate,
       expectedMinor,
       createdByUserId: scope.actorId,
+      // Each member row's organizationId is half of its composite key to this batch,
+      // so Prisma takes it from the batch (scope.organizationId) and refuses it here.
+      // The composite (organizationId, tenderId) key then keeps every tender in-tenant.
       tenders: {
         create: tenders.map((tender) => ({
-          organizationId: scope.organizationId,
           tenderId: tender.id,
           amountMinor: tender.amountMinor,
         })),

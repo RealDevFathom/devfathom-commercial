@@ -691,6 +691,12 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
     'src/components/layout/hotel-navigation.test.tsx',
     // d299: Restaurant growth availability fixture.
     'src/lib/ai/provider.test.ts',
+    // fd4630b6 (DEV-721): Ask Fathom finance tool schemas are checked for every vertical.
+    'src/lib/ai/tool-input-schema.test.ts',
+    // 616c8eb6 (DEV-740, #1415): a RESTAURANT tenant is refused the pharmacy camera
+    // gateway, live-view grant and stream.
+    'src/app/api/pharmacy/cameras/[cameraId]/stream/route.test.ts',
+    'src/server/routers/pharmacy-cameras.live.test.ts',
     // d299: canonical demo identity moved to this tenancy boundary.
     'src/lib/tenancy/demo-identity.ts',
     // d299: shared demo deployment boundary moved to activation gates.
@@ -761,6 +767,29 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
     'src/server/restaurant-branch-scope.db.test.ts',
     'src/server/routers/restaurant-tax.db.test.ts',
     'src/server/routers/restaurant-tax.test.ts',
+    // 53efb594 (#971) + df6103a7 (#973): Settings hides restaurant KOT/KDS print
+    // routing and the restaurant-branch receipt designer from other verticals,
+    // reading the vertical from entitlements like the approved topbar bell; the
+    // receipts route fails closed (notFound) without a RESTAURANT tenant actor.
+    'src/app/(app)/settings/settings-content.tsx',
+    'src/app/(app)/settings/receipts/page.tsx',
+    'src/app/(app)/settings/receipts/page.test.tsx',
+    'src/app/(app)/settings/settings-entitlements.test.tsx',
+    'src/app/(app)/settings/settings-print-routing-vertical.test.tsx',
+    // 56d486ca (#969): one exhaustive, typed vertical → invite/member copy map
+    // (a new vertical fails typecheck) and the fixtures that prove each vertical.
+    'src/lib/team/invite-copy.ts',
+    'src/lib/team/invite-copy.test.ts',
+    'src/app/(app)/team/team-content.test.tsx',
+    // Fixture-only references; the code under test names no RESTAURANT branch.
+    // 47ea6c8d (DEV-576): dosing guard applies in a non-pharmacy vertical.
+    'src/app/api/assistant/route.guards.test.ts',
+    // 578ec5e9 (#672): RESTAURANT is the wrong-vertical negative fixture.
+    'src/lib/pharmacy/accounts/fiscal-exceptions.reader.test.ts',
+    // 5fc1b72a (#558): `vertical` column value of the inserted fixture org.
+    'src/lib/restaurant/menu-import-concurrency.db.test.ts',
+    // 25014315 (WHA-305): restaurant tenant context for HR-less notifications.
+    'src/server/routers/team.notifications.test.ts',
   ]);
 
   const APPROVED_PATTERNS = [

@@ -432,8 +432,15 @@ describe('custom ABAC decisions', () => {
       'pharmacy:catalogue-review',
       'pharmacy:orders',
       'pharmacy:counter',
+      // Day close/reconcile (#654): managers and owners only (DEV-32/DEV-739). No
+      // default policy: it is granted explicitly (Manager, Owner / Operator) or by
+      // `pharmacy:*`/`*` (Owner); the session-ADMIN path lives in the close procedure.
+      'pharmacy:close',
     ] as const satisfies readonly Action[];
 
+    // 48 = the 45 pinned before #654 + 'pharmacy:close' (default deny, above) +
+    // 'pharmacy:prescriptions' (#418, [isAdmin] policy, covered separately) +
+    // 'pharmacy:procurement-approve' (#994, PUR-02).
     expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(48);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);

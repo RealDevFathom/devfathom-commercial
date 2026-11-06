@@ -101,6 +101,7 @@ function fixture() {
     device: { branchId: 'branch' },
     movements,
   };
+  const order = { id: 'order', branchId: 'branch', businessDate: D1, status: 'PAYMENT_PENDING' };
   const closedDays = new Set<number>();
   const locks: string[] = [];
   const keys = new Map<string, Record<string, unknown>>();
@@ -161,7 +162,7 @@ function fixture() {
           ? {
               id: 'order',
               branchId: 'branch',
-              status: 'PAYMENT_PENDING',
+              status: order.status,
               channel: 'DINE_IN',
               items: [{ id: 'item', status: 'SERVED' }],
             }
@@ -175,12 +176,29 @@ function fixture() {
               serviceChargePolicyVersion: null,
               deliveryFulfillment: null,
               items: [
-                { id: 'item', status: 'SENT', unitPrice: D('4000'), quantity: 1, modifiers: [] },
+                {
+                  id: 'item',
+                  status: 'SENT',
+                  remakeOfItemId: null,
+                  unitPrice: D('4000'),
+                  quantity: 1,
+                  modifiers: [],
+                },
               ],
             }
           : null
       ),
-      update: vi.fn(async () => undefined),
+      update: vi.fn(async ({ data }: { data: { status?: string } }) => {
+        if (data.status) order.status = data.status;
+        return undefined;
+      }),
+      // Daily-close readiness (#538) counts the day's unresolved orders.
+      count: vi.fn(
+        async ({ where }: { where: Omit<Where, 'status'> & { status: { in: string[] } } }) => {
+          const { status, ...fields } = where;
+          return matches(order, fields) && status.in.includes(order.status) ? 1 : 0;
+        }
+      ),
     },
     restaurantOrderTable: { updateMany: vi.fn(async () => ({ count: 1 })) },
     restaurantBill: {

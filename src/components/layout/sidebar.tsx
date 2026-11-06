@@ -317,13 +317,14 @@ export const navigation: NavItem[] = [
   },
   // PH-POS / POS-01: the counter is the pharmacy's primary operating surface, so
   // it is a first-class rail entry gated by its explicit module ownership.
-  // #979: the day-close console only opens for a pharmacy administrator, so a
-  // cashier is not offered an entry that ends in "Day close unavailable".
+  // #979: a cashier is not offered an entry that ends in "Day close unavailable".
+  // DEV-739: the entry follows the server's dayCloseAccess answer (an eligible owner,
+  // administrator or assigned manager), so it is not limited to administrators.
   {
     label: 'Day close',
+    pharmacyCapabilities: ['pharmacy:close'],
     href: '/pharmacy/counter/close',
     icon: Monitor,
-    adminOnly: true,
     group: 'Pharmacy',
     module: 'pharmacy-counter',
   },
@@ -665,6 +666,19 @@ function useVisibleNavigation() {
     retry: false,
     staleTime: 30_000,
   });
+  const closeEnabled = Boolean(
+    session?.user.id &&
+    session.user.organizationId === entitlements.organizationId &&
+    evaluateSessionUser(session.user).ok &&
+    entitlements.vertical === 'PHARMACY' &&
+    isModuleGranted('pharmacy-counter', entitlements.enabledModules)
+  );
+  const closeAccess = trpc.pharmacySales.dayCloseAccess.useQuery(undefined, {
+    enabled: closeEnabled,
+    retry: false,
+    staleTime: 0,
+    refetchOnMount: 'always',
+  });
   const pharmacyCapabilities = [
     ...(safetyAccess.data?.allowed ? ['pharmacy:safety'] : []),
     ...(sopAccess.data &&
@@ -673,6 +687,16 @@ function useVisibleNavigation() {
       : []),
     ...railCapabilities,
   ];
+  // Only dayCloseAccess grants 'pharmacy:close' here; the rail read never asks about it.
+  if (
+    closeEnabled &&
+    !closeAccess.isFetching &&
+    !closeAccess.isError &&
+    closeAccess.data?.allowed &&
+    closeAccess.data.userId === session?.user.id &&
+    closeAccess.data.organizationId === session.user.organizationId
+  )
+    pharmacyCapabilities.push('pharmacy:close');
   const filteredNav = visibleNavigation(
     entitlements,
     session?.user?.role,

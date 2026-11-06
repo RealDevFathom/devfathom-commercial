@@ -56,6 +56,7 @@ const ids = {
 
 let deps: Deps;
 const devices = new Map<string, Device>();
+const composerProofs = new Map<string, string>();
 const currentBusinessDate = () => new Date().toISOString().slice(0, 10);
 const previousBusinessDate = (date: string) => {
   const previous = new Date(`${date}T00:00:00.000Z`);
@@ -81,6 +82,8 @@ async function call(
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (options.secret) headers.authorization = `Bearer ${options.secret}`;
   if (options.session) headers['x-terminal-session'] = options.session;
+  const composerProof = options.session ? composerProofs.get(options.session) : undefined;
+  if (composerProof) headers['x-pos-composer-proof'] = composerProof;
   if (options.key) headers['idempotency-key'] = options.key;
   const url = new URL('https://tenant.test/api/restaurant/probe');
   for (const [name, value] of Object.entries(options.query ?? {})) {
@@ -116,6 +119,7 @@ async function unlock(device: Device): Promise<string> {
     body: { staffProfileId: ids.operator, type: 'PIN', secret: PIN },
   });
   expect(unlocked.status).toBe(200);
+  composerProofs.set(session, unlocked.json.composerProof as string);
   return session;
 }
 
@@ -156,6 +160,18 @@ async function seedOrder(
     }
     return { orderId: order.id, itemIds };
   });
+}
+
+/** The POS parks a served order for payment before checkout (closeForPayment); the
+ * final tender then closes it. A still-SERVED order is active and blocks the day close. */
+async function parkForPayment(device: Device, session: string, orderId: string): Promise<void> {
+  const response = await call(deps.routes.orderClose, {
+    secret: device.secret,
+    session,
+    key: key('park'),
+    body: { orderId },
+  });
+  expect(response.status, JSON.stringify(response.json)).toBe(200);
 }
 
 async function cutBills(
@@ -199,22 +215,25 @@ beforeAll(async () => {
     import('@/lib/restaurant/devices'),
     import('@/lib/restaurant/operator-credentials'),
     import('@/app/api/restaurant/checkout/bill/route'),
-    import('@/app/api/restaurant/checkout/comp/route'),
+    // The public MVP comp endpoint denies every request (#454); the retained comp domain
+    // is reachable only through the test-only transport.
+    import('@/lib/test-support/retained-comp-route'),
     import('@/app/api/restaurant/checkout/tender/route'),
     import('@/app/api/restaurant/checkout/refund/route'),
     import('@/app/api/restaurant/cash/day/close/route'),
     import('@/app/api/restaurant/cash/day/correct/route'),
     import('@/app/api/restaurant/terminal/establish/route'),
     import('@/app/api/restaurant/terminal/unlock/route'),
+    import('@/app/api/restaurant/orders/close/route'),
   ]);
-  const [bill, comp, tender, refund, dayClose, dayCorrect, establish, unlockRoute] =
+  const [bill, comp, tender, refund, dayClose, dayCorrect, establish, unlockRoute, orderClose] =
     routeModules as RouteModule[];
   deps = {
     withTenantDb: scopedDb.withTenantDb,
     withPlatformDb: scopedDb.withPlatformDb,
     enrollDevice: deviceModule.enrollDevice,
     hashOperatorCredential: credentials.hashOperatorCredential,
-    routes: { bill, comp, tender, refund, dayClose, dayCorrect },
+    routes: { bill, comp, tender, refund, dayClose, dayCorrect, orderClose },
     terminal: { establish, unlock: unlockRoute },
   };
 
@@ -369,6 +388,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
     const compOrder = await seedOrder(ids.moneyBranch, device.deviceId, businessDate, 41001, [
       '8.01',
     ]);
+    await parkForPayment(device, session, compOrder.orderId);
     const [compBillId] = await cutBills(device, session, compOrder.orderId, { kind: 'NONE' });
     const compLine = await deps.withTenantDb(orgId, (tx) =>
       tx.restaurantBillLine.findFirst({
@@ -423,6 +443,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
     const tipOrder = await seedOrder(ids.moneyBranch, device.deviceId, businessDate, 41002, [
       '5.00',
     ]);
+    await parkForPayment(device, session, tipOrder.orderId);
     const [tipBillId] = await cutBills(device, session, tipOrder.orderId, { kind: 'NONE' });
     await cardTender(device, session, tipBillId!, '5.00', '1.23');
 
@@ -449,6 +470,7 @@ describeIfDatabase('WHA-62 M5 acceptance battery (real REST + DB)', () => {
     const session = await unlock(device);
     const saleDate = previousBusinessDate(currentBusinessDate());
     const order = await seedOrder(ids.crossBranch, device.deviceId, saleDate, 51001, ['40.00']);
+    await parkForPayment(device, session, order.orderId);
     const [billId] = await cutBills(device, session, order.orderId, { kind: 'NONE' });
     const sale = await cardTender(device, session, billId!, '40.00', '2.00');
 

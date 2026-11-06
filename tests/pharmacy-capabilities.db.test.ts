@@ -15,6 +15,8 @@ const org = `qa130_${suffix}`;
 const other = `${org}_other`;
 const third = `${org}_third`;
 const restaurant = `${org}_restaurant`;
+const lookalike = `${org}_lookalike`;
+const late = `${org}_late`;
 const runtimeRole = `qa130_${suffix}`;
 const id = (key: string) => `${org}_${key}`;
 const migration = readFileSync(
@@ -31,12 +33,37 @@ const administratorReportsMigration = readFileSync(
   'prisma/migrations/20261029000258_pharmacy_administrator_reports/migration.sql',
   'utf8'
 );
+// DEV-32/DEV-739 rollout phase 1: day close is for managers and owners only. Removes
+// the close ALLOW #654's Pharmacist template had granted. Existing system Managers gain
+// close only in phase 2, after the branch-assignment close gate is serving (see
+// docs/operations/pharmacy-day-close-rollout.md).
+const dayCloseMigration = readFileSync(
+  'prisma/migrations/20261106220000_pharmacy_pharmacist_day_close_revoke/migration.sql',
+  'utf8'
+)
+  .replace(/^BEGIN;$/m, '')
+  .replace(/^COMMIT;$/m, '');
 const ownerPvSafetyMigration = readFileSync(
   'prisma/migrations/20261101120000_pharmacy_owner_pv_safety/migration.sql',
   'utf8'
 )
   .replace(/^BEGIN;$/m, '')
   .replace(/^COMMIT;$/m, '');
+// Rollout phase 2 (not a migration in this release; see the runbook). Tested here so
+// the SQL that will ship as the phase 2 migration is the SQL that was tested.
+const dayClosePhase2 = readFileSync('docs/operations/sql/pharmacy-day-close-phase2.sql', 'utf8')
+  .replace(/^BEGIN;$/m, '')
+  .replace(/^COMMIT;$/m, '');
+// Template grants these migrations never write, so the installed roles here are seeded
+// and expected without them:
+// - DEV-751 (#1418) sop:* grants, for new tenants only. Existing tenants opt in through
+//   docs/operations/pharmacy-sop-rollout/up.sql (tests/pharmacy-sop-role-grants.db.test.ts).
+// - #994 'pharmacy:procurement-approve', backfilled by its own migration
+//   (20261106200200_pharmacy_purchasing_authz, tests/pharmacy-procurement-approve-backfill.db.test.ts).
+const installedHere = (capabilities: readonly string[]) =>
+  capabilities.filter(
+    (capability) => !capability.startsWith('sop:') && capability !== 'pharmacy:procurement-approve'
+  );
 const expiry = new Date('2035-01-02T00:00:00.000Z');
 const expired = new Date('2020-01-02T00:00:00.000Z');
 const legacy: Record<string, string[]> = {
@@ -83,7 +110,7 @@ const legacy: Record<string, string[]> = {
         `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,"updatedAt") VALUES ($1,$2,$3,$1,$1,'Pharmacy','Staff',now())`,
         [id(`user_${template.key}`), org, id(template.key)]
       );
-      for (const capability of legacy[template.key] ?? template.capabilities) {
+      for (const capability of legacy[template.key] ?? installedHere(template.capabilities)) {
         await client.query(
           `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,$4,'ALLOW')`,
           [id(`${template.key}_${capability}`), org, id(template.key), capability]
@@ -163,10 +190,47 @@ const legacy: Record<string, string[]> = {
       `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'reports:operational','DENY')`,
       [id('admin_reports_deny'), other, id('admin')]
     );
+    // Day-close reconciliation (DEV-32/DEV-739). Each role starts with the stated
+    // 'pharmacy:close' row (or none). Only system roles in PHARMACY organizations
+    // change; an explicit DENY is never removed or overridden.
     await client.query(
       `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','RESTAURANT',now(),now())`,
       [restaurant]
     );
+    // (organizationId, key) is unique, so tenant-authored lookalikes keyed
+    // 'pharmacist'/'manager' (isSystem=false) live in their own PHARMACY org.
+    await client.query(
+      `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY',now(),now())`,
+      [lookalike]
+    );
+    for (const [key, roleKey, isSystem, roleOrg, close] of [
+      // A Pharmacist provisioned from #654's template carries the ALLOW: removed.
+      ['templated_pharmacist', 'pharmacist', true, other, 'ALLOW'],
+      // An explicit DENY stays a DENY.
+      ['denied_pharmacist', 'pharmacist', true, third, 'DENY'],
+      // Tenant-authored lookalike and another vertical are untouched.
+      ['custom_pharmacist', 'pharmacist', false, lookalike, 'ALLOW'],
+      ['restaurant_pharmacist', 'pharmacist', true, restaurant, 'ALLOW'],
+      // Phase 1 grants no Manager anything; a Manager's DENY stays a DENY.
+      ['other_manager', 'manager', true, other, null],
+      ['denied_manager', 'manager', true, third, 'DENY'],
+      ['custom_manager', 'manager', false, lookalike, null],
+      ['restaurant_manager', 'manager', true, restaurant, null],
+    ] as const) {
+      await client.query(
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$4,$5,now())`,
+        [id(key), roleOrg, roleKey, key, isSystem]
+      );
+      await client.query(
+        `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:dispense','ALLOW')`,
+        [id(`${key}_dispense`), roleOrg, id(key)]
+      );
+      if (close)
+        await client.query(
+          `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:close',$4)`,
+          [id(`${key}_close`), roleOrg, id(key), close]
+        );
+    }
     for (const key of ['owner', 'admin']) {
       await client.query(
         `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$3,true,now())`,
@@ -183,7 +247,9 @@ const legacy: Record<string, string[]> = {
     await client.query(migration);
     await client.query(managerProcurementMigration);
     await client.query(administratorReportsMigration);
+    // In migration order: 20261101120000 (owner PV safety), then 20261106220000 (day close).
     await client.query(ownerPvSafetyMigration);
+    await client.query(dayCloseMigration);
   }, 60_000);
   afterAll(async () => {
     await client.query('ROLLBACK');
@@ -197,8 +263,12 @@ const legacy: Record<string, string[]> = {
         [id(template.key)]
       );
       // Owner's redundant explicit order grant remains harmless and is not removed.
+      // An installed Manager gains the template's 'pharmacy:close' only in rollout
+      // phase 2, after the branch-assignment close gate is live (DEV-739).
       const expected = [
-        ...template.capabilities,
+        ...installedHere(template.capabilities).filter(
+          (capability) => !(template.key === 'manager' && capability === 'pharmacy:close')
+        ),
         ...(template.key === 'owner' ? ['pharmacy:orders'] : []),
       ].sort();
       expect(rows.rows.map((r) => r.capability)).toEqual(expected);
@@ -229,8 +299,8 @@ const legacy: Record<string, string[]> = {
       [org]
     );
     const rolesBefore = await client.query(
-      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3) ORDER BY id`,
-      [org, other, third]
+      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3,$4,$5) ORDER BY id`,
+      [org, other, third, restaurant, lookalike]
     );
     const ownerOther = await client.query(
       `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 ORDER BY capability`,
@@ -259,10 +329,11 @@ const legacy: Record<string, string[]> = {
       { capability: 'pharmacy:safety', effect: 'DENY' },
       { capability: 'reports:operational', effect: 'DENY' },
     ]);
-    // ...and never touches another vertical's system owner/admin roles.
+    // ...and never touches another vertical's system owner/admin roles. (The same
+    // restaurant org also holds DEV-739's pharmacist/manager fixtures, pinned below.)
     const restaurantRoles = await client.query(
-      `SELECT capability FROM organization_role_permissions WHERE "organizationId"=$1`,
-      [restaurant]
+      `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId" = ANY($1::text[])`,
+      [[id('restaurant_owner'), id('restaurant_admin')]]
     );
     expect(restaurantRoles.rows).toEqual([]);
     const customAdministrator = await client.query(
@@ -270,6 +341,26 @@ const legacy: Record<string, string[]> = {
       [id('custom_administrator')]
     );
     expect(customAdministrator.rows).toEqual([]);
+    const dispense = { capability: 'pharmacy:dispense', effect: 'ALLOW' };
+    const close = (effect: 'ALLOW' | 'DENY') => ({ capability: 'pharmacy:close', effect });
+    const procurement = { capability: 'pharmacy:procurement', effect: 'ALLOW' };
+    for (const [key, expected] of [
+      ['templated_pharmacist', [dispense]],
+      ['denied_pharmacist', [close('DENY'), dispense]],
+      ['custom_pharmacist', [close('ALLOW'), dispense]],
+      ['restaurant_pharmacist', [close('ALLOW'), dispense]],
+      // System Managers also hold #375's procurement backfill (20261022100000).
+      ['other_manager', [dispense, procurement]],
+      ['denied_manager', [close('DENY'), dispense, procurement]],
+      ['custom_manager', [dispense]],
+      ['restaurant_manager', [dispense]],
+    ] as const) {
+      const rows = await client.query(
+        `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 ORDER BY capability`,
+        [id(key)]
+      );
+      expect({ key, rows: rows.rows }).toEqual({ key, rows: expected });
+    }
     const custom = await client.query(
       `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
       [id('other_custom')]
@@ -305,6 +396,7 @@ const legacy: Record<string, string[]> = {
     await client.query(managerProcurementMigration);
     await client.query(administratorReportsMigration);
     await client.query(ownerPvSafetyMigration);
+    await client.query(dayCloseMigration);
     expect(
       (
         await client.query(
@@ -316,8 +408,8 @@ const legacy: Record<string, string[]> = {
     expect(
       (
         await client.query(
-          `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3) ORDER BY id`,
-          [org, other, third]
+          `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3,$4,$5) ORDER BY id`,
+          [org, other, third, restaurant, lookalike]
         )
       ).rows
     ).toEqual(rolesBefore.rows);
@@ -363,6 +455,18 @@ const legacy: Record<string, string[]> = {
     // #479: the default Owner role's exact grant lets it file and review PV.
     expect(await can(subject('owner'), 'pharmacy:safety', undefined, { db })).toBe(true);
     expect(await can(subject('manager'), 'pharmacy:procurement', undefined, { db })).toBe(true);
+    // Day close: owners, administrators and managers (DEV-32/DEV-739). The Pharmacist and
+    // Cashier templates carry no default grant.
+    // An installed Manager role is granted in rollout phase 2; a Manager provisioned
+    // from the current template already holds it (pharmacy-sales.branch-scope.test.ts).
+    for (const [key, allowed] of PHARMACY_ROLE_TEMPLATES.map(
+      (role) => [role.key, role.key === 'owner' || role.key === 'owner-operator'] as const
+    )) {
+      expect({
+        key,
+        allowed: await can(subject(key), 'pharmacy:close', undefined, { db }),
+      }).toEqual({ key, allowed });
+    }
     expect(await can(subject('cashier'), 'pharmacy:orders', undefined, { db })).toBe(true);
     expect(await can(subject('cashier'), 'pharmacy:procurement', undefined, { db })).toBe(false);
     expect(await can(subject('auditor'), 'pharmacy:dispense', undefined, { db })).toBe(false);
@@ -374,5 +478,115 @@ const legacy: Record<string, string[]> = {
     expect(forced.rows).toHaveLength(2);
     expect(forced.rows.every((r) => r.relforcerowsecurity)).toBe(true);
     await client.query('RESET ROLE');
+  });
+
+  it('rollout phase 2 grants installed Managers, removes late Pharmacist grants, keeps DENYs', async () => {
+    const closeRows = (role: string) =>
+      client
+        .query(
+          `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 AND capability='pharmacy:close'`,
+          [id(role)]
+        )
+        .then((result) => result.rows);
+    // Isolated from the phase 1 assertions above, so test order does not matter.
+    await client.query('SAVEPOINT rollout_phase_2');
+    await client.query(`SELECT set_config('app.is_platform_admin','true',true)`);
+    // A previous revision provisioned a Pharmacist from the old template during phase 1.
+    await client.query(
+      `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY',now(),now())`,
+      [late]
+    );
+    await client.query(
+      `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,'pharmacist','Pharmacist',true,now())`,
+      [id('late_pharmacist'), late]
+    );
+    await client.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:close','ALLOW')`,
+      [id('late_pharmacist_close'), late, id('late_pharmacist')]
+    );
+    await client.query(dayClosePhase2);
+    expect(await closeRows('late_pharmacist')).toEqual([]);
+    expect(await closeRows('templated_pharmacist')).toEqual([]);
+    expect(await closeRows('denied_pharmacist')).toEqual([
+      { capability: 'pharmacy:close', effect: 'DENY' },
+    ]);
+    expect(await closeRows('manager')).toEqual([{ capability: 'pharmacy:close', effect: 'ALLOW' }]);
+    expect(await closeRows('other_manager')).toEqual([
+      { capability: 'pharmacy:close', effect: 'ALLOW' },
+    ]);
+    expect(await closeRows('denied_manager')).toEqual([
+      { capability: 'pharmacy:close', effect: 'DENY' },
+    ]);
+    expect(await closeRows('custom_manager')).toEqual([]);
+    expect(await closeRows('restaurant_manager')).toEqual([]);
+    expect(await closeRows('custom_pharmacist')).toEqual([
+      { capability: 'pharmacy:close', effect: 'ALLOW' },
+    ]);
+    expect(await closeRows('restaurant_pharmacist')).toEqual([
+      { capability: 'pharmacy:close', effect: 'ALLOW' },
+    ]);
+    // An installed Manager now matches its template exactly.
+    const managerTemplate = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'manager')!;
+    expect(
+      (
+        await client.query(
+          `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1 ORDER BY capability`,
+          [id('manager')]
+        )
+      ).rows.map((row) => row.capability)
+    ).toEqual(installedHere(managerTemplate.capabilities).sort());
+    const orgs = [org, other, third, restaurant, lookalike, late];
+    const snapshot = () =>
+      client
+        .query(
+          `SELECT * FROM organization_role_permissions WHERE "organizationId" = ANY($1) ORDER BY id`,
+          [orgs]
+        )
+        .then((result) => result.rows);
+    const once = await snapshot();
+    await client.query(dayClosePhase2);
+    expect(await snapshot()).toEqual(once);
+
+    // The real can(), as the restricted runtime role: an installed Manager now closes.
+    await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
+    await client.query(
+      `SELECT set_config('app.is_platform_admin','false',true),set_config('app.current_organization_id',$1,true)`,
+      [org]
+    );
+    const db = {
+      user: {
+        findUnique: async ({ where }: { where: { id: string } }) => ({
+          organizationRole: {
+            permissions: (
+              await client.query(
+                `SELECT p.capability,p.effect FROM users u JOIN organization_role_permissions p ON p."organizationRoleId"=u."organizationRoleId" WHERE u.id=$1`,
+                [where.id]
+              )
+            ).rows,
+          },
+          permissionOverrides: (
+            await client.query(
+              `SELECT capability,effect FROM user_permission_overrides WHERE "userId"=$1 AND ("expiresAt" IS NULL OR "expiresAt">now())`,
+              [where.id]
+            )
+          ).rows,
+        }),
+      },
+    } as unknown as AuthzDb;
+    for (const [key, allowed] of PHARMACY_ROLE_TEMPLATES.map(
+      (role) => [role.key, ['manager', 'owner', 'owner-operator'].includes(role.key)] as const
+    )) {
+      expect({
+        key,
+        allowed: await can(
+          { id: id(`user_${key}`), role: 'EMPLOYEE', department: 'Pharmacy', status: 'ACTIVE' },
+          'pharmacy:close',
+          undefined,
+          { db }
+        ),
+      }).toEqual({ key, allowed });
+    }
+    await client.query('RESET ROLE');
+    await client.query('ROLLBACK TO SAVEPOINT rollout_phase_2');
   });
 });

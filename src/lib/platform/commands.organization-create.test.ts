@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   userCreate: vi.fn(),
   opportunityFindUnique: vi.fn(),
   opportunityUpdateMany: vi.fn(),
+  opportunityForUpdate: vi.fn(),
   accountForUpdate: vi.fn(),
 }));
 
@@ -31,8 +32,35 @@ function record(model: string) {
   });
 }
 
+// Conversion locks the opportunity row first and, once it is claimed, the
+// account row. Route each raw lock to its own mock.
+function lockRow(
+  query: TemplateStringsArray | { strings: readonly string[] },
+  ...values: unknown[]
+) {
+  const text = 'strings' in query ? query.strings.join('?') : Array.from(query).join('?');
+  return text.includes('platform_opportunities')
+    ? mocks.opportunityForUpdate(query, ...values)
+    : mocks.accountForUpdate(query, ...values);
+}
+
+type OpportunityRow = {
+  id: string;
+  accountId: string;
+  stage: string;
+  convertedOrganizationId: string | null;
+};
+
+// The row lock and the eligibility read observe the same committed row.
+function givenOpportunity(row: OpportunityRow | null) {
+  mocks.opportunityForUpdate.mockResolvedValue(
+    row ? [{ id: row.id, convertedOrganizationId: row.convertedOrganizationId }] : []
+  );
+  mocks.opportunityFindUnique.mockResolvedValue(row);
+}
+
 const platformDb = {
-  $queryRaw: mocks.accountForUpdate,
+  $queryRaw: lockRow,
   platformPackage: {
     findUnique: vi.fn(async () => ({
       id: 'pkg_1',
@@ -140,13 +168,13 @@ describe('crm.opportunity.convert eligibility', () => {
   });
 
   it.each([
-    ['WON', 'org_existing'],
-    ['LOST', null],
-    ['QUALIFIED', 'org_existing'],
+    ['WON', 'org_existing', 'Opportunity has already been converted.'],
+    ['LOST', null, 'Opportunity is not eligible for conversion.'],
+    ['QUALIFIED', 'org_existing', 'Opportunity has already been converted.'],
   ])(
     'rejects an ineligible opportunity before provisioning',
-    async (stage, convertedOrganizationId) => {
-      mocks.opportunityFindUnique.mockResolvedValue({
+    async (stage, convertedOrganizationId, message) => {
+      givenOpportunity({
         id: 'opp_1',
         accountId: 'account_1',
         stage,
@@ -161,17 +189,16 @@ describe('crm.opportunity.convert eligibility', () => {
       ).catch((caught: unknown) => caught);
 
       expect(error).toBeInstanceOf(PlatformSecurityError);
-      expect(error).toMatchObject({
-        status: 409,
-        message: 'Opportunity is not eligible for conversion.',
-      });
+      expect(error).toMatchObject({ status: 409, message });
+      expect(mocks.opportunityForUpdate).toHaveBeenCalledOnce();
       expect(mocks.opportunityUpdateMany).not.toHaveBeenCalled();
+      expect(mocks.accountForUpdate).not.toHaveBeenCalled();
       expect(platformDb.organization.create).not.toHaveBeenCalled();
     }
   );
 
   it('rejects a missing opportunity before provisioning', async () => {
-    mocks.opportunityFindUnique.mockResolvedValue(null);
+    givenOpportunity(null);
 
     const error = await executePlatformCommand(
       actor,
@@ -181,17 +208,18 @@ describe('crm.opportunity.convert eligibility', () => {
     ).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
-    expect(error).toMatchObject({
-      status: 409,
-      message: 'Opportunity is not eligible for conversion.',
-    });
+    expect(error).toMatchObject({ status: 400, message: 'Opportunity not found.' });
+    expect(mocks.opportunityForUpdate).toHaveBeenCalledOnce();
+    expect(mocks.opportunityFindUnique).not.toHaveBeenCalled();
     expect(mocks.opportunityUpdateMany).not.toHaveBeenCalled();
     expect(mocks.accountForUpdate).not.toHaveBeenCalled();
     expect(platformDb.organization.create).not.toHaveBeenCalled();
   });
 
-  it.each(['PROPOSAL', 'WON'])('loses a concurrent %s conversion claim before provisioning', async (stage) => {
-    mocks.opportunityFindUnique.mockResolvedValue({
+  // Under the opportunity row lock the conditional claim cannot lose a race, so this
+  // models a defence-in-depth path: if the claim still matches no row, fail closed.
+  it.each(['PROPOSAL', 'WON'])('fails closed when the %s conversion claim matches no row', async (stage) => {
+    givenOpportunity({
       id: 'opp_1', accountId: 'account_1', stage, convertedOrganizationId: null,
     });
     mocks.opportunityUpdateMany.mockResolvedValue({ count: 0 });
@@ -200,7 +228,10 @@ describe('crm.opportunity.convert eligibility', () => {
       { ...payload('admin@acme.com'), opportunityId: 'opp_1' }, request
     ).catch((caught: unknown) => caught);
 
-    expect(error).toMatchObject({ status: 409 });
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'Opportunity is not eligible for conversion.',
+    });
     expect(mocks.opportunityUpdateMany).toHaveBeenCalledWith({
       where: { id: 'opp_1', stage, convertedOrganizationId: null },
       data: { stage: 'WON', wonAt: expect.any(Date) },
@@ -210,7 +241,7 @@ describe('crm.opportunity.convert eligibility', () => {
   });
 
   it.each(['DISCOVERY', 'WON'])('rejects a %s opportunity when its account is already linked', async (stage) => {
-    mocks.opportunityFindUnique.mockResolvedValue({
+    givenOpportunity({
       id: 'opp_2', accountId: 'account_1', stage, convertedOrganizationId: null,
     });
     mocks.opportunityUpdateMany.mockResolvedValue({ count: 1 });
@@ -235,7 +266,7 @@ describe('crm.opportunity.convert eligibility', () => {
   });
 
   it('applies the same replay guard to opportunity-linked organization onboarding', async () => {
-    mocks.opportunityFindUnique.mockResolvedValue({
+    givenOpportunity({
       id: 'opp_1', accountId: 'account_1', stage: 'WON', convertedOrganizationId: 'org_existing',
     });
 
@@ -243,7 +274,11 @@ describe('crm.opportunity.convert eligibility', () => {
       { ...payload('admin@acme.com'), opportunityId: 'opp_1' }, request
     ).catch((caught: unknown) => caught);
 
-    expect(error).toMatchObject({ status: 409 });
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'Opportunity has already been converted.',
+    });
+    expect(mocks.opportunityFindUnique).not.toHaveBeenCalled();
     expect(platformDb.organization.create).not.toHaveBeenCalled();
   });
 
@@ -253,7 +288,7 @@ describe('crm.opportunity.convert eligibility', () => {
     ['organization.create', 'NEGOTIATION'],
     ['organization.create', 'WON'],
   ])('%s claims an unlinked %s opportunity and preserves its original stage in the event', async (command, stage) => {
-    mocks.opportunityFindUnique.mockResolvedValue({
+    givenOpportunity({
       id: 'opp_1', accountId: 'account_1', stage, convertedOrganizationId: null,
     });
     mocks.opportunityUpdateMany.mockResolvedValue({ count: 1 });
@@ -269,6 +304,8 @@ describe('crm.opportunity.convert eligibility', () => {
       where: { id: 'opp_1', stage, convertedOrganizationId: null },
       data: { stage: 'WON', wonAt: expect.any(Date) },
     });
+    expect(mocks.opportunityForUpdate).toHaveBeenCalledOnce();
+    expect(mocks.opportunityForUpdate).toHaveBeenCalledBefore(mocks.opportunityFindUnique);
     expect(mocks.accountForUpdate).toHaveBeenCalledOnce();
     expect(mocks.accountForUpdate).toHaveBeenCalledBefore(platformDb.organization.create);
     expect(created.opportunityUpdate).toContainEqual({ convertedOrganizationId: 'org_new' });

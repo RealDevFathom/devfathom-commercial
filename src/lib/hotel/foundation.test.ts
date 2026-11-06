@@ -24,14 +24,17 @@ const priorCatalogDigests = {
   AGENCY: '54e0ca2cb112bd14c7bde79c1aba7ceeb7875fc51c5a0e5dd05c0db326440769',
   RESTAURANT: '94d6616c691e680b51b340e75547478e5fdd98e9aa208efc12ce64670dc950a7',
   // QA-130: canonical capability names and explicit Owner report grants.
-  // DEV-751: generic sop:* actions in the pharmacy capability catalog and the
-  // appended pharmacy SOP role-template grants, on top of #247's explicit
-  // pharmacy:safety grants (Owner template, bootstrap admin). The pin was
-  // already stale on develop before either change. If DEV-739 (#1413) lands
-  // later, it recomputes this pin with its day-close change and names it here.
-  // DEV-17 (#994): pharmacy:procurement-approve on the Manager and Owner /
-  // Operator templates; the hashed catalog data differs only by those grants.
-  PHARMACY: '259c422c8d031e258714eb533a8efe682deefd4361d8994fc69c8bcc272e95b0',
+  // #975 (47518cbf): Owner / Operator template gains exact 'pharmacy:procurement',
+  // 'pharmacy:inventory', 'pharmacy:counter', 'pharmacy:close', 'pharmacy:manage'.
+  // #247 / #479 (3369c68b): the Owner template gains exact 'pharmacy:safety'.
+  // DEV-751 (#1418): generic sop:* actions in the pharmacy capability catalog and the
+  // appended pharmacy SOP role-template grants.
+  // DEV-17 (#994): pharmacy:procurement-approve on the Manager and Owner / Operator
+  // templates. Develop's pin with both was 259c422c….
+  // DEV-739 (#1413, Saad, DEV-32): day close is managers and owners only, so
+  // 'pharmacy:close' moves from the Pharmacist template (#654) to the Manager template.
+  // Restoring only those two template lines reproduces 259c422c…; nothing else changed.
+  PHARMACY: '79c9eeb9106f321094a14f06fe8fcf267b084738f6dd2bfb0c916bda6f132377',
 };
 
 const property = {

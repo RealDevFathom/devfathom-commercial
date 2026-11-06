@@ -167,15 +167,20 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
           expiryPrecision: 'DAY',
         },
       });
+      // The bills below sell a STRIP (10 units). A lot received as single
+      // units offers only a UNIT sale unit (saleUnitOptions), and priceFromLot
+      // refuses a sale unit larger than the received pack (#829). Receive the
+      // lot as sealed strips so the server prices the same STRIP the counter
+      // would offer: Rs 25.00 per strip, Rs 2.50 per tablet, as before.
       await receiveLot(db, scope, {
         manufacturingBatchId: batch.id,
-        packLevelId: fixture.medicines.otc.packLevelIds.unit,
+        packLevelId: fixture.medicines.otc.packLevelIds.strip,
         stockLocationId: fixture.stockLocationId,
-        unitsPerPack: 1,
+        unitsPerPack: 10,
         supplierName: 'Settlement returns fixture',
         supplierInvoiceRef: key(),
         unitCostMinor: 100,
-        printedMrpMinor: 250,
+        printedMrpMinor: 2500,
         receivedExpiresAt: expiry,
         receivedExpiryPrecision: 'DAY',
         quantityUnits: 20,

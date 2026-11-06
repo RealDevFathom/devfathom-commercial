@@ -1051,8 +1051,13 @@ export async function commitMenuImport(
       const extractedIsForeign = extractedCurrency !== null && extractedCurrency !== tenantCurrency;
       // A foreign extracted price is acceptable only when the reviewer typed an
       // amount in the organization currency; relabelling alone is not a conversion.
+      // Re-entering the extracted foreign figure as the local amount is a relabel
+      // too, however the review got there (e.g. currency first, then the figure).
       const hasReviewedConversion =
-        reviewedCurrency === tenantCurrency && line.reviewedPriceAmount !== null;
+        reviewedCurrency === tenantCurrency &&
+        line.reviewedPriceAmount !== null &&
+        (line.extractedPriceAmount === null ||
+          !line.reviewedPriceAmount.equals(line.extractedPriceAmount));
       if (
         !tenantCurrency ||
         priceCurrency !== tenantCurrency ||

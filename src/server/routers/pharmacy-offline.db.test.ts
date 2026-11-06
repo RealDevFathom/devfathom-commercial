@@ -394,11 +394,13 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     }));
     expect(report.cashExpectedMinor).toBe(0);
     expect(report.tenderTotals).toEqual([{ type: 'RAAST', amountMinor: 100, refundMinor: 0, netMinor: 100 }]);
-    const batch = await inOrg(ORG_A, async (db) => {
+    const { batch, tenderId } = await inOrg(ORG_A, async (db) => {
       const tender = await db.pharmacyTender.findFirstOrThrow({ where: { saleId } });
-      return bookkeeping.createSettlementBatch(db, scope, { reference: tag('RAAST'), provider: 'Raast', tenderType: 'RAAST', businessDate, tenderIds: [tender.id] });
+      return { tenderId: tender.id, batch: await bookkeeping.createSettlementBatch(db, scope, { reference: tag('RAAST'), provider: 'Raast', tenderType: 'RAAST', businessDate, tenderIds: [tender.id] }) };
     });
     expect(batch.expectedMinor).toBe(100);
+    // The member row takes the batch's tenant through the real client (it once failed validation).
+    expect(batch.tenders).toEqual([expect.objectContaining({ organizationId: ORG_A, tenderId, amountMinor: 100 })]);
     const lines = await inOrg(ORG_A, async (db) => Promise.all([1, 2].map((number) => db.pharmacyBankStatementLine.create({ data: {
       organizationId: ORG_A, branchId: scope.branchId, statementRef: tag('statement'), lineReference: `line-${number}`, bookedAt: new Date(), amountMinor: 100, description: 'Merchant receipt',
     } }))));

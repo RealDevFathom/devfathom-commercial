@@ -224,6 +224,21 @@ describe('pharmacy navigation', () => {
     ).toBe(true);
   });
 
+  it('shows day close only after the server grants day-close access', () => {
+    const entitled = {
+      vertical: 'PHARMACY' as const,
+      enabledModules: ['pharmacy-core', 'pharmacy-counter'],
+    };
+    expect(
+      visibleNavigation(entitled, 'ADMIN').some((item) => item.href === '/pharmacy/counter/close')
+    ).toBe(false);
+    expect(
+      visibleNavigation(entitled, 'EMPLOYEE', [], ['pharmacy:close']).some(
+        (item) => item.href === '/pharmacy/counter/close'
+      )
+    ).toBe(true);
+  });
+
   describe('cashier exposure (#979)', () => {
     const everyPharmacyModule = {
       vertical: 'PHARMACY' as const,
@@ -274,8 +289,12 @@ describe('pharmacy navigation', () => {
       expect(hrefs('ADMIN')).not.toContain(route);
     });
 
-    it('keeps the administrator-only day close for administrators', () => {
-      expect(hrefs('ADMIN')).toContain('/pharmacy/counter/close');
+    // DEV-739: Day close follows the server's dayCloseAccess answer, the only source
+    // of 'pharmacy:close' in the rail, so a cashier still never meets a dead end.
+    it('offers Day close only once the server grants it, to an administrator or a manager', () => {
+      expect(hrefs('ADMIN')).not.toContain('/pharmacy/counter/close');
+      expect(hrefs('ADMIN', ['pharmacy:close'])).toContain('/pharmacy/counter/close');
+      expect(hrefs('EMPLOYEE', ['pharmacy:close'])).toContain('/pharmacy/counter/close');
     });
 
     it('shows Team to administrators, and to members only with the HR directory', () => {

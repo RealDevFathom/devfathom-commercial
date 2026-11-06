@@ -2,7 +2,7 @@
 
 import { tenderTotalsSchema } from '@/lib/pharmacy/manual-payments';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -17,6 +17,12 @@ import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-r
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import {
+  clearDayCloseDraft,
+  readDayCloseDraft,
+  writeDayCloseDraft,
+  type DayCloseDraftScope,
+} from './day-close-draft-storage';
 
 /**
  * "Opened 09:12 by Ayesha Karim", or just the time when the opener is no longer a
@@ -46,36 +52,72 @@ export function PharmacyDayCloseConsole() {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
   const user = session?.user;
-  if (
-    status !== 'authenticated' ||
-    !evaluateSessionUser(user).ok ||
-    user?.role !== 'ADMIN' ||
-    user.organizationId !== entitlements.organizationId ||
-    !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
-  ) {
+  const eligibleSession = status === 'authenticated' && evaluateSessionUser(user).ok &&
+    user?.organizationId === entitlements.organizationId &&
+    isModuleGranted('pharmacy-counter', entitlements.enabledModules);
+  const access = trpc.pharmacySales.dayCloseAccess.useQuery(undefined, {
+    enabled: eligibleSession, retry: false, staleTime: 0, refetchOnMount: 'always',
+  });
+  // Keep an already-allowed console mounted across background access refetches
+  // (Sidebar remount / dayCloseAccess isFetching); only the initial load gate
+  // should wipe reconciliation / drawer-count state.
+  const accessMatches =
+    !!access.data?.allowed &&
+    access.data.userId === user?.id &&
+    access.data.organizationId === user.organizationId;
+  if (!eligibleSession || access.isError || !accessMatches) {
     return (
       <SectionCard title="Day close unavailable">
         <p role="status">
-          {status === 'loading'
+          {status === 'loading' || (eligibleSession && !access.isError && !access.data)
             ? 'Checking day-close access…'
-            : 'Sign in as a pharmacy administrator to reconcile and close a day.'}
+            : access.isError
+              ? 'Could not check day-close access. Reload to retry.'
+              : 'Day close is for owners, administrators and managers, on the branches they are assigned to.'}
         </p>
       </SectionCard>
     );
   }
-  return <DayCloseBranches key={`${user.organizationId}:${user.id}`} />;
+  return (
+    <DayCloseBranches
+      key={`${user.organizationId}:${user.id}`}
+      organizationId={user.organizationId}
+      userId={user.id}
+      closable={access.data!.branchIds}
+    />
+  );
 }
 
-function DayCloseBranches() {
+function DayCloseBranches({
+  organizationId,
+  userId,
+  closable,
+}: {
+  organizationId: string;
+  userId: string;
+  /** The branches the server would let this viewer close (`dayCloseAccess`). */
+  closable: readonly string[];
+}) {
   const branches = trpc.pharmacySales.counterBranches.useQuery();
+  // Only the branches this viewer may close; the server repeats the check on every call.
+  const options = branches.data?.branches.filter((branch) => closable.includes(branch.id)) ?? [];
   const [selected, setSelected] = useState('');
+  // The branch the form first opened on, until the operator picks one: a later change
+  // in which branches are closable never silently moves the form to another branch.
+  const [opened, setOpened] = useState('');
+  const first = options[0]?.id ?? '';
+  if (!selected && !opened && first) setOpened(first);
   const [picked, setPicked] = useState<string | null>(null);
   const timeZone = branches.data?.timezone;
   // Until the operator picks a day: today in the workspace's zone, settled once
   // the zone is known, so a page left open past midnight keeps its day.
   const today = useMemo(() => (timeZone ? workspaceToday(timeZone) : ''), [timeZone]);
   const date = picked ?? today;
-  const branchId = selected || branches.data?.branches[0]?.id || '';
+  // The branch in use that is no longer closable stops the form rather than moving it
+  // to another branch's drawers.
+  const wanted = selected || opened || first;
+  const lost = Boolean(wanted) && !options.some((branch) => branch.id === wanted);
+  const branchId = lost ? '' : wanted;
   const currency = branches.data?.currency;
   return (
     <div className="space-y-6">
@@ -92,9 +134,14 @@ function DayCloseBranches() {
               className="min-h-11 rounded-sm border border-border-default bg-surface-card px-3 focus-visible:outline-2 focus-visible:outline-ring"
               value={branchId}
               onChange={(e) => setSelected(e.target.value)}
-              disabled={branches.isLoading || !branches.data?.branches.length}
+              disabled={branches.isLoading || !options.length}
             >
-              {branches.data?.branches.map((b) => (
+              {!branchId && (
+                <option value="" disabled>
+                  Choose a branch
+                </option>
+              )}
+              {options.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
                 </option>
@@ -120,13 +167,20 @@ function DayCloseBranches() {
             </Button>
           </p>
         )}
-        {branches.isSuccess && !branches.data.branches.length && (
-          <p>No active pharmacy branches are available.</p>
+        {branches.isSuccess && !options.length && (
+          <p>No active branch you can close is available.</p>
+        )}
+        {lost && options.length > 0 && (
+          <p role="status">
+            You can no longer close the branch you were working on. Choose a branch to continue.
+          </p>
         )}
       </SectionCard>
       {branchId && currency && /^\d{4}-\d{2}-\d{2}$/.test(date) && (
         <DayCloseForm
           key={`${branchId}:${date}`}
+          organizationId={organizationId}
+          userId={userId}
           branchId={branchId}
           date={date}
           currency={currency}
@@ -137,10 +191,14 @@ function DayCloseBranches() {
 }
 
 function DayCloseForm({
+  organizationId,
+  userId,
   branchId,
   date,
   currency,
 }: {
+  organizationId: string;
+  userId: string;
   branchId: string;
   date: string;
   currency: string;
@@ -148,9 +206,24 @@ function DayCloseForm({
   const input = { branchId, businessDate: new Date(`${date}T00:00:00.000Z`) };
   const preview = trpc.pharmacySales.closePreview.useQuery(input, { refetchOnWindowFocus: false });
   const close = trpc.pharmacySales.closeDay.useMutation();
-  const [counts, setCounts] = useState<Record<string, string>>({});
-  const [note, setNote] = useState('');
+  const draftScope = useMemo<DayCloseDraftScope>(
+    () => ({ organizationId, userId, branchId, businessDate: date }),
+    [organizationId, userId, branchId, date]
+  );
+  // Restore counted cash / variance note after a full route remount (DEV-754).
+  const [counts, setCounts] = useState<Record<string, string>>(
+    () => readDayCloseDraft(draftScope)?.counts ?? {}
+  );
+  const [note, setNote] = useState(() => readDayCloseDraft(draftScope)?.note ?? '');
   const [confirmed, setConfirmed] = useState(false);
+  useEffect(() => {
+    writeDayCloseDraft(draftScope, { counts, note });
+  }, [draftScope, counts, note]);
+  // A recorded close for this day (this tab's or another's) ends the draft.
+  const recordedClose = Boolean(close.data ?? preview.data?.close);
+  useEffect(() => {
+    if (recordedClose) clearDayCloseDraft(draftScope);
+  }, [recordedClose, draftScope]);
   const [locale, setLocale] = useState<CounterReceiptLocale>('en');
   const [printMessage, setPrintMessage] = useState('');
   if (preview.isLoading)
@@ -363,7 +436,9 @@ function DayCloseForm({
                 disabled={busy}
                 onClick={() => {
                   setCounts({});
+                  setNote('');
                   setConfirmed(false);
+                  clearDayCloseDraft(draftScope);
                   close.reset();
                   void preview.refetch();
                 }}

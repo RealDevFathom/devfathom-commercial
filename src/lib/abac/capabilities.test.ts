@@ -23,12 +23,15 @@ export const intendedPharmacyGrants = {
     'pharmacy:manage',
     'pharmacy:procurement-approve',
   ],
-  pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
+  // Day close: owners, administrators and managers (DEV-32, DEV-739); no default
+  // pharmacist grant. A role that grants pharmacy:close decides, not the profession.
+  pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
   manager: [
     'pharmacy:manage',
     'pharmacy:orders',
     'pharmacy:procurement',
     'pharmacy:procurement-approve',
+    'pharmacy:close',
   ],
   cashier: ['pharmacy:counter', 'pharmacy:orders'],
   procurement: ['pharmacy:procurement'],
@@ -107,7 +110,7 @@ describe('canonical capability contract (#130)', () => {
   });
 
   it.each([
-    ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close']],
+    ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review']],
     ['cashier', ['pharmacy:counter', 'pharmacy:orders']],
     ['finance', ['reports:financial']],
     ['auditor', ['reports:operational']],

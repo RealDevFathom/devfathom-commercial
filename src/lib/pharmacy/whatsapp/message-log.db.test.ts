@@ -21,8 +21,14 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 }));
 
 import { sendClaimedMessage } from './message-log';
+import { assertDisposableRlsDatabase } from '../../../../tests/disposable-rls-database';
 
-const databaseUrl = process.env.DATABASE_URL;
+// Setup creates a restricted login role, grants it table access and seeds both
+// tenants, which needs the schema owner with CREATEROLE. In the QA gate
+// DATABASE_URL is the NOCREATEROLE runtime role, so prefer OWNER_DATABASE_URL
+// (the gate's owner on the same database) and fall back to DATABASE_URL for a
+// local superuser setup. The assertions run as the created role either way.
+const databaseUrl = process.env.OWNER_DATABASE_URL ?? process.env.DATABASE_URL;
 const describeIfDatabase = databaseUrl ? describe : describe.skip;
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 const role = `whatsapp_consent_${suffix}`;
@@ -71,10 +77,21 @@ async function drain(logId: string, customerId: string, send: () => Promise<neve
 
 describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
   beforeAll(async () => {
+    // Creates a LOGIN role and commits tenants: local or explicitly disposable only.
+    assertDisposableRlsDatabase(databaseUrl!);
     await admin!.connect();
     await admin!.query(
       `CREATE ROLE "${role}" LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${password}'`
     );
+    // PostgreSQL 16+: a NOSUPERUSER CREATEROLE owner holds only ADMIN OPTION on a
+    // role it creates; INHERIT lets teardown DROP OWNED BY it. The created role
+    // gains nothing from this grant.
+    await admin!.query(`GRANT "${role}" TO CURRENT_USER WITH INHERIT TRUE, SET FALSE`);
+    // A disposable database may revoke CONNECT from PUBLIC (the QA gate does).
+    const [{ database }] = (
+      await admin!.query<{ database: string }>('SELECT current_database() AS database')
+    ).rows;
+    await admin!.query(`GRANT CONNECT ON DATABASE "${database}" TO "${role}"`);
     await admin!.query(`GRANT USAGE ON SCHEMA public TO "${role}"`);
     await admin!.query(
       `GRANT SELECT, INSERT, UPDATE ON pharmacy_customers, pharmacy_message_logs TO "${role}"`
@@ -114,11 +131,13 @@ describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
     await Promise.all([stop.connect(), sender.connect()]);
     for (const client of [stop!, sender!]) {
       const posture = await client.query(
-        `SELECT rolcanlogin, rolsuper, rolbypassrls
+        `SELECT rolcanlogin, rolsuper, rolbypassrls,
+                EXISTS (SELECT 1 FROM pg_auth_members WHERE member = current_user::regrole)
+                  AS member_of_any_role
          FROM pg_roles WHERE rolname = current_user`
       );
       expect(posture.rows).toEqual([
-        { rolcanlogin: true, rolsuper: false, rolbypassrls: false },
+        { rolcanlogin: true, rolsuper: false, rolbypassrls: false, member_of_any_role: false },
       ]);
     }
   }, 60_000);
@@ -155,8 +174,11 @@ describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
     expect(send).not.toHaveBeenCalled();
     await beginTenant(sender!, orgA);
     expect(
-      (await sender!.query(`SELECT status, error FROM pharmacy_message_logs WHERE id = $1`, [logId]))
-        .rows
+      (
+        await sender!.query(`SELECT status, error FROM pharmacy_message_logs WHERE id = $1`, [
+          logId,
+        ])
+      ).rows
     ).toEqual([{ status: 'IGNORED', error: 'OPTED_OUT_BEFORE_SEND' }]);
     expect(
       (await sender!.query(`SELECT id FROM pharmacy_customers WHERE id = $1`, [customerB])).rows
@@ -192,8 +214,11 @@ describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
     expect(send).not.toHaveBeenCalled();
     await beginTenant(sender!, orgA);
     expect(
-      (await sender!.query(`SELECT status, error FROM pharmacy_message_logs WHERE id = $1`, [logId]))
-        .rows
+      (
+        await sender!.query(`SELECT status, error FROM pharmacy_message_logs WHERE id = $1`, [
+          logId,
+        ])
+      ).rows
     ).toEqual([{ status: 'IGNORED', error: 'OPTED_OUT_BEFORE_SEND' }]);
     await sender!.query('COMMIT');
   });

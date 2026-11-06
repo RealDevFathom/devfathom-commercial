@@ -14,6 +14,11 @@ it.skipIf(!ownerUrl).each([0, 5001])(
     await client.connect();
     try {
       await client.query(`CREATE ROLE ${name} NOLOGIN NOSUPERUSER NOBYPASSRLS`);
+      // PostgreSQL 16+: a NOSUPERUSER CREATEROLE owner (the CI gate's gate_owner, also
+      // NOINHERIT) gets only ADMIN OPTION on a role it creates, with createrole_self_grant
+      // empty. SET lets it make the role own the schema and act as it; INHERIT lets it
+      // drop the role's schema afterwards. Neither changes what the role itself may do.
+      await client.query(`GRANT ${name} TO CURRENT_USER WITH INHERIT TRUE, SET TRUE`);
       await client.query(`CREATE SCHEMA ${name} AUTHORIZATION ${name}`);
       await client.query(`SET ROLE ${name}`);
       await client.query(`SET search_path TO ${name}`);

@@ -11,6 +11,9 @@ const client = new pg.Client({ connectionString: url });
 const suffix = randomUUID().replaceAll('-', '');
 const org = `qa975_${suffix}`;
 const other = `${org}_other`;
+// organization_roles is unique on (organizationId, key), so the tenant-authored
+// lookalike lives in its own PHARMACY organization rather than beside `denied`.
+const lookalike = `${org}_lookalike`;
 const restaurant = `${org}_restaurant`;
 const id = (key: string) => `${org}_${key}`;
 const migration = readFileSync(
@@ -31,11 +34,13 @@ const previousTemplate = [
 const ownerOperator = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner-operator')!;
 // `pharmacy:procurement-approve` joined the template later and is backfilled by
 // its own migration (20261106200200_pharmacy_purchasing_authz, covered by
-// tests/pharmacy-procurement-approve-backfill.db.test.ts).
+// tests/pharmacy-procurement-approve-backfill.db.test.ts). DEV-751 (#1418) appends
+// sop:* grants for new tenants; this backfill never adds them (existing tenants opt
+// in through docs/operations/pharmacy-sop-rollout/up.sql).
 const template = {
   ...ownerOperator,
   capabilities: ownerOperator.capabilities.filter(
-    (capability) => capability !== 'pharmacy:procurement-approve'
+    (capability) => capability !== 'pharmacy:procurement-approve' && !capability.startsWith('sop:')
   ),
 };
 
@@ -56,6 +61,7 @@ async function grants(roleId: string) {
     for (const [organizationId, vertical] of [
       [org, 'PHARMACY'],
       [other, 'PHARMACY'],
+      [lookalike, 'PHARMACY'],
       [restaurant, 'RESTAURANT'],
     ] as const) {
       await client.query(
@@ -66,7 +72,7 @@ async function grants(roleId: string) {
     for (const [key, roleKey, isSystem, roleOrg] of [
       ['system', 'owner-operator', true, org],
       ['denied', 'owner-operator', true, other],
-      ['custom', 'owner-operator', false, other],
+      ['custom', 'owner-operator', false, lookalike],
       ['restaurant', 'owner-operator', true, restaurant],
       ['cashier', 'cashier', true, org],
     ] as const) {
@@ -124,18 +130,18 @@ async function grants(roleId: string) {
 
   it('writes each backfilled grant into the role organization and is idempotent', async () => {
     const tenants = await client.query<{ mismatched: number }>(
-      `SELECT count(*)::int AS mismatched FROM organization_role_permissions p JOIN organization_roles r ON r.id=p."organizationRoleId" WHERE r."organizationId" IN ($1,$2,$3) AND p."organizationId"<>r."organizationId"`,
-      [org, other, restaurant]
+      `SELECT count(*)::int AS mismatched FROM organization_role_permissions p JOIN organization_roles r ON r.id=p."organizationRoleId" WHERE r."organizationId" IN ($1,$2,$3,$4) AND p."organizationId"<>r."organizationId"`,
+      [org, other, lookalike, restaurant]
     );
     expect(tenants.rows[0]!.mismatched).toBe(0);
     const before = await client.query(
-      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3) ORDER BY id`,
-      [org, other, restaurant]
+      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3,$4) ORDER BY id`,
+      [org, other, lookalike, restaurant]
     );
     await client.query(migration);
     const after = await client.query(
-      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3) ORDER BY id`,
-      [org, other, restaurant]
+      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3,$4) ORDER BY id`,
+      [org, other, lookalike, restaurant]
     );
     expect(after.rows).toEqual(before.rows);
   });

@@ -8,7 +8,17 @@ import {
 
 describe('PH-RPT metric contract', () => {
   it('defines a source, scope, permission, and drill-through for every asserted metric', () => {
-    expect(PHARMACY_METRIC_CONTRACT).toHaveLength(23);
+    // 24th metric: lostDemandEvents (#748, owner Q&A lost-demand topic).
+    expect(PHARMACY_METRIC_CONTRACT).toHaveLength(24);
+    expect(PHARMACY_METRIC_CONTRACT.find((metric) => metric.key === 'lostDemandEvents')).toEqual({
+      key: 'lostDemandEvents',
+      label: 'Recorded lost-demand events',
+      definition: expect.stringContaining('missing capture is unknown, not zero'),
+      source: 'pharmacy_unfulfilled_demand_events',
+      scope: 'selected branches and event creation dates',
+      drillThrough: '/pharmacy/reports?section=demand',
+      permission: 'reports:operational',
+    });
     for (const metric of PHARMACY_METRIC_CONTRACT) {
       expect(metric.key).toBeTruthy();
       expect(metric.definition).toBeTruthy();

@@ -54,6 +54,8 @@ vi.mock('@/lib/trpc', () => ({
         useQuery: () => ({ data: { canComplete: false, canVerify: false, canManage: false } }),
       },
     },
+    // DEV-739: the rail asks the server whether to offer Day close.
+    pharmacySales: { dayCloseAccess: { useQuery: () => ({ data: undefined }) } },
   },
 }));
 vi.mock('motion/react', () => ({

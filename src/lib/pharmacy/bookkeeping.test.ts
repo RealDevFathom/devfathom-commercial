@@ -61,11 +61,15 @@ describe('POS settlement batches', () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
+          organizationId: 'org-a',
+          branchId: 'branch-a',
           expectedMinor: 1000,
+          // Members inherit organizationId from the batch: Prisma's nested create has no
+          // such field, and passing one fails validation against the real client.
           tenders: {
             create: [
-              { organizationId: 'org-a', tenderId: 'tender-1', amountMinor: 700 },
-              { organizationId: 'org-a', tenderId: 'tender-2', amountMinor: 300 },
+              { tenderId: 'tender-1', amountMinor: 700 },
+              { tenderId: 'tender-2', amountMinor: 300 },
             ],
           },
         }),

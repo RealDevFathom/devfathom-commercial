@@ -156,6 +156,21 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
         data: { currency: 'USD', timezone: 'America/Chicago' },
       })
     );
+    // ORG's administrator is a real user row: the close gate reads its rules for an
+    // explicit pharmacy:close DENY and refuses an ADMIN it cannot read (DEV-739).
+    await withPlatformDb(async (db) => {
+      await db.$executeRawUnsafe(
+        `INSERT INTO organization_departments (id, "organizationId", key, name, "updatedAt") VALUES ($1, $2, 'Pharmacy', 'Pharmacy', now())`,
+        `${ACTOR}_department`,
+        ORG
+      );
+      await db.$executeRawUnsafe(
+        `INSERT INTO users (id, "organizationId", name, email, role, department, title, "updatedAt") VALUES ($1, $2, 'Administrator', $3, 'ADMIN', 'Pharmacy', 'Owner', now())`,
+        ACTOR,
+        ORG,
+        `${ACTOR}@example.test`
+      );
+    });
     await createBranch(ORG, ACTIVE);
     await createBranch(ORG, RETIRED);
     await createBranch(OTHER_ORG, FOREIGN);
@@ -246,7 +261,9 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
           }),
         NOT_IN_WORKSPACE,
       ],
-      // The tender and the refund move cash through the same drawer.
+      // The tender and the refund move cash through the same drawer, so both pass the
+      // counter receipt-access guard (capability, member, branch assignment) first
+      // and refuse an out-of-scope branch the way it words it (#578).
       [
         'tender',
         (c) =>
@@ -338,6 +355,39 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
       timezone: 'America/Chicago',
     });
     expect(await rowsFor(ACTIVE)).toEqual({ drawers: 1, movements: 3, closed: 1, closes: 0 });
+  });
+
+  it('lets an expired pharmacy:close DENY lapse for the administrator, and a live one refuse', async () => {
+    const NO_CLOSE = {
+      code: 'FORBIDDEN',
+      message: 'Day-close permission is required to reconcile and close a day.',
+    };
+    // (userId, capability) is unique: one override, first expired, then made live.
+    const overrideId = `${ACTOR}_close_deny`;
+    const platformSql = (sql: string, ...values: unknown[]) =>
+      withPlatformDb((db) => db.$executeRawUnsafe(sql, ...values));
+    try {
+      await platformSql(
+        `INSERT INTO user_permission_overrides (id, "organizationId", "userId", capability, effect, reason, "expiresAt", "updatedAt") VALUES ($1, $2, $3, 'pharmacy:close', 'DENY', 'DEV-739 fixture', $4, now())`,
+        overrideId,
+        ORG,
+        ACTOR,
+        new Date(Date.now() - 60_000)
+      );
+      await expect(
+        asAdmin((c) => c.closePreview({ branchId: ACTIVE, businessDate }))
+      ).resolves.toMatchObject({ branchName: `Branch ${ACTIVE}` });
+      await platformSql(
+        `UPDATE user_permission_overrides SET "expiresAt" = $2, "updatedAt" = now() WHERE id = $1`,
+        overrideId,
+        new Date(Date.now() + 3_600_000)
+      );
+      await expect(
+        asAdmin((c) => c.closePreview({ branchId: ACTIVE, businessDate }))
+      ).rejects.toMatchObject(NO_CLOSE);
+    } finally {
+      await platformSql(`DELETE FROM user_permission_overrides WHERE id = $1`, overrideId);
+    }
   });
 
   it('answers the daily close’s typed refusals as typed errors, not as a 500', async () => {
