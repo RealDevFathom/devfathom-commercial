@@ -675,6 +675,18 @@ type ReceiptLine = {
   receivedPacks?: number;
 };
 /** A direct-purchase (PUR-05) receipt, or one against `purchaseOrderId` when given. */
+/**
+ * Drafted receipts in these cases name an approver with a valid PIN or a purchase order,
+ * so drafting is never blocked (#246). Narrow away `{ blocked }`, and fail loudly if it
+ * ever appears.
+ */
+function drafted<R>(result: R): Exclude<R, { blocked: string }> {
+  if (result && typeof result === 'object' && 'blocked' in result) {
+    throw new Error(`Goods receipt draft was blocked: ${String(result.blocked)}`);
+  }
+  return result as Exclude<R, { blocked: string }>;
+}
+
 function receiptInput(
   supplierId: string,
   label: string,
@@ -2320,12 +2332,14 @@ describeIfDatabase(
         await asPurchasing(approver, (api) =>
           api.sendPurchaseOrder({ purchaseOrderId: order!.id })
         );
-        const receipt = await asPurchasing(buyer, (api) =>
-          api.createGoodsReceipt(
-            receiptInput(state.supplierId, 'on-valid-po', {
-              purchaseOrderId: order!.id,
-              line: { purchaseOrderLineId: order!.lines[0]!.id, receivedPacks: 5 },
-            })
+        const receipt = drafted(
+          await asPurchasing(buyer, (api) =>
+            api.createGoodsReceipt(
+              receiptInput(state.supplierId, 'on-valid-po', {
+                purchaseOrderId: order!.id,
+                line: { purchaseOrderLineId: order!.lines[0]!.id, receivedPacks: 5 },
+              })
+            )
           )
         );
         const posted = await asPurchasing(buyer, (api) =>
@@ -2451,7 +2465,9 @@ describeIfDatabase(
             [draftsToPostOn, `off-then-on-${state.key}`],
           ] as const) {
             const input = receiptInput(state.supplierId, label);
-            const receipt = await asPurchasing(buyer, (api) => api.createGoodsReceipt(input));
+            const receipt = drafted(
+              await asPurchasing(buyer, (api) => api.createGoodsReceipt(input))
+            );
             expect(receipt).toMatchObject({ status: 'DRAFT', supplierId: state.supplierId });
             drafts.set(state.key, { id: receipt!.id, reference: input.reference });
             expect(
@@ -2561,7 +2577,7 @@ describeIfDatabase(
           purchaseOrderId: order!.id,
           line: { purchaseOrderLineId: order!.lines[0]!.id, receivedPacks: 5 },
         });
-        const receipt = await asPurchasing(buyer, (api) => api.createGoodsReceipt(input));
+        const receipt = drafted(await asPurchasing(buyer, (api) => api.createGoodsReceipt(input)));
         await asPurchasing(buyer, (api) =>
           api.postGoodsReceipt({ branchId: E.branch, goodsReceiptId: receipt!.id })
         );
@@ -2715,7 +2731,9 @@ describeIfDatabase(
             receivedAt: new Date('2026-03-01T09:00:00.000Z'),
             line: { printedExpiry: new Date('2026-06-01T00:00:00.000Z') },
           });
-          const receipt = await asPurchasing(buyer, (api) => api.createGoodsReceipt(input));
+          const receipt = drafted(
+            await asPurchasing(buyer, (api) => api.createGoodsReceipt(input))
+          );
           await expect(
             asPurchasing(buyer, (api) =>
               api.postGoodsReceipt({ branchId: E.branch, goodsReceiptId: receipt!.id })
@@ -2776,7 +2794,9 @@ describeIfDatabase(
             const input = receiptInput(subject.supplierId, `off-controlled-${subject.key}`, {
               line: CONTROLLED(),
             });
-            const receipt = await asPurchasing(buyer, (api) => api.createGoodsReceipt(input));
+            const receipt = drafted(
+              await asPurchasing(buyer, (api) => api.createGoodsReceipt(input))
+            );
             expect(receipt).toMatchObject({ status: 'DRAFT', supplierId: subject.supplierId });
             // The pharmacist witness PIN is an independent controlled-drug safeguard: the
             // owner switch never reads it, so posting is held exactly as with the checks ON.
@@ -2841,7 +2861,9 @@ describeIfDatabase(
           const input = receiptInput(valid.supplierId, 'off-controlled-valid', {
             line: CONTROLLED(),
           });
-          const receipt = await asPurchasing(buyer, (api) => api.createGoodsReceipt(input));
+          const receipt = drafted(
+            await asPurchasing(buyer, (api) => api.createGoodsReceipt(input))
+          );
           expect(receipt).toMatchObject({ status: 'DRAFT' });
           await expect(
             asPurchasing(buyer, (api) =>
@@ -3176,7 +3198,9 @@ describeIfDatabase(
 
         it('drafts and posts a goods receipt, one skip each', async () => {
           const input = receiptInput(CROSS.supplierId, `off-${CROSS.key}`);
-          const receipt = await asPurchasing(buyer, (api) => api.createGoodsReceipt(input));
+          const receipt = drafted(
+            await asPurchasing(buyer, (api) => api.createGoodsReceipt(input))
+          );
           await expect(
             asPurchasing(buyer, (api) =>
               api.postGoodsReceipt({ branchId: E.branch, goodsReceiptId: receipt!.id })
