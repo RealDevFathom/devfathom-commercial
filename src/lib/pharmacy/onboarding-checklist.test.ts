@@ -216,7 +216,7 @@ describe('fresh Pharmacy setup destinations', () => {
     const items = pharmacyOnboardingChecklist(evaluateReadiness('org', [], {})).items;
     for (const [key, href] of [
       ['MEDICINE_CATALOG_READINESS', '/pharmacy/medicines'],
-      ['OPENING_STOCK_READINESS', '/pharmacy/purchasing/receiving'],
+      ['OPENING_STOCK_READINESS', '/pharmacy/inventory/import'],
       ['PARTIES_AND_BALANCES', '/pharmacy/purchasing/suppliers'],
     ]) {
       expect(items.find((item) => item.key === key)).toMatchObject({
@@ -243,14 +243,28 @@ describe('fresh Pharmacy setup destinations', () => {
     });
   });
 
-  it('offers catalog, receiving and canonical setup links from empty inventory', () => {
-    const page = readFileSync('src/app/(app)/pharmacy/inventory/page.tsx', 'utf8');
-    const empty = page.slice(
-      page.indexOf('No available lots yet.'),
-      page.indexOf('No available lots yet.') + 1100
+  it('sends opening stock to the one import entry point, keeping Goods in as the alternative', () => {
+    const item = pharmacyOnboardingChecklist(evaluateReadiness('org', [], {})).items.find(
+      (row) => row.key === 'OPENING_STOCK_READINESS'
     );
-    for (const href of ['/pharmacy/medicines', '/pharmacy/purchasing/receiving', '/pharmacy']) {
-      expect(empty).toContain(`href="${href}"`);
-    }
+    expect(item).toMatchObject({
+      href: '/pharmacy/inventory/import',
+      linkLabel: 'Import opening stock',
+    });
+    expect(item?.why).toMatch(/Goods in/);
+  });
+
+  it('offers catalog and supplier-receiving links from empty inventory', () => {
+    const page = readFileSync('src/app/(app)/pharmacy/inventory/page.tsx', 'utf8');
+    const start = page.indexOf('title="Stock by expiry"');
+    const end = page.indexOf('No available stock at this branch yet.');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const empty = page.slice(start, end);
+    expect(empty).toContain("{ href: '/pharmacy/medicines', label: 'Set up medicines and packs' }");
+    expect(empty).toContain('receiveStep');
+    expect(page).toMatch(
+      /const receiveStep = \{\s*href: '\/pharmacy\/purchasing\/receiving',\s*label: 'Receive a supplier delivery',/
+    );
   });
 });

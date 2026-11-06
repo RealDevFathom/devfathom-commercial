@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { ExpiryBoard, type ExpiryBoardRow } from '@/components/pharmacy/inventory/expiry-board';
+import { BranchField, FilterForm } from '@/components/pharmacy/inventory/filter-form';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -108,6 +109,12 @@ export default async function PharmacyExpiryBoardPage({
           <p className="text-sm text-text-muted">
             The expiry board is branch-scoped. Finish pharmacy onboarding to create a branch.
           </p>
+          <Link
+            className={buttonVariants({ className: 'mt-4', variant: 'secondary' })}
+            href="/pharmacy"
+          >
+            Open pharmacy onboarding
+          </Link>
         </SectionCard>
       </main>
     );
@@ -187,7 +194,8 @@ export default async function PharmacyExpiryBoardPage({
         kind: 'error',
       });
     }
-    redirect(destination);
+    // Replace, not push: a completed action must not leave an extra Back step.
+    redirect(destination, 'replace');
   }
 
   return (
@@ -202,18 +210,14 @@ export default async function PharmacyExpiryBoardPage({
         </div>
       ) : null}
       <SectionCard className="print:hidden" eyebrow="Branch-scoped" title="Board filters">
-        <form className="flex flex-wrap items-end gap-3" method="get">
+        <FilterForm
+          action={route}
+          autoSubmit
+          className="flex flex-wrap items-end gap-3"
+          label="Expiry board filters"
+        >
           {view === 'print' ? <input name="view" type="hidden" value="print" /> : null}
-          <label className="min-w-64 flex-1 text-sm text-text-body">
-            Branch
-            <select className={inputClass} defaultValue={branch.id} name="branch">
-              {branches.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} · {item.city}
-                </option>
-              ))}
-            </select>
-          </label>
+          <BranchField branches={branches} value={branch.id} />
           <label className="min-w-48 text-sm text-text-body">
             Expiring within
             <select className={inputClass} defaultValue={String(withinDays)} name="within">
@@ -224,16 +228,20 @@ export default async function PharmacyExpiryBoardPage({
               ))}
             </select>
           </label>
-          <Button type="submit" variant="secondary">
-            Show
+          <Button className="min-h-11 px-4" type="submit">
+            Show stock
           </Button>
           <Link
-            className={buttonVariants({ variant: 'ghost' })}
+            className={buttonVariants({ className: 'min-h-11 px-4', variant: 'outline' })}
             href={`/pharmacy/inventory?branch=${encodeURIComponent(branch.id)}`}
           >
             Back to inventory
           </Link>
-        </form>
+        </FilterForm>
+        <p className="mt-3 text-sm text-text-muted" role="status">
+          Showing stock at {branch.name} that expires within {withinDays} days, plus expired stock
+          still on the shelf. Changing a filter updates the board straight away.
+        </p>
       </SectionCard>
       <ExpiryBoard
         action={perform}

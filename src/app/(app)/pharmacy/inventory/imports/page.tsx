@@ -15,6 +15,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { FilterForm } from '@/components/pharmacy/inventory/filter-form';
+import { openingImportHref } from '@/components/pharmacy/inventory/opening-import';
 import { readImportedStock, type ImportedStockQuery } from '@/lib/pharmacy/imported-stock';
 
 export const metadata: Metadata = { title: 'Imported stock · Pharmacy inventory' };
@@ -35,9 +37,14 @@ export default async function ImportedStockPage({
         heading="Imported stock"
         description="Original medicine stock references retained from completed imports."
         actions={
-          <Link href="/pharmacy/inventory" className={buttonVariants({ variant: 'secondary' })}>
-            Back to Inventory
-          </Link>
+          <>
+            <Link href={openingImportHref()} className={buttonVariants({ variant: 'secondary' })}>
+              Import opening stock
+            </Link>
+            <Link href="/pharmacy/inventory" className={buttonVariants({ variant: 'ghost' })}>
+              Back to Inventory
+            </Link>
+          </>
         }
       />
       {!data ? (
@@ -74,7 +81,7 @@ export default async function ImportedStockPage({
             </p>
           </SectionCard>
           <SectionCard title="Imported medicine references" titleLevel={2}>
-            <form action={ROUTE} method="get" className="mb-5 flex flex-wrap items-end gap-3">
+            <FilterForm action={ROUTE} className="mb-5 flex flex-wrap items-end gap-3">
               <label
                 className="min-w-0 flex-1 basis-64 text-sm text-text-body"
                 htmlFor="import-search"
@@ -100,7 +107,7 @@ export default async function ImportedStockPage({
                   Clear search
                 </Link>
               ) : null}
-            </form>
+            </FilterForm>
             {data.rows.length === 0 ? (
               <p
                 role="status"

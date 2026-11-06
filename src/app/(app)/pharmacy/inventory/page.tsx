@@ -3,6 +3,8 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { BranchField, FilterForm } from '@/components/pharmacy/inventory/filter-form';
+import { openingImportHref } from '@/components/pharmacy/inventory/opening-import';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
@@ -67,11 +69,27 @@ function url(branchId: string, notice: string, kind: 'success' | 'error' = 'succ
   return `${route}?${new URLSearchParams({ branch: branchId, notice, kind })}`;
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
+type NextStep = { href: string; label: string };
+
+/** An empty section that says why it is empty and links to the next useful step. */
+function Empty({ children, steps = [] }: { children: React.ReactNode; steps?: NextStep[] }) {
   return (
-    <p className="rounded-[var(--radius-sm)] bg-surface-sunken p-5 text-sm text-text-muted">
-      {children}
-    </p>
+    <div className="rounded-[var(--radius-sm)] bg-surface-sunken p-5 text-sm text-text-muted">
+      <p>{children}</p>
+      {steps.length ? (
+        <div className="mt-3 flex flex-wrap gap-3">
+          {steps.map((step) => (
+            <Link
+              className={buttonVariants({ variant: 'outline' })}
+              href={step.href}
+              key={step.href}
+            >
+              {step.label}
+            </Link>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -103,7 +121,7 @@ export default async function PharmacyInventoryPage({
         <PageHeader
           eyebrow="Pharmacy operations"
           heading="Inventory"
-          description="Lots, counts, transfers, recalls, and ranked stock actions."
+          description="Stock by batch and expiry, counts, transfers, recalls and stock to-dos."
         />
         <SectionCard title={moduleEnabled ? 'Permission required' : 'Inventory module unavailable'}>
           <p className="text-sm text-text-muted">
@@ -137,7 +155,7 @@ export default async function PharmacyInventoryPage({
         <PageHeader
           eyebrow="Pharmacy operations"
           heading="Inventory"
-          description="Lots, counts, transfers, recalls, and ranked stock actions."
+          description="Stock by batch and expiry, counts, transfers, recalls and stock to-dos."
         />
         <SectionCard title="Create an active branch first">
           <p className="text-sm text-text-muted">
@@ -405,30 +423,37 @@ export default async function PharmacyInventoryPage({
       void error;
       destination = url(branchId, pharmacyActionErrorMessage('inventory'), 'error');
     }
-    redirect(destination);
+    // Replace, not push: a completed action must not leave an extra Back step.
+    redirect(destination, 'replace');
   }
+
+  const inventoryHash = (id: string) =>
+    `${route}?${new URLSearchParams({ branch: branch.id })}#${id}`;
+  const importHref = openingImportHref(branch.id);
+  const receiveStep = {
+    href: '/pharmacy/purchasing/receiving',
+    label: 'Receive a supplier delivery',
+  };
+  const importStep = { href: importHref, label: 'Import opening stock' };
+  const locationStep = { href: inventoryHash('locations'), label: 'Create a location' };
+  const countSteps: NextStep[] = [
+    ...(available.length ? [] : [importStep, receiveStep]),
+    ...(locations.length ? [] : [locationStep]),
+  ];
+  const otherBranchesWithoutLocation = branches.filter(
+    (item) => item.id !== branch.id && !destinationLocations.some((l) => l.branchId === item.id)
+  );
 
   return (
     <main className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy operations · INV-01—09 / PUR-07"
         heading="Inventory"
-        description="FEFO lots, controlled stock movements, chain operations, and the ranked work queue."
+        description="Your stock by batch and expiry, with counts, write-offs, transfers, recalls and stock to-dos."
         actions={
-          <>
-            <Link
-              href="/pharmacy/inventory/import"
-              className={buttonVariants({ variant: 'secondary' })}
-            >
-              Import opening stock
-            </Link>
-            <Link
-              href="/pharmacy/inventory/imports"
-              className={buttonVariants({ variant: 'secondary' })}
-            >
-              Imported stock / Awaiting verification
-            </Link>
-          </>
+          <Link href={importHref} className={buttonVariants()}>
+            Import opening stock
+          </Link>
         }
       />
       {query.notice ? (
@@ -440,21 +465,16 @@ export default async function PharmacyInventoryPage({
         </div>
       ) : null}
       <SectionCard title="Working branch" eyebrow="Organization-scoped">
-        <form className="flex flex-wrap items-end gap-3" method="get">
-          <label className="min-w-64 flex-1 text-sm text-text-body">
-            Branch
-            <select className={inputClass} defaultValue={branch.id} name="branch">
-              {branches.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} · {item.city}
-                </option>
-              ))}
-            </select>
-          </label>
-          <Button type="submit" variant="secondary">
-            Open branch
-          </Button>
-        </form>
+        {branches.length > 1 ? (
+          <FilterForm action={route} autoSubmit className="flex flex-wrap items-end gap-3">
+            <BranchField branches={branches} value={branch.id} />
+            <Button className="min-h-11" type="submit" variant="secondary">
+              Open branch
+            </Button>
+          </FilterForm>
+        ) : (
+          <BranchField branches={branches} value={branch.id} />
+        )}
       </SectionCard>
       <section aria-label="Inventory summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Available units" value={totalUnits.toLocaleString()} sub="Ledger projection" />
@@ -471,24 +491,17 @@ export default async function PharmacyInventoryPage({
         <Stat label="Open stock actions" value={signals.length} sub="Ranked by due time" />
       </section>
 
-      <SectionCard title="Lots and FEFO board" eyebrow="INV-01—04">
+      <SectionCard title="Stock by expiry" eyebrow="INV-01—04 · soonest expiry sells first">
         {available.length === 0 ? (
-          <Empty>
-            No available lots yet. Set up a medicine and its pack, then receive a supplier delivery.
-            <span className="mt-3 flex flex-wrap gap-3">
-              <Link href="/pharmacy/medicines" className={buttonVariants({ variant: 'outline' })}>
-                Set up medicines and packs
-              </Link>
-              <Link
-                href="/pharmacy/purchasing/receiving"
-                className={buttonVariants({ variant: 'outline' })}
-              >
-                Receive opening stock
-              </Link>
-              <Link href="/pharmacy" className={buttonVariants({ variant: 'ghost' })}>
-                Pharmacy setup
-              </Link>
-            </span>
+          <Empty
+            steps={[
+              { href: '/pharmacy/medicines', label: 'Set up medicines and packs' },
+              receiveStep,
+            ]}
+          >
+            No available stock at this branch yet. Add your medicines and their packs first. To load
+            stock you already have, use Import opening stock at the top of this page; for new stock,
+            receive a supplier delivery.
           </Empty>
         ) : (
           <div
@@ -500,7 +513,7 @@ export default async function PharmacyInventoryPage({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>FEFO</TableHead>
+                  <TableHead>Sell order</TableHead>
                   <TableHead>Medicine / batch</TableHead>
                   <TableHead>Expiry</TableHead>
                   <TableHead>Location</TableHead>
@@ -572,7 +585,7 @@ export default async function PharmacyInventoryPage({
       </SectionCard>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <SectionCard title="Locations" eyebrow="INV-05">
+        <SectionCard className="scroll-mt-24" id="locations" title="Locations" eyebrow="INV-05">
           {outOfRangeLogs.length > 0 ? (
             <div
               className="mb-4 rounded-[var(--radius-sm)] border border-destructive bg-destructive-background p-3 text-sm text-destructive-foreground"
@@ -709,7 +722,12 @@ export default async function PharmacyInventoryPage({
             </div>
           </div>
         </SectionCard>
-        <SectionCard title="Physical count" eyebrow="INV-06 · frozen snapshot">
+        <SectionCard
+          className="scroll-mt-24"
+          id="counts"
+          title="Physical count"
+          eyebrow="INV-06 · frozen snapshot"
+        >
           {available.length && locations.length ? (
             <form action={perform} className="grid gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-count" />
@@ -752,8 +770,17 @@ export default async function PharmacyInventoryPage({
               </Button>
             </form>
           ) : (
-            <Empty>Receive stock and create a location before starting a count.</Empty>
+            <Empty steps={countSteps}>
+              {available.length
+                ? 'A count is taken at a stock location. Create a location for this branch, then start the count.'
+                : 'There is nothing to count yet: this branch has no stock on hand. Import your opening stock or receive a delivery, then count it here.'}
+            </Empty>
           )}
+          {counts.length === 0 && available.length && locations.length ? (
+            <p className="mt-4 text-sm text-text-muted">
+              No counts yet. Pick a lot above, enter what is on the shelf and freeze the count.
+            </p>
+          ) : null}
           <div className="mt-5 space-y-2">
             {counts.map((count) => (
               <div
@@ -837,9 +864,16 @@ export default async function PharmacyInventoryPage({
             </Button>
           </form>
         ) : (
-          <Empty>
-            A write-off needs available or quarantined stock and a different active organization
-            member as witness.
+          <Empty
+            steps={
+              writeOffPositions.length
+                ? [{ href: '/team', label: 'Invite a team member' }]
+                : [importStep, receiveStep]
+            }
+          >
+            {writeOffPositions.length
+              ? 'A write-off must be witnessed by a second active team member. Invite a colleague, then record the write-off with them.'
+              : 'There is no stock at this branch to adjust or write off yet. Import opening stock or receive a delivery first.'}
           </Empty>
         )}
         {releasableQuarantined.length ? (
@@ -881,6 +915,14 @@ export default async function PharmacyInventoryPage({
       <SectionCard
         title="Inter-branch transfers"
         eyebrow="INV-07 · allocate → approve → dispatch → receive"
+        actions={
+          <Link
+            className={buttonVariants({ size: 'sm', variant: 'secondary' })}
+            href={`/pharmacy/inventory/transfers?${new URLSearchParams({ branch: branch.id })}`}
+          >
+            Open stock transfers
+          </Link>
+        }
       >
         {available.length && destinationLocations.length ? (
           <form action={perform} className="grid gap-3 md:grid-cols-3">
@@ -919,9 +961,25 @@ export default async function PharmacyInventoryPage({
             </Button>
           </form>
         ) : (
-          <Empty>
-            Transfers need available stock and a second active branch. Add the branch and its
-            receiving location in onboarding.
+          <Empty
+            steps={
+              branches.length < 2
+                ? [{ href: '/pharmacy', label: 'Add a second branch in onboarding' }]
+                : !destinationLocations.length
+                  ? [
+                      {
+                        href: `${route}?${new URLSearchParams({ branch: otherBranchesWithoutLocation[0]?.id ?? branch.id })}#locations`,
+                        label: `Create a location at ${otherBranchesWithoutLocation[0]?.name ?? 'the other branch'}`,
+                      },
+                    ]
+                  : [importStep, receiveStep]
+            }
+          >
+            {branches.length < 2
+              ? 'Transfers move stock between your branches, and you have one. Add a second branch and its stock location in onboarding.'
+              : !destinationLocations.length
+                ? `${otherBranchesWithoutLocation.map((item) => item.name).join(', ')} ${otherBranchesWithoutLocation.length === 1 ? 'has' : 'have'} no stock location to receive into. Create one there first.`
+                : 'This branch has no available stock to send yet. Import opening stock or receive a delivery first.'}
           </Empty>
         )}
         <div className="mt-5 space-y-2">

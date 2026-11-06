@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  options: { data: { branches: [{ id: 'branch', name: 'Main branch' }], locations: [{ id: 'location', branchId: 'branch', name: 'Main store' }] }, isPending: false, error: null as unknown, refetch: vi.fn() },
+  options: { data: { branches: [{ id: 'branch', name: 'Main branch' }], locations: [{ id: 'location', branchId: 'branch', name: 'Main store', kind: 'STORE' }] } as { branches: Array<{ id: string; name: string }>; locations: Array<{ id: string; branchId: string; name: string; kind: string }> }, isPending: false, error: null as unknown, refetch: vi.fn() },
   upload: { mutateAsync: vi.fn(), isPending: false },
   preview: { mutateAsync: vi.fn(), isPending: false },
   commit: { mutateAsync: vi.fn(), isPending: false },
@@ -18,6 +18,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.options.error = null;
   mocks.options.isPending = false;
+  mocks.options.data = { branches: [{ id: 'branch', name: 'Main branch' }], locations: [{ id: 'location', branchId: 'branch', name: 'Main store', kind: 'STORE' }] };
   mocks.upload.isPending = mocks.preview.isPending = mocks.commit.isPending = false;
   mocks.upload.mutateAsync.mockResolvedValue({ headers: ['Source', 'Barcode', 'Batch', 'Expiry', 'MRP', 'Cost', 'Exported', 'Counted', 'Note'], sample: [['SRC', '00123', 'B1', '2099-06', '25', '1.25', '12', '10', 'Excluded damage']], rowCount: 1, mapping });
   mocks.preview.mutateAsync.mockResolvedValue({ previewHash: 'a'.repeat(64), canCommit: true, blockers: [], totalUnits: 10, totalValueMinor: '1250', lines: [{ rowNumber: 2, sourceRef: 'SRC', packReference: '00123', medicineName: 'Test medicine', batchNumber: 'B1', expiryDate: '2099-06-30', expiryPrecision: 'MONTH', expectedUnits: 12, countedUnits: 10, currentUnits: 0, proposedUnits: 10, varianceUnits: -2, unitsPerPack: 10, printedMrpMinor: 2500, unitCostMinor: 125, varianceNote: 'Excluded damage', errors: [] }] });
@@ -26,14 +27,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 async function uploadAndPreview() {
-  fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch' } });
   fireEvent.change(screen.getByLabelText('Stock location'), { target: { value: 'location' } });
   const file = new File(['A\n1'], 'stock.csv', { type: 'text/csv' });
   Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
   fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
-  await screen.findByRole('button', { name: 'Run dry-run diff' });
-  fireEvent.click(screen.getByRole('button', { name: 'Run dry-run diff' }));
-  await screen.findByRole('button', { name: 'Commit opening stock' });
+  await screen.findByRole('button', { name: 'Preview import' });
+  fireEvent.click(screen.getByRole('button', { name: 'Preview import' }));
+  await screen.findByRole('button', { name: 'Import opening stock' });
 }
 
 describe('owner importer wizard', () => {
@@ -41,31 +41,29 @@ describe('owner importer wizard', () => {
     render(<OwnerImportWizard />);
     await uploadAndPreview();
     expect(screen.getByText(/Test medicine/)).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Commit opening stock' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Import opening stock' })).toBeDisabled();
     expect(mocks.commit.mutateAsync).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit opening stock' }));
-    await screen.findByText('Opening stock committed');
+    fireEvent.click(screen.getByRole('button', { name: 'Import opening stock' }));
+    await screen.findByText('Opening stock imported');
     expect(mocks.commit.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'branch', stockLocationId: 'location', confirmed: true, previewHash: 'a'.repeat(64), mapping }));
-    expect(screen.getByText(/10 base units posted/)).toBeVisible();
+    expect(screen.getByText(/10 units added/)).toBeVisible();
   });
   it('invalidates the dry run and confirmation after a mapping edit', async () => {
     render(<OwnerImportWizard />);
     await uploadAndPreview();
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.change(screen.getByLabelText('Cost per base unit (PKR) *'), { target: { value: '4' } });
-    expect(screen.queryByRole('button', { name: 'Commit opening stock' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Import opening stock' })).toBeNull();
     expect(mocks.commit.mutateAsync).not.toHaveBeenCalled();
   });
   it('keeps the file and mapping after a dry-run error', async () => {
     mocks.preview.mutateAsync.mockRejectedValueOnce(new Error('Map each required field to a different column.'));
     render(<OwnerImportWizard />);
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch' } });
-    fireEvent.change(screen.getByLabelText('Stock location'), { target: { value: 'location' } });
     const file = new File(['A\n1'], 'stock.csv');
     Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
     fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
-    fireEvent.click(await screen.findByRole('button', { name: 'Run dry-run diff' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview import' }));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('different column'));
     expect(screen.getByLabelText('Cost per base unit (PKR) *')).toHaveValue('5');
     expect(screen.getByText(/stock.csv · 1 stock rows/)).toBeVisible();
@@ -75,6 +73,57 @@ describe('owner importer wizard', () => {
     render(<OwnerImportWizard />);
     expect(screen.getByText('Owner access required')).toBeVisible();
     expect(screen.queryByLabelText('CSV or XLSX file')).toBeNull();
+  });
+  it('starts on the working branch and its first receiving location', async () => {
+    mocks.options.data = {
+      branches: [{ id: 'branch', name: 'Main branch' }, { id: 'north', name: 'North branch' }],
+      locations: [
+        { id: 'location', branchId: 'branch', name: 'Main store', kind: 'STORE' },
+        { id: 'north-hold', branchId: 'north', name: 'A quarantine shelf', kind: 'QUARANTINE' },
+        { id: 'north-shelf', branchId: 'north', name: 'Main shelf', kind: 'STORE' },
+      ],
+    };
+    render(<OwnerImportWizard initialBranchId="north" />);
+    expect(screen.getByRole('combobox', { name: 'Branch' })).toHaveValue('north');
+    expect(screen.getByRole('combobox', { name: 'Stock location' })).toHaveValue('north-shelf');
+    expect(screen.getByRole('link', { name: 'Back to Inventory' })).toHaveAttribute('href', '/pharmacy/inventory?branch=north');
+    const file = new File(['A\n1'], 'stock.csv');
+    Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
+    fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview import' }));
+    await waitFor(() => expect(mocks.preview.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'north', stockLocationId: 'north-shelf' })));
+  });
+  it('ignores a working branch outside the caller’s branches', () => {
+    render(<OwnerImportWizard initialBranchId="someone-else" />);
+    expect(screen.getByText('Main branch')).toBeVisible();
+    expect(screen.getByRole('combobox', { name: 'Stock location' })).toHaveValue('location');
+  });
+  it('shows a single branch as text instead of a picker', () => {
+    render(<OwnerImportWizard />);
+    expect(screen.queryByRole('combobox', { name: 'Branch' })).toBeNull();
+    expect(screen.getByText('Main branch')).toBeVisible();
+  });
+  it('links the imported-stock review list from the import page', () => {
+    render(<OwnerImportWizard />);
+    expect(screen.getByRole('link', { name: 'Imported stock awaiting verification' })).toHaveAttribute('href', '/pharmacy/inventory/imports');
+  });
+  it('explains an unmatched row and offers the catalogue search and catalogue review', async () => {
+    mocks.preview.mutateAsync.mockResolvedValueOnce({ previewHash: 'b'.repeat(64), canCommit: false, blockers: [], totalUnits: 100, totalValueMinor: '30000', lines: [{ rowNumber: 2, sourceRef: 'QA-OPEN-1', packReference: '1234567890123', medicineName: null, batchNumber: 'QA-B001', expiryDate: '2027-06-30', expiryPrecision: 'DAY', expectedUnits: 100, countedUnits: 100, currentUnits: 0, proposedUnits: 100, varianceUnits: 0, unitsPerPack: null, printedMrpMinor: 5000, unitCostMinor: 300, varianceNote: '', errors: ['Match exactly one published medicine pack with a valid current conversion, using its barcode or pack ID.'] }] });
+    render(<OwnerImportWizard />);
+    const file = new File(['A\n1'], 'stock.csv');
+    Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
+    fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview import' }));
+    expect(await screen.findByText('No medicine in your catalogue has pack code 1234567890123')).toBeVisible();
+    expect(screen.getByText('1 row needs a fix')).toBeVisible();
+    expect(screen.queryByText(/Match exactly one published medicine pack/)).toBeNull();
+    expect(screen.getByRole('link', { name: /Open medicine catalogue and packs/ })).toHaveAttribute('href', '/pharmacy/medicines?query=1234567890123');
+    const review = screen.getByRole('link', { name: /Open catalogue review/ });
+    expect(review).toHaveAttribute('href', '/pharmacy/medicines');
+    expect(screen.getByText(/Medicine reference connectors section/)).toBeVisible();
+    expect(screen.queryByRole('link', { name: /Pick the matching medicine|Request a new medicine/ })).toBeNull();
+    expect(review).toHaveAttribute('target', '_blank');
+    expect(screen.getByRole('button', { name: 'Import opening stock' })).toBeDisabled();
   });
   it('shows a loading state before options arrive', () => {
     mocks.options.isPending = true;

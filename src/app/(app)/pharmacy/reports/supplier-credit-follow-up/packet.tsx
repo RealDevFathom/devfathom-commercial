@@ -6,6 +6,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { formulaSafeCell } from '@/lib/pharmacy/reference-connectors';
+import { formatReportPeriod, formatReportTimestamp } from '../report-helpers';
 
 type Credit = { id: string; supplierId: string; reference: string; unallocatedMinor: number };
 export type FollowUpPacketData = {
@@ -212,8 +213,9 @@ export function FollowUpPacket({ packet }: { packet: FollowUpPacketData }) {
       <SectionCard title="Draft evidence scope" titleLevel={2}>
         <StatusPill status="draft" label="Draft · read-only" />
         <p className="mt-3 text-sm text-text-body">
-          Branch: {packet.branch.name}. Return creation period: {packet.from} to {packet.to},
-          inclusive UTC. Prepared at: {packet.preparedAt}. Currency: {currencyLabel(packet)}.
+          Branch: {packet.branch.name}. Returns created {formatReportPeriod(packet.from, packet.to)}
+          (inclusive, UTC). Prepared {formatReportTimestamp(packet.preparedAt)}. Currency:{' '}
+          {currencyLabel(packet)}.
         </p>
         <p className="mt-2 text-sm text-text-muted">{currencyBasis}</p>
         <p className="mt-2 text-sm text-text-muted">{DEFINITION}</p>
@@ -237,8 +239,14 @@ export function FollowUpPacket({ packet }: { packet: FollowUpPacketData }) {
         <SectionCard title="No qualifying follow-up records" titleLevel={2}>
           <p className="text-sm text-text-muted">
             No open issued debit notes on dispatched returns or submitted, undispatched returns were
-            found in the selected records. Broaden the date range or review Returns &amp; claims.
-            This does not confirm a zero supplier balance.
+            found in the selected records. Broaden the date range or review{' '}
+            <a
+              className="rounded-sm underline underline-offset-4 hover:text-text-muted focus-visible:outline-2 focus-visible:outline-ring"
+              href={`/pharmacy/purchasing/returns?${new URLSearchParams({ branch: packet.branch.id })}`}
+            >
+              Returns &amp; claims
+            </a>
+            . This does not confirm a zero supplier balance.
           </p>
         </SectionCard>
       ) : (
@@ -301,7 +309,10 @@ export function FollowUpPacket({ packet }: { packet: FollowUpPacketData }) {
                           />
                           {row.status === 'DISPATCHED' ? (
                             <p className="mt-2 text-xs">
-                              {row.dispatchedAt ?? 'Dispatch timestamp not recorded'}
+                              {formatReportTimestamp(
+                                row.dispatchedAt,
+                                'Dispatch timestamp not recorded'
+                              )}
                             </p>
                           ) : (
                             <>
@@ -314,7 +325,8 @@ export function FollowUpPacket({ packet }: { packet: FollowUpPacketData }) {
                               </p>
                               {row.deadline ? (
                                 <p className="text-xs">
-                                  Earliest recorded return deadline: {row.deadline}
+                                  Earliest recorded return deadline:{' '}
+                                  {formatReportTimestamp(row.deadline)}
                                 </p>
                               ) : null}
                             </>

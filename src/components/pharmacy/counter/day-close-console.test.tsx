@@ -10,7 +10,25 @@ const mocks = vi.hoisted(() => ({
   printZReport: vi.fn(),
   /** The zone the workspace has stored. */
   zone: '',
+  /** Per-payment-type totals the preview returns. */
+  tenderTotals: [] as {
+    type: string;
+    amountMinor: number;
+    refundMinor: number;
+    netMinor: number;
+  }[],
+  totals: {} as Record<string, number>,
+  drawers: null as Record<string, unknown>[] | null,
 }));
+const OPEN_DRAWER = {
+  id: 'd',
+  deviceId: 'counter-0f3b9a5e-6c2d-4f1e-9a7b-2c4d6e8f0a1b',
+  status: 'OPEN',
+  openedAt: new Date('2026-09-29T04:12:00Z'),
+  openedBy: 'Ayesha Karim',
+  expectedMinor: 12500,
+  countedMinor: null,
+};
 /**
  * The workspace's zone in these fixtures: neither Asia/Karachi (which the screen
  * used to assume) nor the zone the tests run in, so a time or a date that ignored
@@ -54,18 +72,15 @@ vi.mock('@/lib/trpc', () => ({
               branchName: 'Main',
               timezone: mocks.zone,
               close: mocks.close,
-              totals: { cashExpectedMinor: 12500, sourceHash: 'hash' },
-              drawers: [
-                {
-                  id: 'd',
-                  deviceId: 'counter-0f3b9a5e-6c2d-4f1e-9a7b-2c4d6e8f0a1b',
-                  status: 'OPEN',
-                  openedAt: new Date('2026-09-29T04:12:00Z'),
-                  openedBy: 'Ayesha Karim',
-                  expectedMinor: 12500,
-                  countedMinor: null,
-                },
-              ],
+              totals: {
+                cashExpectedMinor: 12500,
+                grossSalesMinor: 0,
+                refundTotalMinor: 0,
+                sourceHash: 'hash',
+                ...mocks.totals,
+              },
+              tenderTotals: mocks.tenderTotals,
+              drawers: mocks.drawers ?? [OPEN_DRAWER],
             },
           };
         },
@@ -78,7 +93,14 @@ vi.mock('@/lib/pharmacy/counter-browser-print', () => ({
   printCounterBrowserZReport: mocks.printZReport,
 }));
 import { workspaceToday } from '@/lib/timezone';
-import { cashMinor, drawerOpenedLabel, PharmacyDayCloseConsole } from './day-close-console';
+import {
+  cashMinor,
+  drawerOpenedLabel,
+  LOCK_CONSEQUENCE_COPY,
+  PharmacyDayCloseConsole,
+  RECLOSE_ACCESS_COPY,
+  REFRESH_PREVIEW_COPY,
+} from './day-close-console';
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -89,6 +111,9 @@ beforeEach(() => {
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
+  mocks.tenderTotals = [];
+  mocks.totals = {};
+  mocks.drawers = null;
   mocks.mutate.mockReset();
   mocks.previewInput.mockReset();
   mocks.printZReport.mockReset();
@@ -143,7 +168,9 @@ describe('day-close console', () => {
   it('labels a drawer by its opener and time, never by the device identifier', () => {
     render(<PharmacyDayCloseConsole />);
     const label = screen.getByText(/^Drawer 1 ·/);
-    expect(label).toHaveTextContent(/Drawer 1 · Opened \d{2}:\d{2} by Ayesha Karim · Open/);
+    expect(label).toHaveTextContent(
+      /Drawer 1 · Opened \d{2}:\d{2} by Ayesha Karim · Drawer still open/
+    );
     expect(label).not.toHaveTextContent(/counter-0f3b9a5e/);
     expect(
       drawerOpenedLabel({ openedAt: '2026-09-29T04:12:00Z', openedBy: null }, WORKSPACE_ZONE)
@@ -155,7 +182,7 @@ describe('day-close console', () => {
     // 04:12 UTC is 13:12 in Tokyo, 09:12 in Karachi.
     render(<PharmacyDayCloseConsole />);
     expect(screen.getByText(/^Drawer 1 ·/)).toHaveTextContent(
-      'Drawer 1 · Opened 13:12 by Ayesha Karim · Open'
+      'Drawer 1 · Opened 13:12 by Ayesha Karim · Drawer still open'
     );
     expect(
       drawerOpenedLabel({ openedAt: '2026-09-29T04:12:00Z', openedBy: null }, 'America/Chicago')
@@ -183,7 +210,7 @@ describe('day-close console', () => {
       render(<PharmacyDayCloseConsole />);
       // 04:12 UTC; and 22:30 UTC on the 21st is still the 21st in UTC.
       expect(screen.getByText(/^Drawer 1 ·/)).toHaveTextContent(
-        'Drawer 1 · Opened 04:12 by Ayesha Karim · Open'
+        'Drawer 1 · Opened 04:12 by Ayesha Karim · Drawer still open'
       );
       expect(screen.getByLabelText('Business date')).toHaveValue('2026-10-21');
       expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
@@ -257,5 +284,87 @@ describe('day-close console', () => {
         varianceNote: 'Short by one dollar',
       })
     );
+  });
+  it('never shows a drawer as "Closed" beside an open-day badge', () => {
+    mocks.drawers = [{ ...OPEN_DRAWER, status: 'CLOSED', countedMinor: 12500 }];
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Day not locked yet')).toBeInTheDocument();
+    expect(screen.getByText(/^Drawer 1 ·/)).toHaveTextContent(
+      'Drawer already counted and closed at the counter'
+    );
+    expect(screen.queryByText('Open day')).not.toBeInTheDocument();
+    expect(screen.queryByText(/· Closed$/)).not.toBeInTheDocument();
+  });
+  it('lists why Close and lock day is disabled and ties the reasons to the button', () => {
+    render(<PharmacyDayCloseConsole />);
+    const submit = screen.getByRole('button', { name: 'Close and lock day' });
+    expect(submit).toBeDisabled();
+    expect(submit).toHaveAccessibleDescription(
+      /Drawer 1 is still open: enter its counted cash\..*Tick the box/
+    );
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '124.00' },
+    });
+    expect(submit).toHaveAccessibleDescription(/write a variance note/);
+    expect(submit).not.toHaveAccessibleDescription(/is still open/);
+    fireEvent.change(screen.getByLabelText(/Variance note/), { target: { value: 'Short' } });
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(submit).toBeEnabled();
+    expect(screen.queryByText(/is not available yet/)).not.toBeInTheDocument();
+    expect(submit).toHaveAccessibleDescription(new RegExp(LOCK_CONSEQUENCE_COPY));
+  });
+  it('marks the variance note required only when a count differs', () => {
+    render(<PharmacyDayCloseConsole />);
+    const note = screen.getByLabelText(/Variance note/);
+    expect(note).toHaveAttribute('aria-required', 'false');
+    expect(screen.queryByText('(required)')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '125.00' },
+    });
+    expect(note).toHaveAttribute('aria-required', 'false');
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '120.00' },
+    });
+    expect(note).toHaveAttribute('aria-required', 'true');
+    expect(note).toBeRequired();
+    expect(screen.getByText('(required)')).toBeInTheDocument();
+  });
+  it('says the lock cannot be undone and who can issue a corrected report', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText(LOCK_CONSEQUENCE_COPY)).toBeInTheDocument();
+    expect(screen.getByText(RECLOSE_ACCESS_COPY)).toBeInTheDocument();
+    mocks.close = { id: 'c1', sequence: 1, supersedesCloseId: null, reason: null, isFinal: true };
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Day locked')).toBeInTheDocument();
+    expect(screen.getByText(RECLOSE_ACCESS_COPY)).toBeInTheDocument();
+  });
+  it('explains zero totals and what Refresh preview does', () => {
+    mocks.drawers = [];
+    mocks.totals = { cashExpectedMinor: 0 };
+    render(<PharmacyDayCloseConsole />);
+    expect(
+      screen.getByText(/no completed sales, refunds or drawer cash movements/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh preview' })).toHaveAccessibleDescription(
+      REFRESH_PREVIEW_COPY
+    );
+  });
+  it('shows card, credit and returns beside cash, in the organization currency', () => {
+    mocks.totals = { grossSalesMinor: 9000, refundTotalMinor: 700 };
+    mocks.tenderTotals = [
+      { type: 'CARD', amountMinor: 3000, refundMinor: 0, netMinor: 3000 },
+      { type: 'CASH', amountMinor: 5000, refundMinor: 700, netMinor: 4300 },
+      { type: 'CREDIT', amountMinor: 1000, refundMinor: 0, netMinor: 1000 },
+    ];
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Payment types')).toBeInTheDocument();
+    expect(screen.getByTestId('Cash received')).toHaveTextContent('50.00');
+    expect(screen.getByTestId('Card received')).toHaveTextContent('30.00');
+    expect(screen.getByTestId('Credit (khata) given')).toHaveTextContent('10.00');
+    expect(screen.getByTestId('Returns refunded')).toHaveTextContent('7.00');
+    expect(screen.getByText('Returns refunded · USD')).toBeInTheDocument();
+    expect(screen.queryByText(/no completed sales/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/tender/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/PKR/)).not.toBeInTheDocument();
   });
 });

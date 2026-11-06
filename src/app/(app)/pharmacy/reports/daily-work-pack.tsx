@@ -5,6 +5,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
+import { expiryBoardHref, formatReportPeriod, formatReportTimestamp } from './report-helpers';
 
 type Reader = ReturnType<typeof pharmacyReportsRouter.createCaller>['dailyWorkPack'];
 type WorkPack = Awaited<ReturnType<Reader>>;
@@ -30,6 +31,54 @@ const sourceNames: Record<WorkPack['sources'][number]['kind'], string> = {
   expiry: 'Expiry advice',
   'supplier-credit': 'Supplier credit',
 };
+
+type Source = WorkPack['sources'][number];
+
+/** Plain-words reason and next step when a source could not be read. */
+export function unavailableSourceHelp(source: Pick<Source, 'kind' | 'scope'>): {
+  reason: string;
+  next: { href: string; label: string } | null;
+} {
+  const branchId = source.scope.branchId;
+  switch (source.kind) {
+    case 'expiry':
+      return {
+        reason:
+          'Expiry advice could not be read for this branch just now, so stock that is close to expiry is not listed in this pack. Nothing was changed. Check the expiry board directly, or refresh the work pack to try again.',
+        next: { href: expiryBoardHref(null, branchId), label: 'Open expiry board' },
+      };
+    case 'supplier-credit':
+      return {
+        reason:
+          'Supplier returns and credits could not be read for this branch just now. Nothing was changed. Prepare the supplier-credit follow-up directly, or refresh the work pack to try again.',
+        next: {
+          href: `/pharmacy/reports/supplier-credit-follow-up?${new URLSearchParams({ branch: branchId })}`,
+          label: 'Open supplier-credit follow-up',
+        },
+      };
+    case 'anomalies':
+      return {
+        reason:
+          'Recorded anomalies could not be read for this branch just now. Nothing was changed. Review the anomaly signals on this page, or refresh the work pack to try again.',
+        next: null,
+      };
+    default:
+      return {
+        reason:
+          'Stock signals could not be read for this branch just now. Nothing was changed. Check inventory directly, or refresh the work pack to try again.',
+        next: { href: '/pharmacy/inventory', label: 'Open inventory' },
+      };
+  }
+}
+
+function sourceSummary(source: Source) {
+  if (source.returnedRows === null) return 'Item count unavailable.';
+  if (source.returnedRows === 0)
+    return 'No items found. That does not prove there is nothing to check.';
+  return `${source.returnedRows} ${source.returnedRows === 1 ? 'item' : 'items'} found${
+    source.limitReached ? '; more may exist beyond the read limit' : ''
+  }.`;
+}
 
 function Refresh({ fields, retry = false }: { fields: Record<string, string>; retry?: boolean }) {
   return (
@@ -96,26 +145,40 @@ export async function DailyWorkPack({
         <Refresh fields={refreshFields} />
       </div>
       <div className="space-y-2 text-sm text-text-muted">
-        <p>
-          Requested period: {pack.period.from} to {pack.period.to}. Branch scope:{' '}
-          {pack.scope.branchIds.map(branchName).join(', ')}.
-        </p>
-        <p className="break-words">
-          As of: {pack.asOf}. Read at: {pack.readAt}.
+        <p className="text-text-body">
+          {formatReportPeriod(pack.period.from, pack.period.to)} ·{' '}
+          {pack.scope.branchIds.map(branchName).join(', ')} · checked{' '}
+          {formatReportTimestamp(pack.asOf)}
         </p>
         <p>
-          Each source keeps its own time basis below. Supplier, ingredient and batch filters do not
-          apply to this pack. Current records are not a historical snapshot.
-        </p>
-        <p>{pack.completeness.definition}</p>
-        <p>
-          Refresh rereads existing evidence; it does not refresh domain signals or create drafts. No
-          money or time saved is calculated. Amounts use pharmacy integer minor units, displayed to
-          two decimal places. Source currency is unknown; — means unavailable, not zero.
+          A read-only list of things to review today, gathered from stock, expiry, anomaly and
+          supplier-credit records. Refresh reads them again; it never changes anything.
         </p>
         {!pack.permissions.financial ? (
           <p>Operational evidence only. Financial sources were not queried for your role.</p>
         ) : null}
+        <details>
+          <summary className="min-h-11 cursor-pointer py-3 font-medium text-text-body focus-visible:outline-2 focus-visible:outline-ring">
+            How this pack is put together
+          </summary>
+          <div className="space-y-2">
+            <p className="break-words">
+              Requested period: {pack.period.from} to {pack.period.to}. As of:{' '}
+              {formatReportTimestamp(pack.asOf)}. Read at: {formatReportTimestamp(pack.readAt)}.
+            </p>
+            <p>
+              Each source keeps its own time basis below. Supplier, ingredient and batch filters do
+              not apply to this pack. Current records are not a historical snapshot.
+            </p>
+            <p>{pack.completeness.definition}</p>
+            <p>
+              Refresh rereads existing evidence; it does not refresh domain signals or create
+              drafts. No money or time saved is calculated. Amounts use pharmacy integer minor
+              units, displayed to two decimal places. Source currency is unknown; — means
+              unavailable, not zero.
+            </p>
+          </div>
+        </details>
       </div>
       {tasks.length ? (
         <ol className="mt-5 divide-y divide-border-subtle">
@@ -178,10 +241,10 @@ export async function DailyWorkPack({
                         ))}
                       </dl>
                       <p className="break-words text-text-muted">
-                        Observed: {evidence.observedAt ?? 'Unavailable'}. Computed:{' '}
-                        {evidence.computedAt ?? 'Unavailable'}. Source freshness seconds:{' '}
+                        Observed: {formatReportTimestamp(evidence.observedAt)}. Computed:{' '}
+                        {formatReportTimestamp(evidence.computedAt)}. Source freshness seconds:{' '}
                         {evidence.freshnessSeconds ?? 'Unavailable'}. Source due/expiry time:{' '}
-                        {evidence.dueAt ?? 'Unavailable'}.
+                        {formatReportTimestamp(evidence.dueAt)}.
                       </p>
                       {evidence.missingInputs.map((reason) => (
                         <p key={reason} className="text-text-muted">
@@ -202,61 +265,83 @@ export async function DailyWorkPack({
         </ol>
       ) : (
         <p role="status" className="mt-5 text-sm text-text-muted">
-          No review evidence returned from available sources. This is not an all-clear result; check
-          source coverage and unavailable inputs below.
+          Nothing to review was found. That is not an all-clear: check which sources could be read
+          below.
         </p>
       )}
-      <h3 className="mt-6 font-semibold text-text-strong">Source coverage and freshness</h3>
+      <h3 className="mt-6 font-semibold text-text-strong">What this pack could read</h3>
       <ul className="mt-3 divide-y divide-border-subtle">
-        {pack.sources.map((source) => (
-          <li
-            key={source.id}
-            id={sourceAnchor(source.id)}
-            tabIndex={-1}
-            className="space-y-2 py-4 text-sm focus-visible:outline-2 focus-visible:outline-ring"
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">
-                {sourceNames[source.kind]} · {branchName(source.scope.branchId)}
-              </span>
-              <StatusPill
-                status={source.status}
-                tone={source.status === 'unavailable' ? 'danger' : 'neutral'}
-              />
-              <StatusPill status={`${source.coverage} coverage`} tone="warning" />
-            </div>
-            <p className="text-text-muted">{source.timeBasis}</p>
-            <p className="text-text-muted">
-              Returned rows: {source.returnedRows ?? 'Unavailable'}. Row limit:{' '}
-              {source.rowLimit ?? 'Not established'}.{' '}
-              {source.limitReached ? 'Source cap reached; records may be omitted.' : ''}
-            </p>
-            <p className="break-words text-text-muted">
-              Window:{' '}
-              {source.window
-                ? `${source.window.from} to ${source.window.toExclusive} (exclusive end)`
-                : 'Not period-bounded'}
-              . Evaluated as of: {source.evaluatedAsOf ?? 'Unavailable'}. Read at: {source.readAt}.{' '}
-              Freshness:{' '}
-              {source.freshness === 'persisted-unverified'
-                ? 'Persisted; freshness unverified'
-                : 'Live inputs; not historical'}
-              .
-            </p>
-            {Array.from(
-              new Set([
-                ...source.missingInputs,
-                ...pack.missingInputs
-                  .filter((item) => item.sourceId === source.id)
-                  .map((item) => item.reason),
-              ])
-            ).map((reason) => (
-              <p key={reason} className="text-text-muted">
-                {reason}
-              </p>
-            ))}
-          </li>
-        ))}
+        {pack.sources.map((source) => {
+          const help = source.status === 'unavailable' ? unavailableSourceHelp(source) : null;
+          return (
+            <li
+              key={source.id}
+              id={sourceAnchor(source.id)}
+              tabIndex={-1}
+              className="space-y-2 py-4 text-sm focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">
+                  {sourceNames[source.kind]} · {branchName(source.scope.branchId)}
+                </span>
+                <StatusPill
+                  status={source.status}
+                  tone={source.status === 'unavailable' ? 'danger' : 'neutral'}
+                />
+                <StatusPill status={`${source.coverage} coverage`} tone="warning" />
+              </div>
+              {help ? (
+                <>
+                  <p className="text-text-body">{help.reason}</p>
+                  {help.next ? (
+                    <Link href={help.next.href} prefetch={false} className={linkClass}>
+                      {help.next.label}
+                    </Link>
+                  ) : null}
+                </>
+              ) : (
+                <p className="text-text-body">{sourceSummary(source)}</p>
+              )}
+              <details>
+                <summary className="min-h-11 cursor-pointer py-3 font-medium text-text-body focus-visible:outline-2 focus-visible:outline-ring">
+                  Technical detail
+                </summary>
+                <div className="space-y-2">
+                  <p className="text-text-muted">{source.timeBasis}</p>
+                  <p className="text-text-muted">
+                    Returned rows: {source.returnedRows ?? 'Unavailable'}. Row limit:{' '}
+                    {source.rowLimit ?? 'Not established'}.{' '}
+                    {source.limitReached ? 'Source cap reached; records may be omitted.' : ''}
+                  </p>
+                  <p className="break-words text-text-muted">
+                    Window:{' '}
+                    {source.window
+                      ? `${formatReportTimestamp(source.window.from)} to ${formatReportTimestamp(source.window.toExclusive)} (exclusive end)`
+                      : 'Not period-bounded'}
+                    . Evaluated as of: {formatReportTimestamp(source.evaluatedAsOf)}. Read at:{' '}
+                    {formatReportTimestamp(source.readAt)}. Freshness:{' '}
+                    {source.freshness === 'persisted-unverified'
+                      ? 'Persisted; freshness unverified'
+                      : 'Live inputs; not historical'}
+                    .
+                  </p>
+                  {Array.from(
+                    new Set([
+                      ...source.missingInputs,
+                      ...pack.missingInputs
+                        .filter((item) => item.sourceId === source.id)
+                        .map((item) => item.reason),
+                    ])
+                  ).map((reason) => (
+                    <p key={reason} className="text-text-muted">
+                      {reason}
+                    </p>
+                  ))}
+                </div>
+              </details>
+            </li>
+          );
+        })}
       </ul>
     </SectionCard>
   );

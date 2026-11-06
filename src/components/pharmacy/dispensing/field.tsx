@@ -6,15 +6,25 @@ export const fieldClass =
 export function Field({
   label,
   hint,
+  required = false,
   children,
 }: {
   label: string;
   hint?: string;
+  /** Shows a visible required marker; the control itself still carries `required`. */
+  required?: boolean;
   children: ReactNode;
 }) {
   return (
     <label className="grid gap-1.5 text-sm font-medium text-text-strong">
-      <span>{label}</span>
+      <span>
+        {label}
+        {required ? (
+          <span aria-hidden className="ml-0.5 text-destructive">
+            *
+          </span>
+        ) : null}
+      </span>
       {children}
       {hint ? <span className="text-xs font-normal text-text-muted">{hint}</span> : null}
     </label>
