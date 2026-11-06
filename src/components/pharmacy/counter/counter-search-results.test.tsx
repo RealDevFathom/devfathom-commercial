@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { CounterSearchRow } from '@/lib/pharmacy/counter';
@@ -131,6 +131,7 @@ describe('CounterSearchResults safety flags', () => {
     expect(stock).toHaveTextContent('Exp 2028-06-30');
     expect(stock).toHaveTextContent('240 units');
     expect(stock).toHaveTextContent('Fridge F-1');
+    expect(stock).not.toHaveTextContent(' · Name');
     expect(screen.getByText('250.00')).toBeVisible();
     expect(stock).not.toHaveTextContent('Controlled');
     expect(stock).not.toHaveTextContent('Cold chain');
@@ -272,15 +273,42 @@ describe('CounterSearchResults safety flags', () => {
     const { rerender } = render(
       <CounterSearchResults {...props} state="error" error="Search unavailable" />
     );
-    expect(screen.getByRole('alert')).toHaveTextContent('Search unavailable');
-    fireEvent.click(screen.getByRole('button', { name: 'Retry search' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Search isn’t responding. Your bill is safe. Try again.'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(onRetry).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'Capture as unfulfilled demand' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Customer asked for it' }));
     expect(onCaptureDemand).toHaveBeenCalledOnce();
 
     rerender(<CounterSearchResults {...props} state="ready" />);
-    expect(screen.getByText(/Nothing in this catalog matches/)).toHaveTextContent('missing');
-    fireEvent.click(screen.getByRole('button', { name: 'Capture as unfulfilled demand' }));
+    expect(screen.getByText(/Nothing matches/)).toHaveTextContent('missing');
+    fireEvent.click(screen.getByRole('button', { name: 'Customer asked for it' }));
     expect(onCaptureDemand).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows a slow-search hint only after two seconds and resets for the next search', () => {
+    vi.useFakeTimers();
+    try {
+      const props = {
+        rows: [],
+        query: 'para',
+        activeMedicineId: null,
+        onSelect: vi.fn(),
+        onCaptureDemand: vi.fn(),
+        onRetry: vi.fn(),
+      };
+      const { rerender } = render(<CounterSearchResults {...props} state="loading" />);
+      expect(screen.getByRole('status')).toHaveTextContent('Searching for medicines');
+      act(() => vi.advanceTimersByTime(2000));
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Still searching. Scanning the barcode is faster.'
+      );
+      rerender(<CounterSearchResults {...props} state="ready" />);
+      rerender(<CounterSearchResults {...props} state="loading" />);
+      expect(screen.getByRole('status')).toHaveTextContent('Searching for medicines');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

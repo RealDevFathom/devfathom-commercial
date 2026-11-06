@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterSearchRow } from '@/lib/pharmacy/counter';
@@ -31,13 +32,30 @@ const LOCATION_LABEL: Record<string, string> = {
   RETURNS: 'Returns',
 };
 
-const MATCH_LABEL: Record<CounterSearchRow['matchedOn'], string> = {
-  BARCODE: 'Barcode',
-  ALIAS: 'Alias',
-  NAME: 'Name',
-  INGREDIENT: 'Ingredient',
-  PRESENTATION: 'Form',
-};
+function SearchLoading() {
+  const [slow, setSlow] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), 2000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <div
+      role="status"
+      className="space-y-3 rounded-xl border border-border-subtle bg-surface-card p-4"
+    >
+      <p className="text-sm text-text-muted">
+        {slow ? 'Still searching. Scanning the barcode is faster.' : 'Searching for medicines…'}
+      </p>
+      <div aria-hidden="true" className="space-y-3">
+        {[0, 1, 2].map((item) => (
+          <div key={item} className="h-12 rounded-md bg-surface-sunken" />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /**
  * POS-02 result rows.
@@ -56,7 +74,6 @@ export function CounterSearchResults({
   state,
   query,
   activeMedicineId,
-  error,
   disabled = false,
   onSelect,
   onCaptureDemand,
@@ -72,17 +89,15 @@ export function CounterSearchResults({
   }
 
   if (state === 'loading') {
-    return (
-      <p className="text-sm text-text-muted" role="status">
-        Searching the catalog…
-      </p>
-    );
+    return <SearchLoading />;
   }
 
   if (state === 'error') {
     return (
       <div className="space-y-3" role="alert">
-        <p className="text-sm text-destructive">{error ?? 'Search failed.'}</p>
+        <p className="text-sm text-destructive">
+          Search isn’t responding. Your bill is safe. Try again.
+        </p>
         <div className="flex flex-wrap gap-2">
           <Button
             type="button"
@@ -91,7 +106,7 @@ export function CounterSearchResults({
             disabled={disabled}
             onClick={onRetry}
           >
-            Retry search
+            Try again
           </Button>
           <Button
             type="button"
@@ -101,7 +116,7 @@ export function CounterSearchResults({
             onClick={onCaptureDemand}
             className="h-auto min-h-11 whitespace-normal"
           >
-            Capture as unfulfilled demand
+            Customer asked for it
           </Button>
         </div>
       </div>
@@ -111,7 +126,11 @@ export function CounterSearchResults({
   if (rows.length === 0) {
     return (
       <div className="space-y-3">
-        <p className="text-sm text-text-muted">Nothing in this catalog matches “{query}”.</p>
+        <p className="text-sm font-semibold text-text-strong">Nothing matches “{query}”</p>
+        <p className="text-sm text-text-muted">
+          Check the spelling, or try the generic name. If the customer wants it, note that they
+          asked so the owner can restock.
+        </p>
         <Button
           type="button"
           size="touch"
@@ -119,7 +138,7 @@ export function CounterSearchResults({
           onClick={onCaptureDemand}
           className="h-auto min-h-11 whitespace-normal"
         >
-          Capture as unfulfilled demand
+          Customer asked for it
         </Button>
       </div>
     );
@@ -208,7 +227,6 @@ export function CounterSearchResults({
                 {` · Exp ${row.nearestSafeExpiry ? formatReceiptDate(row.nearestSafeExpiry) : '—'}`}
                 {` · ${row.onHandUnits} units`}
                 {notes.length ? ` · ${notes.join(' · ')}` : ''}
-                {` · ${MATCH_LABEL[row.matchedOn]}`}
               </span>
               {safety.length > 0 ? (
                 <span className="col-span-2 flex flex-wrap gap-1">
