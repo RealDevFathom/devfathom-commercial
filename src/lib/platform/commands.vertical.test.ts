@@ -489,6 +489,9 @@ describe('organization.create vertical + package compatibility', () => {
             'pharmacy:counter',
             'pharmacy:close',
             'pharmacy:manage',
+            'sop:manage',
+            'sop:complete',
+            'sop:verify',
           ].map((capability) => ({ organizationId: 'org_new', capability, effect: 'ALLOW' })),
         },
       }),
@@ -511,9 +514,16 @@ describe('organization.create vertical + package compatibility', () => {
       data: expect.objectContaining({
         key: 'owner',
         permissions: {
-          create: ['pharmacy:*', 'reports:operational', 'reports:financial', 'pharmacy:safety'].map(
-            (capability) => ({ organizationId: 'org_new', capability, effect: 'ALLOW' })
-          ),
+          // DEV-751 appends the generic SOP actions after the base Owner grants.
+          create: [
+            'pharmacy:*',
+            'reports:operational',
+            'reports:financial',
+            'pharmacy:safety',
+            'sop:manage',
+            'sop:complete',
+            'sop:verify',
+          ].map((capability) => ({ organizationId: 'org_new', capability, effect: 'ALLOW' })),
         },
       }),
     });

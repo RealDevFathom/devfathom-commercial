@@ -31,6 +31,7 @@ type AssignmentFixture = {
   intervalEndTimeMinutes: number | null;
   windowMinutes: number;
   active: boolean;
+  createdAt?: Date;
   branch: { id: string; timezone: string; businessDayCutoff: string };
 };
 
@@ -322,6 +323,195 @@ describe('generateDueSopOccurrences', () => {
         horizonDays: 0,
       })
     ).rejects.toThrow('connection reset');
+  });
+});
+
+describe('generateDueSopOccurrences creation floor (skipDueBeforeAssignmentCreated)', () => {
+  // DAILY 06:00 America/New_York = 10:00Z; window 06-14 .. 06-16 as of 06-15 12:00Z.
+  const now = at('2026-06-15T12:00:00.000Z');
+  const dueTimes = (store: OccurrenceRow[]) => store.map((row) => row.dueAt.toISOString());
+
+  it('absent: every due time in the window, including ones before the assignment existed', async () => {
+    const { db, store } = makeDb({
+      assignments: [assignment({ createdAt: at('2026-06-15T11:00:00.000Z') })],
+    });
+    await generateDueSopOccurrences(db, { now });
+    expect(dueTimes(store)).toEqual([
+      '2026-06-14T10:00:00.000Z',
+      '2026-06-15T10:00:00.000Z',
+      '2026-06-16T10:00:00.000Z',
+    ]);
+  });
+
+  it('a schedule created after today’s due time starts at its next due time', async () => {
+    const { db, store } = makeDb({
+      assignments: [assignment({ createdAt: at('2026-06-15T11:00:00.000Z') })],
+    });
+    const result = await generateDueSopOccurrences(db, {
+      now,
+      skipDueBeforeAssignmentCreated: true,
+    });
+    expect(result).toEqual({ assignmentsProcessed: 1, created: 1, skipped: 0 });
+    expect(dueTimes(store)).toEqual(['2026-06-16T10:00:00.000Z']);
+  });
+
+  it('keeps an occurrence due in the minute the assignment was created (a one-off due now)', async () => {
+    const { db, store } = makeDb({
+      assignments: [
+        assignment({
+          frequency: 'ONCE',
+          startDate: utcDate(2026, 6, 15),
+          endDate: utcDate(2026, 6, 15),
+          createdAt: at('2026-06-15T10:00:42.517Z'),
+        }),
+      ],
+    });
+    await generateDueSopOccurrences(db, { now, skipDueBeforeAssignmentCreated: true });
+    expect(dueTimes(store)).toEqual(['2026-06-15T10:00:00.000Z']);
+  });
+
+  it('leaves older assignments untouched', async () => {
+    const { db, store } = makeDb({
+      assignments: [assignment({ createdAt: at('2026-06-01T00:00:00.000Z') })],
+    });
+    await generateDueSopOccurrences(db, { now, skipDueBeforeAssignmentCreated: true });
+    expect(store).toHaveLength(3);
+  });
+
+  it('skipDueBefore floors every assignment at a caller-chosen instant (minute precision)', async () => {
+    const { db, store } = makeDb({
+      assignments: [assignment({ createdAt: at('2026-06-01T00:00:00.000Z') })],
+    });
+    await generateDueSopOccurrences(db, {
+      now,
+      skipDueBefore: at('2026-06-15T10:00:59.000Z'),
+      skipDueBeforeAssignmentCreated: true,
+    });
+    expect(dueTimes(store)).toEqual(['2026-06-15T10:00:00.000Z', '2026-06-16T10:00:00.000Z']);
+  });
+
+  it('refuses an invalid skipDueBefore', async () => {
+    const { db } = makeDb({ assignments: [assignment()] });
+    await expect(
+      generateDueSopOccurrences(db, { now, skipDueBefore: new Date(Number.NaN) })
+    ).rejects.toThrow(TypeError);
+  });
+});
+
+describe('generateDueSopOccurrences branchIds scope', () => {
+  const now = at('2026-06-15T12:00:00.000Z');
+  const window = { now, lookbackDays: 0, horizonDays: 0 };
+  const b2 = { id: 'b2', timezone: 'America/New_York', businessDayCutoff: '00:00' };
+
+  it('queries every active assignment when branchIds is absent (unchanged behaviour)', async () => {
+    const { db, raw, store } = makeDb({
+      assignments: [assignment(), assignment({ id: 'a2', branchId: 'b2', branch: b2 })],
+    });
+    await generateDueSopOccurrences(db, window);
+    expect(raw.restaurantSopAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { active: true } })
+    );
+    expect(store.map((row) => row.assignmentId).sort()).toEqual(['a1', 'a2']);
+  });
+
+  it('restricts the assignment query to the given branches', async () => {
+    const assignments = [assignment(), assignment({ id: 'a2', branchId: 'b2', branch: b2 })];
+    const { db, raw, store } = makeDb({ assignments });
+    raw.restaurantSopAssignment.findMany.mockImplementation((async (args: {
+      where: { active: boolean; branchId?: { in: string[] } };
+    }) =>
+      assignments.filter(
+        (row) =>
+          row.active && (!args.where.branchId || args.where.branchId.in.includes(row.branchId))
+      )) as never);
+    const result = await generateDueSopOccurrences(db, { ...window, branchIds: ['b2'] });
+    expect(raw.restaurantSopAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { active: true, branchId: { in: ['b2'] } } })
+    );
+    expect(result).toEqual({ assignmentsProcessed: 1, created: 1, skipped: 0 });
+    expect(store.map((row) => row.assignmentId)).toEqual(['a2']);
+  });
+
+  it('generates nothing and never queries when branchIds is empty', async () => {
+    const { db, raw } = makeDb({ assignments: [assignment()] });
+    const result = await generateDueSopOccurrences(db, { ...window, branchIds: [] });
+    expect(result).toEqual({ assignmentsProcessed: 0, created: 0, skipped: 0 });
+    expect(raw.restaurantSopAssignment.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('generateDueSopOccurrences assignmentIds scope', () => {
+  const now = at('2026-06-15T12:00:00.000Z');
+  const window = { now, lookbackDays: 0, horizonDays: 0 };
+  const b2 = { id: 'b2', timezone: 'America/New_York', businessDayCutoff: '00:00' };
+  const assignments = () => [
+    assignment(),
+    assignment({ id: 'a2' }),
+    assignment({ id: 'a3', branchId: 'b2', branch: b2 }),
+  ];
+
+  function scopedDb(rows: AssignmentFixture[]) {
+    const made = makeDb({ assignments: rows });
+    made.raw.restaurantSopAssignment.findMany.mockImplementation((async (args: {
+      where: { active: boolean; branchId?: { in: string[] }; id?: { in: string[] } };
+    }) =>
+      rows.filter(
+        (row) =>
+          row.active &&
+          (!args.where.branchId || args.where.branchId.in.includes(row.branchId)) &&
+          (!args.where.id || args.where.id.in.includes(row.id))
+      )) as never);
+    return made;
+  }
+
+  it('restricts generation to the given assignment on its branch, leaving siblings alone', async () => {
+    const { db, raw, store } = scopedDb(assignments());
+    const result = await generateDueSopOccurrences(db, {
+      ...window,
+      branchIds: ['b1'],
+      assignmentIds: ['a2'],
+    });
+    expect(raw.restaurantSopAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { active: true, branchId: { in: ['b1'] }, id: { in: ['a2'] } },
+      })
+    );
+    expect(result).toEqual({ assignmentsProcessed: 1, created: 1, skipped: 0 });
+    expect(store.map((row) => row.assignmentId)).toEqual(['a2']);
+  });
+
+  it('restricts by assignment alone when no branch is given', async () => {
+    const { db, raw, store } = scopedDb(assignments());
+    await generateDueSopOccurrences(db, { ...window, assignmentIds: ['a3'] });
+    expect(raw.restaurantSopAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { active: true, id: { in: ['a3'] } } })
+    );
+    expect(store.map((row) => row.assignmentId)).toEqual(['a3']);
+  });
+
+  it('an assignment on another branch than the one given creates nothing', async () => {
+    const { db, store } = scopedDb(assignments());
+    const result = await generateDueSopOccurrences(db, {
+      ...window,
+      branchIds: ['b1'],
+      assignmentIds: ['a3'],
+    });
+    expect(result).toEqual({ assignmentsProcessed: 0, created: 0, skipped: 0 });
+    expect(store).toEqual([]);
+  });
+
+  it('generates nothing and never queries when assignmentIds is empty (never widens)', async () => {
+    const { db, raw, store } = scopedDb(assignments());
+    for (const branchIds of [undefined, ['b1']]) {
+      const result = await generateDueSopOccurrences(db, {
+        ...window,
+        branchIds,
+        assignmentIds: [],
+      });
+      expect(result).toEqual({ assignmentsProcessed: 0, created: 0, skipped: 0 });
+    }
+    expect(raw.restaurantSopAssignment.findMany).not.toHaveBeenCalled();
+    expect(store).toEqual([]);
   });
 });
 

@@ -245,6 +245,9 @@ export const pharmacySafetyRouter = router({
           code: 'BAD_REQUEST',
           message: 'Inspection pack start must not follow its end.',
         });
+      // The pack exports the branch's registers and records: the same branch
+      // scope as every other safety read applies before any of it is built.
+      await organizationBranch(ctx, input.branchId);
       const manifest = await createInspectionPack(ctx.db, input);
       annotateAudit(ctx, {
         category: 'PHARMACY_SAFETY',
@@ -257,7 +260,11 @@ export const pharmacySafetyRouter = router({
       });
       return manifest;
     }),
-  installSopLibrary: safety.mutation(({ ctx }) => installPharmacySopLibrary(ctx.db)),
+  installSopLibrary: safety.mutation(({ ctx }) => {
+    const organizationId = ctx.entitlements?.organizationId;
+    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    return installPharmacySopLibrary(ctx.db, { organizationId });
+  }),
   setRetentionClass: safety
     .input(
       z
