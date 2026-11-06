@@ -97,7 +97,7 @@ describe('#710 manual tender settlement', () => {
       );
     }
   );
-  it('records a standalone card terminal approval without calling a provider adapter', async () => {
+  it('refuses a new externally received card payment without creating a tender', async () => {
     const input = {
       ...base,
       type: 'CARD' as const,
@@ -106,19 +106,41 @@ describe('#710 manual tender settlement', () => {
       approvalCode: 'APP-7',
     };
     const { db, scoped } = fixture(input);
-    await expect(applyPharmacyTender(scoped, scope, input)).resolves.toMatchObject({
-      settled: true,
+    await expect(applyPharmacyTender(scoped, scope, input)).rejects.toMatchObject({
+      reason: 'INVALID_MANUAL_CAPTURE',
     });
-    expect(db.pharmacyTender.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        type: 'CARD',
-        provider: 'MANUAL_TERMINAL',
-        providerRef: '4242',
-        approvalCode: 'APP-7',
-        actorId: 'cashier',
-      }),
-    });
+    expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+    expect(completePaidPharmacySale).not.toHaveBeenCalled();
   });
+  it('rejects manual card evidence even when an adapter is supplied', async () => {
+    const adapter = { name: 'CERTIFIED_TEST_PROVIDER', certified: true, execute: vi.fn() };
+    const input = {
+      ...base,
+      type: 'CARD' as const,
+      payerName: undefined,
+      providerRef: '4242',
+      approvalCode: 'APP-7',
+      adapter,
+    };
+    const { db, scoped } = fixture(input);
+    await expect(applyPharmacyTender(scoped, scope, input)).rejects.toMatchObject({
+      reason: 'INVALID_MANUAL_CAPTURE',
+    });
+    expect(adapter.execute).not.toHaveBeenCalled();
+    expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+  });
+  it.each(['CARD', 'WALLET'] as const)(
+    'refuses a new %s tender without an adapter',
+    async (type) => {
+      const input = { ...base, type, payerName: undefined };
+      const { db, scoped } = fixture(input);
+      await expect(applyPharmacyTender(scoped, scope, input)).rejects.toMatchObject({
+        reason: 'UNCERTIFIED_PROVIDER',
+      });
+      expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+      expect(completePaidPharmacySale).not.toHaveBeenCalled();
+    }
+  );
   it('refuses absent reference before tender creation or completion', async () => {
     const input = { ...base, type: 'RAAST' as const };
     const { db, scoped } = fixture(input);

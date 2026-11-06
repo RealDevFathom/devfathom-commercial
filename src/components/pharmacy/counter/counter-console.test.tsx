@@ -562,7 +562,6 @@ describe('PharmacyCounterConsole tender recovery', () => {
     ['BAD_REQUEST', 'DRAWER_NOT_OPEN', 'CASH'],
     ['FORBIDDEN', 'Access refused.', 'CASH'],
     ['UNAUTHORIZED', 'Sign in required.', 'CASH'],
-    ['BAD_REQUEST', 'UNCERTIFIED_PROVIDER', 'CARD'],
     ['BAD_REQUEST', 'CONSENT_REQUIRED', 'BANK_TRANSFER'],
   ])('retains a %s / %s rejection on the same bill', async (code, message, type) => {
     mocks.mutations.tender!.mockRejectedValue(refused(code!, message));
