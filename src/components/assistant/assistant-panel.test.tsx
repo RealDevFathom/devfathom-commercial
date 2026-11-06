@@ -215,6 +215,24 @@ describe('Ask Fathom context and suggestions', () => {
 });
 
 describe('Ask Fathom request and result states', () => {
+  it('shows setup guidance without retry or provider diagnostics and preserves the question', async () => {
+    fetchMock.mockResolvedValueOnce(
+      Response.json({ error: "Ask Fathom isn't set up yet, contact support." }, { status: 503 })
+    );
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(panel());
+    enter();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Ask Fathom isn't set up yet, contact support."
+    );
+    expect(screen.queryByRole('button', { name: 'Review and retry' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    fireEvent.keyDown(screen.getByLabelText('Your question'), { key: 'Enter' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls).toEqual([['ASSISTANT_REQUEST_FAILED']]);
+    log.mockRestore();
+  });
   it('has no failure alert before a request fails', () => {
     render(panel());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
