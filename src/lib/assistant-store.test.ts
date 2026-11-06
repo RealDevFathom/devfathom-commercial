@@ -119,7 +119,7 @@ describe('organization-bound Ask Fathom presentation state', () => {
     store.setOpen(true);
     expect(useAssistant.getState().open).toBe(false);
     expect(assistantAvailabilityMessage(useAssistant.getState(), 'org-a')).toBe(
-      'Ask Fathom is unavailable because no AI provider is configured for this environment.'
+      "Ask Fathom isn't set up yet, contact support."
     );
     // The company switch explanation wins when both apply.
     store.confirmSettings(settings(false), 30);

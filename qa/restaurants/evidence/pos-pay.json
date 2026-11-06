@@ -1,0 +1,53 @@
+{
+  "address": {
+    "status": 200,
+    "text": "{\"result\":{\"data\":{\"json\":{\"id\":\"cmvhkwz2t002lchjs9n9thrb9\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"customerId\":\"cmvhjuhgi00hl1yjsasvwg6c5\",\"label\":\"Home\",\"recipientName\":\"Sana Guest\",\"normalizedPhone\":\"+923001112233\",\"addressLine1\":\""
+  },
+  "flow": [
+    {
+      "id": "establish",
+      "status": 201,
+      "note": "{\"sessionToken\":\"[redacted]\",\"session\":{\"id\":\"cmvhkwzib002tchjsi0u38w69\",\"state\":\"LOCKED\",\"establishedAt\":\"2026-10-21T03:55:18.849Z\"},\"device\":{\"id\":\"cmvhkwz6k002nchjs6qbr8rt4\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"branchId\":\"cmvhhcldp000m1yjs2sc9obnz\""
+    },
+    {
+      "id": "unlock",
+      "status": 200,
+      "note": "{\"session\":{\"id\":\"cmvhkwzib002tchjsi0u38w69\",\"state\":\"UNLOCKED\",\"activeStaffProfileId\":\"cmvhhclfk004o1yjs8ekhf7z5\"}}"
+    },
+    {
+      "id": "PAY-03",
+      "status": 500,
+      "note": "{\"error\":\"Internal server error\"}"
+    },
+    {
+      "id": "card-open",
+      "status": 201,
+      "note": "{\"orderId\":\"cmvhkx013002ychjs4rrq0usf\",\"orderNumber\":3,\"businessDate\":\"2026-10-21\",\"replayed\":false}"
+    },
+    {
+      "id": "card-item",
+      "status": 201,
+      "note": "{\"itemId\":\"cmvhkx0290032chjsdw0vmcjy\",\"replayed\":false}"
+    },
+    {
+      "id": "card-fire",
+      "status": 200,
+      "note": "{\"orderId\":\"cmvhkx013002ychjs4rrq0usf\",\"itemIds\":[\"cmvhkx0290032chjsdw0vmcjy\"],\"tickets\":[{\"ticketId\":\"cmvhkx03m0036chjsuh32umoy\",\"stationId\":\"cmvhjughs00gq1yjsrw6ss058\",\"ticketNumber\":2,\"createdAt\":\"2026-10-21T03:55:19.618Z\",\"matchedBy\":\"default\",\"items\":[{\"o"
+    },
+    {
+      "id": "card-bill",
+      "status": 200,
+      "note": "{\"orderId\":\"cmvhkx013002ychjs4rrq0usf\",\"billIds\":[\"cmvhkx04z003bchjsp2xsugf3\"],\"replayed\":false}"
+    },
+    {
+      "id": "PAY-04",
+      "status": 500,
+      "note": "{\"error\":\"Internal server error\"}"
+    },
+    {
+      "id": "MNU-03-before",
+      "status": 400,
+      "note": "{\"error\":\"The menu publication is not offered on the DELIVERY channel.\"}"
+    }
+  ]
+}
