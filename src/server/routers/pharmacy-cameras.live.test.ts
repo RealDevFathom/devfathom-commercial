@@ -578,8 +578,9 @@ describe('live view grants', () => {
     const issued = await caller().issueLiveViewGrant({ cameraId: 'cam_1' });
     expect(issued.grantId).toBe('grant_1');
     const remaining = new Date(issued.expiresAt).getTime() - Date.now();
-    expect(remaining).toBeGreaterThan(55_000);
-    expect(remaining).toBeLessThanOrEqual(60_000);
+    // Under the session's 60 s ceiling with room for a browser clock 5 s behind.
+    expect(remaining).toBeGreaterThan(50_000);
+    expect(remaining).toBeLessThanOrEqual(55_000);
     expect(grants[0]).toMatchObject({
       organizationId: 'org_a',
       cameraId: 'cam_1',
@@ -733,5 +734,34 @@ describe('configured camera settings', () => {
       code: 'FORBIDDEN',
     });
     expect(db.camera.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('configured-mode evidence grants', () => {
+  it('apply the live branch rule to issueViewerGrant and evidence', async () => {
+    const manager = caller({ userId: 'manager_1', role: 'MANAGER' });
+    await expect(manager.issueViewerGrant({ cameraId: 'cam_1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    grants.push(grant({ id: 'grant_ev', viewerId: 'manager_1' }));
+    await expect(
+      manager.evidence({ cameraId: 'cam_1', grantId: 'grant_ev' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.cameraStreamGrant.create).not.toHaveBeenCalled();
+  });
+
+  it('refuse support sessions and non-pharmacy organizations', async () => {
+    for (const over of [{ support: { id: 'support' } }, { vertical: 'RESTAURANT' }]) {
+      await expect(caller(over).issueViewerGrant({ cameraId: 'cam_1' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+    }
+    expect(db.cameraStreamGrant.create).not.toHaveBeenCalled();
+  });
+
+  it('still issue an evidence grant to an organization ADMIN', async () => {
+    await expect(caller().issueViewerGrant({ cameraId: 'cam_1' })).resolves.toMatchObject({
+      id: 'grant_1',
+    });
   });
 });

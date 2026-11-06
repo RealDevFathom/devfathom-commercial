@@ -119,7 +119,7 @@ export function PharmacyConfiguredSetup({
         sourceRef: String(data.get('sourceRef') ?? '').trim(),
       });
       setCameraOutcome(
-        'Camera registered disabled. Give its camera and gateway IDs to the gateway owner, run Check configured connection, then enable it. Registration does not prove live video.'
+        'Camera registered disabled. Give the gateway owner the binding IDs shown on its camera card, run Check configured connection, then enable it. Registration does not prove live video.'
       );
       form.reset();
       setGatewayId('');

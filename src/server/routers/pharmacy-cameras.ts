@@ -24,8 +24,12 @@ import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 const id = z.string().min(1).max(128);
 const refs = z.enum(['sim-camera-1', 'sim-counter-1', 'sim-fridge-1']);
-/** Live grants last one minute; the player renews before expiry (shared live-session). */
-const LIVE_GRANT_MS = 60_000;
+/**
+ * Live grant lifetime. The shared live session rejects a grant with more than
+ * 60 s left by the browser's clock, so issue 55 s: a browser clock up to 5 s
+ * behind the server still accepts it. The player renews 15 s before expiry.
+ */
+const LIVE_GRANT_MS = 55_000;
 const cameraProcedure = adminProcedure.use(({ ctx, next }) => {
   if (
     !hasModule(ctx.entitlements, 'pharmacy-core') ||
@@ -69,6 +73,17 @@ async function liveBranch(ctx: TRPCContext, organizationId: string, branchId: st
     }))
   )
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+}
+/**
+ * Configured (mediamtx) mode holds real production cameras, so every camera-bound
+ * procedure there applies the live rule: pharmacy tenant, no platform support
+ * session, and branch access. The simulator path keeps its existing rule.
+ */
+async function configuredModeGuard(ctx: TRPCContext, organizationId: string, branchId: string) {
+  if (!cameraGatewayRuntime.available || cameraGatewayRuntime.mode !== 'mediamtx') return;
+  if (ctx.organization?.vertical !== 'PHARMACY' || ctx.support)
+    throw new TRPCError({ code: 'FORBIDDEN' });
+  await liveBranch(ctx, organizationId, branchId);
 }
 /** Camera, gateway and branch must agree and be live; the stream route repeats this. */
 function assertLiveGateway(row: Awaited<ReturnType<typeof camera>>) {
@@ -148,6 +163,8 @@ export const pharmacyCamerasRouter = router({
       zones,
       presets: CAMERA_BRAND_PRESETS,
       availability: cameraGatewayPublicState(cameraGatewayRuntime),
+      /** Binding identifiers the gateway owner needs; no URL, address or secret. */
+      organizationId,
     };
   }),
   enrollGateway: cameraProcedure
@@ -368,11 +385,7 @@ export const pharmacyCamerasRouter = router({
       const row = await camera(ctx.db, organizationId, input.cameraId);
       // Configured mode: enabling a camera exposes live video, so apply the live
       // branch rule. The simulator path keeps its existing organization-wide rule.
-      if (cameraGatewayRuntime.available && cameraGatewayRuntime.mode === 'mediamtx') {
-        if (ctx.organization?.vertical !== 'PHARMACY' || ctx.support)
-          throw new TRPCError({ code: 'FORBIDDEN' });
-        await liveBranch(ctx, organizationId, row.branchId);
-      }
+      await configuredModeGuard(ctx, organizationId, row.branchId);
       try {
         // setCameraPreset sets counterEvidence exactly when the preset is COUNTER.
         await setCameraPreset(ctx.db, { organizationId, branchId: row.branchId }, input);
@@ -414,6 +427,7 @@ export const pharmacyCamerasRouter = router({
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
       const row = await camera(ctx.db, ctx.session.user.organizationId, input.cameraId);
+      await configuredModeGuard(ctx, ctx.session.user.organizationId, row.branchId);
       if (!row.enabled || row.gateway.status !== 'ACTIVE' || row.gateway.revokedAt)
         throw new TRPCError({ code: 'FORBIDDEN' });
       if (input.previousGrantId) {
@@ -553,6 +567,7 @@ export const pharmacyCamerasRouter = router({
     .query(async ({ ctx, input }) => {
       const organizationId = ctx.session.user.organizationId;
       const row = await camera(ctx.db, organizationId, input.cameraId);
+      await configuredModeGuard(ctx, organizationId, row.branchId);
       if (!row.enabled || row.gateway.status !== 'ACTIVE' || row.gateway.revokedAt)
         throw new TRPCError({ code: 'FORBIDDEN' });
       const grant = await ctx.db.cameraStreamGrant.findFirst({

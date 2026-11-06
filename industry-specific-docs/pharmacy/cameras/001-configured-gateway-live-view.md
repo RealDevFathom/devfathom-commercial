@@ -83,7 +83,8 @@ The simulator path (`CAMERA_GATEWAY_MODE=simulated`, development/test only) is u
 - **Branch access.** The branch must be active. A session `ADMIN` of the organization may use
   every active branch (the existing counter convention). Anyone else needs an active pharmacy
   branch assignment to that branch.
-- **Grants.** Live grants last 60 s. The player renews 15 s before expiry and stops after 30
+- **Grants.** Live grants last 55 s, so a browser clock up to 5 s behind the server still
+  accepts them (the shared session refuses more than 60 s left). The player renews 15 s before expiry and stops after 30
   renewals. That cap is client-side only; it is not a security boundary, because every issue
   and every stream request re-authorizes. Renewal requires a live grant the viewer holds for
   that camera. The prior grant is left to lapse (at most 15 s) so in-flight player requests
@@ -123,7 +124,8 @@ Same baseline as `industry-specific-docs/restaurants/cameras/002-configured-medi
    IP-based or loopback-only MediaMTX read grant: behind a same-host reverse proxy, LAN
    clients can appear to come from loopback. Every HLS read must use the authenticated
    reader in item 4.
-3. A pharmacy gateway and camera registered in the app. Their IDs are shown on the camera card.
+3. A pharmacy gateway and camera registered in the app. The camera card shows every binding
+   identifier: camera, gateway, branch and organization IDs.
 4. A dedicated least-privilege HLS reader username/password delivered through secret
    configuration. This is not the DVR password.
 5. A binding entry with `"vertical": "pharmacy"` (placeholders below, not usable values):

@@ -363,6 +363,7 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
   const configured = (cameraOverrides: Record<string, unknown> = {}) =>
     workspaceData({
       availability: { available: true, mode: 'mediamtx' },
+      organizationId: 'org_a',
       cameras: [
         {
           id: 'cam_1',
@@ -453,6 +454,9 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
     render(<PharmacyCamerasConsole />);
     expect(screen.getByText('cam_1')).toBeVisible();
     expect(screen.getByText('gw_1')).toBeVisible();
+    // Every identifier the server binding matches on.
+    expect(screen.getByText('Branch ID').nextSibling).toHaveTextContent('branch_a');
+    expect(screen.getByText('Organization ID').nextSibling).toHaveTextContent('org_a');
     expect(screen.getByRole('note')).toHaveTextContent('not supported by this live gateway');
     fireEvent.click(screen.getByRole('button', { name: 'Check configured connection' }));
     expect(mocks.diagnose).toHaveBeenCalledWith({ cameraId: 'cam_1' });
@@ -471,6 +475,27 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close live view' }));
     expect(mocks.revoke).toHaveBeenCalledWith({ cameraId: 'cam_1', grantId: 'live_1' });
     expect(screen.queryByLabelText('Counter camera playback panel')).not.toBeInTheDocument();
+  });
+
+  it('closes live view for good when its camera is disabled', async () => {
+    mocks.workspace.mockReturnValue(ready(configured()));
+    const view = render(<PharmacyCamerasConsole />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open live view' }));
+    });
+    expect(screen.getByLabelText('Counter camera playback panel')).toBeInTheDocument();
+    mocks.workspace.mockReturnValue(ready(configured({ enabled: false })));
+    view.rerender(<PharmacyCamerasConsole />);
+    expect(screen.queryByLabelText('Counter camera playback panel')).not.toBeInTheDocument();
+    expect(mocks.revoke).toHaveBeenCalledWith({ cameraId: 'cam_1', grantId: 'live_1' });
+    const grantsBefore = mocks.liveGrant.mock.calls.length;
+    mocks.workspace.mockReturnValue(ready(configured()));
+    await act(async () => {
+      view.rerender(<PharmacyCamerasConsole />);
+    });
+    expect(screen.queryByLabelText('Counter camera playback panel')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open live view' })).toBeEnabled();
+    expect(mocks.liveGrant).toHaveBeenCalledTimes(grantsBefore);
   });
 
   it('keeps a disabled camera out of live view', () => {

@@ -232,7 +232,11 @@ export function PharmacyCamerasConsole() {
     setViewer(null);
   }
   // The player stops and releases its grant when it unmounts.
-  if (liveCameraId && (workspaceAccessLost || !enabled)) setLiveCameraId(null);
+  // A view whose camera is disabled or gone closes for good, so re-enabling the
+  // camera later never restarts video by itself.
+  const liveCamera = workspace.data?.cameras.find((camera) => camera.id === liveCameraId);
+  if (liveCameraId && (workspaceAccessLost || !enabled || (workspace.data && !liveCamera?.enabled)))
+    setLiveCameraId(null);
   useEffect(() => {
     if (!viewer || !enabled) void utils.pharmacyCameras.evidence.reset();
   }, [viewer, enabled, utils]);
@@ -474,6 +478,16 @@ export function PharmacyCamerasConsole() {
                         <div className="flex flex-wrap gap-x-2">
                           <dt>Gateway ID</dt>
                           <dd className="break-all text-text-strong">{camera.gatewayId}</dd>
+                        </div>
+                        <div className="flex flex-wrap gap-x-2">
+                          <dt>Branch ID</dt>
+                          <dd className="break-all text-text-strong">{camera.branchId}</dd>
+                        </div>
+                        <div className="flex flex-wrap gap-x-2">
+                          <dt>Organization ID</dt>
+                          <dd className="break-all text-text-strong">
+                            {workspace.data.organizationId}
+                          </dd>
                         </div>
                       </dl>
                       <div className="mt-3 flex flex-wrap gap-3">
