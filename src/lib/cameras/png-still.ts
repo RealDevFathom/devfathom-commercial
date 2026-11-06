@@ -92,7 +92,19 @@ function decodePngStill(bytes: unknown): DecodedPng | null {
       } else if (type === 'IHDR') {
         return null;
       } else if (type === 'PLTE') {
-        if (idatState !== 'none' || length === 0 || length % 3 !== 0) return null;
+        // At most 2^depth entries (256 for 8-bit; 256 for truecolour suggested
+        // palettes), never for greyscale, and only once: no room to smuggle data.
+        if (
+          !header ||
+          palette ||
+          idatState !== 'none' ||
+          header.colour === 0 ||
+          header.colour === 4 ||
+          length === 0 ||
+          length % 3 !== 0 ||
+          length > 3 * Math.min(256, 2 ** header.depth)
+        )
+          return null;
         palette = data;
       } else if (type === 'IDAT') {
         if (idatState === 'closed') return null;

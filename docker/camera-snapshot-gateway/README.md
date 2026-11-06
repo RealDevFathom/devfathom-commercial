@@ -50,9 +50,13 @@ RTSP `-timeout` option as listen mode, so the service refuses to start on it.
   `requestTimeout` 10 s (checked every second), `maxHeaderSize` 8192, one request per
   connection, at most 64 connections.
 
+**Still size.** `maxWidth` defaults to 1280 (at most 1920). A noisy 1080p PNG can exceed the
+4 MiB cap, and an oversized still is refused, not truncated. The shipped example's
+placeholder secrets are rejected until you replace them.
+
 ## Install and operate (owner)
 
-1. **Reader secret, per path.** Generate a random secret of at least 32 characters and hash it:
+1. **Reader secret, per path.** Generate a random secret of at least 32 characters (printable ASCII; the command below is) and hash it:
 
    ```sh
    SECRET="$(openssl rand -base64 33 | tr -d '\n')"
@@ -75,10 +79,12 @@ RTSP `-timeout` option as listen mode, so the service refuses to start on it.
    `snapshotBaseUrl` (the same host as the HLS gateway `baseUrl`), issued by a CA the app
    trusts. Store `tls.key` readable only by root and the `devfathom-snapshot` group.
 
-4. **MediaMTX.** Generate a second, URL-safe secret (`openssl rand -hex 24`) for the
+4. **MediaMTX.** Generate a second, URL-safe secret of at least 32 characters (`openssl rand -hex 24`) for the
    snapshot reader. Put it in `config.json` `rtspReader.password` and in the snippet's `pass`.
    Apply `mediamtx.snapshot.example.yml`: one authenticated, loopback-only reader with `read`
-   on each snapshot path. Remove the stock anonymous `read`/`publish`/`playback` catch-all,
+   on each snapshot path. Before removing the stock anonymous `read`/`publish`/`playback`
+   catch-all, confirm every existing reader and publisher (live-view HLS, the DVR source) has
+   its own user, or it will stop working. Then remove the catch-all,
    keep `api`, `metrics`, `pprof` and `playback` disabled (or authenticated), and do not change
    `record`, playback or the DVR source.
 

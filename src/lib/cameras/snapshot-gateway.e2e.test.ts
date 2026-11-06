@@ -199,10 +199,13 @@ describe.skipIf(!runnable)('real gateway service + real ffmpeg + app transport',
         listen: { host: '127.0.0.1', port: 8899 },
         tls: { certFile: join(dir, 'cert.pem'), keyFile: join(dir, 'key.pem') },
         rtspOrigin: 'rtsp://127.0.0.1:8554',
-        rtspReader: { username: 'snapshot-reader', password: 'e2e-mediamtx-reader-0123456789' },
+        rtspReader: {
+          username: 'snapshot-reader',
+          password: 'e2e-mediamtx-reader-secret-0123456789',
+        },
         ffmpegPath: FFMPEG,
         timeoutMs: 6000,
-        maxWidth: 1920,
+        maxWidth: 1280,
         paths: [
           {
             path: PATH,
@@ -238,14 +241,14 @@ describe.skipIf(!runnable)('real gateway service + real ffmpeg + app transport',
     // The gateway asked ffmpeg for the configured MediaMTX loopback path only.
     expect(spawnedArgs).toHaveLength(1);
     expect(spawnedArgs[0]).toContain(
-      `rtsp://snapshot-reader:e2e-mediamtx-reader-0123456789@127.0.0.1:8554/${PATH}`
+      `rtsp://snapshot-reader:e2e-mediamtx-reader-secret-0123456789@127.0.0.1:8554/${PATH}`
     );
     expect(pinnedLookups).toEqual([PINNED]);
 
     const stored = [...files.values()];
     expect(stored).toHaveLength(1);
     // Scaled down to maxWidth by the gateway, and a complete decodable PNG.
-    expect(inspectPngStill(stored[0])).toEqual({ width: 1920, height: 1080 });
+    expect(inspectPngStill(stored[0])).toEqual({ width: 1280, height: 720 });
   }, 30_000);
 
   it('a wrong reader secret is refused by the gateway and nothing is stored', async () => {

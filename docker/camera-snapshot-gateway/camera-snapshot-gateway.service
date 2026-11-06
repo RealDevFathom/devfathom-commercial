@@ -14,9 +14,8 @@
 Description=DevFathom camera snapshot gateway (PNG stills from loopback MediaMTX RTSP)
 After=network-online.target mediamtx.service
 Wants=network-online.target
-# Keep retrying after a crash loop instead of giving up permanently.
-StartLimitIntervalSec=120
-StartLimitBurst=10
+# Never stop retrying after a crash loop (RestartSec below paces restarts).
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

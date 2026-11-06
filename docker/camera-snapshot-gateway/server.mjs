@@ -44,7 +44,11 @@ const RTSP_ORIGIN_PATTERN = /^rtsp:\/\/(?:127\.0\.0\.1|\[::1\]):([0-9]{1,5})$/;
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 // MediaMTX reader credential: URL-safe characters only, so it never needs escaping.
 const READER_USER_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-const READER_PASS_PATTERN = /^[A-Za-z0-9_-]{24,128}$/;
+const READER_PASS_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
+// Printable ASCII without ':' (Basic auth separator); compared byte for byte.
+const USERNAME_PATTERN = /^[\x21-\x39\x3b-\x7e]{1,256}$/;
+/** The shipped examples' placeholders must never be accepted as real secrets. */
+const isPlaceholder = (/** @type {string} */ value) => /replace/i.test(value) || /^0+$/.test(value);
 const MIN_FFMPEG_MAJOR = 5;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const REALM = 'Basic realm="camera-snapshot"';
@@ -154,7 +158,12 @@ export function parseConfig(raw) {
     const reader = /** @type {Record<string, unknown>} */ (root.rtspReader);
     checkKeys(reader, ['username', 'password'], ['username', 'password']);
     if (typeof reader.username !== 'string' || !READER_USER_PATTERN.test(reader.username)) fail();
-    if (typeof reader.password !== 'string' || !READER_PASS_PATTERN.test(reader.password)) fail();
+    if (
+      typeof reader.password !== 'string' ||
+      !READER_PASS_PATTERN.test(reader.password) ||
+      isPlaceholder(reader.password)
+    )
+      fail();
 
     if (!Array.isArray(root.paths) || root.paths.length < 1 || root.paths.length > 256) fail();
     const seen = new Set();
@@ -165,14 +174,13 @@ export function parseConfig(raw) {
       checkKeys(entry, keys, keys);
       const { path, username, passwordSha256 } = entry;
       if (typeof path !== 'string' || path.length > 120 || !PATH_PATTERN.test(path)) fail();
+      if (typeof username !== 'string' || !USERNAME_PATTERN.test(username)) fail();
       if (
-        typeof username !== 'string' ||
-        username.length === 0 ||
-        username.length > 256 ||
-        /[:\r\n\0]/.test(username)
+        typeof passwordSha256 !== 'string' ||
+        !HASH_PATTERN.test(passwordSha256) ||
+        isPlaceholder(passwordSha256)
       )
         fail();
-      if (typeof passwordSha256 !== 'string' || !HASH_PATTERN.test(passwordSha256)) fail();
       if (seen.has(path)) fail();
       seen.add(path);
       return Object.freeze(
@@ -199,7 +207,8 @@ export function parseConfig(raw) {
       timeoutMs: integer(root.timeoutMs, 1000, 8000, 4000),
       maxBytes: integer(root.maxBytes, 1, MAX_PNG_BYTES, MAX_PNG_BYTES),
       maxConcurrent: integer(root.maxConcurrent, 1, 4, 2),
-      maxWidth: integer(root.maxWidth, 160, 3840, 1920),
+      // A noisy 1080p PNG can exceed 4 MiB; 1280 keeps real stills well inside it.
+      maxWidth: integer(root.maxWidth, 160, 1920, 1280),
       paths: Object.freeze(paths),
     });
   } catch {
@@ -229,6 +238,11 @@ export function ffmpegArgs(config, path) {
     '-hide_banner',
     '-loglevel',
     'error',
+    // One decoder and filter thread: bounded tasks under the unit's TasksMax.
+    '-filter_threads',
+    '1',
+    '-threads',
+    '1',
     '-rtsp_transport',
     'tcp',
     '-timeout',

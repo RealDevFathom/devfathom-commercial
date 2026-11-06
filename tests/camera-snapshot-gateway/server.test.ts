@@ -56,12 +56,16 @@ afterEach(() => {
 });
 
 describe('parseConfig', () => {
-  test('accepts the shipped example and applies defaults', () => {
+  test('refuses the shipped example until its placeholders are replaced, then applies defaults', () => {
     const example = readFileSync(
       resolve('docker/camera-snapshot-gateway/config.example.json'),
       'utf8'
     );
-    const parsed = parseConfig(example);
+    expect(() => parseConfig(example)).toThrow('Invalid snapshot gateway configuration.');
+    const filled = JSON.parse(example);
+    filled.rtspReader.password = 'generated-url-safe-reader-secret-0123456789';
+    filled.paths[0].passwordSha256 = sha256Hex(SECRET);
+    const parsed = parseConfig(JSON.stringify(filled));
     expect(parsed.paths[0].path).toBe('pharmacy/branch-1/counter-1');
     expect(parsed.rtspOrigin).toBe('rtsp://127.0.0.1:8554');
 
@@ -70,7 +74,7 @@ describe('parseConfig', () => {
       timeoutMs: 4000,
       maxBytes: 4194304,
       maxConcurrent: 2,
-      maxWidth: 1920,
+      maxWidth: 1280,
     });
     expect(Object.isFrozen(minimal)).toBe(true);
     expect(Object.isFrozen(minimal.paths)).toBe(true);
@@ -143,7 +147,23 @@ describe('parseConfig', () => {
     ['maxConcurrent 0', { ...base, maxConcurrent: 0 }],
     ['maxConcurrent 5', { ...base, maxConcurrent: 5 }],
     ['maxWidth 159', { ...base, maxWidth: 159 }],
-    ['maxWidth 3841', { ...base, maxWidth: 3841 }],
+    ['maxWidth above 1920', { ...base, maxWidth: 1921 }],
+    [
+      'placeholder reader password',
+      {
+        ...base,
+        rtspReader: {
+          ...base.rtspReader,
+          password: 'REPLACE-with-generated-url-safe-secret-32plus',
+        },
+      },
+    ],
+    [
+      'short reader password',
+      { ...base, rtspReader: { ...base.rtspReader, password: 'a'.repeat(31) } },
+    ],
+    ['all-zero path hash', { ...base, paths: [{ ...entry, passwordSha256: '0'.repeat(64) }] }],
+    ['non-ASCII username', { ...base, paths: [{ ...entry, username: 'caf\u00e9' }] }],
     ['array root', [base]],
     ['null root', null],
   ];
@@ -180,6 +200,10 @@ describe('ffmpegArgs', () => {
       '-hide_banner',
       '-loglevel',
       'error',
+      '-filter_threads',
+      '1',
+      '-threads',
+      '1',
       '-rtsp_transport',
       'tcp',
       '-timeout',

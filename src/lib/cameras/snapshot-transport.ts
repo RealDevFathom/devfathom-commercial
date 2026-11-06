@@ -123,7 +123,9 @@ function parseBindings(raw: string): SnapshotBinding[] {
       if (!base || !snapshot || snapshot.hostname !== base.hostname) throw new Error();
       if (!isPrivateIPv4(binding.address)) throw new Error();
       if (binding.path.length > 120 || !PATH.test(binding.path)) throw new Error();
-      if (binding.username.length > 256 || binding.username.includes(':')) throw new Error();
+      // Printable ASCII: the gateway compares bytes, so nothing else could ever match.
+      if (binding.username.length > 256 || !/^[\x21-\x39\x3b-\x7e]+$/.test(binding.username))
+        throw new Error();
       // A generated reader secret, not a human password.
       if (binding.password.length < 24) throw new Error();
       const cameraKey = JSON.stringify([binding.organizationId, binding.cameraId]);

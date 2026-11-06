@@ -16,7 +16,7 @@
   "timeoutMs": 4000,
   "maxBytes": 4194304,
   "maxConcurrent": 2,
-  "maxWidth": 1920,
+  "maxWidth": 1280,
   "paths": [
     {
       "path": "pharmacy/branch-1/counter-1",

@@ -48,11 +48,13 @@ never connects to the DVR, never writes to disk, and does not change `record` (d
    - Basic auth with a snapshot-only reader secret.
    - Connection pinned to the binding's RFC1918 IPv4 address, with TLS hostname verification.
    - No redirects, no compression, and `image/png` only.
-   - At most 4 MiB, an 8 s deadline and 4 concurrent reads.
+   - At most 4 MiB, a 10 s deadline and 4 concurrent reads. The gateway scales stills to
+     1280 px wide by default (at most 1920), which keeps real frames under the cap.
 6. `png-still.ts` accepts only a complete PNG: signature, IHDR first, CRC on every chunk, legal
    colour type and bit depth, non-interlaced, at most 4096×4096, contiguous IDAT that inflates
    (bounded) to exactly the promised scanline size with legal row filters, and IEND last.
-   Anything else stores nothing.
+   Anything else stores nothing. What is stored is a canonical re-encode (IHDR, a bounded
+   PLTE for palette images, one IDAT, IEND), so no metadata or hidden bytes reach storage.
 7. The still goes to private tenant storage, and the row becomes `CAPTURED`. Gateway errors
    retry, then settle as `SNAPSHOT_UNAVAILABLE`. No URL, host, path or credential is ever
    persisted.
@@ -86,7 +88,9 @@ that DEV-740 (#1415) is changing, and so snapshot credentials differ from HLS re
 The rules: every key is required, and unknown keys are rejected. `vertical` must be
 `pharmacy`. `baseUrl` must equal the registered gateway URL. `snapshotBaseUrl` must share its
 hostname. `address` must be RFC1918 IPv4. Each camera and each stream appears once. A malformed
-value fails startup without echoing anything.
+value disables stills (captures settle as `SNAPSHOT_UNSUPPORTED`) and logs the fixed event
+`camera-snapshot-bindings-invalid`, without echoing anything; live viewing and other jobs keep
+working.
 
 For consoles, `evidenceSnapshotSupported(runtime, target)` returns true only for a provisioned
 camera. DEV-740 can use it to replace its configured-mode "unsupported" label.

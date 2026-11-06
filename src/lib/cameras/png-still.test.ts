@@ -139,4 +139,24 @@ describe('inspectPngStill', () => {
     const simulated = await createSimulatedCameraGateway().getSnapshot('sim-camera-1');
     expect(inspectPngStill(normalizePngStill(simulated))).toEqual({ width: 1, height: 1 });
   });
+
+  it('bounds the palette so it cannot carry arbitrary data', () => {
+    const base = makePng({ colour: 3, depth: 8 });
+    const withPalette = (bytes: Buffer, colour = 3, depth = 8) => {
+      const source = makePng({ colour, depth });
+      // signature + IHDR (33 bytes), then replace any existing PLTE with ours.
+      const rest = colour === 3 ? source.subarray(33 + 12 + 3) : source.subarray(33);
+      return Buffer.concat([source.subarray(0, 33), pngChunk('PLTE', bytes), rest]);
+    };
+    expect(inspectPngStill(base)).not.toBeNull();
+    expect(inspectPngStill(withPalette(Buffer.alloc(768)))).not.toBeNull();
+    expect(inspectPngStill(withPalette(Buffer.alloc(771)))).toBeNull();
+    const smuggled = Buffer.alloc(900_000 - (900_000 % 3), 'x');
+    expect(normalizePngStill(withPalette(smuggled))).toBeNull();
+    // 2-bit palette images allow 4 entries only.
+    expect(inspectPngStill(withPalette(Buffer.alloc(15), 3, 2))).toBeNull();
+    // Greyscale images must not carry a palette.
+    expect(inspectPngStill(withPalette(Buffer.alloc(3), 0, 8))).toBeNull();
+    expect(inspectPngStill(withPalette(Buffer.alloc(3), 4, 8))).toBeNull();
+  });
 });

@@ -136,6 +136,8 @@ describe('CAMERA_SNAPSHOT_BINDINGS validation', () => {
     ['path traversal', [{ ...binding, path: '../admin' }]],
     ['path with query', [{ ...binding, path: 'cam?x=1' }]],
     ['colon username', [{ ...binding, username: 'a:b' }]],
+    ['non-ASCII username', [{ ...binding, username: 'caf\u00e9' }]],
+    ['space in username', [{ ...binding, username: 'app snapshot' }]],
     ['weak secret', [{ ...binding, password: 'short' }]],
     ['header injection', [{ ...binding, password: `${SECRET}\r\nX: y` }]],
     ['duplicate camera', [binding, { ...binding, path: 'other' }]],
