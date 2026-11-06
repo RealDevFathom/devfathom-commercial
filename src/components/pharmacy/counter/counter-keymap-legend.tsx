@@ -53,12 +53,8 @@ export function CounterKeymapLegend({
         <p className="text-sm text-text-muted">{keymap.preset.description}</p>
         {!keymap.preset.confirmed ? (
           <p role="status" className="flex flex-wrap items-center gap-2 text-sm text-warning">
-            <StatusPill status="unconfirmed" tone="warning" label="Placeholder" />
-            <span>
-              These chords are a proposal, to confirm in Phase 0
-              {keymap.preset.phaseZeroDecision ? ` (${keymap.preset.phaseZeroDecision})` : ''}. They
-              may change once the incumbent scorecard is complete.
-            </span>
+            <StatusPill status="unconfirmed" tone="warning" label="Under review" />
+            <span>This keyboard layout is under review and may change.</span>
           </p>
         ) : null}
         {saving ? (

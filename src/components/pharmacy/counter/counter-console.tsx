@@ -15,7 +15,9 @@ import {
 } from 'react';
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import Link from 'next/link';
-import { ShieldCheck, Star, UserRound } from 'lucide-react';
+import { Menu, ShieldCheck, Star, UserRound } from 'lucide-react';
+import { useCounterNavigation } from '@/components/layout/counter-navigation-context';
+import { useCounterMobileChrome } from '@/components/layout/counter-mobile-chrome';
 import { signIn, useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -139,6 +141,14 @@ function counterDeviceId(): string {
 }
 
 const subscribeToNothing = () => () => {};
+function subscribeCounterNetwork(onChange: () => void) {
+  window.addEventListener('online', onChange);
+  window.addEventListener('offline', onChange);
+  return () => {
+    window.removeEventListener('online', onChange);
+    window.removeEventListener('offline', onChange);
+  };
+}
 /** `null` when storage is unavailable: the tender path reports that case itself. */
 function readCounterDeviceId(): string | null {
   try {
@@ -316,6 +326,8 @@ function ScopedPharmacyCounterConsole({
   safetyLicensed: boolean;
   accountEmail: string;
 }) {
+  const openCounterNavigation = useCounterNavigation();
+  const setMobileChrome = useCounterMobileChrome();
   const utils = trpc.useUtils();
 
   const [selectedBranchId, setSelectedBranchId] = useState(initialBranchId);
@@ -357,6 +369,16 @@ function ScopedPharmacyCounterConsole({
   const receiptIntent = useRef<ReceiptIntent | null>(null);
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [drawerToast, setDrawerToast] = useState<string | null>(null);
+  const [drawerError, setDrawerError] = useState<string | null>(null);
+  const browserOnline = useSyncExternalStore(
+    subscribeCounterNetwork,
+    () => navigator.onLine,
+    () => null
+  );
+  const [reconnectState, setReconnectState] = useState<'idle' | 'reconnecting' | 'refresh-failed'>(
+    'idle'
+  );
   const [pending, setPending] = useState<string | null>(null);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
@@ -371,11 +393,18 @@ function ScopedPharmacyCounterConsole({
   const outcomeInFlight = useRef(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const nextLineRef = useRef<HTMLElement>(null);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
+  const moreReturnRef = useRef<HTMLElement | null>(null);
+  const openMore = useCallback((trigger: HTMLElement) => {
+    moreReturnRef.current = trigger;
+    setDrawerError(null);
+    setActionsOpen(true);
+  }, []);
   const [checksOpen, setChecksOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [loyaltyOpen, setLoyaltyOpen] = useState(false);
@@ -386,6 +415,36 @@ function ScopedPharmacyCounterConsole({
     staleTime: 60_000,
   });
   const branches = useMemo(() => branchesQuery.data?.branches ?? [], [branchesQuery.data]);
+  const refetchBranches = branchesQuery.refetch;
+  useEffect(() => {
+    let active = true;
+    let revision = 0;
+    const offline = () => {
+      revision += 1;
+      setReconnectState('idle');
+    };
+    const online = () => {
+      const attempt = ++revision;
+      setReconnectState('reconnecting');
+      void Promise.resolve()
+        .then(() => refetchBranches())
+        .then((result) => {
+          if (active && attempt === revision)
+            setReconnectState(result?.isSuccess ? 'idle' : 'refresh-failed');
+        })
+        .catch(() => {
+          if (active && attempt === revision) setReconnectState('refresh-failed');
+        });
+    };
+    window.addEventListener('offline', offline);
+    window.addEventListener('online', online);
+    return () => {
+      active = false;
+      revision += 1;
+      window.removeEventListener('offline', offline);
+      window.removeEventListener('online', online);
+    };
+  }, [refetchBranches]);
   // Every drawer, tender and loyalty write is stamped with the workspace's day.
   const workspaceZone = branchesQuery.data?.timezone;
   const todayBusinessDate = useCallback(() => businessDate(workspaceZone), [workspaceZone]);
@@ -393,6 +452,25 @@ function ScopedPharmacyCounterConsole({
   // Derived, not mirrored into state: the default branch is simply "the first
   // one" until the operator picks another, so an effect would only add a render.
   const branchId = selectedBranchId || (branches[0]?.id ?? '');
+  const networkState =
+    browserOnline === null
+      ? 'unknown'
+      : !browserOnline
+        ? 'offline'
+        : reconnectState === 'idle'
+          ? 'available'
+          : reconnectState;
+  const connectionLabel =
+    networkState === 'unknown'
+      ? 'Checking network'
+      : networkState === 'offline'
+        ? 'Offline'
+        : networkState === 'reconnecting'
+          ? 'Reconnecting'
+          : networkState === 'refresh-failed'
+            ? 'Network available · branch refresh failed'
+            : 'Network available';
+  const selectedBranchName = branches.find((branch) => branch.id === branchId)?.name ?? null;
   const recoveryScope = useMemo<TenderAttemptScope>(
     () => ({ organizationId, accountId, branchId }),
     [organizationId, accountId, branchId]
@@ -401,6 +479,28 @@ function ScopedPharmacyCounterConsole({
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
     branches.some((branch) => branch.id === branchId);
+
+  useEffect(() => {
+    setMobileChrome?.({
+      branchName: selectedBranchName,
+      connectionLabel,
+      moreOpen: actionsOpen,
+      openMore: branchAuthorized ? openMore : null,
+    });
+  }, [
+    setMobileChrome,
+    selectedBranchName,
+    connectionLabel,
+    actionsOpen,
+    openMore,
+    branchAuthorized,
+  ]);
+  useEffect(
+    () => () => {
+      setMobileChrome?.(null);
+    },
+    [setMobileChrome]
+  );
 
   useEffect(
     () => () => {
@@ -522,6 +622,20 @@ function ScopedPharmacyCounterConsole({
   );
   const openDrawerSession = drawerQuery.data?.openDrawer ?? null;
   const drawerStatusKnown = drawerQuery.isSuccess || drawerQuery.isError;
+
+  useEffect(() => {
+    if (notice?.tone !== 'success') return;
+    const timeout = window.setTimeout(() => {
+      setNotice((current) => (current === notice ? null : current));
+    }, 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+
+  useEffect(() => {
+    if (!drawerToast) return;
+    const timeout = window.setTimeout(() => setDrawerToast(null), 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [drawerToast]);
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -740,6 +854,10 @@ function ScopedPharmacyCounterConsole({
     attempt !== null ||
     checkingOutcome;
   const lineCount = cart?.lines.length ?? 0;
+  const unitCount = currentBill ? cart.lines.reduce((total, line) => total + line.quantity, 0) : 0;
+  const hasControlledLine = Boolean(
+    activeRow?.restriction.controlled || (currentBill && cart.lines.some((line) => line.controlled))
+  );
 
   const refreshTenderBill = useCallback(
     async (resolution = tenderOutcome?.status) => {
@@ -984,6 +1102,7 @@ function ScopedPharmacyCounterConsole({
             message:
               'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
           });
+          if (scannedRow) stageRow(scannedRow);
           openChecks();
           return;
         }
@@ -1070,6 +1189,7 @@ function ScopedPharmacyCounterConsole({
       quantity,
       refreshCart,
       selectedOption,
+      stageRow,
       utils,
     ]
   );
@@ -1726,13 +1846,21 @@ function ScopedPharmacyCounterConsole({
 
   if (branchesQuery.isLoading) {
     return (
-      <div className="space-y-6">
-        <PageHeader eyebrow="Pharmacy" heading="Counter" description="Loading this workspace." />
-        <SectionCard title="Loading">
-          <p className="text-sm text-text-muted" role="status">
-            Loading branches…
-          </p>
-        </SectionCard>
+      <div className="h-full bg-surface-page p-4" role="status" aria-label="Loading the counter">
+        <div aria-hidden="true" className="h-14 rounded-[var(--radius-sm)] bg-surface-sunken" />
+        <div
+          aria-hidden="true"
+          className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px]"
+        >
+          <div className="space-y-4">
+            <div className="h-14 rounded-[var(--radius-sm)] bg-surface-sunken" />
+            {[1, 2, 3].map((row) => (
+              <div key={row} className="h-20 rounded-[var(--radius-sm)] bg-surface-sunken" />
+            ))}
+          </div>
+          <div className="h-48 rounded-[var(--radius-md)] bg-surface-sunken" />
+        </div>
+        <p className="mt-4 text-sm text-text-muted">Loading the counter…</p>
       </div>
     );
   }
@@ -1747,14 +1875,16 @@ function ScopedPharmacyCounterConsole({
         />
         <SectionCard title="Branches unavailable">
           <div className="space-y-3" role="alert">
-            <p className="text-sm text-destructive">{messageFrom(branchesQuery.error)}</p>
+            <p className="text-sm text-destructive">
+              We couldn’t load your branches. This attempt did not change your bill. Try again.
+            </p>
             <Button
               type="button"
               variant="outline"
               className="h-11"
               onClick={() => void branchesQuery.refetch()}
             >
-              Retry
+              Try again
             </Button>
           </div>
         </SectionCard>
@@ -1836,22 +1966,44 @@ function ScopedPharmacyCounterConsole({
 
   return (
     <div
-      className="pos-calm h-full min-h-0 overflow-y-auto bg-surface-page px-4 pt-3 pb-28 xl:pb-4"
+      className="pos-calm h-full min-h-0 overflow-y-auto bg-surface-page px-4 pt-3 pb-28 lg:flex lg:flex-col lg:overflow-hidden lg:pb-4"
       data-counter-console=""
     >
-      <header className="mb-3 space-y-3">
+      <header className="mb-3 space-y-3 lg:shrink-0">
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
+          {openCounterNavigation ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="hidden h-11 md:inline-flex"
+              onClick={openCounterNavigation}
+            >
+              <Menu aria-hidden="true" /> Menu
+            </Button>
+          ) : null}
+          <div>
+            <h1
+              className={`${setMobileChrome ? 'sr-only md:not-sr-only' : ''} text-2xl font-semibold tracking-tight text-text-strong`}
+            >
+              Counter
+            </h1>
+            {!setMobileChrome ? (
+              <p className="text-xs text-text-muted md:hidden">
+                {connectionLabel}
+                {selectedBranchName ? ` · ${selectedBranchName}` : ''}
+              </p>
+            ) : null}
+          </div>
           <Button
             variant="outline"
-            className="ml-auto h-11 rounded-[var(--radius-sm)] md:hidden"
+            className={`${setMobileChrome ? 'hidden md:inline-flex' : ''} ml-auto h-11 rounded-[var(--radius-sm)] xl:hidden`}
+            aria-haspopup="dialog"
             aria-expanded={actionsOpen}
-            aria-controls="counter-actions"
-            onClick={() => setActionsOpen(!actionsOpen)}
+            onClick={(event) => openMore(event.currentTarget)}
           >
-            Actions
+            More
           </Button>
-          <div className="order-2 flex w-full flex-wrap items-center gap-3 md:order-none md:w-auto">
+          <div className="order-2 hidden w-full flex-wrap items-center gap-3 md:order-none md:flex md:w-auto">
             <label className="sr-only" htmlFor="counter-branch">
               Branch
             </label>
@@ -1889,13 +2041,22 @@ function ScopedPharmacyCounterConsole({
                 }
               />
               {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
+              <StatusPill
+                status={networkState}
+                tone={
+                  networkState === 'offline' || networkState === 'refresh-failed'
+                    ? 'warning'
+                    : 'neutral'
+                }
+                label={connectionLabel}
+              />
               {openDrawerSession ? (
                 <StatusPill status="drawer-open" tone="success" label="Drawer open" />
               ) : (
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                  className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
                   disabled={busy || !drawerStatusKnown}
                   onClick={() => {
                     setPending('drawer');
@@ -1906,12 +2067,7 @@ function ScopedPharmacyCounterConsole({
                         businessDate: todayBusinessDate(),
                         openingFloatMinor: 0,
                       })
-                      .then(() =>
-                        setNotice({
-                          tone: 'success',
-                          message: 'Cash drawer opened for this counter.',
-                        })
-                      )
+                      .then(() => setDrawerToast('Cash drawer opened for this counter.'))
                       .catch((error: unknown) =>
                         setNotice({ tone: 'warning', message: messageFrom(error) })
                       )
@@ -1929,7 +2085,7 @@ function ScopedPharmacyCounterConsole({
           </div>
           <div
             id="counter-actions"
-            className={`${actionsOpen ? 'flex' : 'hidden'} order-3 w-full flex-wrap items-center gap-2 md:order-none md:ml-auto md:flex md:w-auto [&>button]:rounded-[var(--radius-sm)]`}
+            className="order-3 hidden w-full flex-wrap items-center gap-2 xl:order-none xl:ml-auto xl:flex xl:w-auto [&>button]:rounded-[var(--radius-sm)]"
           >
             <CounterReturnPanel
               branchId={branchId}
@@ -1994,98 +2150,128 @@ function ScopedPharmacyCounterConsole({
           </Button>
         </div>
       </header>
-      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="min-w-0 space-y-3">
-          <SectionCard className="overflow-hidden rounded-xl p-0" aria-label="Counter bill">
-            <div className="border-b border-border-subtle p-4">
-              <h2 className="mb-2 text-sm font-semibold text-text-strong">Scan or search</h2>
-              {notice ? (
-                <div
-                  role={notice.tone === 'success' ? 'status' : 'alert'}
-                  aria-live="polite"
-                  className={`flex items-center gap-3 rounded-lg border p-3 ${
-                    notice.tone === 'danger'
-                      ? 'border-destructive/30 bg-destructive/10'
-                      : notice.tone === 'warning'
-                        ? 'border-warning/30 bg-warning/10'
-                        : notice.tone === 'success'
-                          ? 'border-success/30 bg-success/10'
-                          : 'border-border-subtle bg-surface-sunken'
-                  }`}
-                >
-                  <StatusPill status={notice.tone} tone={notice.tone} />
-                  <div className="min-w-0 space-y-2 text-sm">
-                    <p className="text-text-body">{notice.message}</p>
-                    {notice.inventoryBranchId ? (
-                      <Link
-                        href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        prefetch={false}
-                        className={buttonVariants({
-                          variant: 'outline',
-                          className: 'h-auto min-h-11 whitespace-normal',
-                        })}
-                      >
-                        Open Inventory to review pack breaking (new tab)
-                      </Link>
-                    ) : null}
-                  </div>
+      {drawerToast ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed start-4 z-50 flex max-w-[min(35rem,calc(100vw-2rem))] items-center gap-3 rounded-[var(--radius-sm)] border border-success/30 bg-surface-card p-3 shadow-md ${notice?.tone === 'success' ? 'bottom-40 lg:bottom-28' : 'bottom-24 lg:bottom-11'}`}
+        >
+          <StatusPill status="success" tone="success" label="Drawer open" />
+          <p className="text-sm text-text-body">{drawerToast}</p>
+        </div>
+      ) : null}
+      <div className="grid items-start gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_340px] lg:grid-rows-[auto_minmax(0,1fr)] lg:items-stretch xl:grid-cols-[minmax(0,1fr)_380px]">
+        <SectionCard
+          className="overflow-hidden rounded-xl p-0 lg:relative lg:z-10 lg:col-start-1 lg:row-start-1 lg:self-start lg:overflow-visible"
+          aria-label="Counter bill"
+        >
+          <div className="border-b border-border-subtle p-4">
+            <h2 className="mb-2 text-sm font-semibold text-text-strong">Scan or search</h2>
+            {notice ? (
+              <div
+                role={notice.tone === 'success' ? 'status' : 'alert'}
+                aria-live="polite"
+                className={`${notice.tone === 'success' ? 'fixed bottom-24 start-4 z-50 max-w-[min(35rem,calc(100vw-2rem))] shadow-md lg:bottom-11' : ''} flex items-center gap-3 rounded-lg border p-3 ${
+                  notice.tone === 'danger'
+                    ? 'border-destructive/30 bg-destructive/10'
+                    : notice.tone === 'warning'
+                      ? 'border-warning/30 bg-warning/10'
+                      : notice.tone === 'success'
+                        ? 'border-success/30 bg-surface-card'
+                        : 'border-border-subtle bg-surface-sunken'
+                }`}
+              >
+                <StatusPill status={notice.tone} tone={notice.tone} />
+                <div className="min-w-0 space-y-2 text-sm">
+                  <p className="text-text-body">{notice.message}</p>
+                  {notice.inventoryBranchId ? (
+                    <Link
+                      href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      prefetch={false}
+                      className={buttonVariants({
+                        variant: 'outline',
+                        className: 'h-auto min-h-11 whitespace-normal',
+                      })}
+                    >
+                      Open Inventory to review pack breaking (new tab)
+                    </Link>
+                  ) : null}
                 </div>
-              ) : null}
+              </div>
+            ) : null}
 
-              <div className="space-y-2">
-                <div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="counter-search" className="sr-only">
-                      Scan or search
-                    </Label>
-                    <Input
-                      id="counter-search"
-                      ref={searchRef}
-                      // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
-                      data-counter-scan=""
-                      autoFocus
-                      autoComplete="off"
-                      value={query}
-                      disabled={busy}
-                      placeholder="Brand, generic or barcode"
-                      aria-describedby="counter-search-help"
-                      onChange={(event) => {
-                        scannerRevision.current += 1;
-                        setQuery(event.target.value);
-                        setActiveRow(null);
-                        setSaleUnit(null);
-                        setQuantity(1);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== 'Enter') return;
-                        event.preventDefault();
-                        const trimmed = event.currentTarget.value.trim();
-                        const barcode =
-                          /^\d{6,}$/.test(trimmed) ||
-                          trimmed.startsWith(']d2') ||
-                          trimmed.startsWith('(01)');
-                        if (barcode) {
-                          void addBarcode(trimmed);
-                          return;
-                        }
-                        if (activeRow) {
-                          void addToCart();
-                          return;
-                        }
-                        void runSearch();
-                      }}
-                      className="h-12"
-                    />
-                    <p id="counter-search-help" className="text-xs text-text-muted">
-                      {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
-                      selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
-                      opens pay.
-                    </p>
-                  </div>
+            <div className="space-y-2">
+              <div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="counter-search" className="sr-only">
+                    Scan or search
+                  </Label>
+                  <Input
+                    id="counter-search"
+                    ref={searchRef}
+                    // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
+                    data-counter-scan=""
+                    autoFocus
+                    autoComplete="off"
+                    value={query}
+                    disabled={busy}
+                    placeholder="Brand, generic or barcode"
+                    aria-describedby="counter-search-help"
+                    onChange={(event) => {
+                      scannerRevision.current += 1;
+                      setQuery(event.target.value);
+                      setActiveRow(null);
+                      setSaleUnit(null);
+                      setQuantity(1);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter') return;
+                      event.preventDefault();
+                      const trimmed = event.currentTarget.value.trim();
+                      const barcode =
+                        /^\d{6,}$/.test(trimmed) ||
+                        trimmed.startsWith(']d2') ||
+                        trimmed.startsWith('(01)');
+                      if (barcode) {
+                        void addBarcode(trimmed);
+                        return;
+                      }
+                      if (activeRow) {
+                        void addToCart();
+                        return;
+                      }
+                      void runSearch();
+                    }}
+                    className="h-14 rounded-[var(--radius-sm)] border-[1.5px] border-border-default"
+                  />
+                  <p id="counter-search-help" className="text-xs text-text-muted">
+                    {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
+                    selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
+                    opens pay.
+                  </p>
+                  {activeRow ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="hidden min-h-11 lg:inline-flex"
+                      onClick={() => nextLineRef.current?.focus()}
+                    >
+                      Go to next line
+                    </Button>
+                  ) : null}
                 </div>
+              </div>
 
+              <div
+                data-counter-search-dropdown=""
+                className={
+                  trimmedQuery.length >= 2 && !scannerQuery
+                    ? 'lg:absolute lg:inset-x-4 lg:top-full lg:z-20 lg:max-h-[max(8rem,calc(100dvh-300px))] lg:overflow-y-auto lg:rounded-xl lg:bg-surface-card lg:shadow-md'
+                    : ''
+                }
+              >
                 <CounterSearchResults
                   rows={
                     searchCurrent && !searchQuery.isPlaceholderData
@@ -2113,12 +2299,24 @@ function ScopedPharmacyCounterConsole({
                 />
               </div>
             </div>
+          </div>
+        </SectionCard>
+        <div
+          data-counter-bill-scroll=""
+          role="region"
+          aria-label="Bill workspace"
+          tabIndex={0}
+          className="focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring lg:col-span-2 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto"
+        >
+          <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px]">
             {activeRow ? (
               <section
+                ref={nextLineRef}
                 aria-label="Next line"
-                className="m-4 rounded-lg border border-border-subtle bg-surface-sunken p-3"
+                tabIndex={-1}
+                className="rounded-lg border border-border-subtle bg-surface-sunken p-3 focus-visible:outline-2 focus-visible:outline-ring lg:col-start-2 lg:row-start-1"
               >
-                <div className="grid items-center gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(0,2fr)_auto]">
+                <div className="grid items-start gap-4">
                   <div className="min-w-0">
                     <h2 className="font-mono text-[10px] uppercase tracking-widest text-text-muted">
                       Next line
@@ -2155,7 +2353,7 @@ function ScopedPharmacyCounterConsole({
                     />
                     {activeRow.saleUnits.length === 0 ? (
                       <div className="space-y-1.5">
-                        <Label htmlFor="counter-demand-units">Requested canonical units</Label>
+                        <Label htmlFor="counter-demand-units">Requested units</Label>
                         <Input
                           id="counter-demand-units"
                           type="number"
@@ -2181,7 +2379,7 @@ function ScopedPharmacyCounterConsole({
                       >
                         {pending === 'captureDemand'
                           ? 'Capturing…'
-                          : `Capture shortfall: ${shortfallUnits} canonical units`}
+                          : `Record ${shortfallUnits} unavailable units`}
                       </Button>
                     ) : null}
                   </div>
@@ -2223,104 +2421,117 @@ function ScopedPharmacyCounterConsole({
                 </div>
               </section>
             ) : null}
-            <section aria-label="Cart">
-              <CounterCartPanel
-                cart={cart}
-                alerts={alerts}
-                state={
-                  !saleId
-                    ? 'idle'
-                    : cartQuery.isLoading
-                      ? 'loading'
-                      : cartQuery.isError
-                        ? 'error'
-                        : 'ready'
-                }
-                error={cartQuery.error ? messageFrom(cartQuery.error) : null}
-                onRetry={() => void refreshTenderBill()}
-              />
-            </section>
-          </SectionCard>
-          {substituteInput ? (
-            <SectionCard compact eyebrow="AI-05 · RX-04" title="Exact substitute suggestions">
-              <CounterSubstituteProposals
-                proposals={substitutesQuery.data ?? []}
-                state={
-                  substitutesQuery.isLoading
-                    ? 'loading'
-                    : substitutesQuery.isError
-                      ? 'error'
-                      : 'ready'
-                }
-                prescriptionOnly={activeRow?.restriction.rx ?? false}
-                error={substitutesQuery.error ? messageFrom(substitutesQuery.error) : null}
-                disabled={busy}
-                onChoose={(proposal) => {
-                  setQuery(proposal.displayName);
-                  setSubmittedSearch({
-                    text: proposal.displayName,
-                    query: proposal.displayName,
-                    branchId,
-                  });
-                  setActiveRow(null);
-                }}
-                onDecline={() => void declineVisibleSubstitutes()}
-                onRetry={() => void substitutesQuery.refetch()}
-              />
-            </SectionCard>
-          ) : null}
+            <div className="min-w-0 space-y-3 lg:col-start-1 lg:row-start-1">
+              <section aria-label="Cart">
+                <SectionCard className="overflow-hidden rounded-xl p-0">
+                  <div className="flex items-center justify-between px-4 pt-3 pb-2">
+                    <h2 className="font-display text-sm font-semibold text-text-strong">Cart</h2>
+                    <span className="text-xs text-text-muted">{lineCount} lines</span>
+                  </div>
+                  <CounterCartPanel
+                    cart={cart}
+                    alerts={alerts}
+                    state={
+                      !saleId
+                        ? 'idle'
+                        : cartQuery.isLoading
+                          ? 'loading'
+                          : cartQuery.isError
+                            ? 'error'
+                            : 'ready'
+                    }
+                    error={cartQuery.error ? messageFrom(cartQuery.error) : null}
+                    onRetry={() => void refreshTenderBill()}
+                  />
+                </SectionCard>
+              </section>
+              {substituteInput ? (
+                <SectionCard compact title="Exact substitute suggestions">
+                  <CounterSubstituteProposals
+                    proposals={substitutesQuery.data ?? []}
+                    state={
+                      substitutesQuery.isLoading
+                        ? 'loading'
+                        : substitutesQuery.isError
+                          ? 'error'
+                          : 'ready'
+                    }
+                    prescriptionOnly={activeRow?.restriction.rx ?? false}
+                    error={substitutesQuery.error ? messageFrom(substitutesQuery.error) : null}
+                    disabled={busy}
+                    onChoose={(proposal) => {
+                      setQuery(proposal.displayName);
+                      setSubmittedSearch({
+                        text: proposal.displayName,
+                        query: proposal.displayName,
+                        branchId,
+                      });
+                      setActiveRow(null);
+                    }}
+                    onDecline={() => void declineVisibleSubstitutes()}
+                    onRetry={() => void substitutesQuery.refetch()}
+                  />
+                </SectionCard>
+              ) : null}
 
-          <CounterUpsellSuggestions
-            branchId={branchId}
-            medicineIds={currentBill ? cart.lines.map((line) => line.medicineId) : []}
-            disabled={busy || !branchAuthorized}
-            onChoose={(suggestion) => {
-              setQuery(suggestion.displayName);
-              setSubmittedSearch({
-                text: suggestion.displayName,
-                query: suggestion.displayName,
-                branchId,
-              });
-              setActiveRow(null);
-            }}
-          />
+              <div>
+                <CounterUpsellSuggestions
+                  branchId={branchId}
+                  medicineIds={currentBill ? cart.lines.map((line) => line.medicineId) : []}
+                  disabled={busy || !branchAuthorized}
+                  onChoose={(suggestion) => {
+                    setQuery(suggestion.displayName);
+                    setSubmittedSearch({
+                      text: suggestion.displayName,
+                      query: suggestion.displayName,
+                      branchId,
+                    });
+                    setActiveRow(null);
+                  }}
+                />
+              </div>
+            </div>
+          </div>
         </div>
         <aside
           id="counter-bill-total"
           aria-label="Bill total"
-          className="min-w-0 xl:sticky xl:top-0 [&_button]:rounded-[var(--radius-sm)]"
+          className="min-w-0 space-y-3 lg:col-start-2 lg:row-start-1 [&_button]:rounded-[var(--radius-sm)]"
         >
-          <SectionCard
-            className="rounded-xl p-4"
-            eyebrow="Bill total"
-            actions={<span className="text-xs text-text-muted">{lineCount} lines</span>}
-          >
-            <dl className="space-y-2 text-sm">
-              {(
-                [
-                  ['Gross', cart?.totals.grossMinor],
-                  ['Discount', cart?.totals.discountMinor],
-                  ['Tendered', cart?.totals.tenderedMinor],
-                ] as const
-              ).map(([label, value]) => (
-                <div key={label} className="flex justify-between gap-3">
-                  <dt className="text-text-muted">{label}</dt>
-                  <dd className="font-mono tabular-nums">
-                    {currentBill && value !== undefined ? formatMinor(value) : '—'}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-            <div className="my-4 border-y border-border-subtle py-4">
+          <SectionCard compact className="rounded-xl p-3">
+            <details>
+              <summary className="cursor-pointer text-xs text-text-muted focus-visible:outline-2 focus-visible:outline-ring">
+                Bill breakdown
+              </summary>
+              <dl className="mt-2 space-y-2 text-sm">
+                {(
+                  [
+                    ['Gross', cart?.totals.grossMinor],
+                    ['Discount', cart?.totals.discountMinor],
+                    ['Tendered', cart?.totals.tenderedMinor],
+                  ] as const
+                ).map(([label, value]) => (
+                  <div key={label} className="flex justify-between gap-3">
+                    <dt className="text-text-muted">{label}</dt>
+                    <dd className="font-mono tabular-nums">
+                      {currentBill && value !== undefined ? `Rs ${formatMinor(value)}` : '—'}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </details>
+            <div className="my-2 flex items-center justify-between gap-3 border-y border-border-subtle py-2">
               <p className="font-mono text-xs text-text-muted">
                 {billState === 'settled' ? `Paid · receipt ${cart?.receiptNumber}` : 'Balance due'}
               </p>
-              <p className="mt-1 font-mono text-4xl font-semibold tracking-tight text-text-strong tabular-nums">
+              <p className="font-mono text-3xl font-semibold tracking-tight text-text-strong tabular-nums">
                 {billState === 'settled' && currentBill
-                  ? formatMinor(cart.totals.tenderedMinor)
+                  ? `Rs ${formatMinor(cart.totals.tenderedMinor)}`
                   : balanceMinor === null
-                    ? '—'
-                    : formatMinor(balanceMinor)}
+                    ? saleId
+                      ? '—'
+                      : `Rs ${formatMinor(0)}`
+                    : `Rs ${formatMinor(balanceMinor)}`}
               </p>
             </div>
             {billState === 'settled' ? (
@@ -2348,11 +2559,11 @@ function ScopedPharmacyCounterConsole({
               </div>
             ) : (
               <Button
-                className="h-14 w-full justify-between"
+                className="hidden h-14 w-full justify-between lg:flex"
                 disabled={billState !== 'ready' || blocked || busy}
                 onClick={openPayment}
               >
-                <span>Pay</span>
+                <span>Take payment</span>
                 <span className="sr-only">·</span>
                 <kbd className="rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1.5 py-0.5 font-mono text-xs">
                   {formatBinding(keymap.bindings.openTender)}
@@ -2412,33 +2623,134 @@ function ScopedPharmacyCounterConsole({
       </div>
       <div
         aria-label="Phone payment"
-        className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] xl:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden"
       >
         <div className="min-w-0 flex-1">
           <p className="text-xs text-text-muted">
-            {blocked ? 'Payment locked · safety block' : 'Balance due'}
+            {blocked
+              ? 'Payment locked · safety block'
+              : `${lineCount} ${lineCount === 1 ? 'item' : 'items'} · ${unitCount} ${unitCount === 1 ? 'unit' : 'units'} · Balance due`}
           </p>
           <p className="font-mono text-xl font-semibold text-text-strong tabular-nums">
-            {balanceMinor === null ? '—' : formatMinor(balanceMinor)}
+            {balanceMinor === null
+              ? saleId
+                ? '—'
+                : `Rs ${formatMinor(0)}`
+              : `Rs ${formatMinor(balanceMinor)}`}
           </p>
         </div>
         <Button
-          variant="outline"
-          className="h-13 rounded-[var(--radius-sm)]"
-          onClick={() =>
-            document.getElementById('counter-bill-total')?.scrollIntoView({ block: 'start' })
-          }
-        >
-          Bill
-        </Button>
-        <Button
-          className="h-13 min-w-28 rounded-[var(--radius-sm)]"
+          className="h-14 min-w-[156px] rounded-[var(--radius-sm)]"
           disabled={billState !== 'ready' || blocked || busy}
           onClick={openPayment}
         >
-          Pay <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
+          Take payment{' '}
+          <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
         </Button>
       </div>
+      <Dialog open={actionsOpen} onOpenChange={setActionsOpen}>
+        <DialogPortal>
+          <DialogOverlay className="bg-foreground/40 backdrop-blur-none" />
+          <DialogPrimitive.Popup
+            finalFocus={moreReturnRef}
+            className="pos-calm fixed inset-x-0 bottom-0 z-50 flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-t-3xl border border-border-subtle bg-surface-card text-text-strong outline-none md:inset-y-0 md:start-auto md:end-0 md:w-[460px] md:max-h-none md:rounded-none lg:w-[480px]"
+          >
+            <div className="flex shrink-0 items-center justify-between border-b border-border-subtle p-4">
+              <DialogTitle className="text-lg font-semibold">More</DialogTitle>
+              <DialogClose render={<Button variant="outline" className="h-11" />}>
+                Close
+              </DialogClose>
+            </div>
+            <DialogDescription className="sr-only">
+              Counter actions and branch settings.
+            </DialogDescription>
+            <div className="grid min-h-0 gap-3 overflow-y-auto p-4">
+              <div className="space-y-2 md:hidden">
+                <Label htmlFor="counter-more-branch">Branch</Label>
+                <select
+                  id="counter-more-branch"
+                  value={branchId}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setDrawerError(null);
+                    scannerRevision.current += 1;
+                    setSelectedBranchId(event.target.value);
+                    setActiveRow(null);
+                    setActiveSale(null);
+                    setHeldSaleId(null);
+                  }}
+                  className="h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-sunken px-3 text-sm font-semibold text-text-strong focus-visible:ring-3 focus-visible:ring-ring disabled:opacity-50"
+                >
+                  {branches.map((branch) => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name} · {branch.code}
+                    </option>
+                  ))}
+                </select>
+                {openDrawerSession ? (
+                  <StatusPill status="drawer-open" tone="success" label="Drawer open" />
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-12 w-full"
+                    disabled={busy || !drawerStatusKnown}
+                    onClick={() => {
+                      setDrawerError(null);
+                      setPending('drawer');
+                      openDrawer
+                        .mutateAsync({
+                          branchId,
+                          deviceId: counterDeviceId(),
+                          businessDate: todayBusinessDate(),
+                          openingFloatMinor: 0,
+                        })
+                        .then(() => setDrawerToast('Cash drawer opened for this counter.'))
+                        .catch((error: unknown) => setDrawerError(messageFrom(error)))
+                        .finally(() => {
+                          setPending(null);
+                          void utils.pharmacySales.drawerStatus.invalidate();
+                        });
+                    }}
+                  >
+                    Open drawer
+                  </Button>
+                )}
+                {drawerError ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {drawerError}
+                  </p>
+                ) : null}
+              </div>
+              <CounterReturnPanel
+                branchId={branchId}
+                organizationId={organizationId}
+                accountId={accountId}
+                deviceId={counterDeviceId}
+                businessDate={todayBusinessDate}
+              />
+              <Link
+                className={buttonVariants({ variant: 'outline', className: 'h-12' })}
+                href="/pharmacy/orders"
+                onClick={() => setActionsOpen(false)}
+              >
+                Customer orders
+              </Link>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-12"
+                onClick={() => {
+                  setActionsOpen(false);
+                  setShortcutsOpen(true);
+                }}
+              >
+                Shortcuts
+              </Button>
+            </div>
+          </DialogPrimitive.Popup>
+        </DialogPortal>
+      </Dialog>
       <CounterOverlay
         title="Payment"
         open={paymentOpen}
@@ -2544,6 +2856,7 @@ function ScopedPharmacyCounterConsole({
             // FORBIDDEN read means this actor cannot dispense, so the controlled
             // authorization panel is not offered (the server refuses it anyway).
             // Without Pharmacy Safety the read is not made at all, with the same outcome.
+            !hasControlledLine ||
             !safetyLicensed ||
             (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code ===
               'FORBIDDEN'
@@ -2618,7 +2931,6 @@ function ScopedPharmacyCounterConsole({
       >
         <SectionCard
           compact
-          eyebrow="CRM-L01"
           title="Customer loyalty and khata"
           actions={
             <Button

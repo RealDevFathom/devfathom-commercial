@@ -39,10 +39,10 @@ describe('counter keymap presets (POS-01)', () => {
     }
   });
 
-  it('marks Legacy Speed as an unconfirmed Phase 0 placeholder', () => {
+  it('marks Legacy Speed as under review', () => {
     expect(COUNTER_KEYMAP_PRESETS.legacySpeed.confirmed).toBe(false);
     expect(COUNTER_KEYMAP_PRESETS.legacySpeed.phaseZeroDecision).toBe('D01');
-    expect(COUNTER_KEYMAP_PRESETS.legacySpeed.description).toMatch(/confirm in Phase 0/i);
+    expect(COUNTER_KEYMAP_PRESETS.legacySpeed.description).toMatch(/under review.*may change/i);
     // The shipped default must NOT wear the caveat, or the caveat means nothing.
     expect(COUNTER_KEYMAP_PRESETS.devfathom.confirmed).toBe(true);
   });

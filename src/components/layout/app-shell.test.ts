@@ -1,8 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { createElement, type ComponentProps, type ComponentType } from 'react';
+import { createElement, useEffect, type ComponentProps, type ComponentType } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { compile } from 'tailwindcss';
 
 const mocks = vi.hoisted(() => ({ pathname: vi.fn(() => '/dashboard') }));
@@ -11,7 +11,10 @@ vi.mock('next/dynamic', () => ({ default: () => () => null }));
 vi.mock('next/navigation', () => ({ usePathname: mocks.pathname }));
 vi.mock('next-auth/react', () => ({ useSession: () => ({ data: null }) }));
 vi.mock('@/components/entitlements-provider', () => ({
-  useEntitlements: () => ({ vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] }),
+  useEntitlements: () => ({
+    vertical: 'RESTAURANT',
+    enabledModules: ['restaurant-core', 'pharmacy-counter'],
+  }),
 }));
 vi.mock('@/lib/assistant-store', () => ({ useAssistant: () => false }));
 vi.mock('@/lib/tenant-brand', () => ({
@@ -37,6 +40,76 @@ vi.mock('@/components/restaurant/administrator-staff-profile-callout', () => ({
 }));
 
 import { AppShell, isPathModuleEnabled } from './app-shell';
+import { useCounterNavigation } from './counter-navigation-context';
+import { useCounterMobileChrome } from './counter-mobile-chrome';
+
+afterEach(() => vi.unstubAllEnvs());
+
+describe('counter navigation preview', () => {
+  const brand = {
+    organizationId: 'org_test',
+    displayName: 'Test workspace',
+    logoUrl: null,
+    markUrl: null,
+    faviconUrl: null,
+    primaryColor: null,
+    accentColor: null,
+  };
+  function CounterMenu() {
+    const open = useCounterNavigation();
+    const setChrome = useCounterMobileChrome();
+    useEffect(() => {
+      setChrome?.({
+        branchName: 'Test',
+        connectionLabel: 'Network available',
+        moreOpen: false,
+        openMore: () => {},
+      });
+      return () => {
+        setChrome?.(null);
+      };
+    }, [setChrome]);
+    return open
+      ? createElement('button', { onClick: open }, 'Counter menu')
+      : createElement('span', null, 'Studio navigation');
+  }
+  const TestAppShell = AppShell as ComponentType<{
+    brand: Parameters<typeof AppShell>[0]['brand'];
+    children?: React.ReactNode;
+  }>;
+
+  it('keeps navigation available until the counter is ready', () => {
+    vi.stubEnv('NEXT_PUBLIC_COUNTER_IMMERSIVE_NAV', 'true');
+    mocks.pathname.mockReturnValue('/pharmacy/counter');
+    render(createElement(TestAppShell, { brand }, createElement('p', null, 'Loading')));
+    expect(screen.getByText('Desktop navigation').parentElement).not.toHaveClass('md:hidden');
+    expect(screen.getByRole('button', { name: 'More' })).toBeDisabled();
+  });
+
+  it('keeps Studio navigation by default', () => {
+    vi.stubEnv('NEXT_PUBLIC_COUNTER_IMMERSIVE_NAV', '');
+    mocks.pathname.mockReturnValue('/pharmacy/counter');
+    render(createElement(TestAppShell, { brand }, createElement(CounterMenu)));
+    expect(screen.getByText('Studio navigation')).toBeInTheDocument();
+    expect(screen.getByText('Desktop navigation').parentElement).not.toHaveClass('md:hidden');
+  });
+
+  it('opens and closes the opt-in navigation drawer and restores focus', async () => {
+    vi.stubEnv('NEXT_PUBLIC_COUNTER_IMMERSIVE_NAV', 'true');
+    mocks.pathname.mockReturnValue('/pharmacy/counter');
+    render(createElement(TestAppShell, { brand }, createElement(CounterMenu)));
+    expect(screen.getByText('Desktop navigation').parentElement).toHaveClass('md:hidden');
+    const menu = screen.getByRole('button', { name: 'Counter menu' });
+    menu.focus();
+    fireEvent.click(menu);
+    expect(await screen.findByRole('dialog', { name: 'Module navigation' })).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await vi.waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Module navigation' })).not.toBeInTheDocument()
+    );
+    await vi.waitFor(() => expect(menu).toHaveFocus());
+  });
+});
 
 describe('AppShell module guard', () => {
   beforeEach(() => {
