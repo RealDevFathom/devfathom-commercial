@@ -39,8 +39,14 @@ describe('signOutEverything', () => {
   });
 
   it('removes every day-close draft from the tab, and nothing else (DEV-739)', async () => {
-    window.sessionStorage.setItem('devfathom.pharmacy.day-close.draft:org:owner:b:2026-11-06', '{}');
-    window.sessionStorage.setItem('devfathom.pharmacy.day-close.draft:org:manager:a:2026-11-05', '{}');
+    window.sessionStorage.setItem(
+      'devfathom.pharmacy.day-close.draft:org:owner:b:2026-11-06',
+      '{}'
+    );
+    window.sessionStorage.setItem(
+      'devfathom.pharmacy.day-close.draft:org:manager:a:2026-11-05',
+      '{}'
+    );
     window.sessionStorage.setItem('unrelated', 'kept');
     await signOutEverything();
     expect(window.sessionStorage.getItem('unrelated')).toBe('kept');
