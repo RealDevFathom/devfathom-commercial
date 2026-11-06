@@ -17,10 +17,10 @@ import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { createMemoryDriver } from '@/lib/retail-terminal/local-store';
+import { createMemoryDriver, writeTerminalState } from '@/lib/retail-terminal/local-store';
 import type { TerminalStorageDriver } from '@/lib/retail-terminal/local-store';
 
-import { PharmacyCounterRuntime } from './counter-offline-runtime';
+import { COUNTER_STORE_SCHEMA_VERSION, PharmacyCounterRuntime } from './counter-offline-runtime';
 import type { SnapshotVerifier } from './counter-offline-runtime';
 import type { CachedSnapshotState, PharmacyOfflineSnapshotKind } from './offline-action-matrix';
 import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
@@ -139,6 +139,63 @@ function cashSale(units = 1) {
 }
 
 describe('#710 offline manual merchant evidence', () => {
+  it('exposes unresolved historical leased commands for review without changing evidence or suggesting payment status', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    await install(
+      counter,
+      'RULES',
+      { manualMerchantPolicies: { RAAST: { allowReferenceSkip: false } } },
+      { version: 2 }
+    );
+    const queued = await counter.enqueue(
+      {
+        ...cashSale(),
+        action: 'MANUAL_OTC_SALE',
+        payload: {
+          ...cashSale().payload,
+          amountMinor: 100,
+          manualCapture: { type: 'RAAST', payerName: 'Ayesha', providerRef: '001234' },
+        },
+      },
+      MATRIX
+    );
+    expect(queued.ok).toBe(true);
+    const state = structuredClone(counter.snapshot());
+    const original = state.queue!.commands[0]!;
+    original.action = 'MANUAL_OTC_SALE';
+    original.receiptNumber = 900;
+    state.queue!.commands.push({
+      ...structuredClone(original),
+      commandId: 'review',
+      idempotencyKey: 'review',
+      sequence: 2,
+      status: 'QUARANTINED',
+    });
+    state.queue!.commands.push({
+      ...structuredClone(original),
+      commandId: 'accepted',
+      idempotencyKey: 'accepted',
+      sequence: 3,
+      status: 'ACKNOWLEDGED',
+      serverRef: 'recorded-sale',
+    });
+    await writeTerminalState(driver, state, COUNTER_STORE_SCHEMA_VERSION);
+    const restored = runtime(driver);
+    expect(await restored.hydrate()).toBe('ready');
+    const before = structuredClone(restored.snapshot());
+    const items = restored.legacyManualPaymentsNeedingReview();
+    expect(items).toHaveLength(2);
+    expect(items.map((item) => item.status)).toEqual(['PENDING', 'QUARANTINED']);
+    expect(items.every((item) => item.receiptNumber === 900)).toBe(true);
+    expect(JSON.stringify(items)).not.toContain('Ayesha');
+    expect(JSON.stringify(items)).not.toContain('001234');
+    expect(items[0]).not.toHaveProperty('paymentStatus');
+    expect(restored.snapshot()).toEqual(before);
+    const reloaded = runtime(driver);
+    expect(await reloaded.hydrate()).toBe('ready');
+    expect(reloaded.snapshot()).toEqual(before);
+  });
   it('keeps a Raast hold pending through restart and lost acknowledgement without issuing a receipt', async () => {
     const driver = createMemoryDriver();
     const counter = await readyCounter(driver);

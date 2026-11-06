@@ -403,6 +403,24 @@ export class PharmacyCounterRuntime {
       .map((command) => ({ ...command, paymentStatus: 'PENDING' as const }));
   }
 
+  /** Read-only inventory of older leased manual commands needing review.
+   * A queue state or missing server reference is never evidence about funds.
+   * Keep the original receipt and command untouched for authorized recovery. */
+  legacyManualPaymentsNeedingReview() {
+    return this.queue()
+      .commands.filter(
+        (command) => command.action === 'MANUAL_OTC_SALE' && command.status !== 'ACKNOWLEDGED'
+      )
+      .map(({ commandId, sequence, status, clientOriginAt, receiptNumber, serverRef }) => ({
+        commandId,
+        sequence,
+        status,
+        clientOriginAt,
+        receiptNumber,
+        serverRef,
+      }));
+  }
+
   async checkManualPayment(
     commandId: string,
     read: (key: { saleId: string; deviceId: string; requestKey: string }) => Promise<{

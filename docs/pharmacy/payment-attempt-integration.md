@@ -84,6 +84,12 @@ outcome. Unresolved older leased manual-sale commands are paused, not silently
 finalized, discarded or renumbered. Their recovery intersects #954, whose active
 ownership is unverified; that PR is not edited here.
 
+The device-scoped runtime also exposes `legacyManualPaymentsNeedingReview()` as
+a read-only inventory of unacknowledged historical manual commands, including
+quarantined entries. It returns command/receipt identifiers and queue status,
+not payer details or a financial outcome. It never changes the original queue,
+lease or receipt. This inventory is not a recovery screen or a server settlement.
+
 ## Shared contract for phases 2 and 4
 
 `pharmacy_assert_no_payment_attempt(organizationId, branchId, saleId)` locks the
