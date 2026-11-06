@@ -7,7 +7,7 @@ Written after the QA pass in `qa-report.md` (SehatCart develop, 2026-11-02). It 
 - **P1** = needed for launch · **P2** = within 3 months · **P3** = later.
 - **Size:** S (days) · M (1–3 weeks) · L (more than 3 weeks). These are rough, for ordering only.
 - **Evidence** is a QA observation (screenshot, `file:line`, or `qa-report.md` entry) or a labelled real-world practice. Statements about regulation or practice that I could not verify are marked **(guess / to confirm)**. No market sizes or competitor facts are used.
-- Existing GitHub issues are linked instead of duplicated.
+- Existing GitHub issues are linked instead of duplicated. QA findings cite their GitHub issue (filed 2026-11-03; see `qa-report.md`).
 
 ---
 
@@ -16,13 +16,13 @@ Written after the QA pass in `qa-report.md` (SehatCart develop, 2026-11-02). It 
 ### [P1] Counter: a keyboard-first bill that a cashier can run at rush hour without the mouse
 
 - **Who / problem:** Cashier. At a busy counter the cashier types or scans, picks, sets quantity, takes cash and needs the change instantly. Today search results can't be picked with the keyboard, F6 is ignored in the quantity box, change disappears after payment, and the screen shows internal codes (POS-02, "canonical units").
-- **Evidence:** `qa-report.md` keyboard, change-due and layout findings; `qa-evidence/cash-sale-selected.png`, `cash-sale8-paid.png`; open #1024, #1076.
+- **Evidence:** `qa-report.md` keyboard, change-due and layout findings (#1253, #1255; layout in Linear DEV-498 and the counter rebuild #1239); `qa-evidence/cash-sale-selected.png`, `cash-sale8-paid.png`; open #1024, #1076.
 - **Size:** M · **Change to existing feature.**
 
 ### [P1] Counter: parked bills that survive reloads, with an "open bills" list and auto-release
 
 - **Who / problem:** Cashier, owner. Counters juggle several customers at once (one waiting for change, one for a pharmacist). Bills are lost on reload yet keep their stock reserved; in testing, 90 of 100 tablets became unsellable.
-- **Evidence:** `qa-report.md` abandoned-bills Sev1; `src/components/pharmacy/counter/counter-console.tsx:309`; closed #420.
+- **Evidence:** `qa-report.md` abandoned-bills Sev1 (#1242); `src/components/pharmacy/counter/counter-console.tsx:309`; closed #420.
 - **Size:** M · **Change.**
 
 ### [P1] Opening the shop: a "start of day" step (open drawer with counted float, yesterday's close, today's alerts)
@@ -48,13 +48,13 @@ Written after the QA pass in `qa-report.md` (SehatCart develop, 2026-11-02). It 
 ### [P1] Day close that fits real opening hours: business-day cut-off, reopen with a reason, open bills shown
 
 - **Who / problem:** Owner. Late-night and 24-hour pharmacies are common _(guess on share)_. Today an early close blocks every sale until midnight, there is no reopen, and open bills are ignored.
-- **Evidence:** `qa-report.md` day-close Sev2; `src/lib/pharmacy/day-close.ts:32`; `qa-evidence/cash-after-close-pay.png`.
+- **Evidence:** `qa-report.md` day-close Sev2 (#1251); `src/lib/pharmacy/day-close.ts:32`; `qa-evidence/cash-after-close-pay.png`.
 - **Size:** M · **Change.**
 
 ### [P2] Stock counts by shelf with a phone camera, and a real second-person sign-off
 
 - **Who / problem:** Manager, owner. Monthly or cycle counts are done shelf by shelf. Today the count and write-off forms sit inside one very long Inventory page, and the "co-authorising witness" is just a name from a dropdown.
-- **Evidence:** `qa-evidence/own-inventory.png`, `own-writeoff-cashier-witness.png`; `qa-report.md` co-auth Sev2.
+- **Evidence:** `qa-evidence/own-inventory.png`, `own-writeoff-cashier-witness.png`; `qa-report.md` co-auth Sev2 (#1248).
 - **Size:** M · **Change.**
 
 ### [P2] Cash drawer per cashier shift, not per browser
@@ -130,7 +130,7 @@ Written after the QA pass in `qa-report.md` (SehatCart develop, 2026-11-02). It 
 
 - **Who / problem:** Pharmacist, owner. Most shops have one qualified person on duty _(guess on share)_. Today no prescriber or patient can be created, so no Rx sale can finish. Parts of the flow also expect an "independent" second pharmacist.
 - **Proposal:** Quick-add patient and prescriber, capture a photo, let the duty pharmacist verify in one step with audit, and keep the second-person rule for controlled drugs only.
-- **Evidence:** `qa-report.md` prescriptions Sev1; `qa-evidence/pharm-rx-add.png`, `pharm-rx-page.png`; open #1039, #725.
+- **Evidence:** `qa-report.md` prescriptions Sev1 (#1245; a default Pharmacist also can't take payment, #1241); `qa-evidence/pharm-rx-add.png`, `pharm-rx-page.png`; open #1039, #725.
 - **Size:** M · **Change.**
 
 ### [P1] Controlled-drug (narcotics/psychotropics) register in the Punjab format, with daily balance
@@ -250,7 +250,7 @@ Written after the QA pass in `qa-report.md` (SehatCart develop, 2026-11-02). It 
   5. A test sale and a test return.
   6. Day close.
 - Today activation shows 12 jargon-heavy steps and stays BLOCKED.
-- **Evidence:** `qa-evidence/sweep-desk-owner-onboarding.png`; `qa-report.md` branch-assignment Sev1 and opening-stock Sev2.
+- **Evidence:** `qa-evidence/sweep-desk-owner-onboarding.png`; `qa-report.md` branch-assignment Sev1 (#1227) and opening-stock Sev3 (#1262).
 - **Size:** M · **Change.**
 
 ### [P1] Urdu interface for the counter, returns and day close first

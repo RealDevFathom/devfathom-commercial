@@ -19,7 +19,7 @@
   - Assigned QA Cashier and QA Pharmacist to branch MAIN, about 23:20.
   - Created suppliers (one with an XSS-test name), POs, goods receipts, medicines (QA Amoxicillin, QA-RBAC Azithromycin), an XSS-named ingredient, a duplicate STRIP pack for Paracetamol (finding 20), batches QA-B1…B5 and QA-AMX-1, two test patients (one with WhatsApp marketing consent), sales, returns and refunds, a write-off, drawer cash movements (PAID_IN/PAID_OUT) and a recall (acknowledged and closed again).
   - **Closed business day 2026-11-02 at 23:48** with a deliberate −4.00 variance.
-  - The follow-up checks at 00:39 created two test sales (one dated 2026-11-05); both were returned and refunded in full. Their three API drawers (one dated 2026-11-05) are still open.
+  - The follow-up checks at 00:39 created two test sales (one dated 2026-11-05); both were returned and refunded in full. Their three API drawers (one dated 2026-11-05) were closed on 2026-11-04 with a count of 0 and no variance.
   - Open bills from testing still hold about 90 units of QA Panadol (60 of batch QA-B1 in three reload-lost bills, 20 of QA-B2, 10 of QA-B4) and 10 of QA Amoxicillin, because no screen can release them (finding 2).
 - Severity scale used: **Sev1** security, data loss, money wrong or blocks selling · **Sev2** major feature broken · **Sev3** minor bug or misleading UX · **Sev4** polish.
 

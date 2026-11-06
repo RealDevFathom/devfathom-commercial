@@ -1,6 +1,7 @@
 import { Logo } from '@/components/brand/logo';
 import { StatusPill } from '@/components/ui/status-pill';
 import { verticalCopy, type LoginVertical } from './vertical';
+import pharmacyStyles from '@/components/pharmacy/auth-screens.module.css';
 
 export function LoginHero({
   vertical = 'default',
@@ -19,13 +20,21 @@ export function LoginHero({
           ? ['Your property.', 'Your next step.']
           : ['A workspace for', 'your next step.']
     : copy.lines;
-  return (
-    <aside className="fieldbook-login-hero studio-auth-hero">
+  const content = (
+    <>
       <div className="flex items-center justify-between gap-5">
         <Logo variant="white" size="lg" />
         <span className="font-mono text-[10px] uppercase tracking-[0.16em]">{copy.tag}</span>
       </div>
-      <div className={registration ? 'mt-16' : 'my-20 xl:my-24'}>
+      <div
+        className={
+          vertical === 'pharmacy'
+            ? pharmacyStyles.introduction
+            : registration
+              ? 'mt-16'
+              : 'my-20 xl:my-24'
+        }
+      >
         <p
           className={`text-text-on-accent font-semibold leading-[0.94] tracking-[-0.065em] ${registration ? 'text-[clamp(2.4rem,3.3vw,3.5rem)]' : 'text-[clamp(3rem,4.8vw,5.5rem)]'}`}
         >
@@ -43,6 +52,24 @@ export function LoginHero({
         )}
       </div>
       {registration ? <SetupGuide vertical={vertical} /> : <Sample vertical={vertical} />}
+    </>
+  );
+  return (
+    <aside
+      className="fieldbook-login-hero studio-auth-hero"
+      aria-label={
+        vertical === 'pharmacy'
+          ? registration
+            ? 'What registration covers'
+            : 'DevFathom for pharmacies'
+          : undefined
+      }
+    >
+      {vertical === 'pharmacy' && registration ? (
+        <div className={pharmacyStyles.registrationHeroInner}>{content}</div>
+      ) : (
+        content
+      )}
     </aside>
   );
 }
@@ -63,7 +90,7 @@ function SetupGuide({ vertical }: { vertical: LoginVertical }) {
             'Premises and licences',
             'The drug sale licence, its validity and the pharmacist on record.',
           ],
-          ['Owner contact', 'You, as the first admin. Staff join later by invite.'],
+          ['Owner account', 'You, as the first admin. Staff join later by invite.'],
         ]
       : vertical === 'restaurant'
         ? [
@@ -110,7 +137,9 @@ function SetupGuide({ vertical }: { vertical: LoginVertical }) {
             ['Activation', 'Your admin confirms when the workspace is ready.'],
           ];
   return (
-    <div className="mt-10 space-y-7 text-sm">
+    <div
+      className={`mt-10 space-y-7 text-sm ${vertical === 'pharmacy' ? pharmacyStyles.setupGuide : ''}`}
+    >
       <p className="font-mono text-[10px] uppercase tracking-widest text-text-on-accent">
         This form
       </p>
@@ -124,7 +153,11 @@ function SetupGuide({ vertical }: { vertical: LoginVertical }) {
         {vertical === 'hotel' ? 'Before activation' : 'After activation'}
       </p>
       {nextSteps.map(([title, detail]) => (
-        <div key={title} className="border-s border-border-strong ps-4">
+        <div
+          key={title}
+          data-after-activation={vertical === 'pharmacy' || undefined}
+          className="border-s border-border-strong ps-4"
+        >
           <p className="font-semibold text-text-on-accent">{title}</p>
           <p className="mt-1 text-xs leading-6 text-text-on-accent">{detail}</p>
         </div>
@@ -155,7 +188,7 @@ function Sample({ vertical }: { vertical: LoginVertical }) {
         ['1 × Mint raita', '', 'New'],
       ];
   return (
-    <div className="mt-auto max-w-sm pt-6">
+    <div className={`mt-auto max-w-sm pt-6 ${pharmacy ? pharmacyStyles.sample : ''}`}>
       <div className="rounded-[var(--radius-xl)] border border-border-subtle bg-surface-card p-5 text-text-strong">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -168,7 +201,7 @@ function Sample({ vertical }: { vertical: LoginVertical }) {
             {!pharmacy && <p className="mt-2 text-xs text-text-muted">Table 12, dine-in</p>}
           </div>
           {pharmacy ? (
-            <StatusPill status="Paid" />
+            <StatusPill status="Paid" tone="success" />
           ) : (
             <span className="font-mono text-[10px] text-text-muted">6 min</span>
           )}
@@ -176,7 +209,7 @@ function Sample({ vertical }: { vertical: LoginVertical }) {
         {rows.map(([name, detail, status]) => (
           <div
             key={name}
-            className="mt-4 flex items-center justify-between gap-3 border-t border-border-subtle pt-4 text-xs"
+            className={`mt-4 flex items-center justify-between gap-3 border-t border-border-subtle pt-4 text-xs ${pharmacy ? pharmacyStyles.sampleRow : ''}`}
           >
             <div>
               <p className="font-semibold text-text-strong">{name}</p>

@@ -350,6 +350,18 @@ Run `bun run db:seed` again after correcting them.
 Realtime, email, file storage, OAuth, AI, and meetings integrations are optional locally. Leave
 their values empty in `.env.local` unless you are testing that integration.
 
+### AI providers
+
+AI is off locally until a provider is configured. To try Ask Fathom or growth insights, set one
+plain key in `.env.local`, for example `ANTHROPIC_API_KEY=<your key>`, and set
+`AI_PROVIDER=auto`; unset means off. Plain keys work only outside production and must never be committed.
+
+To exercise the deployed path, set `ANTHROPIC_API_KEY_SECRET_ID` or `OPENAI_API_KEY_SECRET_ID`
+with `AI_SECRETS_REGION`. For Bedrock, set `BEDROCK_REGION=ap-southeast-1`. Both read through an
+AWS profile that can reach them. `AF_HAIKU_LOOKUPS` stays `false` unless you are trying Ask Fathom
+quick lookups on the small model. Every variable, the fallback order, the caps and the IAM policy
+are in [AI providers](./ai-providers.md).
+
 ## Resetting local data
 
 This deletes the local database contents and rebuilds them:

@@ -4,9 +4,22 @@ import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platf
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
 import { PlatformMfaCard } from '@/components/platform/platform-mfa-card';
+import { AiSettingsConsole } from '@/components/platform/ai-settings-console';
+import { AIUsagePanel } from '@/components/platform/ai-usage-panel';
+import { readMonthlyAIUsage } from '@/lib/ai/usage';
 
 export default async function PlatformSettingsPage() {
-  await requirePlatformRead('/platform/settings');
+  const actor = await requirePlatformRead('/platform/settings');
+  // undefined: not a SuperAdmin (no panel); null: the report failed (panel error state).
+  const aiUsage =
+    actor.role === 'SUPER_ADMIN'
+      ? await readMonthlyAIUsage(new Date(), actor).catch((error: unknown) => {
+          console.error('[platform-settings] AI usage report unavailable', {
+            error: error instanceof Error ? error.name : 'Error',
+          });
+          return null;
+        })
+      : undefined;
   const settings = await withPlatformDb((db) =>
     db.platformSetting.findMany({ orderBy: [{ category: 'asc' }, { key: 'asc' }] })
   );
@@ -28,8 +41,10 @@ export default async function PlatformSettingsPage() {
         title="Platform settings"
         description="Versioned operational defaults live in PostgreSQL. Secrets remain in the deployment environment and are never rendered here."
       />
+      {actor.role === 'SUPER_ADMIN' ? <AiSettingsConsole /> : null}
       <div className="mt-7 grid gap-7 xl:grid-cols-[1fr_400px]">
         <div className="space-y-7">
+          {aiUsage !== undefined ? <AIUsagePanel usage={aiUsage} /> : null}
           <PlatformMfaCard />
           <section className="border border-border-default bg-surface-card">
             <div className="border-b border-border-subtle px-5 py-4">

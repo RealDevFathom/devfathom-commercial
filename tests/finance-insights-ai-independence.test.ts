@@ -25,7 +25,10 @@ vi.mock('@/server/audit', () => ({
   recordTrpcAudit: vi.fn(),
   annotateAudit: vi.fn(),
 }));
-vi.mock('@/lib/ai/provider', () => ({ createAIModel: boundaries.provider }));
+vi.mock('@/lib/ai/provider', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/provider')>()),
+  createAIModel: boundaries.provider,
+}));
 
 import { Prisma } from '@/generated/prisma/client';
 import { POST } from '@/app/api/assistant/route';
@@ -230,10 +233,19 @@ beforeEach(() => {
     throw new Error('Use the explicit non-DB fixture');
   });
   vi.stubGlobal('fetch', boundaries.network);
+  // A configured provider isolates the company chat switch; the factory itself stays unreachable.
+  vi.stubEnv('AI_PROVIDER', 'groq');
+  vi.stubEnv('AI_MODEL', 'inert-model');
+  vi.stubEnv('GROQ_API_KEY', 'inert-key');
   // The delivered store requires confirmed settings before the reused open/closed cases.
   useAssistant.getState().setOrganization(null);
   useAssistant.getState().setOrganization('org-a');
-  useAssistant.getState().confirmSettings({ organizationId: 'org-a', askFathomEnabled: true }, 1);
+  useAssistant
+    .getState()
+    .confirmSettings(
+      { organizationId: 'org-a', askFathomEnabled: true, available: true, unavailableReason: null },
+      1
+    );
 });
 
 afterEach(() => {
@@ -241,6 +253,7 @@ afterEach(() => {
   expect(boundaries.network).not.toHaveBeenCalled();
   useAssistant.getState().setOrganization(null);
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe('deterministic readers with an unavailable AI provider', () => {
