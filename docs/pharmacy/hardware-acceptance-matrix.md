@@ -6,7 +6,7 @@
 > evidence that a camera, printer, scanner or card terminal works with DevFathom.
 
 - Linear: DEV-744 (GitHub mirror #1402). Scope is documentation and automated guards only.
-- Code snapshot: `develop` at `396e265`. Every code reference is to that commit.
+- Code snapshot: `develop` at `11660b3`. Every code reference is to that commit.
 - Written from a cloud session. No device, DVR, network, credential or payment was touched.
 - Owners of the implementation work this plan depends on: DEV-740, DEV-741, DEV-742,
   DEV-743, DEV-745. This document describes their current state; it does not do their work.
@@ -153,7 +153,7 @@ real card or wallet, or put credentials into chat, a ticket or a file until the 
   character can therefore yield a rejected or ambiguous code. Whether a given scanner emits,
   swaps or drops GS is a hardware setting to record (HW-SCN-03).
 - **Observed parser limitation (reported to DEV-92, not fixed here).** On `develop` at
-  `396e265`, the last variable-length element of a scan is rejected as "not terminated before the
+  `11660b3`, the last variable-length element of a scan is rejected as "not terminated before the
   next AI" when its tail looks like another GS1 element, even though the final element
   legitimately has no trailing GS. Reproduction (synthetic data, GS = byte 0x1D):
   `]d2` + `01` + `08961234567894` + `17270430` + `10B2201` + GS + `21` + a serial such as
@@ -324,7 +324,7 @@ not show that a CCTV camera, the DVR or its firmware work.
 | 3 | Network (LAN) thermal | Used by other pharmacies; path preserved | UNTESTED, planned option only, not scheduled |
 | 4 | Bluetooth thermal | Used by other pharmacies; path preserved | UNTESTED, planned option only, not scheduled |
 
-What the code supports at `396e265`, so nobody assumes more:
+What the code supports at `11660b3`, so nobody assumes more:
 - The app has **no** WebUSB, Web Serial or Web Bluetooth code. Browser printing can reach a USB
   printer only through an OS-installed queue and driver. Bluetooth works the same way, only if the
   OS pairs the printer and exposes a queue. Which OS and browser can do that is unverified.
