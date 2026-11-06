@@ -2679,7 +2679,9 @@ async function main() {
             graceMinutes: 0,
             active: true,
             assigneeTargetType: 'PERSON',
-            assigneeStaffProfileId: RESTAURANT_E2E.operatorId,
+            // SOP actions are recorded against the signed-in user's own staff
+            // profile, so the acceptance lane's signed-in admin owns this SOP.
+            assigneeStaffProfileId: IDS.alexStaff,
             assigneeJobRoleId: null,
           },
           create: {
@@ -2692,7 +2694,7 @@ async function main() {
             startDate: BUSINESS_DATE,
             dueTimeMinutes: 480,
             assigneeTargetType: 'PERSON',
-            assigneeStaffProfileId: RESTAURANT_E2E.operatorId,
+            assigneeStaffProfileId: IDS.alexStaff,
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
           },
@@ -2710,7 +2712,7 @@ async function main() {
             startedAt: null,
             submittedAt: null,
             resolvedAt: null,
-            assignedStaffProfileId: RESTAURANT_E2E.operatorId,
+            assignedStaffProfileId: IDS.alexStaff,
             poolJobRoleId: null,
             claimedByStaffProfileId: null,
             claimedAt: null,
@@ -2724,7 +2726,7 @@ async function main() {
             status: 'SCHEDULED',
             dueAt: new Date('2026-08-27T03:00:00.000Z'),
             windowEndsAt: new Date('2026-08-28T03:00:00.000Z'),
-            assignedStaffProfileId: RESTAURANT_E2E.operatorId,
+            assignedStaffProfileId: IDS.alexStaff,
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
           },

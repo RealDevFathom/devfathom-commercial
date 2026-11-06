@@ -43,6 +43,12 @@ const dayCloseMigration = readFileSync(
 )
   .replace(/^BEGIN;$/m, '')
   .replace(/^COMMIT;$/m, '');
+const ownerPvSafetyMigration = readFileSync(
+  'prisma/migrations/20261101120000_pharmacy_owner_pv_safety/migration.sql',
+  'utf8'
+)
+  .replace(/^BEGIN;$/m, '')
+  .replace(/^COMMIT;$/m, '');
 // Rollout phase 2 (not a migration in this release; see the runbook). Tested here so
 // the SQL that will ship as the phase 2 migration is the SQL that was tested.
 const dayClosePhase2 = readFileSync('docs/operations/sql/pharmacy-day-close-phase2.sql', 'utf8')
@@ -215,9 +221,24 @@ const legacy: Record<string, string[]> = {
           [id(`${key}_close`), roleOrg, id(key), close]
         );
     }
+    for (const key of ['owner', 'admin']) {
+      await client.query(
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$3,true,now())`,
+        [id(`restaurant_${key}`), restaurant, key]
+      );
+    }
+    // #479: an existing explicit pharmacy:safety DENY on a system bootstrap admin must
+    // survive the PV safety backfill; a non-pharmacy tenant's system owner/admin is never
+    // touched.
+    await client.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:safety','DENY')`,
+      [id('admin_safety_deny'), other, id('admin')]
+    );
     await client.query(migration);
     await client.query(managerProcurementMigration);
     await client.query(administratorReportsMigration);
+    // In migration order: 20261101120000 (owner PV safety), then 20261104120000 (day close).
+    await client.query(ownerPvSafetyMigration);
     await client.query(dayCloseMigration);
   }, 60_000);
   afterAll(async () => {
@@ -277,21 +298,33 @@ const legacy: Record<string, string[]> = {
     );
     expect(ownerOther.rows).toEqual([
       { capability: 'pharmacy:*', effect: 'ALLOW' },
+      { capability: 'pharmacy:safety', effect: 'ALLOW' },
       { capability: 'reports:financial', effect: 'DENY' },
       { capability: 'reports:operational', effect: 'ALLOW' },
     ]);
     const administrator = await client.query(
-      `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
+      `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 ORDER BY capability`,
       [id('administrator')]
     );
-    expect(administrator.rows).toEqual([{ capability: 'reports:operational', effect: 'ALLOW' }]);
+    expect(administrator.rows).toEqual([
+      { capability: 'pharmacy:safety', effect: 'ALLOW' },
+      { capability: 'reports:operational', effect: 'ALLOW' },
+    ]);
     const deniedAdministrator = await client.query(
-      `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
+      `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 ORDER BY capability`,
       [id('admin')]
     );
     expect(deniedAdministrator.rows).toEqual([
+      // The PV safety backfill preserves an explicit DENY.
+      { capability: 'pharmacy:safety', effect: 'DENY' },
       { capability: 'reports:operational', effect: 'DENY' },
     ]);
+    // ...and never touches another vertical's system owner/admin roles.
+    const restaurantRoles = await client.query(
+      `SELECT capability FROM organization_role_permissions WHERE "organizationId"=$1`,
+      [restaurant]
+    );
+    expect(restaurantRoles.rows).toEqual([]);
     const customAdministrator = await client.query(
       `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
       [id('custom_administrator')]
@@ -351,6 +384,7 @@ const legacy: Record<string, string[]> = {
     await client.query(migration);
     await client.query(managerProcurementMigration);
     await client.query(administratorReportsMigration);
+    await client.query(ownerPvSafetyMigration);
     await client.query(dayCloseMigration);
     expect(
       (
@@ -407,6 +441,8 @@ const legacy: Record<string, string[]> = {
     expect(await can(subject('pharmacist'), 'pharmacy:dispense', undefined, { db })).toBe(true);
     expect(await can(subject('pharmacist'), 'pharmacy:safety', undefined, { db })).toBe(false);
     expect(await can(subject('owner'), 'reports:financial', undefined, { db })).toBe(true);
+    // #479: the default Owner role's exact grant lets it file and review PV.
+    expect(await can(subject('owner'), 'pharmacy:safety', undefined, { db })).toBe(true);
     expect(await can(subject('manager'), 'pharmacy:procurement', undefined, { db })).toBe(true);
     // Day close: owners, administrators and managers (DEV-32/DEV-739). The Pharmacist and
     // Cashier templates carry no default grant.

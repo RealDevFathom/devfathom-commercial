@@ -53,10 +53,11 @@ afterEach(() => {
 });
 
 describe('EvidenceCapture', () => {
-  it('offers named tenant staff and mobile camera/file capture without exposing IDs as copy', () => {
+  it('uses session attribution and preserves mobile camera/file capture', () => {
     const { container } = render(<EvidenceCapture {...props} />);
 
-    expect(screen.getByLabelText('Uploading staff')).toHaveTextContent('Mina Khan');
+    expect(screen.getByText('Uploaded as your signed-in staff profile.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Uploading staff')).not.toBeInTheDocument();
     const file = screen.getByLabelText('Take or choose photo');
     expect(file).toHaveAttribute('accept', 'image/jpeg,image/png,image/webp');
     expect(file).toHaveAttribute('capture', 'environment');
@@ -70,9 +71,6 @@ describe('EvidenceCapture', () => {
     render(<EvidenceCapture {...props} />);
 
     const proof = new File(['proof'], 'proof.jpg', { type: 'image/jpeg' });
-    fireEvent.change(screen.getByLabelText('Uploading staff'), {
-      target: { value: 'staff-internal' },
-    });
     const fileInput = screen.getByLabelText('Take or choose photo');
     Object.defineProperty(fileInput, 'files', {
       configurable: true,
@@ -104,11 +102,10 @@ describe('EvidenceCapture', () => {
     );
   });
 
-  it('keeps signature capture keyboard/file based and disables upload without active staff', () => {
+  it('keeps signature capture available without a caller-selected staff directory', () => {
     render(<EvidenceCapture {...props} purpose="signature" staff={[]} />);
 
     expect(screen.getByLabelText('Choose signature image')).not.toHaveAttribute('capture');
-    expect(screen.getByRole('button', { name: 'Upload signature proof' })).toBeDisabled();
-    expect(screen.getByRole('status')).toHaveTextContent('No active restaurant staff profile');
+    expect(screen.getByRole('button', { name: 'Upload signature proof' })).toBeEnabled();
   });
 });

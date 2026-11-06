@@ -66,9 +66,11 @@ function pending() {
     organizationId: 'org_a',
     branchId: 'branch_a',
     status: 'PENDING',
+    subjectKind: 'PHARMACY_TENDER',
     requestedAt: new Date(now.getTime() - 60_000),
     camera: {
       enabled: true,
+      counterEvidence: true,
       branchId: 'branch_a',
       sourceRef: 'sim-counter-1',
       gateway: { status: 'ACTIVE', revokedAt: null as Date | null },
@@ -219,6 +221,8 @@ describe('capture outcomes', () => {
     expect(mocks.store).toHaveBeenCalledWith(adapter, {
       organizationId: 'org_a',
       cameraId: 'sim-counter-1',
+      // DEV-745: the authorized scope travels with every capture.
+      target: expect.objectContaining({ organizationId: 'org_a', branchId: 'branch_a' }),
     });
     expect(db.cameraEvidence.updateMany).toHaveBeenCalledWith({
       where: { id: 'ev_1', organizationId: 'org_a', status: 'PENDING' },
