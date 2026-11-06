@@ -16,6 +16,18 @@ describe('evaluatePackAuthentication', () => {
     expect(evaluatePackAuthentication(facts)).toMatchObject({ status: 'VERIFIED', issues: [] });
   });
 
+  it('does not claim a batch match from a GTIN alone', () => {
+    const gtinOnly = parseGs1DataMatrix('(01)08901234567890');
+    expect(
+      evaluatePackAuthentication({ ...facts, parsed: gtinOnly, recordedBatch: null })
+    ).toMatchObject({
+      status: 'NOT_VERIFIABLE',
+      issues: ['NOT_VERIFIABLE'],
+      advisory: true,
+      explanation: expect.stringContaining('no batch number'),
+    });
+  });
+
   it('keeps missing and non-GS1 codes advisory and never labels them counterfeit', () => {
     const result = evaluatePackAuthentication({ ...facts, parsed: parseGs1DataMatrix('') });
     expect(result).toMatchObject({ status: 'NOT_VERIFIABLE', advisory: true });

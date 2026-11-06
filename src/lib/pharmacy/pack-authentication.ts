@@ -47,6 +47,14 @@ export function evaluatePackAuthentication(
     issues.push('EXPIRY_MISMATCH');
   if (facts.serialSeenOnDifferentPack) issues.push('DUPLICATE_SERIAL');
   if (facts.recordedBatch?.recalled) issues.push('RECALLED_BATCH');
+  if (!issues.length && !facts.parsed.fields.batch)
+    return {
+      status: 'NOT_VERIFIABLE',
+      issues: ['NOT_VERIFIABLE'],
+      explanation: 'The code has no batch number. The pack cannot be matched to a recorded batch.',
+      parsed: facts.parsed.fields,
+      advisory: true,
+    };
   if (!issues.length)
     return {
       status: 'VERIFIED',
