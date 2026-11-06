@@ -870,6 +870,22 @@ export async function closeRecall(
   // never be hidden by the snapshot and then overwritten with ACTIVE.
   const lockedBatches = await lockRecallBatches(db, scope.organizationId, notice);
   if (!lockedBatches.length) throw new PharmacyInventoryError('INVALID_STATE');
+  // The batch lock only stops NEW lots (a lot insert's FK takes KEY SHARE on
+  // its batch). Stock can also reappear on an EXISTING lot — a count
+  // adjustment, transfer or return posting a movement to a zero-balance lot.
+  // Every movement and balance row references its lot by FK, which takes KEY
+  // SHARE on the lot; FOR UPDATE conflicts with that. Locking every affected
+  // lot therefore waits for any in-flight stock posting to commit (so the
+  // affected-branch query below sees it) and holds new postings until this
+  // closure commits.
+  await db.$queryRaw(Prisma.sql`
+    SELECT l.id
+    FROM "pharmacy_inventory_lots" l
+    WHERE l."organizationId" = ${scope.organizationId}
+      AND l."manufacturingBatchId" IN (${Prisma.join(lockedBatches.map(({ id }) => id))})
+    ORDER BY l.id
+    FOR UPDATE OF l
+  `);
   const affectedLots = {
     organizationId: scope.organizationId,
     ...(notice.batchId

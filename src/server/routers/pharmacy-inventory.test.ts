@@ -669,6 +669,30 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     });
   });
 
+  it.each([
+    ['the notice is not OPEN', null, { id: 'lot_1' }],
+    [
+      'the branch holds no recalled stock',
+      { id: 'recall_1', batchId: 'batch_1', medicineId: null },
+      null,
+    ],
+  ] as const)('refuses a recall acknowledgement when %s (#629)', async (_label, notice, lot) => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    });
+    db.$queryRaw.mockResolvedValueOnce([{ id: 'recall_1' }] as never);
+    db.pharmacyRecallNotice.findFirst.mockResolvedValue(notice);
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue(lot);
+
+    await expect(
+      caller().acknowledgeRecall({ branchId: 'branch_a', recallNoticeId: 'recall_1' })
+    ).rejects.toThrow();
+    expect(db.pharmacyRecallAcknowledgement.create).not.toHaveBeenCalled();
+  });
+
   it('refuses a transfer whose source and destination are the same location', async () => {
     grant([allow('pharmacy:inventory')]);
     await expect(
