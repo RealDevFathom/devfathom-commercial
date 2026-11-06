@@ -1,0 +1,34 @@
+# DEV-745 example snippet for mediamtx.yml (owner reviews before applying).
+#
+# The snapshot gateway reads each camera path from MediaMTX's own RTSP output on
+# loopback (rtsp://127.0.0.1:8554/<path>, the default rtspAddress :8554), as a
+# dedicated authenticated reader. It is NOT granted anonymous access.
+#
+# Why no anonymous loopback grant: MediaMTX permissions are per action, not per
+# protocol, so `read` also covers HLS and WebRTC. If anything on this host (for
+# example an nginx or Caddy TLS front for HLS) forwards LAN requests to MediaMTX
+# over loopback, MediaMTX sees them as 127.0.0.1. hlsTrustedProxies only changes
+# the IP shown in logs, not authentication. A loopback-anonymous `read` would
+# then let any LAN client read the pharmacy streams.
+#
+# IMPORTANT: the stock MediaMTX config ships a catch-all `user: any` entry that
+# allows anonymous `publish`, `read` and `playback` from any IP. Remove it. Also
+# keep `api`, `metrics`, `pprof` and `playback` disabled (their defaults), or
+# require credentials for them; do not rely on the stock anonymous-loopback
+# `api` grant, which would let any local process rewrite path config.
+#
+# This snippet only adds one reader. It does not set or change `record`
+# (default: false), playback, any path `source`, or the DVR connection.
+
+# Requires the default `authMethod: internal`.
+authInternalUsers:
+  # ...your existing authenticated users (HLS readers, the publisher) stay here...
+
+  # The snapshot gateway's reader: same values as config.json `rtspReader`.
+  - user: devfathom-snapshot-reader
+    pass: REPLACE-with-generated-url-safe-secret-32plus
+    ips: ['127.0.0.1', '::1']
+    permissions:
+      - action: read
+        path: pharmacy/branch-1/counter-1
+      # One `read` entry per snapshot path in config.json `paths`.
