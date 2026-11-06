@@ -1,0 +1,10 @@
+import { trpc, short, disposeApis, save } from './lib.mjs';
+const m = await trpc('owner', 'pharmacyMedicine.get', { id: 'cmvxpws13002v1xqrfsg4p4hz' });
+save('med-get.json', m);
+const d = m.data ?? {};
+console.log(short(m, 200));
+console.log('keys', Object.keys(d));
+for (const pl of d.packLevels ?? []) console.log('PACK', JSON.stringify(pl).slice(0, 400));
+for (const b of d.barcodes ?? []) console.log('BARCODE', JSON.stringify(b).slice(0, 300));
+for (const p of d.printedMrps ?? d.mrps ?? []) console.log('MRP', JSON.stringify(p).slice(0, 300));
+await disposeApis();

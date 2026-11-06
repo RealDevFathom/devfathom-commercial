@@ -1,0 +1,16 @@
+[
+  { "goto": "/pharmacy/settings/branches" },
+  { "select": { "label": "Member" }, "value": "QA Cashier — Cashier" },
+  { "click": { "role": "button", "name": "Assign" } },
+  { "wait": 2000, "map": true, "max": 1500, "log": "cashier assigned" },
+  { "select": { "label": "Member" }, "value": "QA Pharmacist — Pharmacist" },
+  { "click": { "role": "button", "name": "Assign" } },
+  {
+    "wait": 2000,
+    "map": true,
+    "max": 2000,
+    "shot": "own-branch-assigned",
+    "full": true,
+    "log": "pharmacist assigned"
+  }
+]

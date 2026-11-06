@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
@@ -34,6 +34,15 @@ const testRouter = router({
   restaurantReports: restaurantReportsRouter,
 });
 const states = new Map<string, boolean>();
+const configured = { AI_PROVIDER: 'groq', AI_MODEL: 'inert-model', GROQ_API_KEY: 'inert-key' };
+function availability(organizationId: string, askFathomEnabled: boolean) {
+  return {
+    organizationId,
+    askFathomEnabled,
+    available: askFathomEnabled,
+    unavailableReason: askFathomEnabled ? null : 'COMPANY_DISABLED',
+  };
+}
 const db = {
   organization: { findUnique: mocks.findUnique, update: mocks.update },
   user: { findUnique: mocks.user },
@@ -74,17 +83,18 @@ beforeEach(() => {
     }
   );
   mocks.user.mockResolvedValue({ organizationRole: null, permissionOverrides: [] });
+  for (const [name, value] of Object.entries(configured)) vi.stubEnv(name, value);
 });
+afterEach(() => vi.unstubAllEnvs());
 
 describe('organizationAdmin AskFathom contract (mock database, real authorization)', () => {
   it.each(['ADMIN', 'EMPLOYEE', 'HR'])(
     'allows active %s to read only current company settings',
     async (role) => {
       const caller = testRouter.createCaller(context('org_b', role));
-      await expect(caller.organizationAdmin.askFathomSettings()).resolves.toEqual({
-        organizationId: 'org_b',
-        askFathomEnabled: false,
-      });
+      await expect(caller.organizationAdmin.askFathomSettings()).resolves.toEqual(
+        availability('org_b', false)
+      );
       expect(mocks.findUnique).toHaveBeenCalledWith({
         where: { id: 'org_b' },
         select: { id: true, askFathomEnabled: true },
@@ -96,14 +106,12 @@ describe('organizationAdmin AskFathom contract (mock database, real authorizatio
     const ctx = context();
     const caller = testRouter.createCaller(ctx).organizationAdmin;
     for (const askFathomEnabled of [false, false, true]) {
-      await expect(caller.setAskFathomEnabled({ askFathomEnabled })).resolves.toEqual({
-        organizationId: 'org_a',
-        askFathomEnabled,
-      });
-      await expect(caller.askFathomSettings()).resolves.toEqual({
-        organizationId: 'org_a',
-        askFathomEnabled,
-      });
+      await expect(caller.setAskFathomEnabled({ askFathomEnabled })).resolves.toEqual(
+        availability('org_a', askFathomEnabled)
+      );
+      await expect(caller.askFathomSettings()).resolves.toEqual(
+        availability('org_a', askFathomEnabled)
+      );
     }
     expect(mocks.update).toHaveBeenLastCalledWith({
       where: { id: 'org_a' },
@@ -286,4 +294,38 @@ describe('organizationAdmin AskFathom contract (mock database, real authorizatio
       expect(mocks.payments).toHaveBeenCalledOnce();
     }
   );
+
+  it.each<[Record<string, string | undefined>, string]>([
+    [{ AI_PROVIDER: undefined }, 'AI_PROVIDER unset'],
+    [{ AI_PROVIDER: 'disabled' }, 'AI_PROVIDER disabled'],
+    [{ AI_PROVIDER: 'not-a-provider' }, 'unknown AI_PROVIDER'],
+    [{ AI_MODEL: '' }, 'AI_MODEL missing'],
+    [{ GROQ_API_KEY: ' ' }, 'provider key missing'],
+    [{ AI_MODEL: '${AI_MODEL}' }, 'AI_MODEL placeholder'],
+  ])('reports chat unavailable without a configured provider: %j (%s)', async (env) => {
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+    const caller = testRouter.createCaller(context('org_a', 'EMPLOYEE')).organizationAdmin;
+    const expected = {
+      organizationId: 'org_a',
+      askFathomEnabled: true,
+      available: false,
+      unavailableReason: 'AI_NOT_CONFIGURED',
+    };
+    await expect(caller.askFathomSettings()).resolves.toEqual(expected);
+    // The admin save response uses the same rule, so it cannot re-enable the launcher.
+    await expect(
+      testRouter
+        .createCaller(context('org_a'))
+        .organizationAdmin.setAskFathomEnabled({ askFathomEnabled: true })
+    ).resolves.toEqual(expected);
+    // An off company switch is the reason shown first, even when the provider is also missing.
+    states.set('org_a', false);
+    await expect(caller.askFathomSettings()).resolves.toEqual(availability('org_a', false));
+  });
+
+  it('never exposes provider setting names or values to the client', async () => {
+    vi.stubEnv('AI_MODEL', '');
+    const result = await testRouter.createCaller(context()).organizationAdmin.askFathomSettings();
+    expect(JSON.stringify(result)).not.toMatch(/AI_MODEL|GROQ|inert/);
+  });
 });

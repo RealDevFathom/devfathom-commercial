@@ -1,0 +1,51 @@
+{
+  "slowSearchMs": 1109,
+  "slowAddMs": 1867,
+  "offlineAlerts": [
+    "SUCCESS\n\n1 × Paracetamol 500mg Tablets added.",
+    "Taking payment… Keep this bill open.",
+    "COMMERCIALParacetamol 500mg Tablets dispenses from a batch expiring in 74 day(s)."
+  ],
+  "offlineBanner": null,
+  "onlineAgainAlerts": [
+    "SUCCESS\n\n1 × Paracetamol 500mg Tablets added.",
+    "Payment recorded.",
+    "Receipt ready. Use Print receipt to open the browser print dialog.",
+    "COMMERCIALParacetamol 500mg Tablets dispenses from a batch expiring in 74 day(s)."
+  ],
+  "failed": [
+    {
+      "url": "https://sehatcart.pharmacy.develop.devfathom.com/pharmacy/purchasing?_rsc=IntRV0iuuAUknvpr",
+      "err": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://sehatcart.pharmacy.develop.devfathom.com/pharmacy/pharmacist-queue?_rsc=IntRV0iuuAUknvpr",
+      "err": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://sehatcart.pharmacy.develop.devfathom.com/pharmacy/prescriptions?_rsc=IntRV0iuuAUknvpr",
+      "err": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://sehatcart.pharmacy.develop.devfathom.com/pharmacy/reports?_rsc=IntRV0iuuAUknvpr",
+      "err": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://sehatcart.pharmacy.develop.devfathom.com/pharmacy/orders?_rsc=IntRV0iuuAUknvpr",
+      "err": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://sehatcart.pharmacy.develop.devfathom.com/projects?_rsc=qwtZcLyxED-sbEfQ",
+      "err": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://sehatcart.pharmacy.develop.devfathom.com/pharmacy/counter/close?_rsc=qwtZcLyxED-sbEfQ",
+      "err": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://sehatcart.pharmacy.develop.devfathom.com/pharmacy/inventory?_rsc=m8oD-mK7icLtm4HS",
+      "err": "net::ERR_ABORTED"
+    }
+  ],
+  "http": []
+}

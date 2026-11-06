@@ -1,0 +1,2 @@
+$ tsx --tsconfig scripts/tsconfig.json scripts/process-platform-jobs.ts "--max-jobs=25"
+{"recovered":0,"claimed":1,"succeeded":1,"retried":0,"failed":0}

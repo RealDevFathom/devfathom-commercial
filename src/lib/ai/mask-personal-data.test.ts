@@ -1,0 +1,375 @@
+import type { LanguageModelV3Prompt } from '@ai-sdk/provider';
+import { describe, expect, it } from 'vitest';
+
+import {
+  isPersonalDataKey,
+  maskPersonalDataInPrompt,
+  maskPersonalJson,
+  maskPersonalText,
+  promptHasUnmaskableContent,
+} from './mask-personal-data';
+
+describe('maskPersonalText', () => {
+  it.each([
+    ['Call 0300-1234567 today', 'Call [phone] today'],
+    ['Call 03001234567 today', 'Call [phone] today'],
+    ['Call 0321 7654321', 'Call [phone]'],
+    ['Call +92 300 1234567', 'Call [phone]'],
+    ['Call +923001234567.', 'Call [phone].'],
+    ['Call 0092 300 1234567', 'Call [phone]'],
+    ['Office 021-34567890', 'Office [phone]'],
+    ['UK +44 20 7946 0958 and US +1 (415) 555-0132', 'UK [phone] and US [phone]'],
+    ['Mail ali.khan+rx@example.com.pk now', 'Mail [email] now'],
+    ['CNIC 35202-1234567-1 on file', 'CNIC [cnic] on file'],
+    ['Card 4111 1111 1111 1111 used', 'Card [card] used'],
+    ['Card 4111-1111-1111-1111 used', 'Card [card] used'],
+    ['Card 5500000000000004 used', 'Card [card] used'],
+    ['Amex 3782 822463 10005', 'Amex [card]'],
+    ['IBAN PK36SCBL0000001123456702', 'IBAN [iban]'],
+    ['IBAN PK36 SCBL 0000 0011 2345 6702.', 'IBAN [iban].'],
+    ['Call 0300 123 4567 today', 'Call [phone] today'],
+    ['Call 0300-123-4567.', 'Call [phone].'],
+    ['Call 923001234567 now', 'Call [phone] now'],
+    ['Call 92 300 1234567, thanks', 'Call [phone], thanks'],
+    ['Call 92-300-123-4567', 'Call [phone]'],
+    ['(0321 765 4321)', '([phone])'],
+  ])('masks %j', (input, expected) => {
+    expect(maskPersonalText(input)).toBe(expected);
+  });
+
+  it.each([
+    'Sales today were PKR 1,234,567.89 across 312 invoices.',
+    'Revenue 12345678 vs 23456789 last week (+15.5%).',
+    'Barcode 8964000123456 and GTIN 08964000123456 in stock: 42 units.',
+    'Batch B-2026-11-02 expires 2027-03-31 at 09:45.',
+    'Invoice INV-0012345678 total Rs. 4,500; order #001234567890.',
+    'Card-like but not Luhn: 4111111111111112.',
+    'Growth was +12,500 rupees; margin 0.3412.',
+    'Amount 1234 5678 9012 3456 is not a card here.',
+    'Year 2026, quarter 3, ratio 1.25, count 1000000.',
+    'Sold 923 units for PKR 300,123,456 on 2026-11-02.',
+    'totalMinor 9230012345678 and 92300123456 paisa; 923001234567.50 rupees.',
+    'Batch 0300-123-45678 and lot 0300-1234-567.',
+    'Ref 1923001234567 and order 92300123456789.',
+    'Sales 9,230,012,345 over 92 days (300 invoices, 1234567 minor units).',
+  ])('leaves ordinary figures alone: %j', (input) => {
+    expect(maskPersonalText(input)).toBe(input);
+  });
+});
+
+describe('personal-data keys', () => {
+  it.each([
+    'phone',
+    'mobile',
+    'email',
+    'cnic',
+    'address',
+    'customerName',
+    'patientName',
+    'customerPhone',
+    'patient_mobile',
+    'billingAddress',
+    'addressLine1',
+    'contactEmail',
+    'whatsappNumber',
+    'name',
+    'fullName',
+    'displayName',
+    'firstName',
+    'lastName',
+    'familyName',
+    'recipientName',
+    'recipient_name',
+    'recipientNameSnapshot',
+    'customerNameSnapshot',
+    'walkInCustomerName',
+    'primaryPatientName',
+  ])('%s is personal data', (key) => {
+    expect(isPersonalDataKey(key)).toBe(true);
+  });
+
+  it.each([
+    'productName',
+    'brandName',
+    'branchName',
+    'organizationName',
+    'medicineName',
+    'reportName',
+    'productNameSnapshot',
+    'zoneNameSnapshot',
+    'label',
+    'metricKey',
+    'toolName',
+    'total',
+    'emailEnabled',
+    'addressId',
+  ])('%s is not', (key) => {
+    expect(isPersonalDataKey(key)).toBe(false);
+  });
+
+  it('redacts values under personal-data keys and keeps figures elsewhere', () => {
+    expect(
+      maskPersonalJson({
+        customers: [
+          {
+            customerName: 'Ayesha Malik',
+            phone: 3001234567,
+            address: { street: '12 Mall Road', city: 'Lahore' },
+            totalMinor: 125000,
+            visits: 7,
+            note: 'prefers WhatsApp on 0300-7654321',
+            emailVerified: true,
+            email: null,
+          },
+        ],
+        productName: 'Panadol 500mg',
+        revenue: '1,234,567.00',
+      })
+    ).toEqual({
+      customers: [
+        {
+          customerName: '[redacted]',
+          phone: '[redacted]',
+          address: '[redacted]',
+          totalMinor: 125000,
+          visits: 7,
+          note: 'prefers WhatsApp on [phone]',
+          emailVerified: true,
+          email: null,
+        },
+      ],
+      productName: 'Panadol 500mg',
+      revenue: '1,234,567.00',
+    });
+  });
+});
+
+describe('name-bearing keys in tool results', () => {
+  it('redacts person names and keeps product, branch, organization and report names', () => {
+    expect(
+      maskPersonalJson({
+        organizationName: 'Shifa Pharmacy',
+        branchName: 'DHA Phase 5',
+        report: { label: 'Top sellers', metricKey: 'revenue' },
+        rows: [
+          {
+            name: 'Ayesha Malik',
+            displayName: 'Ayesha M.',
+            firstName: 'Ayesha',
+            lastName: 'Malik',
+            productName: 'Panadol 500mg',
+            brandName: 'Panadol',
+            quantity: 12,
+            totalMinor: 125000,
+          },
+        ],
+        delivery: {
+          recipientNameSnapshot: 'Bilal Khan',
+          zoneNameSnapshot: 'Gulberg',
+          walkInCustomerName: 'Sara',
+        },
+      })
+    ).toEqual({
+      organizationName: 'Shifa Pharmacy',
+      branchName: 'DHA Phase 5',
+      report: { label: 'Top sellers', metricKey: 'revenue' },
+      rows: [
+        {
+          name: '[redacted]',
+          displayName: '[redacted]',
+          firstName: '[redacted]',
+          lastName: '[redacted]',
+          productName: 'Panadol 500mg',
+          brandName: 'Panadol',
+          quantity: 12,
+          totalMinor: 125000,
+        },
+      ],
+      delivery: {
+        recipientNameSnapshot: '[redacted]',
+        zoneNameSnapshot: 'Gulberg',
+        walkInCustomerName: '[redacted]',
+      },
+    });
+  });
+
+  it('redacts names inside a tool result carried as JSON text', () => {
+    const [message] = maskPersonalDataInPrompt([
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'c1',
+            toolName: 'topCustomers',
+            output: {
+              type: 'text',
+              value: '[{"fullName":"Ayesha Malik","familyName":"Malik","visits":4}]',
+            },
+          },
+        ],
+      },
+    ]);
+    expect(message.content).toEqual([
+      expect.objectContaining({
+        output: {
+          type: 'text',
+          value: '[{"fullName":"[redacted]","familyName":"[redacted]","visits":4}]',
+        },
+      }),
+    ]);
+  });
+});
+
+describe('promptHasUnmaskableContent', () => {
+  const text = { type: 'text' as const, text: 'Sales today?' };
+
+  it('is false for text-only prompts, tool calls and text tool results', () => {
+    expect(
+      promptHasUnmaskableContent([
+        { role: 'system', content: 'You are Fathom.' },
+        { role: 'user', content: [text] },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'sales', input: {} }],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'c1',
+              toolName: 'sales',
+              output: { type: 'content', value: [{ type: 'text', text: '{"total":1}' }] },
+            },
+          ],
+        },
+      ])
+    ).toBe(false);
+  });
+
+  it('is true for a user image, an assistant file or an image in a tool result', () => {
+    const image = new Uint8Array([1, 2, 3]);
+    expect(
+      promptHasUnmaskableContent([
+        { role: 'user', content: [text, { type: 'file', data: image, mediaType: 'image/png' }] },
+      ])
+    ).toBe(true);
+    expect(
+      promptHasUnmaskableContent([
+        {
+          role: 'assistant',
+          content: [{ type: 'file', data: image, mediaType: 'application/pdf' }],
+        },
+      ])
+    ).toBe(true);
+    expect(
+      promptHasUnmaskableContent([
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'c1',
+              toolName: 'scan',
+              output: {
+                type: 'content',
+                value: [{ type: 'image-data', data: 'AAAA', mediaType: 'image/png' }],
+              },
+            },
+          ],
+        },
+      ])
+    ).toBe(true);
+  });
+});
+
+describe('maskPersonalDataInPrompt', () => {
+  it('masks every text the model reads, including tool inputs and results, and keeps files', () => {
+    const image = new Uint8Array([1, 2, 3]);
+    const prompt: LanguageModelV3Prompt = [
+      { role: 'system', content: 'Owner contact: owner@pharmacy.pk' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Find the customer on 0300-1234567. Sales were 1,250,000.' },
+          { type: 'file', data: image, mediaType: 'image/png' },
+        ],
+      },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: 'Look up 0300-1234567.' },
+          {
+            type: 'tool-call',
+            toolCallId: 'c1',
+            toolName: 'findCustomer',
+            input: { phone: '0300-1234567', limit: 5 },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'c1',
+            toolName: 'findCustomer',
+            output: {
+              type: 'json',
+              value: { customerName: 'Ayesha Malik', cnic: '35202-1234567-1', spendMinor: 98500 },
+            },
+          },
+          {
+            type: 'tool-result',
+            toolCallId: 'c2',
+            toolName: 'notes',
+            output: { type: 'text', value: '{"patientName":"Bilal","visits":3}' },
+          },
+        ],
+      },
+    ];
+    const masked = maskPersonalDataInPrompt(prompt);
+    expect(masked[0]).toEqual({ role: 'system', content: 'Owner contact: [email]' });
+    expect(masked[1].content).toEqual([
+      { type: 'text', text: 'Find the customer on [phone]. Sales were 1,250,000.' },
+      { type: 'file', data: image, mediaType: 'image/png' },
+    ]);
+    expect(masked[2].content).toEqual([
+      { type: 'reasoning', text: 'Look up [phone].' },
+      {
+        type: 'tool-call',
+        toolCallId: 'c1',
+        toolName: 'findCustomer',
+        input: { phone: '[redacted]', limit: 5 },
+      },
+    ]);
+    expect(masked[3].content).toEqual([
+      {
+        type: 'tool-result',
+        toolCallId: 'c1',
+        toolName: 'findCustomer',
+        output: {
+          type: 'json',
+          value: { customerName: '[redacted]', cnic: '[redacted]', spendMinor: 98500 },
+        },
+      },
+      {
+        type: 'tool-result',
+        toolCallId: 'c2',
+        toolName: 'notes',
+        output: { type: 'text', value: '{"patientName":"[redacted]","visits":3}' },
+      },
+    ]);
+    // The caller's prompt is not mutated.
+    expect(prompt[0]).toEqual({ role: 'system', content: 'Owner contact: owner@pharmacy.pk' });
+  });
+
+  it('keeps JSON text byte for byte when there is nothing to mask', () => {
+    const value = '{ "total": 1250000,  "units": 42 }';
+    const [message] = maskPersonalDataInPrompt([
+      { role: 'user', content: [{ type: 'text', text: value }] },
+    ]);
+    expect(message.content).toEqual([{ type: 'text', text: value }]);
+  });
+});

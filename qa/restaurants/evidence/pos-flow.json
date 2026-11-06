@@ -1,0 +1,62 @@
+[
+  {
+    "id": "STF-owner-role",
+    "status": "pass",
+    "notes": "200 {\"result\":{\"data\":{\"json\":{\"granted\":[\"cmvhhclf000361yjssb1hecpy\"],\"revoked\":[]}}}}"
+  },
+  {
+    "id": "CFG-02-cookie",
+    "status": "pass",
+    "notes": "authjs.csrf-token:131 authjs.callback-url:39 devfathom-terminal:47"
+  },
+  {
+    "id": "CFG-02-session-ended",
+    "status": "pass",
+    "notes": "Admin session cookie after enroll: absent"
+  },
+  {
+    "id": "SEC-02",
+    "status": "fail",
+    "notes": "401 {\"error\":\"Missing or malformed terminal session token.\"}"
+  },
+  {
+    "id": "POS-unlock",
+    "status": "fail",
+    "notes": "401 {\"error\":\"Missing or malformed terminal session token.\"}"
+  },
+  {
+    "id": "PAY-04-copy",
+    "status": "fail",
+    "notes": "Skip to order pad DevFathom Restaurant POS LOCKED RESTAURANT POS Terminal locked QA Register flow · Clifton SUCCESS Device session established. Unlock to continue. Unlock terminal LOCKED Operator Choose an operator Ayesha Khan — Organization administrator Operator PIN Unlock terminal"
+  },
+  {
+    "id": "ORD-02",
+    "status": "fail",
+    "notes": "open 401 {\"error\":\"Missing or malformed terminal session token.\"}; add 401 {\"error\":\"Missing or malformed terminal session token.\"}; naan 401 {\"error\":\"Missing or malformed terminal session token.\"}; fire 401 {\"error\":\"Missing or malformed terminal session token.\"}"
+  },
+  {
+    "id": "ORD-03",
+    "status": "fail",
+    "notes": "401 {\"error\":\"Missing or malformed terminal session token.\"}"
+  },
+  {
+    "id": "ORD-05",
+    "status": "fail",
+    "notes": "401 {\"error\":\"Missing or malformed terminal session token.\"}"
+  },
+  {
+    "id": "PAY-01",
+    "status": "fail",
+    "notes": "drawer 401 {\"error\":\"Missing or malformed terminal session token.\"}; bill 401 {\"error\":\"Missing or malformed terminal session token.\"}"
+  },
+  {
+    "id": "PAY-03",
+    "status": "fail",
+    "notes": "401 {\"error\":\"Missing or malformed terminal session token.\"}"
+  },
+  {
+    "id": "PAY-04",
+    "status": "fail",
+    "notes": "401 {\"error\":\"Missing or malformed terminal session token.\"}"
+  }
+]

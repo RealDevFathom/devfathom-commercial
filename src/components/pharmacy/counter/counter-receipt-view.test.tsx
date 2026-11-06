@@ -61,6 +61,46 @@ it('offers labeled paper selection and routes printing through the provided hand
   expect(screen.getByText(/saved designer settings are not connected yet/i)).toBeTruthy();
 });
 
+it('shows recorded payment, exact change and an issued receipt preview without printing again', () => {
+  const input = props();
+  input.receipt!.lines[0]!.identityStatus = 'ISSUED';
+  input.receipt!.tenders = [
+    {
+      tenderId: 'cash-1',
+      type: 'CASH',
+      amountMinor: 100,
+      cashReceivedMinor: 200,
+      changeGivenMinor: 100,
+    },
+  ];
+  input.receipt!.totals.tenderedMinor = 200;
+  input.receipt!.totals.changeMinor = 100;
+  render(<CounterReceiptView {...input} />);
+
+  const recorded = within(screen.getByRole('status'));
+  expect(recorded.getByRole('heading', { name: 'Payment recorded' })).toBeTruthy();
+  expect(recorded.getByText('Receipt 12')).toBeTruthy();
+  expect(recorded.getByText('Change').nextElementSibling).toHaveTextContent('PKR 1.00');
+  expect(recorded.getByText('Total').nextElementSibling).toHaveTextContent('PKR 1.00');
+  expect(screen.getByRole('heading', { name: 'Receipt preview' })).toBeTruthy();
+  const preview = within(screen.getByRole('region', { name: 'Receipt 12' }));
+  expect(preview.getByText(/Medicine/)).toBeTruthy();
+  expect(preview.getByText('CASH')).toBeTruthy();
+  expect(preview.getByText('Tendered').nextElementSibling).toHaveTextContent('2.00');
+  expect(input.onPrint).not.toHaveBeenCalled();
+});
+
+it.each([{ receiptNumber: null }, { completedAt: null }])(
+  'does not announce recorded payment for an incomplete receipt: %j',
+  (incomplete) => {
+    const input = props();
+    input.receipt = { ...input.receipt!, ...incomplete };
+    render(<CounterReceiptView {...input} />);
+    expect(screen.queryByRole('heading', { name: 'Payment recorded' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Print receipt' })).toBeDisabled();
+  }
+);
+
 it('disables controls while refreshing the receipt', () => {
   render(<CounterReceiptView {...props({ printing: true })} />);
   expect(screen.getByLabelText('Format')).toBeDisabled();
@@ -160,6 +200,7 @@ it('disables printing when shared semantic validation rejects the receipt', () =
   render(<CounterReceiptView {...input} />);
   expect(screen.getByRole('button', { name: 'Print receipt' })).toBeDisabled();
   expect(screen.getByRole('alert')).toHaveTextContent('cannot be previewed');
+  expect(screen.queryByRole('heading', { name: 'Payment recorded' })).toBeNull();
 });
 
 it('keeps Rx printing disabled when receipt has no sourced directions or licence', () => {

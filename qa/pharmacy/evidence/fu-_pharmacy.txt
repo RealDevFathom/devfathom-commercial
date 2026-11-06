@@ -1,0 +1,209 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY
+Onboarding
+
+The twelve steps between a new pharmacy workspace and its first legal sale. Each step says what it needs and where to do it.
+
+PLAT-03 · ACTIVATION
+Activation status
+BLOCKED
+
+Activation is refused until these 10 steps are done: Organization type, Legal business, Launch jurisdiction and 7 more.
+
+QA Clifton Chemist is not activated yet. DevFathom activates a pharmacy once every step below is done — nobody can wave it through.
+
+Step 1
+Organization type
+Go to this step
+Step 2
+Legal business
+Open organization
+Step 3
+Launch jurisdiction
+Open regulatory profile
+Step 4
+Premises and licences
+Open regulatory profile
+Step 5
+Branches and locations
+Create or review stock locations
+Step 8
+Medicine catalog readiness
+Set up medicines and packs
+Step 9
+Opening stock readiness
+Receive opening stock
+Step 10
+Parties and balances
+Set up suppliers
+Step 11
+Devices and documents
+Go to this step
+Step 12
+Readiness and parallel run
+Open pharmacy counter
+PLAT-03 · ONBOARDING
+Your setup steps
+2/12 done
+
+Twelve steps take a pharmacy from a new workspace to its first legal sale. Each one says what it needs and where to do it.
+
+Step 1
+:
+ Organization type
+NEEDS YOU
+
+Confirm this workspace operates as a pharmacy, and record where that decision is written down.
+
+Confirm this step
+Step 2
+:
+ Legal business
+NEEDS YOU
+
+Confirm the registered legal name and business details on the organization page, then record the reference.
+
+Open organization
+— Legal business
+Confirm this step
+Step 3
+:
+ Launch jurisdiction
+NEEDS YOU
+
+Choose the province you are launching in on the branch regulatory profile, then record the decision.
+
+Open regulatory profile
+— Launch jurisdiction
+Confirm this step
+Step 4
+:
+ Premises and licences
+NEEDS YOU
+
+Add a branch regulatory profile with a valid licence and a qualified person whose cover is in date.
+
+Open regulatory profile
+— Premises and licences
+Step 5
+:
+ Branches and locations
+NEEDS YOU
+
+Record that every branch and its stock locations exist, naming where the layout is documented.
+
+Create or review stock locations
+— Branches and locations
+Confirm this step
+Step 6
+:
+ Commercial package
+DONE
+
+A pharmacy package is assigned to this workspace.
+
+Step 7
+:
+ Owner and role templates
+DONE
+
+Owner and the pharmacy role templates are in place.
+
+Open organization
+— Owner and role templates
+Step 8
+:
+ Medicine catalog readiness
+NEEDS YOU
+
+Review and publish a medicine, then define its pack for receiving.
+
+Set up medicines and packs
+— Medicine catalog readiness
+Step 9
+:
+ Opening stock readiness
+NEEDS YOU
+
+Receive opening stock against at least one lot, so the ledger starts from a counted position.
+
+Receive opening stock
+— Opening stock readiness
+Step 10
+:
+ Parties and balances
+NEEDS YOU
+
+Add at least one authorized, active supplier so purchasing and returns have a counterparty.
+
+Set up suppliers
+— Parties and balances
+Step 11
+:
+ Devices and documents
+NEEDS YOU
+
+Record the counters, printers and document templates this pharmacy will use, naming where they are listed.
+
+Confirm this step
+Step 12
+:
+ Readiness and parallel run
+NEEDS YOU
+
+Record the parallel-run result that shows the pharmacy is ready to go live.
+
+Open pharmacy counter
+— Readiness and parallel run
+Confirm this step
+Where to next
+
+The regulatory profile is the step most pharmacies spend the longest on — a licence, a qualified person, and the schedules the province permits.
+
+Open the regulatory profile
