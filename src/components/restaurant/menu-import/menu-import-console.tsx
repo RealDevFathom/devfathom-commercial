@@ -238,9 +238,7 @@ function VariantReviewList({ variants }: { variants: ExtractedVariant[] }) {
           <li key={`${variant.name}-${index}`} className="text-xs text-text-strong">
             <span>{variant.name}</span>
             <span className="ml-2 tabular-nums text-text-muted">
-              {variant.amount
-                ? `${variant.amount} ${variant.currency ?? ''}`.trim()
-                : '(no price)'}
+              {variant.amount ? `${variant.amount} ${variant.currency ?? ''}`.trim() : '(no price)'}
             </span>
           </li>
         ))}

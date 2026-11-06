@@ -331,9 +331,7 @@ describe('Restaurant menu-import console', () => {
         data: detail({
           pages: [
             {
-              id: 'page_1',
-              pageNumber: 1,
-              warnings: [],
+              ...detail().pages[0],
               lines: [
                 line({
                   extractedVariants: [
