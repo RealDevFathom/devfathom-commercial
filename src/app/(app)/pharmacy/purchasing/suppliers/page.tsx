@@ -5,7 +5,10 @@ import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/actio
 
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
+import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner';
 import type { SupplierSummary } from '@/lib/pharmacy/purchasing-console';
 import {
   AccessState,
@@ -90,6 +93,29 @@ export default async function PharmacySuppliersPage({
       <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled={moduleEnabled} />
     );
   }
+  // #979: suppliers, requisitions and orders are procurement work, closed to a
+  // counter-only role exactly as Goods-in is.
+  if (!(await actorCanProcure(ctx.db, ctx.session.user.id))) {
+    return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
+  }
+  // PR J (#979): authorizing a supplier needs the approver capability as well,
+  // as approving a purchase order does. Offer the control only to the people the
+  // server will let through: Manager, Owner, and the solo owner.
+  // The solo owner may verify a licence they filed: there is nobody else to.
+  const sessionUser = ctx.session.user;
+  const [canAuthorize, soloOwner] = await Promise.all([
+    can(subjectFromSession(sessionUser), 'pharmacy:procurement-approve', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta?.ip ?? null,
+    }),
+    isSoloPharmacyOwner(ctx.db, {
+      organizationId: ctx.entitlements.organizationId,
+      actorId: sessionUser.id,
+      role: sessionUser.role,
+      actorOrganizationId: sessionUser.organizationId,
+    }),
+  ]);
 
   const caller = await purchasingCaller();
   if (!caller) {
@@ -260,6 +286,36 @@ export default async function PharmacySuppliersPage({
     return next;
   }
 
+  async function verifyLicence(form: FormData) {
+    'use server';
+    const supplierId = field(form, 'supplierId');
+    const outcome = purchasingOutcome();
+    let next: string;
+    try {
+      const actionCaller = await purchasingCaller();
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.verifySupplierLicence)({
+        licenceId: field(form, 'licenceId'),
+      });
+      revalidatePath(ROUTE);
+      next = destination(
+        ROUTE,
+        {
+          message: 'Licence verified. The unverified filing is kept as evidence.',
+          kind: 'success',
+        },
+        { supplier: supplierId }
+      );
+    } catch (error) {
+      next = destination(
+        ROUTE,
+        { ...outcome.failure(error, 'Could not verify the licence.'), kind: 'error' },
+        { supplier: supplierId }
+      );
+    }
+    return next;
+  }
+
   async function setAuthorization(form: FormData) {
     'use server';
     const supplierId = field(form, 'supplierId');
@@ -385,9 +441,13 @@ export default async function PharmacySuppliersPage({
           <div className="min-w-0 space-y-6">
             {selected ? (
               <SupplierDetail
+                canAuthorize={canAuthorize}
+                currentUserId={ctx.session.user.id}
+                soloOwner={soloOwner}
                 notice={notice}
                 onRecordLicence={recordLicence}
                 onSetAuthorization={setAuthorization}
+                onVerifyLicence={verifyLicence}
                 skips={selectedSkips}
                 supplier={selected}
               />
@@ -462,14 +522,23 @@ export default async function PharmacySuppliersPage({
 function SupplierDetail({
   supplier,
   notice,
+  canAuthorize,
+  currentUserId,
+  soloOwner,
   onRecordLicence,
   onSetAuthorization,
+  onVerifyLicence,
   skips,
 }: {
   supplier: SupplierSummary;
   notice: ReturnType<typeof noticeFrom>;
+  canAuthorize: boolean;
+  currentUserId: string;
+  /** The workspace's only active member, who may verify their own filing. */
+  soloOwner: boolean;
   onRecordLicence: (form: FormData) => Promise<string>;
   onSetAuthorization: (form: FormData) => Promise<string>;
+  onVerifyLicence: (form: FormData) => Promise<string>;
   skips: Parameters<typeof SupplierComplianceSkipList>[0]['skips'];
 }) {
   const supersedable = supplier.licences.filter((licence) => !licence.superseded);
@@ -508,20 +577,31 @@ function SupplierDetail({
           />
           {/* UX rule 15: the control is one action and it is never greyed out
               while the operator is clearly acting on it. */}
-          <PurchasingActionForm
-            operation={{
-              resource: `supplier:${supplier.id}`,
-              action: supplier.authorized ? 'withdraw' : 'authorize',
-            }}
-            action={onSetAuthorization}
-            className="mt-3"
-          >
-            <input name="supplierId" type="hidden" value={supplier.id} />
-            <input name="authorized" type="hidden" value={supplier.authorized ? 'false' : 'true'} />
-            <SubmitButton variant={supplier.authorized ? 'destructive' : 'primary'}>
-              {supplier.authorized ? 'Withdraw authorization' : 'Authorize this supplier'}
-            </SubmitButton>
-          </PurchasingActionForm>
+          {!canAuthorize ? (
+            <p className="mt-3 text-sm text-text-muted">
+              Authorizing a supplier, or withdrawing it, needs the purchase-order approval
+              permission, which a Manager or the Owner holds. Ask one of them to decide.
+            </p>
+          ) : (
+            <PurchasingActionForm
+              operation={{
+                resource: `supplier:${supplier.id}`,
+                action: supplier.authorized ? 'withdraw' : 'authorize',
+              }}
+              action={onSetAuthorization}
+              className="mt-3"
+            >
+              <input name="supplierId" type="hidden" value={supplier.id} />
+              <input
+                name="authorized"
+                type="hidden"
+                value={supplier.authorized ? 'false' : 'true'}
+              />
+              <SubmitButton variant={supplier.authorized ? 'destructive' : 'primary'}>
+                {supplier.authorized ? 'Withdraw authorization' : 'Authorize this supplier'}
+              </SubmitButton>
+            </PurchasingActionForm>
+          )}
           <SupplierComplianceSkipList skips={skips} />
         </div>
       </SectionCard>
@@ -582,6 +662,33 @@ function SupplierDetail({
                   <p className="mt-1 truncate font-mono text-xs text-text-muted">
                     Evidence: {licence.evidenceUri}
                   </p>
+                ) : null}
+                {/* PUR-01: verification is a second person's act. The server
+                    refuses the filer, and a filing whose filer was never
+                    recorded, except for the solo owner; this only says so
+                    before they try. */}
+                {!licence.verified && !licence.superseded ? (
+                  !soloOwner && licence.recordedByUserId === currentUserId ? (
+                    <p className="mt-2 text-xs text-text-muted">
+                      You filed this licence. A colleague with purchasing access verifies it.
+                    </p>
+                  ) : !soloOwner && licence.recordedByUserId === null ? (
+                    <p className="mt-2 text-xs text-text-muted">
+                      This licence was filed before DevFathom recorded who filed it, so nobody can
+                      confirm it was checked by a second person. File it again as a correction of
+                      this filing, and a colleague verifies the new filing.
+                    </p>
+                  ) : (
+                    <PurchasingActionForm
+                      operation={{ resource: `licence:${licence.id}`, action: 'verify' }}
+                      action={onVerifyLicence}
+                      className="mt-2"
+                    >
+                      <input name="supplierId" type="hidden" value={supplier.id} />
+                      <input name="licenceId" type="hidden" value={licence.id} />
+                      <SubmitButton variant="secondary">Verify licence</SubmitButton>
+                    </PurchasingActionForm>
+                  )
                 ) : null}
               </li>
             ))}
@@ -654,6 +761,10 @@ function SupplierDetail({
               </label>
             )}
           </Field>
+          <p className="text-xs text-text-muted sm:col-span-2">
+            Whoever files a licence cannot also verify it: a colleague verifies it from the list
+            above. Only the sole owner of a one-person workspace may tick this box.
+          </p>
           <div className="flex items-end">
             <SubmitButton>File licence</SubmitButton>
           </div>

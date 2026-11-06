@@ -55,6 +55,7 @@ vi.mock('@/server/routers/pharmacy-purchasing', () => ({
   pharmacyPurchasingRouter: { createCaller: mocks.createCaller },
 }));
 
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import SuppliersPage from './suppliers/page';
 import OrdersPage from './orders/page';
 import ReceivingPage from './receiving/page';
@@ -66,7 +67,15 @@ const actor = {
   support: null,
 };
 
-function contextStub(enabledModules = ['pharmacy-procurement']) {
+function contextStub(
+  enabledModules = ['pharmacy-procurement'],
+  // PR J: the returns board also needs financial report access (Manager + Finance).
+  grants: readonly string[] = [
+    'pharmacy.procurement',
+    'pharmacy:procurement-approve',
+    'reports:financial',
+  ]
+) {
   return {
     session: actor.session,
     organization: actor.organization,
@@ -75,7 +84,7 @@ function contextStub(enabledModules = ['pharmacy-procurement']) {
       user: {
         findUnique: vi.fn().mockResolvedValue({
           organizationRole: {
-            permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
+            permissions: grants.map((capability) => ({ capability, effect: 'ALLOW' })),
           },
           permissionOverrides: [],
         }),
@@ -105,6 +114,7 @@ const licensedSupplier = {
     expiresAt: new Date('2027-01-01T00:00:00.000Z'),
     evidenceUri: null,
     verified: true,
+    recordedByUserId: null,
     superseded: false,
     daysToExpiry: 300,
   },
@@ -169,6 +179,9 @@ const workspace = {
   ],
   suppliers: [licensedSupplier, lapsedSupplier],
   approvers: [{ id: 'user-2', name: 'Bilal', email: 'bilal@example.test' }],
+  procurementApprovers: [
+    { id: 'user-2', name: 'Bilal', email: 'bilal@example.test', branchIds: ['branch-1'] },
+  ],
 };
 
 function callerStub(overrides: Record<string, unknown> = {}) {
@@ -204,6 +217,8 @@ beforeEach(() => {
 });
 
 const params = (query: Record<string, string> = {}) => Promise.resolve(query);
+const template = (key: string) =>
+  PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!.capabilities;
 
 describe('tenancy and licensing (UX rule 7)', () => {
   it('never asks the context factory to re-resolve tenancy', async () => {
@@ -255,6 +270,95 @@ describe('tenancy and licensing (UX rule 7)', () => {
       screen.getByRole('heading', { name: 'You do not have purchasing access' })
     ).toBeDefined();
     expect(mocks.createCaller).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Every member who does no procurement work (#979, PR J): the stock Cashier
+   * and Pharmacist templates, the default EMPLOYEE with no organization role, an
+   * empty Member role, and the Inventory, Auditor and Finance templates.
+   */
+  const NON_PROCUREMENT_ROLES = [
+    ['cashier', template('cashier')],
+    ['pharmacist', template('pharmacist')],
+    ['default employee', null],
+    ['empty member role', []],
+    ['inventory', template('inventory')],
+    ['auditor', template('auditor')],
+    ['finance', template('finance')],
+  ] as const;
+  const SURFACES = [
+    ['overview', () => OverviewPage({ searchParams: params({ supplier: 'sup-ok' }) })],
+    ['suppliers', () => SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) })],
+    ['orders', () => OrdersPage({ searchParams: params() })],
+    ['goods-in', () => ReceivingPage({ searchParams: params() })],
+    ['returns', () => ReturnsPage({ searchParams: params() })],
+  ] as const;
+  const PROCUREMENT_CONTROLS = [
+    'Add supplier',
+    'File licence',
+    'Verify licence',
+    'Withdraw authorization',
+    'Authorize this supplier',
+    'Draft requisition',
+    'Draft order',
+    'Submit for approval',
+    'Approve',
+    'Reject',
+    'Send to supplier',
+    'Post receipt',
+    'Raise return',
+  ];
+
+  it.each(
+    NON_PROCUREMENT_ROLES.flatMap(([role, grants]) =>
+      SURFACES.map(([surface, page]) => [role, surface, grants, page] as const)
+    )
+  )(
+    'closes %s out of %s with no procurement control and no router call (#979)',
+    async (_role, _surface, grants, page) => {
+      mocks.createTRPCContext.mockResolvedValue({
+        ...contextStub(),
+        db: {
+          user: {
+            findUnique: vi.fn().mockResolvedValue({
+              role: 'EMPLOYEE',
+              organizationRole:
+                grants === null
+                  ? null
+                  : { permissions: grants.map((capability) => ({ capability, effect: 'ALLOW' })) },
+              permissionOverrides: [],
+            }),
+          },
+        },
+      });
+
+      render(await page());
+
+      expect(
+        screen.getByRole('heading', { name: 'You do not have purchasing access' })
+      ).toBeDefined();
+      for (const action of PROCUREMENT_CONTROLS) {
+        expect(screen.queryByRole('button', { name: action }), action).toBeNull();
+      }
+      expect(mocks.createCaller).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still offers those actions to a member who holds pharmacy:procurement (#979)', async () => {
+    mocks.createTRPCContext.mockResolvedValue(
+      contextStub(['pharmacy-procurement'], ['pharmacy:procurement'])
+    );
+
+    const suppliers = render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+    for (const action of ['Add supplier', 'File licence']) {
+      expect(screen.queryAllByRole('button', { name: action }).length, action).toBeGreaterThan(0);
+    }
+    suppliers.unmount();
+
+    render(await OrdersPage({ searchParams: params() }));
+    for (const action of ['Draft requisition', 'Draft order']) {
+      expect(screen.queryAllByRole('button', { name: action }).length, action).toBeGreaterThan(0);
+    }
   });
 
   it('says "no purchasing access" — a different sentence — when the session has no user', async () => {
@@ -378,13 +482,15 @@ describe('pickers (UX rules 1, 12, 16)', () => {
 
   it('replaces an empty required picker with what is missing and where to fix it', async () => {
     mocks.createCaller.mockReturnValue(
-      callerStub({ workspace: vi.fn().mockResolvedValue({ ...workspace, approvers: [] }) })
+      callerStub({
+        workspace: vi.fn().mockResolvedValue({ ...workspace, procurementApprovers: [] }),
+      })
     );
 
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
 
     expect(
-      screen.getByRole('heading', { name: 'No second person can approve a bypass' })
+      screen.getByRole('heading', { name: 'No authorized approver is available' })
     ).toBeDefined();
     expect(screen.getByRole('link', { name: /Invite a colleague/ }).getAttribute('href')).toBe(
       '/team'
@@ -435,6 +541,7 @@ describe('preconditions (UX rule 13)', () => {
           medicines: [],
           suppliers: [],
           approvers: [],
+          procurementApprovers: [],
         }),
       })
     );
@@ -635,6 +742,166 @@ describe('segregation of duties (PUR-02)', () => {
 
     expect(screen.getByText(/You raised this order, so you cannot approve it/)).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  });
+
+  it.each(['SUBMITTED', 'APPROVED'] as const)(
+    'offers no approve or send action on a %s order to a buyer without the approval permission (PR J)',
+    async (status) => {
+      mocks.createTRPCContext.mockResolvedValue(
+        contextStub(['pharmacy-procurement'], ['pharmacy:procurement'])
+      );
+      mocks.createCaller.mockReturnValue(
+        callerStub({
+          purchaseOrders: vi.fn().mockResolvedValue([
+            {
+              id: 'po-1',
+              reference: 'PO-1',
+              status,
+              supplier: { id: 'sup-ok', name: 'Karachi Distributors' },
+              branch: null,
+              branchId: null,
+              supplierId: 'sup-ok',
+              requisition: null,
+              lines: [],
+              approvals: [],
+              goodsReceipts: [],
+              createdByUserId: 'user-9',
+            },
+          ]),
+          landedCost: vi.fn().mockResolvedValue({
+            payableMinor: 0,
+            landedCostMinor: 0,
+            taxMinor: 0,
+            chargesMinor: 0,
+            canonicalUnits: 0,
+            netCostMinor: 0,
+            lines: [],
+          }),
+        })
+      );
+
+      render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
+
+      expect(screen.getByText(/needs the purchase-order approval permission/)).toBeDefined();
+      expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Send to supplier' })).toBeNull();
+    }
+  );
+});
+
+describe('supplier authorization needs the approval permission (PUR-01, PR J)', () => {
+  it('explains instead of offering authorize or withdraw to a buyer without it', async () => {
+    mocks.createTRPCContext.mockResolvedValue(
+      contextStub(['pharmacy-procurement'], ['pharmacy:procurement'])
+    );
+
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+
+    expect(
+      screen.getByText(
+        /Authorizing a supplier, or withdrawing it, needs the purchase-order approval/
+      )
+    ).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Withdraw authorization' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Authorize this supplier' })).toBeNull();
+    // Filing and verifying licence evidence stays procurement work.
+    expect(screen.queryAllByRole('button', { name: 'File licence' }).length).toBeGreaterThan(0);
+  });
+
+  it('offers the control to a member who also holds the approval permission', async () => {
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+
+    expect(screen.getByRole('button', { name: 'Withdraw authorization' })).toBeDefined();
+    expect(screen.queryByText(/Authorizing a supplier, or withdrawing it/)).toBeNull();
+  });
+
+  it('offers it to the legacy owner (tenant admin without a role)', async () => {
+    mocks.createTRPCContext.mockResolvedValue({
+      ...contextStub(),
+      session: { ...actor.session, user: { ...actor.session.user, role: 'ADMIN' } },
+      db: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            role: 'ADMIN',
+            organizationRole: null,
+            permissionOverrides: [],
+          }),
+          // Active members, as the solo-owner rule reads them: not alone here.
+          findMany: vi.fn().mockResolvedValue([{ id: 'user-1' }, { id: 'user-2' }]),
+        },
+      },
+    });
+
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+
+    expect(screen.getByRole('button', { name: 'Withdraw authorization' })).toBeDefined();
+  });
+});
+
+describe('licence verification controls match the server (PUR-01, PR J)', () => {
+  const unverified = (id: string, recordedByUserId: string | null) => ({
+    ...licensedSupplier.governingLicence,
+    id,
+    licenceNumber: id,
+    verified: false,
+    recordedByUserId,
+  });
+  function withLicences(...licences: ReturnType<typeof unverified>[]) {
+    mocks.createCaller.mockReturnValue(
+      callerStub({ suppliers: vi.fn().mockResolvedValue([{ ...licensedSupplier, licences }]) })
+    );
+  }
+  function asOwner(members: string[]) {
+    mocks.createTRPCContext.mockResolvedValue({
+      ...contextStub(),
+      session: { ...actor.session, user: { ...actor.session.user, role: 'ADMIN' } },
+      db: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            role: 'ADMIN',
+            status: 'ACTIVE',
+            organizationRole: {
+              key: 'owner',
+              isSystem: true,
+              permissions: [{ capability: '*', effect: 'ALLOW' }],
+            },
+            permissionOverrides: [],
+          }),
+          findMany: vi.fn().mockResolvedValue(members.map((id) => ({ id }))),
+        },
+      },
+    });
+  }
+
+  it("offers Verify only on a colleague's filing, and explains the filer's own and unrecorded ones", async () => {
+    withLicences(unverified('lic-mine', 'user-1'), unverified('lic-legacy', null));
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+    expect(screen.queryByRole('button', { name: 'Verify licence' })).toBeNull();
+    expect(screen.getByText(/You filed this licence/)).toBeDefined();
+    expect(screen.getByText(/filed before DevFathom recorded who filed it/)).toBeDefined();
+  });
+
+  it("offers Verify on a colleague's filing", async () => {
+    withLicences(unverified('lic-colleague', 'user-2'));
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+    expect(screen.getAllByRole('button', { name: 'Verify licence' })).toHaveLength(1);
+  });
+
+  it('offers the solo owner Verify on their own and unrecorded filings', async () => {
+    asOwner(['user-1']);
+    withLicences(unverified('lic-mine', 'user-1'), unverified('lic-legacy', null));
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+    expect(screen.getAllByRole('button', { name: 'Verify licence' })).toHaveLength(2);
+    expect(screen.queryByText(/A colleague with purchasing access verifies it/)).toBeNull();
+  });
+
+  it('does not treat an administrator with colleagues as the solo owner', async () => {
+    asOwner(['user-1', 'user-2']);
+    withLicences(unverified('lic-mine', 'user-1'));
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+    expect(screen.queryByRole('button', { name: 'Verify licence' })).toBeNull();
+    expect(screen.getByText(/You filed this licence/)).toBeDefined();
   });
 });
 
@@ -1025,5 +1292,162 @@ describe('goods-in scan and duplicate serial', () => {
     );
     const unset = render(await ReceivingPage({ searchParams: params({ order: 'po-1' }) }));
     expect(unset.container.querySelector('select[name="stockLocation:line-1"]')).toHaveValue('');
+  });
+});
+
+describe('purchasing PIN controls', () => {
+  it('offers only approvers assigned to the receiving branch and preserves the self-solo rule', async () => {
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        workspace: vi.fn().mockResolvedValue({
+          ...workspace,
+          procurementApprovers: [
+            ...workspace.procurementApprovers,
+            {
+              id: 'other-approver',
+              name: 'Other branch',
+              email: 'other@example.test',
+              branchIds: ['branch-2'],
+            },
+            {
+              id: 'user-1',
+              name: 'Owner',
+              email: 'owner@example.test',
+              branchIds: ['branch-1', 'branch-2'],
+              soloBranchIds: ['branch-2'],
+            },
+          ],
+        }),
+      })
+    );
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    const picker = within(screen.getByLabelText('Approved by'));
+    expect(picker.getByRole('option', { name: 'Bilal (bilal@example.test)' })).toBeDefined();
+    expect(picker.queryByRole('option', { name: 'Other branch (other@example.test)' })).toBeNull();
+    expect(picker.queryByRole('option', { name: 'Owner (owner@example.test)' })).toBeNull();
+  });
+  it('offers a masked, labelled approval PIN without autocomplete', async () => {
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    const pin = screen.getByLabelText('Approver PIN') as HTMLInputElement;
+    expect(pin.type).toBe('password');
+    expect(pin.autocomplete).toBe('off');
+    expect(pin.required).toBe(true);
+    expect(pin.getAttribute('inputmode')).toBe('numeric');
+  });
+  it('refuses a receiving-view actor without procurement access', async () => {
+    const ctx = contextStub();
+    ctx.db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:receiving-view', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    });
+    mocks.createTRPCContext.mockResolvedValue(ctx);
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    expect(screen.queryByLabelText('Approver PIN')).toBeNull();
+    expect(
+      screen.getByRole('heading', { name: 'You do not have purchasing access' })
+    ).toBeDefined();
+  });
+  it.each(['branch-2', null])(
+    'does not offer owner self-approval outside the solo branch (%s)',
+    async (branchId) => {
+      mocks.createCaller.mockReturnValue(
+        callerStub({
+          workspace: vi.fn().mockResolvedValue({
+            ...workspace,
+            procurementApprovers: [
+              {
+                id: 'user-1',
+                name: 'Owner',
+                email: 'owner@example.test',
+                branchIds: ['branch-1', 'branch-2'],
+                soloBranchIds: ['branch-1'],
+                soloOrganizationWide: false,
+              },
+            ],
+          }),
+          purchaseOrders: vi.fn().mockResolvedValue([
+            {
+              id: 'po-1',
+              reference: 'STAFFED-PO',
+              status: 'SUBMITTED',
+              supplier: { id: 'sup-ok', name: 'Supplier' },
+              branch: null,
+              branchId,
+              supplierId: 'sup-ok',
+              requisition: null,
+              lines: [],
+              approvals: [],
+              goodsReceipts: [],
+              createdByUserId: 'user-1',
+            },
+          ]),
+          landedCost: vi.fn().mockResolvedValue(null),
+        })
+      );
+      render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
+      expect(screen.queryByLabelText('Owner PIN')).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Approve$/ })).toBeNull();
+    }
+  );
+  it('offers a PIN-protected decision to a solo owner while preserving the multi-staff refusal', async () => {
+    const ctx = contextStub();
+    mocks.createTRPCContext.mockResolvedValue({
+      ...ctx,
+      session: { ...actor.session, user: { ...actor.session.user, role: 'ADMIN' } },
+      db: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            role: 'ADMIN',
+            status: 'ACTIVE',
+            organizationRole: {
+              key: 'owner',
+              isSystem: true,
+              permissions: [{ capability: '*', effect: 'ALLOW' }],
+            },
+            permissionOverrides: [],
+          }),
+          findMany: vi.fn().mockResolvedValue([{ id: 'user-1' }]),
+        },
+      },
+    });
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        workspace: vi.fn().mockResolvedValue({
+          ...workspace,
+          procurementApprovers: [
+            {
+              id: 'user-1',
+              name: 'Owner',
+              email: 'owner@example.test',
+              branchIds: ['branch-1'],
+              soloOrganizationWide: true,
+              soloBranchIds: ['branch-1'],
+            },
+          ],
+        }),
+        purchaseOrders: vi.fn().mockResolvedValue([
+          {
+            id: 'po-1',
+            reference: 'SOLO-PO',
+            status: 'SUBMITTED',
+            supplier: { id: 'sup-ok', name: 'Supplier' },
+            branch: null,
+            branchId: null,
+            supplierId: 'sup-ok',
+            requisition: null,
+            lines: [],
+            approvals: [],
+            goodsReceipts: [],
+            createdByUserId: 'user-1',
+          },
+        ]),
+        landedCost: vi.fn().mockResolvedValue(null),
+      })
+    );
+    render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
+    expect((screen.getByLabelText('Owner PIN') as HTMLInputElement).type).toBe('password');
+    expect(screen.getByRole('button', { name: /^Approve$/ })).toBeDefined();
   });
 });

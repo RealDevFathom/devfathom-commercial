@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
-import { Field, WorkspaceState, fieldClass } from './field';
+import { AccessDeniedState, Field, WorkspaceState, fieldClass, isAccessDenied } from './field';
 import { SubstitutionForm, type SubstitutionValue } from './substitution-form';
 
 export function SubstitutionConsole() {
@@ -36,9 +36,15 @@ export function SubstitutionConsole() {
         </WorkspaceState>
       ) : null}
       {workspace.error ? (
-        <WorkspaceState title="Substitution workspace could not be loaded" tone="danger">
-          {workspace.error.message}
-        </WorkspaceState>
+        isAccessDenied(workspace.error) ? (
+          <AccessDeniedState title="You do not have substitution access">
+            Substitution evidence is restricted to users holding the dispensing permission.
+          </AccessDeniedState>
+        ) : (
+          <WorkspaceState title="Substitution workspace could not be loaded" tone="danger">
+            {workspace.error.message}
+          </WorkspaceState>
+        )
       ) : null}
       {workspace.data ? (
         <SectionCard title="Record substitution" titleLevel={2} className="max-w-3xl">

@@ -2251,7 +2251,10 @@ export const pharmacyInventoryRouter = router({
       }
     }),
   /** WHA-1603 INV-07 console: both directions for one branch, slip-ready. */
-  transferBoard: auditedProtectedProcedure
+  // PR J (#979): the transfer board shows every movement between branches, so it
+  // needs the same `pharmacy:inventory` capability its allocate/approve/dispatch/
+  // receive actions already need, not just the module.
+  transferBoard: inventoryControl
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) =>
       transferBoard(ctx.db, await admittedScopeFor(ctx, input.branchId))

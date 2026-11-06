@@ -73,6 +73,7 @@ import { pharmacyFinanceRouter } from './pharmacy-finance';
 import { pharmacyOnboardingRouter } from './pharmacy-onboarding';
 import { pharmacyOrderingRouter } from './pharmacy-ordering';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
+import { pharmacyAccessRouter } from './pharmacy-access';
 import { aiSettingsRouter } from './ai-settings';
 
 export const appRouter = router({
@@ -151,6 +152,7 @@ export const appRouter = router({
   pharmacyOnboarding: pharmacyOnboardingRouter,
   pharmacyOrdering: pharmacyOrderingRouter,
   pharmacySupplierLinks: pharmacySupplierLinksRouter,
+  pharmacyAccess: pharmacyAccessRouter,
 });
 
 export type AppRouter = typeof appRouter;

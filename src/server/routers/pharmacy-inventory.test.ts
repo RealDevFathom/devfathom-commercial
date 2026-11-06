@@ -1909,3 +1909,20 @@ describe('PUR-07 — the stock action centre transport', () => {
     expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
   });
 });
+
+describe('PR J (#979) — the transfer board needs pharmacy:inventory', () => {
+  it('refuses the cashier before reading any transfer', async () => {
+    grant([allow('pharmacy:counter'), allow('pharmacy:orders')]);
+    await expect(caller().transferBoard({ branchId: 'branch_a' })).rejects.toMatchObject(
+      CAPABILITY_REFUSAL
+    );
+    expect(db.pharmacyInterbranchTransfer.findMany).not.toHaveBeenCalled();
+  });
+
+  it('reads the board for the inventory grant', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyInterbranchTransfer.findMany.mockResolvedValue([]);
+    Object.assign(db.user, { findMany: vi.fn().mockResolvedValue([]) });
+    await expect(caller().transferBoard({ branchId: 'branch_a' })).resolves.toEqual([]);
+  });
+});

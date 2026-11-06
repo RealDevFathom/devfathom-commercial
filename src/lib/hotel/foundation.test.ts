@@ -29,7 +29,9 @@ const priorCatalogDigests = {
   // pharmacy:safety grants (Owner template, bootstrap admin). The pin was
   // already stale on develop before either change. If DEV-739 (#1413) lands
   // later, it recomputes this pin with its day-close change and names it here.
-  PHARMACY: '81bdc13b242b07bea52d926a3adbf2fc4308dc61bc7b556a5a2739a49a591c01',
+  // DEV-17 (#994): pharmacy:procurement-approve on the Manager and Owner /
+  // Operator templates; the hashed catalog data differs only by those grants.
+  PHARMACY: '259c422c8d031e258714eb533a8efe682deefd4361d8994fc69c8bcc272e95b0',
 };
 
 const property = {

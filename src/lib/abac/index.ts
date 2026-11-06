@@ -68,6 +68,15 @@ async function customDecision(
   return { decision: null, hasOrganizationRole };
 }
 
+/**
+ * Actions whose tenant-admin fallback applies only to an administrator with no
+ * organization role. An assigned role is the boundary for these.
+ */
+const ROLE_BOUNDED_ADMIN_ACTIONS: ReadonlySet<Action> = new Set([
+  'pharmacy:procurement',
+  'pharmacy:procurement-approve',
+]);
+
 /** True iff some policy registered for `action` allows the subject + resource. */
 export async function can(
   subject: Subject,
@@ -92,7 +101,7 @@ export async function can(
     // not yet have an organization role. Once a role is assigned, its
     // capabilities are the boundary: an omitted procurement grant must not
     // fall through to the coarse ADMIN policy.
-    if (action === 'pharmacy:procurement' && hasOrganizationRole) return false;
+    if (ROLE_BOUNDED_ADMIN_ACTIONS.has(action) && hasOrganizationRole) return false;
   } catch (err) {
     console.error('[abac] custom permission lookup for "%s" threw:', action, err);
     return false;

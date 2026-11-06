@@ -28,7 +28,16 @@ const previousTemplate = [
   'pharmacy:catalogue-review',
   'pharmacy:safety',
 ];
-const template = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner-operator')!;
+const ownerOperator = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner-operator')!;
+// `pharmacy:procurement-approve` joined the template later and is backfilled by
+// its own migration (20261106200200_pharmacy_purchasing_authz, covered by
+// tests/pharmacy-procurement-approve-backfill.db.test.ts).
+const template = {
+  ...ownerOperator,
+  capabilities: ownerOperator.capabilities.filter(
+    (capability) => capability !== 'pharmacy:procurement-approve'
+  ),
+};
 
 async function grants(roleId: string) {
   const rows = await client.query<{ capability: string; effect: string }>(

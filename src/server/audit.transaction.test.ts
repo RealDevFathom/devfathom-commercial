@@ -174,6 +174,22 @@ describe('transaction-bound seed audits', () => {
   });
 });
 
+it('redacts nested purchasing PINs even when input validation refuses the request', () => {
+  expect(
+    toAuditJson({
+      pin: '1234',
+      approvalPin: '2345',
+      directPurchase: { pin: '3456', approvedByUserId: 'person' },
+      metadata: { pinVerified: true },
+    })
+  ).toEqual({
+    pin: '[REDACTED]',
+    approvalPin: '[REDACTED]',
+    directPurchase: { pin: '[REDACTED]', approvedByUserId: 'person' },
+    metadata: { pinVerified: true },
+  });
+});
+
 it('redacts owner PIN before resolver execution including validation and capability failures', () => {
   expect(toAuditJson({ pin: '1234', nested: { PIN: '5678' }, reportId: 'pv_1' })).toEqual({
     pin: '[REDACTED]',

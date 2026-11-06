@@ -7,7 +7,7 @@ import { registerPrintTotals } from '@/lib/pharmacy/register-print';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
-import { WorkspaceState } from './field';
+import { AccessDeniedState, WorkspaceState, isAccessDenied } from './field';
 
 const cell = 'break-words px-2 py-1.5 align-top text-xs text-text-body';
 const head =
@@ -67,6 +67,22 @@ export function ControlledRegisterConsole() {
     popup.focus();
     popup.print();
     setPrintError(false);
+  }
+
+  // #979: a refused branch read is "not permitted", not an empty "No branch" picker.
+  if (isAccessDenied(branches.error)) {
+    return (
+      <div className="min-w-0 space-y-4">
+        <PageHeader
+          eyebrow="Pharmacy"
+          heading="Controlled register"
+          description="Append-only sales, purchases and corrections for this branch."
+        />
+        <AccessDeniedState title="You do not have controlled-register access">
+          The controlled register is restricted to users holding the pharmacy safety permission.
+        </AccessDeniedState>
+      </div>
+    );
   }
 
   return (

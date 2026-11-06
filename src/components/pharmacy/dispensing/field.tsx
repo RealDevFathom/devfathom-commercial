@@ -38,3 +38,26 @@ export function WorkspaceState({
     </div>
   );
 }
+
+/** A refusal, as opposed to a failed load: the surface is closed to this role (#979). */
+export function isAccessDenied(
+  error: { data?: { code?: string } | null } | null | undefined
+): boolean {
+  return error?.data?.code === 'FORBIDDEN';
+}
+
+/**
+ * "Not permitted" is its own state with its own next step — never a connection
+ * problem to retry, and never an empty branch list (#979).
+ */
+export function AccessDeniedState({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <WorkspaceState title={title}>
+      <p>{children}</p>
+      <p className="mt-2">
+        Ask a workspace administrator to add it to your role. Nothing here failed to load — the
+        surface itself is closed to your role.
+      </p>
+    </WorkspaceState>
+  );
+}

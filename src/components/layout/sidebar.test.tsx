@@ -9,6 +9,11 @@ const useSessionMock = vi.hoisted(() =>
   vi.fn(() => ({ data: { user: { role: 'ADMIN', name: 'Test operator' } } }))
 );
 const usePathnameMock = vi.hoisted(() => vi.fn(() => '/dashboard'));
+// The pharmacy rail's capability read (#979); unanswered unless a pharmacy case sets it.
+const pharmacyRailQuery = vi.hoisted(() => ({
+  data: undefined as
+    undefined | { userId: string; organizationId: string | null; capabilities: string[] },
+}));
 // The hospitality rail's one read; unanswered unless a hospitality case sets it.
 const railQuery = vi.hoisted(() => ({
   data: undefined as
@@ -66,6 +71,9 @@ vi.mock('@/lib/trpc', () => ({
     },
     pharmacySafety: {
       access: { useQuery: () => ({ data: { allowed: false } }) },
+    },
+    pharmacyAccess: {
+      navigation: { useQuery: () => ({ data: pharmacyRailQuery.data }) },
     },
     pharmacySop: {
       access: {
@@ -225,13 +233,20 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     vertical = 'PHARMACY',
     granted = pharmacyModules,
     pathname = '/dashboard',
+    capabilities = ['pharmacy:procurement', 'reports:operational'],
+    railUserId = 'pharmacy-user-1',
   }: {
     role?: string;
     vertical?: EntitlementView['vertical'];
     granted?: string[];
     pathname?: string;
+    capabilities?: string[];
+    railUserId?: string;
   } = {}) {
-    useSessionMock.mockReturnValue({ data: { user: { role, name: 'Test operator' } } });
+    useSessionMock.mockReturnValue({
+      data: { user: { id: 'pharmacy-user-1', role, name: 'Test operator' } },
+    } as unknown as ReturnType<typeof useSessionMock>);
+    pharmacyRailQuery.data = { userId: railUserId, organizationId: 'pharmacy-1', capabilities };
     usePathnameMock.mockReturnValue(pathname);
     const onNavigate = vi.fn();
     render(
@@ -259,7 +274,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
   it('renders named, focusable destinations with Chat disabled', () => {
     const onNavigate = renderNavigation();
     for (const [label, href] of destinations) {
-      const link = screen.getByRole('link', { name: new RegExp(`${label}$`) });
+      const link = screen.getByRole('link', { name: (name) => name.endsWith(label) });
       expect(link).toHaveAttribute('href', href);
       expect(link.tabIndex).toBe(0);
       link.focus();
@@ -274,7 +289,9 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     'hides disabled %s without hiding other licensed destinations',
     (label, href, module) => {
       renderNavigation({ granted: [...pharmacyModules.filter((key) => key !== module), 'chat'] });
-      expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
+      ).not.toBeInTheDocument();
       const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
       expect(hrefs).not.toContain(href);
       for (const [, otherHref] of destinations) {
@@ -287,7 +304,9 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
   it('keeps operational links for non-admins while finance and setup stay admin-only', () => {
     renderNavigation({ role: 'MEMBER' });
     for (const label of ['Inventory', 'Purchasing', 'Reports & Insights']) {
-      expect(screen.getByRole('link', { name: new RegExp(`${label}$`) })).toBeInTheDocument();
+      expect(
+        screen.getByRole('link', { name: (name) => name.endsWith(label) })
+      ).toBeInTheDocument();
     }
     for (const label of [
       'Finance',
@@ -296,7 +315,44 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
       'Regulatory profile',
       'Branch assignments',
     ]) {
-      expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it('offers a cashier without procurement or reports neither destination (#979)', () => {
+    renderNavigation({ role: 'MEMBER', capabilities: [] });
+    expect(screen.getByRole('link', { name: /Inventory$/ })).toBeInTheDocument();
+    for (const label of ['Purchasing', 'Reports & Insights', 'Day close', 'Team']) {
+      expect(
+        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  // #979, PR J: the rail answer is the ABAC-resolved capability list. No role
+  // that does no procurement work is offered the Purchasing destination.
+  it.each([
+    ['cashier', ['pharmacy:counter', 'pharmacy:orders']],
+    ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close']],
+    ['default employee', []],
+    ['inventory', ['pharmacy:inventory']],
+    ['auditor', ['reports:operational']],
+    ['finance', ['reports:financial']],
+  ] as const)('offers the %s role no Purchasing destination (#979)', (_role, capabilities) => {
+    renderNavigation({ role: 'MEMBER', capabilities: [...capabilities] });
+    expect(screen.queryByRole('link', { name: /Purchasing$/ })).not.toBeInTheDocument();
+    const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href') ?? '');
+    expect(hrefs.filter((href) => href.startsWith('/pharmacy/purchasing'))).toEqual([]);
+  });
+
+  it('ignores a cached capability answer for another signed-in identity (#979)', () => {
+    renderNavigation({ role: 'MEMBER', railUserId: 'someone-else' });
+    for (const label of ['Purchasing', 'Reports & Insights']) {
+      expect(
+        screen.queryByRole('link', { name: (name) => name.endsWith(label) })
+      ).not.toBeInTheDocument();
     }
   });
 
@@ -344,7 +400,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     ['/pharmacy/inventory', 'Inventory'],
   ])('marks only the longest matching destination current at %s', (pathname, label) => {
     renderNavigation({ pathname });
-    expect(screen.getByRole('link', { name: new RegExp(`${label}$`) })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: (name) => name.endsWith(label) })).toHaveAttribute(
       'aria-current',
       'page'
     );
@@ -425,7 +481,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Hospitality navigation', (surf
       entries.map(([, href]) => href)
     );
     for (const [label, href] of entries) {
-      const link = screen.getByRole('link', { name: new RegExp(`${label}$`) });
+      const link = screen.getByRole('link', { name: (name) => name.endsWith(label) });
       expect(link).toHaveAttribute('href', href);
       expect(link.tabIndex).toBe(0);
     }

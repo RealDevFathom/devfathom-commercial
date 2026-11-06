@@ -22,6 +22,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
+import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
@@ -77,7 +78,17 @@ export default async function PharmacyTransfersPage({
   const query = await searchParams;
   const ctx = await tenantContext();
   const moduleEnabled = ctx ? hasModule(ctx.entitlements, 'pharmacy-inventory') : false;
-  if (!ctx?.session?.user || !moduleEnabled) {
+  // PR J (#979): the page checks the permission the board and its actions need,
+  // not just the module, so a counter-only role is told why instead of erroring.
+  const permitted =
+    moduleEnabled && ctx?.session?.user
+      ? await can(subjectFromSession(ctx.session.user), 'pharmacy:inventory', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }).catch(() => false)
+      : false;
+  if (!ctx?.session?.user || !moduleEnabled || !permitted) {
     return (
       <main className="min-w-0 space-y-6">
         <PageHeader {...header} />

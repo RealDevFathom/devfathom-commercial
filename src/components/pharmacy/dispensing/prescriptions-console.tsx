@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
-import { Field, WorkspaceState, fieldClass } from './field';
+import { AccessDeniedState, Field, WorkspaceState, fieldClass, isAccessDenied } from './field';
 import { MedicationCard } from './medication-card';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -260,9 +260,16 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
         </WorkspaceState>
       ) : null}
       {workspace.error ? (
-        <WorkspaceState title="Prescriptions could not be loaded" tone="danger">
-          {workspace.error.message} Try again when the connection is restored.
-        </WorkspaceState>
+        isAccessDenied(workspace.error) ? (
+          <AccessDeniedState title="You do not have prescription access">
+            Prescription records are restricted to pharmacists and administrators holding the
+            prescription permission.
+          </AccessDeniedState>
+        ) : (
+          <WorkspaceState title="Prescriptions could not be loaded" tone="danger">
+            {workspace.error.message} Try again when the connection is restored.
+          </WorkspaceState>
+        )
       ) : null}
       {workspace.data ? (
         <>
