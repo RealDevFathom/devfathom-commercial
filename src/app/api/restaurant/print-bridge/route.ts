@@ -93,10 +93,7 @@ async function context(request: Request) {
   return ctx as TRPCContext & { session: NonNullable<TRPCContext['session']> };
 }
 
-async function permitted(
-  ctx: NonNullable<Awaited<ReturnType<typeof context>>>,
-  action: Action
-) {
+async function permitted(ctx: NonNullable<Awaited<ReturnType<typeof context>>>, action: Action) {
   return can(subjectFromSession(ctx.session.user), action, undefined, {
     db: ctx.db,
     source: 'TRPC',

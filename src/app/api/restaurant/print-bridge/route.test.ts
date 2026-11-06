@@ -97,6 +97,29 @@ describe('print bridge authorization boundary', () => {
     expect((await POST(request('POST', job))).status).toBe(202);
     expect(mocks.enqueue).toHaveBeenCalledOnce();
   });
+  it.each(['primary', 'assignment'])(
+    'denies read-only %s branch staff printer tests',
+    async (kind) => {
+      (kind === 'primary'
+        ? db.restaurantStaffProfile
+        : db.restaurantBranchAssignment
+      ).findFirst.mockResolvedValue({ id: 'allowed' });
+      const res = await POST(request('POST', job));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        error: 'You do not have permission to test restaurant printers.',
+      });
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.anything(),
+        'restaurant:configure',
+        undefined,
+        expect.anything()
+      );
+      expect(db.restaurantStaffProfile.findFirst).not.toHaveBeenCalled();
+      expect(db.$transaction).not.toHaveBeenCalled();
+      expect(mocks.enqueue).not.toHaveBeenCalled();
+    }
+  );
   it('allows organization configurator routing and rejects unauthorized routing', async () => {
     expect((await PUT(request('PUT', { branchId: 'branch-b', routes: [] }))).status).toBe(403);
     expect(db.restaurantPrintRoute.deleteMany).not.toHaveBeenCalled();
