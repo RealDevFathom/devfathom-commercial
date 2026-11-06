@@ -287,7 +287,8 @@ export async function createCount(
     });
   }
   const lines = await db.pharmacyInventoryCountLine.findMany({ where: { countId: count.id } });
-  const coauth = countNeedsCoauth(lines, varianceThreshold);
+  // Use the persisted snapshot: the trigger may have stored a newer owner setting.
+  const coauth = countNeedsCoauth(lines, count.varianceThreshold);
   return db.pharmacyInventoryCount.update({
     where: { id: count.id },
     data: { status: coauth ? 'AWAITING_COAUTH' : 'OPEN' },

@@ -142,6 +142,28 @@ describe('stock count co-authorization threshold is server-owned', () => {
     expect(count.status).toBe('OPEN');
   });
 
+  it('derives status from the persisted snapshot when the setting changes mid-create', async () => {
+    // The read returns 0, but the trigger snapshots a concurrent owner change to 5.
+    const db = createDb(0);
+    db.pharmacyInventoryCount.create.mockImplementationOnce(async ({ data }) => ({
+      id: 'count',
+      ...data,
+      varianceThreshold: 5,
+    }));
+    const count = await createCount(db as never, scope, {
+      // 3 packs + 5 loose = 35 counted: a 5-unit shortfall, within the stored 5.
+      readings: [
+        {
+          inventoryLotId: 'lot',
+          stockLocationId: 'store',
+          countedSealedPacks: 3,
+          countedLooseUnits: 5,
+        },
+      ],
+    });
+    expect(count.status).toBe('OPEN');
+  });
+
   it('refuses a self-approved OPEN count whose stored threshold exceeds server policy', async () => {
     // A row written with a loose client threshold (e.g. before the cap) must not
     // let its creator post an above-policy adjustment without a checker.
