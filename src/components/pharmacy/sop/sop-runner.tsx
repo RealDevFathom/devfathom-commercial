@@ -825,6 +825,7 @@ function StepItem({
                   timezone={timezone}
                   variant="another"
                   excursionStep={excursionTarget}
+                  stepNote={step.note}
                   onConflict={onConflict}
                 />
               ) : null}

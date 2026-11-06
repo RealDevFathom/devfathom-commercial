@@ -48,6 +48,8 @@ export type SopRecordPickerProps = {
   variant?: 'step' | 'another';
   /** The step that records an out-of-range reading and what was done, when the procedure has one. */
   excursionStep?: { stepOrder: number; title: string } | null;
+  /** The step's saved note; on a done step it already documents its readings. */
+  stepNote?: string | null;
   /**
    * The procedure changed underneath this person: the procedure shows the
    * server's words where they will be seen and re-reads it (this step may no
@@ -96,6 +98,7 @@ export function SopRecordPicker({
   timezone = null,
   variant = 'step',
   excursionStep = null,
+  stepNote = null,
   onConflict,
 }: SopRecordPickerProps) {
   const id = useId();
@@ -130,11 +133,12 @@ export function SopRecordPicker({
   const home = RECORD_HOME[recordType];
   const another = variant === 'another';
   // A done step's note can't change, so without a separate excursion step an
-  // out-of-range reading linked after a send-back carries its own note (the
-  // server refuses it otherwise).
+  // out-of-range reading linked after a send-back carries its own note unless
+  // the step's note already covers it (the server refuses it otherwise).
   const needsLinkNote =
     another &&
     !excursionStep &&
+    !stepNote?.trim() &&
     options.some((record) => record.id === value && record.detail?.outOfRange === true);
 
   return (

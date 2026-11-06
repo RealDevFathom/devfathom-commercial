@@ -318,6 +318,40 @@ describe('reworking a sent-back procedure', () => {
     ]);
   });
 
+  it('needs no link note when the done step’s own note already covers its readings', () => {
+    given(
+      reworkOccurrence({
+        steps: [
+          step({
+            requiredRecordType: 'TEMPERATURE_LOG',
+            completed: true,
+            completedByName: 'Asma',
+            note: 'Fridge read 9 °C at opening; moved stock.',
+          }),
+        ],
+      })
+    );
+    h.queries.linkableRecords = {
+      data: [
+        {
+          id: 'temp-hot',
+          recordType: 'TEMPERATURE_LOG',
+          occurredAt: new Date('2026-11-04T05:30:00Z'),
+          detail: recordDetail({ label: 'Vaccine fridge · 9.4 °C', outOfRange: true }),
+        },
+      ],
+    };
+    render(<RunnerHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add a change to step 1' }));
+    fireEvent.change(
+      screen.getByLabelText(
+        'temperature log for Confirm the refrigerator temperature was recorded'
+      ),
+      { target: { value: 'temp-hot' } }
+    );
+    expect(screen.queryByLabelText(/What happened and what you did/)).not.toBeInTheDocument();
+  });
+
   it('needs no link note when the procedure records excursions on their own step', () => {
     given(reworkOccurrence());
     h.queries.linkableRecords = {
@@ -426,6 +460,16 @@ describe('the reviewer of a reworked procedure', () => {
     // The completed-step summary carries the same detail.
     expect(screen.getByRole('list', { name: 'Linked records for step 1' })).toHaveTextContent(
       'Vaccine fridge · 9.4 °C at 09:30'
+    );
+  });
+
+  it('sees what happened, written with an out-of-range reading’s link', () => {
+    const review = asReviewer({
+      recordLinks: [recordLink({ note: 'Door left open; moved stock to the backup fridge.' })],
+    });
+    const links = within(review).getByRole('list', { name: 'Linked records to check' });
+    expect(within(links).getByRole('listitem')).toHaveTextContent(
+      'Door left open; moved stock to the backup fridge.'
     );
   });
 
