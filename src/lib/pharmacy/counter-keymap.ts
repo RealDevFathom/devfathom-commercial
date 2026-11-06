@@ -136,16 +136,16 @@ export const COUNTER_KEYMAP_PRESETS: Readonly<Record<CounterKeymapPresetKey, Cou
 
 export const COUNTER_ACTION_LABELS: Readonly<Record<CounterAction, string>> = {
   focusSearch: 'Focus scan and search',
-  selectPackUnit: 'Sell by pack',
-  selectStripUnit: 'Sell by strip',
-  selectLooseUnit: 'Sell by unit',
-  addToCart: 'Add to cart',
+  selectPackUnit: 'Next add as pack',
+  selectStripUnit: 'Next add as strip',
+  selectLooseUnit: 'Next add as unit',
+  addToCart: 'Add the highlighted result',
   holdSale: 'Hold bill',
   resumeSale: 'Resume held bill',
-  openTender: 'Open tender',
+  openTender: 'Take payment',
   printReceipt: 'Print receipt',
-  focusPrescriptionPanel: 'Focus prescription panel',
-  captureDemand: 'Capture unfulfilled demand',
+  focusPrescriptionPanel: 'Patient and prescription',
+  captureDemand: 'Customer asked for it',
   voidSale: 'Void bill',
 };
 

@@ -83,6 +83,7 @@ import {
   resolveCounterKeymap,
   shouldHandleCounterKey,
   type CounterAction,
+  type CounterBinding,
   type CounterKeymapPresetKey,
 } from '@/lib/pharmacy/counter-keymap';
 import { COUNTER_ERROR_MESSAGES, counterErrorMessage } from '@/lib/pharmacy/counter-messages';
@@ -360,15 +361,21 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [keymapSaveError, setKeymapSaveError] = useState<string | null>(null);
-  const [keymapPresetDraft, setKeymapPresetDraft] = useState<CounterKeymapPresetKey | null>(null);
-  const queuedKeymapPreset = useRef<CounterKeymapPresetKey | null>(null);
+  const [keymapDraft, setKeymapDraft] = useState<{
+    preset: CounterKeymapPresetKey;
+    overrides: Record<string, CounterBinding>;
+  } | null>(null);
+  const queuedKeymap = useRef<{
+    preset: CounterKeymapPresetKey;
+    overrides: Record<string, CounterBinding>;
+  } | null>(null);
   const keymapSaveRunning = useRef(false);
   const keymapMounted = useRef(true);
   useEffect(() => {
     keymapMounted.current = true;
     return () => {
       keymapMounted.current = false;
-      queuedKeymapPreset.current = null;
+      queuedKeymap.current = null;
     };
   }, []);
   const [drawerToast, setDrawerToast] = useState<string | null>(null);
@@ -504,8 +511,8 @@ function ScopedPharmacyCounterConsole({
   }, [branchAuthorized, branchId, branches, initialBranchId, recoveryScope, selectedBranchId]);
 
   const keymapQuery = trpc.pharmacySales.counterKeymap.useQuery(undefined, { staleTime: 300_000 });
-  const keymap = keymapPresetDraft
-    ? resolveCounterKeymap({ preset: keymapPresetDraft })
+  const keymap = keymapDraft
+    ? resolveCounterKeymap(keymapDraft)
     : (keymapQuery.data ?? resolveCounterKeymap({ preset: 'devfathom' }));
   const saveKeymap = trpc.pharmacySales.counterSaveKeymap.useMutation({
     onSuccess: (saved) => {
@@ -526,19 +533,28 @@ function ScopedPharmacyCounterConsole({
     if (keymapSaveRunning.current) return;
     keymapSaveRunning.current = true;
     try {
-      while (keymapMounted.current && queuedKeymapPreset.current !== null) {
-        const preset = queuedKeymapPreset.current;
-        queuedKeymapPreset.current = null;
+      while (keymapMounted.current && queuedKeymap.current !== null) {
+        const next = queuedKeymap.current;
+        queuedKeymap.current = null;
         try {
-          await saveKeymap.mutateAsync({ preset, overrides: {} });
+          await saveKeymap.mutateAsync(next);
         } catch {
           // The mutation's onError reports failure; a later choice may still be saved.
         }
       }
     } finally {
       keymapSaveRunning.current = false;
-      if (keymapMounted.current) setKeymapPresetDraft(null);
+      if (keymapMounted.current) setKeymapDraft(null);
     }
+  }
+  function queueKeymap(next: {
+    preset: CounterKeymapPresetKey;
+    overrides: Record<string, CounterBinding>;
+  }) {
+    setKeymapSaveError(null);
+    setKeymapDraft(next);
+    queuedKeymap.current = next;
+    void saveQueuedKeymap();
   }
 
   const trimmedQuery = query.trim();
@@ -2868,12 +2884,10 @@ function ScopedPharmacyCounterConsole({
           saving={saveKeymap.isPending}
           disabled={pending === 'tender'}
           error={keymapSaveError}
-          onPresetChange={(preset: CounterKeymapPresetKey) => {
-            setKeymapSaveError(null);
-            setKeymapPresetDraft(preset);
-            queuedKeymapPreset.current = preset;
-            void saveQueuedKeymap();
-          }}
+          onPresetChange={(preset: CounterKeymapPresetKey) =>
+            queueKeymap({ preset, overrides: {} })
+          }
+          onBindingsChange={(overrides) => queueKeymap({ preset: keymap.preset.key, overrides })}
         />
       </CounterOverlay>
       <CounterOverlay

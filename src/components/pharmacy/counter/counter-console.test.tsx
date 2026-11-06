@@ -2155,6 +2155,29 @@ describe('DEV-618 counter composition', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Could not save shortcuts.');
   });
 
+  it('queues a key change behind a pending preset save', async () => {
+    let finish!: () => void;
+    mocks.mutations.counterSaveKeymap!.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Shortcuts' }));
+    fireEvent.change(screen.getByLabelText('Keymap'), { target: { value: 'legacySpeed' } });
+    const change = screen.getByRole('button', { name: 'Change Focus scan and search' });
+    fireEvent.click(change);
+    fireEvent.keyDown(change, { key: 'F2', shiftKey: true });
+    expect(mocks.mutations.counterSaveKeymap).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+    await waitFor(() => expect(mocks.mutations.counterSaveKeymap).toHaveBeenCalledTimes(2));
+    expect(mocks.mutations.counterSaveKeymap).toHaveBeenLastCalledWith({
+      preset: 'legacySpeed',
+      overrides: { focusSearch: { key: 'F2', shift: true } },
+    });
+  });
+
   it('drops queued changes and stale preference responses when the operator unmounts', async () => {
     let finish!: () => void;
     mocks.mutations.counterSaveKeymap!.mockImplementationOnce(
