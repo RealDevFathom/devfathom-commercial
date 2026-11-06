@@ -1305,6 +1305,7 @@ describe('proof captured outside the pharmacy workspace', () => {
 describe('an out-of-range reading linked where no later note can reach it', () => {
   const TEMP_STEP = opening.steps[1]!.title;
   const arrange = (opts: {
+    stepNote?: string;
     done?: boolean;
     existing?: boolean;
     outOfRange?: boolean;
@@ -1320,6 +1321,7 @@ describe('an out-of-range reading linked where no later note can reach it', () =
       opening.steps.map((step, index) => ({
         id: `ostep_${index + 1}`,
         completed: index === 1 ? opts.done !== false : false,
+        note: index === 1 ? (opts.stepNote ?? null) : null,
         templateStep: {
           title: opts.excursion && index === 4 ? 'Record any excursion' : step.title,
         },
@@ -1369,6 +1371,7 @@ describe('an out-of-range reading linked where no later note can reach it', () =
     ['an in-range reading', {}, { outOfRange: false }],
     ['the same reading linked again', {}, { existing: true }],
     ['a separate excursion step', {}, { excursion: true }],
+    ['a done step that already has a note', {}, { stepNote: 'Fridge at 9 °C; moved stock' }],
   ])('links it with %s', async (_label, extra, opts) => {
     arrange(opts);
     await expect(link(extra)).resolves.toMatchObject({ linkId: 'link_1' });

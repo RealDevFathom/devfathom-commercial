@@ -1025,7 +1025,7 @@ async function assertExcursionNoteBeforeCompletion(
  * step already done (after a send-back) or to no step at all. Without a
  * separate excursion step, submission needs a note on the link or its step,
  * and neither a done step's note nor an existing link's note can change, so
- * an undocumented out-of-range reading linked there could never be submitted.
+ * an out-of-range reading linked there without either could never be submitted.
  */
 async function assertExcursionNoteBeforeLateLink(
   ctx: TRPCContext,
@@ -1041,13 +1041,19 @@ async function assertExcursionNoteBeforeLateLink(
   if (input.recordType !== 'TEMPERATURE_LOG' || input.note?.trim()) return;
   const steps = await ctx.db.restaurantSopOccurrenceStep.findMany({
     where: { occurrenceId },
-    select: { id: true, completed: true, templateStep: { select: { title: true } } },
+    select: {
+      id: true,
+      completed: true,
+      note: true,
+      templateStep: { select: { title: true } },
+    },
   });
   if (steps.some((step) => EXCURSION_STEP.test(step.templateStep.title))) return;
   if (input.occurrenceStepId) {
     const step = steps.find((candidate) => candidate.id === input.occurrenceStepId);
-    // An open step takes the note before it is marked done (checked there).
-    if (!step || !step.completed) return;
+    // An open step takes the note before it is marked done (checked there),
+    // and a done step's own note already counts at submission.
+    if (!step || !step.completed || step.note?.trim()) return;
   }
   // Linking the same reading again stays the adapter's no-op.
   const existing = await ctx.db.pharmacySopRecordLink.findFirst({

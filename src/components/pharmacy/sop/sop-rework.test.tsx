@@ -303,9 +303,15 @@ describe('reworking a sent-back procedure', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'This reading is out of range. Write what happened and what you did.'
     );
-    fireEvent.change(screen.getByLabelText(noteLabel), {
-      target: { value: '  Door left open; moved stock.  ' },
-    });
+    const note = screen.getByLabelText(noteLabel);
+    expect(note).toHaveAttribute('aria-required', 'true');
+    expect(note).toHaveAttribute('aria-invalid', 'true');
+    expect(note).toHaveAccessibleDescription(
+      'This reading is out of range. Write what happened and what you did.'
+    );
+    fireEvent.change(note, { target: { value: '  Door left open; moved stock.  ' } });
+    // Typing clears the refusal.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Link record' }));
     expect(h.calls.linkRecord).toEqual([
       expect.objectContaining({ recordId: 'temp-hot', note: 'Door left open; moved stock.' }),

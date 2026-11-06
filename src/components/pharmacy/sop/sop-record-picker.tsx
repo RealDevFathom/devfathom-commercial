@@ -210,11 +210,14 @@ export function SopRecordPicker({
             <select
               id={id}
               aria-label={`${label} for ${stepTitle}`}
-              aria-invalid={error ? true : undefined}
+              aria-invalid={error && !needsLinkNote ? true : undefined}
               className={fieldClass}
               value={value}
               disabled={link.isPending}
-              onChange={(event) => onChange(event.target.value)}
+              onChange={(event) => {
+                setError(null);
+                onChange(event.target.value);
+              }}
             >
               <option value="">Select…</option>
               {options.map((record) => (
@@ -234,9 +237,15 @@ export function SopRecordPicker({
                 id={`${id}-link-note`}
                 className="min-h-20 bg-surface-raised"
                 maxLength={2000}
+                aria-required
+                aria-invalid={error && !linkNote.trim() ? true : undefined}
+                aria-describedby={error ? `${id}-error` : undefined}
                 value={linkNote}
                 disabled={link.isPending}
-                onChange={(event) => setLinkNote(event.target.value)}
+                onChange={(event) => {
+                  setError(null);
+                  setLinkNote(event.target.value);
+                }}
               />
             </label>
           ) : null}
@@ -255,7 +264,7 @@ export function SopRecordPicker({
         <p className="text-sm text-warning">{outOfRangeAdvice(excursionStep, stepTitle)}</p>
       ) : null}
       {error ? (
-        <p className="text-sm text-destructive" role="alert">
+        <p id={`${id}-error`} className="text-sm text-destructive" role="alert">
           {error}
         </p>
       ) : null}
