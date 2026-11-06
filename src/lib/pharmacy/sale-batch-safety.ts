@@ -9,7 +9,7 @@ import type { LedgerScope } from './stock-ledger';
 export type SaleBatchErrorReason =
   'SALE_BATCH_RECALLED' | 'SALE_BATCH_QUARANTINED' | 'SALE_BATCH_EXPIRED' | 'SALE_BATCH_BLOCKED';
 
-/** #633: a batch on the sale stopped being sellable after its line was added. */
+/** #659: a batch on the sale stopped being sellable after its line was added. */
 export class PharmacySaleBatchError extends Error {
   constructor(
     readonly reason: SaleBatchErrorReason,
@@ -56,7 +56,7 @@ function rank(reason: BlockReason): number {
 }
 
 /**
- * #633: batch safety is decided when a line is added to the cart, but the batch can be
+ * #659: batch safety is decided when a line is added to the cart, but the batch can be
  * recalled or quarantined, or reach its expiry instant, before the bill is paid. Every
  * tender and every completion therefore re-loads the batch behind each allocated lot in
  * the caller's transaction and refuses the sale, before any money or receipt is written,

@@ -1,0 +1,78 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Inventory
+Imports
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY INVENTORY · AWAITING VERIFICATION
+Imported stock
+
+Original medicine stock references retained from completed imports.
+
+Back to Inventory
+Awaiting verification
+
+These quantities are imported references pending batch, expiry, and physical count verification. They are not available-to-sell balances. Pack meanings and conversions also need verification; no quantities here are multiplied or rounded into units.
+
+IMPORTED MEDICINE ROWS
+0
+All completed imports in this workspace
+ROWS WITH REPORTED STOCK
+0
+Original QTY is a valid positive decimal; all imports
+
+Totals count source rows, not distinct medicines or verified sellable units. Search filters the list below. Posted stock balances remain on Inventory. Blank or invalid source counts appear as Unknown; valid decimals keep their original precision.
+
+Imported medicine references
+Search medicine name
+Search imports
+
+No completed medicine imports are visible in this workspace.
+
+0 matching rows · Page 1 of 1 · Up to 50 rows per page
+
+Previous
+Next

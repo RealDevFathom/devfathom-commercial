@@ -1,7 +1,7 @@
 /**
  * @vitest-environment node
  *
- * #633 against a REAL migrated PostgreSQL, as the restricted runtime role under FORCE RLS.
+ * #659 against a REAL migrated PostgreSQL, as the restricted runtime role under FORCE RLS.
  * Batch safety was decided only at add-to-cart, so a batch recalled, quarantined or past
  * its stored exclusive expiry instant before payment could still be tendered, completed
  * and printed on a receipt. Each change made after add-to-cart must refuse the tender and
@@ -30,8 +30,8 @@ let inventoryOperations: typeof import('./inventory-operations');
 
 const describeDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const run = randomUUID().slice(0, 8);
-const organizationId = `sbs633_${run}`;
-const scope = { organizationId, branchId: `sbs633_branch_${run}`, actorId: 'sbs633-actor' };
+const organizationId = `sbs659_${run}`;
+const scope = { organizationId, branchId: `sbs659_branch_${run}`, actorId: 'sbs659-actor' };
 const businessDate = new Date('2026-10-22T00:00:00.000Z');
 let catalog: { locationId: string };
 
@@ -224,7 +224,7 @@ function tenderInput(saleId: string, amountMinor: number) {
   };
 }
 
-describeDatabase('#633 batch safety is rechecked at tender and completion', () => {
+describeDatabase('#659 batch safety is rechecked at tender and completion', () => {
   it('still settles and completes a sale whose batch stayed safe', async () => {
     const f = await cart('safe');
     const result = await tenant((db) =>

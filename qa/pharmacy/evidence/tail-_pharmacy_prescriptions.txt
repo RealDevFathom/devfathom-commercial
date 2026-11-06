@@ -1,0 +1,54 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Search workspace
+⌘K
+Ask Fathom
+Ask Fathom chat availability is being checked. Try again shortly.
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY · RX-02
+Prescriptions
+
+Capture the original evidence, authority and every authorized unit before dispensing.
+
+Loading prescriptions
+Retrieving protected patient and prescription records.
