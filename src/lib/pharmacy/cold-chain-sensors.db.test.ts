@@ -164,6 +164,59 @@ beforeAll(async () => {
   await inOrg(ORG_A, (db) => db.user.create({ data: member(LEAVER, ORG_A) }));
 }, 120_000);
 
+/** A cold-chain medicine lot on hand in `fridge`, so PUR-07 has a COLD_CHAIN fact to raise. */
+async function stockColdChainLot(fridge: string): Promise<void> {
+  await inOrg(ORG_A, async (db) => {
+    const medicine = await db.medicine.create({
+      data: {
+        organizationId: ORG_A,
+        productName: `Sensor vaccine ${randomBytes(4).toString('hex')}`,
+        productFamily: 'PHARMACEUTICAL',
+        coldChain: true,
+        presentations: {
+          create: { organizationId: ORG_A, presentation: 'Vial, 10 per pack' },
+        },
+      },
+      include: { presentations: true },
+    });
+    const packLevel = await db.packLevel.create({
+      data: {
+        organizationId: ORG_A,
+        presentationId: medicine.presentations[0]!.id,
+        versionGroupId: `pack-${randomBytes(4).toString('hex')}`,
+        version: 1,
+        level: 'STRIP',
+        unitsPerParent: 10,
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    });
+    const batch = await db.pharmacyManufacturingBatch.create({
+      data: {
+        organizationId: ORG_A,
+        medicineId: medicine.id,
+        batchNumber: `B-${randomBytes(4).toString('hex')}`,
+        expiresAt: new Date('2028-01-01T00:00:00.000Z'),
+        expiryPrecision: 'DAY',
+      },
+    });
+    await deps.ledger.receiveLot(db, scope(ORG_A, BRANCH_A), {
+      manufacturingBatchId: batch.id,
+      packLevelId: packLevel.id,
+      stockLocationId: fridge,
+      unitsPerPack: 10,
+      supplierName: 'Cold Distributor',
+      supplierInvoiceRef: `INV-${randomBytes(4).toString('hex')}`,
+      unitCostMinor: 100,
+      printedMrpMinor: 200,
+      receivedExpiresAt: batch.expiresAt,
+      receivedExpiryPrecision: 'DAY',
+      quantityUnits: 10,
+      idempotencyKey: `receive-${randomBytes(4).toString('hex')}`,
+      receivedAt: new Date('2026-10-01T00:00:00.000Z'),
+    });
+  });
+}
+
 describeIfDatabase('#732 live cold-chain sensor push', () => {
   it('stores pushed readings as SENSOR evidence in the enrolled zone only', async () => {
     const fridge = await zone(ORG_A, BRANCH_A, 'COLD');
@@ -277,9 +330,10 @@ describeIfDatabase('#732 live cold-chain sensor push', () => {
       deps.sensors.rotateColdChainSensorSecret(db, scope(ORG_A, BRANCH_A), sensor.id)
     );
     expect(rotated.sensor.enrolledByActorId).toBe(ADMIN);
-    await expect(deps.sensors.receiveSensorPush(rotated.secret, body, now)).resolves.toMatchObject(
-      { ok: true, accepted: 1 }
-    );
+    await expect(deps.sensors.receiveSensorPush(rotated.secret, body, now)).resolves.toMatchObject({
+      ok: true,
+      accepted: 1,
+    });
     await expect(
       inOrg(ORG_A, (db) =>
         db.pharmacyTemperatureLog.findMany({
@@ -372,55 +426,7 @@ describeIfDatabase('#732 live cold-chain sensor push', () => {
   it('raises the existing COLD_CHAIN stock alert when a push starts an excursion', async () => {
     const fridge = await zone(ORG_A, BRANCH_A, 'COLD');
     const { secret } = await enroll(ORG_A, BRANCH_A, fridge);
-    await inOrg(ORG_A, async (db) => {
-      const medicine = await db.medicine.create({
-        data: {
-          organizationId: ORG_A,
-          productName: `Sensor vaccine ${randomBytes(4).toString('hex')}`,
-          productFamily: 'PHARMACEUTICAL',
-          coldChain: true,
-          presentations: {
-            create: { organizationId: ORG_A, presentation: 'Vial, 10 per pack' },
-          },
-        },
-        include: { presentations: true },
-      });
-      const packLevel = await db.packLevel.create({
-        data: {
-          organizationId: ORG_A,
-          presentationId: medicine.presentations[0]!.id,
-          versionGroupId: `pack-${randomBytes(4).toString('hex')}`,
-          version: 1,
-          level: 'STRIP',
-          unitsPerParent: 10,
-          effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
-        },
-      });
-      const batch = await db.pharmacyManufacturingBatch.create({
-        data: {
-          organizationId: ORG_A,
-          medicineId: medicine.id,
-          batchNumber: `B-${randomBytes(4).toString('hex')}`,
-          expiresAt: new Date('2028-01-01T00:00:00.000Z'),
-          expiryPrecision: 'DAY',
-        },
-      });
-      await deps.ledger.receiveLot(db, scope(ORG_A, BRANCH_A), {
-        manufacturingBatchId: batch.id,
-        packLevelId: packLevel.id,
-        stockLocationId: fridge,
-        unitsPerPack: 10,
-        supplierName: 'Cold Distributor',
-        supplierInvoiceRef: `INV-${randomBytes(4).toString('hex')}`,
-        unitCostMinor: 100,
-        printedMrpMinor: 200,
-        receivedExpiresAt: batch.expiresAt,
-        receivedExpiryPrecision: 'DAY',
-        quantityUnits: 10,
-        idempotencyKey: `receive-${randomBytes(4).toString('hex')}`,
-        receivedAt: new Date('2026-10-01T00:00:00.000Z'),
-      });
-    });
+    await stockColdChainLot(fridge);
 
     // One warm reading is only pending; no alert yet.
     const pending = await deps.sensors.receiveSensorPush(
@@ -464,5 +470,42 @@ describeIfDatabase('#732 live cold-chain sensor push', () => {
         })
       )
     ).resolves.toBe(0);
+  });
+
+  it('raises the COLD_CHAIN alert when the sensor clock runs ahead of the server', async () => {
+    const fridge = await zone(ORG_A, BRANCH_A, 'COLD');
+    const { secret } = await enroll(ORG_A, BRANCH_A, fridge);
+    await stockColdChainLot(fridge);
+
+    // Each reading is stamped about 60 s ahead of server time, inside the
+    // accepted clock-skew allowance.
+    for (const [recordedAt, serverNow] of [
+      ['2026-11-01T12:00:00.000Z', '2026-11-01T11:59:00.000Z'],
+      ['2026-11-01T12:15:00.000Z', '2026-11-01T12:14:00.000Z'],
+    ] as const) {
+      await expect(
+        deps.sensors.receiveSensorPush(secret, readings([recordedAt, 9]), new Date(serverNow))
+      ).resolves.toMatchObject({ ok: true, accepted: 1, alertsRefreshed: false });
+    }
+
+    const excursion = await deps.sensors.receiveSensorPush(
+      secret,
+      readings(['2026-11-01T12:30:00.000Z', 9.3]),
+      new Date('2026-11-01T12:29:00.000Z')
+    );
+    expect(excursion).toMatchObject({
+      ok: true,
+      accepted: 1,
+      zoneStatus: 'EXCURSION',
+      alertsRefreshed: true,
+    });
+    await expect(
+      inOrg(ORG_A, (db) =>
+        db.pharmacyStockSignal.findMany({
+          where: { stockLocationId: fridge, kind: 'COLD_CHAIN', status: 'OPEN' },
+          select: { kind: true },
+        })
+      )
+    ).resolves.toEqual([{ kind: 'COLD_CHAIN' }]);
   });
 });

@@ -462,9 +462,17 @@ export async function receiveSensorPush(
     const known = new Set(existing.map((row) => row.recordedAt.getTime()));
     const fresh = readings.filter((reading) => !known.has(reading.recordedAt.getTime()));
 
+    // A reading may be stamped up to MAX_SENSOR_CLOCK_SKEW_MS ahead of the
+    // server. Zone status ignores readings after its evaluation time, so the
+    // zone (and the alert refresh) is evaluated at the newest accepted reading
+    // when that is later than server `now`; otherwise a fast sensor clock
+    // would hide its own excursion.
+    const evaluatedAt = new Date(
+      Math.max(now.getTime(), ...readings.map((reading) => reading.recordedAt.getTime()))
+    );
     const statusOf = async () =>
-      (await loadTemperatureZoneStatuses(db, scope, now, [sensor.stockLocationId]))[0]?.status ??
-      null;
+      (await loadTemperatureZoneStatuses(db, scope, evaluatedAt, [sensor.stockLocationId]))[0]
+        ?.status ?? null;
     const before = await statusOf();
     if (before === null) return { ok: false, error: 'zone_unavailable' };
 
@@ -515,7 +523,7 @@ export async function receiveSensorPush(
         },
       })) > 0;
     const alertsRefreshed = entering || recovered;
-    if (alertsRefreshed) await refreshStockSignals(db, scope, now);
+    if (alertsRefreshed) await refreshStockSignals(db, scope, evaluatedAt);
 
     return {
       ok: true,
