@@ -98,6 +98,7 @@ import {
   pharmacySopRouter,
   type SopCommand,
 } from './pharmacy-sop';
+import { PharmacySopAccessError } from '@/lib/pharmacy/sop-adapter';
 import { findPharmacySopPack } from '@/lib/pharmacy/sop-library';
 import { SopExecutionError } from '@/lib/restaurant/sop-execution';
 import { RecurrenceError } from '@/lib/restaurant/sop-recurrence';
@@ -502,7 +503,56 @@ describe('new proof and links after a send-back use the normal routes', () => {
     occurrenceRow = { ...occurrenceRow, status: 'REJECTED' };
     await expect(
       caller().evidenceTarget({ ...OCC_INPUT, occurrenceStepId: 'ostep_1' })
-    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: SOP_STATE_MESSAGES.changed });
+  });
+
+  it.each(['SCHEDULED', 'REJECTED', 'SUBMITTED', 'LATE', 'VERIFIED'] as const)(
+    'a stale screen adding proof or a record to a %s procedure is told it changed',
+    async (status) => {
+      db.restaurantSopTemplateVersion.findFirst.mockResolvedValue({
+        template: { name: receiving.name },
+      });
+      occurrenceRow = { ...occurrenceRow, status };
+      for (const call of [
+        () => caller().evidenceTarget({ ...OCC_INPUT, occurrenceStepId: 'ostep_1' }),
+        () => caller().linkRecord({ ...OCC_INPUT, recordType: 'GOODS_RECEIPT', recordId: 'gr_2' }),
+      ]) {
+        const error = await call().catch((caught: TRPCError) => caught);
+        expect(error).toMatchObject({ code: 'CONFLICT', message: SOP_STATE_MESSAGES.changed });
+        expect((error as TRPCError).message).not.toMatch(/occurrence|[A-Z]{3,}/);
+      }
+      expect(mocks.adapter.linkPharmacySopRecord).not.toHaveBeenCalled();
+    }
+  );
+
+  it('a procedure that moved on inside the link transaction is told it changed', async () => {
+    db.restaurantSopTemplateVersion.findFirst.mockResolvedValue({
+      template: { name: receiving.name },
+    });
+    mocks.adapter.linkPharmacySopRecord.mockRejectedValueOnce(
+      new PharmacySopAccessError('This procedure is not in progress.', 'STATE_CHANGED')
+    );
+    await expect(
+      caller().linkRecord({ ...OCC_INPUT, recordType: 'GOODS_RECEIPT', recordId: 'gr_2' })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: SOP_STATE_MESSAGES.changed });
+  });
+
+  it('says plainly that a cancelled or reversed receipt cannot be linked', async () => {
+    db.restaurantSopTemplateVersion.findFirst.mockResolvedValue({
+      template: { name: receiving.name },
+    });
+    mocks.adapter.linkPharmacySopRecord.mockRejectedValueOnce(
+      new PharmacySopAccessError(
+        'A cancelled or reversed receipt can’t be linked.',
+        'INVALID_INPUT'
+      )
+    );
+    await expect(
+      caller().linkRecord({ ...OCC_INPUT, recordType: 'GOODS_RECEIPT', recordId: 'gr_x' })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'A cancelled or reversed receipt can’t be linked.',
+    });
   });
 
   it('linkRecord accepts a new link once the procedure is back IN_PROGRESS', async () => {
@@ -826,6 +876,12 @@ describe('linkableRecords', () => {
       },
     });
     expect(JSON.stringify(row)).not.toMatch(/DRAFT|POSTED/);
+    // A cancelled receipt never happened, so the picker never offers one.
+    expect(db.pharmacyGoodsReceipt.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: { notIn: ['CANCELLED', 'REVERSED'] } }),
+      })
+    );
   });
 
   it.each([

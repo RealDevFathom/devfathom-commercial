@@ -42,6 +42,8 @@ export type PharmacySopAccessErrorReason =
   | 'ROLE_REQUIRED'
   | 'NOT_INDEPENDENT'
   | 'RECORD_OUT_OF_SCOPE'
+  /** The procedure moved on (sent for review, checked, sent back) since it was read. */
+  | 'STATE_CHANGED'
   | 'INVALID_INPUT';
 
 export class PharmacySopAccessError extends Error {
@@ -644,7 +646,7 @@ export async function setPharmacySopRoleHolding(
       // The target's profile is found by user id, so a matching user covers
       // the grantor's own profile too.
       if (grantor.userId === targetUserId) {
-        refuse('NOT_INDEPENDENT', 'You cannot grant yourself a verifier role.');
+        refuse('NOT_INDEPENDENT', 'You can’t give yourself a role that checks procedures.');
       }
     }
     if (
@@ -775,7 +777,8 @@ export async function assertIndependentPharmacyVerifier(
 ): Promise<void> {
   const occurrence = await assertOccurrenceAtSite(db, input);
   const verifier = input.verifierStaffProfileId;
-  if (!verifier) refuse('ROLE_REQUIRED', 'A verifier role is required at this branch.');
+  if (!verifier)
+    refuse('ROLE_REQUIRED', 'You don’t hold a role that checks procedures at this branch.');
 
   const [allowed, held] = await Promise.all([
     pharmacySopVerifierRolesFor(db, occurrence.templateVersionId),
@@ -783,11 +786,11 @@ export async function assertIndependentPharmacyVerifier(
   ]);
   const qualifying = held.filter((key) => allowed.includes(key));
   if (qualifying.length === 0) {
-    refuse('ROLE_REQUIRED', 'A verifier role is required at this branch.');
+    refuse('ROLE_REQUIRED', 'You don’t hold a role that checks procedures at this branch.');
   }
 
   const notIndependent = () =>
-    refuse('NOT_INDEPENDENT', 'Someone who worked on this checklist cannot verify it.');
+    refuse('NOT_INDEPENDENT', 'You can’t check a procedure you worked on.');
   if (
     occurrence.assignedStaffProfileId === verifier ||
     occurrence.claimedByStaffProfileId === verifier
@@ -828,7 +831,7 @@ export async function assertIndependentPharmacyVerifier(
       user.status !== 'ACTIVE' ||
       !(await can(user, 'pharmacy:dispense', undefined, { db }))
     ) {
-      refuse('ROLE_REQUIRED', 'A verifier role is required at this branch.');
+      refuse('ROLE_REQUIRED', 'You don’t hold a role that checks procedures at this branch.');
     }
   }
 }
@@ -846,7 +849,12 @@ async function pharmacyRecordAtBranch(
     recordType: PharmacySopRecordType;
     recordId: string;
   }
-): Promise<{ outOfRange?: boolean; occurredAt?: Date; coldChain?: boolean } | null> {
+): Promise<{
+  outOfRange?: boolean;
+  occurredAt?: Date;
+  coldChain?: boolean;
+  cancelled?: boolean;
+} | null> {
   const { organizationId, pharmacyBranchId: branchId, recordId: id } = input;
   switch (input.recordType) {
     case 'TEMPERATURE_LOG': {
@@ -872,9 +880,14 @@ async function pharmacyRecordAtBranch(
     case 'GOODS_RECEIPT': {
       const receipt = await db.pharmacyGoodsReceipt.findFirst({
         where: { id, organizationId, branchId },
-        select: { receivedAt: true },
+        select: { receivedAt: true, status: true },
       });
-      return receipt ? { occurredAt: receipt.receivedAt } : null;
+      return receipt
+        ? {
+            occurredAt: receipt.receivedAt,
+            cancelled: receipt.status === 'CANCELLED' || receipt.status === 'REVERSED',
+          }
+        : null;
     }
     case 'MANUFACTURING_BATCH':
       return (await db.pharmacyManufacturingBatch.findFirst({
@@ -904,7 +917,9 @@ async function pharmacyRecordAtBranch(
  * A repeat of an existing link returns it with `created: false`; the step and
  * note of the first link stand. Inside the transaction the occurrence row is
  * share-locked and re-read: it must be IN_PROGRESS and the actor must be its
- * owner (assignee, else claimer), otherwise INVALID_INPUT. Event records must
+ * owner (assignee, else claimer), otherwise STATE_CHANGED (it moved on) or
+ * INVALID_INPUT (not the owner). A cancelled goods receipt is never linked.
+ * Event records must
  * fall in {@link pharmacySopRecordTimeBounds} of the occurrence
  * (RECORD_OUT_OF_SCOPE otherwise).
  */
@@ -985,16 +1000,16 @@ export async function linkPharmacySopRecord(
       occurrence.resolvedAt ||
       (CLOSED_OCCURRENCE_STATUSES as readonly string[]).includes(occurrence.status)
     ) {
-      refuse('INVALID_INPUT', 'This checklist is already closed.');
+      refuse('STATE_CHANGED', 'This procedure is already closed.');
     }
     if (occurrence.status !== 'IN_PROGRESS') {
-      refuse('INVALID_INPUT', 'Start the checklist before linking records to it.');
+      refuse('STATE_CHANGED', 'This procedure is not in progress.');
     }
     const owner = occurrence.assignedStaffProfileId ?? occurrence.claimedByStaffProfileId;
     if (owner !== input.actor.staffProfileId) {
       refuse(
         'INVALID_INPUT',
-        'Only the assigned or claiming staff member may link records to this checklist.'
+        'Only the person this procedure is assigned to, or who claimed it, can link records to it.'
       );
     }
     const occurrenceStepId = input.occurrenceStepId || null;
@@ -1015,6 +1030,8 @@ export async function linkPharmacySopRecord(
       recordId,
     });
     if (!record) refuse('RECORD_OUT_OF_SCOPE', 'That record was not found at this branch.');
+    if (record.cancelled)
+      refuse('INVALID_INPUT', 'A cancelled or reversed receipt can’t be linked.');
     if (input.recordType === 'TEMPERATURE_LOG' && input.temperatureZone) {
       const zone = temperatureZoneOf(record.coldChain);
       if (zone !== input.temperatureZone)
@@ -1441,7 +1458,13 @@ export async function listPharmacySopLinkableRecords(
     }
     case 'GOODS_RECEIPT': {
       const rows = (await db.pharmacyGoodsReceipt.findMany({
-        where: { organizationId, branchId, ...(bounds ? { receivedAt: bounds } : {}) },
+        // A cancelled or reversed receipt no longer stands, so it is never offered.
+        where: {
+          organizationId,
+          branchId,
+          status: { notIn: ['CANCELLED', 'REVERSED'] },
+          ...(bounds ? { receivedAt: bounds } : {}),
+        },
         orderBy: [{ receivedAt: 'desc' }, { id: 'asc' }],
         take,
         select: RECEIPT_DETAIL_SELECT,

@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EVIDENCE_ENDPOINT, SopEvidenceUpload } from './sop-evidence-upload';
+import { PHARMACY_SOP_CHANGED_MESSAGE } from '@/lib/pharmacy/sop-shared';
 
 type Listener = (event?: unknown) => void;
 
@@ -37,6 +38,7 @@ class FakeRequest {
   }
 }
 
+const CHANGED = PHARMACY_SOP_CHANGED_MESSAGE;
 const photo = () => new File(['fridge display'], 'fridge.jpg', { type: 'image/jpeg' });
 
 function renderUpload(props: Partial<React.ComponentProps<typeof SopEvidenceUpload>> = {}) {
@@ -129,13 +131,55 @@ describe('procedure proof upload', () => {
       FakeRequest.sent[0].fire(
         'load',
         409,
-        '{"error":"Start the occurrence before adding proof to it."}'
+        '{"error":"This exact image is already on the step but was not captured in the pharmacy workspace."}'
       )
     );
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'Start the occurrence before adding proof to it.'
-    );
+    expect(screen.getByRole('alert')).toHaveTextContent('This exact image is already on the step');
     expect(screen.queryByRole('button', { name: 'Retry upload' })).not.toBeInTheDocument();
+  });
+
+  it('hands a procedure that moved on to onConflict with the server words, and shows nothing inline', () => {
+    const onConflict = vi.fn();
+    const { onUploaded } = renderUpload({ onConflict });
+    choose(photo());
+    act(() =>
+      FakeRequest.sent[0].fire('load', 409, JSON.stringify({ error: CHANGED, conflict: true }))
+    );
+    expect(onConflict).toHaveBeenCalledExactlyOnceWith(CHANGED);
+    expect(onUploaded).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry upload' })).not.toBeInTheDocument();
+    // The file input is ready for a new choice once the procedure is re-read.
+    expect(screen.getByLabelText('Photo for Record fridge temperature')).toBeEnabled();
+  });
+
+  it('uses the fixed plain words when a moved-on refusal carries none', () => {
+    const onConflict = vi.fn();
+    renderUpload({ onConflict });
+    choose(photo());
+    act(() => FakeRequest.sent[0].fire('load', 409, '{"conflict":true}'));
+    expect(onConflict).toHaveBeenCalledExactlyOnceWith(CHANGED);
+  });
+
+  it('keeps a failed save inline with a retry, never treating it as a moved-on procedure', () => {
+    const onConflict = vi.fn();
+    renderUpload({ onConflict });
+    choose(photo());
+    act(() =>
+      FakeRequest.sent[0].fire('load', 503, '{"error":"Proof was not saved. Retry in a moment."}')
+    );
+    expect(onConflict).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Proof was not saved. Retry in a moment.');
+    expect(screen.getByRole('button', { name: 'Retry upload' })).toBeVisible();
+  });
+
+  it('without onConflict, shows a moved-on refusal inline', () => {
+    renderUpload();
+    choose(photo());
+    act(() =>
+      FakeRequest.sent[0].fire('load', 409, JSON.stringify({ error: CHANGED, conflict: true }))
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(CHANGED);
   });
 
   it('rejects a file that is not an image before uploading', () => {

@@ -35,6 +35,7 @@ import {
   type PharmacySopProvenance,
 } from '@/lib/pharmacy/sop-evidence';
 import {
+  PHARMACY_SOP_CHANGED_MESSAGE,
   PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE,
   PHARMACY_SOP_SCHEDULE_LIMITS,
 } from '@/lib/pharmacy/sop-shared';
@@ -164,19 +165,21 @@ function mapAccessError(err: PharmacySopAccessError): never {
         message: 'This account is linked to more than one active staff profile. Ask an admin.',
       });
     case 'OCCURRENCE_OUT_OF_SCOPE':
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Procedure not found.' });
     case 'RECORD_OUT_OF_SCOPE':
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Record not found at this branch.' });
     case 'ROLE_REQUIRED':
       throw new TRPCError({
         code: 'FORBIDDEN',
-        message: 'You do not hold the pharmacy SOP role this action needs at this branch.',
+        message: 'You don’t hold the role this procedure needs at this branch.',
       });
     case 'NOT_INDEPENDENT':
       throw new TRPCError({
         code: 'FORBIDDEN',
-        message: 'A verifier must not have worked on the occurrence they verify.',
+        message: 'You can’t check a procedure you worked on.',
       });
+    case 'STATE_CHANGED':
+      throw new TRPCError({ code: 'CONFLICT', message: SOP_STATE_MESSAGES.changed });
     case 'INVALID_INPUT':
       throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
   }
@@ -189,7 +192,7 @@ export type SopCommand =
 
 /** Fixed wording for state refusals: the engine's own text names internal states. */
 export const SOP_STATE_MESSAGES = {
-  changed: 'This procedure has changed since you opened it. Refresh to see its current state.',
+  changed: PHARMACY_SOP_CHANGED_MESSAGE,
   alreadyChecked: 'This procedure has already been checked.',
   notInReview: 'This procedure has not been sent for review yet.',
   ownWork: 'Only the person this procedure is assigned to, or who claimed it, can work on it.',
@@ -251,9 +254,9 @@ export function mapSopError(err: unknown, command: SopCommand = 'other'): never 
   if (err instanceof SopExecutionError) {
     switch (err.reason) {
       case 'NOT_FOUND':
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Procedure not found.' });
       case 'STEP_NOT_FOUND':
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Step not found on this occurrence.' });
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Step not found on this procedure.' });
       case 'NOT_OWNER':
         throw new TRPCError({
           code: 'FORBIDDEN',
@@ -274,7 +277,7 @@ export function mapSopError(err: unknown, command: SopCommand = 'other'): never 
   if (err instanceof SopVerificationError) {
     switch (err.reason) {
       case 'NOT_FOUND':
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Procedure not found.' });
       case 'INVALID_STATE':
         // Only a review decision moves a procedure out of review, so a review
         // that finds it gone means someone already checked it.
@@ -293,7 +296,7 @@ export function mapSopError(err: unknown, command: SopCommand = 'other'): never 
       case 'NOT_FOUND':
         throw new TRPCError({
           code: 'NOT_FOUND',
-          message: 'That SOP template, assignment or branch was not found.',
+          message: 'That procedure, schedule or branch was not found.',
         });
       case 'TEMPLATE_LIMIT_REACHED':
         throw new TRPCError({
@@ -439,10 +442,10 @@ async function pharmacyTemplate(ctx: TRPCContext, templateId: string) {
   });
   const pack = template ? pharmacySopPackForTemplateName(template.name) : undefined;
   if (!template || !pack) {
-    throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy SOP template not found.' });
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Procedure not found.' });
   }
   if (!template.isActive) {
-    throw new TRPCError({ code: 'CONFLICT', message: 'This SOP template is archived.' });
+    throw new TRPCError({ code: 'CONFLICT', message: 'This procedure is no longer in use.' });
   }
   return { template, pack };
 }
@@ -564,7 +567,7 @@ async function assertOccurrenceVisible(
     if (poolRole && heldRoles.includes(poolRole)) return { heldRoles, canVerify };
   }
   if (await allowed(ctx, 'sop:manage')) return { heldRoles, canVerify };
-  throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+  throw new TRPCError({ code: 'NOT_FOUND', message: 'Procedure not found.' });
 }
 
 /** The occurrence must be the actor's own work (assigned or claimed). */
@@ -590,7 +593,7 @@ async function assertStepOnOccurrence(
     select: { id: true },
   });
   if (!step)
-    throw new TRPCError({ code: 'NOT_FOUND', message: 'Step not found on this occurrence.' });
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Step not found on this procedure.' });
 }
 
 // ── Proof provenance ──────────────────────────────────────────────────────────
@@ -703,7 +706,7 @@ async function assertLinkableRecordType(
     select: { templateStep: { select: { title: true, stepOrder: true } } },
   });
   if (!step) {
-    throw new TRPCError({ code: 'NOT_FOUND', message: 'Step not found on this occurrence.' });
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Step not found on this procedure.' });
   }
   const packStep = packStepFor(pack, step.templateStep);
   const required = requiredRecordTypeOf(packStep);
@@ -839,7 +842,7 @@ async function assertPharmacySubmissionRequirements(
       },
     },
   });
-  if (!occ) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+  if (!occ) throw new TRPCError({ code: 'NOT_FOUND', message: 'Procedure not found.' });
   const pack = pharmacySopPackForTemplateName(occ.assignment.template.name);
 
   // The engine accepts any evidence row as photo/signature proof. Count only
@@ -1401,8 +1404,7 @@ export const pharmacySopRouter = router({
           if (!heldRoles.includes(pack.pharmacy.roleKey)) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
-              message:
-                'That person does not hold the pharmacy SOP role this procedure needs at this branch.',
+              message: 'That person doesn’t hold the role this procedure needs at this branch.',
             });
           }
         }
@@ -1630,7 +1632,7 @@ export const pharmacySopRouter = router({
     }),
 
   /**
-   * "Create today's work now": materialise due occurrences for THIS branch
+   * "Create work from schedules now": materialise due occurrences for THIS branch
    * only (the engine is restricted to the site's engine branch, so no other
    * site, pharmacy or restaurant, is touched). Idempotent through
    * `unique(assignmentId, dueAt)`. An explicit manager action, so it stays
@@ -1780,7 +1782,7 @@ export const pharmacySopRouter = router({
         if (!heldRoles.includes(pack.pharmacy.roleKey)) {
           throw new TRPCError({
             code: 'FORBIDDEN',
-            message: 'You do not hold the pharmacy SOP role this procedure needs at this branch.',
+            message: 'You don’t hold the role this procedure needs at this branch.',
           });
         }
 
@@ -2067,7 +2069,7 @@ export const pharmacySopRouter = router({
           getOccurrenceAuditTrail(ctx.db, occurrence.id),
           pharmacyJobRoleIds(ctx),
         ]);
-        if (!detail) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+        if (!detail) throw new TRPCError({ code: 'NOT_FOUND', message: 'Procedure not found.' });
         const latestRejection = latestRejectionOf(detail.verifications);
         const after = (at: Date | null | undefined) =>
           Boolean(latestRejection && at && at.getTime() > latestRejection.createdAt.getTime());
@@ -2269,13 +2271,13 @@ export const pharmacySopRouter = router({
           message:
             outcome.reason === 'NOT_ELIGIBLE'
               ? 'You do not hold the role this procedure is pooled to at this branch.'
-              : 'This occurrence is not available to claim.',
+              : 'This procedure is not available to claim.',
         });
       }
       if (outcome.status === 'CLAIMED_BY_OTHER') {
         throw new TRPCError({
           code: 'CONFLICT',
-          message: 'Someone else has already claimed this occurrence.',
+          message: 'Someone else has already claimed this procedure.',
         });
       }
       if (outcome.status === 'CLAIMED') {
@@ -2359,11 +2361,10 @@ export const pharmacySopRouter = router({
           input.occurrenceId
         );
         assertOwnWork(occurrence, actor);
+        // Only open, started work takes records. Anything else means the
+        // procedure moved on since this person opened it (a stale tab).
         if (occurrence.status !== 'IN_PROGRESS') {
-          throw new TRPCError({
-            code: 'CONFLICT',
-            message: 'Start the occurrence before linking records to it.',
-          });
+          throw new TRPCError({ code: 'CONFLICT', message: SOP_STATE_MESSAGES.changed });
         }
         const packStep = await assertLinkableRecordType(
           ctx,
@@ -2417,11 +2418,10 @@ export const pharmacySopRouter = router({
           input.occurrenceId
         );
         assertOwnWork(occurrence, actor);
+        // As for records: proof goes only on started work; anything else is a
+        // stale screen. The evidence route answers this CONFLICT with 409.
         if (occurrence.status !== 'IN_PROGRESS') {
-          throw new TRPCError({
-            code: 'CONFLICT',
-            message: 'Start the occurrence before adding proof to it.',
-          });
+          throw new TRPCError({ code: 'CONFLICT', message: SOP_STATE_MESSAGES.changed });
         }
         await assertStepOnOccurrence(ctx, occurrence.id, input.occurrenceStepId);
         return {
@@ -2479,7 +2479,7 @@ export const pharmacySopRouter = router({
           where: { id: occurrence.id },
           select: { dueAt: true, windowEndsAt: true },
         });
-        if (!window) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+        if (!window) throw new TRPCError({ code: 'NOT_FOUND', message: 'Procedure not found.' });
         // Offer only records the link will accept (the adapter enforces the
         // same bounds); null means the type is not time-bounded.
         return listPharmacySopLinkableRecords(ctx.db, {
@@ -2542,7 +2542,7 @@ export const pharmacySopRouter = router({
             },
           });
           if (!current) {
-            throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Procedure not found.' });
           }
           assertOwnWork(current, actor);
           const latest = current.verifications[0];

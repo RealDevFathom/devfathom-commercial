@@ -1051,13 +1051,13 @@ function scheduleTarget(row: SopAssignment) {
 }
 
 /**
- * Each schedule switch's name: what it controls, so "checked" reads as
- * "active" ("Schedule active: Pharmacy — hygiene for Pharmacy assistant").
- * Two schedules for the same procedure and people are told apart by when they
- * run ("…, every day at 15:00"), and by number if even that is the same.
+ * Each schedule's name: the procedure and who does it ("Pharmacy — hygiene
+ * for Pharmacy assistant"). Two schedules for the same procedure and people
+ * are told apart by when they run ("…, every day at 15:00"), and by number if
+ * even that is the same.
  */
-export function scheduleSwitchNames(rows: readonly SopAssignment[]) {
-  const base = rows.map((row) => `Schedule active: ${row.templateName} for ${scheduleTarget(row)}`);
+export function scheduleLabels(rows: readonly SopAssignment[]) {
+  const base = rows.map((row) => `${row.templateName} for ${scheduleTarget(row)}`);
   const count = (names: string[], name: string) => names.filter((other) => other === name).length;
   const timed = base.map((name, index) => {
     if (count(base, name) < 2) return name;
@@ -1073,6 +1073,21 @@ export function scheduleSwitchNames(rows: readonly SopAssignment[]) {
   });
 }
 
+/**
+ * Each schedule switch's name: what it controls, so "checked" reads as
+ * "active" ("Schedule active: Pharmacy — hygiene for Pharmacy assistant").
+ */
+export function scheduleSwitchNames(rows: readonly SopAssignment[]) {
+  return scheduleLabels(rows).map((label) => `Schedule active: ${label}`);
+}
+
+/** What pausing or resuming one schedule did, naming it as its switch does. */
+export function scheduleToggleNotice(label: string, active: boolean) {
+  return active
+    ? `Resumed ${label}. New work will be created from it again.`
+    : `Paused ${label}. Work already created stays and can still be done.`;
+}
+
 /** What creating work from the schedules did, in words. */
 export function generateNotice(result: { created?: number | null } | null | undefined) {
   const created = result?.created;
@@ -1080,6 +1095,9 @@ export function generateNotice(result: { created?: number | null } | null | unde
   if (created === 0) return 'Nothing new to create from your schedules right now.';
   return `Created ${created} ${created === 1 ? 'procedure' : 'procedures'} from your schedules.`;
 }
+
+/** The manual button: it creates whatever is due from the schedules, not only today's work. */
+export const GENERATE_LABEL = 'Create work from schedules now';
 
 /** What pausing a schedule does, said once above the list. */
 export const PAUSE_COPY =
@@ -1097,25 +1115,23 @@ function Schedules({
   const utils = trpc.useUtils();
   const assignments = trpc.pharmacySop.assignments.useQuery({ pharmacyBranchId }, { retry: false });
   const [error, setError] = useState<string | null>(null);
-  const [changed, setChanged] = useState<string | null>(null);
+  /** What the last pause or resume did (or why it failed), said below the list. */
+  const [changed, setChanged] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null);
   /** The schedule being paused or resumed, named in the notice once it is saved. */
-  const toggling = useRef<{ name: string; target: string; active: boolean } | null>(null);
+  const toggling = useRef<{ label: string; active: boolean } | null>(null);
   const setActive = trpc.pharmacySop.setAssignmentActive.useMutation({
     onSuccess: async () => {
-      setError(null);
       const done = toggling.current;
       if (done) {
-        setChanged(
-          done.active
-            ? `Resumed ${done.name} for ${done.target}. New work will be created from it again.`
-            : `Paused ${done.name} for ${done.target}. Work already created stays and can still be done.`
-        );
+        setChanged({ tone: 'success', text: scheduleToggleNotice(done.label, done.active) });
       }
       await utils.pharmacySop.assignments.invalidate({ pharmacyBranchId });
     },
     onError: (cause) => {
-      setChanged(null);
-      setError(errorMessage(cause, 'The schedule could not be changed. Retry.'));
+      setChanged({
+        tone: 'danger',
+        text: errorMessage(cause, 'The schedule could not be changed. Retry.'),
+      });
     },
   });
   const generate = trpc.pharmacySop.generate.useMutation({
@@ -1128,7 +1144,7 @@ function Schedules({
       setError(errorMessage(cause, 'Work could not be created from your schedules. Retry.')),
   });
   const list: SopAssignment[] = (assignments.data ?? []).filter((row) => !row.superseded);
-  const switchNames = scheduleSwitchNames(list);
+  const labels = scheduleLabels(list);
 
   return (
     <SectionCard
@@ -1142,7 +1158,7 @@ function Schedules({
             disabled={generate.isPending}
             onClick={() => generate.mutate({ pharmacyBranchId })}
           >
-            {generate.isPending ? 'Creating…' : "Create today's work now"}
+            {generate.isPending ? 'Creating…' : GENERATE_LABEL}
           </Button>
         ) : null
       }
@@ -1175,9 +1191,6 @@ function Schedules({
       ) : (
         <div className="grid gap-3">
           <p className="text-xs text-text-muted">{PAUSE_COPY}</p>
-          <p role="status" className="text-sm text-text-body empty:hidden">
-            {changed}
-          </p>
           <ul className="divide-y divide-border-subtle">
             {list.map((row, index) => (
               // One grid for every row, so the toggle sits at the same place on
@@ -1205,13 +1218,9 @@ function Schedules({
                     className={`${SWITCH_CONTRAST} ${SWITCH_HIT_AREA}`}
                     checked={row.active}
                     disabled={setActive.isPending}
-                    aria-label={switchNames[index]}
+                    aria-label={`Schedule active: ${labels[index]}`}
                     onCheckedChange={(active) => {
-                      toggling.current = {
-                        name: row.templateName,
-                        target: scheduleTarget(row),
-                        active,
-                      };
+                      toggling.current = { label: labels[index]!, active };
                       setChanged(null);
                       setActive.mutate({ pharmacyBranchId, assignmentId: row.id, active });
                     }}
@@ -1221,6 +1230,16 @@ function Schedules({
               </li>
             ))}
           </ul>
+          {/* Below the list, never above it: a notice appearing there would
+              push every row down just as the next switch is tapped. */}
+          <p role="status" className="text-sm text-text-body empty:hidden">
+            {changed?.tone === 'success' ? changed.text : null}
+          </p>
+          {changed?.tone === 'danger' ? (
+            <p role="alert" className="text-sm text-destructive">
+              {changed.text}
+            </p>
+          ) : null}
         </div>
       )}
     </SectionCard>
@@ -1229,7 +1248,7 @@ function Schedules({
 
 /** What the automatic-scheduling switch does, said in plain words beside it. */
 export const AUTO_SCHEDULE_COPY =
-  "When on, this branch's procedures are created automatically from its schedules, due at the times you set. It checks every hour. When off, use 'Create today's work now'. Procedures never block pharmacy work.";
+  "When on, this branch's procedures are created automatically from its schedules, due at the times you set. It checks every hour. When off, use 'Create work from schedules now'. Procedures never block pharmacy work.";
 
 /** A time of day at the branch, for the next automatic run ("12:00"). */
 function branchTime(value: Date | string, timezone: string | null) {
@@ -1253,7 +1272,7 @@ export function autoScheduleNotice(
   timezone: string | null
 ) {
   if (!result.autoScheduleEnabled) {
-    return "Turned off. Use 'Create today's work now' when you are ready.";
+    return "Turned off. Use 'Create work from schedules now' when you are ready.";
   }
   const created =
     result.generated == null

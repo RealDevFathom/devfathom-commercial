@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/trpc', async () => (await import('./sop-trpc-mock')).trpcModule);
@@ -136,6 +136,60 @@ describe('a refused change after the procedure changed elsewhere', () => {
     expect(alerts).toHaveLength(1);
     expect(alerts[0]).toHaveTextContent(CHECKED);
     await waitFor(() => expect(alerts[0]).toHaveFocus());
+    expect(h.invalidated.map(([name]) => name)).toEqual(['occurrence', 'board']);
+  });
+});
+
+describe('proof refused because the procedure moved on (a stale rework tab)', () => {
+  const CHANGED =
+    'This procedure has changed since you opened it. Refresh to see its current state.';
+
+  /** Just enough of the browser upload request to answer one upload. */
+  class FakeRequest {
+    static sent: FakeRequest[] = [];
+    status = 0;
+    responseText = '';
+    upload = { addEventListener: vi.fn() };
+    private listeners: Record<string, Array<() => void>> = {};
+    open() {}
+    addEventListener(type: string, listener: () => void) {
+      (this.listeners[type] ??= []).push(listener);
+    }
+    send() {
+      FakeRequest.sent.push(this);
+    }
+    answer(status: number, body: string) {
+      this.status = status;
+      this.responseText = body;
+      for (const listener of this.listeners.load ?? []) listener();
+    }
+  }
+
+  beforeEach(() => {
+    FakeRequest.sent = [];
+    vi.stubGlobal('XMLHttpRequest', FakeRequest);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('shows the server’s words at the top, focused, offers no retry and re-reads it', async () => {
+    h.queries.occurrence = { data: reworkOccurrence() };
+    h.queries.linkableRecords = { data: [] };
+    render(<RunnerHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add a change to step 1' }));
+    fireEvent.change(
+      screen.getByLabelText('Photo for Confirm the refrigerator temperature was recorded'),
+      { target: { files: [new File(['fridge'], 'fridge.jpg', { type: 'image/jpeg' })] } }
+    );
+    expect(FakeRequest.sent).toHaveLength(1);
+    act(() => FakeRequest.sent[0]!.answer(409, JSON.stringify({ error: CHANGED, conflict: true })));
+    // One message, at the top of the procedure, not one inside the upload too.
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent(CHANGED);
+    expect(alerts[0]).not.toHaveTextContent(/occurrence/i);
+    await waitFor(() => expect(alerts[0]).toHaveFocus());
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Retry upload' })).not.toBeInTheDocument();
     expect(h.invalidated.map(([name]) => name)).toEqual(['occurrence', 'board']);
   });
 });

@@ -273,13 +273,13 @@ describe('pharmacy procedures workspace', () => {
   it('shows a claim conflict in plain words', () => {
     setup();
     h.outcomes.claim = () =>
-      Object.assign(new Error('Someone else has already claimed this occurrence.'), {
+      Object.assign(new Error('Someone else has already claimed this procedure.'), {
         data: { code: 'CONFLICT' },
       });
     render(<PharmacySopWorkspace />);
     fireEvent.click(screen.getByRole('button', { name: 'Claim Pharmacy — hygiene' }));
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'Someone else has already claimed this occurrence.'
+      'Someone else has already claimed this procedure.'
     );
   });
 

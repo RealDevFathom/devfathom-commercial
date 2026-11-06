@@ -6,7 +6,7 @@
  * `pharmacySopSiteSetting` table.
  *
  * Pins:
- * - "Create today's work now" (`generate`) and `startOnDemand` hand the engine
+ * - "Create work from schedules now" (`generate`) and `startOnDemand` hand the engine
  *   only this site's engine branch, never the whole tenant;
  * - automatic scheduling is OFF until a manager turns it on, per branch,
  *   through a gated, branch-scoped, strict and audited mutation;
@@ -234,7 +234,7 @@ beforeEach(() => {
 
 // ── Manual generation is branch-scoped ───────────────────────────────────────
 
-describe('generate ("Create today\'s work now")', () => {
+describe('generate ("Create work from schedules now")', () => {
   it('hands the engine only this site’s engine branch', async () => {
     await caller().generate(BRANCH_INPUT);
     expect(mocks.engine.generateDueSopOccurrences).toHaveBeenCalledTimes(1);

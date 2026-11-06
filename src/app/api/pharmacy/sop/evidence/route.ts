@@ -5,6 +5,7 @@ import { TRPCError } from '@trpc/server';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 import { publicRequestOrigin } from '@/lib/http-origin';
+import { PHARMACY_SOP_CHANGED_MESSAGE } from '@/lib/pharmacy/sop-shared';
 import {
   pharmacySopEvidenceFilename,
   resolvePharmacySopProvenance,
@@ -174,7 +175,7 @@ export async function POST(request: Request) {
     const occurrenceStepId = field(form, 'occurrenceStepId') || null;
     const purpose = field(form, 'evidencePurpose') || 'photo';
     if (!pharmacyBranchId || !occurrenceId) {
-      throw new EvidenceInputError('Branch and occurrence are required.');
+      throw new EvidenceInputError('Choose the branch and procedure first.');
     }
     if (purpose !== 'photo' && purpose !== 'signature') {
       throw new EvidenceInputError('Choose whether this file is photo or signature proof.');
@@ -309,20 +310,25 @@ export async function POST(request: Request) {
       // re-attaches idempotently and writes the receipt again.
       return json(503, { error: 'Proof was not saved. Retry in a moment.', retryable: true });
     }
+    // `conflict: true` marks a procedure that moved on since the screen read
+    // it (a stale tab): the upload hands it to the runner, which re-reads the
+    // procedure, instead of offering a retry that cannot succeed.
     if (error instanceof TRPCError) {
       const status = TRPC_STATUS[error.code];
+      if (status === 409) return json(409, { error: error.message, conflict: true });
       if (status) return json(status, { error: error.message });
     }
     if (error instanceof SopExecutionError) {
+      if (error.reason === 'INVALID_STATE') {
+        return json(409, { error: PHARMACY_SOP_CHANGED_MESSAGE, conflict: true });
+      }
       const status =
         error.reason === 'NOT_FOUND' || error.reason === 'STEP_NOT_FOUND'
           ? 404
           : error.reason === 'NOT_OWNER'
             ? 403
-            : error.reason === 'INVALID_STATE'
-              ? 409
-              : 400;
-      return json(status, { error: 'Proof could not be attached to this occurrence.' });
+            : 400;
+      return json(status, { error: 'Proof could not be added to this procedure.' });
     }
     if (error instanceof StorageUnavailableError) {
       return json(503, { error: 'Proof capture unavailable. Storage is unavailable.' });

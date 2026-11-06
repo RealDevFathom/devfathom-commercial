@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
+import { PHARMACY_SOP_CHANGED_MESSAGE } from '@/lib/pharmacy/sop-shared';
 
 import type { EvidencePurpose } from './sop-model';
 
@@ -37,16 +38,29 @@ export type SopEvidenceUploadProps = {
    * step after a send-back, so the label never says "required".
    */
   required?: boolean;
+  /**
+   * The procedure moved on since this screen read it (the server answers 409
+   * with `conflict: true`): the runner shows the words and re-reads it. A
+   * retry could never succeed, so none is offered here. Without it the words
+   * are shown inline.
+   */
+  onConflict?: (message: string) => void;
 };
 
-function serverMessage(request: XMLHttpRequest) {
+function responseBody(request: XMLHttpRequest): Record<string, unknown> | null {
   try {
-    const body = JSON.parse(request.responseText) as { error?: unknown; message?: unknown };
-    const text = typeof body.error === 'string' ? body.error : body.message;
-    if (typeof text === 'string' && text.length > 0 && text.length <= 300) return text;
+    const body: unknown = JSON.parse(request.responseText);
+    return body && typeof body === 'object' ? (body as Record<string, unknown>) : null;
   } catch {
-    // Not JSON — fall through to the generic message.
+    return null; // Not JSON — the caller falls back to the generic message.
   }
+}
+
+function serverMessage(request: XMLHttpRequest) {
+  const body = responseBody(request);
+  if (!body) return null;
+  const text = typeof body.error === 'string' ? body.error : body.message;
+  if (typeof text === 'string' && text.length > 0 && text.length <= 300) return text;
   return null;
 }
 
@@ -70,6 +84,7 @@ export function SopEvidenceUpload({
   recount,
   onUploaded,
   required = true,
+  onConflict,
 }: SopEvidenceUploadProps) {
   const id = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -128,6 +143,14 @@ export function SopEvidenceUpload({
       inFlight.current = null;
       if (request.status >= 200 && request.status < 300) {
         finish();
+        return;
+      }
+      if (request.status === 409 && responseBody(request)?.conflict === true && onConflict) {
+        // The chosen file is dropped: it can only go on the procedure as it is now.
+        pending.current = null;
+        if (inputRef.current) inputRef.current.value = '';
+        update({ kind: 'idle' });
+        onConflict(serverMessage(request) ?? PHARMACY_SOP_CHANGED_MESSAGE);
         return;
       }
       const retryable = request.status >= 500 || request.status === 0 || request.status === 429;

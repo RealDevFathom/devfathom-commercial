@@ -27,6 +27,7 @@ import {
   ensurePharmacySopStaffProfile,
   linkPharmacySopRecord,
   listPharmacySopBranches,
+  listPharmacySopLinkableRecords,
   pharmacySopRecordDetailKey,
   pharmacySopRecordTimeBounds,
   pharmacySopRolesAt,
@@ -64,8 +65,9 @@ function matches(row: Row, where: Row | undefined, tables: Tables): boolean {
       );
     }
     if (condition && typeof condition === 'object' && !Array.isArray(condition)) {
-      const op = condition as { in?: unknown[]; not?: unknown };
+      const op = condition as { in?: unknown[]; notIn?: unknown[]; not?: unknown };
       if (op.in) return op.in.includes(row[key]);
+      if (op.notIn) return !op.notIn.includes(row[key]);
       if ('not' in op) return row[key] !== op.not;
     }
     return row[key] === condition;
@@ -1112,6 +1114,38 @@ describe('occurrence scope and independent verification', () => {
   });
 });
 
+describe('listPharmacySopLinkableRecords', () => {
+  it('never offers a cancelled goods receipt, but offers draft and posted ones', async () => {
+    const { db, tables } = fixture();
+    tables.goodsReceipts = tables.goodsReceipts.filter((row) => row.branchId !== 'pb_main');
+    const receipt = (id: string, status: string) => ({
+      id,
+      organizationId: ORG,
+      branchId: 'pb_main',
+      reference: id.toUpperCase(),
+      status,
+      receivedAt: at('2026-11-04T09:00:00Z'),
+      supplierInvoiceRef: null,
+      supplier: { name: 'Medline Traders' },
+    });
+    tables.goodsReceipts.push(
+      receipt('grn_draft', 'DRAFT'),
+      receipt('grn_posted', 'POSTED'),
+      receipt('grn_cancelled', 'CANCELLED'),
+      receipt('grn_reversed', 'REVERSED')
+    );
+    const rows = await listPharmacySopLinkableRecords(db, {
+      organizationId: ORG,
+      pharmacyBranchId: 'pb_main',
+      timezone: 'Asia/Karachi',
+      recordType: 'GOODS_RECEIPT',
+      bounds: null,
+      take: 50,
+    });
+    expect(rows.map((row) => row.id).sort()).toEqual(['grn_draft', 'grn_posted']);
+  });
+});
+
 describe('pharmacySopRecordTimeBounds', () => {
   const occurrence = {
     dueAt: at('2026-11-04T08:00:00Z'),
@@ -1211,6 +1245,40 @@ describe('linkPharmacySopRecord', () => {
     ]);
   });
 
+  it('refuses a cancelled goods receipt in plain words, and links draft and posted ones', async () => {
+    const { db, tables } = fixture();
+    const receivedAt = at('2026-11-04T09:00:00Z');
+    tables.goodsReceipts.push(
+      {
+        id: 'grn_cancelled',
+        organizationId: ORG,
+        branchId: 'pb_main',
+        status: 'CANCELLED',
+        receivedAt,
+      },
+      {
+        id: 'grn_reversed',
+        organizationId: ORG,
+        branchId: 'pb_main',
+        status: 'REVERSED',
+        receivedAt,
+      },
+      { id: 'grn_draft', organizationId: ORG, branchId: 'pb_main', status: 'DRAFT', receivedAt },
+      { id: 'grn_posted', organizationId: ORG, branchId: 'pb_main', status: 'POSTED', receivedAt }
+    );
+    const link = (recordId: string) =>
+      linkPharmacySopRecord(db, { ...base, recordType: 'GOODS_RECEIPT', recordId });
+    for (const refused of ['grn_cancelled', 'grn_reversed']) {
+      await expect(link(refused)).rejects.toMatchObject({
+        reason: 'INVALID_INPUT',
+        message: 'A cancelled or reversed receipt can’t be linked.',
+      });
+    }
+    expect(await reason(link('grn_draft'))).toBe('RESOLVED');
+    expect(await reason(link('grn_posted'))).toBe('RESOLVED');
+    expect(tables.links.map((row) => row.recordId).sort()).toEqual(['grn_draft', 'grn_posted']);
+  });
+
   it('refuses an occurrence that is not IN_PROGRESS, re-read inside the transaction', async () => {
     const { db, tables } = fixture();
     const record = { recordType: 'TEMPERATURE_LOG' as const, recordId: 'temp_main' };
@@ -1218,10 +1286,10 @@ describe('linkPharmacySopRecord', () => {
       await reason(
         linkPharmacySopRecord(db, { ...base, ...record, occurrenceId: 'occ_submitted_own' })
       )
-    ).toBe('INVALID_INPUT');
+    ).toBe('STATE_CHANGED');
     // A status change between the router's check and the link is caught too.
     tables.occurrences.find((row) => row.id === 'occ_live')!.status = 'SUBMITTED';
-    expect(await reason(linkPharmacySopRecord(db, { ...base, ...record }))).toBe('INVALID_INPUT');
+    expect(await reason(linkPharmacySopRecord(db, { ...base, ...record }))).toBe('STATE_CHANGED');
     expect(tables.links).toHaveLength(0);
   });
 
@@ -1257,7 +1325,7 @@ describe('linkPharmacySopRecord', () => {
     const record = { recordType: 'TEMPERATURE_LOG' as const, recordId: 'temp_main' };
     for (const occurrenceId of ['occ_verified', 'occ_waived']) {
       expect(await reason(linkPharmacySopRecord(db, { ...base, ...record, occurrenceId }))).toBe(
-        'INVALID_INPUT'
+        'STATE_CHANGED'
       );
     }
     expect(

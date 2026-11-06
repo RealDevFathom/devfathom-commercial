@@ -115,7 +115,12 @@ vi.mock('@/lib/restaurant/sop-score', () => ({
 }));
 
 import { router } from '../trpc';
-import { notOwnedOrClaimedBy, pharmacySopRouter } from './pharmacy-sop';
+import {
+  mapSopError,
+  notOwnedOrClaimedBy,
+  pharmacySopRouter,
+  SOP_STATE_MESSAGES,
+} from './pharmacy-sop';
 import { PharmacySopAccessError } from '@/lib/pharmacy/sop-adapter';
 import { pharmacySopEvidenceFilename } from '@/lib/pharmacy/sop-evidence';
 import { PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE } from '@/lib/pharmacy/sop-shared';
@@ -537,7 +542,7 @@ describe('branch and occurrence scope', () => {
       new PharmacySopAccessError('occ_1 is at branch pbranch_other', 'OCCURRENCE_OUT_OF_SCOPE')
     );
     const error = await call(caller()).catch((err: unknown) => err);
-    expect(error).toMatchObject({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+    expect(error).toMatchObject({ code: 'NOT_FOUND', message: 'Procedure not found.' });
     expect(mocks.adapter.assertOccurrenceAtSite).toHaveBeenCalledWith(db, {
       occurrenceId: 'occ_1',
       site: SITE,
@@ -680,7 +685,7 @@ describe('createAssignment', () => {
     mocks.adapter.pharmacySopRolesAt.mockResolvedValue(['pharmacy-assistant']);
     await expect(caller().createAssignment(personInput)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: expect.stringContaining('does not hold the pharmacy SOP role'),
+      message: 'That person doesn’t hold the role this procedure needs at this branch.',
     });
     expect(mocks.engine.createAssignment).not.toHaveBeenCalled();
   });
@@ -1399,7 +1404,7 @@ describe('engine refusals never echo internal ids', () => {
     );
     await expect(caller().start(OCC_INPUT)).rejects.toMatchObject({
       code: 'NOT_FOUND',
-      message: 'Occurrence not found.',
+      message: 'Procedure not found.',
     });
 
     mocks.engine.completeStep.mockRejectedValueOnce(
@@ -1407,7 +1412,7 @@ describe('engine refusals never echo internal ids', () => {
     );
     await expect(
       caller().completeStep({ ...OCC_INPUT, templateStepId: 'tstep_1', note: 'ok' })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Step not found on this occurrence.' });
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Step not found on this procedure.' });
 
     occurrenceRow = { ...occurrenceRow, status: 'SUBMITTED', assignedStaffProfileId: 'staff_op' };
     mocks.engine.verifyOccurrence.mockRejectedValueOnce(
@@ -1415,7 +1420,7 @@ describe('engine refusals never echo internal ids', () => {
     );
     await expect(caller().verify(OCC_INPUT)).rejects.toMatchObject({
       code: 'NOT_FOUND',
-      message: 'Occurrence not found.',
+      message: 'Procedure not found.',
     });
   });
 });
@@ -1430,7 +1435,7 @@ describe('coordinator follow-ups', () => {
   });
 
   it.each([
-    ['NOT_INDEPENDENT', 'You cannot grant yourself a verifier role.'],
+    ['NOT_INDEPENDENT', 'You can’t give yourself a role that checks procedures.'],
     ['ROLE_REQUIRED', 'The qualified-person role needs the pharmacist dispensing permission.'],
   ] as const)('setRoleHolding passes the adapter %s wording through', async (reason, text) => {
     mocks.adapter.setPharmacySopRoleHolding.mockRejectedValueOnce(
@@ -1453,16 +1458,23 @@ describe('coordinator follow-ups', () => {
     );
     await expect(caller().verify(OCC_INPUT)).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'A verifier must not have worked on the occurrence they verify.',
+      message: 'You can’t check a procedure you worked on.',
     });
   });
 
   it.each([
-    ['TEMPERATURE_LOG', temperatureLog.name, 'pharmacyTemperatureLog', 'recordedAt'],
-    ['GOODS_RECEIPT', receiving.name, 'pharmacyGoodsReceipt', 'receivedAt'],
+    ['TEMPERATURE_LOG', temperatureLog.name, 'pharmacyTemperatureLog', 'recordedAt', {}],
+    [
+      'GOODS_RECEIPT',
+      receiving.name,
+      'pharmacyGoodsReceipt',
+      'receivedAt',
+      // A cancelled receipt is never offered.
+      { status: { notIn: ['CANCELLED', 'REVERSED'] } },
+    ],
   ] as const)(
     'linkableRecords bounds %s candidates to the link window',
-    async (recordType, packName, delegate, column) => {
+    async (recordType, packName, delegate, column, extra) => {
       const dueAt = new Date('2026-11-04T08:00:00.000Z');
       const windowEndsAt = new Date('2026-11-04T12:00:00.000Z');
       db.restaurantSopTemplateVersion.findFirst.mockResolvedValue({ template: { name: packName } });
@@ -1474,6 +1486,7 @@ describe('coordinator follow-ups', () => {
             organizationId: 'org_1',
             branchId: SITE.pharmacyBranchId,
             [column]: { gte: new Date(dueAt.getTime() - 86_400_000), lte: windowEndsAt },
+            ...extra,
           },
         })
       );
@@ -1482,6 +1495,58 @@ describe('coordinator follow-ups', () => {
 });
 
 // ── Visual QA follow-ups ─────────────────────────────────────────────────────
+
+describe('refusals speak in plain operator words', () => {
+  it('names a claim someone else won as a procedure', async () => {
+    mocks.engine.claimSopOccurrence.mockResolvedValueOnce({ status: 'CLAIMED_BY_OTHER' });
+    await expect(caller().claim(OCC_INPUT)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'Someone else has already claimed this procedure.',
+    });
+    mocks.engine.claimSopOccurrence.mockResolvedValueOnce({
+      status: 'NOT_CLAIMABLE',
+      reason: 'INVALID_STATE',
+    });
+    await expect(caller().claim(OCC_INPUT)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'This procedure is not available to claim.',
+    });
+  });
+
+  it('says a procedure no longer in use, never an archived template', async () => {
+    db.restaurantSopTemplate.findUnique.mockResolvedValue({
+      id: 'tpl_old',
+      name: opening.name,
+      isActive: false,
+    });
+    await expect(
+      caller().createAssignment({
+        ...BRANCH_INPUT,
+        templateId: 'tpl_old',
+        target: { type: 'ROLE' as const, roleKey: 'pharmacy-assistant' as const },
+        frequency: 'DAILY' as const,
+        dueTimeMinutes: 9 * 60,
+        startDate: '2026-11-04',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: 'This procedure is no longer in use.' });
+  });
+
+  it.each([
+    ['ROLE_REQUIRED', 'FORBIDDEN', 'You don’t hold the role this procedure needs at this branch.'],
+    ['NOT_INDEPENDENT', 'FORBIDDEN', 'You can’t check a procedure you worked on.'],
+    ['OCCURRENCE_OUT_OF_SCOPE', 'NOT_FOUND', 'Procedure not found.'],
+    ['STATE_CHANGED', 'CONFLICT', SOP_STATE_MESSAGES.changed],
+  ] as const)('maps the adapter %s refusal to fixed plain words', (reason, code, message) => {
+    let caught: unknown;
+    try {
+      mapSopError(new PharmacySopAccessError('occurrence occ_1 verifier', reason));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({ code, message });
+    expect(String((caught as Error).message)).not.toMatch(/occurrence|verifier|SOP template/i);
+  });
+});
 
 describe('review queue is null-safe', () => {
   it('excludes only the reviewer’s own work, keeping rows whose owner columns are NULL', async () => {

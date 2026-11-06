@@ -20,3 +20,12 @@ export const PHARMACY_SOP_SCHEDULE_LIMITS = {
  */
 export const PHARMACY_SOP_NO_STAFF_PROFILE_MESSAGE =
   'Set up your procedures profile at this branch before taking part in procedures.';
+
+/**
+ * The fixed wording of a CONFLICT refusal when the procedure moved on (sent
+ * for review, checked, sent back) since the person opened it. The router and
+ * the proof upload route both answer with it; the runner re-reads the
+ * procedure when it sees it.
+ */
+export const PHARMACY_SOP_CHANGED_MESSAGE =
+  'This procedure has changed since you opened it. Refresh to see its current state.';

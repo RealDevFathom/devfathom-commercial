@@ -35,6 +35,7 @@ vi.mock('@/server/routers/_app', () => ({
 
 import { POST } from './route';
 import { isPharmacySopCapturedEvidence } from '@/lib/pharmacy/sop-evidence';
+import { PHARMACY_SOP_CHANGED_MESSAGE } from '@/lib/pharmacy/sop-shared';
 import { SopExecutionError } from '@/lib/restaurant/sop-execution';
 import { StorageUnavailableError } from '@/lib/storage';
 
@@ -232,6 +233,19 @@ describe('POST pharmacy SOP evidence', () => {
     expect(mocks.attachEvidence).not.toHaveBeenCalled();
   });
 
+  it('answers a procedure that moved on (stale screen) with 409, its plain words and a conflict mark', async () => {
+    mocks.evidenceTarget.mockRejectedValueOnce(
+      new TRPCError({ code: 'CONFLICT', message: PHARMACY_SOP_CHANGED_MESSAGE })
+    );
+    const response = await POST(request());
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: PHARMACY_SOP_CHANGED_MESSAGE,
+      conflict: true,
+    });
+    expect(mocks.putUpload).not.toHaveBeenCalled();
+  });
+
   it('refuses an unauthenticated request before building a context', async () => {
     mocks.resolveTenantActor.mockResolvedValueOnce(null);
     const response = await POST(request());
@@ -297,6 +311,11 @@ describe('POST pharmacy SOP evidence', () => {
     );
     const response = await POST(request());
     expect(response.status).toBe(409);
+    // The procedure moved on between authorization and attach: same plain words.
+    await expect(response.json()).resolves.toEqual({
+      error: PHARMACY_SOP_CHANGED_MESSAGE,
+      conflict: true,
+    });
     expect(mocks.deleteUpload).toHaveBeenCalledWith('org_1', mocks.putUpload.mock.calls[0]![1]);
   });
 
@@ -462,7 +481,10 @@ describe('POST pharmacy SOP evidence capture receipts', () => {
     });
     const response = await POST(request());
     expect(response.status).toBe(409);
-    expect(await response.text()).toContain('not captured in the pharmacy workspace');
+    const text = await response.text();
+    expect(text).toContain('not captured in the pharmacy workspace');
+    // Not a stale screen: the person picks another photo, so no conflict mark.
+    expect(JSON.parse(text)).not.toHaveProperty('conflict');
     expect(db.pharmacySopEvidenceCapture.createMany).not.toHaveBeenCalled();
     expect(mocks.deleteUpload).toHaveBeenCalledWith('org_1', mocks.putUpload.mock.calls[0]![1]);
   });

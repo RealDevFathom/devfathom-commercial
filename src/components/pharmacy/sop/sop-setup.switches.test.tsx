@@ -5,14 +5,16 @@ vi.mock('@/lib/trpc', async () => (await import('./sop-trpc-mock')).trpcModule);
 
 import {
   autoScheduleNotice,
+  GENERATE_LABEL,
   generateNotice,
   PAUSE_COPY,
   scheduleSwitchNames,
+  scheduleToggleNotice,
   SopSetupView,
   SWITCH_CONTRAST,
   SWITCH_HIT_AREA,
 } from './sop-setup';
-import { mockState as h } from './sop-trpc-mock';
+import { mockState as h, refusal } from './sop-trpc-mock';
 
 /**
  * DEV-751 — Setup switches: a visible off state, names that say whose schedule
@@ -164,6 +166,42 @@ describe('Setup switches', () => {
       `${base}, every day at 09:00 (1)`,
       `${base}, every day at 09:00 (2)`,
     ]);
+
+    // The pause notice names the schedule the same way, so it is clear which one.
+    fireEvent.click(screen.getByRole('switch', { name: `${base}, every day at 15:00` }));
+    expect(
+      screen.getByText(
+        'Paused Pharmacy — hygiene for Pharmacy assistant, every day at 15:00. Work already created stays and can still be done.'
+      )
+    ).toHaveAttribute('role', 'status');
+  });
+
+  it('says what a pause did below the list, so no row moves under the next tap', () => {
+    renderSetup();
+    const list = screen.getByRole('switch', { name: TRAINING }).closest('ul')!;
+    const before = [...list.querySelectorAll('li')];
+    fireEvent.click(screen.getByRole('switch', { name: TRAINING }));
+    const notice = screen.getByText(
+      scheduleToggleNotice(TRAINING.replace('Schedule active: ', ''), false)
+    );
+    expect(notice).toHaveAttribute('role', 'status');
+    // After the list in the document, never above it; the rows are the same nodes.
+    expect(list.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(list.contains(notice)).toBe(false);
+    expect([...list.querySelectorAll('li')]).toEqual(before);
+    // Nothing between the pause copy and the list either.
+    expect(list.previousElementSibling).toHaveTextContent(PAUSE_COPY);
+  });
+
+  it('says a failed pause below the list, too', () => {
+    h.outcomes.setAssignmentActive = () =>
+      refusal('The schedule could not be changed. Retry.', 'INTERNAL_SERVER_ERROR');
+    renderSetup();
+    const list = screen.getByRole('switch', { name: TRAINING }).closest('ul')!;
+    fireEvent.click(screen.getByRole('switch', { name: TRAINING }));
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('The schedule could not be changed. Retry.');
+    expect(list.compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('says pausing keeps work already created, and confirms a pause and a resume', () => {
@@ -238,7 +276,11 @@ describe('Setup switches', () => {
     const onNotice = vi.fn();
     h.outcomes.generate = () => ({ assignmentsProcessed: 2, created: 1, skipped: 1 });
     renderSetup(onNotice);
-    fireEvent.click(screen.getByRole('button', { name: "Create today's work now" }));
+    fireEvent.click(screen.getByRole('button', { name: GENERATE_LABEL }));
+    expect(GENERATE_LABEL).toBe('Create work from schedules now');
+    // It creates whatever the schedules have due (yesterday to tomorrow), so
+    // the label never promises only today's work.
+    expect(GENERATE_LABEL).not.toMatch(/today/i);
     expect(h.calls.generate).toEqual([{ pharmacyBranchId: 'pb_1' }]);
     expect(onNotice).toHaveBeenCalledWith({
       tone: 'success',

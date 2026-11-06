@@ -497,7 +497,7 @@ export function SopRunner({
               <h3 className="font-semibold text-text-strong">Send for review</h3>
               {blockers.length ? (
                 <div id={`blocked-${occurrence.id}`}>
-                  <p className="text-sm text-text-body">You can send this for review once:</p>
+                  <p className="text-sm text-text-body">Before you can send this for review:</p>
                   <ul
                     className="mt-2 grid list-disc gap-1 pl-5 text-sm text-text-muted"
                     aria-label="What is still needed"
@@ -794,6 +794,7 @@ function StepItem({
                 evidenceCount={photos.length}
                 recount={() => recount('photo')}
                 onUploaded={onChanged}
+                onConflict={onConflict}
               />
               {step.requiresSignature ? (
                 <SopEvidenceUpload
@@ -806,6 +807,7 @@ function StepItem({
                   evidenceCount={signatures.length}
                   recount={() => recount('signature')}
                   onUploaded={onChanged}
+                  onConflict={onConflict}
                 />
               ) : null}
               {step.requiredRecordType ? (
@@ -885,6 +887,7 @@ function StepItem({
               evidenceCount={photos.length}
               recount={() => recount('photo')}
               onUploaded={onChanged}
+              onConflict={onConflict}
             />
           ) : null}
           {step.requiresSignature ? (
@@ -897,6 +900,7 @@ function StepItem({
               evidenceCount={signatures.length}
               recount={() => recount('signature')}
               onUploaded={onChanged}
+              onConflict={onConflict}
             />
           ) : null}
           <label

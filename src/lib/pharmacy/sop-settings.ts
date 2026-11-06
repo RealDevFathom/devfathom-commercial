@@ -19,7 +19,7 @@ import type { PharmacySopSiteRef } from '@/lib/pharmacy/sop-adapter';
  * setting is append-only (`pharmacy_sop_site_settings`): every change is a new
  * row with who changed it and why, and the newest row for a branch wins. No row
  * means OFF. With it off, a manager still creates the day's work explicitly
- * ("Create today's work now"), which is never affected by this setting.
+ * ("Create work from schedules now"), which is never affected by this setting.
  *
  * `pharmacySopAutoScheduledBranchIds` and `generateAutoPharmacySopBranchOccurrences`
  * are called only by the background jobs in `sop-auto-schedule-job.ts`, which
@@ -151,7 +151,7 @@ export async function setPharmacySopAutoSchedule(
  * engine's default horizon (tomorrow) only. The engine's default one-day
  * lookback exists to backfill a missed restaurant run for its late/missed
  * sweep; here it would create yesterday's already-overdue procedures for a day
- * the branch was OFF. The explicit manager action ("Create today's work now")
+ * the branch was OFF. The explicit manager action ("Create work from schedules now")
  * keeps the engine default.
  */
 export const PHARMACY_SOP_AUTO_LOOKBACK_DAYS = 0;
