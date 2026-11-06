@@ -10,7 +10,7 @@ const schema = readFileSync('prisma/schema.prisma', 'utf8');
 
 describe('catalogue change review persistence contract', () => {
   it('forces organization RLS on the review queue', () => {
-    expect(migration).toContain('CREATE TABLE "pharmacy_catalogue_changes"');
+    expect(migration).toContain('CREATE TABLE IF NOT EXISTS "pharmacy_catalogue_changes"');
     expect(migration).toContain(
       'ALTER TABLE "pharmacy_catalogue_changes" ENABLE ROW LEVEL SECURITY'
     );
