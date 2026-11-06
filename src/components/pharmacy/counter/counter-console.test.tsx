@@ -1314,7 +1314,14 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     if (creating) {
       await waitFor(() => expect(mocks.mutations.create).toHaveBeenCalledTimes(1));
       if (mode === 'unmount-create') view.unmount();
-      else fireEvent.change(search, { target: { value: 'another medicine' } });
+      else {
+        // The bill was sent for this scan, so typing no longer cancels it; losing the
+        // branch while it is created does.
+        mocks.queries.counterBranches = query({
+          branches: [{ id: 'branch-b', name: 'Other branch' }],
+        });
+        view.rerender(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      }
       await act(async () => resolveCreate!({ id: 'sale-created' }));
     }
     if (mode === 'stale') {
@@ -1530,6 +1537,53 @@ describe('PharmacyCounterConsole barcode safety', () => {
     });
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
     expect(mocks.searchSetData).not.toHaveBeenCalled();
+  });
+
+  it('adds the first scan of a new bill when a key is typed while the bill is created', async () => {
+    let resolveCreate!: (value: { id: string }) => void;
+    mocks.mutations.create!.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        })
+    );
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    const search = scan();
+    await waitFor(() => expect(mocks.mutations.create).toHaveBeenCalledTimes(1));
+    fireEvent.change(search, { target: { value: '6' } });
+    await act(async () => resolveCreate({ id: 'sale-created' }));
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ saleId: 'sale-created', medicineId: 'med-barcode' })
+    );
+    expect(search).toHaveValue('6');
+  });
+
+  it('adds a GS1 pack when a key is typed while its pack check is pending', async () => {
+    let resolveCheck!: (value: unknown) => void;
+    mocks.mutations.authenticatePack!.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCheck = resolve;
+        })
+    );
+    mocks.mutations.create!.mockResolvedValue({ id: 'sale-created' });
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    const search = scan(gs1);
+    await waitFor(() => expect(mocks.mutations.authenticatePack).toHaveBeenCalledTimes(1));
+    fireEvent.change(search, { target: { value: '6' } });
+    await act(async () =>
+      resolveCheck({
+        status: 'VERIFIED',
+        explanation: 'Pack verified.',
+        parsed: { gtin: '01234567890128' },
+      })
+    );
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ saleId: 'sale-created', medicineId: 'med-barcode' })
+    );
+    expect(search).toHaveValue('6');
   });
 
   it('keeps a single scan in flight until its add finishes', async () => {
@@ -1782,11 +1836,49 @@ describe('PharmacyCounterConsole cashier view', () => {
     mocks.queries.counterBranches = query({
       branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
       counterManager: true,
+      counterBatchDetail: true,
     });
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(screen.getByText('POS-02')).toBeInTheDocument();
     expect(screen.getByText('CRM-L01')).toBeInTheDocument();
     expect(screen.getByText('Cart and FEFO allocation')).toBeInTheDocument();
+  });
+
+  it('keeps the FEFO batch map for a pharmacist, without the internal codes', () => {
+    mocks.queries.counterBranches = query({
+      branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
+      counterManager: false,
+      counterBatchDetail: true,
+    });
+    const [line] = cart().lines;
+    mocks.queries.counterCart = {
+      ...query(
+        cart({
+          lines: [
+            {
+              ...line!,
+              allocations: [
+                {
+                  inventoryLotId: 'lot-a',
+                  batchNumber: 'B-7',
+                  expiresAt: '2028-06-30T00:00:00.000Z',
+                  canonicalUnits: 1,
+                  stockLocationCode: 'SHELF-2',
+                  overridden: false,
+                },
+              ],
+            },
+          ],
+        })
+      ),
+      refetch: mocks.refetch,
+    };
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByText('Cart and FEFO allocation')).toBeInTheDocument();
+    const allocation = screen.getByRole('list', { name: 'FEFO allocation for Synthetic item' });
+    expect(allocation).toHaveTextContent('Batch B-7');
+    expect(allocation).toHaveTextContent('SHELF-2');
+    expect(screen.queryByText('POS-02')).not.toBeInTheDocument();
   });
 });
 
@@ -1854,11 +1946,32 @@ describe('PharmacyCounterConsole scan field under fast typing', () => {
     fireEvent.keyDown(search, { key: 'Enter' });
     await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
     expect(search).toBeEnabled();
-    typeFast(search, '654321');
+    // A scanner appends to whatever the field holds, so the first code must be gone.
+    typeFast(search, '654321', (search as HTMLInputElement).value);
     expect(search).toHaveValue('654321');
     await act(async () => resolveAdd({}));
     await screen.findByText('1 × Paracetamol added.');
     expect(search).toHaveValue('654321');
+  });
+
+  it('gives the scanned code back when the add fails', async () => {
+    mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+    let rejectAdd!: (error: Error) => void;
+    mocks.mutations.addLine!.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectAdd = reject;
+        })
+    );
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    typeFast(search, '123456');
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    expect(search).toHaveValue('');
+    await act(async () => rejectAdd(new Error('Stock moved to another bill.')));
+    await screen.findByText('Stock moved to another bill.');
+    expect(search).toHaveValue('123456');
   });
 
   it('still clears the field after an add when nothing new was typed', async () => {

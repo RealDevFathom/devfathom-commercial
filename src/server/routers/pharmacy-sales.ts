@@ -1708,6 +1708,7 @@ export const pharmacySalesRouter = router({
   counterBranches: protectedProcedure.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const subject = subjectFromSession(ctx.session.user);
     const [branches, organization, counterManager] = await Promise.all([
       ctx.db.pharmacyBranch.findMany({
         where: { organizationId, active: true },
@@ -1718,15 +1719,17 @@ export const pharmacySalesRouter = router({
         where: { id: organizationId },
         select: { currency: true, timezone: true },
       }),
-      // Display only: managers and owners see the counter's internal codes, batch
-      // map and keymap presets. Every write keeps its own server-side check.
+      // Display only: managers and owners see the counter's internal codes and
+      // keymap presets. Every write keeps its own server-side check.
       ctx.session.user.role === 'ADMIN'
         ? true
-        : can(subjectFromSession(ctx.session.user), 'pharmacy:manage', undefined, {
-            db: ctx.db,
-            source: 'TRPC',
-          }),
+        : can(subject, 'pharmacy:manage', undefined, { db: ctx.db, source: 'TRPC' }),
     ]);
+    // Display only: the cart's batch map also stays for a pharmacist. The exact
+    // dispense grant decides it; no wildcard grants `pharmacy:dispense`.
+    const counterBatchDetail =
+      counterManager ||
+      (await can(subject, 'pharmacy:dispense', undefined, { db: ctx.db, source: 'TRPC' }));
     return {
       branches,
       currency: organization?.currency ?? 'PKR',
@@ -1735,6 +1738,7 @@ export const pharmacySalesRouter = router({
       timezone: workspaceTimezone(organization?.timezone),
       paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
       counterManager,
+      counterBatchDetail,
     };
   }),
 

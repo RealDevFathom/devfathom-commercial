@@ -299,6 +299,9 @@ function ScopedPharmacyCounterConsole({
   const [submittedSearch, setSubmittedSearch] = useState({ text: '', query: '', branchId: '' });
   const submittedQuery = submittedSearch.query;
   const scannerRevision = useRef(0);
+  // Bumped only by a branch switch or unmount. Once a scan's pack check or bill
+  // has been sent, only this cancels it: a key typed meanwhile does not.
+  const scanScope = useRef(0);
   const scannerInFlight = useRef<{ text: string; branchId: string; revision: number } | null>(
     null
   );
@@ -358,11 +361,13 @@ function ScopedPharmacyCounterConsole({
     staleTime: 60_000,
   });
   const branches = useMemo(() => branchesQuery.data?.branches ?? [], [branchesQuery.data]);
-  // Managers and owners keep the counter's internal codes, batch map and keymap
-  // presets; a cashier sees only what is needed to sell. Display only: the server
-  // still checks every action.
+  // Managers and owners keep the counter's internal codes and keymap presets;
+  // a cashier sees only what is needed to sell. Display only: the server still
+  // checks every action.
   const counterManager = branchesQuery.data?.counterManager === true;
   const internalCode = (code: string) => (counterManager ? code : undefined);
+  // The cart's batch map (batch, expiry, units, location) also stays for a pharmacist.
+  const counterBatchDetail = branchesQuery.data?.counterBatchDetail === true;
   // Every drawer, tender and loyalty write is stamped with the workspace's day.
   const workspaceZone = branchesQuery.data?.timezone;
   const todayBusinessDate = useCallback(() => businessDate(workspaceZone), [workspaceZone]);
@@ -382,6 +387,7 @@ function ScopedPharmacyCounterConsole({
   useEffect(
     () => () => {
       scannerRevision.current += 1;
+      scanScope.current += 1;
     },
     [branchAuthorized, branchId]
   );
@@ -843,15 +849,17 @@ function ScopedPharmacyCounterConsole({
         return;
       }
       const revision = ++scannerRevision.current;
+      const scope = scanScope.current;
       const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
       if (!looksLikeGs1) {
         setSubmittedSearch({ text: trimmed, query: trimmed, branchId });
-        return { query: trimmed, revision, blocked: false };
+        return { query: trimmed, revision, blocked: false, authenticated: false };
       }
       setPending('authenticatePack');
       try {
         const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
-        if (revision !== scannerRevision.current) return;
+        // The pack check was sent: only a branch switch or unmount cancels this scan now.
+        if (scope !== scanScope.current) return;
         setSubmittedSearch({ text: trimmed, query: verdict.parsed?.gtin ?? trimmed, branchId });
         setNotice({
           tone:
@@ -866,9 +874,10 @@ function ScopedPharmacyCounterConsole({
           query: verdict.parsed?.gtin ?? trimmed,
           revision,
           blocked: verdict.status === 'BLOCKED_RECALL',
+          authenticated: true,
         };
       } catch (error) {
-        if (revision !== scannerRevision.current) return;
+        if (scope !== scanScope.current) return;
         setNotice({ tone: 'danger', message: messageFrom(error) });
       } finally {
         setPending(null);
@@ -892,37 +901,44 @@ function ScopedPharmacyCounterConsole({
   }, [branchId, createSale, saleId, setActiveSale]);
 
   const addToCart = useCallback(
-    async (scannedRow?: CounterSearchRow, scanRevision?: number) => {
-      const scanIsCurrent = () =>
-        scanRevision === undefined || scanRevision === scannerRevision.current;
-      if (!scanIsCurrent()) return;
+    async (
+      scannedRow?: CounterSearchRow,
+      scan?: { scope: number; text: string }
+    ): Promise<boolean> => {
+      const scanInScope = () => scan === undefined || scan.scope === scanScope.current;
+      if (!scanInScope()) return false;
       const row = scannedRow ?? activeRow;
       const option = scannedRow ? (scannedRow.saleUnits[0] ?? null) : selectedOption;
       const units = scannedRow ? 1 : quantity;
       const selectionPreview = scannedRow ? counterSelectionPreview(row, option, units) : preview;
       const batchOverride = scannedRow ? null : lotOverride;
-      if (!row || !option || !selectionPreview || busy) return;
+      if (!row || !option || !selectionPreview || busy) return false;
       if (!selectionPreview.sufficient) {
         setNotice({
           tone: 'warning',
           message: `Only ${selectionPreview.availableUnits} safe units are on hand. Reduce the quantity or capture the shortfall.`,
         });
-        return;
+        return false;
       }
       const overrideLotId = batchOverride?.inventoryLotId ?? null;
       if (overrideLotId && !batchOverride?.reason.trim()) {
         setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
-        return;
+        return false;
       }
       setPending('addToCart');
       setNotice(null);
-      // The scan field stays live while this add runs; remember what it held so
-      // the next scan, typed meanwhile, survives the clear below.
-      const submittedText = searchRef.current?.value ?? '';
+      // Clear the scan field now, so the next scan starts empty instead of being
+      // joined to this one. A scan arrives already cleared by addBarcode, which
+      // gives its own code back; a manual add gets its text back below.
+      const submittedText = scan?.text ?? searchRef.current?.value ?? '';
+      const submittedRevision = scannerRevision.current;
+      if (!scan) setQuery('');
+      let committed = false;
       try {
         const activeSaleId = await ensureSale();
-        // Creating a bill can outlive this scan or the mounted counter.
-        if (!scanIsCurrent()) return;
+        // Creating a bill can outlive a branch switch or the mounted counter. It
+        // was sent for this scan, so a key typed meanwhile does not cancel it.
+        if (!scanInScope()) return false;
         const controlled = row.restriction.controlled;
         const addressOk = patientAddress.trim().length >= 3;
         const prescriptionOk =
@@ -945,7 +961,7 @@ function ScopedPharmacyCounterConsole({
               'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
           });
           rxPanelRef.current?.focus();
-          return;
+          return false;
         }
         const refSerial = Number(controlledAuth.refSerial);
         const added = await addLine.mutateAsync({
@@ -987,8 +1003,9 @@ function ScopedPharmacyCounterConsole({
         });
         if ('blocked' in added) {
           setNotice({ tone: 'warning', message: added.blocked });
-          return;
+          return false;
         }
+        committed = true;
         await refreshCart();
         await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
         await utils.pharmacySafety.controlledRegister.invalidate();
@@ -1010,9 +1027,14 @@ function ScopedPharmacyCounterConsole({
             : {}),
         });
       } finally {
+        // Not added: give the text back for a retry, a pick or the shortfall,
+        // unless the operator has typed since.
+        if (!committed && !scan && submittedRevision === scannerRevision.current)
+          setQuery((current) => (current === '' ? submittedText : current));
         setControlledAuth((value) => ({ ...value, pin: '' }));
         setPending(null);
       }
+      return committed;
     },
     [
       activeRow,
@@ -1053,7 +1075,18 @@ function ScopedPharmacyCounterConsole({
       )
         return;
       scannerInFlight.current = scan;
+      // Clear the scan field now, so the next scan starts empty instead of being
+      // joined to this one. The code comes back below if nothing is added.
+      const submittedText = searchRef.current?.value ?? scan.text;
+      const scope = scanScope.current;
+      setQuery('');
+      let committed = false;
       let revision: number | undefined;
+      let authenticated = false;
+      // A plain lookup still gives way to a newer key or scan. Once a GS1 pack check
+      // has been sent, only a branch switch or unmount cancels the scan.
+      const stillCurrent = () =>
+        authenticated ? scope === scanScope.current : revision === scannerRevision.current;
       try {
         const searching = runSearch(submittedQuery);
         // runSearch claims its revision synchronously, before its first await.
@@ -1061,26 +1094,31 @@ function ScopedPharmacyCounterConsole({
         const search = await searching;
         if (!search || search.blocked) return;
         revision = search.revision;
+        authenticated = search.authenticated;
         const result = await utils.pharmacySales.counterSearch.fetch(
           { branchId, query: search.query },
           { staleTime: 10_000 }
         );
-        if (revision !== scannerRevision.current || result.rows.length !== 1 || barcodeBusy.current)
-          return;
+        if (!stillCurrent() || result.rows.length !== 1 || barcodeBusy.current) return;
         const row = result.rows[0]!;
         const restage =
           activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
-        if (restage) stageRow(row);
+        // Keys typed since the pack check are the operator's next search: the pack
+        // is still added, but not staged over what they typed.
+        if (restage && revision === scannerRevision.current) stageRow(row);
         const scanPreview = restage
           ? counterSelectionPreview(row, row.saleUnits[0] ?? null, 1)
           : preview;
         if (scanPreview?.sufficient) {
-          await addToCart(restage ? row : undefined, revision);
+          committed = await addToCart(restage ? row : undefined, { scope, text: submittedText });
         }
       } catch (error) {
-        if (revision === scannerRevision.current)
-          setNotice({ tone: 'danger', message: messageFrom(error) });
+        if (stillCurrent()) setNotice({ tone: 'danger', message: messageFrom(error) });
       } finally {
+        // Not added (recall, no single match, busy, shortfall, refused or failed):
+        // give the code back, unless a key was typed or a newer scan began since.
+        if (!committed && scan.revision === scannerRevision.current)
+          setQuery((current) => (current === '' ? submittedText : current));
         if (scannerInFlight.current === scan) scannerInFlight.current = null;
       }
     },
@@ -1962,6 +2000,7 @@ function ScopedPharmacyCounterConsole({
                     disabled={busy}
                     onChange={(event) => {
                       scannerRevision.current += 1;
+                      scanScope.current += 1;
                       setSelectedBranchId(event.target.value);
                       setActiveRow(null);
                       setActiveSale(null);
@@ -2155,7 +2194,7 @@ function ScopedPharmacyCounterConsole({
             compact
             className="min-h-0 flex-1 overflow-y-auto"
             eyebrow={internalCode('POS-03')}
-            title={counterManager ? 'Cart and FEFO allocation' : 'Cart'}
+            title={counterBatchDetail ? 'Cart and FEFO allocation' : 'Cart'}
             actions={
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -2192,7 +2231,7 @@ function ScopedPharmacyCounterConsole({
               }
               error={cartQuery.error ? messageFrom(cartQuery.error) : null}
               onRetry={() => void refreshTenderBill()}
-              showAllocation={counterManager}
+              showAllocation={counterBatchDetail}
             />
           </SectionCard>
 
