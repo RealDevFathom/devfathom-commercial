@@ -1,3 +1,6 @@
+import { createTranslator } from 'next-intl';
+import defaultMessages from '@/messages/en.json';
+
 /**
  * PH-POS / POS-09 — what the counter is allowed to say, and how loudly.
  *
@@ -53,18 +56,6 @@ const SEVERITY_RANK: Record<CounterAlertSeverity, number> = {
 };
 
 /** INV-03 hard blocks, phrased for a counter rather than for a ledger. */
-const BLOCK_MESSAGES: Record<BlockReason, string> = {
-  EXPIRED: 'Nearest batch is expired and cannot be dispensed.',
-  RECALLED: 'Batch is under recall and is blocked from sale.',
-  QUARANTINED: 'Stock is quarantined and is blocked from sale.',
-  DAMAGED: 'Stock is marked damaged and is blocked from sale.',
-  DESTROYED: 'Stock is recorded as destroyed and cannot be sold.',
-  IN_TRANSIT: 'Stock is in transit to another branch and is not sellable here.',
-  RETURNED_TO_SUPPLIER: 'Stock is dispatched back to the supplier and is not sellable.',
-  UNRECEIVED: 'Lot has not been received yet and cannot be dispensed.',
-  UNAUTHORIZED: 'Stock belongs to another branch or tenant and is not sellable here.',
-  EMPTY: 'No sellable units remain in this batch.',
-};
 
 export type CounterAlertMedicine = {
   medicineId: string;
@@ -110,10 +101,15 @@ export type CounterAlertLine = {
 
 export type CounterAlertContext = {
   at: Date;
+  /** Display copy only; alert severity, code and authorization remain unchanged. */
+  translate?: (key: string, values?: Record<string, string | number>) => string;
   /** Days before expiry at which the counter starts warning commercially. */
   nearExpiryDays?: number;
 };
 
+const englishText = createTranslator({ locale: 'en', messages: defaultMessages.CounterAlerts });
+const defaultText = (key: string, values?: Record<string, string | number>) =>
+  englishText(key as Parameters<typeof englishText>[0], values);
 const DAY_MS = 86_400_000;
 
 function push(alerts: CounterAlert[], alert: CounterAlert): void {
@@ -129,6 +125,7 @@ function push(alerts: CounterAlert[], alert: CounterAlert): void {
  * teaches the operator to dismiss it.
  */
 function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): CounterAlert[] {
+  const t = context.translate ?? defaultText;
   const alerts: CounterAlert[] = [];
   const { medicine } = line;
   const name = medicine.displayName;
@@ -138,9 +135,9 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
       key: `block:${medicine.medicineId}:${reason}`,
       severity: 'SAFETY_BLOCK',
       code: `STOCK_${reason}`,
-      message: `${name}: ${BLOCK_MESSAGES[reason]}`,
+      message: t('value0Value1', { value0: name, value1: t(`stock.${reason}`) }),
       saleLineRef: line.ref,
-      remedy: 'Choose another batch, or capture the shortfall as unfulfilled demand.',
+      remedy: t('chooseAnotherBatchOrCaptureTheShortfallAsUnfulfilled'),
     });
   }
 
@@ -152,18 +149,18 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
         key: `rx-emergency:${line.ref}`,
         severity: 'CLINICAL_ADVICE',
         code: 'CONTROLLED_EMERGENCY_SUPPLY',
-        message: `${name} was supplied as an emergency without a prescription. The prescription follow-up stays open.`,
+        message: t('value0WasSuppliedAsAnEmergencyWithoutAPrescription', { value0: name }),
         saleLineRef: line.ref,
-        remedy: "Capture the prescriber's prescription to close the emergency follow-up.",
+        remedy: t('captureThePrescriberSPrescriptionToCloseTheEmergency'),
       });
     } else if (!prescription) {
       push(alerts, {
         key: `rx-missing:${medicine.medicineId}`,
         severity: 'SAFETY_BLOCK',
         code: medicine.controlled ? 'CONTROLLED_WITHOUT_PRESCRIPTION' : 'RX_WITHOUT_PRESCRIPTION',
-        message: `${name} requires a prescription before it can be dispensed.`,
+        message: t('value0RequiresAPrescriptionBeforeItCanBeDispensed', { value0: name }),
         saleLineRef: line.ref,
-        remedy: 'Attach a captured prescription and have a pharmacist verify it.',
+        remedy: t('attachACapturedPrescriptionAndHaveAPharmacistVerify'),
       });
     } else {
       if (!prescription.verified) {
@@ -171,9 +168,9 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
           key: `rx-unverified:${prescription.id}`,
           severity: 'SAFETY_BLOCK',
           code: 'PRESCRIPTION_NOT_VERIFIED',
-          message: `The prescription attached to ${name} has not been verified by a pharmacist.`,
+          message: t('thePrescriptionAttachedToValue0HasNotBeenVerified', { value0: name }),
           saleLineRef: line.ref,
-          remedy: 'A pharmacist must verify this prescription; a cashier cannot self-approve it.',
+          remedy: t('aPharmacistMustVerifyThisPrescriptionACashierCannot'),
         });
       }
       if (prescription.expiresAt.getTime() <= context.at.getTime()) {
@@ -181,9 +178,9 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
           key: `rx-expired:${prescription.id}`,
           severity: 'SAFETY_BLOCK',
           code: 'PRESCRIPTION_EXPIRED',
-          message: `The prescription attached to ${name} is outside its validity period.`,
+          message: t('thePrescriptionAttachedToValue0IsOutsideItsValidity', { value0: name }),
           saleLineRef: line.ref,
-          remedy: 'Capture a current prescription before dispensing.',
+          remedy: t('captureACurrentPrescriptionBeforeDispensing'),
         });
       }
       if (prescription.remainingAuthorizedUnits < line.requestedCanonicalUnits) {
@@ -191,9 +188,12 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
           key: `rx-quantity:${prescription.id}`,
           severity: 'SAFETY_BLOCK',
           code: 'PRESCRIPTION_QUANTITY_EXCEEDED',
-          message: `${name} exceeds the remaining authorized quantity (${prescription.remainingAuthorizedUnits} units).`,
+          message: t('value0ExceedsTheRemainingAuthorizedQuantityValue1Units', {
+            value0: name,
+            value1: prescription.remainingAuthorizedUnits,
+          }),
           saleLineRef: line.ref,
-          remedy: 'Reduce the quantity to the remaining authorization, or record a partial fill.',
+          remedy: t('reduceTheQuantityToTheRemainingAuthorizationOrRecord'),
         });
       }
     }
@@ -204,9 +204,9 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
       key: `high-alert:${medicine.medicineId}`,
       severity: 'SAFETY_BLOCK',
       code: 'HIGH_ALERT_MEDICINE',
-      message: `${name} is a high-alert medicine and needs an independent pharmacist check.`,
+      message: t('value0IsAHighAlertMedicineAndNeedsAn', { value0: name }),
       saleLineRef: line.ref,
-      remedy: 'A pharmacist must confirm the medicine, strength and quantity before release.',
+      remedy: t('aPharmacistMustConfirmTheMedicineStrengthAndQuantity'),
     });
   }
 
@@ -215,7 +215,7 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
       key: `lasa:${medicine.medicineId}`,
       severity: 'CLINICAL_ADVICE',
       code: 'LOOK_ALIKE_SOUND_ALIKE',
-      message: `${name} is look-alike/sound-alike. Read the strength back before handing over.`,
+      message: t('value0IsLookAlikeSoundAlikeReadTheStrength', { value0: name }),
       saleLineRef: line.ref,
       remedy: null,
     });
@@ -226,7 +226,7 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
       key: `cold-chain:${medicine.medicineId}`,
       severity: 'CLINICAL_ADVICE',
       code: 'COLD_CHAIN_HANDLING',
-      message: `${name} is cold-chain. Hand over in an insulated pack and state the storage range.`,
+      message: t('value0IsColdChainHandOverInAnInsulated', { value0: name }),
       saleLineRef: line.ref,
       remedy: null,
     });
@@ -237,9 +237,9 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
       key: `regulated-discount:${medicine.medicineId}`,
       severity: 'COMMERCIAL',
       code: 'REGULATED_DISCOUNT_REFUSED',
-      message: `Discounts are not applied to ${name} because it is a regulated item.`,
+      message: t('discountsAreNotAppliedToValue0BecauseItIs', { value0: name }),
       saleLineRef: line.ref,
-      remedy: 'Remove the discount to complete this line.',
+      remedy: t('removeTheDiscountToCompleteThisLine'),
     });
   }
 
@@ -253,9 +253,12 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
         key: `near-expiry:${medicine.medicineId}`,
         severity: 'COMMERCIAL',
         code: 'NEAR_EXPIRY_BATCH',
-        message: `${name} dispenses from a batch expiring in ${remainingDays} day(s).`,
+        message: t('value0DispensesFromABatchExpiringInValue1Day', {
+          value0: name,
+          value1: remainingDays,
+        }),
         saleLineRef: line.ref,
-        remedy: 'Tell the customer the expiry before completing the sale.',
+        remedy: t('tellTheCustomerTheExpiryBeforeCompletingTheSale'),
       });
     }
   }
@@ -270,7 +273,11 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
  * block, so `hasBlockingAlert` is unaffected. Points at the first line that
  * carries the salt.
  */
-function duplicateSaltAlerts(lines: readonly CounterAlertLine[]): CounterAlert[] {
+function duplicateSaltAlerts(
+  lines: readonly CounterAlertLine[],
+  context: CounterAlertContext
+): CounterAlert[] {
+  const t = context.translate ?? defaultText;
   return duplicateSaltGroups(
     lines.map((line) => ({
       ref: line.ref,
@@ -283,9 +290,13 @@ function duplicateSaltAlerts(lines: readonly CounterAlertLine[]): CounterAlert[]
     key: `duplicate-salt:${group.ingredientKey}`,
     severity: 'CLINICAL_ADVICE',
     code: 'DUPLICATE_ACTIVE_INGREDIENT',
-    message: `${group.medicines.map((medicine) => medicine.displayName).join(', ')} ${group.medicines.length === 2 ? 'both' : 'all'} contain ${group.ingredientName}. Check the patient is not double-dosing.`,
+    message: t('value0Value1ContainValue2CheckThePatientIsNot', {
+      value0: group.medicines.map((medicine) => medicine.displayName).join(t('listSeparator')),
+      value1: group.medicines.length === 2 ? t('both') : t('all'),
+      value2: group.ingredientName,
+    }),
     saleLineRef: group.medicines[0]?.ref ?? null,
-    remedy: 'Confirm each is intended, then acknowledge. The sale is not blocked.',
+    remedy: t('confirmEachIsIntendedThenAcknowledgeTheSaleIs'),
     acknowledgement: {
       kind: 'DUPLICATE_ACTIVE_INGREDIENT',
       ingredientKey: group.ingredientKey,
@@ -310,7 +321,7 @@ export function counterAlertsFor(
       if (!byKey.has(alert.key)) byKey.set(alert.key, alert);
     }
   }
-  for (const alert of duplicateSaltAlerts(lines)) {
+  for (const alert of duplicateSaltAlerts(lines, context)) {
     if (!byKey.has(alert.key)) byKey.set(alert.key, alert);
   }
   return [...byKey.values()].sort(

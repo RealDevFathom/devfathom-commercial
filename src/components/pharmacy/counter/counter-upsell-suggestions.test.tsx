@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
+import { renderWithIntl as render } from '@/test/intl';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/trpc', () => ({ trpc: {} }));

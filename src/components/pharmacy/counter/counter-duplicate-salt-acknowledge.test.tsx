@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
+import { renderWithIntl as render } from '@/test/intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -86,9 +87,15 @@ describe('CounterDuplicateSaltAcknowledge (#724)', () => {
   });
 
   it.each<[string, typeof medicines]>([
-    ['adds a third medicine', [...medicines, { medicineId: 'pcm', displayName: 'PCM', ref: 'line-3' }]],
+    [
+      'adds a third medicine',
+      [...medicines, { medicineId: 'pcm', displayName: 'PCM', ref: 'line-3' }],
+    ],
     ['removes a medicine', medicines.slice(0, 1)],
-    ['replaces a medicine', [medicines[0]!, { medicineId: 'pcm', displayName: 'PCM', ref: 'line-3' }]],
+    [
+      'replaces a medicine',
+      [medicines[0]!, { medicineId: 'pcm', displayName: 'PCM', ref: 'line-3' }],
+    ],
     ['replaces a sale line', [medicines[0]!, { ...medicines[1]!, ref: 'line-new' }]],
   ])('requires acknowledgement again when the group %s', (_change, changed) => {
     const { rerender } = render(<CounterDuplicateSaltAcknowledge {...props} />);
@@ -127,11 +134,12 @@ describe('CounterDuplicateSaltAcknowledge (#724)', () => {
   });
 
   it('only acknowledges the medicine group actually recorded by the server', () => {
-    mocks.mutate.mockImplementation((_input, options: { onSuccess: (data: typeof props) => void }) =>
-      options.onSuccess({
-        ...props,
-        medicines: [...medicines, { medicineId: 'pcm', displayName: 'PCM', ref: 'line-3' }],
-      })
+    mocks.mutate.mockImplementation(
+      (_input, options: { onSuccess: (data: typeof props) => void }) =>
+        options.onSuccess({
+          ...props,
+          medicines: [...medicines, { medicineId: 'pcm', displayName: 'PCM', ref: 'line-3' }],
+        })
     );
     render(<CounterDuplicateSaltAcknowledge {...props} />);
     fireEvent.click(screen.getByRole('button', { name: 'Acknowledge' }));

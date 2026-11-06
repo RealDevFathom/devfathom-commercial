@@ -1,5 +1,7 @@
 'use client';
 
+import { useLocale, useTranslations } from 'next-intl';
+import { useCounterError } from '@/i18n/use-counter-error';
 import { useEffect, useRef, useState } from 'react';
 
 import { buildDispensingLabels, type DispensingLabelSource } from '@/lib/pharmacy/dispensing-label';
@@ -18,6 +20,8 @@ import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptDate,
+  formatCounterTime,
+  localizeReceiptDigits,
   receiptTitle,
   type CounterReceipt,
   type CounterReceiptLocale,
@@ -79,12 +83,15 @@ type ThermalJob =
   | { state: 'error'; message: string };
 
 /** Asks the Pharmacy print bridge for the ESC/POS job; never queues or confirms paper. */
-async function requestThermalJob(input: {
-  branchId: string;
-  saleId: string;
-  locale: CounterReceiptLocale;
-  reprint: boolean;
-}): Promise<ThermalJob> {
+async function requestThermalJob(
+  input: {
+    branchId: string;
+    saleId: string;
+    locale: CounterReceiptLocale;
+    reprint: boolean;
+  },
+  text: (key: string) => string
+): Promise<ThermalJob> {
   const params = new URLSearchParams({
     branchId: input.branchId,
     saleId: input.saleId,
@@ -109,38 +116,14 @@ async function requestThermalJob(input: {
     if (response.status === 422 && body?.fallback === 'BROWSER_OS') return { state: 'fallback' };
     return {
       state: 'error',
-      message:
-        typeof body?.error === 'string'
-          ? body.error
-          : 'The thermal print job could not be prepared. Retry, or use Print receipt.',
+      message: typeof body?.error === 'string' ? body.error : text('thermalPrepareFailed'),
     };
   } catch {
     return {
       state: 'error',
-      message: 'The thermal print job could not be requested. Check the connection and retry.',
+      message: text('thermalRequestFailed'),
     };
   }
-}
-
-const EVIDENCE_KIND: Record<CounterEvidenceView['kind'], string> = {
-  TENDER: 'Tender',
-  REFUND: 'Refund',
-  DAILY_CLOSE: 'Day close',
-};
-
-const EVIDENCE_STATUS: Record<CounterEvidenceView['status'], string> = {
-  PENDING: 'Still pending capture.',
-  CAPTURED: 'Still no longer in storage.',
-  FAILED: 'No still was captured.',
-  PURGED: 'Still removed under the camera retention period.',
-};
-
-function evidenceTime(value: string | null): string {
-  if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? '—'
-    : `${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 16)} UTC`;
 }
 
 /** Operator-only evidence stills; kept outside the receipt document on purpose. */
@@ -155,44 +138,53 @@ function CounterReceiptEvidence({
   refreshing?: boolean;
   onRefresh?: () => void;
 }) {
+  const ct = useTranslations('CounterText');
+  const evidenceLocale = useLocale() === 'ur' ? 'ur' : 'en';
   const pending = evidence.some((item) => item.status === 'PENDING');
   return (
     <section
-      aria-label="Camera evidence"
+      aria-label={ct('cameraEvidence')}
       className="space-y-2 rounded-md border border-border-subtle p-3"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm font-semibold text-text-strong">Camera evidence</p>
+        <p className="text-sm font-semibold text-text-strong">{ct('cameraEvidence')}</p>
         {onRefresh && (error || pending) ? (
           <Button type="button" variant="secondary" disabled={refreshing} onClick={onRefresh}>
-            {refreshing ? 'Refreshing evidence…' : 'Refresh evidence'}
+            {refreshing ? ct('refreshingEvidence') : ct('refreshEvidence')}
           </Button>
         ) : null}
       </div>
       {error ? (
         <p role="alert" className="text-sm text-text-muted">
-          Camera evidence could not be loaded. Your access may have changed; no stills are shown.
+          {ct('cameraEvidenceCouldNotBeLoadedYourAccessMay')}
         </p>
       ) : null}
       <ul className="grid gap-3 sm:grid-cols-2">
         {evidence.map((item) => (
           <li key={item.id} className="space-y-1">
-            <p className="text-sm text-text-strong">{EVIDENCE_KIND[item.kind]}</p>
+            <p className="text-sm text-text-strong">{ct(`evidenceKinds.${item.kind}`)}</p>
             {item.image ? (
               // A private data: URL from the branch-scoped read; nothing to optimise.
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={item.image}
-                alt={`Camera still at ${EVIDENCE_KIND[item.kind].toLowerCase()}, ${evidenceTime(item.capturedAt)}`}
+                alt={ct('cameraStillAt', {
+                  kind: ct(`evidenceKinds.${item.kind}`).toLowerCase(),
+                  time: formatCounterTime(item.capturedAt, evidenceLocale),
+                })}
                 className="w-full rounded border border-border-subtle"
               />
             ) : (
-              <p className="text-sm text-text-muted">{EVIDENCE_STATUS[item.status]}</p>
+              <p className="text-sm text-text-muted">{ct(`evidenceStatus.${item.status}`)}</p>
             )}
             <p className="text-xs text-text-muted">
               {item.capturedAt
-                ? `Captured ${evidenceTime(item.capturedAt)}`
-                : `Requested ${evidenceTime(item.requestedAt)}`}
+                ? ct('capturedValue0', {
+                    value0: formatCounterTime(item.capturedAt, evidenceLocale),
+                  })
+                : ct('requestedValue0', {
+                    value0: formatCounterTime(item.requestedAt, evidenceLocale),
+                  })}
             </p>
           </li>
         ))}
@@ -223,6 +215,8 @@ export function CounterReceiptView({
   settlement,
   onSettlementPresented,
 }: CounterReceiptViewProps) {
+  const ct = useTranslations('CounterText');
+  const messageFrom = useCounterError();
   const [labelError, setLabelError] = useState<{ saleId: string; message: string } | null>(null);
   const [thermal, setThermal] = useState<{ key: string; job: ThermalJob } | null>(null);
   const [thermalPrinted, setThermalPrinted] = useState<ReadonlySet<string>>(new Set());
@@ -258,18 +252,15 @@ export function CounterReceiptView({
     receiptRegion.current?.scrollIntoView?.({ block: 'nearest', behavior: 'instant' });
 
     let printStatus: CounterReceiptPresentationResult['printStatus'] = 'manual';
-    let message = 'Receipt ready. Use Print receipt to open the browser print dialog.';
+    let message = ct('receiptReadyUsePrint');
     if (settlement.autoPrint) {
       try {
         printCounterBrowserReceipt(receipt, locale, format, false, settlement.printReservation);
         printStatus = 'dialog-requested';
-        message = 'Browser print dialog requested. Physical printing is not confirmed.';
+        message = ct('receiptPrintRequested');
       } catch (error) {
         printStatus = 'manual-required';
-        message =
-          error instanceof Error
-            ? error.message
-            : 'The browser print dialog could not open. Retry Print receipt.';
+        message = error instanceof Error ? error.message : ct('receiptPrintRetry');
       }
     } else {
       settlement.printReservation?.cancel();
@@ -279,16 +270,16 @@ export function CounterReceiptView({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Surface the external popup result for manual recovery.
     setPresentation({ ...result, message });
     onSettlementPresented?.(result);
-  }, [receipt, state, printing, settlement, locale, format, onSettlementPresented]);
+  }, [receipt, state, printing, settlement, locale, format, onSettlementPresented, ct]);
 
   if (state === 'idle') {
-    return <p className="text-sm text-text-muted">Settle the bill to render its receipt.</p>;
+    return <p className="text-sm text-text-muted">{ct('settleTheBillToRenderItsReceipt')}</p>;
   }
 
   if (state === 'loading') {
     return (
       <p className="text-sm text-text-muted" role="status">
-        Loading receipt…
+        {ct('loadingReceipt')}
       </p>
     );
   }
@@ -296,9 +287,9 @@ export function CounterReceiptView({
   if (state === 'error' || receipt === null) {
     return (
       <div className="space-y-2" role="alert">
-        <p className="text-sm text-destructive">{error ?? 'The receipt could not be loaded.'}</p>
+        <p className="text-sm text-destructive">{error ?? ct('theReceiptCouldNotBeLoaded')}</p>
         <Button type="button" variant="outline" className="h-11" onClick={onRetry}>
-          Retry receipt
+          {ct('retryReceipt')}
         </Button>
       </div>
     );
@@ -306,7 +297,7 @@ export function CounterReceiptView({
 
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const direction = COUNTER_RECEIPT_DIRECTION[locale];
-  const language = locale === 'ur' ? 'ur-PK' : 'en';
+  const language = locale;
 
   let document: string | null = null;
   let documentError: string | null = null;
@@ -318,8 +309,7 @@ export function CounterReceiptView({
       reprint
     );
   } catch {
-    documentError =
-      'This receipt cannot be previewed. Reload it or ask support to check its source data.';
+    documentError = strings.unpreviewable;
   }
 
   const settled = receipt.receiptNumber !== null && Boolean(receipt.completedAt);
@@ -330,7 +320,7 @@ export function CounterReceiptView({
     if (!branchId) return;
     const saleId = receipt.saleId;
     setThermal({ key: thermalKey, job: { state: 'sending' } });
-    const job = await requestThermalJob({ branchId, saleId, locale, reprint: thermalReprint });
+    const job = await requestThermalJob({ branchId, saleId, locale, reprint: thermalReprint }, ct);
     setThermal({ key: thermalKey, job });
     if (job.state === 'ready') setThermalPrinted((prior) => new Set(prior).add(saleId));
   };
@@ -347,24 +337,27 @@ export function CounterReceiptView({
           <div className="space-y-2">
             <StatusPill status="settled" tone="success" label={receiptTitle(receipt, locale)} />
             <h3 className="text-xl font-semibold tracking-tight text-text-strong">
-              {locale === 'ur' ? 'ادائیگی درج ہو گئی' : 'Payment recorded'}
+              {strings.paymentRecorded}
             </h3>
             <p className="text-sm text-text-muted">
               {receipt.branchName} ·{' '}
-              {receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}
+              {localizeReceiptDigits(
+                receipt.businessDate ?? formatReceiptDate(receipt.completedAt, locale),
+                locale
+              )}
             </p>
           </div>
           <dl className="flex flex-wrap gap-x-8 gap-y-3">
             <div>
               <dt className="font-mono text-xs text-text-muted">{strings.net}</dt>
               <dd className="text-2xl font-semibold tabular-nums text-text-strong">
-                {receipt.currency} {formatMinor(receipt.totals.netMinor)}
+                {receipt.currency} {formatMinor(receipt.totals.netMinor, locale)}
               </dd>
             </div>
             <div>
               <dt className="font-mono text-xs text-text-muted">{strings.change}</dt>
               <dd className="text-2xl font-semibold tabular-nums text-text-strong">
-                {receipt.currency} {formatMinor(receipt.totals.changeMinor)}
+                {receipt.currency} {formatMinor(receipt.totals.changeMinor, locale)}
               </dd>
             </div>
           </dl>
@@ -373,7 +366,7 @@ export function CounterReceiptView({
 
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-1.5">
-          <Label htmlFor="receipt-locale">Language</Label>
+          <Label htmlFor="receipt-locale">{ct('language')}</Label>
           <select
             id="receipt-locale"
             value={locale}
@@ -381,12 +374,12 @@ export function CounterReceiptView({
             onChange={(event) => onLocaleChange(event.target.value as CounterReceiptLocale)}
             className="h-11 rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           >
-            <option value="en">English</option>
-            <option value="ur">اردو</option>
+            <option value="en">{ct('english')}</option>
+            <option value="ur">{ct('urdu')}</option>
           </select>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="receipt-format">Format</Label>
+          <Label htmlFor="receipt-format">{ct('format')}</Label>
           <select
             id="receipt-format"
             value={format}
@@ -394,8 +387,8 @@ export function CounterReceiptView({
             onChange={(event) => onFormatChange(event.target.value as CounterReceiptFormat)}
             className="h-11 rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           >
-            <option value="THERMAL">Thermal · 80 mm</option>
-            <option value="THERMAL_58">Thermal · 58 mm</option>
+            <option value="THERMAL">{ct('thermal80Mm')}</option>
+            <option value="THERMAL_58">{ct('thermal58Mm')}</option>
             <option value="A4">A4</option>
           </select>
         </div>
@@ -407,7 +400,7 @@ export function CounterReceiptView({
           }
           onClick={onPrint}
         >
-          {printing ? 'Loading receipt…' : reprint ? 'Reprint receipt' : 'Print receipt'}
+          {printing ? ct('loadingReceipt') : reprint ? ct('reprintReceipt') : ct('printReceipt')}
         </Button>
         {branchId ? (
           <Button
@@ -418,10 +411,10 @@ export function CounterReceiptView({
             onClick={() => void printThermal()}
           >
             {thermalJob?.state === 'sending'
-              ? 'Preparing thermal job…'
+              ? ct('preparingThermalJob')
               : thermalReprint
-                ? 'Reprint to thermal (ESC/POS)'
-                : 'Print to thermal (ESC/POS)'}
+                ? ct('reprintToThermalESCPOS')
+                : ct('printToThermalESCPOS')}
           </Button>
         ) : null}
         {receipt.receiptNumber === null ? (
@@ -433,7 +426,11 @@ export function CounterReceiptView({
         ) : reprint ? (
           <StatusPill status="reprint" tone="info" label={strings.reprint} />
         ) : (
-          <StatusPill status="settled" tone="success" label={`#${receipt.receiptNumber}`} />
+          <StatusPill
+            status="settled"
+            tone="success"
+            label={ct('value0', { value0: receipt.receiptNumber })}
+          />
         )}
       </div>
 
@@ -442,11 +439,7 @@ export function CounterReceiptView({
           {labelError.message}
         </p>
       ) : null}
-      <p className="text-sm text-text-muted">
-        Browser / OS print fallback: allow pop-ups, then select your printer and matching paper size
-        in the print dialog. These paper choices apply to this session; saved designer settings are
-        not connected yet. Printing cannot be confirmed here.
-      </p>
+      <p className="text-sm text-text-muted">{ct('browserOSPrintFallbackAllowPopUpsThenSelect')}</p>
 
       {presentation?.saleId === receipt.saleId &&
       presentation.receiptNumber === receipt.receiptNumber ? (
@@ -461,37 +454,38 @@ export function CounterReceiptView({
       {thermalJob?.state === 'ready' ? (
         <div className="flex flex-wrap items-center gap-3" role="status">
           <p className="text-sm text-text-muted">
-            ESC/POS job ready: {thermalJob.byteCount} bytes, {thermalJob.paperWidth} mm branch
-            format{thermalJob.reprint ? ', marked as a reprint' : ''}. Send it through your local
-            print bridge; paper delivery cannot be confirmed here.
+            {ct('escPOSJobReady')}
+            {thermalJob.byteCount} {ct('bytes')}
+            {thermalJob.paperWidth} {ct('mmBranchFormat')}
+            {thermalJob.reprint ? ct('markedAsAReprint') : ''}
+            {ct('sendItThroughYourLocalPrintBridgePaperDelivery')}
           </p>
           <a
             className={buttonVariants({ variant: 'outline', className: 'h-11' })}
             download={`receipt-${receipt.receiptNumber}${thermalJob.reprint ? '-reprint' : ''}.bin`}
             href={`data:application/octet-stream;base64,${thermalJob.data}`}
           >
-            Save ESC/POS job
+            {ct('saveESCPOSJob')}
           </a>
         </div>
       ) : thermalJob?.state === 'fallback' ? (
         <p className="text-sm text-warning" role="alert">
-          The thermal printer cannot print this receipt&apos;s text (Urdu or other non-Latin
-          characters). Use Print receipt for the browser / OS receipt.
+          {ct('theThermalPrinterCannotPrintThisReceiptAposS')}
         </p>
       ) : thermalJob?.state === 'error' ? (
         <p className="text-sm text-destructive" role="alert">
-          {thermalJob.message}
+          {messageFrom(new Error(thermalJob.message))}
         </p>
       ) : null}
 
       {documentError ? (
         <p className="text-sm text-destructive" role="alert">
-          {documentError}
+          {messageFrom(new Error(documentError))}
         </p>
       ) : null}
 
       <h3 className="font-mono text-xs uppercase tracking-wider text-text-muted">
-        {locale === 'ur' ? 'رسید کا پیش منظر' : 'Receipt preview'}
+        {strings.preview}
       </h3>
       <section
         ref={receiptRegion}
@@ -515,7 +509,11 @@ export function CounterReceiptView({
             {strings.branch}: {receipt.branchName}
           </p>
           <p className="text-text-muted">
-            {strings.date}: {receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}
+            {strings.date}:{' '}
+            {localizeReceiptDigits(
+              receipt.businessDate ?? formatReceiptDate(receipt.completedAt, locale),
+              locale
+            )}
           </p>
           {receipt.receiptNumber === null ? (
             <p className="text-warning">{strings.noReceiptNumber}</p>
@@ -533,7 +531,7 @@ export function CounterReceiptView({
               buildDispensingLabels(receipt, lineSources);
             } catch (error) {
               labelUnavailable =
-                error instanceof Error ? error.message : 'Rx label source unavailable.';
+                error instanceof Error ? error.message : ct('rxLabelSourceUnavailable');
             }
             return (
               <li key={line.saleLineId} className="space-y-0.5 py-2">
@@ -542,7 +540,7 @@ export function CounterReceiptView({
                     {counterLinePresentation(line, locale).identity}
                   </span>
                   <span className="shrink-0 tabular-nums text-text-strong">
-                    {formatMinor(line.lineTotalMinor)}
+                    {formatMinor(line.lineTotalMinor, locale)}
                   </span>
                 </div>
                 <p className="text-text-muted">{counterLinePricing(line, locale)}</p>
@@ -575,16 +573,17 @@ export function CounterReceiptView({
                       setLabelError({
                         saleId: receipt.saleId,
                         message:
-                          error instanceof Error ? error.message : 'Rx label printing failed.',
+                          error instanceof Error ? error.message : ct('rxLabelPrintingFailed'),
                       });
                     }
                   }}
                 >
-                  Print Rx labels · 50 × 30 mm
+                  {ct('printRxLabels5030Mm')}
                 </Button>
                 <p id={`rx-label-${line.saleLineId}`} className="text-text-muted">
-                  {labelUnavailable ??
-                    'English / Urdu · 50 × 30 mm, 100% scale, no browser headers or footers.'}
+                  {labelUnavailable
+                    ? messageFrom(new Error(labelUnavailable))
+                    : ct('englishUrdu5030Mm100ScaleNoBrowser')}
                 </p>
               </li>
             );
@@ -603,7 +602,7 @@ export function CounterReceiptView({
           ).map(([label, value]) => (
             <div key={label} className="flex justify-between gap-3">
               <dt className="text-text-muted">{label}</dt>
-              <dd className="tabular-nums text-text-strong">{formatMinor(value)}</dd>
+              <dd className="tabular-nums text-text-strong">{formatMinor(value, locale)}</dd>
             </div>
           ))}
         </dl>
@@ -613,9 +612,9 @@ export function CounterReceiptView({
             <p className="text-text-muted">{strings.tenders}</p>
             {receipt.tenders.map((tender) => (
               <div key={tender.tenderId} className="flex justify-between gap-3">
-                <span className="text-text-strong">{tender.type}</span>
+                <span className="text-text-strong">{ct(`tenderCodes.${tender.type}`)}</span>
                 <span className="tabular-nums text-text-strong">
-                  {formatMinor(tender.amountMinor)}
+                  {formatMinor(tender.amountMinor, locale)}
                 </span>
               </div>
             ))}
@@ -626,7 +625,7 @@ export function CounterReceiptView({
       {document ? (
         <details className="rounded-md border border-border-subtle p-3">
           <summary className="cursor-pointer text-sm font-semibold text-text-strong">
-            Shared browser receipt preview (not queued)
+            {ct('sharedBrowserReceiptPreviewNotQueued')}
           </summary>
           <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs text-text-body">
             {document}

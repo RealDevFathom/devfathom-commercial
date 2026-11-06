@@ -1,5 +1,7 @@
 'use client';
 
+import messages from '@/messages/en.json';
+
 import { useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { CalendarClock, Plus, Upload } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
@@ -39,13 +41,13 @@ export function isImageType(value: string): value is PrescriptionUpload['content
 }
 
 export function fileError(file: File | null) {
-  if (!file || file.size === 0) return 'Choose a non-empty prescription image.';
-  if (file.size > maxPrescriptionBytes) return 'Choose a file no larger than 5 MiB.';
+  if (!file || file.size === 0) return messages.CounterErrors.RX_FILE_EMPTY;
+  if (file.size > maxPrescriptionBytes) return messages.CounterErrors.RX_FILE_SIZE;
   if (
     !isImageType(file.type) ||
     !evidenceTypes[file.type].includes(file.name.split('.').pop()?.toLowerCase() ?? '')
   )
-    return 'Use a JPEG, PNG or WebP with a matching file extension.';
+    return messages.CounterErrors.RX_FILE_TYPE;
   return null;
 }
 

@@ -1,9 +1,9 @@
 'use client';
 
+import { useTranslations } from 'next-intl';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
-  COUNTER_ACTION_LABELS,
   COUNTER_ACTIONS,
   COUNTER_KEYMAP_PRESETS,
   formatBinding,
@@ -32,11 +32,12 @@ export function CounterKeymapLegend({
   disabled = false,
   onPresetChange,
 }: CounterKeymapLegendProps) {
+  const ct = useTranslations('CounterText');
   const overridden = new Set(keymap.overriddenActions);
   return (
     <div className="space-y-2">
       <div className="space-y-1.5">
-        <Label htmlFor="counter-keymap-preset">Keymap</Label>
+        <Label htmlFor="counter-keymap-preset">{ct('keymap')}</Label>
         <select
           id="counter-keymap-preset"
           value={keymap.preset.key}
@@ -46,24 +47,26 @@ export function CounterKeymapLegend({
         >
           {Object.values(COUNTER_KEYMAP_PRESETS).map((preset) => (
             <option key={preset.key} value={preset.key}>
-              {preset.label}
+              {ct(`presets.${preset.key}.label`)}
             </option>
           ))}
         </select>
-        <p className="text-sm text-text-muted">{keymap.preset.description}</p>
+        <p className="text-sm text-text-muted">{ct(`presets.${keymap.preset.key}.description`)}</p>
         {!keymap.preset.confirmed ? (
           <p role="status" className="flex flex-wrap items-center gap-2 text-sm text-warning">
-            <StatusPill status="unconfirmed" tone="warning" label="Placeholder" />
+            <StatusPill status="unconfirmed" tone="warning" label={ct('placeholder')} />
             <span>
-              These chords are a proposal, to confirm in Phase 0
-              {keymap.preset.phaseZeroDecision ? ` (${keymap.preset.phaseZeroDecision})` : ''}. They
-              may change once the incumbent scorecard is complete.
+              {ct('theseChordsAreAProposalToConfirmInPhase')}
+              {keymap.preset.phaseZeroDecision
+                ? ct('value04', { value0: keymap.preset.phaseZeroDecision })
+                : ''}
+              {ct('theyMayChangeOnceTheIncumbentScorecardIsComplete')}
             </span>
           </p>
         ) : null}
         {saving ? (
           <p className="text-sm text-text-muted" role="status">
-            Saving keymap…
+            {ct('savingKeymap')}
           </p>
         ) : null}
       </div>
@@ -71,12 +74,10 @@ export function CounterKeymapLegend({
       <dl className="grid grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
         {COUNTER_ACTIONS.map((action) => (
           <div key={action} className="flex items-center justify-between gap-2 py-0.5">
-            <dt className="min-w-0 truncate text-xs text-text-body">
-              {COUNTER_ACTION_LABELS[action]}
-            </dt>
+            <dt className="min-w-0 truncate text-xs text-text-body">{ct(`actions.${action}`)}</dt>
             <dd className="flex shrink-0 items-center gap-1.5">
               {overridden.has(action) ? (
-                <StatusPill status="custom" tone="info" label="Custom" />
+                <StatusPill status="custom" tone="info" label={ct('custom')} />
               ) : null}
               <kbd className="rounded-[3px] border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-strong">
                 {formatBinding(keymap.bindings[action])}

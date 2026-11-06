@@ -17,3 +17,22 @@ describe('WhatsApp replies', () => {
     expect(confirmation).not.toContain('Panadol');
   });
 });
+
+it('uses the customer locale for a single-language consent reply and localized order quantity', async () => {
+  const { localizedWhatsAppReplies } = await import('./messages');
+  const ur = localizedWhatsAppReplies('ur');
+  expect(ur.optedOut).toContain('START');
+  expect(ur.optedOut).not.toContain('You will no longer');
+  expect(ur.confirmation({ reference: 'ABC123', quantity: 2, branch: 'Gulberg' })).toContain(
+    '۲ آئٹم'
+  );
+  expect(
+    localizedWhatsAppReplies('en').confirmation({
+      reference: 'ABC123',
+      quantity: 2,
+      branch: 'Gulberg',
+    })
+  ).toBe(
+    'Order ABC123 received: 2 item(s) for collection at Gulberg. We will confirm when it is ready.'
+  );
+});

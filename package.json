@@ -39,7 +39,8 @@
     "email:smoke": "tsx scripts/email-smoke.ts",
     "platform:jobs": "tsx --tsconfig scripts/tsconfig.json scripts/process-platform-jobs.ts",
     "restaurant:jobs": "tsx --tsconfig scripts/tsconfig.json scripts/run-restaurant-jobs.ts",
-    "restaurant:print-bridge": "tsx --tsconfig scripts/tsconfig.json scripts/print-bridge.ts"
+    "restaurant:print-bridge": "tsx --tsconfig scripts/tsconfig.json scripts/print-bridge.ts",
+    "test:e2e:pharmacy-locale": "tsx scripts/run-pharmacy-e2e.ts --config=playwright.pharmacy-locale.config.ts"
   },
   "prisma": {
     "seed": "bunx tsx prisma/seed.ts"
@@ -104,6 +105,7 @@
     "motion": "^13.4.4",
     "next": "16.4.2",
     "next-auth": "5.0.0-beta.32",
+    "next-intl": "^4.14.9",
     "openid-client": "6.8.4",
     "pg": "^8.20.0",
     "prisma": "^7.10.0",

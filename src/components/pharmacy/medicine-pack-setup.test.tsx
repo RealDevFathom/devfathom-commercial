@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { renderWithIntl as render } from '@/test/intl';
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -24,6 +25,14 @@ vi.mock('@/lib/trpc', () => ({
       pharmacyMedicine: { get: { invalidate: mocks.invalidateMedicine } },
     }),
     pharmacyMedicine: {
+      addUrduAlias: {
+        useMutation: () => ({
+          mutateAsync: vi.fn(),
+          reset: vi.fn(),
+          isPending: false,
+          error: null,
+        }),
+      },
       search: { useQuery: () => mocks.search },
       get: { useQuery: () => mocks.medicine },
       createPackLevel: {

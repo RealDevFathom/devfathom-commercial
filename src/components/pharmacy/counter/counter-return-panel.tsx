@@ -1,5 +1,6 @@
 'use client';
 
+import { useLocale, useTranslations } from 'next-intl';
 import { useRef, useState, useSyncExternalStore } from 'react';
 import { z } from '@/lib/zod-csp';
 import { Button } from '@/components/ui/button';
@@ -8,8 +9,12 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { trpc } from '@/lib/trpc';
 import { browserUuid } from '@/lib/browser-uuid';
-import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
-import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { useCounterError } from '@/i18n/use-counter-error';
+import {
+  formatMinor,
+  formatCounterTime,
+  localizeReceiptDigits,
+} from '@/lib/pharmacy/counter-receipt';
 import { buildCounterBrowserReceipt } from '@/lib/pharmacy/counter-browser-print';
 
 const attemptSchema = z.discriminatedUnion('kind', [
@@ -69,17 +74,18 @@ const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
 export function CounterReturnPanel(props: Props) {
+  const ct = useTranslations('CounterText');
   const [open, setOpen] = useState(false);
   return (
     <>
       <Button variant="outline" className="h-11" onClick={() => setOpen(true)}>
-        Returns & refunds
+        {ct('returnsRefunds')}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
-          <DialogTitle>Returns & refunds</DialogTitle>
+          <DialogTitle>{ct('returnsRefunds')}</DialogTitle>
           <DialogDescription>
-            Find the original receipt, record returned stock, then refund its original tenders.
+            {ct('findTheOriginalReceiptRecordReturnedStockThenRefund')}
           </DialogDescription>
           {open && (
             <ReturnForm
@@ -103,6 +109,18 @@ function subscribeConnection(changed: () => void) {
 }
 
 export function ReturnForm({ branchId, organizationId, accountId, deviceId, businessDate }: Props) {
+  const ct = useTranslations('CounterText');
+  const locale = useLocale() === 'ur' ? 'ur' : 'en';
+  const counterErrorMessage = useCounterError();
+  const reasonLabel = (value: string) => {
+    const names: Record<string, string> = {
+      WRONG_ITEM: 'wrongItemStrip',
+      DAMAGED: 'damaged',
+      CUSTOMER_CHANGED_MIND: 'customerChangedMind',
+      OTHER: 'otherExplainInInspection',
+    };
+    return Object.hasOwn(names, value) ? ct(names[value]!) : value;
+  };
   const storageKey = `pharmacy-return:${organizationId}:${accountId}:${branchId}`;
   // This form mounts only after opening the client-side dialog. Read recovery once,
   // before enabling any mutation; the parent key isolates account and branch changes.
@@ -115,8 +133,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     } catch {
       return {
         attempt: null,
-        error:
-          'Saved return recovery is unavailable. Ask a supervisor before starting another refund.',
+        error: ct('returnRecoveryUnavailable'),
       };
     }
   });
@@ -145,11 +162,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const [witnessPin, setWitnessPin] = useState('');
   const [busy, setBusy] = useState(false);
   const latch = useRef(false);
-  const [message, setMessage] = useState(
-    recovery.attempt
-      ? 'An earlier attempt needs reconciliation. Retry the saved attempt with the same reference.'
-      : ''
-  );
+  const [message, setMessage] = useState(recovery.attempt ? ct('returnEarlierAttempt') : '');
   const [error, setError] = useState(recovery.error);
   const lookup = trpc.pharmacySales.lookupReceiptByNumber.useQuery(
     { branchId, receiptNumber: searched || 1 },
@@ -223,7 +236,10 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
             }
           }
           setError(
-            `Return not recorded. ${result.blocked}${retry ? ' Enter a fresh witness PIN and retry the saved return.' : ''}`
+            ct('returnNotRecordedValue0Value1', {
+              value0: result.blocked,
+              value1: retry ? ct('returnWitnessRetry') : '',
+            })
           );
           return;
         }
@@ -239,9 +255,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       setUnits('1');
       setAmount('');
       setMessage(
-        next.kind === 'return'
-          ? 'Return recorded. Choose an original tender to refund.'
-          : 'Refund recorded. Loyalty tender refunds restore redeemed points. Reprint the receipt below.'
+        next.kind === 'return' ? ct('returnRecordedChooseTender') : ct('refundRecordedReprint')
       );
     } catch (cause) {
       const code = (cause as { data?: { code?: string } })?.data?.code;
@@ -254,7 +268,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         }
       }
       setError(
-        `${counterErrorMessage(cause)} Check history before handing out cash; an unknown outcome must use the saved retry.`
+        ct('value0CheckHistoryBeforeHandingOutCashAnUnknown', {
+          value0: counterErrorMessage(cause),
+        })
       );
     } finally {
       latch.current = false;
@@ -264,14 +280,13 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
 
   const witnessFields = (
     <section
-      aria-label="Controlled medicine return witness"
+      aria-label={ct('controlledMedicineReturnWitness')}
       className="space-y-3 rounded-md border border-border-subtle p-3"
     >
       <p className="text-sm text-text-muted">
-        Controlled medicine. A different pharmacist must witness this return with a fresh PIN. The
-        PIN is never saved on this device.
+        {ct('controlledMedicineADifferentPharmacistMustWitnessThisReturn')}
       </p>
-      <Label htmlFor="return-witness">Witnessing pharmacist</Label>
+      <Label htmlFor="return-witness">{ct('witnessingPharmacist')}</Label>
       <select
         id="return-witness"
         className={selectClass}
@@ -282,7 +297,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           setWitnessPin('');
         }}
       >
-        <option value="">Select pharmacist</option>
+        <option value="">{ct('selectPharmacist')}</option>
         {pharmacists.data?.map((staff) => (
           <option key={staff.id} value={staff.id}>
             {staff.name}
@@ -290,21 +305,18 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         ))}
       </select>
       {pharmacists.isLoading ? (
-        <p role="status">Loading pharmacists…</p>
+        <p role="status">{ct('loadingPharmacists')}</p>
       ) : pharmacists.isError ? (
         <p role="alert">
           {counterErrorMessage(pharmacists.error)}{' '}
           <Button variant="outline" onClick={() => void pharmacists.refetch()}>
-            Reload pharmacists
+            {ct('reloadPharmacists')}
           </Button>
         </p>
       ) : pharmacists.data && pharmacists.data.length === 0 ? (
-        <p role="status">
-          No independent pharmacist with an active staff PIN is available. Ask your administrator
-          to configure one.
-        </p>
+        <p role="status">{ct('noIndependentPharmacistWithAnActiveStaffPINIs')}</p>
       ) : null}
-      <Label htmlFor="return-witness-pin">Witness PIN</Label>
+      <Label htmlFor="return-witness-pin">{ct('witnessPIN')}</Label>
       <Input
         id="return-witness-pin"
         type="password"
@@ -322,45 +334,48 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   function print() {
     try {
       if (!receipt.data || !data || stale || receipt.isFetching || receipt.isError)
-        throw new Error('Reload receipt and return history before printing.');
+        throw new Error(ct('reloadReceiptBeforePrinting'));
       const popup = window.open('', '_blank', 'popup,width=480,height=720');
-      if (!popup) throw new Error('Allow pop-ups to reprint this receipt.');
+      if (!popup) throw new Error(ct('allowPopUpsForReceipt'));
       popup.opener = null;
       popup.document.open();
-      popup.document.write(buildCounterBrowserReceipt(receipt.data, 'en', 'THERMAL', true));
+      popup.document.write(buildCounterBrowserReceipt(receipt.data, locale, 'THERMAL', true));
       popup.document.close();
       const appendix = popup.document.createElement('pre');
       appendix.textContent =
-        '\nRETURNS & REFUNDS\n' +
+        '\n' +
+        ct('returnPrintHeading') +
+        '\n' +
         data.returns
           .map(
             (row) =>
-              `${row.createdAt.toISOString()} ${row.reason}\n${row.lines.map((item) => `${data.lines.find((l) => l.id === item.saleLineId)?.name ?? 'Item'}: ${item.canonicalUnits} units · ${item.integrityDecision}`).join('\n')}`
+              `${formatCounterTime(row.createdAt, locale)} ${reasonLabel(row.reason)}\n${row.lines.map((item) => ct('returnPrintLine', { name: data.lines.find((l) => l.id === item.saleLineId)?.name ?? ct('returnItemFallback'), units: localizeReceiptDigits(item.canonicalUnits, locale), decision: item.integrityDecision })).join('\n')}`
           )
           .join('\n') +
         '\n' +
         data.tenders
           .flatMap((row) =>
             row.refunds.map(
-              (item) => `${row.type}: PKR ${formatMinor(item.amountMinor)} · ${item.reason}`
+              (item) =>
+                `${ct(`tenderCodes.${row.type}`)}: PKR ${formatMinor(item.amountMinor, locale)} · ${item.reason}`
             )
           )
           .join('\n');
       popup.document.body.append(appendix);
       popup.focus();
       popup.print();
-      setMessage('Browser print dialog requested. Paper delivery is not confirmed.');
+      setMessage(ct('returnPrintRequested'));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Receipt could not print.');
+      setError(cause instanceof Error ? cause.message : ct('receiptCouldNotPrint'));
     }
   }
 
   return (
     <div className="space-y-4">
-      {!online && <p role="alert">Offline. Returns and refunds require a connection.</p>}
+      {!online && <p role="alert">{ct('offlineReturnsAndRefundsRequireAConnection')}</p>}
       {error && (
         <p role="alert" className="text-destructive">
-          {error}
+          {counterErrorMessage(new Error(error))}
         </p>
       )}
       {message && <p role="status">{message}</p>}
@@ -376,7 +391,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
             (attempt.kind === 'return' && (!data || !witnessReady))
           }
         >
-          Retry saved {attempt.kind}
+          {ct('retrySaved')}
+          {ct(`returnActions.${attempt.kind}`)}
         </Button>
       )}
       {attempt?.kind === 'return' && witnessRequired && witnessFields}
@@ -392,7 +408,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         }}
       >
         <div>
-          <Label htmlFor="return-receipt">Receipt number</Label>
+          <Label htmlFor="return-receipt">{ct('receiptNumber')}</Label>
           <Input
             id="return-receipt"
             type="number"
@@ -411,24 +427,24 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           className="h-11"
           disabled={locked || !Number.isSafeInteger(Number(number)) || Number(number) < 1}
         >
-          Find receipt
+          {ct('findReceipt')}
         </Button>
       </form>
-      {lookup.isFetching && searched > 0 && <p role="status">Looking up receipt…</p>}
+      {lookup.isFetching && searched > 0 && <p role="status">{ct('lookingUpReceipt')}</p>}
       {lookup.isError && (
         <p role="alert">
           {counterErrorMessage(lookup.error)}{' '}
           <Button variant="outline" onClick={() => void lookup.refetch()}>
-            Retry lookup
+            {ct('retryLookup')}
           </Button>
         </p>
       )}
       {searched > 0 && lookup.isSuccess && lookup.data.length === 0 && (
-        <p>No settled receipt found in this branch.</p>
+        <p>{ct('noSettledReceiptFoundInThisBranch')}</p>
       )}
       {!!lookup.data?.length && (
         <div className="space-y-2">
-          <p>Choose the matching date and counter. Receipt numbers can repeat.</p>
+          <p>{ct('chooseTheMatchingDateAndCounterReceiptNumbersCan')}</p>
           {lookup.data.map((row) => (
             <Button
               key={row.id}
@@ -443,18 +459,19 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 setConfirmed(false);
               }}
             >
-              Receipt {row.receiptNumber} · {row.businessDate?.toISOString().slice(0, 10)} ·{' '}
+              {ct('receipt2')}
+              {row.receiptNumber} · {row.businessDate?.toISOString().slice(0, 10)} ·{' '}
               {row.receiptDeviceId}
             </Button>
           ))}
         </div>
       )}
-      {saleId && history.isFetching && <p role="status">Loading return history…</p>}
+      {saleId && history.isFetching && <p role="status">{ct('loadingReturnHistory')}</p>}
       {saleId && history.isError && (
         <p role="alert">
           {counterErrorMessage(history.error)}{' '}
           <Button variant="outline" onClick={() => void history.refetch()}>
-            Reload history
+            {ct('reloadHistory')}
           </Button>
         </p>
       )}
@@ -464,8 +481,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
             disabled={locked || stale}
             className="space-y-3 rounded-lg border border-border-subtle p-4"
           >
-            <legend className="px-1 font-semibold">1. Record returned stock</legend>
-            <Label htmlFor="return-line">Sold line</Label>
+            <legend className="px-1 font-semibold">{ct('1RecordReturnedStock')}</legend>
+            <Label htmlFor="return-line">{ct('soldLine')}</Label>
             <select
               id="return-line"
               className={selectClass}
@@ -479,19 +496,19 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 setConfirmed(false);
               }}
             >
-              <option value="">Choose a line</option>
+              <option value="">{ct('chooseALine')}</option>
               {data.lines.map((row) => (
                 <option
                   key={row.id}
                   value={row.id}
                   disabled={row.returnedUnits === row.canonicalUnits}
                 >
-                  {row.name} · {row.quantity} {row.saleUnit === 'PACK' ? 'BOX' : row.saleUnit} ·{' '}
-                  {row.canonicalUnits - row.returnedUnits} units returnable
+                  {row.name} · {row.quantity} {ct(`returnSaleUnits.${row.saleUnit}`)} ·{' '}
+                  {row.canonicalUnits - row.returnedUnits} {ct('unitsReturnable')}
                 </option>
               ))}
             </select>
-            <Label htmlFor="return-lot">Returned lot / batch</Label>
+            <Label htmlFor="return-lot">{ct('returnedLotBatch')}</Label>
             <select
               id="return-lot"
               className={selectClass}
@@ -502,21 +519,20 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 setConfirmed(false);
               }}
             >
-              <option value="">Lot cannot be verified — quarantine</option>
+              <option value="">{ct('lotCannotBeVerifiedQuarantine')}</option>
               {line?.lots.map((lot) => (
                 <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
-                  {lot.batchNumber} · {lot.lotId} · {lot.returnableUnits} units remaining
-                  {lot.restockAllowed ? '' : ' · quarantine only'}
+                  {lot.batchNumber} · {lot.lotId} · {lot.returnableUnits} {ct('unitsRemaining')}
+                  {lot.restockAllowed ? '' : ct('quarantineOnly')}
                 </option>
               ))}
             </select>
             {!lotId && (
               <p className="text-sm text-text-muted">
-                Unidentified stock stays in quarantine with a pharmacist-verification task. No lot
-                receives available stock.
+                {ct('unidentifiedStockStaysInQuarantineWithAPharmacistVerification')}
               </p>
             )}
-            <Label htmlFor="return-units">Return quantity (base units)</Label>
+            <Label htmlFor="return-units">{ct('returnQuantityBaseUnits')}</Label>
             <Input
               id="return-units"
               className="h-11"
@@ -532,11 +548,12 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
             />
             {line && (
               <p className="text-sm text-text-muted">
-                One sold {line.saleUnit === 'PACK' ? 'box' : line.saleUnit.toLowerCase()} contains{' '}
-                {line.canonicalUnitsPerSaleUnit} base units.
+                {ct('oneSold')}
+                {ct(`returnSaleUnits.${line.saleUnit}`)} {ct('contains')}{' '}
+                {line.canonicalUnitsPerSaleUnit} {ct('baseUnits')}
               </p>
             )}
-            <Label htmlFor="return-reason">Reason</Label>
+            <Label htmlFor="return-reason">{ct('reason')}</Label>
             <select
               id="return-reason"
               className={selectClass}
@@ -546,12 +563,12 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 setConfirmed(false);
               }}
             >
-              <option value="WRONG_ITEM">Wrong item / strip</option>
-              <option value="DAMAGED">Damaged</option>
-              <option value="CUSTOMER_CHANGED_MIND">Customer changed mind</option>
-              <option value="OTHER">Other — explain in inspection</option>
+              <option value="WRONG_ITEM">{ct('wrongItemStrip')}</option>
+              <option value="DAMAGED">{ct('damaged')}</option>
+              <option value="CUSTOMER_CHANGED_MIND">{ct('customerChangedMind')}</option>
+              <option value="OTHER">{ct('otherExplainInInspection')}</option>
             </select>
-            <Label htmlFor="return-disposition">Stock disposition</Label>
+            <Label htmlFor="return-disposition">{ct('stockDisposition')}</Label>
             <select
               id="return-disposition"
               className={selectClass}
@@ -561,14 +578,14 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 setConfirmed(false);
               }}
             >
-              <option value="QUARANTINE">Quarantine for review</option>
+              <option value="QUARANTINE">{ct('quarantineForReview')}</option>
               <option value="RESTOCK" disabled={!selectedLot?.restockAllowed}>
-                Restock to verified lot and original shelf
+                {ct('restockToVerifiedLotAndOriginalShelf')}
               </option>
             </select>
             {disposition === 'QUARANTINE' && (
               <>
-                <Label htmlFor="return-location">Quarantine location</Label>
+                <Label htmlFor="return-location">{ct('quarantineLocation')}</Label>
                 <select
                   id="return-location"
                   className={selectClass}
@@ -578,7 +595,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                     setConfirmed(false);
                   }}
                 >
-                  <option value="">Choose location</option>
+                  <option value="">{ct('chooseLocation')}</option>
                   {data.locations.map((row) => (
                     <option key={row.id} value={row.id}>
                       {row.name}
@@ -586,14 +603,11 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                   ))}
                 </select>
                 {data.locations.length === 0 && (
-                  <p role="alert">
-                    No quarantine location is configured for this branch. Ask a supervisor to
-                    configure one.
-                  </p>
+                  <p role="alert">{ct('noQuarantineLocationIsConfiguredForThisBranchAsk')}</p>
                 )}
               </>
             )}
-            <Label htmlFor="return-integrity">Inspection and integrity decision</Label>
+            <Label htmlFor="return-integrity">{ct('inspectionAndIntegrityDecision')}</Label>
             <Input
               id="return-integrity"
               className="h-11"
@@ -604,8 +618,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               }}
             />
             <p className="text-sm text-text-muted">
-              Restock only inspected medicine with acceptable storage and intact packaging. Expired
-              or recalled lots are refused by the server.
+              {ct('restockOnlyInspectedMedicineWithAcceptableStorageAndIntact')}
             </p>
             {!attempt && witnessRequired && witnessFields}
             <label className="flex min-h-11 items-center gap-2">
@@ -614,7 +627,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 checked={confirmed}
                 onChange={(event) => setConfirmed(event.target.checked)}
               />
-              I confirm the quantity, inspection and stock disposition.
+              {ct('iConfirmTheQuantityInspectionAndStockDisposition')}
             </label>
             <Button
               className="h-11"
@@ -651,16 +664,19 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 )
               }
             >
-              Record return
+              {ct('recordReturn')}
             </Button>
           </fieldset>
           <fieldset
             disabled={locked || stale}
             className="space-y-3 rounded-lg border border-border-subtle p-4"
           >
-            <legend className="px-1 font-semibold">2. Refund original tender</legend>
-            <p>Returned value awaiting refund: PKR {formatMinor(data.refundableMinor)}</p>
-            <Label htmlFor="refund-tender">Original tender</Label>
+            <legend className="px-1 font-semibold">{ct('2RefundOriginalTender')}</legend>
+            <p>
+              {ct('returnedValueAwaitingRefundPKR')}
+              {formatMinor(data.refundableMinor)}
+            </p>
+            <Label htmlFor="refund-tender">{ct('originalTender')}</Label>
             <select
               id="refund-tender"
               className={selectClass}
@@ -670,14 +686,15 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 setManual(false);
               }}
             >
-              <option value="">Choose tender</option>
+              <option value="">{ct('chooseTender')}</option>
               {data.tenders.map((row) => (
                 <option key={row.id} value={row.id} disabled={row.refundedMinor >= row.amountMinor}>
-                  {row.type} · PKR {formatMinor(row.amountMinor - row.refundedMinor)} remaining
+                  {ct(`tenderCodes.${row.type}`)} {ct('pkr')}
+                  {formatMinor(row.amountMinor - row.refundedMinor, locale)} {ct('remaining')}
                 </option>
               ))}
             </select>
-            <Label htmlFor="refund-amount">Refund amount (PKR)</Label>
+            <Label htmlFor="refund-amount">{ct('refundAmountPKR')}</Label>
             <Input
               id="refund-amount"
               className="h-11"
@@ -686,8 +703,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               onChange={(event) => setAmount(event.target.value)}
             />
             <p className="text-sm text-text-muted">
-              Refund up to PKR {formatMinor(available)} on this tender. Repeat with another original
-              tender for a mixed payment. Loyalty refunds restore redeemed points.
+              {ct('refundUpToPKR')}
+              {formatMinor(available)} {ct('onThisTenderRepeatWithAnotherOriginalTenderFor')}
             </p>
             {manualRequired && (
               <label className="flex min-h-11 items-start gap-2">
@@ -696,8 +713,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                   checked={manual}
                   onChange={(event) => setManual(event.target.checked)}
                 />
-                No provider refund adapter is configured. Issue CASH from this drawer; manual
-                reversal required. I will reconcile the original provider separately.
+                {ct('noProviderRefundAdapterIsConfiguredIssueCASHFrom')}
               </label>
             )}
             <Button
@@ -727,25 +743,31 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 })
               }
             >
-              Confirm refund
+              {ct('confirmRefund')}
             </Button>
           </fieldset>
-          <section aria-label="Return and refund history" className="space-y-2">
-            <h3 className="font-semibold">Return and refund history</h3>
-            {data.returns.length === 0 && <p>No returns recorded.</p>}
+          <section aria-label={ct('returnAndRefundHistory')} className="space-y-2">
+            <h3 className="font-semibold">{ct('returnAndRefundHistory')}</h3>
+            {data.returns.length === 0 && <p>{ct('noReturnsRecorded')}</p>}
             {data.returns.map((row) => (
               <p key={row.id}>
-                {row.reason}:{' '}
+                {reasonLabel(row.reason)}:{' '}
                 {row.lines
-                  .map((item) => `${item.canonicalUnits} units · ${item.integrityDecision}`)
+                  .map((item) =>
+                    ct('value0UnitsValue1', {
+                      value0: item.canonicalUnits,
+                      value1: item.integrityDecision,
+                    })
+                  )
                   .join(', ')}
               </p>
             ))}
             {data.tenders.flatMap((row) =>
               row.refunds.map((item) => (
                 <p key={item.id}>
-                  {row.type} refund: PKR {formatMinor(item.amountMinor)}
-                  {item.manualReversalRequired ? ' · CASH — manual reversal required' : ''}
+                  {ct(`tenderCodes.${row.type}`)} {ct('refundPKR')}
+                  {formatMinor(item.amountMinor, locale)}
+                  {item.manualReversalRequired ? ct('cashManualReversalRequired') : ''}
                 </p>
               ))
             )}
@@ -763,11 +785,11 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               }
               onClick={print}
             >
-              Reprint receipt with refunds
+              {ct('reprintReceiptWithRefunds')}
             </Button>
             {receipt.isError && (
               <Button variant="outline" onClick={() => void receipt.refetch()}>
-                Reload receipt
+                {ct('reloadReceipt')}
               </Button>
             )}
           </section>

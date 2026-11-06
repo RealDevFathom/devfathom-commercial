@@ -1,5 +1,6 @@
 'use client';
 
+import { useTranslations } from 'next-intl';
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
@@ -26,10 +27,11 @@ export function CounterSubstituteProposals({
   onDecline: () => void;
   onRetry: () => void;
 }) {
+  const ct = useTranslations('CounterText');
   if (state === 'loading') {
     return (
       <p className="text-sm text-text-muted" role="status">
-        Checking exact in-stock equivalents…
+        {ct('checkingExactInStockEquivalents')}
       </p>
     );
   }
@@ -37,10 +39,10 @@ export function CounterSubstituteProposals({
     return (
       <div className="space-y-3" role="alert">
         <p className="text-sm text-destructive">
-          {error ?? 'Substitute suggestions are unavailable.'}
+          {error ?? ct('substituteSuggestionsAreUnavailable')}
         </p>
         <Button type="button" variant="outline" className="h-11" onClick={onRetry}>
-          Retry
+          {ct('retry')}
         </Button>
       </div>
     );
@@ -48,21 +50,21 @@ export function CounterSubstituteProposals({
   if (proposals.length === 0) {
     return (
       <p className="text-sm text-text-muted">
-        No cheaper exact equivalent is safely available in this branch.
+        {ct('noCheaperExactEquivalentIsSafelyAvailableInThis')}
       </p>
     );
   }
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <StatusPill status="suggestion" tone="info" label="Suggestion only" />
+        <StatusPill status="suggestion" tone="info" label={ct('suggestionOnly')} />
         <p className="text-xs text-text-muted">
-          Not clinical advice. Nothing is substituted until a pharmacist acts.
+          {ct('notClinicalAdviceNothingIsSubstitutedUntilAPharmacist')}
         </p>
       </div>
       <ul
         className="divide-y divide-border-subtle rounded-md border border-border-subtle"
-        aria-label="Substitute suggestions"
+        aria-label={ct('substituteSuggestions')}
       >
         {proposals.map((proposal) => (
           <li
@@ -78,7 +80,7 @@ export function CounterSubstituteProposals({
                 {proposal.dosageForm} · {proposal.route} · {proposal.equivalenceBasis}
               </p>
               <p className="mt-1 font-mono text-xs tabular-nums text-text-body">
-                {formatMinor(proposal.priceMinor)} · save{' '}
+                {formatMinor(proposal.priceMinor)} {ct('save')}{' '}
                 {formatMinor(proposal.priceDifferenceMinor)}
               </p>
             </div>
@@ -87,7 +89,7 @@ export function CounterSubstituteProposals({
                 href="/pharmacy/substitution"
                 className="inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
               >
-                Pharmacist review
+                {ct('pharmacistReview')}
               </Link>
             ) : (
               <Button
@@ -97,7 +99,7 @@ export function CounterSubstituteProposals({
                 disabled={disabled}
                 onClick={() => onChoose(proposal)}
               >
-                Review option
+                {ct('reviewOption')}
               </Button>
             )}
           </li>
@@ -110,7 +112,7 @@ export function CounterSubstituteProposals({
         disabled={disabled}
         onClick={onDecline}
       >
-        Patient declined substitutes
+        {ct('patientDeclinedSubstitutes')}
       </Button>
     </div>
   );

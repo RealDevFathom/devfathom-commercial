@@ -1,3 +1,6 @@
+import enMessages from '@/messages/en.json';
+import urMessages from '@/messages/ur.json';
+
 /**
  * PH-POS / POS-08 — the counter receipt: thermal and A4, Urdu and English.
  *
@@ -105,6 +108,9 @@ type Strings = {
   tenders: string;
   saleUnit: Record<SaleUnitKind, string>;
   noReceiptNumber: string;
+  paymentRecorded: string;
+  preview: string;
+  unpreviewable: string;
 };
 
 /**
@@ -113,50 +119,8 @@ type Strings = {
  * a monolingual one.
  */
 export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Strings>> = {
-  en: {
-    receipt: 'Receipt',
-    reprint: 'Reprint — not a new sale',
-    unissued: 'Receipt unissued',
-    branch: 'Branch',
-    date: 'Date',
-    medicine: 'Medicine',
-    strength: 'Strength',
-    batch: 'Batch',
-    expiry: 'Expiry',
-    quantity: 'Qty',
-    unitPrice: 'Unit price',
-    lineTotal: 'Amount',
-    gross: 'Gross',
-    discount: 'Discount',
-    net: 'Total',
-    tendered: 'Tendered',
-    change: 'Change',
-    tenders: 'Payments',
-    saleUnit: { PACK: 'pack', STRIP: 'strip', UNIT: 'unit' },
-    noReceiptNumber: 'This bill is not settled, so no receipt number has been issued.',
-  },
-  ur: {
-    receipt: 'رسید',
-    reprint: 'دوبارہ پرنٹ — نئی فروخت نہیں',
-    unissued: 'رسید نمبر جاری نہیں ہوا',
-    branch: 'برانچ',
-    date: 'تاریخ',
-    medicine: 'دوا',
-    strength: 'طاقت',
-    batch: 'بیچ',
-    expiry: 'میعاد',
-    quantity: 'مقدار',
-    unitPrice: 'فی یونٹ قیمت',
-    lineTotal: 'رقم',
-    gross: 'کل رقم',
-    discount: 'رعایت',
-    net: 'قابلِ ادائیگی',
-    tendered: 'ادا شدہ',
-    change: 'واپسی',
-    tenders: 'ادائیگیاں',
-    saleUnit: { PACK: 'پیک', STRIP: 'پتّا', UNIT: 'یونٹ' },
-    noReceiptNumber: 'یہ بل ادا نہیں ہوا، اس لیے رسید نمبر جاری نہیں ہوا۔',
-  },
+  en: enMessages.Receipt,
+  ur: urMessages.Receipt,
 };
 
 /** Text direction, so the A4 render does not have to re-derive it per locale. */
@@ -171,27 +135,70 @@ export const COUNTER_RECEIPT_DIRECTION: Readonly<Record<CounterReceiptLocale, 'l
  * Never divides by 100 in floating point: `Math.round(x / 100 * 100)` is how a
  * receipt total starts disagreeing with the ledger by a paisa.
  */
-export function formatMinor(amountMinor: number): string {
+export function localizeReceiptDigits(
+  value: string | number,
+  locale: CounterReceiptLocale
+): string {
+  const text = String(value);
+  return locale === 'ur' ? text.replace(/\d/g, (digit) => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]) : text;
+}
+
+export function formatMinor(amountMinor: number, locale: CounterReceiptLocale = 'en'): string {
   if (!Number.isSafeInteger(amountMinor)) return '0.00';
   const negative = amountMinor < 0;
   const absolute = Math.abs(amountMinor);
   const major = Math.floor(absolute / 100);
   const fraction = absolute % 100;
-  return `${negative ? '-' : ''}${major}.${String(fraction).padStart(2, '0')}`;
+  return localizeReceiptDigits(
+    `${negative ? '-' : ''}${major}.${String(fraction).padStart(2, '0')}`,
+    locale
+  );
 }
 
 /** ISO timestamp reduced to the date a receipt prints. */
-export function formatReceiptDate(value: string | null): string {
+export function formatReceiptDate(
+  value: string | null,
+  locale: CounterReceiptLocale = 'en'
+): string {
   if (!value) return '—';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : date.toISOString().slice(0, 10);
+  return Number.isNaN(date.getTime())
+    ? '—'
+    : localizeReceiptDigits(date.toISOString().slice(0, 10), locale);
+}
+
+/** Operator timestamps always use the pharmacy's Pakistan time zone. */
+export function formatCounterTime(
+  value: string | Date | null,
+  locale: CounterReceiptLocale = 'en'
+): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Karachi',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    })
+      .formatToParts(date)
+      .map((part) => [part.type, part.value])
+  );
+  return localizeReceiptDigits(
+    `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} PKT`,
+    locale
+  );
 }
 
 export function receiptTitle(receipt: CounterReceipt, locale: CounterReceiptLocale): string {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   return receipt.receiptNumber === null
     ? strings.unissued
-    : `${strings.receipt} ${receipt.receiptNumber}`;
+    : `${strings.receipt} ${localizeReceiptDigits(receipt.receiptNumber, locale)}`;
 }
 
 /**
@@ -207,9 +214,9 @@ export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceip
   const identity = [line.medicineName, line.strength].filter(Boolean).join(' ');
   const tail = [
     `${strings.batch} ${line.batchNumber}`,
-    `${strings.expiry} ${formatReceiptDate(line.expiresAt)}`,
-    `${line.quantity} ${strings.saleUnit[line.saleUnit]}`,
-    formatMinor(line.lineTotalMinor),
+    `${strings.expiry} ${formatReceiptDate(line.expiresAt, locale)}`,
+    `${localizeReceiptDigits(line.quantity, locale)} ${strings.saleUnit[line.saleUnit]}`,
+    formatMinor(line.lineTotalMinor, locale),
   ].join(' · ');
 
   const full = `${identity} (${line.presentation}) · ${tail}`;
@@ -233,11 +240,11 @@ function footerFor(
 ): string {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const parts = [
-    `${strings.gross} ${formatMinor(receipt.totals.grossMinor)}`,
-    `${strings.discount} ${formatMinor(receipt.totals.discountMinor)}`,
-    `${strings.net} ${formatMinor(receipt.totals.netMinor)}`,
-    `${strings.tendered} ${formatMinor(receipt.totals.tenderedMinor)}`,
-    `${strings.change} ${formatMinor(receipt.totals.changeMinor)}`,
+    `${strings.gross} ${formatMinor(receipt.totals.grossMinor, locale)}`,
+    `${strings.discount} ${formatMinor(receipt.totals.discountMinor, locale)}`,
+    `${strings.net} ${formatMinor(receipt.totals.netMinor, locale)}`,
+    `${strings.tendered} ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
+    `${strings.change} ${formatMinor(receipt.totals.changeMinor, locale)}`,
   ];
   if (receipt.receiptNumber === null) parts.push(strings.noReceiptNumber);
   if (reprint) parts.push(strings.reprint);
@@ -309,7 +316,9 @@ export function counterReceiptTotals(input: {
   const tenderedMinor = input.tenders.reduce(
     (total, tender) =>
       total +
-      (tender.type === 'CASH' ? (tender.cashReceivedMinor ?? tender.amountMinor) : tender.amountMinor),
+      (tender.type === 'CASH'
+        ? (tender.cashReceivedMinor ?? tender.amountMinor)
+        : tender.amountMinor),
     0
   );
   const changeMinor = input.tenders.reduce(

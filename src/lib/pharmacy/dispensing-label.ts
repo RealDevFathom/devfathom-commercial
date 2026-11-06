@@ -1,3 +1,5 @@
+import messages from '@/messages/en.json';
+
 import { COUNTER_RECEIPT_STRINGS, type CounterReceipt } from './counter-receipt';
 
 /** Minimal authorized label payload. No patient, consent, or actor identifiers. */
@@ -36,18 +38,18 @@ export function buildDispensingLabels(
   sources: readonly DispensingLabelSource[]
 ): string {
   if (receipt.receiptNumber === null || !receipt.completedAt || sources.length === 0) {
-    throw new Error('Load a settled receipt and sourced Rx directions before printing labels.');
+    throw new Error(messages.CounterErrors.RX_LABEL_SOURCE);
   }
   const seen = new Set<string>();
   const labels = sources.flatMap((source) => {
     const matches = receipt.lines.filter((line) => line.saleLineId === source.saleLineId);
     if (source.saleId !== receipt.saleId || matches.length !== 1 || seen.has(source.saleLineId)) {
-      throw new Error('Rx label source does not match this receipt.');
+      throw new Error(messages.CounterErrors.RX_LABEL_MISMATCH);
     }
     seen.add(source.saleLineId);
     const line = matches[0]!;
     if (source.rx !== true || line.identityStatus !== 'ISSUED' || !line.allocations?.length) {
-      throw new Error('Rx label requires issued medicine and batch identity.');
+      throw new Error(messages.CounterErrors.RX_LABEL_IDENTITY);
     }
     const branch = escapeHtml(text(receipt.branchName, 'pharmacy name'));
     const medicine = escapeHtml(
@@ -76,7 +78,7 @@ export function buildDispensingLabels(
         Number.isNaN(parsed.getTime()) ||
         parsed.toISOString().slice(0, 10) !== date
       ) {
-        throw new Error('Rx label requires valid batch expiry.');
+        throw new Error(messages.CounterErrors.RX_LABEL_EXPIRY);
       }
       const batch = escapeHtml(text(allocation.batchNumber, 'batch number'));
       return `<section class="dispensing-label" aria-label="Rx dispensing label">

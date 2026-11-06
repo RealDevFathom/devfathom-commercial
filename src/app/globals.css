@@ -1719,3 +1719,18 @@
     outline-color: Highlight;
   }
 }
+
+/* Urdu uses a locally hosted Nastaliq face; direction comes from the root document. */
+[lang='ur'] {
+  --font-sans: 'Noto Nastaliq Urdu', 'Instrument Sans', serif;
+  --font-display: var(--font-sans);
+  --font-heading: var(--font-sans);
+  font-family: var(--font-sans);
+  line-height: 1.8;
+}
+
+/* The base body font utility has an explicit stack, so opt the Urdu document into its locale token. */
+html[lang='ur'] body,
+[lang='ur'] .font-sans {
+  font-family: var(--font-sans);
+}

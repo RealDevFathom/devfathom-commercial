@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, within } from '@testing-library/react';
+import { renderWithIntl as render } from '@/test/intl';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { CounterReceiptView, type CounterReceiptViewProps } from './counter-receipt-view';
@@ -185,10 +186,10 @@ it.each(['UNAVAILABLE', undefined] as const)(
       ],
     };
     render(<CounterReceiptView {...input} />);
-    const region = within(screen.getByRole('region', { name: 'رسید 12' }));
+    const region = within(screen.getByRole('region', { name: 'رسید ۱۲' }));
     expect(region.getByText('تاریخی شناخت دستیاب نہیں')).toBeTruthy();
     expect(
-      region.getByText('بیچ: دستیاب نہیں · میعاد: دستیاب نہیں · بنیادی اکائیاں: 7')
+      region.getByText('بیچ: دستیاب نہیں · میعاد: دستیاب نہیں · بنیادی اکائیاں: ۷')
     ).toBeTruthy();
     expect(screen.queryByText(/LIVE_CATALOG/)).toBeNull();
   }
@@ -325,19 +326,19 @@ it('shows the refund still beside the receipt, outside the printable document', 
   );
   const evidence = within(screen.getByRole('region', { name: 'Camera evidence' }));
   const image = evidence.getByRole('img', {
-    name: 'Camera still at refund, 2026-09-06 08:31 UTC',
+    name: 'Camera still at refund, 2026-09-06 13:31 PKT',
   });
   expect(image).toHaveAttribute('src', still);
   expect(evidence.getByText('Still removed under the camera retention period.')).toBeTruthy();
-  expect(evidence.getByText('Captured 2026-09-06 08:31 UTC')).toBeTruthy();
+  expect(evidence.getByText('Captured 2026-09-06 13:31 PKT')).toBeTruthy();
   const receipt = screen.getByRole('region', { name: 'Receipt 12' });
   expect(within(receipt).queryByRole('img')).toBeNull();
   expect(container.querySelector('pre')?.textContent ?? '').not.toContain('Camera');
 });
 
 it.each([
-  ['PENDING', 'Still pending capture.', 'Requested 2026-09-06 08:30 UTC'],
-  ['FAILED', 'No still was captured.', 'Requested 2026-09-06 08:30 UTC'],
+  ['PENDING', 'Still pending capture.', 'Requested 2026-09-06 13:30 PKT'],
+  ['FAILED', 'No still was captured.', 'Requested 2026-09-06 13:30 PKT'],
 ] as const)('explains %s evidence without an image', (status, message, time) => {
   render(
     <CounterReceiptView
@@ -398,8 +399,8 @@ it.each(['en', 'ur'] as const)('shows exact mixed-lot pricing in the live %s rec
   ];
   render(<CounterReceiptView {...input} />);
   const item = screen.getAllByRole('listitem')[0]!;
-  expect(item).toHaveTextContent('2 × 1.00 + 1 × 1.01');
-  expect(item).toHaveTextContent('3.01');
+  expect(item).toHaveTextContent(locale === 'ur' ? '۲ × ۱.۰۰ + ۱ × ۱.۰۱' : '2 × 1.00 + 1 × 1.01');
+  expect(item).toHaveTextContent(locale === 'ur' ? '۳.۰۱' : '3.01');
   expect(item).not.toHaveTextContent('3 unit × 1.00');
 });
 

@@ -46,6 +46,8 @@ export type CounterMatchKind = 'BARCODE' | 'ALIAS' | 'NAME' | 'INGREDIENT' | 'PR
 export type CounterSearchRow = {
   medicineId: string;
   displayName: string;
+  /** Optional catalogue alias; never replaces the reviewed primary identity. */
+  urduName?: string | null;
   brandName: string | null;
   manufacturer: string | null;
   /** Rendered strength components, for example `500 mg + 30 mg`. */
@@ -270,6 +272,12 @@ export async function searchCounterCatalog(
       include: {
         strengths: { include: { ingredient: { select: { name: true } } } },
         presentations: { orderBy: { createdAt: 'asc' } },
+        aliases: {
+          where: { organizationId: scope.organizationId, type: 'URDU' },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+          select: { value: true },
+        },
       },
     }),
     db.pharmacyInventoryLot.findMany({
@@ -442,6 +450,7 @@ export async function searchCounterCatalog(
     rows.push({
       medicineId: medicine.id,
       displayName: medicine.productName,
+      urduName: medicine.aliases?.[0]?.value ?? null,
       brandName: medicine.brandName,
       manufacturer: medicine.manufacturer,
       strength: renderStrength(medicine.strengths),

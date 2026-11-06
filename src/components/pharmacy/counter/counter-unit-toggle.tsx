@@ -1,5 +1,6 @@
 'use client';
 
+import { useTranslations } from 'next-intl';
 import { useId } from 'react';
 
 import { Input } from '@/components/ui/input';
@@ -20,12 +21,6 @@ export type CounterUnitToggleProps = {
   onQuantityChange: (quantity: number) => void;
   /** Rendered beside each unit so the operator sees the chord, not a tooltip. */
   chordFor?: (kind: SaleUnitKind) => string | null;
-};
-
-const KIND_LABEL: Record<SaleUnitKind, string> = {
-  PACK: 'Pack',
-  STRIP: 'Strip',
-  UNIT: 'Unit',
 };
 
 /**
@@ -51,13 +46,13 @@ export function CounterUnitToggle({
   onQuantityChange,
   chordFor,
 }: CounterUnitToggleProps) {
+  const ct = useTranslations('CounterText');
   const quantityId = useId();
 
   if (options.length === 0) {
     return (
       <p className="text-sm text-text-muted" role="status">
-        No sale unit is available for this medicine. Its pack hierarchy does not match the received
-        lot, so no price can be derived.
+        {ct('noSaleUnitIsAvailableForThisMedicineIts')}
       </p>
     );
   }
@@ -66,11 +61,11 @@ export function CounterUnitToggle({
     <div className={inline ? 'grid items-end gap-3 sm:grid-cols-[auto_auto_1fr]' : 'space-y-2'}>
       <div className="space-y-1">
         {inline ? (
-          <span className="block text-xs font-semibold text-text-strong">Sale unit</span>
+          <span className="block text-xs font-semibold text-text-strong">{ct('saleUnit')}</span>
         ) : null}
         <div
           role="radiogroup"
-          aria-label="Sale unit"
+          aria-label={ct('saleUnit')}
           aria-disabled={disabled || undefined}
           className="flex flex-wrap gap-2"
         >
@@ -99,22 +94,23 @@ export function CounterUnitToggle({
                       : options[(index - 1 + options.length) % options.length]!;
                   onSelect(next.kind);
                 }}
-                className={`flex min-h-11 min-w-0 flex-col items-start gap-0.5 rounded-md border px-2 py-1 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 ${
+                className={`flex min-h-11 min-w-0 flex-col items-start gap-0.5 rounded-md border px-2 py-1 text-start focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 ${
                   active
                     ? 'border-primary bg-primary text-primary-foreground'
                     : 'border-border-subtle bg-surface-card text-text-strong hover:bg-surface-sunken'
                 }`}
               >
                 <span className="text-sm font-semibold">
-                  {KIND_LABEL[option.kind]}
+                  {ct(`saleUnitLabels.${option.kind}`)}
                   {option.levelLabel && option.levelLabel !== option.kind ? (
-                    <span className="ml-1 font-normal opacity-80">({option.levelLabel})</span>
+                    <span className="ms-1 font-normal opacity-80">({option.levelLabel})</span>
                   ) : null}
                 </span>
                 <span
                   className={`font-mono text-[0.625rem] tracking-wide ${active ? 'text-primary-foreground' : 'text-text-muted'}`}
                 >
-                  {option.canonicalUnitsPerSaleUnit} units{chord ? ` · ${chord}` : ''}
+                  {option.canonicalUnitsPerSaleUnit} {ct('units')}
+                  {chord ? ` · ${chord}` : ''}
                 </span>
               </button>
             );
@@ -123,11 +119,11 @@ export function CounterUnitToggle({
       </div>
 
       <div className="space-y-1">
-        <Label htmlFor={quantityId}>Quantity</Label>
+        <Label htmlFor={quantityId}>{ct('quantity')}</Label>
         <div className="flex items-center gap-1">
           <button
             type="button"
-            aria-label="Decrease quantity"
+            aria-label={ct('decreaseQuantity')}
             disabled={disabled || quantity <= 1}
             onClick={() => onQuantityChange(Math.max(1, quantity - 1))}
             className="inline-flex size-11 items-center justify-center rounded-md border border-border-subtle bg-surface-card text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
@@ -152,7 +148,7 @@ export function CounterUnitToggle({
           />
           <button
             type="button"
-            aria-label="Increase quantity"
+            aria-label={ct('increaseQuantity')}
             disabled={disabled}
             onClick={() => onQuantityChange(quantity + 1)}
             className="inline-flex size-11 items-center justify-center rounded-md border border-border-subtle bg-surface-card text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
@@ -174,13 +170,13 @@ export function CounterUnitToggle({
         >
           <div>
             <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-              {inline ? 'Units' : 'Canonical units'}
+              {inline ? ct('units2') : ct('canonicalUnits')}
             </dt>
             <dd className="font-mono tabular-nums text-text-strong">{preview.canonicalUnits}</dd>
           </div>
           <div>
             <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-              Unit price
+              {ct('unitPrice')}
             </dt>
             <dd className="font-mono tabular-nums text-text-strong">
               {formatMinor(preview.unitPriceMinor)}
@@ -188,7 +184,7 @@ export function CounterUnitToggle({
           </div>
           <div className={inline ? 'sr-only' : undefined}>
             <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-              Pro-rata ceiling
+              {ct('proRataCeiling')}
             </dt>
             <dd className="font-mono tabular-nums text-text-muted">
               {formatMinor(preview.proRataCeilingMinor)}
@@ -196,7 +192,7 @@ export function CounterUnitToggle({
           </div>
           <div>
             <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-              Line total
+              {ct('lineTotal')}
             </dt>
             <dd className="font-mono tabular-nums text-text-strong">
               {formatMinor(preview.grossMinor)}
@@ -207,18 +203,18 @@ export function CounterUnitToggle({
               <StatusPill
                 status="in-stock"
                 tone="success"
-                label={`Covered · ${preview.availableUnits} units on hand`}
+                label={ct('coveredValue0UnitsOnHand', { value0: preview.availableUnits })}
               />
             ) : (
               <span role="alert" className="flex flex-wrap items-center gap-2">
                 <StatusPill
                   status="short"
                   tone="warning"
-                  label={`Short by ${preview.shortfallUnits} units`}
+                  label={ct('shortByValue0Units', { value0: preview.shortfallUnits })}
                 />
                 <span className="text-sm text-text-body">
-                  Only {preview.availableUnits} safe units are on hand. Reduce the quantity or
-                  capture the shortfall as unfulfilled demand.
+                  {ct('only')}
+                  {preview.availableUnits} {ct('safeUnitsAreOnHandReduceTheQuantityOr')}
                 </span>
               </span>
             )}

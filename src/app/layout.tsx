@@ -1,9 +1,13 @@
 import type { Metadata, Viewport } from 'next';
-import { headers } from 'next/headers';
+import { cookies, headers } from 'next/headers';
+import { NextIntlClientProvider } from 'next-intl';
 import localFont from 'next/font/local';
 import './globals.css';
 import { Providers } from '@/components/providers';
 import { PreferenceBootstrap } from '@/components/preference-bootstrap';
+import { defaultLocale, isAppLocale, localeCookieName, localeDirection } from '@/i18n/config';
+import enMessages from '@/messages/en.json';
+import urMessages from '@/messages/ur.json';
 
 // Separate subset calls preserve Unicode coverage and Latin-only preloading.
 //
@@ -155,6 +159,19 @@ const plexMono = localFont({
   ],
 });
 
+const nastaliq = localFont({
+  src: [
+    { path: './fonts/noto-nastaliq-urdu-400.ttf', weight: '400', style: 'normal' },
+    { path: './fonts/noto-nastaliq-urdu-600.ttf', weight: '600', style: 'normal' },
+  ],
+  variable: '--font-nastaliq',
+  display: 'swap',
+  preload: false,
+  fallback: ['serif'],
+  adjustFontFallback: false,
+  declarations: [{ prop: 'font-family', value: 'Noto Nastaliq Urdu' }],
+});
+
 const description =
   'The DevFathom company hub — projects, finance, clients, people, and real-time collaboration in one calm, unified workspace for the team that designs, builds, and advises.';
 
@@ -211,12 +228,17 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const nonce = (await headers()).get('x-nonce') ?? undefined;
+  const savedLocale = (await cookies()).get(localeCookieName)?.value;
+  const locale = isAppLocale(savedLocale) ? savedLocale : defaultLocale;
+  const messages = locale === 'ur' ? urMessages : enMessages;
 
   return (
     <html
-      lang="en"
+      lang={locale}
+      dir={localeDirection(locale)}
+      data-locale={locale}
       data-theme="light"
-      className={`${instrumentSansExtended.variable} ${instrumentSans.variable} ${plexMonoCyrillicExtended.variable} ${plexMonoCyrillic.variable} ${plexMonoVietnamese.variable} ${plexMonoExtended.variable} ${plexMono.variable} h-full`}
+      className={`${instrumentSansExtended.variable} ${instrumentSans.variable} ${plexMonoCyrillicExtended.variable} ${plexMonoCyrillic.variable} ${plexMonoVietnamese.variable} ${plexMonoExtended.variable} ${plexMono.variable} ${nastaliq.variable} h-full`}
       // Saved preferences intentionally mutate only <html> before hydration.
       // React's one-level escape hatch must not spread to descendants.
       suppressHydrationWarning
@@ -225,7 +247,9 @@ export default async function RootLayout({
         <PreferenceBootstrap nonce={nonce} />
       </head>
       <body className="min-h-full">
-        <Providers>{children}</Providers>
+        <NextIntlClientProvider locale={locale} messages={messages} timeZone="Asia/Karachi">
+          <Providers>{children}</Providers>
+        </NextIntlClientProvider>
       </body>
     </html>
   );

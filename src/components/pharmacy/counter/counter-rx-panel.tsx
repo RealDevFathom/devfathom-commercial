@@ -1,5 +1,7 @@
 'use client';
 
+import { useTranslations } from 'next-intl';
+import { useCounterError } from '@/i18n/use-counter-error';
 import { forwardRef, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 
@@ -35,6 +37,7 @@ function photoUrlFor(prescriptionId: string): string | null {
 }
 
 function PrescriptionThumbnail({ url, label }: { url: string; label: string }) {
+  const ct = useTranslations('CounterText');
   return (
     <a
       href={url}
@@ -50,7 +53,7 @@ function PrescriptionThumbnail({ url, label }: { url: string; label: string }) {
         loading="lazy"
         className="size-14 rounded-md border border-border-subtle object-cover"
       />
-      <span className="sr-only"> (opens in a new tab)</span>
+      <span className="sr-only"> {ct('opensInANewTab')}</span>
     </a>
   );
 }
@@ -76,6 +79,8 @@ function CounterRxPhotoCapture({
   patientName: string;
   disabled: boolean;
 }) {
+  const ct = useTranslations('CounterText');
+  const messageFrom = useCounterError();
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const workspace = trpc.pharmacyPrescriptions.workspace.useQuery(undefined, { enabled: open });
@@ -119,14 +124,14 @@ function CounterRxPhotoCapture({
 
   async function ensureUploaded(): Promise<string> {
     if (uploadedUrl) return uploadedUrl;
-    if (!file || !isImageType(file.type)) throw new Error('Take or choose a prescription photo.');
+    if (!file || !isImageType(file.type)) throw new Error(ct('takePrescriptionPhoto'));
     const result = await uploadSource.mutateAsync({
       patientId,
       contentType: file.type,
       dataBase64: await imageBase64(file),
     });
     if (!attachmentUrl(result?.url) || result.sourceFileRef !== result.url) {
-      throw new Error('The upload could not be confirmed. Retry the photo.');
+      throw new Error(ct('uploadNotConfirmed'));
     }
     setUploadedUrl(result.url);
     return result.url;
@@ -139,7 +144,7 @@ function CounterRxPhotoCapture({
     try {
       setPrefill(await extractSource.mutateAsync({ sourceFileRef: await ensureUploaded() }));
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'The prescription could not be read.');
+      setError(failure instanceof Error ? failure.message : ct('thePrescriptionCouldNotBeRead'));
     } finally {
       inFlight.current = false;
     }
@@ -161,7 +166,7 @@ function CounterRxPhotoCapture({
       return;
     }
     if (usedSuggestion && !confirmed) {
-      setError('Confirm the suggested values against the photo before saving.');
+      setError(ct('confirmTheSuggestedValuesAgainstThePhotoBeforeSaving'));
       return;
     }
     const data = new FormData(form);
@@ -193,7 +198,9 @@ function CounterRxPhotoCapture({
       setOpen(false);
     } catch (failure) {
       setError(
-        `${failure instanceof Error ? failure.message : 'The request failed.'} Your photo and form are kept for retry.`
+        ct('value0YourPhotoAndFormAreKeptForRetry', {
+          value0: failure instanceof Error ? failure.message : ct('requestFailed'),
+        })
       );
       return;
     } finally {
@@ -211,9 +218,9 @@ function CounterRxPhotoCapture({
         <div role="status" className="flex items-center gap-3 text-sm text-text-body">
           <PrescriptionThumbnail
             url={saved.url}
-            label={`Saved prescription photo for ${patientName}`}
+            label={ct('savedPrescriptionPhotoForValue0', { value0: patientName })}
           />
-          <span>Prescription photo saved. A pharmacist must still sign it before release.</span>
+          <span>{ct('prescriptionPhotoSavedAPharmacistMustStillSignIt')}</span>
         </div>
       ) : null}
       {!open ? (
@@ -227,18 +234,18 @@ function CounterRxPhotoCapture({
             setOpen(true);
           }}
         >
-          Photograph prescription
+          {ct('photographPrescription')}
         </Button>
       ) : (
         <form
-          aria-label="Photograph prescription"
+          aria-label={ct('photographPrescription')}
           aria-busy={busy}
           onSubmit={submit}
           className="space-y-3 rounded-md border border-border-subtle p-3"
         >
           <fieldset disabled={disabled || busy} className="grid min-w-0 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="counter-rx-photo">Prescription photo</Label>
+              <Label htmlFor="counter-rx-photo">{ct('prescriptionPhoto')}</Label>
               <input
                 id="counter-rx-photo"
                 type="file"
@@ -252,42 +259,42 @@ function CounterRxPhotoCapture({
                   setError(fileError(next));
                   setPreview(next && !fileError(next) ? URL.createObjectURL(next) : null);
                 }}
-                className="block w-full text-sm file:mr-3 file:h-11 file:rounded-md file:border file:border-border-subtle file:bg-transparent file:px-3 file:font-semibold"
+                className="block w-full text-sm file:me-3 file:h-11 file:rounded-md file:border file:border-border-subtle file:bg-transparent file:px-3 file:font-semibold"
               />
               <p id="counter-rx-photo-hint" className="text-xs text-text-muted">
-                JPEG, PNG or WebP up to 5 MiB. Stored privately as inspection evidence.
+                {ct('jpegPNGOrWebPUpTo5MiBStored')}
               </p>
             </div>
             {preview ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={preview}
-                alt="Selected prescription photo"
+                alt={ct('selectedPrescriptionPhoto')}
                 className="size-24 rounded-md border border-border-subtle object-cover"
               />
             ) : null}
 
             {file && !fileError(file) ? (
               <Button type="button" variant="outline" className="h-11" onClick={suggest}>
-                {extractSource.isPending ? 'Reading photo…' : 'Suggest from photo'}
+                {extractSource.isPending ? ct('readingPhoto') : ct('suggestFromPhoto')}
               </Button>
             ) : null}
 
             {prefill ? (
-              <section aria-label="Suggestions from photo" className="space-y-2">
+              <section aria-label={ct('suggestionsFromPhoto')} className="space-y-2">
                 <p className="text-xs text-text-muted">
-                  Read by {prefill.adapter.toLowerCase()} OCR. Nothing is filled in until you choose
-                  a suggestion.
+                  {ct('readBy')}
+                  {prefill.adapter.toLowerCase()} {ct('ocrNothingIsFilledInUntilYouChooseA')}
                 </p>
                 {prefill.lines.length === 0 ? (
                   <p className="text-sm text-text-muted">
-                    No medicine could be read from the photo.
+                    {ct('noMedicineCouldBeReadFromThePhoto')}
                   </p>
                 ) : null}
                 {prefill.lines.map((line, index) => (
                   <div key={index} className="space-y-1 rounded-md bg-surface-sunken p-2 text-sm">
                     <p className="text-text-strong">
-                      Read:{' '}
+                      {ct('read')}{' '}
                       {[line.drugName.value, line.strength.value].filter(Boolean).join(' ') || '—'}{' '}
                       <span className="font-mono text-xs text-text-muted">
                         {Math.round(line.drugName.confidence * 100)}%
@@ -307,7 +314,8 @@ function CounterRxPhotoCapture({
                             })
                           }
                         >
-                          Use medicine {candidate.label}
+                          {ct('useMedicine')}
+                          {candidate.label}
                         </Button>
                       ))}
                       {line.dose.value ? (
@@ -319,8 +327,8 @@ function CounterRxPhotoCapture({
                             applySuggestion(() => setDirections(line.dose.value ?? ''))
                           }
                         >
-                          Use directions “{line.dose.value}” (
-                          {Math.round(line.dose.confidence * 100)}
+                          {ct('useDirections')}
+                          {line.dose.value}” ({Math.round(line.dose.confidence * 100)}
                           %)
                         </Button>
                       ) : null}
@@ -337,7 +345,7 @@ function CounterRxPhotoCapture({
             ) : null}
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label htmlFor="counter-rx-prescriber">Prescriber</Label>
+                <Label htmlFor="counter-rx-prescriber">{ct('prescriber')}</Label>
                 <select
                   id="counter-rx-prescriber"
                   name="prescriberId"
@@ -346,7 +354,7 @@ function CounterRxPhotoCapture({
                   className={selectClass}
                 >
                   <option value="" disabled>
-                    {workspace.isLoading ? 'Loading…' : 'Select prescriber'}
+                    {workspace.isLoading ? ct('loading') : ct('selectPrescriber')}
                   </option>
                   {workspace.data?.prescribers.map((prescriber) => (
                     <option key={prescriber.id} value={prescriber.id}>
@@ -356,7 +364,7 @@ function CounterRxPhotoCapture({
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="counter-rx-valid-until">Valid until</Label>
+                <Label htmlFor="counter-rx-valid-until">{ct('validUntil')}</Label>
                 <Input
                   id="counter-rx-valid-until"
                   name="validUntil"
@@ -368,7 +376,7 @@ function CounterRxPhotoCapture({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="counter-rx-medicine">Medicine</Label>
+                <Label htmlFor="counter-rx-medicine">{ct('medicine')}</Label>
                 <select
                   id="counter-rx-medicine"
                   required
@@ -380,7 +388,7 @@ function CounterRxPhotoCapture({
                   className={selectClass}
                 >
                   <option value="" disabled>
-                    Select medicine
+                    {ct('selectMedicine')}
                   </option>
                   {workspace.data?.medicines.map((item) => (
                     <option key={item.id} value={item.id}>
@@ -390,7 +398,7 @@ function CounterRxPhotoCapture({
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="counter-rx-presentation">Presentation</Label>
+                <Label htmlFor="counter-rx-presentation">{ct('presentation')}</Label>
                 <select
                   id="counter-rx-presentation"
                   required
@@ -400,7 +408,7 @@ function CounterRxPhotoCapture({
                   className={selectClass}
                 >
                   <option value="" disabled>
-                    Select presentation
+                    {ct('selectPresentation')}
                   </option>
                   {medicine?.presentations.map((item) => (
                     <option key={item.id} value={item.id}>
@@ -410,7 +418,7 @@ function CounterRxPhotoCapture({
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="counter-rx-quantity">Authorized units</Label>
+                <Label htmlFor="counter-rx-quantity">{ct('authorizedUnits')}</Label>
                 <Input
                   id="counter-rx-quantity"
                   name="quantity"
@@ -421,20 +429,20 @@ function CounterRxPhotoCapture({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="counter-rx-custody">Original custody</Label>
+                <Label htmlFor="counter-rx-custody">{ct('originalCustody')}</Label>
                 <select
                   id="counter-rx-custody"
                   name="custodyState"
                   defaultValue="NOT_HELD"
                   className={selectClass}
                 >
-                  <option value="NOT_HELD">Returned / not held</option>
-                  <option value="HELD_AT_PHARMACY">Held at pharmacy</option>
+                  <option value="NOT_HELD">{ct('returnedNotHeld')}</option>
+                  <option value="HELD_AT_PHARMACY">{ct('heldAtPharmacy')}</option>
                 </select>
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="counter-rx-directions">Directions</Label>
+              <Label htmlFor="counter-rx-directions">{ct('directions')}</Label>
               <Input
                 id="counter-rx-directions"
                 required
@@ -452,12 +460,12 @@ function CounterRxPhotoCapture({
                   onChange={(event) => setConfirmed(event.target.checked)}
                   className="mt-1 size-4"
                 />
-                I have checked the suggested medicine and directions against the photo.
+                {ct('iHaveCheckedTheSuggestedMedicineAndDirectionsAgainst')}
               </label>
             ) : null}
             {error ? (
               <p role="alert" className="text-sm text-destructive">
-                {error}
+                {messageFrom(new Error(error))}
               </p>
             ) : null}
             <div className="flex flex-wrap gap-2">
@@ -467,10 +475,10 @@ function CounterRxPhotoCapture({
                 disabled={!file || Boolean(fileError(file)) || (usedSuggestion && !confirmed)}
               >
                 {uploadSource.isPending
-                  ? 'Uploading photo…'
+                  ? ct('uploadingPhoto')
                   : capture.isPending
-                    ? 'Saving…'
-                    : 'Save prescription'}
+                    ? ct('saving')
+                    : ct('savePrescription')}
               </Button>
               <Button
                 type="button"
@@ -481,7 +489,7 @@ function CounterRxPhotoCapture({
                   setOpen(false);
                 }}
               >
-                Cancel
+                {ct('cancel')}
               </Button>
             </div>
           </fieldset>
@@ -574,6 +582,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
     },
     ref
   ) {
+    const ct = useTranslations('CounterText');
     const blocks = alerts.filter((alert) => alert.severity === 'SAFETY_BLOCK');
     const advice = alerts.filter((alert) => alert.severity === 'CLINICAL_ADVICE');
     const commercial = alerts.filter((alert) => alert.severity === 'COMMERCIAL');
@@ -584,13 +593,13 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
         tabIndex={-1}
         className="min-w-0 space-y-5 rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
       >
-        <section aria-label="Safety blocks" className="space-y-3">
+        <section aria-label={ct('safetyBlocks')} className="space-y-3">
           <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-            Safety blocks
+            {ct('safetyBlocks')}
           </h4>
           {blocks.length === 0 ? (
             <p className="text-sm text-text-muted">
-              Safety checks run before payment. Any reported blocks appear here.
+              {ct('safetyChecksRunBeforePaymentAnyReportedBlocksAppear')}
             </p>
           ) : (
             <ul className="space-y-2">
@@ -600,7 +609,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   role="alert"
                   className="space-y-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3"
                 >
-                  <StatusPill status="blocked" tone="danger" label="Blocked" />
+                  <StatusPill status="blocked" tone="danger" label={ct('blocked')} />
                   <p className="text-sm font-semibold leading-relaxed text-text-strong">
                     {alert.message}
                   </p>
@@ -615,21 +624,21 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
 
         {advice.length > 0 || commercial.length > 0 ? (
           <section
-            aria-label="Counselling and notices"
+            aria-label={ct('counsellingAndNotices')}
             className="space-y-3 border-t border-border-subtle pt-5"
           >
             <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-              Counselling and notices
+              {ct('counsellingAndNotices')}
             </h4>
             {advice.length > 0 ? (
-              <ul aria-label="Clinical advice" className="space-y-2">
+              <ul aria-label={ct('clinicalAdvice')} className="space-y-2">
                 {advice.map((alert) => (
                   <li
                     key={alert.key}
                     role="status"
                     className="space-y-2 rounded-xl border border-border-subtle bg-surface-card p-3 text-sm text-text-body"
                   >
-                    <StatusPill status="advice" tone="neutral" label="Advice" />
+                    <StatusPill status="advice" tone="neutral" label={ct('advice')} />
                     <p className="font-medium leading-relaxed">{alert.message}</p>
                     {alert.remedy ? (
                       <p className="text-sm text-text-muted">{alert.remedy}</p>
@@ -648,14 +657,14 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               </ul>
             ) : null}
             {commercial.length > 0 ? (
-              <ul aria-label="Commercial notices" className="space-y-2">
+              <ul aria-label={ct('commercialNotices')} className="space-y-2">
                 {commercial.map((alert) => (
                   <li
                     key={alert.key}
                     role="status"
                     className="space-y-2 rounded-xl bg-surface-sunken p-3 text-sm text-text-body"
                   >
-                    <StatusPill status="commercial" tone="neutral" label="Commercial" />
+                    <StatusPill status="commercial" tone="neutral" label={ct('commercial')} />
                     <p className="font-medium leading-relaxed">{alert.message}</p>
                     {alert.remedy ? (
                       <p className="text-sm text-text-muted">{alert.remedy}</p>
@@ -668,17 +677,16 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
         ) : null}
 
         <section
-          aria-label="Patient and prescriptions"
+          aria-label={ct('patientAndPrescriptions')}
           className="space-y-3 border-t border-border-subtle pt-5"
         >
           <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-            Patient
+            {ct('patient')}
           </h4>
 
           {state === 'denied' ? (
             <p className="text-sm text-text-muted" role="status">
-              Prescriptions are not enabled for this workspace. Commercial lines can still be sold;
-              a prescription-only line will stay blocked.
+              {ct('prescriptionsAreNotEnabledForThisWorkspaceCommercialLines')}
             </p>
           ) : patient ? (
             <div className="space-y-3">
@@ -691,16 +699,16 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 </div>
                 <div className="flex items-center gap-2">
                   {patient.dispensingConsent ? (
-                    <StatusPill status="consent" tone="success" label="Dispensing consent" />
+                    <StatusPill status="consent" tone="success" label={ct('dispensingConsent')} />
                   ) : (
-                    <StatusPill status="no-consent" tone="warning" label="No consent on file" />
+                    <StatusPill status="no-consent" tone="warning" label={ct('noConsentOnFile')} />
                   )}
                 </div>
               </div>
 
               {patient.prescriptions.length === 0 ? (
                 <p className="text-sm text-text-muted">
-                  No prescription is on file for this patient.
+                  {ct('noPrescriptionIsOnFileForThisPatient')}
                 </p>
               ) : (
                 <ul className="space-y-3">
@@ -714,20 +722,26 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                           {photoUrlFor(prescription.prescriptionId) ? (
                             <PrescriptionThumbnail
                               url={photoUrlFor(prescription.prescriptionId)!}
-                              label={`Prescription photo from ${prescription.prescriberName}`}
+                              label={ct('prescriptionPhotoFromValue0', {
+                                value0: prescription.prescriberName,
+                              })}
                             />
                           ) : null}
                           <p className="text-sm text-text-strong">{prescription.prescriberName}</p>
                         </div>
                         {prescription.inDate ? (
-                          <StatusPill status="valid" tone="success" label="In date" />
+                          <StatusPill status="valid" tone="success" label={ct('inDate')} />
                         ) : (
-                          <StatusPill status="expired" tone="danger" label="Outside validity" />
+                          <StatusPill
+                            status="expired"
+                            tone="danger"
+                            label={ct('outsideValidity')}
+                          />
                         )}
                       </div>
                       <p className="break-words font-mono text-xs leading-relaxed text-text-muted">
                         {formatReceiptDate(prescription.validFrom)} →{' '}
-                        {formatReceiptDate(prescription.validUntil)} · repeats{' '}
+                        {formatReceiptDate(prescription.validUntil)} {ct('repeats')}{' '}
                         {prescription.authorizedRepeats} ·{' '}
                         {prescription.custodyState.toLowerCase().replaceAll('_', ' ')}
                       </p>
@@ -739,14 +753,14 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                           >
                             <span className="text-text-strong">{line.medicineName}</span>
                             <span className="font-mono tabular-nums text-text-muted">
-                              {line.remainingAuthorizedUnits} of {line.authorizedCanonicalUnits}{' '}
-                              units left
+                              {line.remainingAuthorizedUnits} {ct('of')}
+                              {line.authorizedCanonicalUnits} {ct('unitsLeft')}
                             </span>
                             {line.verified ? (
                               <StatusPill
                                 status="verified"
                                 tone="success"
-                                label="Pharmacist signed"
+                                label={ct('pharmacistSigned')}
                               />
                             ) : (
                               <StatusPill
@@ -754,8 +768,10 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                                 tone="warning"
                                 label={
                                   line.latestDecision
-                                    ? `Awaiting sign · ${line.latestDecision.toLowerCase()}`
-                                    : 'Awaiting pharmacist'
+                                    ? ct('awaitingSignValue0', {
+                                        value0: line.latestDecision.toLowerCase(),
+                                      })
+                                    : ct('awaitingPharmacist')
                                 }
                               />
                             )}
@@ -776,11 +792,11 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                       disabled={disabled || state === 'loading' || state === 'error'}
                       onClick={() => onCapturePrescription({ patientId: patient.patientId })}
                     >
-                      Capture prescription
+                      {ct('capturePrescription')}
                     </Button>
                   ) : disabled || state === 'loading' || state === 'error' ? (
                     <Button type="button" variant="outline" className="h-11" disabled>
-                      Capture prescription
+                      {ct('capturePrescription')}
                     </Button>
                   ) : (
                     <Link
@@ -790,10 +806,10 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                       rel="noopener noreferrer"
                       prefetch={false}
                     >
-                      Capture prescription
+                      {ct('capturePrescription')}
                       <span className="sr-only">
                         {' '}
-                        for {patient.displayName} (opens in a new tab)
+                        for {patient.displayName} {ct('opensInANewTab')}
                       </span>
                     </Link>
                   )}
@@ -804,14 +820,16 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                     disabled={disabled}
                     onClick={onClearPatient}
                   >
-                    Detach patient
+                    {ct('detachPatient')}
                   </Button>
                 </div>
                 <p className="text-xs text-text-muted">
                   {onCapturePrescription
-                    ? `Capture evidence for ${patient.displayName}.`
-                    : `Opens capture for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
-                  Capture does not replace pharmacist review or dispensing consent.
+                    ? ct('captureEvidenceForValue0', { value0: patient.displayName })
+                    : ct('opensCaptureForValue0InANewTabThis', {
+                        value0: patient.displayName,
+                      })}{' '}
+                  {ct('captureDoesNotReplacePharmacistReviewOrDispensingConsent')}
                 </p>
                 <CounterRxPhotoCapture
                   key={patient.patientId}
@@ -824,17 +842,17 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
           ) : (
             <div className="space-y-2">
               <p className="text-sm text-text-muted">
-                Select a patient to capture their prescription.
+                {ct('selectAPatientToCaptureTheirPrescription')}
               </p>
               <div className="space-y-1.5">
-                <Label htmlFor="counter-patient-search">Find patient</Label>
+                <Label htmlFor="counter-patient-search">{ct('findPatient')}</Label>
                 <div className="flex gap-2">
                   <Input
                     id="counter-patient-search"
                     value={query}
                     autoComplete="off"
                     disabled={disabled}
-                    placeholder="Name or phone"
+                    placeholder={ct('nameOrPhone')}
                     onChange={(event) => onQueryChange(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key !== 'Enter') return;
@@ -850,23 +868,23 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                     disabled={disabled || query.trim().length < 2}
                     onClick={onSearch}
                   >
-                    Search
+                    {ct('search')}
                   </Button>
                 </div>
               </div>
 
               {state === 'loading' ? (
                 <p className="text-sm text-text-muted" role="status">
-                  Searching patients…
+                  {ct('searchingPatients')}
                 </p>
               ) : null}
               {state === 'error' ? (
                 <p className="text-sm text-destructive" role="alert">
-                  {error ?? 'Patient search failed.'}
+                  {error ?? ct('patientSearchFailed')}
                 </p>
               ) : null}
               {state === 'ready' && candidates.length === 0 ? (
-                <p className="text-sm text-text-muted">No patient matches that search.</p>
+                <p className="text-sm text-text-muted">{ct('noPatientMatchesThatSearch')}</p>
               ) : null}
 
               {candidates.map((candidate) => (
@@ -887,16 +905,17 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
         </section>
         {controlled ? (
           <section
-            aria-label="Controlled medicine authorization"
+            aria-label={ct('controlledMedicineAuthorization')}
             className="space-y-3 border-t border-border-subtle pt-5"
           >
-            <h4 className="font-semibold text-text-strong">Controlled medicine authorization</h4>
+            <h4 className="font-semibold text-text-strong">
+              {ct('controlledMedicineAuthorization')}
+            </h4>
             <p className="text-xs text-text-muted">
-              Patient address and a pharmacist PIN are required. Use a prescription, or record an
-              emergency supply. Online only.
+              {ct('patientAddressAndAPharmacistPINAreRequiredUse')}
             </p>
             <Label className="text-xs text-text-muted" htmlFor="controlled-address">
-              Patient address
+              {ct('patientAddress')}
             </Label>
             <Input
               id="controlled-address"
@@ -916,12 +935,12 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 disabled={disabled}
                 onChange={(event) => controlled.onChange('emergency', event.target.checked)}
               />
-              Emergency supply, no prescription
+              {ct('emergencySupplyNoPrescription')}
             </label>
             {controlled.emergency ? (
               <>
                 <Label className="text-xs text-text-muted" htmlFor="controlled-prescriber-name">
-                  Prescriber name
+                  {ct('prescriberName')}
                 </Label>
                 <Input
                   id="controlled-prescriber-name"
@@ -931,7 +950,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   onChange={(event) => controlled.onChange('prescriberName', event.target.value)}
                 />
                 <Label className="text-xs text-text-muted" htmlFor="controlled-prescriber-reg">
-                  Prescriber registration
+                  {ct('prescriberRegistration')}
                 </Label>
                 <Input
                   id="controlled-prescriber-reg"
@@ -942,7 +961,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 />
               </>
             ) : null}
-            <Label htmlFor="controlled-prescription">Prescription line</Label>
+            <Label htmlFor="controlled-prescription">{ct('prescriptionLine')}</Label>
             <select
               id="controlled-prescription"
               className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
@@ -950,7 +969,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               value={controlled.prescriptionLineId}
               onChange={(event) => controlled.onChange('prescriptionLineId', event.target.value)}
             >
-              <option value="">Select prescription</option>
+              <option value="">{ct('selectPrescription')}</option>
               {patient?.prescriptions
                 .filter((rx) => rx.inDate)
                 .flatMap((rx) =>
@@ -962,7 +981,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   ))
                 )}
             </select>
-            <Label htmlFor="controlled-pharmacist">Approving pharmacist</Label>
+            <Label htmlFor="controlled-pharmacist">{ct('approvingPharmacist')}</Label>
             <select
               id="controlled-pharmacist"
               className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
@@ -970,7 +989,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               value={controlled.staffProfileId}
               onChange={(event) => controlled.onChange('staffProfileId', event.target.value)}
             >
-              <option value="">Select pharmacist</option>
+              <option value="">{ct('selectPharmacist')}</option>
               {controlled.pharmacists.map((staff) => (
                 <option key={staff.id} value={staff.id}>
                   {staff.name}
@@ -978,16 +997,13 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               ))}
             </select>
             {controlled.loading ? (
-              <p role="status">Loading pharmacists…</p>
+              <p role="status">{ct('loadingPharmacists')}</p>
             ) : controlled.error ? (
-              <p role="alert">Pharmacists could not be loaded. Retry by refreshing the counter.</p>
+              <p role="alert">{ct('pharmacistsCouldNotBeLoadedRetryByRefreshingThe')}</p>
             ) : controlled.pharmacists.length === 0 ? (
-              <p role="status">
-                No independent pharmacist with an active staff PIN is available. Ask your
-                administrator to configure one.
-              </p>
+              <p role="status">{ct('noIndependentPharmacistWithAnActiveStaffPINIs')}</p>
             ) : null}
-            <Label htmlFor="controlled-pin">Pharmacist PIN</Label>
+            <Label htmlFor="controlled-pin">{ct('pharmacistPIN')}</Label>
             <Input
               id="controlled-pin"
               type="password"
@@ -1010,10 +1026,10 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 disabled={disabled}
                 onChange={(event) => controlled.onChange('rxSerialWritten', event.target.checked)}
               />
-              Register serial written on the prescription
+              {ct('registerSerialWrittenOnThePrescription')}
             </label>
             <Label className="text-xs text-text-muted" htmlFor="controlled-ref-serial">
-              Earlier register serial
+              {ct('earlierRegisterSerial')}
             </Label>
             <Input
               id="controlled-ref-serial"
@@ -1024,8 +1040,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               onChange={(event) => controlled.onChange('refSerial', event.target.value)}
             />
             <p className="text-xs text-text-muted">
-              Leave the earlier serial blank unless this repeats a previous entry. PIN is cleared
-              after each attempt.
+              {ct('leaveTheEarlierSerialBlankUnlessThisRepeatsA')}
             </p>
           </section>
         ) : null}

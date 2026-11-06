@@ -14,6 +14,7 @@ export default defineConfig({
   testIgnore: [
     'platform-control-plane*.spec.ts',
     'pharmacy-counter.spec.ts',
+    'pharmacy-locale.spec.ts',
     'login-redesign.spec.ts',
   ],
   // `test-results/` holds committed visual-QA baselines, and Playwright wipes its

@@ -1,3 +1,5 @@
+import messages from '@/messages/en.json';
+
 import { z } from '@/lib/zod-csp';
 import type { inferRouterInputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
@@ -30,13 +32,26 @@ const storedSchema = z
         saleId: id,
         deviceId: id,
         businessDate: z.string().datetime({ offset: false }),
-        type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT', 'KHATA', 'RAAST', 'JAZZCASH', 'EASYPAISA']),
+        type: z.enum([
+          'CASH',
+          'CARD',
+          'BANK_TRANSFER',
+          'WALLET',
+          'CREDIT',
+          'KHATA',
+          'RAAST',
+          'JAZZCASH',
+          'EASYPAISA',
+        ]),
         amountMinor: minor.positive(),
         cashReceivedMinor: minor.optional(),
         idempotencyKey: z.string().trim().min(1).max(160),
         familyAccountId: id.optional(),
         ownerOverride: z.boolean().optional(),
-        providerRef: z.string().regex(/^\d{4,6}$/).optional(),
+        providerRef: z
+          .string()
+          .regex(/^\d{4,6}$/)
+          .optional(),
         payerName: z.string().trim().min(1).max(100).optional(),
         referenceSkipped: z.boolean().optional(),
       })
@@ -45,8 +60,7 @@ const storedSchema = z
   })
   .strict();
 
-export const TENDER_STORAGE_MESSAGE =
-  'Payment recovery storage is unavailable or unreadable. No new payment can be sent. Keep this browser data and ask a supervisor for help; do not clear it to retry payment.';
+export const TENDER_STORAGE_MESSAGE = messages.CounterText.paymentRecoveryStorage;
 
 // The existing counter device uses localStorage. The offline terminal document
 // is device-bound, has no account scope, and permits replay/discard: it cannot
@@ -80,9 +94,17 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
   const input = stored.input;
   const date = new Date(input.businessDate);
   if (isManualTender(input.type)) {
-    manualTenderCaptureSchema.parse({ type: input.type, providerRef: input.providerRef,
-      payerName: input.payerName, referenceSkipped: input.referenceSkipped });
-  } else if (input.providerRef !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined) {
+    manualTenderCaptureSchema.parse({
+      type: input.type,
+      providerRef: input.providerRef,
+      payerName: input.payerName,
+      referenceSkipped: input.referenceSkipped,
+    });
+  } else if (
+    input.providerRef !== undefined ||
+    input.payerName !== undefined ||
+    input.referenceSkipped !== undefined
+  ) {
     throw new Error(TENDER_STORAGE_MESSAGE);
   }
   if (

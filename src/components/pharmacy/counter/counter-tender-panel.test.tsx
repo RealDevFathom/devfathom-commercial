@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { renderWithIntl as render } from '@/test/intl';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
