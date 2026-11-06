@@ -693,6 +693,10 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
     'src/lib/ai/provider.test.ts',
     // fd4630b6 (DEV-721): Ask Fathom finance tool schemas are checked for every vertical.
     'src/lib/ai/tool-input-schema.test.ts',
+    // 616c8eb6 (DEV-740, #1415): a RESTAURANT tenant is refused the pharmacy camera
+    // gateway, live-view grant and stream.
+    'src/app/api/pharmacy/cameras/[cameraId]/stream/route.test.ts',
+    'src/server/routers/pharmacy-cameras.live.test.ts',
     // d299: canonical demo identity moved to this tenancy boundary.
     'src/lib/tenancy/demo-identity.ts',
     // d299: shared demo deployment boundary moved to activation gates.
