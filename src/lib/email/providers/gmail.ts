@@ -1,10 +1,4 @@
-// The umbrella SDK imports every Google API into the compiler/bundler graph.
-// Use the same auth/Gmail implementations without loading unrelated services.
-import {
-  auth as googleAuth,
-  gmail as createGmail,
-  type gmail_v1,
-} from 'googleapis/build/src/apis/gmail';
+import { google, type gmail_v1 } from 'googleapis';
 import type {
   AdapterCredentials,
   ListOptions,
@@ -21,10 +15,10 @@ export class GmailAdapter implements MailAdapter {
 
   private client(): gmail_v1.Gmail {
     const { clientId, clientSecret, redirectUri } = googleConfig();
-    const auth = new googleAuth.OAuth2(clientId, clientSecret, redirectUri);
+    const auth = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
     // googleapis transparently refreshes the access token from the refresh token.
     auth.setCredentials({ refresh_token: this.creds.refreshToken });
-    return createGmail({ version: 'v1', auth });
+    return google.gmail({ version: 'v1', auth });
   }
 
   async listMessages(opts: ListOptions = {}): Promise<ListResult> {
