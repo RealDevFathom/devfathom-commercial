@@ -249,7 +249,8 @@ async function respond(req: Request) {
       tools,
       toolChoice: isApprovalContinuation ? 'auto' : assistantToolChoice(hint, tools),
       stopWhen: stepCountIs(AI_GENERATION_LIMITS.maxSteps),
-      maxOutputTokens: AI_GENERATION_LIMITS.maxOutputTokensPerStep,
+      // The cap bounds the budget reservation; the legacy path stays uncapped.
+      maxOutputTokens: routedRequestId ? AI_GENERATION_LIMITS.maxOutputTokensPerStep : undefined,
       providerOptions: ai.providerOptions,
       onFinish: routedRequestId
         ? async ({ totalUsage }) => {

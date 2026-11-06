@@ -161,6 +161,17 @@ describe('assistant API scope', () => {
     expect(new Set(mocks.reserve.mock.calls.map(([, input]) => input.requestId)).size).toBe(2);
   });
 
+  it('caps output tokens only on the budget-routed path', async () => {
+    expect((await POST(request({ messages: [user] }))).status).toBe(200);
+    expect(mocks.model).toHaveBeenCalledOnce();
+    expect(mocks.stream.mock.calls[0][0].maxOutputTokens).toBeUndefined();
+
+    vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '5');
+    expect((await POST(request({ messages: [user] }))).status).toBe(200);
+    expect(mocks.routedModel).toHaveBeenCalledOnce();
+    expect(mocks.stream.mock.calls[1][0].maxOutputTokens).toBe(4096);
+  });
+
   it('requires a valid idempotency key when budget routing is enabled', async () => {
     vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '5');
     const response = await POST(

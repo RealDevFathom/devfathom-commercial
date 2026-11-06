@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { Prisma } from '@/generated/prisma/client';
 import type { RoutedAIProvider } from './model-defaults';
 
@@ -19,22 +19,20 @@ export class UnknownAIModelPriceError extends Error {
   }
 }
 
-/** Select the newest price that was already effective when the usage occurred. */
-export function effectiveModelPrice(
-  prices: readonly ModelPrice[],
-  provider: RoutedAIProvider,
+/**
+ * Select the newest catalog price that was already effective when the usage
+ * occurred. Fails closed: an unpriced model is never charged a fallback rate.
+ */
+export async function findEffectiveModelPrice(
+  db: Pick<ScopedDb, 'aiModelPrice'>,
+  provider: string,
   model: string,
-  occurredAt: Date
-): ModelPrice {
-  const price = prices
-    .filter(
-      (candidate) =>
-        candidate.provider === provider &&
-        candidate.model === model &&
-        candidate.effectiveFrom.getTime() <= occurredAt.getTime()
-    )
-    .sort((a, b) => b.effectiveFrom.getTime() - a.effectiveFrom.getTime())[0];
-
+  at: Date
+) {
+  const price = await db.aiModelPrice.findFirst({
+    where: { provider, model, effectiveFrom: { lte: at } },
+    orderBy: { effectiveFrom: 'desc' },
+  });
   if (!price) throw new UnknownAIModelPriceError(provider, model);
   return price;
 }
@@ -45,7 +43,8 @@ export function calculateAIUsageCost(
   inputTokens: number,
   outputTokens: number
 ): Prisma.Decimal {
-  if (!Number.isSafeInteger(inputTokens) || inputTokens < 0) throw new Error('invalid_input_tokens');
+  if (!Number.isSafeInteger(inputTokens) || inputTokens < 0)
+    throw new Error('invalid_input_tokens');
   if (!Number.isSafeInteger(outputTokens) || outputTokens < 0)
     throw new Error('invalid_output_tokens');
 
@@ -54,23 +53,6 @@ export function calculateAIUsageCost(
     .plus(price.outputUsdPerMtok.mul(outputTokens))
     .div(1_000_000)
     .toDecimalPlaces(6, Prisma.Decimal.ROUND_HALF_UP);
-}
-
-export function pricedAIUsage(
-  prices: readonly ModelPrice[],
-  usage: {
-    provider: RoutedAIProvider;
-    model: string;
-    inputTokens: number;
-    outputTokens: number;
-    occurredAt: Date;
-  }
-): Prisma.Decimal {
-  return calculateAIUsageCost(
-    effectiveModelPrice(prices, usage.provider, usage.model, usage.occurredAt),
-    usage.inputTokens,
-    usage.outputTokens
-  );
 }
 
 export type AIUsageRecord = {

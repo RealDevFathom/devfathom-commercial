@@ -1,36 +1,10 @@
 import { Prisma } from '@/generated/prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { providerForAnthropicBudget } from './router';
-import {
-  calculateAIUsageCost,
-  effectiveModelPrice,
-  pricedAIUsage,
-  UnknownAIModelPriceError,
-  type ModelPrice,
-} from './spend';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { calculateAIUsageCost, findEffectiveModelPrice, UnknownAIModelPriceError } from './spend';
 
 describe('AI model spend', () => {
-  it('uses the latest price effective at the usage timestamp', () => {
-    const base: ModelPrice = {
-      provider: 'anthropic',
-      model: 'known',
-      inputUsdPerMtok: new Prisma.Decimal(1),
-      outputUsdPerMtok: new Prisma.Decimal(5),
-      effectiveFrom: new Date('2026-10-23'),
-    };
-    const prices: ModelPrice[] = [
-      base,
-      { ...base, inputUsdPerMtok: new Prisma.Decimal(2), effectiveFrom: new Date('2026-11-01') },
-    ];
-    expect(effectiveModelPrice(prices, base.provider, base.model, new Date('2026-10-31'))).toBe(
-      base
-    );
-    expect(
-      effectiveModelPrice(prices, base.provider, base.model, new Date('2026-11-02'))
-        .inputUsdPerMtok
-    ).toEqual(new Prisma.Decimal(2));
-  });
-
   it('rounds once to six decimal USD places using decimal arithmetic', () => {
     expect(
       calculateAIUsageCost(
@@ -48,36 +22,20 @@ describe('AI model spend', () => {
     ).toBe('0.000001');
   });
 
-  it('fails closed for an unknown model rather than using a provider-wide fallback', () => {
-    expect(() =>
-      pricedAIUsage([], {
-        provider: 'anthropic',
-        model: 'unknown',
-        inputTokens: 1,
-        outputTokens: 1,
-        occurredAt: new Date('2026-10-24'),
-      })
-    ).toThrow(UnknownAIModelPriceError);
+  it('fails closed for an unknown model rather than using a provider-wide fallback', async () => {
+    const db = {
+      aiModelPrice: { findFirst: vi.fn().mockResolvedValue(null) },
+    } as unknown as Pick<ScopedDb, 'aiModelPrice'>;
+    await expect(
+      findEffectiveModelPrice(db, 'anthropic', 'unknown', new Date('2026-10-24'))
+    ).rejects.toThrow(UnknownAIModelPriceError);
   });
 
   it('makes the budget decision from the persisted rounded cost', () => {
-    const persisted = pricedAIUsage(
-      [
-        {
-          provider: 'anthropic',
-          model: 'deep',
-          inputUsdPerMtok: new Prisma.Decimal(15),
-          outputUsdPerMtok: new Prisma.Decimal(75),
-          effectiveFrom: new Date('2026-10-23'),
-        },
-      ],
-      {
-        provider: 'anthropic',
-        model: 'deep',
-        inputTokens: 1_000_000,
-        outputTokens: 1_000_000,
-        occurredAt: new Date('2026-10-24'),
-      }
+    const persisted = calculateAIUsageCost(
+      { inputUsdPerMtok: new Prisma.Decimal(15), outputUsdPerMtok: new Prisma.Decimal(75) },
+      1_000_000,
+      1_000_000
     );
     expect(persisted.toFixed(6)).toBe('90.000000');
     expect(providerForAnthropicBudget(persisted, new Prisma.Decimal(80))).toBe('bedrock');

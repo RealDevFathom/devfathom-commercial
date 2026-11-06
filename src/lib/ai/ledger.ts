@@ -3,7 +3,7 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { DEFAULT_AI_MODELS, type AIModelTier, type RoutedAIProvider } from './model-defaults';
-import { calculateAIUsageCost, UnknownAIModelPriceError } from './spend';
+import { calculateAIUsageCost, findEffectiveModelPrice } from './spend';
 import { providerForAnthropicBudget } from './router';
 
 export const AI_GENERATION_LIMITS = {
@@ -38,10 +38,19 @@ export async function reserveAIUsage(
   await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`ai-budget:${input.organizationId}`}))`;
 
   const existing = await db.aiUsage.findUnique({
-    where: { organizationId_requestId: { organizationId: input.organizationId, requestId: input.requestId } },
+    where: {
+      organizationId_requestId: {
+        organizationId: input.organizationId,
+        requestId: input.requestId,
+      },
+    },
   });
   if (existing && existing.status !== 'CANCELLED')
-    return { provider: existing.provider as RoutedAIProvider, model: existing.model, isReplay: true };
+    return {
+      provider: existing.provider as RoutedAIProvider,
+      model: existing.model,
+      isReplay: true,
+    };
 
   const aggregate = await db.aiUsage.aggregate({
     where: {
@@ -63,11 +72,7 @@ export async function reserveAIUsage(
   const spent = aggregate._sum.costUsd ?? new Prisma.Decimal(0);
   const provider: RoutedAIProvider = providerForAnthropicBudget(spent, input.monthlyBudgetUsd);
   const model = DEFAULT_AI_MODELS[provider][input.tier];
-  const price = await db.aiModelPrice.findFirst({
-    where: { provider, model, effectiveFrom: { lte: occurredAt } },
-    orderBy: { effectiveFrom: 'desc' },
-  });
-  if (!price) throw new UnknownAIModelPriceError(provider, model);
+  const price = await findEffectiveModelPrice(db, provider, model, occurredAt);
   const reservedCostUsd = calculateAIUsageCost(
     price,
     AI_GENERATION_LIMITS.maxInputTokensPerStep * AI_GENERATION_LIMITS.maxSteps,
@@ -86,7 +91,12 @@ export async function reserveAIUsage(
   };
   if (existing) {
     await db.aiUsage.update({
-      where: { organizationId_requestId: { organizationId: input.organizationId, requestId: input.requestId } },
+      where: {
+        organizationId_requestId: {
+          organizationId: input.organizationId,
+          requestId: input.requestId,
+        },
+      },
       data,
     });
   } else {
@@ -100,19 +110,26 @@ export async function reserveAIUsage(
 /** Completes a reservation exactly once and prices it from the database catalog. */
 export async function recordAIUsage(
   db: ScopedDb,
-  input: { organizationId: string; requestId: string; inputTokens: number; outputTokens: number; occurredAt?: Date }
+  input: {
+    organizationId: string;
+    requestId: string;
+    inputTokens: number;
+    outputTokens: number;
+    occurredAt?: Date;
+  }
 ) {
   const usage = await db.aiUsage.findUnique({
-    where: { organizationId_requestId: { organizationId: input.organizationId, requestId: input.requestId } },
+    where: {
+      organizationId_requestId: {
+        organizationId: input.organizationId,
+        requestId: input.requestId,
+      },
+    },
   });
   if (!usage) throw new Error('ai_usage_reservation_missing');
   if (usage.status !== 'RESERVED') return usage;
   const occurredAt = input.occurredAt ?? usage.occurredAt;
-  const price = await db.aiModelPrice.findFirst({
-    where: { provider: usage.provider, model: usage.model, effectiveFrom: { lte: occurredAt } },
-    orderBy: { effectiveFrom: 'desc' },
-  });
-  if (!price) throw new UnknownAIModelPriceError(usage.provider, usage.model);
+  const price = await findEffectiveModelPrice(db, usage.provider, usage.model, occurredAt);
   const costUsd = calculateAIUsageCost(price, input.inputTokens, input.outputTokens);
   await db.aiUsage.updateMany({
     where: { organizationId: input.organizationId, requestId: input.requestId, status: 'RESERVED' },
@@ -125,7 +142,12 @@ export async function recordAIUsage(
     },
   });
   return db.aiUsage.findUniqueOrThrow({
-    where: { organizationId_requestId: { organizationId: input.organizationId, requestId: input.requestId } },
+    where: {
+      organizationId_requestId: {
+        organizationId: input.organizationId,
+        requestId: input.requestId,
+      },
+    },
   });
 }
 
@@ -150,11 +172,7 @@ export async function commitAIUsageReservation(
     where: { organizationId_requestId: { organizationId, requestId } },
   });
   if (!usage || usage.status !== 'RESERVED') return;
-  const price = await db.aiModelPrice.findFirst({
-    where: { provider: usage.provider, model: usage.model, effectiveFrom: { lte: usage.occurredAt } },
-    orderBy: { effectiveFrom: 'desc' },
-  });
-  if (!price) throw new UnknownAIModelPriceError(usage.provider, usage.model);
+  const price = await findEffectiveModelPrice(db, usage.provider, usage.model, usage.occurredAt);
   const costUsd = calculateAIUsageCost(
     price,
     AI_GENERATION_LIMITS.maxInputTokensPerStep * AI_GENERATION_LIMITS.maxSteps,

@@ -11,7 +11,28 @@ const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 const orgA = `org_ai_a_${suffix}`;
 const orgB = `org_ai_b_${suffix}`;
 const orgC = `org_ai_c_${suffix}`;
+// Suffix-unique models keep these price rows out of the real default catalog.
+const testModel = `test-model-${suffix}`;
+const unpricedModel = `unpriced-${suffix}`;
 let owner: Client;
+
+async function insertReservedUsage(requestId: string, model: string, occurredAt: Date) {
+  await owner.query('BEGIN');
+  try {
+    // ai_usages forces RLS, so the row must be written inside orgA's tenant scope.
+    await owner.query("SELECT set_config('app.current_organization_id', $1, true)", [orgA]);
+    await owner.query(
+      `INSERT INTO "ai_usages"
+        ("id", "organization_id", "request_id", "provider", "model", "cost_usd", "status", "expires_at", "occurred_at")
+       VALUES ($1, $2, $3, 'anthropic', $4, 0, 'RESERVED', $5, $5)`,
+      [randomUUID(), orgA, requestId, model, occurredAt]
+    );
+    await owner.query('COMMIT');
+  } catch (error) {
+    await owner.query('ROLLBACK');
+    throw error;
+  }
+}
 
 describeIfDatabase('AI ledger database integration', () => {
   beforeAll(async () => {
@@ -26,11 +47,27 @@ describeIfDatabase('AI ledger database integration', () => {
               ($5, $6, 'AI C', 'AI C', 'RESTAURANT', 'ACTIVE', 'SHARED', now(), now())`,
       [orgA, `ai-a-${suffix}`, orgB, `ai-b-${suffix}`, orgC, `ai-c-${suffix}`]
     );
+    await owner.query(
+      `INSERT INTO "ai_model_prices"
+        ("id", "provider", "model", "input_usd_per_mtok", "output_usd_per_mtok", "effective_from")
+       VALUES ($1, 'anthropic', $4, 2, 10, '2026-10-01T00:00:00Z'),
+              ($2, 'anthropic', $4, 4, 20, '2026-10-15T00:00:00Z'),
+              ($3, 'anthropic', $4, 100, 500, '2099-01-01T00:00:00Z')`,
+      [
+        `price_test_1001_${suffix}`,
+        `price_test_1015_${suffix}`,
+        `price_test_2099_${suffix}`,
+        testModel,
+      ]
+    );
   });
 
   afterAll(async () => {
     if (!owner) return;
-    await owner.query('DELETE FROM "ai_usages" WHERE "organization_id" = ANY($1)', [[orgA, orgB, orgC]]);
+    await owner.query('DELETE FROM "ai_model_prices" WHERE "model" = $1', [testModel]);
+    await owner.query('DELETE FROM "ai_usages" WHERE "organization_id" = ANY($1)', [
+      [orgA, orgB, orgC],
+    ]);
     await owner.query('DELETE FROM "organizations" WHERE "id" = ANY($1)', [[orgA, orgB, orgC]]);
     await owner.end();
     vi.unstubAllEnvs();
@@ -60,10 +97,20 @@ describeIfDatabase('AI ledger database integration', () => {
 
     const [completed, competingCompletion] = await Promise.all([
       withTenantDb(orgA, (db) =>
-        recordAIUsage(db, { organizationId: orgA, requestId, inputTokens: 1_000, outputTokens: 500 })
+        recordAIUsage(db, {
+          organizationId: orgA,
+          requestId,
+          inputTokens: 1_000,
+          outputTokens: 500,
+        })
       ),
       withTenantDb(orgA, (db) =>
-        recordAIUsage(db, { organizationId: orgA, requestId, inputTokens: 2_000, outputTokens: 1_000 })
+        recordAIUsage(db, {
+          organizationId: orgA,
+          requestId,
+          inputTokens: 2_000,
+          outputTokens: 1_000,
+        })
       ),
     ]);
     expect(competingCompletion.costUsd.toFixed(6)).toBe(completed.costUsd.toFixed(6));
@@ -177,9 +224,7 @@ describeIfDatabase('AI ledger database integration', () => {
     const cancelledRequestId = requestIds[anthropicIndex]!;
     await withTenantDb(orgB, (db) => cancelAIUsage(db, orgB, cancelledRequestId));
     const retry = await reserve(cancelledRequestId);
-    expect(retry).toEqual(
-      expect.objectContaining({ provider: 'anthropic', isReplay: false })
-    );
+    expect(retry).toEqual(expect.objectContaining({ provider: 'anthropic', isReplay: false }));
   });
 
   it('counts later reservations in the same month when a request is delayed before locking', async () => {
@@ -202,7 +247,9 @@ describeIfDatabase('AI ledger database integration', () => {
       );
 
     // A reservation from the following month must not consume October's budget.
-    expect((await reserve(`next-month-${suffix}`, new Date('2026-11-01'))).provider).toBe('anthropic');
+    expect((await reserve(`next-month-${suffix}`, new Date('2026-11-01'))).provider).toBe(
+      'anthropic'
+    );
     expect((await reserve(`later-${suffix}`, laterAt)).provider).toBe('anthropic');
     expect((await reserve(`delayed-${suffix}`, delayedAt)).provider).toBe('bedrock');
   });
@@ -219,6 +266,76 @@ describeIfDatabase('AI ledger database integration', () => {
           expect(price, `${provider}/${model}`).not.toBeNull();
         }
       }
+    });
+  });
+
+  it('prices usage from the row effective at each date and fails closed for unpriced models', async () => {
+    const [
+      { withTenantDb },
+      { commitAIUsageReservation, recordAIUsage },
+      { findEffectiveModelPrice, UnknownAIModelPriceError },
+    ] = await Promise.all([
+      import('@/lib/tenancy/scoped-db'),
+      import('./ledger'),
+      import('./spend'),
+    ]);
+    const complete = (requestId: string, occurredAt: Date) =>
+      withTenantDb(orgA, (db) =>
+        recordAIUsage(db, {
+          organizationId: orgA,
+          requestId,
+          inputTokens: 1_000,
+          outputTokens: 500,
+          occurredAt,
+        })
+      );
+    const early = new Date('2026-10-10T00:00:00Z');
+    const late = new Date('2026-10-20T00:00:00Z');
+    await insertReservedUsage(`effective-early-${suffix}`, testModel, early);
+    await insertReservedUsage(`effective-late-${suffix}`, testModel, late);
+
+    // 1,000 input + 500 output tokens: $2/$10 -> 0.007, $4/$20 -> 0.014, $100/$500 -> 0.35.
+    const earlyUsage = await complete(`effective-early-${suffix}`, early);
+    expect(earlyUsage.status).toBe('COMPLETED');
+    expect(earlyUsage.costUsd.toFixed(6)).toBe('0.007000');
+    const lateUsage = await complete(`effective-late-${suffix}`, late);
+    expect(lateUsage.status).toBe('COMPLETED');
+    expect(lateUsage.costUsd.toFixed(6)).toBe('0.014000');
+
+    await withTenantDb(orgA, async (db) => {
+      const effectiveFrom = async (at: Date) =>
+        (await findEffectiveModelPrice(db, 'anthropic', testModel, at)).effectiveFrom.toISOString();
+      expect(await effectiveFrom(early)).toBe('2026-10-01T00:00:00.000Z');
+      expect(await effectiveFrom(late)).toBe('2026-10-15T00:00:00.000Z');
+      // A future-dated price is never applied before it takes effect.
+      expect(await effectiveFrom(new Date())).toBe('2026-10-15T00:00:00.000Z');
+    });
+    await expect(
+      withTenantDb(orgA, (db) =>
+        findEffectiveModelPrice(db, 'anthropic', testModel, new Date('2026-09-30T00:00:00Z'))
+      )
+    ).rejects.toThrow(UnknownAIModelPriceError);
+
+    const unpricedId = `unpriced-request-${suffix}`;
+    await insertReservedUsage(unpricedId, unpricedModel, early);
+    await expect(
+      withTenantDb(orgA, (db) =>
+        recordAIUsage(db, {
+          organizationId: orgA,
+          requestId: unpricedId,
+          inputTokens: 1,
+          outputTokens: 1,
+        })
+      )
+    ).rejects.toThrow(UnknownAIModelPriceError);
+    await expect(
+      withTenantDb(orgA, (db) => commitAIUsageReservation(db, orgA, unpricedId))
+    ).rejects.toThrow(UnknownAIModelPriceError);
+    await withTenantDb(orgA, async (db) => {
+      const unpriced = await db.aiUsage.findUniqueOrThrow({
+        where: { organizationId_requestId: { organizationId: orgA, requestId: unpricedId } },
+      });
+      expect(unpriced.status).toBe('RESERVED');
     });
   });
 });
