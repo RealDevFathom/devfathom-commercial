@@ -345,6 +345,27 @@ describe('CounterTenderPanel acknowledgement', () => {
 });
 
 describe('CounterTenderPanel bill and interaction states', () => {
+  it('shows a qualified last known balance while an uncertain payment stays locked', () => {
+    const { props } = setup({
+      state: 'error',
+      balanceMinor: 29400,
+      recoveryOutcome: { status: 'unknown', message: 'Check the saved payment.' },
+      onCheckOutcome: vi.fn(),
+    });
+    expect(screen.getByText('Last known balance').parentElement).toHaveTextContent('294.00');
+    expect(screen.getByText(/balance may have changed/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(props.onTender).not.toHaveBeenCalled();
+  });
+
+  it('does not invent a balance when an uncertain payment has no known balance', () => {
+    setup({
+      balanceMinor: null,
+      recoveryOutcome: { status: 'unknown', message: 'Check payment.' },
+    });
+    expect(screen.getByText('Balance due').parentElement).toHaveTextContent('Unavailable');
+    expect(screen.queryByText('Last known balance')).not.toBeInTheDocument();
+  });
   it('restores card evidence read-only while an uncertain payment is checked', () => {
     const { props } = setup({
       initialDraft: {

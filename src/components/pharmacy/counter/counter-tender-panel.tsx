@@ -383,13 +383,18 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
             <p className="space-y-2">
               <span className="block font-mono text-xs tracking-wide text-text-muted uppercase">
-                Balance due
+                {unknown && balanceKnown ? 'Last known balance' : 'Balance due'}
               </span>
               <span className="block text-3xl font-semibold tracking-tight tabular-nums text-text-strong">
-                {balanceKnown && (state === 'ready' || state === 'settled') && !unknown
+                {balanceKnown && (unknown || state === 'ready' || state === 'settled')
                   ? formatMinor(balanceMinor)
                   : 'Unavailable'}
               </span>
+              {unknown && balanceKnown ? (
+                <span className="block text-sm text-text-muted">
+                  This payment may already be saved, so the balance may have changed.
+                </span>
+              ) : null}
             </p>
             <div className="flex flex-col items-end gap-2">
               <span className="font-mono text-xs text-text-muted">PKR</span>
