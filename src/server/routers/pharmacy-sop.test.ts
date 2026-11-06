@@ -600,6 +600,67 @@ describe('server-derived actor and strict inputs', () => {
     );
   });
 
+  describe('out-of-range reading on a procedure without an excursion step', () => {
+    const steps = [
+      { id: 'ostep_1', templateStepId: 'tstep_1', templateStep: { title: 'Confirm readings' } },
+      { id: 'ostep_2', templateStepId: 'tstep_2', templateStep: { title: 'Open the counter' } },
+    ];
+    const arrange = (opts: {
+      linkNote?: string | null;
+      outOfRange?: boolean;
+      titles?: string[];
+    }) => {
+      db.restaurantSopOccurrenceStep.findMany.mockResolvedValue(
+        opts.titles
+          ? steps.map((step, index) => ({ ...step, templateStep: { title: opts.titles![index]! } }))
+          : steps
+      );
+      db.pharmacySopRecordLink.findMany.mockResolvedValue([
+        { recordId: 'log_hot', note: opts.linkNote ?? null },
+      ]);
+      db.pharmacyTemperatureLog.findFirst.mockResolvedValue(
+        opts.outOfRange === false ? null : { id: 'log_hot' }
+      );
+    };
+
+    it('refuses to mark the step done without a note (it could never be submitted)', async () => {
+      arrange({});
+      await expect(
+        caller().completeStep({ ...OCC_INPUT, templateStepId: 'tstep_1' })
+      ).rejects.toMatchObject({
+        code: 'PRECONDITION_FAILED',
+        message: expect.stringContaining('out of range'),
+      });
+      expect(mocks.engine.completeStep).not.toHaveBeenCalled();
+      expect(db.pharmacySopRecordLink.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            occurrenceStepId: 'ostep_1',
+            pharmacyBranchId: SITE.pharmacyBranchId,
+            recordType: 'TEMPERATURE_LOG',
+          }),
+        })
+      );
+    });
+
+    it.each([
+      ['a step note', { note: 'Fridge at 9 °C; moved stock' }, {}],
+      ['a note on the link', {}, { linkNote: 'Door left open; reset' }],
+      ['an in-range reading', {}, { outOfRange: false }],
+      ['a separate excursion step', {}, { titles: ['Confirm readings', 'Record any excursion'] }],
+    ])('allows it with %s', async (_label, input, opts) => {
+      arrange(opts);
+      mocks.engine.completeStep.mockResolvedValue({
+        occurrenceStepId: 'ostep_1',
+        completed: true,
+        completedAt: new Date(),
+      });
+      await expect(
+        caller().completeStep({ ...OCC_INPUT, templateStepId: 'tstep_1', ...input })
+      ).resolves.toMatchObject({ completed: true });
+    });
+  });
+
   it('maps an engine ownership refusal to FORBIDDEN', async () => {
     mocks.engine.completeStep.mockRejectedValue(
       new SopExecutionError('Only the assigned or claiming staff member…', 'NOT_OWNER')

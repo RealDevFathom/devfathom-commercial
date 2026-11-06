@@ -965,6 +965,54 @@ async function assertPharmacySubmissionRequirements(
   }
 }
 
+/**
+ * A procedure without a separate excursion step (opening, closing) documents
+ * an out-of-range reading on the temperature step itself. Submission requires
+ * that note, and a done step cannot be edited outside a send-back, so the note
+ * is required before the step is marked done: otherwise the procedure could
+ * never be submitted.
+ */
+async function assertExcursionNoteBeforeCompletion(
+  ctx: TRPCContext,
+  site: PharmacySopSiteRef,
+  occurrenceId: string,
+  input: { templateStepId: string; note?: string | null }
+): Promise<void> {
+  if (input.note?.trim()) return;
+  const steps = await ctx.db.restaurantSopOccurrenceStep.findMany({
+    where: { occurrenceId },
+    select: { id: true, templateStepId: true, templateStep: { select: { title: true } } },
+  });
+  if (steps.some((step) => EXCURSION_STEP.test(step.templateStep.title))) return;
+  const step = steps.find((candidate) => candidate.templateStepId === input.templateStepId);
+  if (!step) return; // The engine reports an unknown step.
+  const links = await ctx.db.pharmacySopRecordLink.findMany({
+    where: {
+      occurrenceId,
+      occurrenceStepId: step.id,
+      pharmacyBranchId: site.pharmacyBranchId,
+      recordType: 'TEMPERATURE_LOG',
+    },
+    select: { recordId: true, note: true },
+  });
+  const undocumented = links.filter((link) => !link.note?.trim());
+  if (undocumented.length === 0) return;
+  const outOfRange = await ctx.db.pharmacyTemperatureLog.findFirst({
+    where: {
+      id: { in: undocumented.map((link) => link.recordId) },
+      branchId: site.pharmacyBranchId,
+      outOfRange: true,
+    },
+    select: { id: true },
+  });
+  if (!outOfRange) return;
+  throw new TRPCError({
+    code: 'PRECONDITION_FAILED',
+    message:
+      'A linked temperature reading is out of range. Write what happened and what you did in this step’s note before marking it done.',
+  });
+}
+
 // ── Schemas ───────────────────────────────────────────────────────────────────
 
 const ID = z.string().trim().min(1).max(200);
@@ -2357,6 +2405,10 @@ export const pharmacySopRouter = router({
           input.pharmacyBranchId,
           input.occurrenceId
         );
+        await assertExcursionNoteBeforeCompletion(ctx, site, occurrence.id, {
+          templateStepId: input.templateStepId,
+          note: input.note,
+        });
         const result = await completeStep(ctx.db, {
           occurrenceId: occurrence.id,
           templateStepId: input.templateStepId,

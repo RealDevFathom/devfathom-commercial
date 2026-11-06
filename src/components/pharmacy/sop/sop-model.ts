@@ -284,6 +284,22 @@ export function stepBlockers(
     reasons.push('Add your signature.');
   }
   if (step.requiresNote && !draft.note.trim()) reasons.push('Write a note.');
+  // Without a separate excursion step (opening, closing), an out-of-range
+  // reading is documented on this step's own note. A done step can't be
+  // edited later, so the note is needed before marking it done (the server
+  // enforces the same rule).
+  else if (
+    !draft.note.trim() &&
+    !excursionStep(occurrence) &&
+    stepLinks(occurrence, step).some(
+      (link) =>
+        link.recordType === 'TEMPERATURE_LOG' &&
+        link.detail.outOfRange === true &&
+        !link.note?.trim()
+    )
+  ) {
+    reasons.push('A linked reading is out of range. Write what happened and what you did.');
+  }
   return reasons;
 }
 
