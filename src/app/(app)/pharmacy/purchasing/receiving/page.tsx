@@ -79,6 +79,11 @@ import {
   type Notice,
   type SearchQuery,
 } from '../_lib/console';
+import {
+  readPolicyForDisplay,
+  supplierChecksOn,
+  supplierComplianceCaller,
+} from '../suppliers/_lib/supplier-compliance';
 
 export const metadata: Metadata = { title: 'Goods in · Pharmacy purchasing' };
 
@@ -136,6 +141,12 @@ export default async function PharmacyReceivingPage({
       </Frame>
     );
   }
+  // DEV-753: off when a listed supplier says so; with none listed, ask the stored setting
+  // (fail closed: anything but a positive OFF reads as checks on).
+  const checksOff =
+    workspace.suppliers.length > 0
+      ? workspace.suppliers.some((supplier) => supplier.compliance?.checked === false)
+      : !supplierChecksOn(await readPolicyForDisplay(await supplierComplianceCaller()));
 
   const scope = resolveBranch(workspace.branches, param(query, 'branch'));
   if (scope.kind === 'none') {
@@ -892,7 +903,11 @@ export default async function PharmacyReceivingPage({
                 required
               />
               <SelectField
-                emptyHint="No orderable supplier. Authorize one and file a verified licence first."
+                emptyHint={
+                  checksOff
+                    ? 'No supplier yet. Add one in the supplier register first.'
+                    : 'No orderable supplier. Authorize one and file a verified licence first.'
+                }
                 label="Supplier"
                 name="supplierId"
                 notice={notice}

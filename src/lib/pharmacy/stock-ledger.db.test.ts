@@ -2708,6 +2708,58 @@ describeIfDatabase('PH-INV boundaries — cross-tenant and cross-branch', () => 
     expect(narrowed.all).toBeGreaterThan(narrowed.scoped);
     expect(narrowed.otherBranch).toBeNull();
   });
+
+  it("refuses to transfer a sibling branch's lot without revealing that it holds stock", async () => {
+    // DEV-660: the source balance is read under the acting branch, so a real,
+    // AVAILABLE balance in another branch answers exactly like a missing one
+    // and is never locked or moved.
+    const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-cross-branch');
+    const other = await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, BRANCH_A_TWO);
+      const location = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A_TWO,
+          code: `MAIN2-${tag('transfer-cross-branch')}`,
+          name: 'Second branch store',
+          kind: 'STORE',
+        },
+      });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'transfer-cross-branch',
+        branchId: BRANCH_A_TWO,
+        locationId: location.id,
+      });
+      return { lotId: lot.id, locationId: location.id };
+    });
+
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.ledger.transferStock(db, scopeOf(fixture), {
+          inventoryLotId: other.lotId,
+          fromStockLocationId: other.locationId,
+          toStockLocationId: fixture.quarantineLocationId,
+          units: 1,
+          at: NOW,
+          idempotencyKeyPrefix: tag('transfer-cross-branch'),
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'NOT_FOUND' });
+
+    const untouched = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findFirst({
+        where: {
+          inventoryLotId: other.lotId,
+          stockLocationId: other.locationId,
+          disposition: 'AVAILABLE',
+        },
+        select: { onHandUnits: true },
+      })
+    );
+    expect(untouched?.onHandUnits).toBe(40);
+  });
 });
 
 // Shared real-stock fixture for overlapping manual and DRAP recall decisions.

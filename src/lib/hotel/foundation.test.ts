@@ -26,12 +26,13 @@ const priorCatalogDigests = {
   // QA-130: canonical capability names and explicit Owner report grants.
   // #975 (47518cbf): Owner / Operator template gains exact 'pharmacy:procurement',
   // 'pharmacy:inventory', 'pharmacy:counter', 'pharmacy:close', 'pharmacy:manage'.
-  // DEV-739 (Saad, DEV-32): day close is managers and owners only, so 'pharmacy:close'
-  // moves from the Pharmacist template (#654) to the Manager template. Restoring only
-  // those two templates reproduces the previous pin 46ef4f4c…; nothing else changed.
-  // #247 / #479 (3369c68b): the Owner template gains exact 'pharmacy:safety'. Removing
-  // only that grant reproduces the previous pin 6a1d27e5…; nothing else changed.
-  PHARMACY: 'b9de923a119087ac18dc6828691d0a0f5609fe1176846fdda68bb8ba855c31e7',
+  // #247 / #479 (3369c68b): the Owner template gains exact 'pharmacy:safety'.
+  // DEV-751 (#1418): generic sop:* actions in the pharmacy capability catalog and the
+  // appended pharmacy SOP role-template grants. Its pin was 81bdc13b….
+  // DEV-739 (#1413, Saad, DEV-32): day close is managers and owners only, so
+  // 'pharmacy:close' moves from the Pharmacist template (#654) to the Manager template.
+  // Restoring only those two template lines reproduces 81bdc13b…; nothing else changed.
+  PHARMACY: '90b4f45a731df5735677b166f1af6f66e313cf43e0450cad2a763043cb5ef614',
 };
 
 const property = {

@@ -46,6 +46,11 @@ vi.mock('@/lib/trpc', () => ({
     pharmacySafety: {
       access: { useQuery: () => ({ data: { allowed: false } }) },
     },
+    pharmacySop: {
+      access: {
+        useQuery: () => ({ data: { canComplete: false, canVerify: false, canManage: false } }),
+      },
+    },
     // DEV-739: the rail asks the server whether to offer Day close.
     pharmacySales: { dayCloseAccess: { useQuery: () => ({ data: undefined }) } },
   },
@@ -109,6 +114,7 @@ const priorHrefs = [
   '/pharmacy/pharmacist-queue',
   '/pharmacy/substitution',
   '/pharmacy/controlled-register',
+  '/pharmacy/sop',
   '/pharmacy/regulatory',
   '/pharmacy/settings/branches',
   '/reviews',
@@ -164,11 +170,11 @@ beforeEach(() => {
 afterEach(cleanup);
 describe('Hotel navigation composition', () => {
   it('retains Menu import and every accepted link alongside the six hospitality routes', () => {
-    expect(priorHrefs).toHaveLength(58);
-    expect(navigation).toHaveLength(64);
+    expect(priorHrefs).toHaveLength(59);
+    expect(navigation).toHaveLength(65);
     expect(navigation).toHaveLength(priorHrefs.length + hospitalityHrefs.length);
     const hrefs = navigation.map((n) => n.href);
-    expect(new Set(hrefs).size).toBe(64);
+    expect(new Set(hrefs).size).toBe(65);
     expect(new Set(hrefs)).toEqual(new Set([...priorHrefs, ...hospitalityHrefs]));
     expect(hrefs).toEqual(expect.arrayContaining(priorHrefs));
     expect(navigation.find((n) => n.href === MENU_IMPORT)).toMatchObject({

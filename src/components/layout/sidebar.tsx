@@ -403,6 +403,17 @@ export const navigation: NavItem[] = [
     module: 'pharmacy-safety',
     pharmacyCapabilities: ['pharmacy:safety'],
   },
+  // DEV-751: pharmacy procedures on the shared SOP engine, licensed as Pharmacy
+  // Safety. Shown to whoever holds any SOP capability (complete, verify or
+  // manage) — the same three `pharmacySop.access` reports and the page checks.
+  {
+    label: 'Procedures',
+    href: '/pharmacy/sop',
+    icon: ClipboardList,
+    group: 'Pharmacy',
+    module: 'pharmacy-safety',
+    pharmacyCapabilities: ['pharmacy:sop'],
+  },
   {
     label: 'Regulatory profile',
     href: '/pharmacy/regulatory',
@@ -615,6 +626,11 @@ function useVisibleNavigation() {
     retry: false,
     staleTime: 30_000,
   });
+  const sopAccess = trpc.pharmacySop.access.useQuery(undefined, {
+    enabled: safetyModule,
+    retry: false,
+    staleTime: 30_000,
+  });
   const closeEnabled = Boolean(
     session?.user.id &&
     session.user.organizationId === entitlements.organizationId &&
@@ -628,7 +644,13 @@ function useVisibleNavigation() {
     staleTime: 0,
     refetchOnMount: 'always',
   });
-  const pharmacyCapabilities = safetyAccess.data?.allowed ? ['pharmacy:safety'] : [];
+  const pharmacyCapabilities = [
+    ...(safetyAccess.data?.allowed ? ['pharmacy:safety'] : []),
+    ...(sopAccess.data &&
+    (sopAccess.data.canComplete || sopAccess.data.canVerify || sopAccess.data.canManage)
+      ? ['pharmacy:sop']
+      : []),
+  ];
   if (
     closeEnabled &&
     !closeAccess.isFetching &&

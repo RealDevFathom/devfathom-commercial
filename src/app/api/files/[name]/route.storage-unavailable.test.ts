@@ -7,6 +7,7 @@ const m = vi.hoisted(() => ({
   branch: vi.fn(),
   attachment: vi.fn(),
   member: vi.fn(),
+  site: vi.fn(),
   get: vi.fn(),
   tenant: vi.fn(),
 }));
@@ -31,6 +32,7 @@ beforeEach(() => {
       branchRegulatoryProfile: { findFirst: m.licence },
       restaurantSopEvidence: { findFirst: m.sop },
       restaurantBranchAssignment: { findUnique: m.branch },
+      pharmacySopSite: { findFirst: m.site },
       messageAttachment: { findFirst: m.attachment },
       channelMember: { findUnique: m.member },
     })

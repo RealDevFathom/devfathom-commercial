@@ -56,6 +56,11 @@ import {
   type Notice,
   type SearchQuery,
 } from '../_lib/console';
+import {
+  readPolicyForDisplay,
+  supplierChecksOn,
+  supplierComplianceCaller,
+} from '../suppliers/_lib/supplier-compliance';
 
 export const metadata: Metadata = { title: 'Requisitions & orders · Pharmacy purchasing' };
 
@@ -63,6 +68,9 @@ const ROUTE = `${PURCHASING_ROUTE}/orders`;
 const HEADING = 'Requisitions & orders';
 const DESCRIPTION =
   'Demand becomes a requisition, quotes are compared and explained, and an approved order is sent to a supplier that is still licensed at the moment it leaves.';
+/** DEV-753: the same page while the owner has supplier checks off. */
+const DESCRIPTION_CHECKS_OFF =
+  'Demand becomes a requisition, quotes are compared and explained, and an approved order is sent to a supplier. Supplier checks are off, so suppliers are not checked.';
 
 /** Five slots is enough for a hand-written order and needs no client script. */
 const LINE_SLOTS = [0, 1, 2, 3, 4] as const;
@@ -454,10 +462,18 @@ export default async function PharmacyOrdersPage({
 
   const orderable = workspace.suppliers.filter((supplier) => supplier.eligibility.orderable);
   const medicinesWithPacks = workspace.medicines.filter((medicine) => medicine.packs.length > 0);
+  // DEV-753: supplier checks are off. A summary without `compliance` reads as checked.
+  // Off when a listed supplier says so; with no supplier listed yet, ask the stored setting
+  // (read fail-closed: anything but a positive OFF reads as checks on).
+  const checksOff =
+    workspace.suppliers.length > 0
+      ? workspace.suppliers.some((supplier) => supplier.compliance?.checked === false)
+      : !supplierChecksOn(await readPolicyForDisplay(await supplierComplianceCaller()));
+  const description = checksOff ? DESCRIPTION_CHECKS_OFF : DESCRIPTION;
 
   return (
     <PurchasingOutcomeScope>
-      <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
+      <PurchasingHeader heading={HEADING} description={description} />
       <PurchasingTabs active={ROUTE} />
       <NoticeBanner notice={notice} />
       <PurchasingOutcomes />
@@ -476,7 +492,7 @@ export default async function PharmacyOrdersPage({
         <Stat
           label="Orderable suppliers"
           value={`${orderable.length} of ${workspace.suppliers.length}`}
-          sub="Authorized and licensed"
+          sub={checksOff ? 'Supplier checks off: not checked' : 'Authorized and licensed'}
         />
       </div>
 
@@ -626,6 +642,7 @@ export default async function PharmacyOrdersPage({
           {order ? (
             <OrderDetailPanel
               actorId={ctx.session.user.id}
+              checksOff={checksOff}
               comparisons={orderComparisons}
               landed={landed}
               notice={notice}
@@ -647,8 +664,12 @@ export default async function PharmacyOrdersPage({
                 title="No supplier can be ordered from"
                 detail={
                   workspace.suppliers.length === 0
-                    ? 'There are no suppliers yet. Add one and file a verified licence before raising an order.'
-                    : 'Every supplier is either unauthorized or without an unexpired verified licence. PUR-01 refuses an order to any of them.'
+                    ? checksOff
+                      ? 'There are no suppliers yet. Add one in the supplier register; supplier checks are off, so it can be ordered from once added.'
+                      : 'There are no suppliers yet. Add one and file a verified licence before raising an order.'
+                    : checksOff
+                      ? 'No supplier can be ordered from right now. Open the supplier register to add or reactivate one.'
+                      : 'Every supplier is either unauthorized or without an unexpired verified licence. PUR-01 refuses an order to any of them.'
                 }
                 steps={[
                   {
@@ -672,7 +693,11 @@ export default async function PharmacyOrdersPage({
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <TextField label="Reference" name="reference" notice={notice} required />
                   <SelectField
-                    emptyHint="No orderable supplier — authorize one and file a licence first."
+                    emptyHint={
+                      checksOff
+                        ? 'No supplier yet — add one in the supplier register first.'
+                        : 'No orderable supplier — authorize one and file a licence first.'
+                    }
                     label="Supplier"
                     name="supplierId"
                     notice={notice}
@@ -1043,6 +1068,7 @@ function OrderDetailPanel({
   order,
   landed,
   actorId,
+  checksOff,
   comparisons,
   notice,
   onAdvance,
@@ -1065,6 +1091,8 @@ function OrderDetailPanel({
     }[];
   } | null;
   actorId: string;
+  /** DEV-753: supplier checks are off. */
+  checksOff: boolean;
   comparisons: LineComparison[];
   notice: Notice | null;
   onAdvance: (form: FormData) => Promise<string>;
@@ -1274,8 +1302,9 @@ function OrderDetailPanel({
             <input name="action" type="hidden" value="send" />
             <SubmitButton>Send to supplier</SubmitButton>
             <p className="mt-2 text-sm text-text-muted">
-              The supplier&rsquo;s authorization and licence are checked again at this moment;
-              either can have lapsed since the order was drafted.
+              {checksOff
+                ? 'Supplier checks are off, so this supplier is not checked when the order is sent.'
+                : 'The supplier’s authorization and licence are checked again at this moment; either can have lapsed since the order was drafted.'}
             </p>
           </PurchasingActionForm>
         ) : null}
