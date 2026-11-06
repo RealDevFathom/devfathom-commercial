@@ -31,6 +31,11 @@ const labels = {
 
 const cashReceivedLabels: Partial<Record<CounterReceiptLocale, string>> = { en: 'Cash received' };
 
+export function receiptCashReceivedLabel(locale: CounterReceiptLocale): string {
+  const strings = COUNTER_RECEIPT_STRINGS[locale];
+  return cashReceivedLabels[locale] ?? `${strings.tenderName.CASH} ${strings.tendered}`;
+}
+
 /**
  * Show integer-minor-unit arithmetic that exactly reconciles to the stored
  * gross. Mixed lots can make gross / quantity non-integral, so displaying only
@@ -166,9 +171,7 @@ export function buildCounterReceiptPreview(
         `${strings.net}: ${formatMinor(receipt.totals.netMinor)}`,
         `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor)}`,
         ...(cashReceived !== null
-          ? [
-              `${cashReceivedLabels[locale] ?? `${strings.tenderName.CASH} ${strings.tendered}`}: ${formatMinor(cashReceived)}`,
-            ]
+          ? [`${receiptCashReceivedLabel(locale)}: ${formatMinor(cashReceived)}`]
           : []),
         `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
       ],

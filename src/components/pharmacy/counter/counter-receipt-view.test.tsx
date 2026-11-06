@@ -87,7 +87,27 @@ it('shows recorded payment, exact change and an issued receipt preview without p
   expect(preview.getByText(/Medicine/)).toBeTruthy();
   expect(preview.getByText('CASH')).toBeTruthy();
   expect(preview.getByText('Tendered').nextElementSibling).toHaveTextContent('2.00');
+  expect(preview.getByText('Cash received').nextElementSibling).toHaveTextContent('2.00');
   expect(input.onPrint).not.toHaveBeenCalled();
+});
+
+it('shows cash received separately from other tenders and omits it for incomplete legacy data', () => {
+  const input = props();
+  input.receipt!.tenders = [
+    {
+      tenderId: 'cash',
+      type: 'CASH',
+      amountMinor: 100,
+      cashReceivedMinor: 200,
+      changeGivenMinor: 100,
+    },
+    { tenderId: 'wallet', type: 'WALLET', amountMinor: 300, changeGivenMinor: null },
+  ];
+  const view = render(<CounterReceiptView {...input} />);
+  expect(screen.getByText('Cash received').nextElementSibling).toHaveTextContent('2.00');
+  input.receipt!.tenders[0]!.cashReceivedMinor = null;
+  view.rerender(<CounterReceiptView {...input} />);
+  expect(screen.queryByText('Cash received')).toBeNull();
 });
 
 it.each([{ receiptNumber: null }, { completedAt: null }])(
