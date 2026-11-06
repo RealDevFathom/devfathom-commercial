@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({
     organizationWide: false,
     branchIds: ['branch_1'],
   })),
+  claimSopOccurrence: vi.fn(),
+  listClaimablePoolOccurrences: vi.fn(),
+  listStaffSopOccurrences: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -38,6 +41,18 @@ vi.mock('@/lib/abac', async () => {
 vi.mock('@/lib/restaurant/staff-branch-authorization', () => ({
   resolveStaffBranchAuthorization: mocks.resolveStaffBranchAuthorization,
 }));
+
+vi.mock('@/lib/restaurant/sop-assignment', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/restaurant/sop-assignment')>(
+    '@/lib/restaurant/sop-assignment'
+  );
+  return {
+    ...actual,
+    claimSopOccurrence: mocks.claimSopOccurrence,
+    listClaimablePoolOccurrences: mocks.listClaimablePoolOccurrences,
+    listStaffSopOccurrences: mocks.listStaffSopOccurrences,
+  };
+});
 
 import { restaurantSopRouter } from './restaurant-sop';
 
@@ -81,6 +96,7 @@ function makeDb() {
     restaurantJobRole: model(),
     restaurantStaffProfile: model(),
     restaurantSopOccurrence: {
+      findUnique: vi.fn().mockResolvedValue(null),
       findFirst: vi.fn().mockResolvedValue(null),
       findMany: vi.fn().mockResolvedValue([]),
     },
@@ -467,7 +483,10 @@ describe('updateAssignment — effective-dated successor', () => {
       await expect(
         caller().setAssignmentActive({ id: predecessor.id, active: true })
       ).resolves.toMatchObject({ active: true, endDate: new Date('2026-05-31T00:00:00Z') });
-      expect(successor).toMatchObject({ active: true, startDate: new Date('2026-06-01T00:00:00Z') });
+      expect(successor).toMatchObject({
+        active: true,
+        startDate: new Date('2026-06-01T00:00:00Z'),
+      });
     });
 
     it('allows resuming through the last business day, including after local midnight', async () => {
@@ -564,4 +583,56 @@ describe('previewSchedule — DST-correct, no persistence', () => {
       })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
+});
+
+// ── H5: assignment-pool identity comes from the session ──────────────────────
+
+describe('assignment pools bind the staff profile to the session', () => {
+  beforeEach(() => {
+    db.restaurantStaffProfile.findMany.mockResolvedValue([{ id: 'staff_session' }]);
+    mocks.claimSopOccurrence.mockResolvedValue({
+      status: 'CLAIMED',
+      claimedByStaffProfileId: 'staff_session',
+      claimedAt: new Date(),
+    });
+    mocks.listClaimablePoolOccurrences.mockResolvedValue([]);
+    mocks.listStaffSopOccurrences.mockResolvedValue([]);
+  });
+
+  it('claims as the session staff profile, ignoring a supplied staffProfileId', async () => {
+    await caller().claimOccurrence({ occurrenceId: 'occ_1', staffProfileId: 'victim' });
+    expect(mocks.claimSopOccurrence).toHaveBeenCalledWith(db, 'occ_1', 'staff_session');
+    expect(db.restaurantStaffProfile.findMany).toHaveBeenCalledWith({
+      where: { userId: 'user_1', organizationId: 'org_1', status: 'ACTIVE' },
+      select: { id: true },
+      take: 2,
+    });
+  });
+
+  it('claims without a staffProfileId in the input', async () => {
+    await caller().claimOccurrence({ occurrenceId: 'occ_1' });
+    expect(mocks.claimSopOccurrence).toHaveBeenCalledWith(db, 'occ_1', 'staff_session');
+  });
+
+  it("reads only the caller's own pool and queue", async () => {
+    await caller().listClaimablePool({ staffProfileId: 'victim', branchId: 'branch_1' });
+    await caller().listMySopOccurrences({ staffProfileId: 'victim', branchId: 'branch_1' });
+    expect(mocks.listClaimablePoolOccurrences).toHaveBeenCalledWith(db, 'staff_session', {
+      branchId: 'branch_1',
+    });
+    expect(mocks.listStaffSopOccurrences).toHaveBeenCalledWith(db, 'staff_session', {
+      branchId: 'branch_1',
+    });
+  });
+
+  it.each([{ profiles: [] }, { profiles: [{ id: 'a' }, { id: 'b' }] }])(
+    'fails closed without a unique active session staff profile',
+    async ({ profiles }) => {
+      db.restaurantStaffProfile.findMany.mockResolvedValue(profiles);
+      await expect(
+        caller().claimOccurrence({ occurrenceId: 'occ_1', staffProfileId: 'victim' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.claimSopOccurrence).not.toHaveBeenCalled();
+    }
+  );
 });
