@@ -178,5 +178,77 @@
   "initialSha": "6aea99a22daf8a172f8e7e5543b3d5073948ab34",
   "what": "return a generic 500 for unexpected report export failures",
   "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1066": {
+  "sha": "6381e5a0b362798a24b11230d534864ffd75dbc9",
+  "initialSha": "ddd19ed235f63c5a445ba5d1b406a5ee42e24cac",
+  "what": "align reason selectors, drop dynamic RegExp, cover messages",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1064": {
+  "sha": "7fc894abd6f59be1cbedcab95812d8a61daf154d",
+  "initialSha": "b31874551cad8f20c2608461b0547cba45f0735f",
+  "what": "catalogue devices:revoke and exercise branch revoke checks",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1062": {
+  "sha": "a9b2e060ea652fe831667da97764858a4f97cb0e",
+  "initialSha": "b07b3a69de00215f17460047dc23f03cd8f6eb57",
+  "what": "declare adjustment author fields in shift test fixture",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1051": {
+  "sha": "b0d20bc67249e08405dee55660768dab8ea5c628",
+  "initialSha": "01e1d3bc7ecd2c2a61b8af5d52ec650610c23ecf",
+  "what": "complete variant-review test page fixture and format console",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1004": {
+  "sha": "473ee7d33e360d2c2753470969c18c2457bea9aa",
+  "initialSha": "087149317eaa96acae4f3a302b17a374ae2b53c1",
+  "what": "keep hovered primary labels and dark hover links readable",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1001": {
+  "sha": "d32c75456f1082514774cd61c2542de01bdf9090",
+  "initialSha": "63d657e346a3a6224dd7f35902e65efb988c1b18",
+  "what": "one opening-stock entry point, working import next steps and stable report dates (body: what was wrong and how it was verified; ends with the Co-Authored-By / C",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1000": {
+  "sha": "d61ef18dd3d98927a5009f9ccbea97cd8ba983d3",
+  "initialSha": "017d00745fcb47cc2ddb331bd0c82a4330badeee",
+  "what": "show member roles and refresh list after invite",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "997": {
+  "sha": "c91edd89a0049f095933929d6f039303dc04ee3a",
+  "initialSha": "c9e45219ad85b5df1b25e352dd8a3ea9ce3dc14e",
+  "what": "revert out-of-scope purchasing returns permission change",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "996": {
+  "sha": "ca294c9c39d4ea19dfd66ef93caa305cbac227e4",
+  "initialSha": "d673c26fe65ac791d6ce9908320daae9a8d0cae9",
+  "what": "drop pharmacist counter grant, fix backfill fixture",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "993": {
+  "sha": "44e07fc7d925c320a9d62ce0bf7a89cc4e107a9e",
+  "initialSha": "e7d00d6544e1d65d621d39ecaec79c425ee72227",
+  "what": "drop nested pack setup, test barcoded-pack readiness, format",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "984": {
+  "sha": "736ca0524eeabc2323aa4272ffef83045fca89e9",
+  "initialSha": "98e678d8e738fe214ce29aeb1896dd350f5d6832",
+  "what": "test Create location and prescriptions no-access gates",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "955": {
+  "sha": "1f8b368dbf1ffc60a6d193eb21c5f844c9560f9d",
+  "initialSha": "996265a92faa8864543b68c3f800612c1e82b56a",
+  "what": "rotate nightly churn scoring start branch per tick",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
  }
 }
