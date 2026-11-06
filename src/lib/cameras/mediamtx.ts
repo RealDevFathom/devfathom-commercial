@@ -1,7 +1,18 @@
 import { request as httpsRequest } from 'node:https';
 import { isIPv4 } from 'node:net';
 
+/**
+ * The product surface a binding serves. Restaurant and pharmacy cameras live in
+ * separate tables, so a binding must name its vertical: an identifier from one
+ * vertical can never select a stream bound for the other. Bindings written
+ * before pharmacy support omit the field and remain restaurant-only.
+ */
+export type CameraBindingVertical = 'restaurant' | 'pharmacy';
+const VERTICALS: readonly CameraBindingVertical[] = ['restaurant', 'pharmacy'];
+
 export type CameraBindingScope = {
+  /** Omitted means restaurant, matching bindings written before pharmacy support. */
+  vertical?: CameraBindingVertical;
   organizationId: string;
   branchId: string;
   gatewayId: string;
@@ -9,7 +20,8 @@ export type CameraBindingScope = {
   baseUrl: string;
 };
 
-type Binding = CameraBindingScope & {
+type Binding = Omit<CameraBindingScope, 'vertical'> & {
+  vertical: CameraBindingVertical;
   address: string;
   path: string;
   username?: string;
@@ -38,6 +50,36 @@ const DEADLINE_MS = 10_000;
 const RESOURCE = /^[A-Za-z0-9_-][A-Za-z0-9_-]*\.(m3u8|ts|mp4|m4s)$/;
 const PATH = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/;
 
+/**
+ * A registered gateway base URL must be exactly `https://hostname[:port]/`: no
+ * IP literal, credentials, path, query or fragment. The URL alone never causes
+ * an outbound request; the server-side binding remains the allowlist.
+ */
+export function isCameraGatewayBaseUrl(value: string): boolean {
+  if (typeof value !== 'string' || value.length > 500) return false;
+  let base: URL;
+  try {
+    base = new URL(value);
+  } catch {
+    return false;
+  }
+  return (
+    base.protocol === 'https:' &&
+    /^[a-z][a-z0-9.-]*$/i.test(base.hostname) &&
+    !base.username &&
+    !base.password &&
+    !base.search &&
+    !base.hash &&
+    base.pathname === '/' &&
+    base.href === value
+  );
+}
+
+/** A flat or slash-separated gateway path name; never a URL, query or traversal. */
+export function isCameraGatewayPath(value: string): boolean {
+  return typeof value === 'string' && value.length <= 120 && PATH.test(value);
+}
+
 export function cameraResourceName(value: string): string {
   if (!RESOURCE.test(value) || value.length > 200)
     throw new CameraTransportError('unsupported-stream');
@@ -62,7 +104,13 @@ function parseBindings(raw: string): Binding[] {
         'address',
         'path',
       ];
-      if (Object.keys(row).some((key) => ![...required, 'username', 'password'].includes(key)))
+      if (
+        Object.keys(row).some(
+          (key) => ![...required, 'vertical', 'username', 'password'].includes(key)
+        )
+      )
+        throw new Error();
+      if (row.vertical !== undefined && !VERTICALS.includes(row.vertical as CameraBindingVertical))
         throw new Error();
       for (const key of required)
         if (typeof row[key] !== 'string' || !row[key] || row[key].length > 500) throw new Error();
@@ -72,19 +120,12 @@ function parseBindings(raw: string): Binding[] {
           (typeof row[key] !== 'string' || row[key].length > 1024 || /[\r\n]/.test(row[key]))
         )
           throw new Error();
-      const binding = row as Binding;
+      const binding = {
+        ...(row as Omit<Binding, 'vertical'>),
+        vertical: (row.vertical ?? 'restaurant') as CameraBindingVertical,
+      };
+      if (!isCameraGatewayBaseUrl(binding.baseUrl)) throw new Error();
       const base = new URL(binding.baseUrl);
-      if (
-        base.protocol !== 'https:' ||
-        !/^[a-z][a-z0-9.-]*$/i.test(base.hostname) ||
-        base.username ||
-        base.password ||
-        base.search ||
-        base.hash ||
-        base.pathname !== '/' ||
-        base.href !== binding.baseUrl
-      )
-        throw new Error();
       // Explicit private IPv4 routing only; no DNS, loopback, metadata or public targets.
       const octets = binding.address.split('.').map(Number);
       if (
@@ -97,12 +138,16 @@ function parseBindings(raw: string): Binding[] {
       )
         throw new Error();
       if (!PATH.test(binding.path) || binding.username?.includes(':')) throw new Error();
-      const cameraKey = JSON.stringify([binding.organizationId, binding.cameraId]);
+      const cameraKey = JSON.stringify([
+        binding.vertical,
+        binding.organizationId,
+        binding.cameraId,
+      ]);
       const streamKey = `${base.origin}/${binding.path}`;
       if (cameras.has(cameraKey) || streams.has(streamKey)) throw new Error();
       cameras.add(cameraKey);
       streams.add(streamKey);
-      return { ...binding };
+      return binding;
     });
   } catch {
     throw new CameraTransportError('not-configured');
@@ -173,8 +218,10 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
 
   async function read(scope: CameraBindingScope, resource = 'index.m3u8') {
     cameraResourceName(resource);
+    const vertical = scope.vertical ?? 'restaurant';
     const binding = bindings.find(
       (row) =>
+        row.vertical === vertical &&
         row.organizationId === scope.organizationId &&
         row.branchId === scope.branchId &&
         row.gatewayId === scope.gatewayId &&
