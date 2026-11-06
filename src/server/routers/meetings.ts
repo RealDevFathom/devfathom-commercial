@@ -9,6 +9,11 @@ import { computePunctuality } from '@/lib/meeting-occurrence';
 import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
 import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
 import {
+  INVALID_MEETING_TIME_MESSAGE,
+  isMeetingTimeConstraintError,
+  isValidMeetingTimeRange,
+} from '@/lib/meetings/time-range';
+import {
   cancelOccurrence,
   occurrenceJoinPath,
   rescheduleOccurrence,
@@ -30,6 +35,12 @@ const UPCOMING_LIMIT = 50;
 const UPCOMING_SERIES_LIMIT = 200;
 /** Occurrences one `getOccurrences` page may return. */
 const OCCURRENCE_PAGE_SIZE_MAX = 200;
+
+export function assertValidMeetingTimeRange(startTime: Date, endTime: Date): void {
+  if (!isValidMeetingTimeRange(startTime, endTime)) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: INVALID_MEETING_TIME_MESSAGE });
+  }
+}
 
 /**
  * The `Meeting` columns the occurrence resolvers need. Selected explicitly so
@@ -334,6 +345,8 @@ export const meetingsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      assertValidMeetingTimeRange(input.startTime, input.endTime);
+
       // Guard against stale sessions: if the session JWT references a user that
       // no longer exists (e.g. after a DB reset), fail fast with a useful message
       // instead of a cryptic FK violation.
@@ -392,28 +405,61 @@ export const meetingsRouter = router({
       await assertMeetingManage(ctx, input.id);
       const { id, attendeeIds, ...data } = input;
 
-      if (attendeeIds) {
-        const allAttendees = [...new Set([ctx.session.user.id, ...attendeeIds])];
-        await assertInOrganization(ctx.db.user, workspaceId(ctx), allAttendees);
-        await ctx.db.meetingAttendee.deleteMany({ where: { meetingId: id } });
-        await ctx.db.meetingAttendee.createMany({
-          data: allAttendees.map((userId) => ({ meetingId: id, userId })),
+      if (data.startTime !== undefined || data.endTime !== undefined) {
+        const currentTimes = await ctx.db.meeting.findFirst({
+          where: { id, organizationId: workspaceId(ctx) },
+          select: { startTime: true, endTime: true },
         });
+        if (!currentTimes) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Meeting not found' });
+        }
+        assertValidMeetingTimeRange(
+          data.startTime ?? currentTimes.startTime,
+          data.endTime ?? currentTimes.endTime
+        );
       }
 
-      const updated = await ctx.db.meeting.update({
-        where: { id },
-        data: {
-          ...data,
-          // Keep the pair in step on every edit, exactly as `create` does. The
-          // guard matters: `recurrence` is OPTIONAL on this input, and an
-          // absent key means "leave the cadence alone", which must not be
-          // confused with an explicit `null` meaning "make it one-time".
-          ...(data.recurrence !== undefined
-            ? { recurrenceRule: legacyRecurrenceToRule(data.recurrence) }
-            : {}),
-        },
-      });
+      const allAttendees = attendeeIds
+        ? [...new Set([ctx.session.user.id, ...attendeeIds])]
+        : undefined;
+      if (allAttendees) {
+        await assertInOrganization(ctx.db.user, workspaceId(ctx), allAttendees);
+      }
+
+      const updated = await ctx.db.meeting
+        .update({
+          where: { id },
+          data: {
+            ...data,
+            // Keep the pair in step on every edit, exactly as `create` does. The
+            // guard matters: `recurrence` is OPTIONAL on this input, and an
+            // absent key means "leave the cadence alone", which must not be
+            // confused with an explicit `null` meaning "make it one-time".
+            ...(data.recurrence !== undefined
+              ? { recurrenceRule: legacyRecurrenceToRule(data.recurrence) }
+              : {}),
+            // A nested write keeps attendees unchanged if a concurrent time
+            // edit makes this update violate the database constraint.
+            ...(allAttendees
+              ? {
+                  attendees: {
+                    deleteMany: {},
+                    create: allAttendees.map((userId) => ({ userId })),
+                  },
+                }
+              : {}),
+          },
+        })
+        .catch((error: unknown) => {
+          if (isMeetingTimeConstraintError(error)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: INVALID_MEETING_TIME_MESSAGE,
+              cause: error,
+            });
+          }
+          throw error;
+        });
 
       // Reconcile after the edit. Moving the series or changing its cadence
       // adds the slots the new rule produces and CANCELS the future slots that

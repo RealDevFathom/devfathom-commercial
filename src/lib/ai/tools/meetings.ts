@@ -22,6 +22,11 @@ import { computePunctuality } from '@/lib/meeting-occurrence';
 import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
 import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
 import { resolveRelevantOccurrence } from '@/lib/meetings/occurrences';
+import {
+  INVALID_MEETING_TIME_MESSAGE,
+  isMeetingTimeConstraintError,
+  isValidMeetingTimeRange,
+} from '@/lib/meetings/time-range';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 
 const DAY_MS = 86_400_000;
@@ -267,7 +272,7 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
         const end = parseDate(endTime);
         if (!end)
           return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
-        if (end.getTime() <= start.getTime()) {
+        if (!isValidMeetingTimeRange(start, end)) {
           return { error: 'The end time must be after the start time.' };
         }
 
@@ -395,6 +400,25 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
           return { error: 'You can only edit meetings you created (admins can edit any meeting).' };
         }
 
+        const start = startTime == null ? null : parseDate(startTime);
+        if (startTime != null && !start) {
+          return { error: `Could not read the start time "${startTime}". Use an ISO datetime.` };
+        }
+        const end = endTime == null ? null : parseDate(endTime);
+        if (endTime != null && !end) {
+          return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
+        }
+        if (start || end) {
+          const current = await db.meeting.findFirst({
+            where: { id: meetingId, organizationId: h.ctx.organizationId },
+            select: { startTime: true, endTime: true },
+          });
+          if (!current) return { error: 'Meeting not found.' };
+          if (!isValidMeetingTimeRange(start ?? current.startTime, end ?? current.endTime)) {
+            return { error: INVALID_MEETING_TIME_MESSAGE };
+          }
+        }
+
         const data: Prisma.MeetingUpdateInput = {};
         if (title != null) data.title = title;
         if (description != null) data.description = description;
@@ -404,18 +428,8 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
           // Keep the pair in step, as `meetings.update` does.
           data.recurrenceRule = legacyRecurrenceToRule(recurrence);
         }
-        if (startTime != null) {
-          const d = parseDate(startTime);
-          if (!d)
-            return { error: `Could not read the start time "${startTime}". Use an ISO datetime.` };
-          data.startTime = d;
-        }
-        if (endTime != null) {
-          const d = parseDate(endTime);
-          if (!d)
-            return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
-          data.endTime = d;
-        }
+        if (start) data.startTime = start;
+        if (end) data.endTime = end;
 
         // Replace the attendee list when provided (mirrors the router: the
         // acting user is always kept on the list).
@@ -431,25 +445,33 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
             ids.push(pr.value.id);
             names.push(pr.value.name);
           }
-          await db.meetingAttendee.deleteMany({ where: { meetingId } });
           const allAttendees = [...new Set([h.ctx.userId, ...ids])];
-          await db.meetingAttendee.createMany({
-            data: allAttendees.map((userId) => ({ meetingId, userId })),
-          });
+          // Prisma makes the attendee replacement and time edit atomic, even
+          // when the assistant uses a per-operation tenant DB facade.
+          data.attendees = {
+            deleteMany: {},
+            create: allAttendees.map((userId) => ({ userId })),
+          };
           attendeeNames = names;
         }
 
-        const updated = await db.meeting.update({
-          where: { id: meetingId },
-          data,
-          select: {
-            title: true,
-            startTime: true,
-            endTime: true,
-            location: true,
-            recurrence: true,
-          },
-        });
+        const updated = await db.meeting
+          .update({
+            where: { id: meetingId },
+            data,
+            select: {
+              title: true,
+              startTime: true,
+              endTime: true,
+              location: true,
+              recurrence: true,
+            },
+          })
+          .catch((error: unknown) => {
+            if (isMeetingTimeConstraintError(error)) return null;
+            throw error;
+          });
+        if (!updated) return { error: INVALID_MEETING_TIME_MESSAGE };
 
         // Reconcile after the edit, as `meetings.update` does: add the slots the
         // new rule produces, cancel the FUTURE ones that left it, touch nothing

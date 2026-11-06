@@ -19,7 +19,7 @@
  */
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const HOUR = 60 * 60 * 1000;
 
@@ -50,6 +50,8 @@ const mocks = vi.hoisted(() => ({
   pages: [] as Array<{ items: unknown[]; nextCursor?: string }>,
   hasNextPage: false,
   fetchNextPage: vi.fn(),
+  createMeeting: vi.fn(),
+  updateMeeting: vi.fn(),
 }));
 
 vi.mock('next-auth/react', () => ({
@@ -81,8 +83,12 @@ vi.mock('@/lib/trpc', () => {
             isFetchingNextPage: false,
           }),
         },
-        create: mutation(),
-        update: mutation(),
+        create: {
+          useMutation: () => ({ mutate: mocks.createMeeting, isPending: false }),
+        },
+        update: {
+          useMutation: () => ({ mutate: mocks.updateMeeting, isPending: false }),
+        },
         delete: mutation(),
       },
       team: { getAll: { useQuery: () => ({ data: [] }) } },
@@ -103,11 +109,35 @@ const future = (count: number) =>
   );
 
 describe('MeetingsContent pagination', () => {
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    'scrollIntoView'
+  );
+
+  beforeAll(() => {
+    // JSDOM has no layout or scrolling implementation; keep the real picker
+    // and its interaction behavior under test.
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+  });
+
+  afterAll(() => {
+    if (originalScrollIntoView) {
+      Object.defineProperty(Element.prototype, 'scrollIntoView', originalScrollIntoView);
+    } else {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+    }
+  });
+
   beforeEach(() => {
     mocks.upcoming = [];
     mocks.pages = [];
     mocks.hasNextPage = false;
     mocks.fetchNextPage.mockClear();
+    mocks.createMeeting.mockClear();
+    mocks.updateMeeting.mockClear();
   });
 
   // The defect issue #44 reports, at the surface that shows it. A tenant whose
@@ -183,5 +213,106 @@ describe('MeetingsContent pagination', () => {
 
     expect(screen.getByText('Past meeting 2')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
+  });
+
+  it('prevents scheduling when the end time is not after the start time', () => {
+    const { container } = render(<MeetingsContent />);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule Meeting' }));
+
+    fireEvent.change(screen.getByPlaceholderText('e.g. Sprint Planning'), {
+      target: { value: 'Planning' },
+    });
+    fireEvent.change(container.querySelector('input[type="date"]')!, {
+      target: { value: '2026-10-26' },
+    });
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Start time' }));
+    fireEvent.click(screen.getByRole('option', { name: '10:00 AM' }));
+    fireEvent.click(screen.getByRole('combobox', { name: 'End time' }));
+    fireEvent.click(screen.getByRole('option', { name: '10:00 AM' }));
+
+    const timeError = screen.getByRole('alert');
+    expect(timeError).toHaveTextContent('End time must be after start time.');
+    expect(timeError.id).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'Start time' })).toHaveAttribute(
+      'aria-describedby',
+      timeError.id
+    );
+    expect(screen.getByRole('combobox', { name: 'End time' })).toHaveAttribute(
+      'aria-describedby',
+      timeError.id
+    );
+    const schedule = screen.getByRole('button', { name: 'Schedule' });
+    expect(schedule).toBeDisabled();
+    fireEvent.click(schedule);
+    expect(mocks.createMeeting).not.toHaveBeenCalled();
+
+    const endTime = screen.getByRole('combobox', { name: 'End time' });
+    expect(endTime).toHaveAttribute('aria-invalid', 'true');
+    endTime.focus();
+    fireEvent.keyDown(endTime, { key: 'ArrowDown' });
+    expect(endTime).toHaveAttribute('aria-expanded', 'true');
+    expect(endTime).toHaveAttribute('aria-controls', screen.getByRole('listbox').id);
+    expect(endTime).toHaveAttribute(
+      'aria-activedescendant',
+      screen.getByRole('option', { name: '10:00 AM' }).id
+    );
+    fireEvent.keyDown(endTime, { key: 'ArrowDown' });
+    expect(endTime).toHaveAttribute(
+      'aria-activedescendant',
+      screen.getByRole('option', { name: '10:15 AM' }).id
+    );
+    fireEvent.keyDown(endTime, { key: 'Enter' });
+
+    expect(endTime).toHaveFocus();
+    expect(endTime).toHaveAttribute('aria-expanded', 'false');
+    expect(endTime).toHaveAttribute('aria-invalid', 'false');
+    expect(endTime).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(schedule).toBeEnabled();
+    fireEvent.click(schedule);
+    expect(mocks.createMeeting).toHaveBeenCalledOnce();
+    expect(mocks.createMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startTime: new Date('2026-10-26T10:00:00'),
+        endTime: new Date('2026-10-26T10:15:00'),
+      })
+    );
+  });
+
+  it('prevents saving an edited meeting with a reversed time range', () => {
+    mocks.upcoming = [meeting('Editable meeting', new Date('2026-10-26T10:00:00'))];
+    render(<MeetingsContent />);
+
+    fireEvent.click(screen.getByTitle('Edit'));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Start time' }));
+    fireEvent.click(screen.getByRole('option', { name: '10:00 AM' }));
+    fireEvent.click(screen.getByRole('combobox', { name: 'End time' }));
+    fireEvent.click(screen.getByRole('option', { name: '9:00 AM' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('End time must be after start time.');
+    const timeError = screen.getByRole('alert');
+    expect(screen.getByRole('combobox', { name: 'Start time' })).toHaveAttribute(
+      'aria-describedby',
+      timeError.id
+    );
+    expect(timeError.id).toBeTruthy();
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(mocks.updateMeeting).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'End time' }));
+    fireEvent.click(screen.getByRole('option', { name: '11:00 AM' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    expect(mocks.updateMeeting).toHaveBeenCalledOnce();
+    expect(mocks.updateMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startTime: new Date('2026-10-26T10:00:00'),
+        endTime: new Date('2026-10-26T11:00:00'),
+      })
+    );
   });
 });
