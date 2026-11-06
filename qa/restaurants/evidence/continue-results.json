@@ -1,0 +1,168 @@
+{
+  "finishedAt": "2026-10-21T03:11:07.072Z",
+  "bag": {
+    "sessionSlug": "qa-karahi-house",
+    "pins": "not stored"
+  },
+  "results": [
+    {
+      "id": "LCY-04-host",
+      "status": "pass",
+      "notes": "Landed http://qa-karahi-house.localhost:3000/dashboard. Session slug qa-karahi-house org cmvhhcld5000g1yjsl1lp4a8v role ADMIN.",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/house-dashboard.png"
+      ]
+    },
+    {
+      "id": "SESSION-PERSIST",
+      "status": "pass",
+      "notes": "Catalog URL http://qa-karahi-house.localhost:3000/restaurant/catalog after dashboard.",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/house-catalog-first.png"
+      ]
+    },
+    {
+      "id": "TNT-02",
+      "status": "pass",
+      "notes": "Restaurant dashboard and nav text did not include pharmacy Onboarding, Counter, Regulatory, or prescription labels.",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/house-dash.png"
+      ]
+    },
+    {
+      "id": "MNU-04",
+      "status": "fail",
+      "notes": "Sidebar mentions menu import: false. /restaurant/menu-import 200 686ms bounced=false :: QA Karahi House Company workspace Ayesha Khan Organization administrator Restaurant Menu-import Search workspace ⌘K Ask Fathom Ask Fathom chat availability is being checked. Try ag",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/house-menu-import.png",
+        "/workspace/qa/restaurants/evidence/house-dash.png"
+      ]
+    },
+    {
+      "id": "CFG-05",
+      "status": "pass",
+      "notes": "/restaurant/growth 200 648ms bounced=false :: QA Karahi House Company workspace Ayesha Khan Organization administrator Restaurant Growth Search workspace ⌘K Ask Fathom AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Flo",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/house-growth.png"
+      ]
+    },
+    {
+      "id": "CAT-01",
+      "status": "pass",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Restaurant Catalog Search workspace ⌘K Ask Fathom AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Purchasing 10 SOP board 11 SOP reports 12 SOP admin 13 SOP oversight 14 Restaurant staff 15 Roster 16 Tax 17 Branches 18 Delivery 19 Restaurant devices 20 Cameras 21 Catalog 22 Menus 23 Offers 24 Notifications 25 Customers & Loyalty 26 Reports 27 Adv",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/cat-01.png"
+      ]
+    },
+    {
+      "id": "CAT-02-ui",
+      "status": "fail",
+      "notes": "Add category button was not on the catalog.",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/cat-02-missing.png"
+      ]
+    },
+    {
+      "id": "FLR-01",
+      "status": "pass",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Restaurant Floor Search workspace ⌘K Ask Fathom AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Purchasing 10 SOP board 11 SOP reports 12 SOP admin 13 SOP oversight 14 Restaurant staff 15 Roster 16 Tax 17 Branches 18 Delivery 19 Restaurant devices ",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/flr-01.png"
+      ]
+    },
+    {
+      "id": "FLR-02-ui",
+      "status": "fail",
+      "notes": "Add floor was not available.",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/flr-02-missing.png"
+      ]
+    },
+    {
+      "id": "ORD-01",
+      "status": "pass",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Search workspace ⌘K Ask Fathom Ask Fathom chat availability is being checked. Try again shortly. AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Purchasing 10 SOP board 11 SOP reports 12 SOP admin 13 SOP oversight 14 Restaurant staff 15 Roster 16 T",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/ord-01.png"
+      ]
+    },
+    {
+      "id": "LOY-01",
+      "status": "pass",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Search workspace ⌘K Ask Fathom Ask Fathom chat availability is being checked. Try again shortly. AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Purchasing 10 SOP board 11 SOP reports 12 SOP admin 13 SOP oversight 14 Restaurant staff 15 Roster 16 T",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/loy-01.png"
+      ]
+    },
+    {
+      "id": "INV-01",
+      "status": "pass",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Restaurant Inventory Search workspace ⌘K Ask Fathom Ask Fathom chat availability is being checked. Try again shortly. AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Purchasing 10 SOP board 11 SOP reports 12 SOP admin 13 SOP oversight 14 Restaurant",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/inv-01.png"
+      ]
+    },
+    {
+      "id": "MNU-01",
+      "status": "pass",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Search workspace ⌘K Ask Fathom Ask Fathom chat availability is being checked. Try again shortly. AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Purchasing 10 SOP board 11 SOP reports 12 SOP admin 13 SOP oversight 14 Restaurant staff 15 Roster 16 T",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/mnu-01.png"
+      ]
+    },
+    {
+      "id": "NTF-01",
+      "status": "pass",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Restaurant Notifications Search workspace ⌘K Ask Fathom Ask Fathom chat availability is being checked. Try again shortly. AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Purchasing 10 SOP board 11 SOP reports 12 SOP admin 13 SOP oversight 14 Restaurant staff 15 Roster 16 Tax 17 Branches 18 Delivery 19 Restaurant devices 20 Cameras 21 Catalog 22 M",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/ntf-01.png"
+      ]
+    },
+    {
+      "id": "NTF-03",
+      "status": "fail",
+      "notes": "WhatsApp copy appeared on /restaurant/notifications ",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/ntf-01.png"
+      ]
+    },
+    {
+      "id": "BRN-01",
+      "status": "fail",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Search workspace ⌘K Ask Fathom Ask Fathom chat availability is being checked. Try again shortly. AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Purchasing 10 SOP board 11 SOP reports 12 SOP admin 13 SOP oversight 14 Restaurant staff 15 Roster 16 T",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/brn-01.png"
+      ]
+    },
+    {
+      "id": "STF-01",
+      "status": "pass",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Search workspace ⌘K Ask Fathom Ask Fathom chat availability is being checked. Try again shortly. AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Purchasing 10 SOP board 11 SOP reports 12 SOP admin 13 SOP oversight 14 Restaurant staff 15 Roster 16 T",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/stf-01.png"
+      ]
+    },
+    {
+      "id": "MNU-05-page",
+      "status": "pass",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Search workspace ⌘K Ask Fathom Ask Fathom chat availability is being checked. Try again shortly. AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Pur",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/mnu-05.png"
+      ]
+    },
+    {
+      "id": "CATR-01",
+      "status": "pass",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Search workspace ⌘K Ask Fathom Ask Fathom chat availability is being checked. Try again shortly. AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Pur",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/catr-01.png"
+      ]
+    },
+    {
+      "id": "RUN",
+      "status": "blocked",
+      "notes": "goto: Timeout 20000ms exceeded.\nCall log:\n  - navigating to \"http://qa-karahi-house.localhost:3000/restaurant/reports\", waiting until \"domcontentloaded\"\n\n    at main (/workspace/qa/restaurants/continue-qa.ts:488:16)",
+      "evidence": []
+    }
+  ]
+}
