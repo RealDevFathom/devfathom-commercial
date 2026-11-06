@@ -179,6 +179,7 @@ function fixture(
         : []
     ),
   };
+  Object.assign(db, { $transaction: vi.fn(async (work: (tx: unknown) => unknown) => work(db)) });
   const context: TRPCContext = {
     db: db as unknown as ScopedDb,
     entitlements,
