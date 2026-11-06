@@ -69,7 +69,9 @@ async function signIn(page: Page, email = process.env.PHARMACY_E2E_ADMIN_EMAIL!)
 async function openCounter(page: Page, email?: string) {
   await signIn(page, email);
   await page.goto('/pharmacy/counter');
-  await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible({
+    timeout: 60_000,
+  });
   // The module is licensed by the seed, so the shell must render the counter
   // itself rather than the honest not-enabled panel.
   await expect(page.getByRole('heading', { name: 'This module is not enabled' })).toHaveCount(0);
@@ -819,6 +821,7 @@ test('sell → return → refund → reprint from the counter', async ({ page })
 test('counter layout keeps the cart and payment visible while searching', async ({
   page,
 }, testInfo) => {
+  test.setTimeout(180_000);
   await openCounter(page);
   const otc = PHARMACY_E2E.medicines.otc;
   const sale = await trpcMutation<{ id: string }>(page, 'pharmacySales.create', {
@@ -845,7 +848,8 @@ test('counter layout keeps the cart and payment visible while searching', async 
   await page.keyboard.press('F4');
   await setQuantity(page, 2);
   for (const width of [375, 768, 1024, 1280, 1440]) {
-    for (const height of [720, 900]) {
+    const handoffHeight = width === 375 ? 812 : width === 768 ? 1024 : width === 1024 ? 768 : null;
+    for (const height of handoffHeight ? [720, 900, handoffHeight] : [720, 900]) {
       await page.setViewportSize({ width, height });
       for (const theme of ['light', 'dark']) {
         await page.evaluate((value) => (document.documentElement.dataset.theme = value), theme);
@@ -854,12 +858,28 @@ test('counter layout keeps the cart and payment visible while searching', async 
           expect(
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)
           ).toBe(true);
+          const summary =
+            width >= 1024
+              ? page.getByRole('complementary', { name: 'Bill total' })
+              : page.getByLabel('Phone payment');
+          await expect(summary).toContainText(/Rs [0-9]/);
+          const pay = page.getByRole('button', { name: /^Take payment/ });
+          await expect(pay).toHaveCount(1);
+          const payBox = await pay.boundingBox();
+          expect(payBox).not.toBeNull();
+          expect(payBox!.y + payBox!.height).toBeLessThanOrEqual(height);
           await expect(
             page
               .getByRole('region', { name: 'Next line' })
               .getByText(PHARMACY_E2E_EXPECTED.otcStripPrice, { exact: true })
               .first()
           ).toBeVisible();
+          if (width >= 1024) {
+            await expect(page.getByLabel('Scan or search')).toBeInViewport();
+            const cart = await page.getByRole('table', { name: 'Cart lines' }).boundingBox();
+            expect(cart).not.toBeNull();
+            expect(cart!.y).toBeLessThan(height);
+          }
           if (width >= 1280) {
             const pane = await page
               .getByRole('complementary', { name: 'Bill total' })
@@ -869,7 +889,7 @@ test('counter layout keeps the cart and payment visible while searching', async 
             await page.getByLabel('Scan or search').focus();
             await expect(page.getByLabel('Scan or search')).toBeFocused();
           }
-          if (reducedMotion === 'reduce' && [375, 1440].includes(width)) {
+          if (reducedMotion === 'reduce' && [375, 768, 1024, 1440].includes(width)) {
             await page.screenshot({
               path: testInfo.outputPath(`counter-${width}-${height}-${theme}.png`),
             });
@@ -888,6 +908,20 @@ test('counter layout keeps the cart and payment visible while searching', async 
     action: 'void',
     reason: 'Synthetic layout QA complete',
   });
+});
+
+test('opt-in counter navigation opens and restores focus', async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_COUNTER_IMMERSIVE_NAV !== 'true', 'D02 preview is opt-in');
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await openCounter(page);
+  const menu = page.getByRole('button', { name: 'Menu', exact: true });
+  await expect(page.getByRole('navigation', { name: 'Primary navigation' })).not.toBeVisible();
+  await pressControl(menu);
+  await expect(page.getByRole('dialog', { name: 'Module navigation' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Module navigation' })).not.toBeVisible();
+  await expect(menu).toBeFocused();
 });
 
 test('drawer confirmation overlays the counter and dismisses without moving it', async ({

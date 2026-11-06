@@ -15,7 +15,8 @@ import {
 } from 'react';
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import Link from 'next/link';
-import { ShieldCheck, Star, UserRound } from 'lucide-react';
+import { Menu, ShieldCheck, Star, UserRound } from 'lucide-react';
+import { useCounterNavigation } from '@/components/layout/counter-navigation-context';
 import { signIn, useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -316,6 +317,7 @@ function ScopedPharmacyCounterConsole({
   safetyLicensed: boolean;
   accountEmail: string;
 }) {
+  const openCounterNavigation = useCounterNavigation();
   const utils = trpc.useUtils();
 
   const [selectedBranchId, setSelectedBranchId] = useState(initialBranchId);
@@ -358,6 +360,18 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [drawerToast, setDrawerToast] = useState<string | null>(null);
+  const [networkAvailable, setNetworkAvailable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const update = () => setNetworkAvailable(navigator.onLine);
+    update();
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    return () => {
+      window.removeEventListener('online', update);
+      window.removeEventListener('offline', update);
+    };
+  }, []);
   const [pending, setPending] = useState<string | null>(null);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
@@ -523,6 +537,14 @@ function ScopedPharmacyCounterConsole({
   );
   const openDrawerSession = drawerQuery.data?.openDrawer ?? null;
   const drawerStatusKnown = drawerQuery.isSuccess || drawerQuery.isError;
+
+  useEffect(() => {
+    if (notice?.tone !== 'success') return;
+    const timeout = window.setTimeout(() => {
+      setNotice((current) => (current === notice ? null : current));
+    }, 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
 
   useEffect(() => {
     if (!drawerToast) return;
@@ -747,6 +769,7 @@ function ScopedPharmacyCounterConsole({
     attempt !== null ||
     checkingOutcome;
   const lineCount = cart?.lines.length ?? 0;
+  const unitCount = currentBill ? cart.lines.reduce((total, line) => total + line.quantity, 0) : 0;
   const hasControlledLine = Boolean(
     activeRow?.restriction.controlled || (currentBill && cart.lines.some((line) => line.controlled))
   );
@@ -1738,13 +1761,21 @@ function ScopedPharmacyCounterConsole({
 
   if (branchesQuery.isLoading) {
     return (
-      <div className="space-y-6">
-        <PageHeader eyebrow="Pharmacy" heading="Counter" description="Loading this workspace." />
-        <SectionCard title="Loading">
-          <p className="text-sm text-text-muted" role="status">
-            Loading branches…
-          </p>
-        </SectionCard>
+      <div className="h-full bg-surface-page p-4" role="status" aria-label="Loading the counter">
+        <div aria-hidden="true" className="h-14 rounded-[var(--radius-sm)] bg-surface-sunken" />
+        <div
+          aria-hidden="true"
+          className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px]"
+        >
+          <div className="space-y-4">
+            <div className="h-14 rounded-[var(--radius-sm)] bg-surface-sunken" />
+            {[1, 2, 3].map((row) => (
+              <div key={row} className="h-20 rounded-[var(--radius-sm)] bg-surface-sunken" />
+            ))}
+          </div>
+          <div className="h-48 rounded-[var(--radius-md)] bg-surface-sunken" />
+        </div>
+        <p className="mt-4 text-sm text-text-muted">Loading the counter…</p>
       </div>
     );
   }
@@ -1759,14 +1790,16 @@ function ScopedPharmacyCounterConsole({
         />
         <SectionCard title="Branches unavailable">
           <div className="space-y-3" role="alert">
-            <p className="text-sm text-destructive">{messageFrom(branchesQuery.error)}</p>
+            <p className="text-sm text-destructive">
+              We couldn’t load your branches. This attempt did not change your bill. Try again.
+            </p>
             <Button
               type="button"
               variant="outline"
               className="h-11"
               onClick={() => void branchesQuery.refetch()}
             >
-              Retry
+              Try again
             </Button>
           </div>
         </SectionCard>
@@ -1848,22 +1881,45 @@ function ScopedPharmacyCounterConsole({
 
   return (
     <div
-      className="pos-calm h-full min-h-0 overflow-y-auto bg-surface-page px-4 pt-3 pb-28 xl:pb-4"
+      className="pos-calm h-full min-h-0 overflow-y-auto bg-surface-page px-4 pt-3 pb-28 lg:flex lg:flex-col lg:overflow-hidden lg:pb-4"
       data-counter-console=""
     >
-      <header className="mb-3 space-y-3">
+      <header className="mb-3 space-y-3 lg:shrink-0">
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
+          {openCounterNavigation ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="hidden h-11 md:inline-flex"
+              onClick={openCounterNavigation}
+            >
+              <Menu aria-hidden="true" /> Menu
+            </Button>
+          ) : null}
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
+            <p className="text-xs text-text-muted md:hidden">
+              {networkAvailable === null
+                ? 'Checking connection'
+                : networkAvailable
+                  ? 'Network available'
+                  : 'Offline'}
+              {' · '}
+              {branches.find((branch) => branch.id === branchId)?.name}
+            </p>
+          </div>
           <Button
             variant="outline"
-            className="ml-auto h-11 rounded-[var(--radius-sm)] md:hidden"
+            className="ml-auto h-11 rounded-[var(--radius-sm)] xl:hidden"
             aria-expanded={actionsOpen}
             aria-controls="counter-actions"
             onClick={() => setActionsOpen(!actionsOpen)}
           >
-            Actions
+            More
           </Button>
-          <div className="order-2 flex w-full flex-wrap items-center gap-3 md:order-none md:w-auto">
+          <div
+            className={`${actionsOpen ? 'flex' : 'hidden'} order-2 w-full flex-wrap items-center gap-3 md:order-none md:flex md:w-auto`}
+          >
             <label className="sr-only" htmlFor="counter-branch">
               Branch
             </label>
@@ -1901,13 +1957,26 @@ function ScopedPharmacyCounterConsole({
                 }
               />
               {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
+              <StatusPill
+                status={
+                  networkAvailable === null ? 'unknown' : networkAvailable ? 'online' : 'offline'
+                }
+                tone={networkAvailable === false ? 'warning' : 'neutral'}
+                label={
+                  networkAvailable === null
+                    ? 'Checking connection'
+                    : networkAvailable
+                      ? 'Network available'
+                      : 'Offline'
+                }
+              />
               {openDrawerSession ? (
                 <StatusPill status="drawer-open" tone="success" label="Drawer open" />
               ) : (
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                  className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
                   disabled={busy || !drawerStatusKnown}
                   onClick={() => {
                     setPending('drawer');
@@ -1936,7 +2005,7 @@ function ScopedPharmacyCounterConsole({
           </div>
           <div
             id="counter-actions"
-            className={`${actionsOpen ? 'flex' : 'hidden'} order-3 w-full flex-wrap items-center gap-2 md:order-none md:ml-auto md:flex md:w-auto [&>button]:rounded-[var(--radius-sm)]`}
+            className={`${actionsOpen ? 'flex' : 'hidden'} order-3 w-full flex-wrap items-center gap-2 xl:order-none xl:ml-auto xl:flex xl:w-auto [&>button]:rounded-[var(--radius-sm)]`}
           >
             <CounterReturnPanel
               branchId={branchId}
@@ -2005,242 +2074,268 @@ function ScopedPharmacyCounterConsole({
         <div
           role="status"
           aria-live="polite"
-          className="fixed top-4 end-4 z-50 flex max-w-[min(24rem,calc(100vw-2rem))] items-center gap-3 rounded-[var(--radius-sm)] border border-success/30 bg-surface-card p-3 shadow-md"
+          className={`fixed start-4 z-50 flex max-w-[min(35rem,calc(100vw-2rem))] items-center gap-3 rounded-[var(--radius-sm)] border border-success/30 bg-surface-card p-3 shadow-md ${notice?.tone === 'success' ? 'bottom-40 lg:bottom-28' : 'bottom-24 lg:bottom-11'}`}
         >
           <StatusPill status="success" tone="success" label="Drawer open" />
           <p className="text-sm text-text-body">{drawerToast}</p>
         </div>
       ) : null}
-      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_28rem]">
-        <div className="min-w-0 space-y-3">
-          <SectionCard className="overflow-hidden rounded-xl p-0" aria-label="Counter bill">
-            <div className="border-b border-border-subtle p-4">
-              <h2 className="mb-2 text-sm font-semibold text-text-strong">Scan or search</h2>
-              {notice ? (
-                <div
-                  role={notice.tone === 'success' ? 'status' : 'alert'}
-                  aria-live="polite"
-                  className={`flex items-center gap-3 rounded-lg border p-3 ${
-                    notice.tone === 'danger'
-                      ? 'border-destructive/30 bg-destructive/10'
-                      : notice.tone === 'warning'
-                        ? 'border-warning/30 bg-warning/10'
-                        : notice.tone === 'success'
-                          ? 'border-success/30 bg-success/10'
-                          : 'border-border-subtle bg-surface-sunken'
-                  }`}
-                >
-                  <StatusPill status={notice.tone} tone={notice.tone} />
-                  <div className="min-w-0 space-y-2 text-sm">
-                    <p className="text-text-body">{notice.message}</p>
-                    {notice.inventoryBranchId ? (
-                      <Link
-                        href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        prefetch={false}
-                        className={buttonVariants({
-                          variant: 'outline',
-                          className: 'h-auto min-h-11 whitespace-normal',
-                        })}
-                      >
-                        Open Inventory to review pack breaking (new tab)
-                      </Link>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="space-y-2">
-                <div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="counter-search" className="sr-only">
-                      Scan or search
-                    </Label>
-                    <Input
-                      id="counter-search"
-                      ref={searchRef}
-                      // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
-                      data-counter-scan=""
-                      autoFocus
-                      autoComplete="off"
-                      value={query}
-                      disabled={busy}
-                      placeholder="Brand, generic or barcode"
-                      aria-describedby="counter-search-help"
-                      onChange={(event) => {
-                        scannerRevision.current += 1;
-                        setQuery(event.target.value);
-                        setActiveRow(null);
-                        setSaleUnit(null);
-                        setQuantity(1);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== 'Enter') return;
-                        event.preventDefault();
-                        const trimmed = event.currentTarget.value.trim();
-                        const barcode =
-                          /^\d{6,}$/.test(trimmed) ||
-                          trimmed.startsWith(']d2') ||
-                          trimmed.startsWith('(01)');
-                        if (barcode) {
-                          void addBarcode(trimmed);
-                          return;
-                        }
-                        if (activeRow) {
-                          void addToCart();
-                          return;
-                        }
-                        void runSearch();
-                      }}
-                      className="h-12"
-                    />
-                    <p id="counter-search-help" className="text-xs text-text-muted">
-                      {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
-                      selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
-                      opens pay.
-                    </p>
-                  </div>
-                </div>
-
-                <CounterSearchResults
-                  rows={
-                    searchCurrent && !searchQuery.isPlaceholderData
-                      ? (searchQuery.data?.rows ?? [])
-                      : []
-                  }
-                  state={
-                    !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
-                      ? 'idle'
-                      : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
-                        ? 'loading'
-                        : searchQuery.isError
-                          ? 'error'
-                          : 'ready'
-                  }
-                  query={trimmedQuery}
-                  disabled={busy || !branchAuthorized}
-                  activeMedicineId={activeRow?.medicineId ?? null}
-                  error={searchQuery.error ? messageFrom(searchQuery.error) : null}
-                  onSelect={stageRow}
-                  onCaptureDemand={() => void captureShortfall()}
-                  onRetry={() => {
-                    if (searchCurrent) void searchQuery.refetch();
-                  }}
-                />
-              </div>
-            </div>
-            {activeRow ? (
-              <section
-                aria-label="Next line"
-                className="m-4 rounded-lg border border-border-subtle bg-surface-sunken p-3"
+      <div className="grid items-start gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_340px] lg:grid-rows-[auto_minmax(0,1fr)] lg:items-stretch xl:grid-cols-[minmax(0,1fr)_380px]">
+        <SectionCard
+          className="overflow-hidden rounded-xl p-0 lg:col-start-1 lg:row-start-1 lg:max-h-[40dvh] lg:overflow-y-auto"
+          aria-label="Counter bill"
+        >
+          <div className="border-b border-border-subtle p-4">
+            <h2 className="mb-2 text-sm font-semibold text-text-strong">Scan or search</h2>
+            {notice ? (
+              <div
+                role={notice.tone === 'success' ? 'status' : 'alert'}
+                aria-live="polite"
+                className={`${notice.tone === 'success' ? 'fixed bottom-24 start-4 z-50 max-w-[min(35rem,calc(100vw-2rem))] shadow-md lg:bottom-11' : ''} flex items-center gap-3 rounded-lg border p-3 ${
+                  notice.tone === 'danger'
+                    ? 'border-destructive/30 bg-destructive/10'
+                    : notice.tone === 'warning'
+                      ? 'border-warning/30 bg-warning/10'
+                      : notice.tone === 'success'
+                        ? 'border-success/30 bg-surface-card'
+                        : 'border-border-subtle bg-surface-sunken'
+                }`}
               >
-                <div className="grid items-start gap-4">
-                  <div className="min-w-0">
-                    <h2 className="font-mono text-[10px] uppercase tracking-widest text-text-muted">
-                      Next line
-                    </h2>
-                    <p className="mt-1 text-sm font-semibold text-text-strong">
-                      {activeRow.displayName}
-                      {activeRow.strength ? ` ${activeRow.strength}` : ''}
-                    </p>
-                    <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                      {[
-                        activeRow.presentation,
-                        activeRow.dosageForm,
-                        activeRow.batchNumber ? `Batch ${activeRow.batchNumber}` : null,
-                        activeRow.nearestSafeExpiry
-                          ? `Exp ${formatReceiptDate(activeRow.nearestSafeExpiry)}`
-                          : null,
-                        locationLabel,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </p>
-                  </div>
-                  <div className="counter-next-controls space-y-3">
-                    <CounterUnitToggle
-                      inline
-                      options={activeRow.saleUnits}
-                      selected={saleUnit}
-                      quantity={quantity}
-                      preview={preview}
-                      disabled={busy}
-                      onSelect={setSaleUnit}
-                      onQuantityChange={setQuantity}
-                      chordFor={chordFor}
-                    />
-                    {activeRow.saleUnits.length === 0 ? (
-                      <div className="space-y-1.5">
-                        <Label htmlFor="counter-demand-units">Requested units</Label>
-                        <Input
-                          id="counter-demand-units"
-                          type="number"
-                          min={1}
-                          step={1}
-                          className="h-11 w-32"
-                          value={quantity}
-                          disabled={busy}
-                          onChange={(event) => {
-                            const next = Number(event.target.value);
-                            setQuantity(Number.isSafeInteger(next) && next > 0 ? next : 1);
-                          }}
-                        />
-                      </div>
-                    ) : null}
-                    {shortfallUnits > 0 ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-auto min-h-11 whitespace-normal"
-                        disabled={busy || !branchAuthorized}
-                        onClick={() => void captureShortfall()}
-                      >
-                        {pending === 'captureDemand'
-                          ? 'Capturing…'
-                          : `Record ${shortfallUnits} unavailable units`}
-                      </Button>
-                    ) : null}
-                  </div>
+                <StatusPill status={notice.tone} tone={notice.tone} />
+                <div className="min-w-0 space-y-2 text-sm">
+                  <p className="text-text-body">{notice.message}</p>
+                  {notice.inventoryBranchId ? (
+                    <Link
+                      href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      prefetch={false}
+                      className={buttonVariants({
+                        variant: 'outline',
+                        className: 'h-auto min-h-11 whitespace-normal',
+                      })}
+                    >
+                      Open Inventory to review pack breaking (new tab)
+                    </Link>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
 
+            <div className="space-y-2">
+              <div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="counter-search" className="sr-only">
+                    Scan or search
+                  </Label>
+                  <Input
+                    id="counter-search"
+                    ref={searchRef}
+                    // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
+                    data-counter-scan=""
+                    autoFocus
+                    autoComplete="off"
+                    value={query}
+                    disabled={busy}
+                    placeholder="Brand, generic or barcode"
+                    aria-describedby="counter-search-help"
+                    onChange={(event) => {
+                      scannerRevision.current += 1;
+                      setQuery(event.target.value);
+                      setActiveRow(null);
+                      setSaleUnit(null);
+                      setQuantity(1);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter') return;
+                      event.preventDefault();
+                      const trimmed = event.currentTarget.value.trim();
+                      const barcode =
+                        /^\d{6,}$/.test(trimmed) ||
+                        trimmed.startsWith(']d2') ||
+                        trimmed.startsWith('(01)');
+                      if (barcode) {
+                        void addBarcode(trimmed);
+                        return;
+                      }
+                      if (activeRow) {
+                        void addToCart();
+                        return;
+                      }
+                      void runSearch();
+                    }}
+                    className="h-12"
+                  />
+                  <p id="counter-search-help" className="text-xs text-text-muted">
+                    {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
+                    selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
+                    opens pay.
+                  </p>
+                </div>
+              </div>
+
+              <CounterSearchResults
+                rows={
+                  searchCurrent && !searchQuery.isPlaceholderData
+                    ? (searchQuery.data?.rows ?? [])
+                    : []
+                }
+                state={
+                  !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
+                    ? 'idle'
+                    : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
+                      ? 'loading'
+                      : searchQuery.isError
+                        ? 'error'
+                        : 'ready'
+                }
+                query={trimmedQuery}
+                disabled={busy || !branchAuthorized}
+                activeMedicineId={activeRow?.medicineId ?? null}
+                error={searchQuery.error ? messageFrom(searchQuery.error) : null}
+                onSelect={stageRow}
+                onCaptureDemand={() => void captureShortfall()}
+                onRetry={() => {
+                  if (searchCurrent) void searchQuery.refetch();
+                }}
+              />
+            </div>
+          </div>
+        </SectionCard>
+        {activeRow ? (
+          <section
+            aria-label="Next line"
+            className="rounded-lg border border-border-subtle bg-surface-sunken p-3 lg:col-start-2 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto"
+          >
+            <div className="grid items-start gap-4">
+              <div className="min-w-0">
+                <h2 className="font-mono text-[10px] uppercase tracking-widest text-text-muted">
+                  Next line
+                </h2>
+                <p className="mt-1 text-sm font-semibold text-text-strong">
+                  {activeRow.displayName}
+                  {activeRow.strength ? ` ${activeRow.strength}` : ''}
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                  {[
+                    activeRow.presentation,
+                    activeRow.dosageForm,
+                    activeRow.batchNumber ? `Batch ${activeRow.batchNumber}` : null,
+                    activeRow.nearestSafeExpiry
+                      ? `Exp ${formatReceiptDate(activeRow.nearestSafeExpiry)}`
+                      : null,
+                    locationLabel,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+              </div>
+              <div className="counter-next-controls space-y-3">
+                <CounterUnitToggle
+                  inline
+                  options={activeRow.saleUnits}
+                  selected={saleUnit}
+                  quantity={quantity}
+                  preview={preview}
+                  disabled={busy}
+                  onSelect={setSaleUnit}
+                  onQuantityChange={setQuantity}
+                  chordFor={chordFor}
+                />
+                {activeRow.saleUnits.length === 0 ? (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="counter-demand-units">Requested units</Label>
+                    <Input
+                      id="counter-demand-units"
+                      type="number"
+                      min={1}
+                      step={1}
+                      className="h-11 w-32"
+                      value={quantity}
+                      disabled={busy}
+                      onChange={(event) => {
+                        const next = Number(event.target.value);
+                        setQuantity(Number.isSafeInteger(next) && next > 0 ? next : 1);
+                      }}
+                    />
+                  </div>
+                ) : null}
+                {shortfallUnits > 0 ? (
                   <Button
                     type="button"
-                    className="min-h-12 rounded-[var(--radius-sm)]"
-                    disabled={busy || !preview?.sufficient}
-                    onClick={() => void addToCart()}
+                    variant="outline"
+                    className="h-auto min-h-11 whitespace-normal"
+                    disabled={busy || !branchAuthorized}
+                    onClick={() => void captureShortfall()}
                   >
-                    {pending === 'addToCart'
-                      ? 'Adding…'
-                      : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
+                    {pending === 'captureDemand'
+                      ? 'Capturing…'
+                      : `Record ${shortfallUnits} unavailable units`}
                   </Button>
-                </div>
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-text-muted">
-                  <span>
-                    {lotOverride?.inventoryLotId
-                      ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
-                      : activeRow.recommendedLotId && activeRow.batchNumber
-                        ? `FEFO batch ${activeRow.batchNumber} is used; additional batches are allocated if needed.`
-                        : 'No sellable FEFO batch is available.'}
-                  </span>
-                  <CounterLotOverride
-                    value={lotOverride}
-                    lots={lotOptionsQuery.data ?? []}
-                    state={
-                      lotOptionsQuery.isError
+                ) : null}
+              </div>
+
+              <Button
+                type="button"
+                className="min-h-12 rounded-[var(--radius-sm)]"
+                disabled={busy || !preview?.sufficient}
+                onClick={() => void addToCart()}
+              >
+                {pending === 'addToCart'
+                  ? 'Adding…'
+                  : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
+              </Button>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-text-muted">
+              <span>
+                {lotOverride?.inventoryLotId
+                  ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
+                  : activeRow.recommendedLotId && activeRow.batchNumber
+                    ? `FEFO batch ${activeRow.batchNumber} is used; additional batches are allocated if needed.`
+                    : 'No sellable FEFO batch is available.'}
+              </span>
+              <CounterLotOverride
+                value={lotOverride}
+                lots={lotOptionsQuery.data ?? []}
+                state={
+                  lotOptionsQuery.isError
+                    ? 'error'
+                    : lotOptionsQuery.isSuccess
+                      ? 'ready'
+                      : 'loading'
+                }
+                error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
+                disabled={busy}
+                onChange={setLotOverride}
+                onRetry={() => void lotOptionsQuery.refetch()}
+              />
+            </div>
+          </section>
+        ) : null}
+        <div className="min-w-0 space-y-3 lg:col-start-1 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto">
+          <section aria-label="Cart">
+            <SectionCard className="overflow-hidden rounded-xl p-0">
+              <div className="flex items-center justify-between px-4 pt-3 pb-2">
+                <h2 className="font-display text-sm font-semibold text-text-strong">Cart</h2>
+                <span className="text-xs text-text-muted">{lineCount} lines</span>
+              </div>
+              <CounterCartPanel
+                cart={cart}
+                alerts={alerts}
+                state={
+                  !saleId
+                    ? 'idle'
+                    : cartQuery.isLoading
+                      ? 'loading'
+                      : cartQuery.isError
                         ? 'error'
-                        : lotOptionsQuery.isSuccess
-                          ? 'ready'
-                          : 'loading'
-                    }
-                    error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
-                    disabled={busy}
-                    onChange={setLotOverride}
-                    onRetry={() => void lotOptionsQuery.refetch()}
-                  />
-                </div>
-              </section>
-            ) : null}
-          </SectionCard>
+                        : 'ready'
+                }
+                error={cartQuery.error ? messageFrom(cartQuery.error) : null}
+                onRetry={() => void refreshTenderBill()}
+              />
+            </SectionCard>
+          </section>
           {substituteInput ? (
             <SectionCard compact title="Exact substitute suggestions">
               <CounterSubstituteProposals
@@ -2270,52 +2365,28 @@ function ScopedPharmacyCounterConsole({
             </SectionCard>
           ) : null}
 
-          <CounterUpsellSuggestions
-            branchId={branchId}
-            medicineIds={currentBill ? cart.lines.map((line) => line.medicineId) : []}
-            disabled={busy || !branchAuthorized}
-            onChoose={(suggestion) => {
-              setQuery(suggestion.displayName);
-              setSubmittedSearch({
-                text: suggestion.displayName,
-                query: suggestion.displayName,
-                branchId,
-              });
-              setActiveRow(null);
-            }}
-          />
+          <div>
+            <CounterUpsellSuggestions
+              branchId={branchId}
+              medicineIds={currentBill ? cart.lines.map((line) => line.medicineId) : []}
+              disabled={busy || !branchAuthorized}
+              onChoose={(suggestion) => {
+                setQuery(suggestion.displayName);
+                setSubmittedSearch({
+                  text: suggestion.displayName,
+                  query: suggestion.displayName,
+                  branchId,
+                });
+                setActiveRow(null);
+              }}
+            />
+          </div>
         </div>
         <aside
           id="counter-bill-total"
           aria-label="Bill total"
-          className="min-w-0 space-y-3 xl:sticky xl:top-0 [&_button]:rounded-[var(--radius-sm)]"
+          className="min-w-0 space-y-3 lg:col-start-2 lg:row-start-1 [&_button]:rounded-[var(--radius-sm)]"
         >
-          <section
-            aria-label="Cart"
-            className="xl:max-h-[max(10rem,calc(100dvh-35rem))] xl:overflow-y-auto"
-          >
-            <SectionCard className="overflow-hidden rounded-xl p-0">
-              <div className="flex items-center justify-between px-4 pt-3 pb-2">
-                <h2 className="font-display text-sm font-semibold text-text-strong">Cart</h2>
-                <span className="text-xs text-text-muted">{lineCount} lines</span>
-              </div>
-              <CounterCartPanel
-                cart={cart}
-                alerts={alerts}
-                state={
-                  !saleId
-                    ? 'idle'
-                    : cartQuery.isLoading
-                      ? 'loading'
-                      : cartQuery.isError
-                        ? 'error'
-                        : 'ready'
-                }
-                error={cartQuery.error ? messageFrom(cartQuery.error) : null}
-                onRetry={() => void refreshTenderBill()}
-              />
-            </SectionCard>
-          </section>
           <SectionCard compact className="rounded-xl p-3">
             <details>
               <summary className="cursor-pointer text-xs text-text-muted focus-visible:outline-2 focus-visible:outline-ring">
@@ -2332,7 +2403,7 @@ function ScopedPharmacyCounterConsole({
                   <div key={label} className="flex justify-between gap-3">
                     <dt className="text-text-muted">{label}</dt>
                     <dd className="font-mono tabular-nums">
-                      {currentBill && value !== undefined ? formatMinor(value) : '—'}
+                      {currentBill && value !== undefined ? `Rs ${formatMinor(value)}` : '—'}
                     </dd>
                   </div>
                 ))}
@@ -2344,10 +2415,12 @@ function ScopedPharmacyCounterConsole({
               </p>
               <p className="font-mono text-3xl font-semibold tracking-tight text-text-strong tabular-nums">
                 {billState === 'settled' && currentBill
-                  ? formatMinor(cart.totals.tenderedMinor)
+                  ? `Rs ${formatMinor(cart.totals.tenderedMinor)}`
                   : balanceMinor === null
-                    ? '—'
-                    : formatMinor(balanceMinor)}
+                    ? saleId
+                      ? '—'
+                      : `Rs ${formatMinor(0)}`
+                    : `Rs ${formatMinor(balanceMinor)}`}
               </p>
             </div>
             {billState === 'settled' ? (
@@ -2375,11 +2448,11 @@ function ScopedPharmacyCounterConsole({
               </div>
             ) : (
               <Button
-                className="h-11 w-full justify-between"
+                className="hidden h-14 w-full justify-between lg:flex"
                 disabled={billState !== 'ready' || blocked || busy}
                 onClick={openPayment}
               >
-                <span>Pay</span>
+                <span>Take payment</span>
                 <span className="sr-only">·</span>
                 <kbd className="rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1.5 py-0.5 font-mono text-xs">
                   {formatBinding(keymap.bindings.openTender)}
@@ -2439,31 +2512,29 @@ function ScopedPharmacyCounterConsole({
       </div>
       <div
         aria-label="Phone payment"
-        className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] xl:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden"
       >
         <div className="min-w-0 flex-1">
           <p className="text-xs text-text-muted">
-            {blocked ? 'Payment locked · safety block' : 'Balance due'}
+            {blocked
+              ? 'Payment locked · safety block'
+              : `${lineCount} ${lineCount === 1 ? 'item' : 'items'} · ${unitCount} ${unitCount === 1 ? 'unit' : 'units'} · Balance due`}
           </p>
           <p className="font-mono text-xl font-semibold text-text-strong tabular-nums">
-            {balanceMinor === null ? '—' : formatMinor(balanceMinor)}
+            {balanceMinor === null
+              ? saleId
+                ? '—'
+                : `Rs ${formatMinor(0)}`
+              : `Rs ${formatMinor(balanceMinor)}`}
           </p>
         </div>
         <Button
-          variant="outline"
-          className="h-13 rounded-[var(--radius-sm)]"
-          onClick={() =>
-            document.getElementById('counter-bill-total')?.scrollIntoView({ block: 'start' })
-          }
-        >
-          Bill
-        </Button>
-        <Button
-          className="h-13 min-w-28 rounded-[var(--radius-sm)]"
+          className="h-14 min-w-[156px] rounded-[var(--radius-sm)]"
           disabled={billState !== 'ready' || blocked || busy}
           onClick={openPayment}
         >
-          Pay <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
+          Take payment{' '}
+          <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
         </Button>
       </div>
       <CounterOverlay

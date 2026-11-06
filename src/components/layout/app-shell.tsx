@@ -1,9 +1,18 @@
 'use client';
 
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import { Sidebar, TopNavigation } from './sidebar';
+import { CounterNavigationContext } from './counter-navigation-context';
+import {
+  Dialog,
+  DialogClose,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import { Topbar } from './topbar';
 import { PageTransition } from '@/components/motion/page-transition';
 import { isAssistantAvailable, useAssistant } from '@/lib/assistant-store';
@@ -178,6 +187,8 @@ export function AppShell({
   // before this renders. Here the live session is the moving part, so the check
   // below (after every hook) degrades to a notice rather than throwing.
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [counterMenuOpen, setCounterMenuOpen] = useState(false);
+  const counterMenuReturn = useRef<HTMLElement | null>(null);
   const pathname = usePathname();
   const { data: session, status: sessionStatus } = useSession();
   const entitlements = useEntitlements();
@@ -185,6 +196,10 @@ export function AppShell({
   const moduleEnabled =
     !currentModule || isModuleGranted(currentModule, entitlements.enabledModules);
   const counterPos = pathname === '/pharmacy/counter';
+  // D02 remains open. This opt-in preview can be removed or made the default
+  // once Studio's navigation decision is recorded; unset preserves Studio today.
+  const counterNavigationPreview =
+    counterPos && process.env.NEXT_PUBLIC_COUNTER_IMMERSIVE_NAV === 'true';
   const immersive =
     counterPos || pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
   const brandStyle = tenantBrandTokens(brand) as CSSProperties;
@@ -262,7 +277,29 @@ export function AppShell({
             organization activated before staff profiles were provisioned. Self-
             hiding, so it costs a healthy workspace nothing. */}
         <AdministratorStaffProfileCallout />
-        <TopNavigation />
+        <div className={counterNavigationPreview ? 'md:hidden' : undefined}>
+          <TopNavigation />
+        </div>
+        <Dialog open={counterMenuOpen} onOpenChange={setCounterMenuOpen}>
+          <DialogPortal>
+            <DialogOverlay />
+            <DialogPrimitive.Popup
+              finalFocus={counterMenuReturn}
+              className="fixed inset-y-0 start-0 z-50 w-[min(20rem,88vw)] outline-none md:w-[460px] lg:w-[480px]"
+            >
+              <DialogTitle className="sr-only">Module navigation</DialogTitle>
+              <Sidebar
+                brand={brand}
+                className="md:w-[460px] lg:w-[480px]"
+                onNavigate={() => setCounterMenuOpen(false)}
+                collapsible={false}
+              />
+              <DialogClose className="absolute end-3 top-3 z-50 min-h-11 rounded-[var(--radius-sm)] bg-surface-card px-3 text-sm text-text-strong focus-visible:ring-3 focus-visible:ring-ring">
+                Close
+              </DialogClose>
+            </DialogPrimitive.Popup>
+          </DialogPortal>
+        </Dialog>
         <main
           id="main-content"
           tabIndex={-1}
@@ -282,7 +319,21 @@ export function AppShell({
             )}
           >
             {moduleEnabled ? (
-              children
+              <CounterNavigationContext.Provider
+                value={
+                  counterNavigationPreview
+                    ? () => {
+                        counterMenuReturn.current =
+                          document.activeElement instanceof HTMLElement
+                            ? document.activeElement
+                            : null;
+                        setCounterMenuOpen(true);
+                      }
+                    : null
+                }
+              >
+                {children}
+              </CounterNavigationContext.Provider>
             ) : (
               <section className="mx-auto max-w-2xl border border-border-default bg-surface-card p-8">
                 <Box className="h-8 w-8 text-accent-brand" />

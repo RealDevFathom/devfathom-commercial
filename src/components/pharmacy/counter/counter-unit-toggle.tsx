@@ -63,7 +63,11 @@ export function CounterUnitToggle({
   }
 
   return (
-    <div className={inline ? 'grid items-end gap-3 sm:grid-cols-[auto_auto_1fr]' : 'space-y-2'}>
+    <div
+      className={
+        inline ? 'grid items-end gap-3 sm:grid-cols-[auto_auto_1fr] lg:grid-cols-1' : 'space-y-2'
+      }
+    >
       <div className="space-y-1">
         {inline ? (
           <span className="block text-xs font-semibold text-text-strong">Sale unit</span>
