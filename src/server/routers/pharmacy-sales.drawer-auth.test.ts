@@ -230,6 +230,17 @@ beforeEach(() => {
 });
 
 describe('cash drawer authorization (DEV-279, DEV-659)', () => {
+  // Positive control for the DENY-wins cases below: a user-override ALLOW on its own
+  // admits, so those cases fail on the DENY, not because overrides are ignored.
+  it.each(drawerPaths)(
+    '$name admits a counter grant held only as a user override',
+    async (path) => {
+      const f = fixture([], { overrides: [COUNTER], assigned: ['branch-a'] });
+      await expect(path.run(f.caller())).resolves.toBeDefined();
+      expect(f.db.$transaction).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it.each(drawerPaths)('$name allows an assigned counter operator', async (path) => {
     const f = fixture([COUNTER], { assigned: ['branch-a'] });
     await expect(path.run(f.caller())).resolves.toBeDefined();
@@ -416,6 +427,15 @@ const counterPaths: { name: string; run: (caller: Caller) => Promise<unknown>; r
 ];
 
 describe('counter receipt reads and cash tender keep DENY over ALLOW (DEV-659)', () => {
+  it.each(counterPaths)(
+    '$name admits a counter grant held only as a user override',
+    async (path) => {
+      const f = fixture([], { overrides: [COUNTER], assigned: ['branch-a'] });
+      await expect(path.run(f.caller())).resolves.toBeDefined();
+      expect(path.read).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it.each(counterPaths)('$name admits an assigned counter operator', async (path) => {
     const f = fixture([COUNTER], { assigned: ['branch-a'] });
     await expect(path.run(f.caller())).resolves.toBeDefined();

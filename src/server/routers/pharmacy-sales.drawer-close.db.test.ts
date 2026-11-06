@@ -382,4 +382,26 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
       );
     }
   });
+
+  it('does not let an authorized branch move or close another branch’s drawer (DEV-279)', async () => {
+    // The caller is cleared for ACTIVE, but names the drawer still open on RETIRED.
+    const before = await rowsFor(RETIRED);
+    await expect(
+      asAdmin((c) =>
+        c.drawerMovement({
+          branchId: ACTIVE,
+          drawerSessionId: retiredDrawerId,
+          kind: 'PAID_OUT',
+          amountMinor: 100,
+          reason: 'Cross-branch attempt',
+        })
+      )
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DRAWER_NOT_OPEN' });
+    await expect(
+      asAdmin((c) =>
+        c.closeDrawer({ branchId: ACTIVE, drawerSessionId: retiredDrawerId, countedCashMinor: 0 })
+      )
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DRAWER_NOT_OPEN' });
+    expect(await rowsFor(RETIRED)).toEqual(before);
+  });
 });
