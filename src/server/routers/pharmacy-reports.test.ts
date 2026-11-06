@@ -506,9 +506,9 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
     mocks.reportCreate.mockResolvedValue({ id: 'pv_1' });
 
-    await expect(
-      caller('EMPLOYEE').createPharmacovigilanceReport({ ...filing })
-    ).resolves.toEqual({ id: 'pv_1' });
+    await expect(caller('EMPLOYEE').createPharmacovigilanceReport({ ...filing })).resolves.toEqual({
+      id: 'pv_1',
+    });
     expect(mocks.reportCreate).toHaveBeenCalledOnce();
 
     await expect(

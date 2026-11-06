@@ -511,12 +511,9 @@ describe('organization.create vertical + package compatibility', () => {
       data: expect.objectContaining({
         key: 'owner',
         permissions: {
-          create: [
-            'pharmacy:*',
-            'reports:operational',
-            'reports:financial',
-            'pharmacy:safety',
-          ].map((capability) => ({ organizationId: 'org_new', capability, effect: 'ALLOW' })),
+          create: ['pharmacy:*', 'reports:operational', 'reports:financial', 'pharmacy:safety'].map(
+            (capability) => ({ organizationId: 'org_new', capability, effect: 'ALLOW' })
+          ),
         },
       }),
     });
