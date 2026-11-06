@@ -108,14 +108,19 @@ export function CounterUnitToggle({
                   disabled={disabled}
                   onClick={() => onSelect(option.kind)}
                   onKeyDown={(event) => {
-                    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+                    const forward = event.key === 'ArrowRight' || event.key === 'ArrowDown';
+                    const backward = event.key === 'ArrowLeft' || event.key === 'ArrowUp';
+                    if (!forward && !backward) return;
                     event.preventDefault();
-                    const index = options.findIndex((entry) => entry.kind === option.kind);
-                    const next =
-                      event.key === 'ArrowRight'
-                        ? options[(index + 1) % options.length]!
-                        : options[(index - 1 + options.length) % options.length]!;
-                    onSelect(next.kind);
+                    const index = options.findIndex(
+                      (entry) => entry.packLevelId === option.packLevelId
+                    );
+                    const nextIndex =
+                      (index + (forward ? 1 : -1) + options.length) % options.length;
+                    onSelect(options[nextIndex]!.kind);
+                    event.currentTarget.parentElement
+                      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+                      [nextIndex]?.focus();
                   }}
                   className={`flex min-h-11 min-w-0 flex-col items-start gap-0.5 rounded-md border px-2 py-1 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 ${
                     active

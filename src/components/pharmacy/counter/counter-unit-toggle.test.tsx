@@ -92,12 +92,18 @@ describe('CounterUnitToggle (POS-03)', () => {
     const props = renderToggle({ selected: 'STRIP' });
     fireEvent.keyDown(screen.getByRole('radio', { name: /Strip/ }), { key: 'ArrowRight' });
     expect(props.onSelect).toHaveBeenLastCalledWith('UNIT');
+    expect(screen.getByRole('radio', { name: /Unit/ })).toHaveFocus();
 
     fireEvent.keyDown(screen.getByRole('radio', { name: /Pack/ }), { key: 'ArrowLeft' });
     expect(props.onSelect).toHaveBeenLastCalledWith('UNIT');
 
     fireEvent.keyDown(screen.getByRole('radio', { name: /Unit/ }), { key: 'ArrowRight' });
     expect(props.onSelect).toHaveBeenLastCalledWith('PACK');
+    expect(screen.getByRole('radio', { name: /Pack/ })).toHaveFocus();
+
+    fireEvent.keyDown(screen.getByRole('radio', { name: /Pack/ }), { key: 'ArrowUp' });
+    expect(props.onSelect).toHaveBeenLastCalledWith('UNIT');
+    expect(screen.getByRole('radio', { name: /Unit/ })).toHaveFocus();
   });
 
   it('keeps exactly one tab stop in the group', () => {
