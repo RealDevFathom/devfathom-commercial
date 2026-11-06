@@ -1119,9 +1119,8 @@ const purchasingRouter = router({
             });
           }
           // PUR-01: an unauthorized or licence-expired supplier cannot be
-          // received from, checked here and again when the receipt posts. With the
-          // owner's checks off, the evidence is written below, naming the new receipt.
-          const supplierGate = await assertOrderableSupplier(
+          // received from, checked here and again when the receipt posts.
+          await assertOrderableSupplier(
             db,
             ctx,
             await db.pharmacySupplier.findFirst({
@@ -1133,8 +1132,7 @@ const purchasingRouter = router({
               operation: 'GOODS_RECEIPT_CREATE',
               purchaseOrderId: input.purchaseOrderId ?? null,
               reference: input.reference,
-            },
-            { record: false }
+            }
           );
           if (input.directPurchase) {
             assertDirectPurchaseAuthorized({
@@ -1255,7 +1253,7 @@ const purchasingRouter = router({
             });
           }
 
-          const receipt = await db.pharmacyGoodsReceipt.create({
+          return await db.pharmacyGoodsReceipt.create({
             data: {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
@@ -1279,23 +1277,6 @@ const purchasingRouter = router({
             },
             include: { lines: { orderBy: { lineNumber: 'asc' } } },
           });
-          // DEV-753: a receipt drafted past the unchecked supplier gate says so, by its
-          // own id, in the same transaction.
-          if (!supplierGate.checked) {
-            await recordSupplierComplianceSkip(
-              db,
-              { organizationId: scope.organizationId, actorId: scope.actorId },
-              {
-                operation: 'GOODS_RECEIPT_CREATE',
-                supplierId: input.supplierId,
-                purchaseOrderId: input.purchaseOrderId ?? null,
-                goodsReceiptId: receipt.id,
-                reference: input.reference,
-                outcome: supplierGate,
-              }
-            );
-          }
-          return receipt;
         });
       } catch (error) {
         domainError(error);

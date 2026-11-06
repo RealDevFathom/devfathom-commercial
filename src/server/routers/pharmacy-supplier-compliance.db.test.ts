@@ -2428,17 +2428,14 @@ describeIfDatabase(
             expect(
               await skipsAbout({ reference: input.reference, goodsReceiptId: receipt!.id })
             ).toEqual([
-              expectedSkip('GOODS_RECEIPT_CREATE', state, {
-                goodsReceiptId: receipt!.id,
-                reference: input.reference,
-              }),
+              expectedSkip('GOODS_RECEIPT_CREATE', state, { reference: input.reference }),
             ]);
             // The receipt's own evidence lookup finds its creation skip by the receipt id alone.
             expect(
               (await asPolicy(buyer, (api) => api.skips({ goodsReceiptId: receipt!.id }))).map(
-                (skip) => [skip.operation, skip.goodsReceiptId]
+                (skip) => [skip.operation, skip.reference]
               )
-            ).toEqual([['GOODS_RECEIPT_CREATE', receipt!.id]]);
+            ).toEqual([['GOODS_RECEIPT_CREATE', input.reference]]);
           }
         }
       );
@@ -2457,15 +2454,17 @@ describeIfDatabase(
           expect(
             await skipsAbout({ reference: draft!.reference, goodsReceiptId: draft!.id })
           ).toEqual([
-            expectedSkip('GOODS_RECEIPT_CREATE', state, {
-              goodsReceiptId: draft!.id,
-              reference: draft!.reference,
-            }),
+            expectedSkip('GOODS_RECEIPT_CREATE', state, { reference: draft!.reference }),
             expectedSkip('GOODS_RECEIPT_POST', state, {
               goodsReceiptId: draft!.id,
               reference: draft!.reference,
             }),
           ]);
+          expect(
+            (await asPolicy(buyer, (api) => api.skips({ goodsReceiptId: draft!.id })))
+              .map((skip) => skip.operation)
+              .sort()
+          ).toEqual(['GOODS_RECEIPT_CREATE', 'GOODS_RECEIPT_POST']);
         }
       );
 
@@ -2551,7 +2550,6 @@ describeIfDatabase(
           expectedSkip('PURCHASE_ORDER_SEND', state, { purchaseOrderId: order!.id }),
           expectedSkip('GOODS_RECEIPT_CREATE', state, {
             purchaseOrderId: order!.id,
-            goodsReceiptId: receipt!.id,
             reference: input.reference,
           }),
           expectedSkip('GOODS_RECEIPT_POST', state, {
@@ -2743,10 +2741,7 @@ describeIfDatabase(
             expect(
               await skipsAbout({ goodsReceiptId: receipt!.id, reference: input.reference })
             ).toEqual([
-              expectedSkip('GOODS_RECEIPT_CREATE', subject, {
-                goodsReceiptId: receipt!.id,
-                reference: input.reference,
-              }),
+              expectedSkip('GOODS_RECEIPT_CREATE', subject, { reference: input.reference }),
             ]);
           }
         );
@@ -2808,12 +2803,7 @@ describeIfDatabase(
           expect(await receiptStatus(receipt!.id)).toBe('DRAFT');
           expect(
             await skipsAbout({ goodsReceiptId: receipt!.id, reference: input.reference })
-          ).toEqual([
-            expectedSkip('GOODS_RECEIPT_CREATE', valid, {
-              goodsReceiptId: receipt!.id,
-              reference: input.reference,
-            }),
-          ]);
+          ).toEqual([expectedSkip('GOODS_RECEIPT_CREATE', valid, { reference: input.reference })]);
         });
       });
 
@@ -2888,6 +2878,15 @@ describeIfDatabase(
             (skip) => skip.operation
           )
         ).toEqual(['GOODS_RECEIPT_CREATE']);
+        // Posted with the checks back on: the receipt's own lookup still returns its
+        // OFF-era creation evidence.
+        expect(
+          (await asPolicy(buyer, (api) => api.skips({ goodsReceiptId: draft!.id }))).map((skip) => [
+            skip.operation,
+            skip.reference,
+            skip.policyVersion,
+          ])
+        ).toEqual([['GOODS_RECEIPT_CREATE', draft!.reference, 1]]);
       });
 
       it.each(NON_VALID)(
@@ -3139,12 +3138,7 @@ describeIfDatabase(
           expect(
             await skipsAbout({ reference: input.reference, goodsReceiptId: receipt!.id })
           ).toEqual([
-            expectedSkip(
-              'GOODS_RECEIPT_CREATE',
-              CROSS,
-              { goodsReceiptId: receipt!.id, reference: input.reference },
-              3
-            ),
+            expectedSkip('GOODS_RECEIPT_CREATE', CROSS, { reference: input.reference }, 3),
             expectedSkip(
               'GOODS_RECEIPT_POST',
               CROSS,

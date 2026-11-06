@@ -472,7 +472,19 @@ export async function readSupplierComplianceSkips(
     conditions.push(Prisma.sql`"purchaseOrderId" = ${filter.purchaseOrderId}`);
   }
   if (filter.goodsReceiptId) {
-    conditions.push(Prisma.sql`"goodsReceiptId" = ${filter.goodsReceiptId}`);
+    // A receipt's creation evidence is written inside its create transaction before the
+    // receipt row exists, so it names the receipt by supplier and reference. Receipt
+    // references are unique per organization and receipts are never deleted, so that
+    // pair identifies exactly one receipt.
+    conditions.push(Prisma.sql`(
+      "goodsReceiptId" = ${filter.goodsReceiptId}
+      OR ("goodsReceiptId" IS NULL
+          AND "operation" = 'GOODS_RECEIPT_CREATE'
+          AND ("supplierId", "reference") IN (
+            SELECT r."supplierId", r."reference"
+              FROM "pharmacy_goods_receipts" r
+             WHERE r."organizationId" = ${organizationId}
+               AND r."id" = ${filter.goodsReceiptId})))`);
   }
   return db.$queryRaw<SupplierComplianceSkipRecord[]>(Prisma.sql`
     SELECT "id", "operation", "supplierId", "purchaseOrderId", "goodsReceiptId", "reference",
