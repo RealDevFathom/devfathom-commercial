@@ -901,8 +901,13 @@ test('counter layout keeps the cart and payment visible while searching', async 
     }
   }
   // Desktop has one persistent scroll owner; search results may scroll only while open.
-  for (const width of [1024, 1280, 1440]) {
-    await page.setViewportSize({ width, height: 768 });
+  for (const [width, height] of [
+    [1024, 720],
+    [1024, 768],
+    [1280, 720],
+    [1440, 900],
+  ]) {
+    await page.setViewportSize({ width, height });
     const bill = page.getByRole('region', { name: 'Bill workspace' });
     const dimensions = await bill.evaluate((element) => ({
       overflow: getComputedStyle(element).overflowY,
@@ -924,6 +929,18 @@ test('counter layout keeps the cart and payment visible while searching', async 
     await expect(bill).toBeFocused();
     await page.keyboard.press('PageDown');
     await expect.poll(() => bill.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await expect(page.getByRole('button', { name: /^Take payment/ })).toBeInViewport();
+    const nextLine = page.getByRole('region', { name: 'Next line' });
+    await page.getByRole('button', { name: 'Go to next line' }).click();
+    await expect(nextLine).toBeFocused();
+    await expect(nextLine).toBeInViewport();
+    const quantity = nextLine.getByRole('spinbutton', { name: 'Quantity' });
+    const before = Number(await quantity.inputValue());
+    const increase = nextLine.getByRole('button', { name: 'Increase quantity' });
+    await increase.focus();
+    await expect(increase).toBeInViewport();
+    await page.keyboard.press('Space');
+    await expect(quantity).toHaveValue(String(before + 1));
     await expect(page.getByRole('button', { name: /^Take payment/ })).toBeInViewport();
     await page.keyboard.press('F2');
     await expect(page.getByLabel('Scan or search')).toBeFocused();

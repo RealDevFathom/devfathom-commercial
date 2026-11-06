@@ -393,6 +393,7 @@ function ScopedPharmacyCounterConsole({
   const outcomeInFlight = useRef(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const nextLineRef = useRef<HTMLElement>(null);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -2250,6 +2251,16 @@ function ScopedPharmacyCounterConsole({
                     selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
                     opens pay.
                   </p>
+                  {activeRow ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="hidden min-h-11 lg:inline-flex"
+                      onClick={() => nextLineRef.current?.focus()}
+                    >
+                      Go to next line
+                    </Button>
+                  ) : null}
                 </div>
               </div>
 
@@ -2300,8 +2311,10 @@ function ScopedPharmacyCounterConsole({
           <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px]">
             {activeRow ? (
               <section
+                ref={nextLineRef}
                 aria-label="Next line"
-                className="rounded-lg border border-border-subtle bg-surface-sunken p-3 lg:col-start-2 lg:row-start-1"
+                tabIndex={-1}
+                className="rounded-lg border border-border-subtle bg-surface-sunken p-3 focus-visible:outline-2 focus-visible:outline-ring lg:col-start-2 lg:row-start-1"
               >
                 <div className="grid items-start gap-4">
                   <div className="min-w-0">
