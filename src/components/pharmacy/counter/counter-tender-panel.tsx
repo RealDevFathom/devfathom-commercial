@@ -672,7 +672,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         className="min-h-11"
                         value={payerName}
                         maxLength={100}
-                        disabled={!editable || Boolean(preparedCollection)}
+                        disabled={!editable}
                         onChange={(event) => setPayerName(event.target.value)}
                       />
                     </>
@@ -713,7 +713,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         className="min-h-11"
                         value={approvalCode}
                         maxLength={60}
-                        disabled={!editable || Boolean(preparedCollection)}
+                        disabled={!editable}
                         onChange={(event) => setApprovalCode(event.target.value)}
                       />
                     </>
@@ -723,7 +723,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       <input
                         type="checkbox"
                         checked={referenceSkipped}
-                        disabled={!editable || Boolean(preparedCollection)}
+                        disabled={!editable}
                         onChange={(event) => {
                           setReferenceSkipped(event.target.checked);
                           setProviderRef('');
@@ -780,7 +780,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     <input
                       type="checkbox"
                       checked={ownerOverride}
-                      disabled={!editable || Boolean(preparedCollection)}
+                      disabled={!editable}
                       onChange={(event) => setOwnerOverride(event.target.checked)}
                     />
                     Owner: authorize limit increase
@@ -793,7 +793,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         type="password"
                         autoComplete="current-password"
                         value={password}
-                        disabled={!editable || Boolean(preparedCollection)}
+                        disabled={!editable}
                         onChange={(event) => setPassword(event.target.value)}
                         className="h-11 rounded-sm"
                       />
@@ -804,7 +804,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         id="khata-totp"
                         autoComplete="one-time-code"
                         value={totp}
-                        disabled={!editable || Boolean(preparedCollection)}
+                        disabled={!editable}
                         onChange={(event) => setTotp(event.target.value)}
                         className="h-11 rounded-sm"
                       />
@@ -848,7 +848,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 inputMode="decimal"
                 autoComplete="off"
                 value={cashReceived}
-                disabled={!editable || Boolean(preparedCollection)}
+                disabled={!editable}
                 aria-invalid={cashShort || cashInvalid || undefined}
                 aria-describedby="tender-status tender-error tender-cash-error"
                 onChange={(event) => setCashReceived(event.target.value)}

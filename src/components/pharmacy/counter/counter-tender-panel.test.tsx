@@ -78,6 +78,9 @@ describe('DEV-618 payment panel', () => {
       });
       chooseTender(name);
       await prepare();
+      expect(screen.getByLabelText('Payer’s name')).toBeEnabled();
+      expect(screen.getByLabelText('Amount')).toBeDisabled();
+      expect(screen.getByRole('button', { name })).toBeDisabled();
       const reference = screen.getByLabelText('Transaction ID · last 4 to 6 digits');
       expect(reference).toHaveFocus();
       fireEvent.change(reference, { target: { value: '1234' } });
@@ -265,6 +268,7 @@ describe('#710 Raast / wallet counter controls', () => {
     chooseTender('Raast');
     await prepare();
     fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
+    expect(screen.getByLabelText('Skip reference under branch policy')).toBeEnabled();
     fireEvent.click(screen.getByLabelText('Skip reference under branch policy'));
     fireEvent.click(screen.getByRole('button', { name: /^(Take payment|Mark received)$/ }));
     await waitFor(() =>
