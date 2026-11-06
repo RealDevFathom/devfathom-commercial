@@ -105,6 +105,9 @@ else:
             if att:
                 fail.append("tests")
                 msg += f"; FAIL: {len(att)} failure(s) caused by this PR: " + "; ".join(a[:160] for a in att[:3])
+            if retry.get("flakyPassedOnRerun"):
+                files = sorted({p.split(' > ')[0] for p in retry["flakyPassedOnRerun"]})
+                msg += f"; {len(retry['flakyPassedOnRerun'])} test(s) in {', '.join(files)} {retry.get('rerunNote', 'passed when re-run')} (timing flake, not caused by this PR)"
             if prex:
                 files = sorted({p.split(' > ')[0] for p in prex})
                 msg += f"; {len(prex)} failure(s) in {', '.join(files)} also fail identically on develop (pre-existing)"
@@ -147,7 +150,7 @@ if fx and fx["sha"] == head:
     if fx.get("lead"):
         lead = fx["lead"]
     elif fx.get("noInitialRun"):
-        lead = f"head {head[:10]}, which includes fix commit {fx['sha'][:10]} ({fx['what']})"
+        lead = f"head {head[:10]} (fix commit: {fx['what']})"
     elif fx["initialFailure"].startswith("nothing"):
         lead = (f"the first run on {fx['initialSha'][:10]} passed; fix commit {fx['sha'][:10]} ({fx['what']}) addresses the review "
                 f"findings, and the re-run on that head gives")
