@@ -1,0 +1,103 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Reports
+Supplier-credit-follow-up
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY REPORTS
+Supplier-credit follow-up
+
+Prepare a draft evidence pack from recorded returns, debit notes and supplier credit.
+
+Prepare follow-up
+
+Dates select return creation dates, inclusive UTC. Balances use current recorded allocations, not historical closing balances. Each Prepare rereads the source records.
+
+Branch
+Choose a branch
+Clifton Chemist
+From
+To
+Prepare draft
+
+Permission: financial reports. Preparation is read-only and works without Ask Fathom.
+
+Source coverage
+
+Each draft contains only the return and credit pages shown. Next page replaces that source page; it does not accumulate a full branch pack. Credits cover all receipt dates. Allocations are current at each read and can change between pages.
+
+Returns
+
+All records in this source range were returned by this read.
+
+0 records on this page. Page limit: 50. Observed: 2026-10-21T02:27:06.664Z.
+
+Candidate credits
+
+All records in this source range were returned by this read.
+
+0 records on this page. Page limit: 50. Observed: 2026-10-21T02:27:06.630Z.
+
+Draft evidence scope
+DRAFT · READ-ONLY
+
+Branch: Clifton Chemist. Return creation period: 2026-09-22 to 2026-10-21, inclusive UTC. Prepared at: 2026-10-21T02:27:06.664Z. Currency: PKR.
+
+Currency is the current organization setting; source records do not establish historical currency. Amounts use integer minor units (100 per major unit).
+
+Outstanding = issued debit expectation less recorded allocations. Candidate credit is not settlement, cash recovered or revenue. Do not add repeated credit across claims.
+
+Partial coverage: selected return creation dates and records visible to existing readers; not branch totals. Reads are not an atomic or historical snapshot. Missing records or credit do not prove zero debt.
+
+Prepared from current records. Allocations can change; prepare again before reconciliation. Copy and export retain this draft snapshot.
+
+Age is time since debit issue, not a contractual overdue deadline. Return windows apply to undispatched returns only. No supplier message, allocation or posting is performed.
+
+Source: pharmacyPurchasing.purchaseReturns + pharmacyPurchasing.supplierCredits.
+
+No qualifying follow-up records
+
+No open issued debit notes on dispatched returns or submitted, undispatched returns were found in the selected records. Broaden the date range or review Returns & claims. This does not confirm a zero supplier balance.

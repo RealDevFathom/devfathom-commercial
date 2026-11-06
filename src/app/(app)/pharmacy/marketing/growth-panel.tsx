@@ -77,13 +77,20 @@ export function GrowthPanel({
         )}
         {history?.insights.map((insight) => (
           <article key={insight.id} className="space-y-4 border-t border-border-subtle pt-4">
-            <StatusPill status={insight.status} label={insight.status.replaceAll('_', ' ')} />
+            <StatusPill
+              status={insight.status}
+              label={
+                {
+                  READY: 'Ready to review',
+                  UNAVAILABLE: 'Suggestions unavailable',
+                  INVALID: 'No suggestion generated',
+                  INSUFFICIENT_DATA: 'More evidence needed',
+                }[insight.status]
+              }
+            />
             <p className="break-words text-sm text-text-muted">
               {insight.snapshot.current.from} to {insight.snapshot.current.cutoff} (exclusive).
-              Saved {insight.createdAt.toISOString()}.{' '}
-              {insight.provider && insight.model
-                ? `${insight.provider} / ${insight.model}`
-                : 'No model output.'}
+              Saved {insight.createdAt.toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })} PKT.
             </p>
             <section className="space-y-3" aria-label="Saved aggregate evidence">
               <h3 className="font-medium">Saved evidence</h3>
@@ -123,7 +130,11 @@ export function GrowthPanel({
               <p className="text-sm text-text-body">
                 {insight.status === 'INSUFFICIENT_DATA'
                   ? 'Insufficient aggregate evidence after privacy suppression. No recommendation generated.'
-                  : `AI insight unavailable (${insight.failureCode ?? 'OUTPUT'}). No substitute recommendation generated. Manual drafts remain available.`}
+                  : insight.failureCode === 'CONFIGURATION'
+                    ? "AI suggestions aren't set up yet. Contact support."
+                    : insight.failureCode === 'PROVIDER' || insight.failureCode === 'TIMEOUT'
+                      ? 'AI suggestions are not available right now. Manual drafts remain available.'
+                      : 'No suggestion could be generated from this evidence. Manual drafts remain available.'}
               </p>
             )}
             {insight.status === 'READY' &&

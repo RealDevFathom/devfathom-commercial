@@ -1,0 +1,129 @@
+{
+  "prep": {
+    "tax": {
+      "status": 200,
+      "text": "{\"result\":{\"data\":{\"json\":{\"id\":\"cmvhkzf29003ichjsr73y6s70\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"branchId\":\"cmvhhcldp000m1yjs2sc9obnz\",\"versionNumber\":1,\"status\":\"PUBLISHED\",\"effectiveFrom\":\"2026-09-30T19:00:00.000Z\",\"effectiveTo\":null,\"approvalReference\":\"CUSTOMER SUPPLIED / NOT VERIFIED BY DEVFATHOM · QA-TAX-2026-10\",\"approvedAt\":\"2026-10-21T03:57:12.318Z\",\"publishedAt\":\"2026-10-21T03:5"
+    },
+    "channels": {
+      "status": 200,
+      "text": "{\"result\":{\"data\":{\"json\":{\"id\":\"cmvhjug6c00ga1yjs31fwgynt\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"branchId\":\"cmvhhcldp000m1yjs2sc9obnz\",\"menuId\":\"cmvhjug2200g21yjs5jqr333f\",\"priceListId\":\"cmvhjufuz00fr1yjso41bfzwd\",\"status\":\"PUBLISHED\",\"channels\":[\"DINE_IN\",\"TAKEAWAY\",\"DELIVERY\"],\"publishedAt\":\"2026-10-21T03:25:20.904Z\",\"retiredAt\":null,\"createdAt\":\"2026-10-21T03:25:20.868Z\",\"updatedAt\":\"2"
+    }
+  },
+  "flow": [
+    {
+      "id": "establish",
+      "status": 201,
+      "note": "{\"sessionToken\":\"[redacted]\",\"session\":{\"id\":\"cmvhkzfkn003uchjs9dww7fqt\",\"state\":\"LOCKED\",\"establishedAt\":\"2026-10-21T03:57:12.982Z\"},\"device\":{\"id\":\"cmvhkzf94003rchjso6191meb\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"branchId\":\"cmvhhcldp000m1yjs2sc9obnz\",\"name\":\"QA Settle\",\"kind\":\"POS\",\"stationId\":null,\"branchNam"
+    },
+    {
+      "id": "unlock",
+      "status": 200,
+      "note": "{\"session\":{\"id\":\"cmvhkzfkn003uchjs9dww7fqt\",\"state\":\"UNLOCKED\",\"activeStaffProfileId\":\"cmvhhclfk004o1yjs8ekhf7z5\"}}"
+    },
+    {
+      "id": "drawer",
+      "status": 200,
+      "note": "{\"drawerSessionId\":\"cmvhkzfu9003xchjs8p2lroia\",\"businessDate\":\"2026-10-21\",\"openingFloat\":\"500.00\",\"replayed\":false}"
+    },
+    {
+      "id": "summary",
+      "status": 200,
+      "note": "{\"orderId\":\"cmvhkt52y001cchjsuh40tmvw\",\"settled\":false,\"blocker\":\"BILLS_OPEN\",\"derivedOrderTotal\":\"970.00\",\"accountedTotal\":\"970.00\",\"deliveryFeeTotal\":null,\"unbilledItemIds\":[],\"bills\":[{\"id\":\"cmvhkt5ds0027chjsijqnsxuk\",\"status\":\"OPEN\",\"splitKind\":\"NONE\",\"grandTotal\":\"970.00\",\"remainingDue\":\"970.00\",\"deliveryFeeTotal\""
+    },
+    {
+      "id": "PAY-03",
+      "status": 200,
+      "note": "{\"tenderId\":\"cmvhkzgcs0040chjsd8isbmko\",\"billId\":\"cmvhkt5ds0027chjsijqnsxuk\",\"type\":\"CASH\",\"amount\":\"970.00\",\"tipAmount\":\"0.00\",\"changeGiven\":\"4030.00\",\"paymentId\":null,\"drawerSessionId\":\"cmvhkzfu9003xchjs8p2lroia\",\"settled\":false,\"receiptNumber\":null,\"remainingDue\":\"145.50\",\"replayed\":false}"
+    },
+    {
+      "id": "card-open",
+      "status": 201,
+      "note": "{\"orderId\":\"cmvhkzggj0044chjs21wwc6h9\",\"orderNumber\":4,\"businessDate\":\"2026-10-21\",\"replayed\":false}"
+    },
+    {
+      "id": "card-item",
+      "status": 201,
+      "note": "{\"itemId\":\"cmvhkzgjf0048chjskiqxbjtg\",\"replayed\":false}"
+    },
+    {
+      "id": "card-fire",
+      "status": 200,
+      "note": "{\"orderId\":\"cmvhkzggj0044chjs21wwc6h9\",\"itemIds\":[\"cmvhkzgjf0048chjskiqxbjtg\"],\"tickets\":[{\"ticketId\":\"cmvhkzgll004cchjsvzdwxry1\",\"stationId\":\"cmvhjughs00gq1yjsrw6ss058\",\"ticketNumber\":3,\"createdAt\":\"2026-10-21T03:57:14.313Z\",\"matchedBy\":\"default\",\"items\":[{\"orderItemId\":\"cmvhkzgjf0048chjskiqxbjtg\",\"quantity\":1}]}],\"re"
+    },
+    {
+      "id": "card-bill",
+      "status": 200,
+      "note": "{\"orderId\":\"cmvhkzggj0044chjs21wwc6h9\",\"billIds\":[\"cmvhkzgrp004hchjs0bg2q17v\"],\"replayed\":false}"
+    },
+    {
+      "id": "card-summary",
+      "status": 200,
+      "note": "{\"orderId\":\"cmvhkzggj0044chjs21wwc6h9\",\"settled\":false,\"blocker\":\"BILLS_OPEN\",\"derivedOrderTotal\":\"120.00\",\"accountedTotal\":\"120.00\",\"deliveryFeeTotal\":null,\"unbilledItemIds\":[],\"bills\":[{\"id\":\"cmvhkzgrp004hchjs0bg2q17v\",\"status\":\"OPEN\",\"splitKind\":\"NONE\",\"grandTotal\":\"120.00\",\"remainingDue\":\"120.00\",\"deliveryFeeTotal\""
+    },
+    {
+      "id": "PAY-04",
+      "status": 200,
+      "note": "{\"tenderId\":\"cmvhkzgtr004mchjsxn4713ro\",\"billId\":\"cmvhkzgrp004hchjs0bg2q17v\",\"type\":\"CARD\",\"amount\":\"120.00\",\"tipAmount\":\"20.00\",\"changeGiven\":null,\"paymentId\":\"cmvhkzgtn004kchjsizsuu7nr\",\"drawerSessionId\":null,\"settled\":false,\"receiptNumber\":null,\"remainingDue\":\"18.00\",\"replayed\":false}"
+    },
+    {
+      "id": "PAY-07",
+      "status": 400,
+      "note": "{\"error\":\"A co-authorization requires a second identity: the approving manager must differ from the acting operator.\"}"
+    },
+    {
+      "id": "ORD-04",
+      "status": 201,
+      "note": "{\"orderId\":\"cmvhkzh4b004qchjsx3gmkkt1\",\"orderNumber\":5,\"businessDate\":\"2026-10-21\",\"replayed\":false}"
+    },
+    {
+      "id": "ORD-04-item",
+      "status": 201,
+      "note": "{\"itemId\":\"cmvhkzh5c004uchjspyxuyp3w\",\"replayed\":false}"
+    },
+    {
+      "id": "ORD-04-attach",
+      "status": 201,
+      "note": "{\"fulfillmentId\":\"cmvhkzhgl004ychjs6uui9cne\",\"deliveryFee\":\"150\",\"deliveryTax\":\"0\",\"promisedAt\":\"2026-10-21T04:42:15.412Z\"}"
+    },
+    {
+      "id": "PAY-05-open",
+      "status": 201,
+      "note": "{\"orderId\":\"cmvhkzhhx0051chjs6z82xz8k\",\"orderNumber\":6,\"businessDate\":\"2026-10-21\",\"replayed\":false}"
+    },
+    {
+      "id": "split-a",
+      "status": 201,
+      "note": "{\"itemId\":\"cmvhkzhj20055chjsye30wxlg\",\"replayed\":false}"
+    },
+    {
+      "id": "split-b",
+      "status": 201,
+      "note": "{\"itemId\":\"cmvhkzhk10059chjselj5xa75\",\"replayed\":false}"
+    },
+    {
+      "id": "split-fire",
+      "status": 200,
+      "note": "{\"orderId\":\"cmvhkzhhx0051chjs6z82xz8k\",\"itemIds\":[\"cmvhkzhj20055chjsye30wxlg\",\"cmvhkzhk10059chjselj5xa75\"],\"tickets\":[{\"ticketId\":\"cmvhkzhl0005dchjs4fmtzz3d\",\"stationId\":\"cmvhjughs00gq1yjsrw6ss058\",\"ticketNumber\":4,\"createdAt\":\"2026-10-21T03:57:15.588Z\",\"matchedBy\":\"default\",\"items\":[{\"orderItemId\":\"cmvhkzhj20055chjsye"
+    },
+    {
+      "id": "PAY-05",
+      "status": 200,
+      "note": "{\"orderId\":\"cmvhkzhhx0051chjs6z82xz8k\",\"billIds\":[\"cmvhkzhly005jchjsp0yj93he\",\"cmvhkzhm4005lchjsvndsfxwc\"],\"replayed\":false}"
+    },
+    {
+      "id": "PAY-06",
+      "status": 409,
+      "note": "{\"error\":\"The order already has bills; re-splitting requires a recut reason and co-authorization.\"}"
+    },
+    {
+      "id": "ORD-06-open",
+      "status": 201,
+      "note": "{\"orderId\":\"cmvhkzhnw005qchjsob9z54dk\",\"orderNumber\":7,\"businessDate\":\"2026-10-21\",\"replayed\":false}"
+    },
+    {
+      "id": "ORD-06",
+      "status": 200,
+      "note": "{\"orderId\":\"cmvhkzhnw005qchjsob9z54dk\",\"replayed\":false}"
+    }
+  ]
+}

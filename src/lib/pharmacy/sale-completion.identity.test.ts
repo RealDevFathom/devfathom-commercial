@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
     .mockResolvedValue(undefined),
 }));
 
-// #633: the batch re-check has its own PostgreSQL suite (sale-batch-safety.db.test.ts); here
+// #659: the batch re-check has its own PostgreSQL suite (sale-batch-safety.db.test.ts); here
 // it records its place in the order and hands back the batch facts it checked under lock.
 const safety = vi.hoisted(() => ({
   checked: new Map<string, { batchNumber: string; expiresAt: Date }>(),
@@ -295,7 +295,7 @@ describe('R2 a foreign fact anywhere refuses the receipt', () => {
     expect(order).toEqual(['batch-safety', 'sequence', 'sale-completed']);
   });
 
-  it('#633: re-checks the batches before drawing a number and prints the facts it checked', async () => {
+  it('#659: re-checks the batches before drawing a number and prints the facts it checked', async () => {
     safety.checked.set('lot_al_2', {
       batchNumber: 'B-002',
       expiresAt: new Date('2027-05-31T19:00:00.000Z'),
@@ -312,7 +312,7 @@ describe('R2 a foreign fact anywhere refuses the receipt', () => {
     ]);
   });
 
-  it('#633: an unsafe batch refuses before any number, update, event or posting', async () => {
+  it('#659: an unsafe batch refuses before any number, update, event or posting', async () => {
     safety.assert.mockImplementationOnce(async () => {
       order.push('batch-safety');
       throw new Error('SALE_BATCH_RECALLED');

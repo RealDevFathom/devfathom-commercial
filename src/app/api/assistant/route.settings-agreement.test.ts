@@ -174,7 +174,7 @@ describe('Ask Fathom settings and the assistant route agree', () => {
         );
         if (settings.unavailableReason === 'AI_NOT_CONFIGURED') {
           expect(await response.json()).toEqual({
-            error: 'Ask Fathom is currently unavailable. No cached answer was used.',
+            error: "Ask Fathom isn't set up yet, contact support.",
           });
           expect(sdk.stream).not.toHaveBeenCalled();
         }

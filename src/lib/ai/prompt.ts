@@ -1,4 +1,5 @@
 import { ALL_VERTICALS } from '@/lib/vertical-catalog';
+import { workspaceToday } from '@/lib/timezone';
 
 export function assistantSystemPrompt(
   ctx: {
@@ -10,9 +11,9 @@ export function assistantSystemPrompt(
   exposedToolNames: readonly string[] = []
 ) {
   const vertical = ALL_VERTICALS.find((value) => value === ctx.vertical);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = workspaceToday('Asia/Karachi');
   return `You are the DevFathom assistant for this ${vertical ?? 'unverified business type'} workspace.
-Today is ${today}. The server identifies the acting role as ${ctx.role ?? 'EMPLOYEE'}.
+Today is ${today} in Asia/Karachi (PKT). Resolve today/aaj and relative dates in this timezone. The server identifies the acting role as ${ctx.role ?? 'EMPLOYEE'}.
 
 AVAILABLE CAPABILITIES
 Only these tools are exposed for this request: ${exposedToolNames.join(', ') || 'none'}.
