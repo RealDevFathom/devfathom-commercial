@@ -8,6 +8,7 @@ import {
   createSnapshotHandler,
   ffmpegArgs,
   isSupportedFfmpegVersion,
+  procHidesOtherUsers,
   isPngStill,
   parseConfig,
 } from '../../docker/camera-snapshot-gateway/server.mjs';
@@ -504,5 +505,37 @@ describe('isSupportedFfmpegVersion', () => {
     ['', false],
   ])('%s → %s', (line, expected) => {
     expect(isSupportedFfmpegVersion(line)).toBe(expected);
+  });
+});
+
+describe('procHidesOtherUsers', () => {
+  const line = (superOptions: string, mountOptions = 'rw,nosuid,nodev,noexec,relatime') =>
+    `23 28 0:22 / /proc ${mountOptions} shared:12 - proc proc ${superOptions}`;
+  const other = '30 28 0:26 / /sys rw,relatime shared:7 - sysfs sysfs rw';
+
+  test.each([
+    ['hidepid=invisible', true],
+    ['rw,hidepid=2,gid=27', true],
+    ['rw,hidepid=noaccess', true],
+    ['rw,hidepid=1', true],
+    ['rw', false],
+    ['rw,hidepid=0', false],
+    ['rw,hidepid=off', false],
+  ])('%s → %s', (options, expected) => {
+    expect(procHidesOtherUsers([other, line(options)].join('\n'))).toBe(expected);
+  });
+
+  test('uses the /proc mount in effect (the last one) and needs a proc mount at all', () => {
+    expect(procHidesOtherUsers([line('rw,hidepid=invisible'), line('rw')].join('\n'))).toBe(false);
+    expect(procHidesOtherUsers([line('rw'), line('rw,hidepid=invisible')].join('\n'))).toBe(true);
+    expect(procHidesOtherUsers(other)).toBe(false);
+    expect(procHidesOtherUsers('')).toBe(false);
+    // A non-proc filesystem mounted at /proc does not count.
+    expect(procHidesOtherUsers('23 28 0:22 / /proc rw - tmpfs tmpfs rw,hidepid=2')).toBe(false);
+  });
+
+  test("this container's real /proc mountinfo parses", () => {
+    const real = readFileSync('/proc/self/mountinfo', 'utf8');
+    expect(typeof procHidesOtherUsers(real)).toBe('boolean');
   });
 });
