@@ -36,6 +36,7 @@ describe('DEV-618 payment panel', () => {
     expect(screen.getAllByRole('option').map((option) => option.getAttribute('value'))).toEqual([
       'CASH',
       'CARD',
+      'WALLET',
       'BANK_TRANSFER',
       'KHATA',
       'RAAST',
@@ -44,20 +45,13 @@ describe('DEV-618 payment panel', () => {
     ]);
   });
 
-  it('records Card as a manual terminal tender with reference and approval code', async () => {
+  it.each(['CARD', 'WALLET'])('does not offer a manual %s payment', (type) => {
     const { props } = setup();
-    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'CARD' } });
-    fireEvent.change(screen.getByLabelText('Terminal reference or card last 4 digits'), {
-      target: { value: '4242' },
-    });
-    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'APP-7' } });
-    fireEvent.keyDown(screen.getByLabelText('Approval code'), { key: 'Enter' });
-    await waitFor(() =>
-      expect(props.onTender).toHaveBeenCalledWith(
-        { type: 'CARD', amountMinor: 25000, providerRef: '4242', approvalCode: 'APP-7' },
-        { amount: '', cashReceived: '' }
-      )
-    );
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: type } });
+    expect(screen.getByText(/needs an online certified payment provider/)).toBeVisible();
+    expect(screen.queryByLabelText('Approval code')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(props.onTender).not.toHaveBeenCalled();
   });
 
   it('keeps split payments available after the parent supplies the remaining balance', async () => {

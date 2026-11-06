@@ -326,6 +326,18 @@ export async function applyPharmacyTender(
     payloadHash
   );
   if (idem.resultPayload) return { ...(idem.resultPayload as object), replayed: true };
+  // Historical outcomes are replayable above, but a new card or online wallet
+  // payment must never be recorded as externally received or replayed offline.
+  if (input.type === 'CARD' || input.type === 'WALLET') {
+    if (input.leasedReceipt) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
+    if (
+      input.providerRef !== undefined ||
+      input.approvalCode !== undefined ||
+      input.payerName !== undefined ||
+      input.referenceSkipped !== undefined
+    )
+      throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
+  }
   await requirePharmacyDayOpen(db, scope, input.businessDate);
 
   await db.$queryRaw(
@@ -414,7 +426,7 @@ export async function applyPharmacyTender(
     });
     if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
     drawerSessionId = drawer.id;
-  } else if (isManualTender(input.type) && !(input.type === 'CARD' && input.adapter)) {
+  } else if (isManualTender(input.type) && input.type !== 'CARD') {
     if (input.cashReceivedMinor !== undefined)
       throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
     // Policy and capture are checked in the money transaction. Saving policy
@@ -431,7 +443,7 @@ export async function applyPharmacyTender(
         payerName: input.payerName,
         referenceSkipped: input.referenceSkipped,
       });
-      provider = input.type === 'CARD' ? 'MANUAL_TERMINAL' : 'MANUAL_MERCHANT';
+      provider = 'MANUAL_MERCHANT';
       providerRef = capture.providerRef;
       approvalCode = capture.approvalCode;
       payerName = capture.payerName;

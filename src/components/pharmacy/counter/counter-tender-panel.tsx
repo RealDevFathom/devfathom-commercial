@@ -17,7 +17,8 @@ import {
 /** Counter-facing tenders. Integrated providers remain on their separate adapter path. */
 const TENDER_TYPES = [
   { value: 'CASH', label: 'Cash', requiresAdapter: false },
-  { value: 'CARD', label: 'Card', requiresAdapter: false },
+  { value: 'CARD', label: 'Card', requiresAdapter: true },
+  { value: 'WALLET', label: 'Online wallet', requiresAdapter: true },
   { value: 'BANK_TRANSFER', label: 'Bank transfer', requiresAdapter: false },
   { value: 'KHATA', label: 'Khata / credit', requiresAdapter: false },
   { value: 'RAAST', label: 'Raast', requiresAdapter: false },
@@ -175,9 +176,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         : null;
     const selected = TENDER_TYPES.find((entry) => entry.value === type) ?? TENDER_TYPES[0];
     const isKhata = type === 'KHATA' || type === 'CREDIT';
-    const manual = isManualTender(type);
+    const manual = isManualTender(type) && type !== 'CARD';
     const manualCard = type === 'CARD';
-    const merchant = manual && type !== 'CARD' ? manualSettings?.[type] : undefined;
+    const merchant = manual ? manualSettings?.[type] : undefined;
     const merchantReady = Boolean(merchant?.destination.trim() || merchant?.qrImageDataUrl);
     const walletReferenceValid = referenceSkipped || /^\d{4,6}$/.test(providerRef.trim());
     useEffect(() => {
@@ -223,6 +224,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       editable &&
       TENDER_TYPES.some((entry) => entry.value === type) &&
       !blocked &&
+      !selected.requiresAdapter &&
       amountValid &&
       !cashShort &&
       !cashInvalid &&
@@ -445,8 +447,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           </select>
           {selected.requiresAdapter ? (
             <p className="text-sm text-text-muted">
-              Requires a certified payment provider. Without one configured, the server refuses this
-              tender rather than simulating an approval.
+              This method needs an online certified payment provider. It is not set up for this
+              till; take cash or another method.
             </p>
           ) : null}
         </div>
