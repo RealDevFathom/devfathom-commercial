@@ -101,16 +101,22 @@ function DayCloseBranches({
   // Only the branches this viewer may close; the server repeats the check on every call.
   const options = branches.data?.branches.filter((branch) => closable.includes(branch.id)) ?? [];
   const [selected, setSelected] = useState('');
+  // The branch the form first opened on, until the operator picks one: a later change
+  // in which branches are closable never silently moves the form to another branch.
+  const [opened, setOpened] = useState('');
+  const first = options[0]?.id ?? '';
+  if (!selected && !opened && first) setOpened(first);
   const [picked, setPicked] = useState<string | null>(null);
   const timeZone = branches.data?.timezone;
   // Until the operator picks a day: today in the workspace's zone, settled once
   // the zone is known, so a page left open past midnight keeps its day.
   const today = useMemo(() => (timeZone ? workspaceToday(timeZone) : ''), [timeZone]);
   const date = picked ?? today;
-  // A branch the operator chose that is no longer closable stops the form rather than
-  // moving it to another branch's drawers.
-  const lost = Boolean(selected) && !options.some((branch) => branch.id === selected);
-  const branchId = lost ? '' : selected || options[0]?.id || '';
+  // The branch in use that is no longer closable stops the form rather than moving it
+  // to another branch's drawers.
+  const wanted = selected || opened || first;
+  const lost = Boolean(wanted) && !options.some((branch) => branch.id === wanted);
+  const branchId = lost ? '' : wanted;
   const currency = branches.data?.currency;
   return (
     <div className="space-y-6">
@@ -165,7 +171,7 @@ function DayCloseBranches({
         )}
         {lost && options.length > 0 && (
           <p role="status">
-            You can no longer close the branch you chose. Choose a branch to continue.
+            You can no longer close the branch you were working on. Choose a branch to continue.
           </p>
         )}
       </SectionCard>

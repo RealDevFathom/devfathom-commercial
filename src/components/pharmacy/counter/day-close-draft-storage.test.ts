@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  clearAllDayCloseDrafts,
   clearDayCloseDraft,
   dayCloseDraftStorageKey,
   readDayCloseDraft,
@@ -35,12 +36,8 @@ describe('day-close draft storage', () => {
 
   it('isolates drafts across branch or day', () => {
     writeDayCloseDraft(scope, { counts: { d: '12.34' }, note: '' });
-    expect(
-      readDayCloseDraft({ ...scope, branchId: 'other' })
-    ).toBeNull();
-    expect(
-      readDayCloseDraft({ ...scope, businessDate: '2026-11-05' })
-    ).toBeNull();
+    expect(readDayCloseDraft({ ...scope, branchId: 'other' })).toBeNull();
+    expect(readDayCloseDraft({ ...scope, businessDate: '2026-11-05' })).toBeNull();
   });
 
   it('rejects corrupt or oversized payloads', () => {
@@ -57,5 +54,22 @@ describe('day-close draft storage', () => {
     writeDayCloseDraft(scope, { counts: { d: '1.00' }, note: '' });
     clearDayCloseDraft(scope);
     expect(readDayCloseDraft(scope)).toBeNull();
+  });
+
+  it('isolates drafts across organization and user (a shared counter browser)', () => {
+    writeDayCloseDraft(scope, { counts: { d: '10.00' }, note: 'owner note' });
+    expect(readDayCloseDraft({ ...scope, userId: 'manager' })).toBeNull();
+    expect(readDayCloseDraft({ ...scope, organizationId: 'other-org' })).toBeNull();
+    expect(readDayCloseDraft(scope)).toEqual({ counts: { d: '10.00' }, note: 'owner note' });
+  });
+
+  it('clears every user’s drafts, and nothing else, on demand', () => {
+    writeDayCloseDraft(scope, { counts: { d: '10.00' }, note: '' });
+    writeDayCloseDraft({ ...scope, userId: 'manager', branchId: 'a' }, { counts: {}, note: 'x' });
+    window.sessionStorage.setItem('unrelated', 'kept');
+    clearAllDayCloseDrafts();
+    expect(readDayCloseDraft(scope)).toBeNull();
+    expect(readDayCloseDraft({ ...scope, userId: 'manager', branchId: 'a' })).toBeNull();
+    expect(window.sessionStorage.getItem('unrelated')).toBe('kept');
   });
 });

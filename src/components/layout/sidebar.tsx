@@ -615,15 +615,28 @@ function useVisibleNavigation() {
     retry: false,
     staleTime: 30_000,
   });
-  const closeEnabled = Boolean(session?.user.id && session.user.organizationId === entitlements.organizationId &&
-    evaluateSessionUser(session.user).ok && entitlements.vertical === 'PHARMACY' &&
-    isModuleGranted('pharmacy-counter', entitlements.enabledModules));
+  const closeEnabled = Boolean(
+    session?.user.id &&
+    session.user.organizationId === entitlements.organizationId &&
+    evaluateSessionUser(session.user).ok &&
+    entitlements.vertical === 'PHARMACY' &&
+    isModuleGranted('pharmacy-counter', entitlements.enabledModules)
+  );
   const closeAccess = trpc.pharmacySales.dayCloseAccess.useQuery(undefined, {
-    enabled: closeEnabled, retry: false, staleTime: 0, refetchOnMount: 'always',
+    enabled: closeEnabled,
+    retry: false,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
   const pharmacyCapabilities = safetyAccess.data?.allowed ? ['pharmacy:safety'] : [];
-  if (closeEnabled && !closeAccess.isFetching && !closeAccess.isError && closeAccess.data?.allowed &&
-      closeAccess.data.userId === session?.user.id && closeAccess.data.organizationId === session.user.organizationId)
+  if (
+    closeEnabled &&
+    !closeAccess.isFetching &&
+    !closeAccess.isError &&
+    closeAccess.data?.allowed &&
+    closeAccess.data.userId === session?.user.id &&
+    closeAccess.data.organizationId === session.user.organizationId
+  )
     pharmacyCapabilities.push('pharmacy:close');
   const filteredNav = visibleNavigation(
     entitlements,

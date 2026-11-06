@@ -5,12 +5,16 @@ Decision (Saad: DEV-32 2026-11-01, DEV-739 2026-11-04):
 - **Who closes:** daily finalization (`closePreview`, `closeDay`, `dailyClose`) belongs to
   owners, administrators and managers.
 - **Assigned role decides eligibility.** System Owner, Owner / Operator, Manager and
-  Administrator roles are eligible. A stored legacy ADMIN without an organization role
-  is also eligible. Pharmacist, Cashier, other and unknown roles are refused even if a
+  Administrator roles are eligible: the system role keys `owner`, `owner-operator`,
+  `manager`, `admin`, and `administrator` (the bootstrap Administrator role of
+  workspaces created before the canonical templates). A tenant-made role with one of
+  those keys is not a system role and is refused. A stored legacy ADMIN without an
+  organization role is also eligible. Pharmacist, Cashier, other and unknown roles are refused even if a
   role or user override grants `pharmacy:close`. An Owner or Manager is eligible based
   on that assignment; their profession is not checked.
 - **Capability, scope and DENYs:** eligible non-admins need `pharmacy:close` and an
-  active branch assignment. A stored active ADMIN has organization-wide reach. Explicit
+  active branch assignment. A user whose stored row (not the session claim) is an active
+  ADMIN has organization-wide reach. Explicit
   DENYs always win, and an assigned ineligible role blocks an ADMIN as well.
 - **Own drawer counts are separate.** Counting and closing one's own cash drawer
   (`closeDrawer`) is not day close. Its policy belongs to DEV-279 / DEV-659 (#1086) and is
@@ -37,14 +41,21 @@ immediately, behind the new gate.
 
 Tell the affected pharmacies before phase 1, because it removes some access:
 
-| Who                                                                                                            | Before (develop with #654) | Between phase 1 and phase 2                                                           | After phase 2     |
-| -------------------------------------------------------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------- | ----------------- |
-| Session ADMIN (tenant administrator)                                                                           | Any branch                 | Any branch while their stored row is an active ADMIN, unless an explicit DENY applies | Same              |
-| Owner, Owner / Operator (not session ADMIN)                                                                    | Any branch                 | Only branches they are actively assigned to                                           | Same              |
-| Existing system Manager                                                                                        | Cannot close               | Cannot close                                                                          | Assigned branches |
-| Existing system Pharmacist (provisioned since #654)                                                            | Any branch                 | Cannot close                                                                          | Cannot close      |
-| Other roles with a `pharmacy:close` grant | Any branch | Cannot close | Cannot close |
-| Cashier                                                                                                        | Cannot close               | Cannot close                                                                          | Cannot close      |
+| Who                                                                                   | Before (develop with #654) | Between phase 1 and phase 2                                                           | After phase 2     |
+| ------------------------------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------- | ----------------- |
+| Stored ADMIN with no role, or with the system `admin` / `administrator` role          | Any branch                 | Any branch while their stored row is an active ADMIN, unless an explicit DENY applies | Same              |
+| Stored ADMIN holding any other role (Pharmacist, Cashier, custom)                     | Any branch                 | Cannot close                                                                          | Cannot close      |
+| Non-ADMIN holder of the system `admin` / `administrator` role whose role grants close | Any branch                 | Only branches they are actively assigned to                                           | Same              |
+| Owner, Owner / Operator (not a stored ADMIN)                                          | Any branch                 | Only branches they are actively assigned to                                           | Same              |
+| Existing system Manager                                                               | Cannot close               | Cannot close                                                                          | Assigned branches |
+| Existing system Pharmacist (provisioned since #654)                                   | Any branch                 | Cannot close                                                                          | Cannot close      |
+| Other roles with a `pharmacy:close` grant                                             | Any branch                 | Cannot close                                                                          | Cannot close      |
+| Cashier                                                                               | Cannot close               | Cannot close                                                                          | Cannot close      |
+
+An administrator can change their own organization role in Settings, so an ineligible
+role on an ADMIN is not a hard control. To stop an administrator closing, a platform
+operator sets a `pharmacy:close` DENY override on the user. A user whose status is
+`ON_LEAVE` counts as active, as the session gate treats them.
 
 A Pharmacist role provisioned by a previous revision may still carry an ALLOW, but the
 new gate refuses it. While old replicas serve, that grant can still permit close; keep

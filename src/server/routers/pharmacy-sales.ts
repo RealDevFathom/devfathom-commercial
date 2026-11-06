@@ -514,10 +514,11 @@ const closeDate = z
 /** Day close is restricted to the assigned owner or manager role. */
 async function requireCloseIdentity(ctx: TRPCContext): Promise<boolean> {
   const user = ctx.session?.user;
-  const refused = () => new TRPCError({
-    code: 'FORBIDDEN',
-    message: 'Day-close permission is required to reconcile and close a day.',
-  });
+  const refused = () =>
+    new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Day-close permission is required to reconcile and close a day.',
+    });
   if (!user) throw refused();
   const row = await ctx.db.user.findUnique({
     where: { id: user.id },
@@ -526,7 +527,11 @@ async function requireCloseIdentity(ctx: TRPCContext): Promise<boolean> {
       status: true,
       organizationId: true,
       organizationRole: {
-        select: { key: true, isSystem: true, permissions: { select: { capability: true, effect: true } } },
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
@@ -534,7 +539,12 @@ async function requireCloseIdentity(ctx: TRPCContext): Promise<boolean> {
       },
     },
   });
-  if (!row || row.organizationId !== user.organizationId || !row.status || !ACTIVE_STATUSES.has(row.status))
+  if (
+    !row ||
+    row.organizationId !== user.organizationId ||
+    !row.status ||
+    !ACTIVE_STATUSES.has(row.status)
+  )
     throw refused();
 
   // The coarse ADMIN enum is the legacy owner/admin assignment when no

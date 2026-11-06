@@ -1,5 +1,7 @@
 import { signOut } from 'next-auth/react';
 
+import { clearAllDayCloseDrafts } from '@/components/pharmacy/counter/day-close-draft-storage';
+
 /**
  * Sign out of BOTH authentication and organization-selection state.
  *
@@ -13,6 +15,8 @@ import { signOut } from 'next-auth/react';
  * and a network failure must never leave the user stuck signed in.
  */
 export async function signOutEverything(callbackUrl = '/login') {
+  // Drafts of in-progress day closes are this user's; never leave them in the tab.
+  clearAllDayCloseDrafts();
   try {
     await fetch('/api/login', { method: 'DELETE', credentials: 'include' });
   } catch {

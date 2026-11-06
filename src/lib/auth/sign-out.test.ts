@@ -38,6 +38,20 @@ describe('signOutEverything', () => {
     expect(mocks.signOut).toHaveBeenCalledWith({ callbackUrl: '/signed-out' });
   });
 
+  it('removes every day-close draft from the tab, and nothing else (DEV-739)', async () => {
+    window.sessionStorage.setItem('devfathom.pharmacy.day-close.draft:org:owner:b:2026-11-06', '{}');
+    window.sessionStorage.setItem('devfathom.pharmacy.day-close.draft:org:manager:a:2026-11-05', '{}');
+    window.sessionStorage.setItem('unrelated', 'kept');
+    await signOutEverything();
+    expect(window.sessionStorage.getItem('unrelated')).toBe('kept');
+    expect(
+      Object.keys(window.sessionStorage).filter((key) =>
+        key.startsWith('devfathom.pharmacy.day-close.draft:')
+      )
+    ).toEqual([]);
+    window.sessionStorage.clear();
+  });
+
   it('still ends the session when login-intent cleanup fails', async () => {
     vi.mocked(fetch).mockRejectedValueOnce(new Error('network unavailable'));
 

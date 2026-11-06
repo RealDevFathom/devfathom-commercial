@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   access: true,
   /** The branches `dayCloseAccess` names (DEV-739). */
   closable: ['b'] as string[],
+  /** Whose answer `dayCloseAccess` returns. */
+  identity: { userId: 'owner', organizationId: 'org' },
   branches: [{ id: 'b', name: 'Main' }] as { id: string; name: string }[],
   loading: false,
   error: null as Error | null,
@@ -46,8 +48,7 @@ vi.mock('@/lib/trpc', () => ({
           data: {
             allowed: mocks.access,
             branchIds: mocks.access ? mocks.closable : [],
-            userId: 'owner',
-            organizationId: 'org',
+            ...mocks.identity,
           },
           isFetching: false,
           isError: false,
@@ -106,6 +107,7 @@ beforeEach(() => {
   mocks.role = 'ADMIN';
   mocks.access = true;
   mocks.closable = ['b'];
+  mocks.identity = { userId: 'owner', organizationId: 'org' };
   mocks.branches = [{ id: 'b', name: 'Main' }];
   mocks.loading = false;
   mocks.error = null;
@@ -237,7 +239,41 @@ describe('day-close console', () => {
     mocks.previewInput.mockClear();
     mocks.closable = ['a'];
     view.rerender(<PharmacyDayCloseConsole />);
-    expect(screen.getByText(/You can no longer close the branch you chose/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/You can no longer close the branch you were working on/)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('never silently moves the default branch when closable branches change', () => {
+    mocks.branches = [
+      { id: 'a', name: 'Airport' },
+      { id: 'b', name: 'Main' },
+    ];
+    mocks.closable = ['b'];
+    const view = render(<PharmacyDayCloseConsole />);
+    expect(mocks.previewInput).toHaveBeenLastCalledWith(expect.objectContaining({ branchId: 'b' }));
+    mocks.previewInput.mockClear();
+    // Airport becomes closable and sorts first: the form stays on Main.
+    mocks.closable = ['a', 'b'];
+    view.rerender(<PharmacyDayCloseConsole />);
+    for (const [input] of mocks.previewInput.mock.calls)
+      expect(input).toEqual(expect.objectContaining({ branchId: 'b' }));
+    // Main stops being closable: the form stops instead of moving to Airport.
+    mocks.previewInput.mockClear();
+    mocks.closable = ['a'];
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(
+      screen.getByText(/You can no longer close the branch you were working on/)
+    ).toBeInTheDocument();
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('never opens on an answer for another user or workspace', () => {
+    mocks.identity = { userId: 'someone-else', organizationId: 'org' };
+    const view = render(<PharmacyDayCloseConsole />);
+    expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+    mocks.identity = { userId: 'owner', organizationId: 'other-org' };
+    view.rerender(<PharmacyDayCloseConsole />);
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
     expect(mocks.previewInput).not.toHaveBeenCalled();
   });

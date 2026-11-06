@@ -27,7 +27,12 @@ export function dayCloseDraftStorageKey(scope: DayCloseDraftScope): string {
 function isCounts(value: unknown): value is Record<string, string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   return Object.entries(value as Record<string, unknown>).every(
-    ([k, v]) => typeof k === 'string' && k.length > 0 && k.length <= 128 && typeof v === 'string' && v.length <= 32
+    ([k, v]) =>
+      typeof k === 'string' &&
+      k.length > 0 &&
+      k.length <= 128 &&
+      typeof v === 'string' &&
+      v.length <= 32
   );
 }
 
@@ -49,7 +54,8 @@ export function readDayCloseDraft(scope: DayCloseDraftScope): DayCloseDraft | nu
 export function writeDayCloseDraft(scope: DayCloseDraftScope, draft: DayCloseDraft): void {
   if (typeof window === 'undefined') return;
   try {
-    if (!isCounts(draft.counts) || typeof draft.note !== 'string' || draft.note.length > 1000) return;
+    if (!isCounts(draft.counts) || typeof draft.note !== 'string' || draft.note.length > 1000)
+      return;
     window.sessionStorage.setItem(dayCloseDraftStorageKey(scope), JSON.stringify(draft));
   } catch {
     /* private mode / quota — draft is best-effort */
@@ -60,6 +66,26 @@ export function clearDayCloseDraft(scope: DayCloseDraftScope): void {
   if (typeof window === 'undefined') return;
   try {
     window.sessionStorage.removeItem(dayCloseDraftStorageKey(scope));
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Remove every day-close draft in this tab, for any user. Signing out on a shared
+ * counter browser must not leave one manager's counted cash and variance note behind
+ * in the tab for whoever uses it next (DEV-739 security review).
+ */
+export function clearAllDayCloseDrafts(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const storage = window.sessionStorage;
+    const keys: string[] = [];
+    for (let index = 0; index < storage.length; index++) {
+      const key = storage.key(index);
+      if (key?.startsWith(PREFIX)) keys.push(key);
+    }
+    for (const key of keys) storage.removeItem(key);
   } catch {
     /* ignore */
   }
