@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   access: true,
   /** The branches `dayCloseAccess` names (DEV-739). */
   closable: ['b'] as string[],
+  /** A background `dayCloseAccess` refetch in flight. */
+  accessFetching: false,
   /** Whose answer `dayCloseAccess` returns. */
   identity: { userId: 'owner', organizationId: 'org' },
   branches: [{ id: 'b', name: 'Main' }] as { id: string; name: string }[],
@@ -50,7 +52,7 @@ vi.mock('@/lib/trpc', () => ({
             branchIds: mocks.access ? mocks.closable : [],
             ...mocks.identity,
           },
-          isFetching: false,
+          isFetching: mocks.accessFetching,
           isError: false,
         }),
       },
@@ -108,6 +110,7 @@ beforeEach(() => {
   mocks.access = true;
   mocks.closable = ['b'];
   mocks.identity = { userId: 'owner', organizationId: 'org' };
+  mocks.accessFetching = false;
   mocks.branches = [{ id: 'b', name: 'Main' }];
   mocks.loading = false;
   mocks.error = null;
@@ -257,6 +260,7 @@ describe('day-close console', () => {
     // Airport becomes closable and sorts first: the form stays on Main.
     mocks.closable = ['a', 'b'];
     view.rerender(<PharmacyDayCloseConsole />);
+    expect(mocks.previewInput).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'b' }));
     for (const [input] of mocks.previewInput.mock.calls)
       expect(input).toEqual(expect.objectContaining({ branchId: 'b' }));
     // Main stops being closable: the form stops instead of moving to Airport.
@@ -267,6 +271,16 @@ describe('day-close console', () => {
       screen.getByText(/You can no longer close the branch you were working on/)
     ).toBeInTheDocument();
     expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
+  it('keeps the form and the typed count while a background access check runs (d2e6c001)', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '124.00' },
+    });
+    mocks.accessFetching = true;
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toHaveValue('124.00');
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
   });
   it('never opens on an answer for another user or workspace', () => {
     mocks.identity = { userId: 'someone-else', organizationId: 'org' };
@@ -281,7 +295,11 @@ describe('day-close console', () => {
     mocks.role = 'EMPLOYEE';
     mocks.access = false;
     render(<PharmacyDayCloseConsole />);
-    expect(screen.getByText(/Day close is available to owners and managers/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Day close is for owners, administrators and managers, on the branches they are assigned to/
+      )
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
   });
   it('allows an employee with manager access', () => {
@@ -366,5 +384,33 @@ describe('day-close console', () => {
     expect(screen.getByLabelText(/Variance note/)).toHaveValue('still counting');
     // Confirmation is never restored; the operator must re-check before lock.
     expect(screen.getByRole('checkbox')).not.toBeChecked();
+  });
+  it('drops the draft once the day shows a recorded close (closed in another tab)', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
+      target: { value: '12.34' },
+    });
+    const drafts = () =>
+      Object.keys(window.sessionStorage).filter((key) =>
+        key.startsWith('devfathom.pharmacy.day-close.draft:')
+      );
+    expect(drafts()).toHaveLength(1);
+    view.unmount();
+    mocks.close = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(
+      screen.getByText(
+        'Day closed. New tenders and drawer changes for this business date are blocked.'
+      )
+    ).toBeInTheDocument();
+    expect(drafts()).toEqual([]);
   });
 });

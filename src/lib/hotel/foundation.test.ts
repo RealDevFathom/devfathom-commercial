@@ -29,7 +29,9 @@ const priorCatalogDigests = {
   // DEV-739 (Saad, DEV-32): day close is managers and owners only, so 'pharmacy:close'
   // moves from the Pharmacist template (#654) to the Manager template. Restoring only
   // those two templates reproduces the previous pin 46ef4f4c…; nothing else changed.
-  PHARMACY: '6a1d27e58f914526d6238e0bdebce0d119e5bb3de42bf2cc53aad0c1ad2f5a2f',
+  // #247 / #479 (3369c68b): the Owner template gains exact 'pharmacy:safety'. Removing
+  // only that grant reproduces the previous pin 6a1d27e5…; nothing else changed.
+  PHARMACY: 'b9de923a119087ac18dc6828691d0a0f5609fe1176846fdda68bb8ba855c31e7',
 };
 
 const property = {

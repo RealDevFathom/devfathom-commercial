@@ -5,6 +5,13 @@ import { EntitlementsProvider } from '@/components/entitlements-provider';
 import type { EntitlementView } from '@/lib/module-catalog';
 import { Sidebar, TopNavigation } from './sidebar';
 
+/** `pharmacySales.dayCloseAccess`: the server's answer to "may this user close a day?". */
+const dayClose = vi.hoisted(() => ({
+  data: undefined as
+    { userId: string; organizationId: string; allowed: boolean; branchIds: string[] } | undefined,
+  isError: false,
+  enabled: [] as boolean[],
+}));
 const useSessionMock = vi.hoisted(() =>
   vi.fn(() => ({ data: { user: { role: 'ADMIN', name: 'Test operator' } } }))
 );
@@ -64,7 +71,16 @@ vi.mock('@/lib/trpc', () => ({
         },
       },
     },
-    pharmacySales: { dayCloseAccess: { useQuery: () => ({ data: undefined }) } },
+    pharmacySales: {
+      dayCloseAccess: {
+        useQuery: (_input: unknown, options?: { enabled?: boolean }) => {
+          dayClose.enabled.push(Boolean(options?.enabled));
+          return options?.enabled
+            ? { data: dayClose.data, isFetching: false, isError: dayClose.isError }
+            : { data: undefined, isFetching: false, isError: false };
+        },
+      },
+    },
     pharmacySafety: {
       access: { useQuery: () => ({ data: { allowed: false } }) },
     },
@@ -470,4 +486,90 @@ describe.each(['mobile', 'desktop'] as const)('%s Hospitality navigation', (surf
       expect(renderRail({ capabilities: everyRailCapability, vertical })).toEqual([]);
     }
   );
+});
+
+describe('Pharmacy Day close entry follows the server (DEV-739)', () => {
+  const closer = { id: 'user-1', organizationId: 'pharmacy-1', status: 'ACTIVE' };
+  const allowed = {
+    userId: 'user-1',
+    organizationId: 'pharmacy-1',
+    allowed: true,
+    branchIds: ['branch-a'],
+  };
+  function renderRail({
+    user = closer as Record<string, unknown>,
+    granted = ['pharmacy-core', 'pharmacy-counter'],
+    role = 'EMPLOYEE',
+  }: { user?: Record<string, unknown>; granted?: string[]; role?: string } = {}) {
+    useSessionMock.mockReturnValue({ data: { user: { role, name: 'Test operator', ...user } } });
+    usePathnameMock.mockReturnValue('/dashboard');
+    render(
+      <EntitlementsProvider
+        value={{
+          organizationId: 'pharmacy-1',
+          vertical: 'PHARMACY',
+          seatLimit: 10,
+          activeSeats: 1,
+          enabledModules: granted,
+          modules: [],
+          limits: {},
+        }}
+      >
+        <Sidebar collapsible={false} />
+      </EntitlementsProvider>
+    );
+  }
+  const dayCloseLink = () => screen.queryByRole('link', { name: /Day close$/ });
+
+  beforeEach(() => {
+    dayClose.data = undefined;
+    dayClose.isError = false;
+    dayClose.enabled = [];
+  });
+
+  it.each(['EMPLOYEE', 'ADMIN'])(
+    'shows Day close to a %s the server lets close a branch',
+    (role) => {
+      dayClose.data = allowed;
+      renderRail({ role });
+      expect(dayCloseLink()).toHaveAttribute('href', '/pharmacy/counter/close');
+    }
+  );
+
+  it('hides Day close when the server refuses, and keeps the counter', () => {
+    dayClose.data = { ...allowed, allowed: false, branchIds: [] };
+    renderRail();
+    expect(dayCloseLink()).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Counter$/ })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['another user', { userId: 'someone-else' }],
+    ['another workspace', { organizationId: 'other-pharmacy' }],
+  ])('ignores an allowed answer cached for %s', (_label, identity) => {
+    dayClose.data = { ...allowed, ...identity };
+    renderRail();
+    expect(dayCloseLink()).not.toBeInTheDocument();
+  });
+
+  it('hides Day close while its last check failed, even with an earlier allowed answer', () => {
+    dayClose.data = allowed;
+    dayClose.isError = true;
+    renderRail();
+    expect(dayCloseLink()).not.toBeInTheDocument();
+  });
+
+  it('does not ask, and does not show it, without the counter module or a valid session', () => {
+    dayClose.data = allowed;
+    renderRail({ granted: ['pharmacy-core'] });
+    expect(dayCloseLink()).not.toBeInTheDocument();
+    cleanup();
+    renderRail({ user: { ...closer, status: 'SUSPENDED' } });
+    expect(dayCloseLink()).not.toBeInTheDocument();
+    cleanup();
+    renderRail({ user: { ...closer, organizationId: 'another-tenant' } });
+    expect(dayCloseLink()).not.toBeInTheDocument();
+    expect(dayClose.enabled.length).toBeGreaterThan(0);
+    expect(dayClose.enabled.some(Boolean)).toBe(false);
+  });
 });

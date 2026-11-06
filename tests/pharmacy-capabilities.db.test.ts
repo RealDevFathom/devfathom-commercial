@@ -319,10 +319,11 @@ const legacy: Record<string, string[]> = {
       { capability: 'pharmacy:safety', effect: 'DENY' },
       { capability: 'reports:operational', effect: 'DENY' },
     ]);
-    // ...and never touches another vertical's system owner/admin roles.
+    // ...and never touches another vertical's system owner/admin roles. (The same
+    // restaurant org also holds DEV-739's pharmacist/manager fixtures, pinned below.)
     const restaurantRoles = await client.query(
-      `SELECT capability FROM organization_role_permissions WHERE "organizationId"=$1`,
-      [restaurant]
+      `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId" = ANY($1::text[])`,
+      [[id('restaurant_owner'), id('restaurant_admin')]]
     );
     expect(restaurantRoles.rows).toEqual([]);
     const customAdministrator = await client.query(

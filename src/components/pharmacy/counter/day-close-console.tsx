@@ -71,8 +71,9 @@ export function PharmacyDayCloseConsole() {
         <p role="status">
           {status === 'loading' || (eligibleSession && !access.isError && !access.data)
             ? 'Checking day-close access…'
-            : access.isError ? 'Could not check day-close access. Reload to retry.'
-            : 'Day close is available to owners and managers with permission.'}
+            : access.isError
+              ? 'Could not check day-close access. Reload to retry.'
+              : 'Day close is for owners, administrators and managers, on the branches they are assigned to.'}
         </p>
       </SectionCard>
     );
@@ -218,9 +219,11 @@ function DayCloseForm({
   useEffect(() => {
     writeDayCloseDraft(draftScope, { counts, note });
   }, [draftScope, counts, note]);
+  // A recorded close for this day (this tab's or another's) ends the draft.
+  const recordedClose = Boolean(close.data ?? preview.data?.close);
   useEffect(() => {
-    if (close.data) clearDayCloseDraft(draftScope);
-  }, [close.data, draftScope]);
+    if (recordedClose) clearDayCloseDraft(draftScope);
+  }, [recordedClose, draftScope]);
   const [locale, setLocale] = useState<CounterReceiptLocale>('en');
   const [printMessage, setPrintMessage] = useState('');
   if (preview.isLoading)
