@@ -40,7 +40,7 @@ function request(overrides?: {
   form.set('occurrenceId', 'occurrence-1');
   form.set('occurrenceStepId', 'step-1');
   form.set('evidencePurpose', 'photo');
-  form.set('uploaderStaffProfileId', 'staff-1');
+  form.set('uploaderStaffProfileId', 'forged-victim');
   form.set('file', new File(['proof'], 'proof.jpg', { type: overrides?.type ?? 'image/jpeg' }));
   if (overrides && 'file' in overrides) {
     const get = form.get.bind(form);
@@ -66,7 +66,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
   mocks.createTRPCContext.mockResolvedValue({
-    db: {},
+    db: {
+      restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([{ id: 'staff-1' }]) },
+      restaurantSopOccurrence: {
+        findUnique: vi.fn().mockResolvedValue({ branchId: 'branch-1' }),
+      },
+    },
+    entitlements: { organizationId: 'org-1' },
     organization: { id: 'org-1' },
     session: { user: { id: 'user-1' } },
   });
@@ -97,6 +103,56 @@ describe('POST SOP evidence', () => {
     );
   }
 
+  it.each([{ profiles: [] }, { profiles: [{ id: 'one' }, { id: 'two' }] }])(
+    'refuses proof without a unique active session staff profile: %j',
+    async ({ profiles }) => {
+      warnings();
+      mocks.createTRPCContext.mockResolvedValue({
+        db: {
+          restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue(profiles) },
+          // No branch context to choose between several profiles.
+          restaurantSopOccurrence: { findUnique: vi.fn().mockResolvedValue(null) },
+        },
+        entitlements: { organizationId: 'org-1' },
+        organization: { id: 'org-1' },
+        session: { user: { id: 'user-1' } },
+      });
+      const response = await POST(request());
+      expect(response.headers.get('location')).toContain('kind=error');
+      expect(mocks.putUpload).not.toHaveBeenCalled();
+      expect(mocks.attachEvidence).not.toHaveBeenCalled();
+    }
+  );
+
+  it("attributes a multi-branch employee's proof to their profile at the occurrence branch", async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      { id: 'staff-elsewhere', primaryBranchId: 'branch-2', jobRoles: [] },
+      { id: 'staff-here', primaryBranchId: 'branch-1', jobRoles: [] },
+    ]);
+    mocks.createTRPCContext.mockResolvedValue({
+      db: {
+        restaurantStaffProfile: { findMany },
+        restaurantSopOccurrence: {
+          findUnique: vi.fn().mockResolvedValue({ branchId: 'branch-1' }),
+        },
+      },
+      entitlements: { organizationId: 'org-1' },
+      organization: { id: 'org-1' },
+      session: { user: { id: 'user-1' } },
+    });
+    const response = await POST(request());
+    expect(response.headers.get('location')).toContain('Proof+captured');
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: 'user-1', organizationId: 'org-1', status: 'ACTIVE' },
+      })
+    );
+    expect(mocks.attachEvidence).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ uploaderStaffProfileId: 'staff-here' })
+    );
+  });
+
   it('hashes and stores accepted proof with tenant, staff, and purpose attribution', async () => {
     const warn = warnings();
     const response = await POST(
@@ -119,7 +175,7 @@ describe('POST SOP evidence', () => {
       'image/jpeg'
     );
     expect(mocks.attachEvidence).toHaveBeenCalledWith(
-      {},
+      expect.any(Object),
       expect.objectContaining({
         occurrenceId: 'occurrence-1',
         occurrenceStepId: 'step-1',
@@ -128,6 +184,25 @@ describe('POST SOP evidence', () => {
       })
     );
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('rejects upload when the session has no linked active staff even with a supplied uploader', async () => {
+    warnings();
+    mocks.createTRPCContext.mockResolvedValue({
+      db: {
+        restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([]) },
+        restaurantSopOccurrence: {
+          findUnique: vi.fn().mockResolvedValue({ branchId: 'branch-1' }),
+        },
+      },
+      entitlements: { organizationId: 'org-1' },
+      organization: { id: 'org-1' },
+      session: { user: { id: 'user-1' } },
+    });
+    const response = await POST(request());
+    expect(response.headers.get('location')).toContain('kind=error');
+    expect(mocks.putUpload).not.toHaveBeenCalled();
+    expect(mocks.attachEvidence).not.toHaveBeenCalled();
   });
 
   it('accepts a genuine parsed multipart file from a different File realm', async () => {

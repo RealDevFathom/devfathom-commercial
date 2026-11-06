@@ -5,13 +5,19 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 type Proof = {
   actingStaffProfileId: string | null;
-  deviceId: string;
-  terminalSessionId: string;
+  /** The terminal device, or the back-office command's device (null when none). */
+  deviceId: string | null;
+  /** The terminal session; null on the back-office (L2) path, which has none. */
+  terminalSessionId: string | null;
   verified: boolean;
 };
 const proofs = new AsyncLocalStorage<Proof>();
 
-/** Proof stays inside one authenticated terminal request; clients cannot supply it. */
+/**
+ * Proof stays inside one authenticated request; clients cannot supply it. The
+ * terminal path scopes it to the device session; the back-office path scopes it
+ * to the session-derived acting staff profile (see `back-office-approval.ts`).
+ */
 export function withOwnerReauthenticationScope<T>(
   proof: Omit<Proof, 'verified'>,
   work: () => T
@@ -58,7 +64,9 @@ export async function recordOwnerPinReauthentication(
 export function hasOwnerPinReauthentication(actor: string, deviceId?: string | null) {
   const proof = proofs.getStore();
   return Boolean(
-    proof?.verified && proof.actingStaffProfileId === actor && proof.deviceId === deviceId
+    proof?.verified &&
+    proof.actingStaffProfileId === actor &&
+    (proof.deviceId ?? null) === (deviceId ?? null)
   );
 }
 
