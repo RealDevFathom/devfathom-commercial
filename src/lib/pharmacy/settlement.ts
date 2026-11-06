@@ -587,6 +587,10 @@ export async function refundPharmacyTender(
     include: { refunds: true, sale: { select: { customerId: true } } },
   });
   if (!tender) throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
+  // A prior partial tender cannot be refunded around an unresolved collection.
+  // Check before any refund provider call; exact historical replay returned above.
+  await db.$executeRaw(Prisma.sql`SELECT pharmacy_assert_no_payment_attempt(
+    ${scope.organizationId}, ${scope.branchId}, ${tender.saleId})`);
   assertRefundWithinTender(
     tender.amountMinor,
     tender.refunds.reduce((sum, row) => sum + row.amountMinor, 0),
