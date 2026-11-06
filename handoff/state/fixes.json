@@ -277,5 +277,12 @@
   "what": "actor search lookups on the audit ledger bounded to 200 per type, with a notice",
   "initialFailure": "no machine run (QA finding only)",
   "noInitialRun": true
+ },
+ "1059": {
+  "sha": "477cdfe25883cf209abfa1c0764c445e499e75ef",
+  "initialSha": "dc17a4e99f7242633d146bbe4a4dacdf79c2265c",
+  "what": "netSales added to the DailyRow source-close type and to the Insights fixtures, plus a componentized-refund Insights test",
+  "initialFailure": "no machine run (QA finding only)",
+  "noInitialRun": true
  }
 }
