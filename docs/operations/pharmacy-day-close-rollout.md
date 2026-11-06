@@ -200,6 +200,15 @@ behaviour is already covered by `tests/pharmacy-capabilities.db.test.ts`:
 
 DEV-739 tracks it until it ships.
 
+## Alongside the SOP rollout
+
+The SOP rollout (DEV-751, [`pharmacy-sop-rollout.md`](pharmacy-sop-rollout.md)) records every
+`pharmacy:close` count in its check D2 and expects check V4 to find them unchanged. Phase 1
+lowers the Pharmacist close count and phase 2 raises the Manager count. Do not deploy
+either phase between that rollout's D2 and V4. If one ran in between, retake D2 before
+judging V4. A changed close count then belongs to this rollout, not to the SOP phase, and
+is no reason to roll the SOP phase back.
+
 ## Not covered here
 
 - Cash drawer procedures (`drawerStatus`, `openDrawer`, `drawerMovement`, `closeDrawer`)

@@ -32,6 +32,9 @@ const previousTemplate = [
   'pharmacy:safety',
 ];
 const template = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner-operator')!;
+// DEV-751 (#1418) appends sop:* grants for new tenants; this backfill never adds them
+// (existing tenants opt in through docs/operations/pharmacy-sop-rollout/up.sql).
+const backfilled = template.capabilities.filter((capability) => !capability.startsWith('sop:'));
 
 async function grants(roleId: string) {
   const rows = await client.query<{ capability: string; effect: string }>(
@@ -92,13 +95,13 @@ async function grants(roleId: string) {
   it('adds every missing template capability to the system Owner / Operator role', async () => {
     expect(template.capabilities).toEqual(expect.arrayContaining(previousTemplate));
     expect(await grants(id('system'))).toEqual(
-      [...template.capabilities].sort().map((capability) => ({ capability, effect: 'ALLOW' }))
+      [...backfilled].sort().map((capability) => ({ capability, effect: 'ALLOW' }))
     );
   });
 
   it('keeps an existing DENY and adds the remaining grants', async () => {
     expect(await grants(id('denied'))).toEqual(
-      [...template.capabilities].sort().map((capability) => ({
+      [...backfilled].sort().map((capability) => ({
         capability,
         effect: capability === 'pharmacy:close' ? 'DENY' : 'ALLOW',
       }))
