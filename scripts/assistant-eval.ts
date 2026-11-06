@@ -13,7 +13,7 @@
  *
  * Exits non-zero if any case fails — gate model/tool changes with it.
  */
-import 'dotenv/config';
+import './load-local-env';
 import { generateText, stepCountIs } from 'ai';
 import { db } from '../src/lib/db';
 import { createAIModel } from '../src/lib/ai/provider';

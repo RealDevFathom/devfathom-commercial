@@ -2,21 +2,15 @@
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
-import 'dotenv/config';
+import { requireEnvironment } from '../scripts/load-local-env.js';
 
 import {
   bootstrapProduction,
   productionBootstrapInputFromEnvironment,
 } from './production-bootstrap.js';
 
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value?.trim()) throw new Error(`Missing required environment variable: ${name}`);
-  return value;
-}
-
 async function main() {
-  const databaseUrl = required('DATABASE_URL');
+  const databaseUrl = requireEnvironment('DATABASE_URL');
   const input = productionBootstrapInputFromEnvironment(process.env);
 
   const pool = new pg.Pool({ connectionString: databaseUrl });

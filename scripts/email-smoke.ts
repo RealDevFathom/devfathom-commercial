@@ -3,7 +3,7 @@
 // Run with:
 //   bunx tsx scripts/email-smoke.ts you@example.com
 // Falls back to BREVO_SENDER_EMAIL (the account owner) when no recipient given.
-import 'dotenv/config';
+import './load-local-env';
 import { sendEmail } from '../src/lib/email';
 
 async function main() {

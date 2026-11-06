@@ -13,7 +13,7 @@ import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { hash } from 'bcryptjs';
-import 'dotenv/config';
+import { requireEnvironment } from '../scripts/load-local-env.js';
 
 import { adminDepartmentKeyForVertical } from '../src/lib/vertical-catalog.js';
 
@@ -38,7 +38,7 @@ if (PASSWORD.length < 8) {
   process.exit(1);
 }
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new pg.Pool({ connectionString: requireEnvironment('DATABASE_URL') });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
