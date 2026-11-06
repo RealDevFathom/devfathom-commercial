@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 const mocks = vi.hoisted(() => ({ enqueue: vi.fn() }));
 vi.mock('@/lib/restaurant/scheduler', () => ({ enqueue: mocks.enqueue }));
@@ -381,5 +382,44 @@ describe('retention survives failed deletion', () => {
     expect(record.sourceDeletedAt).toBeInstanceOf(Date);
     expect(table.create).not.toHaveBeenCalled();
     expect(runtime.deleteSource).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('commit currency gate', () => {
+  it('rejects a foreign price relabelled as local with the same amount', async () => {
+    const { db, record, table, runtime } = fake();
+    record.status = 'AWAITING_REVIEW';
+    // Every raw read answers with the tenant currency: the commit row lock, then the
+    // FOR SHARE organization read.
+    vi.mocked(db.$queryRaw).mockResolvedValue([{ currency: 'PKR' }] as never);
+    vi.mocked(db.restaurantMenuImportLine.findMany).mockResolvedValue([
+      {
+        id: 'line_1',
+        reviewStatus: 'ACCEPTED',
+        sortOrder: 1,
+        extractedCategoryName: null,
+        extractedProductName: 'Relabelled item',
+        extractedDescription: null,
+        extractedPriceAmount: new Prisma.Decimal('12.50'),
+        extractedCurrency: 'USD',
+        extractedVariants: [],
+        reviewedCategoryName: null,
+        reviewedProductName: null,
+        reviewedDescription: null,
+        reviewedPriceAmount: new Prisma.Decimal('12.50'),
+        reviewedCurrency: 'PKR',
+        mergeProductId: null,
+        mergeVariantId: null,
+      },
+    ] as never);
+
+    await expect(
+      commitMenuImport(db, { importId: record.id, committedById: 'user_1' }, { runtime })
+    ).rejects.toMatchObject({ reason: 'CURRENCY_MISMATCH' });
+    // Only the row lock and the tenant-currency read ran: catalog scaffolding, which
+    // opens with its own organization-scope read, never started.
+    expect(db.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(table.update).not.toHaveBeenCalled();
+    expect(record.status).toBe('AWAITING_REVIEW');
   });
 });

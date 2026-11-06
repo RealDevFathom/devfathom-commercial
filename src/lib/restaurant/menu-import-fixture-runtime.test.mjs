@@ -64,6 +64,9 @@ function setup(node = 'test', selected = 'FIXTURE') {
     toString() {
       return this.value;
     }
+    equals(other) {
+      return Number(this.value) === Number(other.value);
+    }
   }
   const boundaries = {
     'server-only': {},
@@ -389,6 +392,38 @@ test('commit rejects a reviewed foreign-currency amount without an explicit loca
         ['createProduct', 'createMenu', 'addPriceListEntry'].includes(event[0])
     )
   );
+});
+
+test('commit rejects a foreign price relabelled as local with the same numeric amount', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  const Decimal = f.load('@/generated/prisma/client').Prisma.Decimal;
+  f.record.status = 'AWAITING_REVIEW';
+  f.record.defaultCurrency = 'PKR';
+  f.lines.push({
+    id: 'line_1',
+    reviewStatus: 'ACCEPTED',
+    sortOrder: 1,
+    extractedCategoryName: null,
+    extractedProductName: 'Relabelled item',
+    extractedDescription: null,
+    extractedPriceAmount: new Decimal('12.50'),
+    extractedCurrency: 'USD',
+    extractedVariants: [],
+    reviewedCategoryName: null,
+    reviewedProductName: null,
+    reviewedDescription: null,
+    reviewedPriceAmount: new Decimal('12.50'),
+    reviewedCurrency: 'PKR',
+    mergeProductId: null,
+    mergeVariantId: null,
+  });
+
+  await assert.rejects(
+    menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
+    { reason: 'CURRENCY_MISMATCH' }
+  );
+  assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'createProduct'));
 });
 
 test('commit accepts an explicitly reviewed local conversion when extracted currency is unknown', async () => {

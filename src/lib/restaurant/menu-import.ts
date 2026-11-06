@@ -1051,8 +1051,14 @@ export async function commitMenuImport(
       const extractedIsForeign = extractedCurrency !== null && extractedCurrency !== tenantCurrency;
       // A foreign extracted price is acceptable only when the reviewer typed an
       // amount in the organization currency; relabelling alone is not a conversion.
+      // Repeat the amount-change check here rather than relying solely on the
+      // review command: commit is the trust boundary and must fail closed if a
+      // row was written by a migration, administrative repair, or another caller.
       const hasReviewedConversion =
-        reviewedCurrency === tenantCurrency && line.reviewedPriceAmount !== null;
+        reviewedCurrency === tenantCurrency &&
+        line.reviewedPriceAmount !== null &&
+        (line.extractedPriceAmount === null ||
+          !line.reviewedPriceAmount.equals(line.extractedPriceAmount));
       if (
         !tenantCurrency ||
         priceCurrency !== tenantCurrency ||
