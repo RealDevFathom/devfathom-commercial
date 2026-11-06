@@ -609,11 +609,14 @@ describe('server-derived actor and strict inputs', () => {
       linkNote?: string | null;
       outOfRange?: boolean;
       titles?: string[];
+      done?: boolean;
     }) => {
       db.restaurantSopOccurrenceStep.findMany.mockResolvedValue(
-        opts.titles
-          ? steps.map((step, index) => ({ ...step, templateStep: { title: opts.titles![index]! } }))
-          : steps
+        steps.map((step, index) => ({
+          ...step,
+          completed: index === 0 && opts.done === true,
+          ...(opts.titles ? { templateStep: { title: opts.titles[index]! } } : {}),
+        }))
       );
       db.pharmacySopRecordLink.findMany.mockResolvedValue([
         { recordId: 'log_hot', note: opts.linkNote ?? null },
@@ -648,6 +651,7 @@ describe('server-derived actor and strict inputs', () => {
       ['a note on the link', {}, { linkNote: 'Door left open; reset' }],
       ['an in-range reading', {}, { outOfRange: false }],
       ['a separate excursion step', {}, { titles: ['Confirm readings', 'Record any excursion'] }],
+      ['a repeat call on a step already done', {}, { done: true }],
     ])('allows it with %s', async (_label, input, opts) => {
       arrange(opts);
       mocks.engine.completeStep.mockResolvedValue({

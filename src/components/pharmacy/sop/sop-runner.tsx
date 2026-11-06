@@ -28,6 +28,7 @@ import {
   RECORD_LABEL,
   reworkNotes,
   statusCopy,
+  outOfRangeNoteNeeded,
   stepBlockers,
   stepEvidence,
   stepLinks,
@@ -907,7 +908,12 @@ function StepItem({
             className="grid gap-1.5 text-sm font-medium text-text-strong"
             htmlFor={`${id}-note`}
           >
-            <span>Note{step.requiresNote ? ' · required' : ' · optional'}</span>
+            <span>
+              Note
+              {step.requiresNote || outOfRangeNoteNeeded(occurrence, step)
+                ? ' · required'
+                : ' · optional'}
+            </span>
             <Textarea
               id={`${id}-note`}
               className="min-h-20 bg-surface-raised"

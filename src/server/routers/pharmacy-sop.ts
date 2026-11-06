@@ -981,11 +981,18 @@ async function assertExcursionNoteBeforeCompletion(
   if (input.note?.trim()) return;
   const steps = await ctx.db.restaurantSopOccurrenceStep.findMany({
     where: { occurrenceId },
-    select: { id: true, templateStepId: true, templateStep: { select: { title: true } } },
+    select: {
+      id: true,
+      templateStepId: true,
+      completed: true,
+      templateStep: { select: { title: true } },
+    },
   });
   if (steps.some((step) => EXCURSION_STEP.test(step.templateStep.title))) return;
   const step = steps.find((candidate) => candidate.templateStepId === input.templateStepId);
-  if (!step) return; // The engine reports an unknown step.
+  // The engine reports an unknown step, and a repeat call on a done step
+  // stays the engine's no-op.
+  if (!step || step.completed) return;
   const links = await ctx.db.pharmacySopRecordLink.findMany({
     where: {
       occurrenceId,

@@ -108,7 +108,9 @@ describe('linked records in the runner', () => {
     ).toBeVisible();
     expect(screen.queryByText(/in the note before/)).not.toBeInTheDocument();
     // Without such a step, the reading's own step takes the note.
-    expect(outOfRangeAdvice(null, 'Check the fridge')).toMatch(/in this step’s note/);
+    expect(outOfRangeAdvice(null, 'Check the fridge')).toMatch(
+      /in this step’s note before marking it done\./
+    );
   });
 
   it('summarises a done step with each link’s detail and plain proof words', () => {

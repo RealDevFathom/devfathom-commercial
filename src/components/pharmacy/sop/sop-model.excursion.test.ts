@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { stepBlockers, type SopOccurrence, type SopOccurrenceStep } from './sop-model';
+import {
+  outOfRangeNoteNeeded,
+  stepBlockers,
+  type SopOccurrence,
+  type SopOccurrenceStep,
+} from './sop-model';
 
 /**
  * DEV-751 (Codex P2 on #1418): on a procedure without a separate excursion step
@@ -56,5 +61,26 @@ describe('stepBlockers: out-of-range reading without an excursion step', () => {
   ])('does not ask with %s', (_label, opts, note) => {
     const { occ, step } = occurrence(opts);
     expect(stepBlockers(occ, step, { note } as never)).not.toContain(OUT_OF_RANGE);
+  });
+});
+
+describe('outOfRangeNoteNeeded (marks the note as required)', () => {
+  it('is true for an undocumented out-of-range reading', () => {
+    const { occ, step } = occurrence({});
+    expect(outOfRangeNoteNeeded(occ, step)).toBe(true);
+  });
+
+  it.each([
+    ['a note on the link', { linkNote: 'Door left open; reset' }],
+    ['an in-range reading', { outOfRange: false }],
+    ['a separate excursion step', { titles: ['Confirm readings', 'Record any excursion'] }],
+  ])('is false with %s', (_label, opts) => {
+    const { occ, step } = occurrence(opts);
+    expect(outOfRangeNoteNeeded(occ, step)).toBe(false);
+  });
+
+  it('is false once the step is done', () => {
+    const { occ, step } = occurrence({});
+    expect(outOfRangeNoteNeeded(occ, { ...step, completed: true })).toBe(false);
   });
 });

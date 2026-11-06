@@ -75,7 +75,7 @@ export function outOfRangeAdvice(
 ) {
   return excursion && excursion.title !== stepTitle
     ? `A linked reading is out of range. On step ${excursion.stepOrder}, “${excursion.title}”, write what happened and what you did before sending this for review.`
-    : 'A linked reading is out of range. Write what happened and what you did in this step’s note before sending this for review.';
+    : 'A linked reading is out of range. Write what happened and what you did in this step’s note before marking it done.';
 }
 
 /**
