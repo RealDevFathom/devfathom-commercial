@@ -323,7 +323,12 @@ function tenantScope(ctx: TRPCContext): { organizationId: string } {
 function assertOrderableSupplier(
   supplier: {
     authorized: boolean;
-    licences: { id: string; expiresAt: Date; verifiedAt: Date | null; supersedesId: string | null }[];
+    licences: {
+      id: string;
+      expiresAt: Date;
+      verifiedAt: Date | null;
+      supersedesId: string | null;
+    }[];
   } | null,
   at: Date
 ) {

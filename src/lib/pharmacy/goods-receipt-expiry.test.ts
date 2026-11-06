@@ -22,6 +22,12 @@ function receiptDb(line: {
   purchaseOrderStatus?: 'DRAFT' | 'SENT' | 'RECEIVING';
   purchaseOrderBranchId?: string | null;
   purchaseOrderSupplierId?: string;
+  licences?: Array<{
+    id: string;
+    supersedesId: string | null;
+    expiresAt: Date;
+    verifiedAt: Date | null;
+  }>;
 }) {
   const batchFind = vi.fn().mockResolvedValue(null);
   const lineUpdate = vi.fn().mockResolvedValue({});
@@ -69,7 +75,7 @@ function receiptDb(line: {
         supplier: {
           name: 'Supplier',
           authorized: true,
-          licences: [
+          licences: line.licences ?? [
             {
               id: 'licence_a',
               supersedesId: null,
@@ -256,6 +262,33 @@ describe('postGoodsReceipt expiry', () => {
       postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
     ).rejects.toMatchObject({ reason: 'BATCH_EXPIRY_CONFLICT' });
     expect(batchCreate).not.toHaveBeenCalled();
+    expect(receiveLot).not.toHaveBeenCalled();
+  });
+
+  it('refuses to post when a later filing supersedes the only verified licence', async () => {
+    const { db, batchFind } = receiptDb({
+      accepted: 10,
+      rejected: 0,
+      expiry: '2027-12-31',
+      licences: [
+        {
+          id: 'licence_a',
+          supersedesId: null,
+          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+          verifiedAt: new Date('2020-01-01T00:00:00.000Z'),
+        },
+        {
+          id: 'licence_b',
+          supersedesId: 'licence_a',
+          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+          verifiedAt: null,
+        },
+      ],
+    });
+    await expect(
+      postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
+    ).rejects.toMatchObject({ reason: 'SUPPLIER_LICENCE_EXPIRED' });
+    expect(batchFind).not.toHaveBeenCalled();
     expect(receiveLot).not.toHaveBeenCalled();
   });
 

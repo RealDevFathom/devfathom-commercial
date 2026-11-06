@@ -69,6 +69,90 @@ describe('INV-10 central purchasing access', () => {
     ).rejects.toMatchObject({ reason: 'FORBIDDEN' });
   });
 
+  it('refuses a supplier whose only verified, unexpired licence a later filing supersedes', async () => {
+    const future = new Date('2030-01-01T00:00:00.000Z');
+    const licences = [
+      {
+        id: 'licence_a',
+        supplierId: 'supplier',
+        supersedesId: null,
+        verifiedAt: new Date('2020-01-01T00:00:00.000Z'),
+        expiresAt: future,
+      },
+      {
+        id: 'licence_b',
+        supplierId: 'supplier',
+        supersedesId: 'licence_a',
+        verifiedAt: null,
+        expiresAt: future,
+      },
+    ];
+    type LicenceFilter = {
+      verifiedAt?: { not: null };
+      expiresAt?: { gt: Date };
+      supersededBy?: { none: { supplierId: string } };
+    };
+    let supplierWhere: { licences?: { some?: LicenceFilter } } | undefined;
+    let ordersCreated = 0;
+    const db = fakeDb({
+      pharmacyCentralPurchasingAccess: { findMany: async () => [{ branchId: null }] },
+      pharmacySupplier: {
+        // Evaluates the licence filter the way the database would, over the rows above.
+        findFirst: async ({ where }: { where: { licences?: { some?: LicenceFilter } } }) => {
+          supplierWhere = where;
+          const filter = where.licences?.some ?? {};
+          const supersededBy = filter.supersededBy?.none;
+          const licensed = licences.some(
+            (licence) =>
+              (!filter.verifiedAt || licence.verifiedAt !== null) &&
+              (!filter.expiresAt || licence.expiresAt > filter.expiresAt.gt) &&
+              (!supersededBy ||
+                !licences.some(
+                  (later) =>
+                    later.supersedesId === licence.id &&
+                    later.supplierId === supersededBy.supplierId
+                ))
+          );
+          return licensed ? { id: 'supplier' } : null;
+        },
+      },
+      pharmacyBranch: { findFirst: async () => ({ id: 'branch_a' }) },
+      medicine: { findFirst: async () => ({ id: 'medicine' }) },
+      packLevel: { findFirst: async () => ({ id: 'pack' }) },
+      pharmacyPurchaseOrder: {
+        create: async () => {
+          ordersCreated += 1;
+          return { id: 'po', lines: [] };
+        },
+      },
+    });
+
+    await expect(
+      createCentralPurchaseOrder(
+        db,
+        { ...scope, actorId: 'user_central' },
+        {
+          reference: 'PO-CENTRAL',
+          supplierId: 'supplier',
+          receivingBranchId: 'branch_a',
+          lines: [
+            {
+              medicineId: 'medicine',
+              packLevelId: 'pack',
+              orderedPacks: 1,
+              canonicalUnitsPerPack: 10,
+              listPricePerPackMinor: 100,
+            },
+          ],
+        }
+      )
+    ).rejects.toMatchObject({ reason: 'NOT_FOUND' });
+    expect(supplierWhere?.licences?.some?.supersededBy).toEqual({
+      none: { supplierId: 'supplier' },
+    });
+    expect(ordersCreated).toBe(0);
+  });
+
   it('denies a branch purchaser allocating another branch from a central receipt', async () => {
     await expect(
       allocateCentralReceipt(fakeDb(), scope, {

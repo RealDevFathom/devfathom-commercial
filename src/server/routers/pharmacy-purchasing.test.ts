@@ -100,6 +100,26 @@ function orderableSupplier() {
   });
 }
 
+/**
+ * An authorized supplier whose only verified, unexpired licence a later filing
+ * supersedes. Pass `replacementVerifiedAt` to verify that later filing.
+ */
+function supersededSupplier(replacementVerifiedAt: Date | null = null) {
+  return {
+    id: 'supplier_a',
+    authorized: true,
+    licences: [
+      { id: 'licence_a', supersedesId: null, verifiedAt: PAST, expiresAt: FUTURE },
+      {
+        id: 'licence_b',
+        supersedesId: 'licence_a',
+        verifiedAt: replacementVerifiedAt,
+        expiresAt: FUTURE,
+      },
+    ],
+  };
+}
+
 function resolvableCatalog() {
   db.medicine.findFirst.mockResolvedValue({ id: 'medicine_a' });
   db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a' });
@@ -266,6 +286,44 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'SUPPLIER_LICENCE_EXPIRED' });
     expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an order when a later filing supersedes the only verified licence', async () => {
+    resolvableCatalog();
+    db.pharmacySupplier.findFirst.mockResolvedValue(supersededSupplier());
+    await expect(
+      caller().createPurchaseOrder({
+        reference: 'PO-1',
+        supplierId: 'supplier_a',
+        lines: [ORDER_LINE],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'SUPPLIER_LICENCE_EXPIRED' });
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+  });
+
+  it('orders from that supplier once the superseding filing is itself verified', async () => {
+    resolvableCatalog();
+    db.pharmacySupplier.findFirst.mockResolvedValue(supersededSupplier(PAST));
+    await caller().createPurchaseOrder({
+      reference: 'PO-1',
+      supplierId: 'supplier_a',
+      lines: [ORDER_LINE],
+    });
+    expect(db.pharmacyPurchaseOrder.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to send an approved order whose only verified licence has since been superseded', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      status: 'APPROVED',
+      supplierId: 'supplier_a',
+    });
+    db.pharmacySupplier.findFirst.mockResolvedValue(supersededSupplier());
+    await expect(caller().sendPurchaseOrder({ purchaseOrderId: 'po_a' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'SUPPLIER_LICENCE_EXPIRED',
+    });
+    expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
   });
 
   it('refuses to send an approved order whose supplier has since been de-authorized', async () => {
@@ -690,6 +748,38 @@ describe('PUR-02/PUR-03 comparison and landed cost over stored rows', () => {
     expect(result.ranking[1]!.reasons).toContainEqual(
       'Supplier is not authorized to supply this pharmacy.'
     );
+  });
+
+  it('does not rank a quote as comparable when its only verified licence is superseded', async () => {
+    db.pharmacyRequisitionLine.findFirst.mockResolvedValue({
+      id: 'reqline_a',
+      quantityPacks: 10,
+    });
+    const quoteLine = (quoteId: string, supplier: object) => ({
+      quoteId,
+      quote: { supplierId: quoteId, supplier, validUntil: FUTURE },
+      pricePerPackMinor: 10_000,
+      canonicalUnitsPerPack: 10,
+      schemeBuyPacks: 0,
+      schemeFreePacks: 0,
+      discountBps: 0,
+      moqPacks: 1,
+      leadTimeDays: 3,
+      minimumExpiryDays: 365,
+    });
+    db.pharmacyQuoteLine.findMany.mockResolvedValue([
+      quoteLine('quote_superseded', { ...supersededSupplier(), name: 'Superseded' }),
+      quoteLine('quote_licensed', { ...supersededSupplier(PAST), name: 'Licensed' }),
+    ]);
+
+    const result = await caller().compareQuotes({ requisitionLineId: 'reqline_a' });
+    const superseded = result.ranking.find((row) => row.quoteId === 'quote_superseded')!;
+    const licensed = result.ranking.find((row) => row.quoteId === 'quote_licensed')!;
+    expect(superseded.comparable).toBe(false);
+    expect(superseded.reasons).toContainEqual(
+      'Supplier has no unexpired verified licence on file.'
+    );
+    expect(licensed.comparable).toBe(true);
   });
 
   it('costs a stored order so bonus packs lower the unit cost without adding revenue', async () => {

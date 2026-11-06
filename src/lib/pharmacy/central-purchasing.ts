@@ -83,7 +83,15 @@ export async function createCentralPurchaseOrder(
         id: input.supplierId,
         organizationId: scope.organizationId,
         authorized: true,
-        licences: { some: { verifiedAt: { not: null }, expiresAt: { gt: new Date() } } },
+        // Same rule as assertOrderableSupplier: a filing that a later filing
+        // for this supplier supersedes is not licence evidence.
+        licences: {
+          some: {
+            verifiedAt: { not: null },
+            expiresAt: { gt: new Date() },
+            supersededBy: { none: { supplierId: input.supplierId } },
+          },
+        },
       },
     }),
     db.pharmacyBranch.findFirst({
