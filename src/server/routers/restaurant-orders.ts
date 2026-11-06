@@ -2,12 +2,18 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
 import { Prisma } from '@/generated/prisma/client';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { router, capabilityProcedure } from '../trpc';
 import { assertInOrganization } from '../org-refs';
+import { resolveRestaurantActor } from '../restaurant-actor';
 import { annotateAudit } from '../audit';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
-import { CoAuthorizationError } from '@/lib/restaurant/co-authorization';
+import {
+  buildCoAuthorizationRecord,
+  CoAuthorizationError,
+} from '@/lib/restaurant/co-authorization';
+import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
+import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
 import { KitchenTicketError } from '@/lib/restaurant/kitchen-tickets';
 import { OrderPricingError } from '@/lib/restaurant/order-pricing';
 import { operationalOrderChannelSchema, orderChannelSchema } from '@/lib/restaurant/order-channels';
@@ -37,8 +43,8 @@ import {
  * model (C10, consumed by L5a) and the manager-level order mutations.
  *
  * Reads are gated by `capabilityProcedure('orders:read')`; mutations by
- * `capabilityProcedure('orders:manage')` — both org-role-driven through the ABAC
- * engine (no static policy, see `abac/policies.ts`), the licensed `restaurant-pos`
+ * `capabilityProcedure('orders:manage')` (cancellation uses `orders:void`). All use
+ * the org-role-driven ABAC engine (see `abac/policies.ts`), the licensed `restaurant-pos`
  * module (`module-catalog.ts`) and the audit middleware. Tenant scoping is the
  * RLS-forced `organizationId` default on every row (C1).
  *
@@ -152,8 +158,26 @@ async function run<T>(work: () => Promise<T>): Promise<T> {
 
 const readProcedure = capabilityProcedure('orders:read');
 const manageProcedure = capabilityProcedure('orders:manage');
+const voidProcedure = capabilityProcedure('orders:void');
 
 export const restaurantOrdersRouter = router({
+  /** Cancellation attribution needs device labels, never device-management access or secrets. */
+  listCancellationDevices: voidProcedure
+    .input(z.object({ branchId: ID }).strict())
+    .query(async ({ ctx, input }) => {
+      await resolveRestaurantActor(ctx, [input.branchId]);
+      return ctx.db.restaurantRegisteredDevice.findMany({
+        where: { branchId: input.branchId, status: 'ACTIVE' },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          branch: { select: { id: true, name: true } },
+        },
+      });
+    }),
+
   // ── Read model (C10) ─────────────────────────────────────────────────────────
   listOrders: readProcedure
     .input(
@@ -462,7 +486,7 @@ export const restaurantOrdersRouter = router({
       return result;
     }),
 
-  cancel: manageProcedure
+  cancel: voidProcedure
     .input(
       z
         .object({
@@ -470,18 +494,102 @@ export const restaurantOrdersRouter = router({
           reason: z.string().min(1),
           wastageDisposition: DISPOSITION.optional(),
           approvingStaffProfileId: ID.nullish(),
+          approvingType: z.enum(['PIN', 'BADGE']).optional(),
+          approvingSecret: z.string().min(1).max(256).optional(),
           actor: ACTOR,
         })
         .strict()
+        .superRefine((input, ctx) => {
+          if (input.approvingStaffProfileId && (!input.approvingType || !input.approvingSecret)) {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['approvingSecret'],
+              message: 'The approving manager must provide their PIN or badge.',
+            });
+          }
+        })
     )
     .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
+      const order = await ctx.db.restaurantOrder.findUnique({
+        where: { id: input.orderId },
+        select: { branchId: true },
+      });
+      if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Order not found.' });
+      const { staffProfileId } = await resolveRestaurantActor(ctx, [order.branchId]);
+      const device = await ctx.db.restaurantRegisteredDevice.findFirst({
+        where: { id: input.actor.deviceId, branchId: order.branchId, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (!device) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Select an active device for this branch.',
+        });
+      }
+      if (input.approvingStaffProfileId) {
+        await run(async () => {
+          buildCoAuthorizationRecord({
+            actingStaffProfileId: staffProfileId,
+            approvingStaffProfileId: input.approvingStaffProfileId!,
+            capability: 'orders:cancel',
+            reason: input.reason,
+            targetType: 'RestaurantOrder',
+            targetId: input.orderId,
+            deviceId: device.id,
+          });
+        });
+        const now = new Date();
+        if (
+          !(await operatorHasCapability(
+            ctx.db,
+            input.approvingStaffProfileId,
+            'coauth:approve',
+            now,
+            order.branchId
+          ))
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'The approving manager cannot approve for this branch.',
+          });
+        }
+        // Commit failed-attempt counters independently: the outer tRPC transaction
+        // rolls back on an error. Lock the credential rows to serialize PIN attempts.
+        const auth = await withTenantDb(
+          ctx.entitlements.organizationId,
+          async (authDb) => {
+            await authDb.$queryRaw`SELECT "id" FROM "restaurant_operator_credentials"
+            WHERE "staffProfileId" = ${input.approvingStaffProfileId} AND "revokedAt" IS NULL
+            ORDER BY "id" FOR UPDATE`;
+            // Back-office approval accepts only organization-wide credentials;
+            // the browser-selected device is retained solely for attribution.
+            return authenticateOperator(authDb, {
+              staffProfileId: input.approvingStaffProfileId!,
+              type: input.approvingType!,
+              secret: input.approvingSecret!,
+              now,
+            });
+          },
+          { userId: ctx.session!.user.id, skipDrain: true }
+        );
+        if (!auth.ok) {
+          throw new TRPCError({
+            code: auth.reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',
+            message:
+              auth.reason === 'LOCKED'
+                ? 'Approving manager credential is temporarily locked.'
+                : 'Invalid approving credential.',
+          });
+        }
+      }
       const result = await run(() =>
         cancelOrder(ctx.db, {
           orderId: input.orderId,
           reason: input.reason,
           wastageDisposition: input.wastageDisposition,
           approvingStaffProfileId: input.approvingStaffProfileId ?? null,
-          actor: toActor(input.actor),
+          actor: { ...toActor(input.actor), staffProfileId },
         })
       );
       annotateAudit(ctx, {

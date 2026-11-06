@@ -69,6 +69,7 @@ const mocks = vi.hoisted(() => ({
   },
   listCalls: [] as Array<{ input: unknown; enabled: boolean }>,
   detailCalls: [] as Array<{ input: unknown; enabled: boolean }>,
+  deviceCalls: [] as Array<{ input: unknown; enabled: boolean }>,
   cancel: vi.fn(),
   invalidate: vi.fn(),
 }));
@@ -96,22 +97,6 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
     },
-    restaurantDevices: {
-      list: {
-        useQuery: () => ({
-          data: [
-            {
-              id: 'device_1',
-              name: 'Front Register',
-              branch: { id: 'branch_1', name: 'Downtown' },
-              status: 'ACTIVE',
-            },
-          ],
-          error: null,
-          isLoading: false,
-        }),
-      },
-    },
     useUtils: () => ({
       restaurantOrders: {
         listOrders: { invalidate: mocks.invalidate },
@@ -119,6 +104,23 @@ vi.mock('@/lib/trpc', () => ({
       },
     }),
     restaurantOrders: {
+      listCancellationDevices: {
+        useQuery: (input: unknown, options: { enabled: boolean }) => {
+          mocks.deviceCalls.push({ input, enabled: options.enabled });
+          return {
+            data: [
+              {
+                id: 'device_1',
+                name: 'Front Register',
+                branch: { id: 'branch_1', name: 'Downtown' },
+                status: 'ACTIVE',
+              },
+            ],
+            error: null,
+            isLoading: false,
+          };
+        },
+      },
       listOrders: {
         useQuery: (input: unknown, options: { enabled: boolean }) => {
           mocks.listCalls.push({ input, enabled: options.enabled });
@@ -174,12 +176,14 @@ describe('OrdersConsole', () => {
     vi.clearAllMocks();
     mocks.listCalls.length = 0;
     mocks.detailCalls.length = 0;
+    mocks.deviceCalls.length = 0;
   });
 
   it('gates list and detail reads by entitlement, branch, and selection', () => {
     const disabled = renderConsole(false);
     expect(mocks.listCalls.at(-1)?.enabled).toBe(false);
     expect(mocks.detailCalls.at(-1)?.enabled).toBe(false);
+    expect(mocks.deviceCalls.at(-1)?.enabled).toBe(false);
     expect(screen.getByText('Restaurant POS module disabled')).toBeInTheDocument();
     disabled.unmount();
 
@@ -190,6 +194,7 @@ describe('OrdersConsole', () => {
       input: { branchId: 'branch_1', limit: 25 },
       enabled: true,
     });
+    expect(mocks.deviceCalls.at(-1)).toEqual({ input: { branchId: 'branch_1' }, enabled: true });
     expect(mocks.detailCalls.at(-1)?.enabled).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: 'View order 42' }));
@@ -247,6 +252,9 @@ describe('OrdersConsole', () => {
     fireEvent.change(within(dialog).getByLabelText('Approving staff member (optional)'), {
       target: { value: 'manager_1' },
     });
+    fireEvent.change(within(dialog).getByLabelText('Approving PIN or badge secret'), {
+      target: { value: '482913' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm cancellation' }));
 
     expect(mocks.cancel).toHaveBeenCalledWith({
@@ -254,11 +262,49 @@ describe('OrdersConsole', () => {
       reason: 'Guest left',
       wastageDisposition: 'WASTE',
       approvingStaffProfileId: 'manager_1',
+      approvingType: 'PIN',
+      approvingSecret: '482913',
       actor: {
         staffProfileId: 'staff_1',
         deviceId: 'device_1',
         idempotencyKey: '00000000-0000-4000-8000-000000000045',
       },
     });
+  });
+
+  it('keeps the dialog open when an approver has not provided their credential', () => {
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'View order 42' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel order' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Approving staff member (optional)'), {
+      target: { value: 'manager_1' },
+    });
+    fireEvent.submit(
+      within(dialog).getByRole('button', { name: 'Confirm cancellation' }).closest('form')!
+    );
+    expect(mocks.cancel).not.toHaveBeenCalled();
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('must provide their PIN or badge');
+    expect(within(dialog).getByLabelText('Approving PIN or badge secret')).toHaveAttribute(
+      'type',
+      'password'
+    );
+  });
+
+  it('allows pre-preparation cancellation without an additional approver', () => {
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'View order 42' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel order' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'Guest left' } });
+    fireEvent.submit(
+      within(dialog).getByRole('button', { name: 'Confirm cancellation' }).closest('form')!
+    );
+    expect(mocks.cancel).toHaveBeenCalledWith(
+      expect.objectContaining({ approvingStaffProfileId: null })
+    );
+    expect(mocks.cancel.mock.calls[0][0]).not.toHaveProperty('approvingSecret');
   });
 });

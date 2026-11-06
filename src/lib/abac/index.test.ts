@@ -242,6 +242,27 @@ describe('opt-in pharmacy Owner / Operator access', () => {
 });
 
 describe('custom ABAC decisions', () => {
+  it.each(['general-manager', 'branch-manager'])(
+    'allows %s to cancel without device administration',
+    async (key) => {
+      const rolePermissions = roleTemplatesForVertical('RESTAURANT')
+        .find((role) => role.key === key)!
+        .capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }));
+      const db = authorizationDb({ rolePermissions });
+      await expect(can(employee, 'orders:void', undefined, { db })).resolves.toBe(true);
+      await expect(can(employee, 'devices:manage', undefined, { db })).resolves.toBe(false);
+      await expect(can(employee, 'orders:manage', undefined, { db })).resolves.toBe(false);
+      await expect(
+        can(employee, 'orders:void', undefined, {
+          db: authorizationDb({
+            rolePermissions,
+            overrides: [{ capability: 'orders:void', effect: 'DENY' }],
+          }),
+        })
+      ).resolves.toBe(false);
+    }
+  );
+
   const pharmacyPermissionsFor = (roleKey: string): Permission[] =>
     roleTemplatesForVertical('PHARMACY')
       .find((role) => role.key === roleKey)!
@@ -378,6 +399,7 @@ describe('custom ABAC decisions', () => {
       // WHA-863: browser enrollment and revocation use the narrower device
       // capability instead of inheriting broad administrator authority.
       'devices:manage',
+      'orders:void',
       // Pharmacy RX-03/04 and RX-05: pharmacist dispense decisions, substitution
       // evidence, controlled register and incident approval. All three remain
       // exact-grant-only and are never inherited from an agency role.
@@ -388,7 +410,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:counter',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(47);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);

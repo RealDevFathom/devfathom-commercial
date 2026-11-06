@@ -140,7 +140,14 @@ const usedActions = () => mocks.can.mock.calls.map((c) => c[1]);
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
-  mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_server', primaryBranchId: 'b1' }]);
+  mocks.findStaffProfiles.mockResolvedValue([
+    {
+      id: 'staff_server',
+      primaryBranchId: 'b1',
+      jobRoles: [],
+      directCapabilityGrants: [],
+    },
+  ]);
   mocks.findBranchAssignments.mockResolvedValue([]);
   mocks.findBranches.mockImplementation(async ({ where }: { where: { id: { in: string[] } } }) =>
     where.id.in.map((id) => ({ id }))
@@ -675,11 +682,27 @@ describe('actor + idempotency plumbing', () => {
 
   it('fails before purchasing mutation when the active staff mapping is ambiguous', async () => {
     mocks.findStaffProfiles.mockResolvedValue([
-      { id: 'staff_one', primaryBranchId: 'b1' },
-      { id: 'staff_two', primaryBranchId: 'b1' },
+      { id: 'staff_one', primaryBranchId: 'b1', jobRoles: [], directCapabilityGrants: [] },
+      { id: 'staff_two', primaryBranchId: 'b1', jobRoles: [], directCapabilityGrants: [] },
     ]);
     await expect(
       caller().createPurchaseOrder({ supplierId: 's1', branchId: 'b1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.createPurchaseOrder).not.toHaveBeenCalled();
+  });
+
+  it('never treats a DENY-only override at another branch as branch access', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+    mocks.findStaffProfiles.mockResolvedValue([
+      {
+        id: 'staff_server',
+        primaryBranchId: 'b1',
+        jobRoles: [],
+        directCapabilityGrants: [{ branchId: 'b2', effect: 'DENY' }],
+      },
+    ]);
+    await expect(
+      caller().createPurchaseOrder({ supplierId: 's1', branchId: 'b2' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.createPurchaseOrder).not.toHaveBeenCalled();
   });

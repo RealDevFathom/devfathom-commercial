@@ -79,7 +79,14 @@ function makeDb(status = 'DRAFT') {
       findMany: vi.fn().mockResolvedValue([{ id: 'gram', name: 'Gram', abbreviation: 'g' }]),
     },
     restaurantStaffProfile: {
-      findMany: vi.fn().mockResolvedValue([{ id: 'staff_1', primaryBranchId: 'branch_1' }]),
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 'staff_1',
+          primaryBranchId: 'branch_1',
+          jobRoles: [],
+          directCapabilityGrants: [],
+        },
+      ]),
     },
     restaurantBranch: {
       findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
@@ -242,7 +249,7 @@ describe('restaurant catering capability and scope', () => {
       code: 'FORBIDDEN',
     });
     db.restaurantStaffProfile.findMany.mockResolvedValue([
-      { id: 'staff_1', primaryBranchId: 'branch_1' },
+      { id: 'staff_1', primaryBranchId: 'branch_1', jobRoles: [], directCapabilityGrants: [] },
     ]);
     await expect(
       caller().bookingLocations({ branchId: 'branch_1', organizationId: 'foreign' } as never)
@@ -700,10 +707,26 @@ describe('restaurant catering production and cost', () => {
   });
   it('denies a staff member without branch assignment or global configure capability', async () => {
     db.restaurantStaffProfile.findMany.mockResolvedValue([
-      { id: 'staff_1', primaryBranchId: 'other' },
+      { id: 'staff_1', primaryBranchId: 'other', jobRoles: [], directCapabilityGrants: [] },
     ]);
     mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
     await expect(caller().get({ orderId: 'order_1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+  it('never treats a DENY-only override at the order branch as branch access', async () => {
+    db.restaurantStaffProfile.findMany.mockResolvedValue([
+      {
+        id: 'staff_1',
+        primaryBranchId: 'other',
+        jobRoles: [],
+        directCapabilityGrants: [{ branchId: 'branch_1', effect: 'DENY' }],
+      },
+    ]);
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+    await expect(caller().get({ orderId: 'order_1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().transition({ orderId: 'order_1', to: 'QUOTED' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.restaurantCateringOrder.update).not.toHaveBeenCalled();
   });
   it('fails closed for missing active stock location without advancing READY', async () => {
     db = makeDb('IN_PRODUCTION');

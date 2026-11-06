@@ -24,7 +24,16 @@ export async function resolveRestaurantActor(
 
   const actors = await ctx.db.restaurantStaffProfile.findMany({
     where: { userId: user.id, status: 'ACTIVE' },
-    select: { id: true, primaryBranchId: true },
+    select: {
+      id: true,
+      primaryBranchId: true,
+      jobRoles: { select: { branchId: true } },
+      // Only positive overrides bind a branch; a DENY override must never establish access.
+      directCapabilityGrants: {
+        where: { effect: 'ALLOW' },
+        select: { branchId: true, effect: true },
+      },
+    },
     orderBy: { id: 'asc' },
     take: 2,
   });
@@ -38,6 +47,11 @@ export async function resolveRestaurantActor(
   });
   const authorizedBranchIds = new Set(assigned.map(({ branchId }) => branchId));
   if (actor.primaryBranchId) authorizedBranchIds.add(actor.primaryBranchId);
+  // Match the staff directory's branch bindings; identity still comes only from the session.
+  for (const binding of actor.jobRoles) authorizedBranchIds.add(binding.branchId);
+  for (const grant of actor.directCapabilityGrants) {
+    if (grant.effect === 'ALLOW') authorizedBranchIds.add(grant.branchId);
+  }
 
   const assignedToEveryBranch = requiredBranchIds.every((branchId) =>
     authorizedBranchIds.has(branchId)
