@@ -19,6 +19,7 @@ const m = vi.hoisted(() => ({
   consent: vi.fn(),
   archiveCreate: vi.fn(),
   archiveDelete: vi.fn(),
+  catalogue: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: m.scope }));
 vi.mock('@/lib/pharmacy/counter-evidence', () => ({
@@ -26,6 +27,7 @@ vi.mock('@/lib/pharmacy/counter-evidence', () => ({
   runCounterEvidenceSnapshotJob: m.snapshot,
   runCameraEvidenceRetentionJob: m.retention,
 }));
+vi.mock('@/lib/pharmacy/default-catalogue', () => ({ runDefaultCatalogueJob: m.catalogue }));
 import { processPlatformJobs } from './jobs';
 
 const db = {
@@ -94,6 +96,33 @@ afterEach(() => {
 });
 
 describe('composed platform worker boundaries', () => {
+  it('runs the default catalogue apply outside the platform transaction', async () => {
+    const applied = { organizationId: 'tenant-a', created: 50, batches: 1 };
+    let insideScope = false;
+    m.scope.mockImplementation(async (work) => {
+      insideScope = true;
+      try {
+        return await work(db);
+      } finally {
+        insideScope = false;
+      }
+    });
+    m.catalogue.mockImplementation(async () => {
+      expect(insideScope).toBe(false);
+      return applied;
+    });
+    queue(job('PHARMACY_DEFAULT_CATALOGUE_V1'));
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ claimed: 1, succeeded: 1 });
+    expect(m.catalogue).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: 'PHARMACY_DEFAULT_CATALOGUE_V1', organizationId: 'tenant-a' })
+    );
+    expect(m.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'SUCCEEDED', result: applied }),
+      })
+    );
+  });
+
   it('expires consent evidence on an idle worker run without an archive key', async () => {
     vi.stubEnv('PLATFORM_ENCRYPTION_KEY', '');
     await expect(processPlatformJobs()).resolves.toMatchObject({ claimed: 0 });

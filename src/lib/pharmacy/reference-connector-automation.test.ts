@@ -134,8 +134,12 @@ function makeDb() {
       findFirst: vi
         .fn()
         .mockImplementation(async ({ where }) => (where.id === target.id ? { ...target } : null)),
+      // Default-catalogue copies matched by product name and manufacturer.
+      findMany: vi.fn().mockResolvedValue([]),
       update: vi.fn().mockImplementation(async ({ data }) => Object.assign(target, data)),
     },
+    // Default-catalogue provenance matched by the row's source key.
+    medicineCatalogueProvenance: { findMany: vi.fn().mockResolvedValue([]) },
   };
   return { db: db as unknown as ScopedDb, runs, proposals, target, raw: db };
 }
@@ -224,6 +228,112 @@ describe('manual reference connector automation', () => {
       drapRegistrationNumber: 'new-registration',
       controlled: 'true',
     });
+  });
+
+  it('targets the catalogue copy holding the row source key instead of a duplicate', async () => {
+    Object.assign(fixture.target, { saleable: false, productName: 'PANADOL 500MG TAB' });
+    fixture.raw.medicineCatalogueProvenance.findMany.mockResolvedValue([
+      { medicineId: 'medicine-a' },
+    ]);
+    const result = await runManualReferenceConnector(
+      fixture.db,
+      runInput([
+        row('catalog-27', {
+          productName: 'PANADOL 500MG TAB',
+          drapRegistrationNumber: '012345',
+          strength: '500 mg',
+          dosageForm: 'Tablet',
+          pack: '10 x 10',
+        }),
+      ])
+    );
+
+    expect(fixture.raw.medicineCatalogueProvenance.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-a', sourceKey: 'catalog-27' } })
+    );
+    // Source key wins: the name lookup is never needed.
+    expect(fixture.raw.medicine.findMany).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ rowsRejected: 0, proposalRows: 1 });
+    expect(fixture.proposals[0]).toMatchObject({ targetMedicineId: 'medicine-a' });
+    // An unsaleable copy has nothing reviewed yet: every regulated value is
+    // proposed, even the unchanged product name, so it can be published.
+    expect(fixture.proposals[0]?.payload.values).toEqual({
+      productName: 'PANADOL 500MG TAB',
+      drapRegistrationNumber: '012345',
+      strength: '500 mg',
+      dosageForm: 'Tablet',
+      pack: '10 x 10',
+    });
+  });
+
+  it('falls back to a case-insensitive product name and manufacturer match', async () => {
+    fixture.raw.medicine.findMany.mockResolvedValue([{ id: 'medicine-a' }]);
+    const result = await runManualReferenceConnector(
+      fixture.db,
+      runInput([
+        row('row-2', {
+          productName: '  panadol   500mg tab ',
+          manufacturer: 'gsk',
+          strength: '500 mg',
+          dosageForm: 'Tablet',
+          pack: '10 x 10',
+        }),
+      ])
+    );
+
+    expect(fixture.raw.medicine.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org-a',
+          productName: { equals: 'panadol 500mg tab', mode: 'insensitive' },
+          manufacturer: { equals: 'gsk', mode: 'insensitive' },
+          catalogueProvenance: { is: { linkedExisting: false } },
+        },
+      })
+    );
+    expect(result).toMatchObject({ proposalRows: 1 });
+    expect(fixture.proposals[0]).toMatchObject({ targetMedicineId: 'medicine-a' });
+  });
+
+  it('matches a row without a manufacturer only to a copy without one', async () => {
+    await runManualReferenceConnector(
+      fixture.db,
+      runInput([
+        row('row-2', {
+          productName: 'Brufen',
+          strength: '400 mg',
+          dosageForm: 'Tablet',
+          pack: '1',
+        }),
+      ])
+    );
+    expect(fixture.raw.medicine.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ manufacturer: null }) })
+    );
+    // No copy matched: a new-medicine proposal, as before.
+    expect(fixture.proposals[0]).toMatchObject({ targetMedicineId: undefined });
+  });
+
+  it('refuses a row that matches more than one catalogue copy rather than guessing', async () => {
+    fixture.raw.medicine.findMany.mockResolvedValue([{ id: 'copy-1' }, { id: 'copy-2' }]);
+    const result = await runManualReferenceConnector(
+      fixture.db,
+      runInput([row('row-2', { productName: 'Brufen', strength: '400 mg', dosageForm: 'Tablet' })])
+    );
+    expect(result).toMatchObject({ rowsRejected: 1, proposalRows: 0 });
+    expect(result.rejectionReasons).toEqual([
+      { rowSourceKey: 'row-2', reasons: ['AMBIGUOUS_CATALOGUE_MATCH'] },
+    ]);
+    expect(fixture.proposals).toEqual([]);
+  });
+
+  it('never looks for a catalogue copy when the row names its target', async () => {
+    await runManualReferenceConnector(
+      fixture.db,
+      runInput([row('row-2', { productName: 'Old name' }, { targetMedicineId: 'medicine-a' })])
+    );
+    expect(fixture.raw.medicineCatalogueProvenance.findMany).not.toHaveBeenCalled();
+    expect(fixture.raw.medicine.findMany).not.toHaveBeenCalled();
   });
 
   it('records a second identical input as a no-op', async () => {

@@ -3,13 +3,17 @@
 import { browserUuid } from '@/lib/browser-uuid';
 
 import { useState } from 'react';
-import { Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
+import { Download, FileSpreadsheet, Loader2, Search, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { CatalogueReviewDraft } from './catalogue-review-draft';
 import { MedicinePackSetup } from './medicine-pack-setup';
 
 import { Button } from '@/components/ui/button';
+import { FilterChips } from '@/components/ui/filter-chips';
+import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
+import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
   chunkReferenceRows,
@@ -34,6 +38,16 @@ type ConnectorHealth = {
 };
 
 type ParsedFile = { name: string; headers: string[]; rows: Array<Record<string, unknown>> };
+
+type CandidateView = 'reference' | 'catalogue' | 'controlled';
+
+const EMPTY_VIEW_MESSAGE: Record<CandidateView, string> = {
+  reference:
+    'No confirmed reference rows await publication. Upload a manual batch above; regulated changes remain proposals until a pharmacist confirms them.',
+  catalogue:
+    'No default-catalogue medicines await review. Every catalogue item this pharmacy holds is published or was never copied.',
+  controlled: 'No NARCOTICS-flagged default-catalogue medicines await a controlled decision.',
+};
 
 type ChunkedUpload = {
   fileName: string;
@@ -207,10 +221,28 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const [mapping, setMapping] = useState<ManualMappingTemplate>({});
   const [batchId, setBatchId] = useState('');
   const [preview, setPreview] = useState<NormalizedMedicineReferenceRow[]>([]);
+  const [view, setView] = useState<CandidateView>('reference');
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
+  const [draftingId, setDraftingId] = useState<string | null>(null);
   const [upload, setUpload] = useState<ChunkedUpload | null>(null);
   const [uploadingPart, setUploadingPart] = useState<number | null>(null);
-  const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(undefined, {
+  const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(
+    view === 'reference' ? undefined : { view, query: query || undefined },
+    { retry: false }
+  );
+  const summary = trpc.pharmacyMedicine.catalogueReviewSummary.useQuery(undefined, {
     retry: false,
+  });
+  const draft = trpc.pharmacyMedicine.draftCatalogueReview.useMutation({
+    onSuccess: async () => {
+      toast.success(
+        'Review started. Accept its assertions, then publish them to make it saleable.'
+      );
+      setDraftingId(null);
+      await Promise.all([candidates.refetch(), summary.refetch()]);
+    },
+    onError: (error) => toast.error(error.message),
   });
   const proposals = trpc.pharmacyMedicine.referenceConnectorProposals.useQuery(undefined, {
     retry: false,
@@ -233,7 +265,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const publish = trpc.pharmacyMedicine.publishAssertions.useMutation({
     onSuccess: async () => {
       toast.success('Assertions published in a reversible batch.');
-      await candidates.refetch();
+      await Promise.all([candidates.refetch(), summary.refetch()]);
     },
     onError: (error) => toast.error(error.message),
   });
@@ -602,10 +634,96 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
       </SectionCard>
 
       <SectionCard
+        eyebrow="Default medicine catalogue"
+        title="Catalogue review status"
+        titleLevel={2}
+        role="region"
+        aria-label="Default catalogue review status"
+      >
+        {summary.isError ? (
+          <p role="alert" className="text-sm text-destructive">
+            Catalogue review counts are unavailable. No data was changed.
+          </p>
+        ) : (
+          <div className="grid gap-5 sm:grid-cols-3" aria-busy={summary.isPending || undefined}>
+            <Stat
+              label="Awaiting review"
+              value={summary.data?.awaitingReview ?? '—'}
+              sub="Unsaleable until a pharmacist publishes them"
+            />
+            <Stat
+              label="NARCOTICS to review"
+              value={summary.data?.controlledAwaitingReview ?? '—'}
+              sub="Need a reviewed controlled decision"
+            />
+            <Stat
+              label="Held from sale"
+              value={summary.data?.heldFromSale ?? '—'}
+              sub="Your own medicines linked to a NARCOTICS item"
+            />
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard
         eyebrow="MED-03 / MED-04 / MED-05"
         title="Reference review workbench"
         titleLevel={2}
       >
+        <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <FilterChips
+            aria-label="Review queue"
+            value={view}
+            onChange={(next) => {
+              setView(next as CandidateView);
+              setDraftingId(null);
+            }}
+            items={[
+              { value: 'reference', label: 'Reference rows' },
+              {
+                value: 'catalogue',
+                label: 'Default catalogue',
+                count: summary.data?.awaitingReview,
+              },
+              {
+                value: 'controlled',
+                label: 'NARCOTICS review',
+                count: summary.data?.controlledAwaitingReview,
+              },
+            ]}
+          />
+          {view !== 'reference' ? (
+            <form
+              role="search"
+              className="flex min-w-0 items-end gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setQuery(search.trim());
+              }}
+            >
+              <label className="block min-w-0 flex-1 text-xs font-medium text-text-body">
+                Search by name or source key
+                <Input
+                  className="mt-1 min-h-11"
+                  type="search"
+                  value={search}
+                  maxLength={200}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </label>
+              <Button className="min-h-11" type="submit" variant="outline">
+                <Search data-icon="inline-start" /> Search
+              </Button>
+            </form>
+          ) : null}
+        </div>
+        {view !== 'reference' ? (
+          <p className="mb-4 text-sm text-text-muted">
+            Medicines the default catalogue added (and your own medicines it holds from sale) are
+            listed here, 100 at a time, until a pharmacist completes and publishes them. They never
+            appear at the counter, in purchasing or in stock until then.
+          </p>
+        ) : null}
         {candidates.isPending ? (
           <p className="flex items-center gap-2 text-sm text-text-muted">
             <Loader2 className="size-4 animate-spin" /> Loading review candidates…
@@ -619,8 +737,9 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
         ) : null}
         {candidates.data?.length === 0 ? (
           <p className="rounded-md bg-surface-sunken p-5 text-sm text-text-muted">
-            No confirmed reference rows await publication. Upload a manual batch above; regulated
-            changes remain proposals until a pharmacist confirms them.
+            {query && view !== 'reference'
+              ? `No catalogue medicine awaiting review matches “${query}”.`
+              : EMPTY_VIEW_MESSAGE[view]}
           </p>
         ) : null}
         <div className="space-y-4">
@@ -631,6 +750,12 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
             const publishAssertionIds = candidate.provenance
               .filter((item) => item.status === 'ACCEPTED' || item.status === 'CORRECTED')
               .map((item) => item.id);
+            // A default-catalogue medicine with nothing in review yet is
+            // completed here first: that drafts the assertions reviewed below.
+            const needsDraft =
+              Boolean(candidate.catalogueProvenance) &&
+              !reviewAssertionIds.length &&
+              !publishAssertionIds.length;
             return (
               <article key={candidate.id} className="rounded-md border border-border-subtle p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -639,9 +764,44 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                     <p className="mt-1 text-xs text-text-muted">
                       Non-saleable until reviewed and completed · {candidate.id}
                     </p>
+                    {candidate.catalogueProvenance ? (
+                      <p className="mt-1 font-mono text-[11px] text-text-muted">
+                        {candidate.catalogueProvenance.linkedExisting
+                          ? 'Your record, linked to'
+                          : 'Default catalogue'}{' '}
+                        {candidate.catalogueProvenance.sourceKey} · v
+                        {candidate.catalogueProvenance.catalogueVersion}
+                      </p>
+                    ) : null}
+                    {candidate.catalogueProvenance?.controlledCandidate ? (
+                      <p className="mt-2 text-xs font-medium text-warning" role="status">
+                        Filed under NARCOTICS in the default catalogue. Publish a reviewed
+                        controlled decision (true or false) before it can sell.
+                      </p>
+                    ) : null}
                   </div>
-                  <StatusPill status="In review" tone="warning" />
+                  <StatusPill
+                    status={needsDraft ? 'Needs completion' : 'In review'}
+                    tone="warning"
+                  />
                 </div>
+                {needsDraft ? (
+                  <CatalogueReviewDraft
+                    candidate={candidate}
+                    pending={draft.isPending && draftingId === candidate.id}
+                    error={draftingId === candidate.id ? (draft.error?.message ?? null) : null}
+                    onSubmit={(values) => {
+                      setDraftingId(candidate.id);
+                      // Blank optional fields are left out, never sent empty.
+                      draft.mutate({
+                        medicineId: candidate.id,
+                        values: Object.fromEntries(
+                          Object.entries(values).filter(([, value]) => value.trim())
+                        ),
+                      });
+                    }}
+                  />
+                ) : null}
                 <dl className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                   {candidate.provenance.map((assertion) => {
                     const envelope = assertionEnvelope(assertion.assertedValue);
@@ -664,34 +824,36 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                     );
                   })}
                 </dl>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {(['ACCEPT', 'REJECT', 'DEFER'] as const).map((action) => (
+                {needsDraft ? null : (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {(['ACCEPT', 'REJECT', 'DEFER'] as const).map((action) => (
+                      <Button
+                        key={action}
+                        size="sm"
+                        variant={action === 'REJECT' ? 'destructive' : 'outline'}
+                        disabled={!reviewAssertionIds.length || review.isPending}
+                        onClick={() =>
+                          review.mutate({
+                            duplicateKey: `reference:${candidate.id}`,
+                            action,
+                            medicineIds: [candidate.id],
+                            payload: { assertionIds: reviewAssertionIds },
+                          })
+                        }
+                      >
+                        {action.toLowerCase()}
+                      </Button>
+                    ))}
                     <Button
-                      key={action}
+                      className="sm:ml-auto"
                       size="sm"
-                      variant={action === 'REJECT' ? 'destructive' : 'outline'}
-                      disabled={!reviewAssertionIds.length || review.isPending}
-                      onClick={() =>
-                        review.mutate({
-                          duplicateKey: `reference:${candidate.id}`,
-                          action,
-                          medicineIds: [candidate.id],
-                          payload: { assertionIds: reviewAssertionIds },
-                        })
-                      }
+                      disabled={!publishAssertionIds.length || publish.isPending}
+                      onClick={() => publish.mutate({ assertionIds: publishAssertionIds })}
                     >
-                      {action.toLowerCase()}
+                      Publish assertions
                     </Button>
-                  ))}
-                  <Button
-                    className="sm:ml-auto"
-                    size="sm"
-                    disabled={!publishAssertionIds.length || publish.isPending}
-                    onClick={() => publish.mutate({ assertionIds: publishAssertionIds })}
-                  >
-                    Publish assertions
-                  </Button>
-                </div>
+                  </div>
+                )}
               </article>
             );
           })}

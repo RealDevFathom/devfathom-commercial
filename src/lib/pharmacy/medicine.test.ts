@@ -73,6 +73,28 @@ describe('pharmacy medicine invariants', () => {
     ).not.toThrow();
   });
 
+  it('holds a NARCOTICS catalogue candidate until a controlled decision is published', () => {
+    const complete = {
+      productFamily: 'PHARMACEUTICAL' as const,
+      hasPresentation: true,
+      hasStrength: true,
+      hasRegistration: true,
+      provenanceFields: new Set(['drapRegistrationNumber']),
+      controlledCandidate: true,
+    };
+    expect(() => assertSaleable(complete)).toThrow('NOT_SALEABLE');
+    // Even a front-shop item cannot sidestep the review.
+    expect(() =>
+      assertSaleable({ ...complete, productFamily: 'FRONT_SHOP', provenanceFields: new Set() })
+    ).toThrow('NOT_SALEABLE');
+    expect(() =>
+      assertSaleable({
+        ...complete,
+        provenanceFields: new Set(['drapRegistrationNumber', 'controlled']),
+      })
+    ).not.toThrow();
+  });
+
   it('normalizes scan codes and preserves Urdu letters in aliases', () => {
     expect(normalizeMedicineText(' 01-234 567 ')).toBe('01234567');
     expect(normalizeMedicineText('پیرا سیٹامول')).toBe('پیراسیٹامول');

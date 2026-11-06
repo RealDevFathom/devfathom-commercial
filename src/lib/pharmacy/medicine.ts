@@ -137,7 +137,16 @@ export function assertSaleable(input: {
   hasStrength: boolean;
   hasRegistration: boolean;
   provenanceFields: ReadonlySet<string>;
+  /**
+   * The medicine came from the platform default catalogue with a NARCOTICS
+   * review flag. It stays unsaleable — whatever its product family — until a
+   * pharmacist's reviewed `controlled` decision is part of the publication.
+   */
+  controlledCandidate?: boolean;
 }): void {
+  if (input.controlledCandidate && !input.provenanceFields.has('controlled')) {
+    throw new PharmacyMedicineError('NOT_SALEABLE');
+  }
   if (!input.hasPresentation) throw new PharmacyMedicineError('NOT_SALEABLE');
   if (input.productFamily === 'FRONT_SHOP') return;
   if (!input.hasStrength || !input.hasRegistration) {

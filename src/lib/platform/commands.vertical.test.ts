@@ -490,6 +490,43 @@ describe('organization.create vertical + package compatibility', () => {
     }
   });
 
+  // The platform default medicine catalogue is queued as a job inside the
+  // create transaction — never materialised inline, so ~19k medicines can
+  // neither slow nor fail onboarding — and only for a pharmacy.
+  it('queues the default medicine catalogue for a new PHARMACY only', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_p',
+      active: true,
+      defaultSeats: 25,
+      vertical: 'PHARMACY',
+      moduleLinks: [{ moduleId: 'pharmacy-core', enabled: true }],
+    });
+    await run('organization.create', pharmacyCreatePayload());
+    expect(platformDb.platformJob.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org_new',
+        type: 'PHARMACY_DEFAULT_CATALOGUE_V1',
+        requestedById: 'op_1',
+        payload: { catalogueKey: 'pharmacy-default', reason: 'provisioning' },
+        idempotencyKey: 'pharmacy.default-catalogue.v1:org_new:provisioning',
+      },
+    });
+
+    vi.mocked(platformDb.platformJob.create).mockClear();
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_r',
+      active: true,
+      defaultSeats: 25,
+      vertical: 'RESTAURANT',
+      moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
+    });
+    await run('organization.create', restaurantCreatePayload({ packageId: 'pkg_r' }));
+    const queuedTypes = vi
+      .mocked(platformDb.platformJob.create)
+      .mock.calls.map((call) => (call[0] as { data: { type: string } }).data.type);
+    expect(queuedTypes).not.toContain('PHARMACY_DEFAULT_CATALOGUE_V1');
+  });
+
   it('refuses a PHARMACY create that names no premises for its first branch', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',

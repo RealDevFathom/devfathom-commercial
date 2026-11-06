@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { matchCatalogueMedicine } from './default-catalogue-review';
 import {
   MANUAL_FILE_RIGHTS,
   type ConnectorSchedule,
@@ -248,9 +249,33 @@ export async function runManualReferenceConnector(
       continue;
     }
 
-    const target = row.targetMedicineId
+    // A row without a target id that describes a medicine the default
+    // catalogue already put in this pharmacy (its source key, else the same
+    // product name and manufacturer) targets that medicine instead of
+    // proposing a duplicate. Several candidates: refused, never guessed.
+    let targetMedicineId = row.targetMedicineId;
+    let catalogueMatch = false;
+    if (!targetMedicineId) {
+      const match = await matchCatalogueMedicine(db, {
+        organizationId: input.organizationId,
+        rowSourceKey: row.rowSourceKey,
+        productName: row.values.productName,
+        manufacturer: row.values.manufacturer,
+      });
+      if (match.kind === 'ambiguous') {
+        rowsRejected += 1;
+        rejections.push({ rowSourceKey: row.rowSourceKey, reasons: ['AMBIGUOUS_CATALOGUE_MATCH'] });
+        continue;
+      }
+      if (match.kind === 'match') {
+        targetMedicineId = match.medicineId;
+        catalogueMatch = true;
+      }
+    }
+
+    const target = targetMedicineId
       ? await db.medicine.findFirst({
-          where: { id: row.targetMedicineId },
+          where: { id: targetMedicineId },
           select: {
             id: true,
             productName: true,
@@ -260,6 +285,7 @@ export async function runManualReferenceConnector(
             rx: true,
             restricted: true,
             controlled: true,
+            saleable: true,
           },
         })
       : null;
@@ -282,7 +308,10 @@ export async function runManualReferenceConnector(
       }
     }
 
-    const proposed = regulatedChanges(row, target);
+    // An unsaleable catalogue match has no reviewed assertions yet, so every
+    // regulated value is proposed (as for a new medicine), not only the ones
+    // that differ: publication needs all of them.
+    const proposed = regulatedChanges(row, catalogueMatch && !target?.saleable ? null : target);
     if (!target) {
       for (const field of DIRECT_REFERENCE_FIELDS) {
         const value = row.values[field];
