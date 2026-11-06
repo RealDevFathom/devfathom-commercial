@@ -350,7 +350,7 @@ describe('churn score segments (#729)', () => {
     expect(captures).toEqual([]);
   });
 
-  it('ignores a score that predates the customer\'s latest receipt', async () => {
+  it("ignores a score that predates the customer's latest receipt", async () => {
     churnRule('gte', 70);
     churnScores = [{ customerId: 'customer-a', churnScore: 90, scoredAt }];
     mock.pharmacySale.groupBy.mockResolvedValue([

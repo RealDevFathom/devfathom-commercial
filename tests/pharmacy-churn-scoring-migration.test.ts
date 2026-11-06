@@ -45,7 +45,7 @@ describe('pharmacy churn scoring migration (#729)', () => {
   it('bounds the RFM values in the database', () => {
     expect(sql).toContain('"churnScore" BETWEEN 0 AND 100');
     expect(sql).toContain('"recencyScore" BETWEEN 1 AND 5');
-    expect(sql).toContain('"riskBand" IN (\'LOW\', \'MEDIUM\', \'HIGH\')');
+    expect(sql).toContain("\"riskBand\" IN ('LOW', 'MEDIUM', 'HIGH')");
   });
 
   it('stores no clinical, identity or contact data', () => {

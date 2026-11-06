@@ -27,6 +27,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
+  CHURN_TICK_BUDGET_MS,
   churnBusinessDate,
   processNightlyChurnScoring,
   readBranchChurnInputs,
@@ -277,6 +278,57 @@ describe('processNightlyChurnScoring', () => {
       failed: 1,
       deferred: 0,
     });
+    error.mockRestore();
+  });
+
+  it('rotates the start branch so a branch that spends the budget cannot lead every tick', async () => {
+    mocks.platformDb.organization.findMany.mockResolvedValue(
+      ['org-0', 'org-1', 'org-2'].map((id) => ({ id, timezone: 'Asia/Karachi' }))
+    );
+    mocks.platformDb.pharmacyBranch.findMany.mockResolvedValue(
+      [0, 1, 2].map((index) => ({ id: `branch-${index}`, organizationId: `org-${index}` }))
+    );
+    let clock = 1_000_000;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let failing: string | undefined;
+    mocks.withTenantDb.mockImplementation(async (organizationId, callback) => {
+      failing ??= organizationId;
+      if (organizationId === failing) {
+        // Times out at the transaction ceiling, past the whole tick budget.
+        clock += CHURN_TICK_BUDGET_MS;
+        throw new Error('transaction timeout');
+      }
+      return callback(mocks.tenantDb);
+    });
+
+    expect(await processNightlyChurnScoring(now, 25)).toEqual({
+      due: 3,
+      scoredBranches: 0,
+      scoredCustomers: 0,
+      failed: 1,
+      deferred: 2,
+    });
+    expect(mocks.withTenantDb).toHaveBeenCalledTimes(1);
+
+    mocks.withTenantDb.mockClear();
+    const nextTick = new Date(now.getTime() + 5 * 60_000);
+    expect(await processNightlyChurnScoring(nextTick, 25)).toMatchObject({
+      due: 3,
+      scoredBranches: 2,
+      failed: 1,
+    });
+    const [firstOrganization] = mocks.withTenantDb.mock.calls[0] as [string];
+    expect(firstOrganization).not.toBe(failing);
+    expect(mocks.tenantDb.pharmacyChurnScoringRun.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          organizationId: firstOrganization,
+          branchId: firstOrganization.replace('org', 'branch'),
+        }),
+      })
+    );
+    dateNow.mockRestore();
     error.mockRestore();
   });
 

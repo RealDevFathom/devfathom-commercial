@@ -177,6 +177,13 @@ export async function processNightlyChurnScoring(
     const key = (run: { organizationId: string; branchId: string; businessDate: string }) =>
       `${run.organizationId}\u0000${run.branchId}\u0000${run.businessDate}`;
     const seen = new Set(done.map(key));
+    const pending = dated.filter((branch) => !seen.has(key(branch)));
+    if (pending.length === 0) return [];
+    // Start each tick at a different pending branch so branches that keep
+    // failing (their claim rolls back) cannot lead every tick and spend its
+    // whole budget, deferring the same later branches all day.
+    const offset = Math.floor(now.getTime() / 300_000) % pending.length;
+    const ordered = [...pending.slice(offset), ...pending.slice(0, offset)];
     // Entitlements are resolved only for workspaces that still have a branch
     // due today, and only until the per-tick budget is filled, so a tick after
     // all of today's runs are done costs no entitlement lookups. Unentitled
@@ -184,9 +191,8 @@ export async function processNightlyChurnScoring(
     // the budget; the tenant transaction re-checks authoritatively.
     const entitled = new Map<string, boolean>();
     const due: typeof dated = [];
-    for (const branch of dated) {
+    for (const branch of ordered) {
       if (due.length >= take) break;
-      if (seen.has(key(branch))) continue;
       let allowed = entitled.get(branch.organizationId);
       if (allowed === undefined) {
         allowed = hasModule(
@@ -210,8 +216,9 @@ export async function processNightlyChurnScoring(
       deferred = candidates.length - index;
       break;
     }
-    // One branch's failure rolls back only its own transaction (claim included,
-    // so the next tick retries) and never blocks other branches or cron work.
+    // A failure rolls back only this branch's transaction (claim included, so a
+    // later tick retries it) and never fails the cron tick. A slow failure can
+    // still spend this tick's budget; the rotating start order spreads that cost.
     const result = await withTenantDb(
       candidate.organizationId,
       async (db) => {
