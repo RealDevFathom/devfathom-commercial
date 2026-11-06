@@ -722,16 +722,24 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               <div className="grid grid-cols-4 gap-2" aria-label="Quick cash received">
                 {[
                   { label: 'Exact', value: amountMinor },
-                  { label: '500', value: 50_000 },
-                  { label: '1000', value: 100_000 },
-                  { label: '5000', value: 500_000 },
+                  ...(amountValid && amountMinor !== null
+                    ? [1, 2, 3].map((step) => {
+                        const value = (Math.floor(amountMinor / 50_000) + step) * 50_000;
+                        return { label: String(value / 100), value };
+                      })
+                    : []),
                 ].map((option) => (
                   <Button
                     key={option.label}
                     type="button"
                     variant="outline"
                     className="min-h-11 rounded-sm px-2"
-                    disabled={!editable || option.value === null}
+                    disabled={
+                      !editable ||
+                      !amountValid ||
+                      option.value === null ||
+                      !Number.isSafeInteger(option.value)
+                    }
                     onClick={() => {
                       if (option.value !== null) setCashReceived(formatMinor(option.value));
                     }}

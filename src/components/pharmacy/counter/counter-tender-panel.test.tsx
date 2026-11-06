@@ -92,6 +92,18 @@ describe('DEV-618 payment panel', () => {
     );
   });
 
+  it('offers the next three 500-rupee amounts above the amount being paid', () => {
+    setup({ balanceMinor: 250000 });
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '1000.00' } });
+    for (const amount of ['1500', '2000', '2500']) {
+      expect(screen.getByRole('button', { name: amount })).toBeEnabled();
+    }
+    expect(screen.queryByRole('button', { name: '500' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '1500' }));
+    expect(screen.getByLabelText('Cash received')).toHaveValue('1500.00');
+    expect(screen.getByText('Change').parentElement).toHaveTextContent('500.00');
+  });
+
   it('shows the balance, split-payment guidance, and every tender option', () => {
     setup();
     expect(screen.getByText('Balance due').parentElement).toHaveTextContent('250.00');
