@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // The drawer and close family, and the tender and refund that move cash through
 // the same drawer, take their branch from the input. `scopeFor` refuses a branch
 // that is not an active pharmacy branch of the caller's organization (one
-// `assertInOrganization` lookup); the counter's cash tender reaches it through
+// `assertInOrganization` lookup); the counter's cash tender and the three drawer
+// mutations (openDrawer, drawerMovement, closeDrawer) reach it through
 // `branchScopeOrForbidden`, which words that refusal as a scope denial. Every one
-// of these nine procedures must refuse such a branch before the settlement
-// library takes a lock, reads a drawer or writes anything. The close procedures
-// keep their day-close capability gate in front of that check; no capability is
-// added for the counter.
+// of these procedures must refuse such a branch before the settlement library
+// takes a lock, reads a drawer or writes anything. The close procedures keep their
+// day-close capability gate in front of that check. The drawer mutations then
+// need the counter capability and a branch assignment (DEV-279); that matrix is in
+// `pharmacy-sales.drawer-auth.test.ts`.
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -68,7 +70,7 @@ const procedures: Array<[string, (caller: Caller) => Promise<unknown>, Refusal]>
         businessDate,
         openingFloatMinor: 500,
       }),
-    NOT_IN_WORKSPACE,
+    OUTSIDE,
   ],
   [
     'drawerMovement',
@@ -80,12 +82,12 @@ const procedures: Array<[string, (caller: Caller) => Promise<unknown>, Refusal]>
         amountMinor: 100,
         reason: 'Float top-up',
       }),
-    NOT_IN_WORKSPACE,
+    OUTSIDE,
   ],
   [
     'closeDrawer',
     (c) => c.closeDrawer({ branchId: BRANCH, drawerSessionId: 'drawer-1', countedCashMinor: 0 }),
-    NOT_IN_WORKSPACE,
+    OUTSIDE,
   ],
   ['dailyClose', (c) => c.dailyClose({ branchId: BRANCH, businessDate }), NOT_IN_WORKSPACE],
   ['closePreview', (c) => c.closePreview({ branchId: BRANCH, businessDate }), NOT_IN_WORKSPACE],
@@ -139,7 +141,8 @@ let db: {
   $transaction: ReturnType<typeof vi.fn>;
   $queryRaw: ReturnType<typeof vi.fn>;
   $executeRaw: ReturnType<typeof vi.fn>;
-  pharmacyBranch: { findMany: ReturnType<typeof vi.fn> };
+  pharmacyBranch: { findMany: ReturnType<typeof vi.fn>; findFirst: ReturnType<typeof vi.fn> };
+  pharmacyBranchAssignment: { findMany: ReturnType<typeof vi.fn> };
   pharmacyDailyClose: { findFirst: ReturnType<typeof vi.fn> };
   pharmacyDrawerSession: { findFirst: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
   pharmacyDrawerMovement: { create: ReturnType<typeof vi.fn> };
@@ -168,7 +171,11 @@ beforeEach(() => {
     $queryRaw: vi.fn().mockResolvedValue([]),
     $executeRaw: vi.fn().mockResolvedValue(0),
     // Unknown, inactive and another tenant's branch all read as "no such active branch".
-    pharmacyBranch: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacyBranch: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
+    pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyDrawerSession: {
       findFirst: vi.fn().mockResolvedValue(null),
@@ -236,6 +243,15 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
 
   it('opens a drawer on an active branch of the organization, scoped to that branch', async () => {
     db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+    db.pharmacyBranch.findFirst.mockResolvedValue({ id: BRANCH });
+    // An assigned counter operator (DEV-279): the drawer needs both.
+    db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-1',
+      organizationRole: { permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    });
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: BRANCH }]);
     await expect(
       caller('EMPLOYEE').openDrawer({
         branchId: BRANCH,

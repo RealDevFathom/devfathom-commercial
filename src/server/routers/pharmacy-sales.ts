@@ -775,9 +775,12 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          openPharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        // DEV-279: drawers hold cash, so they take the cash-tender gate before any
+        // lock or write: canonical `pharmacy:counter` through `can()`, then the
+        // counter family check, then an active branch assignment. Both checks are
+        // deny-wins: a role DENY or user DENY beats any ALLOW (DEV-659).
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return await ctx.db.$transaction(async (tx) => openPharmacyDrawer(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
@@ -796,8 +799,9 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          recordPharmacyCashMovement(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          recordPharmacyCashMovement(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -816,9 +820,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          closePharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return await ctx.db.$transaction(async (tx) => closePharmacyDrawer(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
