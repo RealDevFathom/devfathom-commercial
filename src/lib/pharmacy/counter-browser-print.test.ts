@@ -210,7 +210,7 @@ describe('isolated Pharmacy browser receipt', () => {
       const text = new DOMParser()
         .parseFromString(html, 'text/html')
         .body.textContent!.replace(/\s+/g, ' ');
-      expect(text).toContain('× ۱٫۰۰');
+      expect(text).toContain('مقدار: 2 یونٹ · کل رقم: ۱٫۷۹');
       expect(text).toContain('رقم: ۱٫۷۹');
       expect(text).toContain('کل رقم: ۲٫۰۰');
       expect(text).toContain('رعایت: ۰٫۲۱');

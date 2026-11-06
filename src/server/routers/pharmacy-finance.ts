@@ -17,6 +17,7 @@ import {
   PharmacyBookkeepingError,
   postBookkeepingTransaction,
   reconcileBankLine,
+  reconcileSettlementBankLine,
   reopenAccountingPeriod,
   reverseBookkeepingTransaction,
 } from '@/lib/pharmacy/bookkeeping';
@@ -335,7 +336,7 @@ export const pharmacyFinanceRouter = router({
           where: {
             organizationId,
             branchId: branch.id,
-            type: { in: ['CARD', 'WALLET', 'BANK_TRANSFER'] },
+            type: { in: ['CARD', 'WALLET', 'BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA'] },
             settlementMembers: { none: {} },
           },
           include: { sale: { select: { receiptNumber: true } } },
@@ -344,7 +345,7 @@ export const pharmacyFinanceRouter = router({
         }),
         ctx.db.pharmacySettlementBatch.findMany({
           where: { organizationId, branchId: branch.id },
-          include: { tenders: true },
+          include: { tenders: true, bankMatches: { where: { reversedAt: null } } },
           orderBy: { businessDate: 'desc' },
           take: 25,
         }),
@@ -464,12 +465,17 @@ export const pharmacyFinanceRouter = router({
 
   reconcile: bookkeepingProcedure
     .input(
-      z.object({ branchId: id, statementLineId: id, transactionId: id, amountMinor: moneyMinor })
+      z.object({ branchId: id, statementLineId: id, transactionId: id.optional(),
+        settlementBatchId: id.optional(), amountMinor: moneyMinor }).strict()
+        .refine((value) => Boolean(value.transactionId) !== Boolean(value.settlementBatchId),
+          'Choose exactly one posted transaction or POS settlement batch.')
     )
     .mutation(async ({ ctx, input }) => {
       try {
         const scoped = await scope(ctx, input.branchId);
-        return await ctx.db.$transaction((tx) => reconcileBankLine(txDb(tx), scoped, input));
+        return await ctx.db.$transaction((tx) => input.settlementBatchId
+          ? reconcileSettlementBankLine(txDb(tx), scoped, { ...input, settlementBatchId: input.settlementBatchId })
+          : reconcileBankLine(txDb(tx), scoped, { ...input, transactionId: input.transactionId! }));
       } catch (error) {
         fail(error);
       }
@@ -481,7 +487,7 @@ export const pharmacyFinanceRouter = router({
         branchId: id,
         reference: z.string().trim().min(1).max(80),
         provider: z.string().trim().min(1).max(120),
-        tenderType: z.enum(['CARD', 'WALLET', 'BANK_TRANSFER']),
+        tenderType: z.enum(['CARD', 'WALLET', 'BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA']),
         businessDate: at,
         tenderIds: z.array(id).min(1).max(100),
       })

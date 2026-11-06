@@ -1,0 +1,170 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Inventory
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY OPERATIONS · INV-01—09 / PUR-07
+Inventory
+
+FEFO lots, controlled stock movements, chain operations, and the ranked work queue.
+
+Imported stock / Awaiting verification
+Inventory action completed.
+ORGANIZATION-SCOPED
+Working branch
+Branch
+Clifton Chemist · Karachi
+Open branch
+AVAILABLE UNITS
+0
+Ledger projection
+HELD UNITS
+0
+Quarantine, damage, transit
+COUNTS AWAITING APPROVAL
+0
+Distinct co-author required
+OPEN STOCK ACTIONS
+0
+Ranked by due time
+INV-01—04
+Lots and FEFO board
+
+No available lots yet. Set up a medicine and its pack, then receive a supplier delivery.
+Set up medicines and packs
+Receive opening stock
+Pharmacy setup
+
+INV-05
+Locations
+
+Shelf A
+
+Store · code SHELF-A
+
+AMBIENT
+Name
+Code
+Storage type
+Store
+Rack bin
+Fridge
+Safe
+Quarantine
+Transit
+Returns
+Validated cold-chain zone
+Minimum °C
+Maximum °C
+Create location
+Manual temperature log
+
+Create a validated cold-chain zone before recording temperatures.
+
+Fridge cameras
+
+No cold-chain camera watches a zone in this branch.
+
+Excursion timeline
+
+No excursion has requested a camera still.
+
+INV-06 · FROZEN SNAPSHOT
+Physical count
+
+Receive stock and create a location before starting a count.
+
+INV-06
+Adjustments and write-off custody
+
+A write-off needs available stock and a different active organization member as witness.
+
+INV-07 · ALLOCATE → APPROVE → DISPATCH → RECEIVE
+Inter-branch transfers
+
+Transfers need available stock and a second active branch. Add the branch and its receiving location in onboarding.
+
+INV-08
+Recalls and quarantine
+
+A received manufacturing batch is required before a recall can be issued.
+
+INV-09
+Near-expiry and return windows
+Act on expiring stock
+
+EXPIRES WITHIN 30 DAYS
+
+PKR 0
+
+0 units at risk · no reserved return claim
+
+EXPIRES WITHIN 60 DAYS
+
+PKR 0
+
+0 units at risk · no reserved return claim
+
+EXPIRES WITHIN 90 DAYS
+
+PKR 0
+
+0 units at risk · no reserved return claim
+
+EXPIRES WITHIN 180 DAYS
+
+PKR 0
+
+0 units at risk · no reserved return claim
+
+PUR-07 · RANKED BY DUE TIME
+Stock action centre
+
+Signals explain their evidence window and never create an order or movement.
+
+Refresh signals
+
+No actionable stock signals. Refresh after receiving stock, approving safety levels, or recording demand.

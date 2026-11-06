@@ -4,7 +4,7 @@ import { EXACT_GRANT_ONLY_ACTIONS, capabilityMatches } from './capabilities';
 import { ALL_ACTIONS } from './policies';
 
 export const intendedPharmacyGrants = {
-  owner: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+  owner: ['pharmacy:*', 'reports:operational', 'reports:financial', 'pharmacy:safety'],
   'owner-operator': [
     'reports:operational',
     'reports:financial',
@@ -12,6 +12,11 @@ export const intendedPharmacyGrants = {
     'pharmacy:dispense',
     'pharmacy:catalogue-review',
     'pharmacy:safety',
+    'pharmacy:procurement',
+    'pharmacy:inventory',
+    'pharmacy:counter',
+    'pharmacy:close',
+    'pharmacy:manage',
   ],
   pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
   manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
@@ -67,11 +72,21 @@ describe('canonical capability contract (#130)', () => {
     const owner = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner')!;
     for (const action of PHARMACY_CHECKED_CAPABILITIES) {
       expect(ALL_ACTIONS).toContain(action);
-      // The owner's pharmacy:* never reaches the exact-grant-only actions.
+      // The owner's pharmacy:* never reaches the exact-grant-only actions; only its
+      // explicit pharmacy:safety grant (#479 PV filing/review) does.
       expect(owner.capabilities.some((grant) => capabilityMatches(grant, action))).toBe(
-        !EXACT_GRANT_ONLY_ACTIONS.has(action)
+        !EXACT_GRANT_ONLY_ACTIONS.has(action) || action === 'pharmacy:safety'
       );
     }
+  });
+
+  it('gives the owner exact pharmacy:safety but never dispense or catalogue review', () => {
+    const owner = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner')!;
+    const holds = (action: string) =>
+      owner.capabilities.some((grant) => capabilityMatches(grant, action));
+    expect(holds('pharmacy:safety')).toBe(true);
+    expect(holds('pharmacy:dispense')).toBe(false);
+    expect(holds('pharmacy:catalogue-review')).toBe(false);
   });
 
   it.each([
@@ -95,7 +110,12 @@ describe('canonical capability contract (#130)', () => {
 });
 
 describe('sensitive pharmacy actions need an exact grant', () => {
-  const sensitive = ['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review'];
+  const sensitive = [
+    'pharmacy:dispense',
+    'pharmacy:prescriptions',
+    'pharmacy:safety',
+    'pharmacy:catalogue-review',
+  ];
 
   it('never matches them through `*` or `pharmacy:*`', () => {
     for (const action of sensitive) {

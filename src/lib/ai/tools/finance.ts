@@ -18,11 +18,13 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
+import { createWithNextInvoiceNumber } from '@/lib/finance/invoice-number';
 import {
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
   PAID_STATUS_ERROR,
 } from '@/lib/finance/invoice-status';
+import { multiplyMoney, roundMoney } from '@/lib/finance/money';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
 // Bound amounts here so an oversized input is a clean validation error, not a
@@ -62,7 +64,7 @@ function rollForwardDueDate(due: Date, interval: string, now: Date): Date {
   return next;
 }
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
+const round2 = roundMoney;
 
 /** Display label for a money amount, e.g. "$1,200" / "Rs 50,000". */
 const moneyLabel = (amount: number, currency: string) =>
@@ -496,37 +498,34 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         description: it.description,
         quantity: it.quantity,
         rate: it.unitPrice,
-        amount: round2(it.quantity * it.unitPrice),
+        amount: multiplyMoney(it.quantity, it.unitPrice),
       }));
       const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
       const taxAmount = round2(tax ?? 0);
       const total = round2(subtotal + taxAmount);
       const invCurrency = currency ?? 'USD';
 
-      // Invoice number: INV-<year>-<sequence>. Mirrors the tRPC mutation.
-      // FIN-09: per-year sequence so it resets to -001 each January.
-      const invYear = new Date().getFullYear();
-      const count = await db.invoice.count({
-        where: { invoiceNumber: { startsWith: `INV-${invYear}-` } },
-      });
-      const invoiceNumber = `INV-${invYear}-${String(count + 1).padStart(3, '0')}`;
-
-      const invoice = await db.invoice.create({
-        data: {
-          invoiceNumber,
-          clientId: rc.value.id,
-          projectId,
-          items: lineItems,
-          subtotal,
-          tax: taxAmount,
-          total,
-          currency: invCurrency,
-          status: 'DRAFT',
-          dueDate: new Date(dueDate),
-          notes: notes ?? null,
-        },
-        include: { client: { select: { name: true } } },
-      });
+      // Same per-organization, per-year INV sequence as the tRPC mutation. The
+      // assistant's per-operation tenant client opens one transaction here so
+      // the number is allocated under the lock the insert commits with.
+      const invoice = await createWithNextInvoiceNumber(db, (tx, invoiceNumber) =>
+        tx.invoice.create({
+          data: {
+            invoiceNumber,
+            clientId: rc.value.id,
+            projectId,
+            items: lineItems,
+            subtotal,
+            tax: taxAmount,
+            total,
+            currency: invCurrency,
+            status: 'DRAFT',
+            dueDate: new Date(dueDate),
+            notes: notes ?? null,
+          },
+          include: { client: { select: { name: true } } },
+        })
+      );
 
       h.activity({
         type: 'invoice_created',

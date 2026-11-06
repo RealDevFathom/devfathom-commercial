@@ -33,6 +33,7 @@ export type PharmacyOfflineAction =
   | 'SEARCH_CATALOG'
   | 'SCAN_BARCODE'
   | 'CASH_OTC_SALE'
+  | 'MANUAL_OTC_SALE'
   | 'KHATA_SALE_WITHIN_CACHED_LIMIT'
   | 'PERMITTED_REFUND'
   | 'PROVISIONAL_CLOSE'
@@ -91,6 +92,13 @@ export const OFFLINE_ACTION_MATRIX: readonly OfflineActionRule[] = [
     requires: ['RECEIPT_NUMBER', 'STOCK_QUOTA'],
     rationale:
       'An over-the-counter cash sale prices from the signed price and tax snapshots, draws a pre-allocated receipt number, and can only move stock this counter owns a quota for.',
+  },
+  {
+    action: 'MANUAL_OTC_SALE',
+    allowedOffline: true,
+    requiresSnapshots: ['CATALOG', 'PRICES', 'TAX', 'RULES', 'LOT_BALANCES'],
+    requires: ['RECEIPT_NUMBER', 'STOCK_QUOTA'],
+    rationale: 'A manually confirmed Raast or wallet OTC sale uses signed branch merchant policy, a receipt lease and device stock quota. Its evidence queues for replay.',
   },
   {
     action: 'KHATA_SALE_WITHIN_CACHED_LIMIT',
@@ -255,6 +263,7 @@ export function decideOfflineAction(
 
   const saleOrDispense =
     action === 'CASH_OTC_SALE' ||
+    action === 'MANUAL_OTC_SALE' ||
     action === 'KHATA_SALE_WITHIN_CACHED_LIMIT' ||
     action === 'CONTROLLED_MEDICINE_SALE';
   if (saleOrDispense && context.medicineSale === true && context.safetyLeaseOk !== true) {

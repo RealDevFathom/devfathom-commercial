@@ -121,7 +121,7 @@ export async function readPharmacyAnomalyFacts(
       : await db.$queryRaw<DiscountRow[]>(Prisma.sql`
           SELECT s."branchId", s."createdByUserId" AS "userId", COUNT(*)::int AS "affectedLines",
                  COUNT(*) FILTER (WHERE l."approvedByUserId" IS NOT NULL)::int AS "approvedOverrideLines",
-                 COALESCE(SUM(l."quantity"*l."unitPriceMinor"),0)::int AS "grossMinor",
+                 COALESCE(SUM(l."grossMinor"),0)::int AS "grossMinor",
                  COALESCE(SUM(l."discountMinor"),0)::int AS "discountMinor", MAX(s."completedAt") AS "occurredAt"
           FROM "pharmacy_sale_lines" l
           JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId"

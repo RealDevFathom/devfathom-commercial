@@ -2,7 +2,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { readAskFathomSettings } from './ask-fathom-settings';
+import {
+  askFathomAvailability,
+  readAskFathomSettings,
+  readRoutedAvailabilityFor,
+} from './ask-fathom-settings';
 
 const findUnique = vi.fn();
 const db = { organization: { findUnique } } as unknown as ScopedDb;
@@ -87,5 +91,42 @@ describe('current company AskFathom settings', () => {
       askFathomEnabled: false,
     });
     expect(findUnique).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('the launcher and the chat share the routed state', () => {
+  const ready = { ready: true, provider: 'auto', modelId: 'auto:standard' } as never;
+  const settings = { organizationId: 'org_a', askFathomEnabled: true };
+
+  it('reports AI_UNAVAILABLE when the routed chain cannot answer', () => {
+    expect(
+      askFathomAvailability(settings, ready, { available: false, reason: 'DISABLED' })
+    ).toEqual({ ...settings, available: false, unavailableReason: 'AI_UNAVAILABLE' });
+    expect(askFathomAvailability(settings, ready, { available: true })).toEqual({
+      ...settings,
+      available: true,
+      unavailableReason: null,
+    });
+  });
+
+  it('keeps the company switch and missing configuration ahead of the routed state', () => {
+    const blocked = { available: false, reason: 'CAPPED' } as const;
+    expect(
+      askFathomAvailability({ ...settings, askFathomEnabled: false }, ready, blocked)
+        .unavailableReason
+    ).toBe('COMPANY_DISABLED');
+    expect(
+      askFathomAvailability(settings, { ready: false, reason: 'NOT_CONFIGURED' } as never, blocked)
+        .unavailableReason
+    ).toBe('AI_NOT_CONFIGURED');
+  });
+
+  it('reads the routed state only for the routed chain', async () => {
+    await expect(
+      readRoutedAvailabilityFor({ ready: true, provider: 'groq', modelId: 'm' } as never)
+    ).resolves.toBeNull();
+    await expect(
+      readRoutedAvailabilityFor({ ready: false, reason: 'NOT_CONFIGURED' } as never)
+    ).resolves.toBeNull();
   });
 });

@@ -61,6 +61,46 @@ it('offers labeled paper selection and routes printing through the provided hand
   expect(screen.getByText(/saved designer settings are not connected yet/i)).toBeTruthy();
 });
 
+it('shows recorded payment, exact change and an issued receipt preview without printing again', () => {
+  const input = props();
+  input.receipt!.lines[0]!.identityStatus = 'ISSUED';
+  input.receipt!.tenders = [
+    {
+      tenderId: 'cash-1',
+      type: 'CASH',
+      amountMinor: 100,
+      cashReceivedMinor: 200,
+      changeGivenMinor: 100,
+    },
+  ];
+  input.receipt!.totals.tenderedMinor = 200;
+  input.receipt!.totals.changeMinor = 100;
+  render(<CounterReceiptView {...input} />);
+
+  const recorded = within(screen.getByRole('status'));
+  expect(recorded.getByRole('heading', { name: 'Payment recorded' })).toBeTruthy();
+  expect(recorded.getByText('Receipt 12')).toBeTruthy();
+  expect(recorded.getByText('Change').nextElementSibling).toHaveTextContent('PKR 1.00');
+  expect(recorded.getByText('Total').nextElementSibling).toHaveTextContent('PKR 1.00');
+  expect(screen.getByRole('heading', { name: 'Receipt preview' })).toBeTruthy();
+  const preview = within(screen.getByRole('region', { name: 'Receipt 12' }));
+  expect(preview.getByText(/Medicine/)).toBeTruthy();
+  expect(preview.getByText('CASH')).toBeTruthy();
+  expect(preview.getByText('Tendered').nextElementSibling).toHaveTextContent('2.00');
+  expect(input.onPrint).not.toHaveBeenCalled();
+});
+
+it.each([{ receiptNumber: null }, { completedAt: null }])(
+  'does not announce recorded payment for an incomplete receipt: %j',
+  (incomplete) => {
+    const input = props();
+    input.receipt = { ...input.receipt!, ...incomplete };
+    render(<CounterReceiptView {...input} />);
+    expect(screen.queryByRole('heading', { name: 'Payment recorded' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Print receipt' })).toBeDisabled();
+  }
+);
+
 it('disables controls while refreshing the receipt', () => {
   render(<CounterReceiptView {...props({ printing: true })} />);
   expect(screen.getByLabelText('Format')).toBeDisabled();
@@ -94,6 +134,9 @@ it('renders every Urdu receipt amount in Urdu digits', () => {
   expect(within(region).getAllByText('۱۲۳۴٫۵۶')).toHaveLength(2);
   expect(container.textContent).not.toContain('1234.56');
   expect(region.textContent).not.toMatch(/\d\.\d\d/);
+  // The settled banner's net and change follow the receipt locale too.
+  expect(screen.getByText('PKR ۱٫۰۰')).toBeTruthy();
+  expect(screen.getByText('PKR ۰٫۰۰')).toBeTruthy();
 });
 
 it('keeps English receipt amounts on ASCII digits', () => {
@@ -188,6 +231,7 @@ it('disables printing when shared semantic validation rejects the receipt', () =
   render(<CounterReceiptView {...input} />);
   expect(screen.getByRole('button', { name: 'Print receipt' })).toBeDisabled();
   expect(screen.getByRole('alert')).toHaveTextContent('cannot be previewed');
+  expect(screen.queryByRole('heading', { name: 'Payment recorded' })).toBeNull();
 });
 
 it('keeps Rx printing disabled when receipt has no sourced directions or licence', () => {
@@ -351,4 +395,58 @@ it.each([
 it.each([undefined, null, []])('renders no evidence section for %j', (evidence) => {
   render(<CounterReceiptView {...props({ evidence })} />);
   expect(screen.queryByRole('region', { name: 'Camera evidence' })).toBeNull();
+});
+
+it.each([
+  ['en', '2 × 1.00 + 1 × 1.01', '3.01'],
+  ['ur', '2 × ۱٫۰۰ + 1 × ۱٫۰۱', '۳٫۰۱'],
+] as const)('shows exact mixed-lot pricing in the live %s receipt', (locale, pricing, total) => {
+  const input = props({ locale });
+  const line = input.receipt!.lines[0]!;
+  input.receipt!.lines = [
+    {
+      ...line,
+      quantity: 3,
+      canonicalUnits: 3,
+      unitPriceMinor: 100,
+      lineTotalMinor: 301,
+      allocations: [
+        {
+          allocationId: 'a',
+          inventoryLotId: 'a',
+          batchNumber: null,
+          expiresAt: null,
+          canonicalUnits: 2,
+          grossMinor: 200,
+        },
+        {
+          allocationId: 'b',
+          inventoryLotId: 'b',
+          batchNumber: null,
+          expiresAt: null,
+          canonicalUnits: 1,
+          grossMinor: 101,
+        },
+      ],
+    },
+  ];
+  render(<CounterReceiptView {...input} />);
+  const item = screen.getAllByRole('listitem')[0]!;
+  expect(item).toHaveTextContent(pricing);
+  expect(item).toHaveTextContent(total);
+  expect(item).not.toHaveTextContent('3 unit × 1.00');
+});
+
+it('states quantity and gross when historical per-lot pricing is unavailable', () => {
+  const input = props();
+  input.receipt!.lines[0] = {
+    ...input.receipt!.lines[0]!,
+    quantity: 3,
+    canonicalUnits: 3,
+    unitPriceMinor: 100,
+    lineTotalMinor: 301,
+  };
+  render(<CounterReceiptView {...input} />);
+  expect(screen.getAllByRole('listitem')[0]).toHaveTextContent('Qty: 3 unit · Gross: 3.01');
+  expect(screen.getAllByRole('listitem')[0]).not.toHaveTextContent('3 unit × 1.00');
 });

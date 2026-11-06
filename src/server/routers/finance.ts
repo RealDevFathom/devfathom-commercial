@@ -15,6 +15,7 @@ import {
   moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
+import { createWithNextInvoiceNumber } from '@/lib/finance/invoice-number';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
 import {
   isPersistableMoney,
@@ -311,31 +312,26 @@ export const financeRouter = router({
     const total = sumMoney([subtotal, tax]);
     assertDerivedInvoiceMoney(lineItems, subtotal, total);
 
-    // Generate invoice number. FIN-09: scope the count to THIS year's invoices
-    // so the sequence resets to -001 each January (was a global count that never
-    // reset across years).
-    const year = new Date().getFullYear();
-    const count = await ctx.db.invoice.count({
-      where: { invoiceNumber: { startsWith: `INV-${year}-` } },
-    });
-    const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
-
-    const invoice = await ctx.db.invoice.create({
-      data: {
-        invoiceNumber,
-        clientId: input.clientId,
-        projectId: input.projectId || null,
-        items: lineItems,
-        subtotal,
-        tax,
-        total,
-        currency: input.currency,
-        status: 'DRAFT',
-        dueDate: input.dueDate,
-        notes: input.notes,
-      },
-      include: { client: { select: { name: true } } },
-    });
+    // INV-<year>-<n>, unique per organization and allocated under a per-tenant
+    // lock in the insert's transaction (FIN-09: the sequence resets each year).
+    const invoice = await createWithNextInvoiceNumber(ctx.db, (tx, invoiceNumber) =>
+      tx.invoice.create({
+        data: {
+          invoiceNumber,
+          clientId: input.clientId,
+          projectId: input.projectId || null,
+          items: lineItems,
+          subtotal,
+          tax,
+          total,
+          currency: input.currency,
+          status: 'DRAFT',
+          dueDate: input.dueDate,
+          notes: input.notes,
+        },
+        include: { client: { select: { name: true } } },
+      })
+    );
 
     logActivity(ctx.db, ctx.session.user.id, {
       type: 'invoice_created',
@@ -584,21 +580,21 @@ export const financeRouter = router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Payment must be at least 0.01.' });
       }
 
-      // IMP-REST-03: captured inside the tx, fired only AFTER it commits.
-      let paidEvent: {
-        invoiceId: string;
-        total: number;
-        currency: string;
-        clientId: string;
-      } | null = null;
-
-      const result = await ctx.db.$transaction(async (tx) => {
+      // IMP-REST-03: return the event from the tx, fire it only AFTER commit.
+      const { result, paidEvent } = await ctx.db.$transaction(async (tx) => {
         // Use the same invoice-row lock as updateInvoice so settlement and edits
         // cannot both proceed from stale status/total snapshots.
         await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.invoiceId} FOR UPDATE`;
         const invoice = await tx.invoice.findUnique({
           where: { id: input.invoiceId },
-          select: { id: true, status: true, total: true, currency: true, clientId: true },
+          select: {
+            id: true,
+            invoiceNumber: true,
+            status: true,
+            total: true,
+            currency: true,
+            clientId: true,
+          },
         });
         if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
 
@@ -659,26 +655,40 @@ export const financeRouter = router({
             where: { id: invoice.id },
             data: { status: 'PAID', paidAt: new Date() },
           });
-          paidEvent = {
-            invoiceId: invoice.id,
-            total,
-            currency: invoice.currency,
-            clientId: invoice.clientId,
-          };
         }
 
         return {
-          payment,
-          amountPaid: newPaid,
-          balance: round2(total - newPaid),
-          status: fullyPaid ? ('PAID' as const) : invoice.status,
+          result: {
+            payment,
+            amountPaid: newPaid,
+            balance: round2(total - newPaid),
+            status: fullyPaid ? ('PAID' as const) : invoice.status,
+          },
+          paidEvent: fullyPaid
+            ? {
+                invoiceId: invoice.id,
+                invoiceNumber: invoice.invoiceNumber,
+                total,
+                currency: invoice.currency,
+                clientId: invoice.clientId,
+              }
+            : null,
         };
       });
 
       // IMP-REST-03: fan out invoice.paid once the invoice has truly flipped to
       // PAID and the transaction has committed. Fire-and-forget — emitEvent
       // never throws, so it can't affect the recorded payment.
-      if (paidEvent) emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', paidEvent);
+      if (paidEvent) {
+        const { invoiceNumber, ...webhookEvent } = paidEvent;
+        logActivity(ctx.db, ctx.session.user.id, {
+          type: 'invoice_paid',
+          message: `marked invoice ${invoiceNumber} as paid (${paidEvent.currency} ${paidEvent.total.toFixed(2)})`,
+          entityType: 'Invoice',
+          entityId: paidEvent.invoiceId,
+        });
+        emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', webhookEvent);
+      }
 
       return result;
     }),

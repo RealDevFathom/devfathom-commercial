@@ -7,6 +7,10 @@ import { LedgerReportsSection } from './ledger-reports';
 import { FinancialStatements } from './financial-statements';
 import { PageHeader } from '@/components/ui/page-header';
 
+vi.mock('@/components/pharmacy/counter/manual-payment-settings-panel', () => ({
+  ManualPaymentSettingsPanel: () => null,
+}));
+
 const mocks = vi.hoisted(() => ({
   financialStatements: vi.fn(),
   branches: vi.fn(),

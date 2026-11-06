@@ -64,6 +64,7 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
   savePharmacyReceiptFormat: vi.fn(),
 }));
 
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
@@ -422,8 +423,9 @@ describe('counter receipt authorization', () => {
     expect(applyPharmacyTender).toHaveBeenCalled();
   });
 
-  it('lets an assigned cashier holding the canonical pharmacy:counter do the same (#163)', async () => {
-    // #163 migrates pharmacy.counter grants to pharmacy:counter, and the Cashier template grants it.
+  it('lets an assigned cashier holding canonical pharmacy:counter use every counter workflow (DEV-295)', async () => {
+    // DEV-295: the Cashier template grants pharmacy:counter, so this must work without
+    // also granting its legacy pharmacy.counter alias.
     const f = fixture([
       { capability: 'pharmacy:counter', effect: 'ALLOW' },
       { capability: 'pharmacy:orders', effect: 'ALLOW' },
@@ -604,6 +606,31 @@ describe('counter receipt authorization', () => {
     }
   );
 
+  it.each(['pharmacy:dispense', 'reports:financial'])(
+    'denies Khata tender with %s access alone',
+    async (capability) => {
+      const f = fixture([{ capability, effect: 'ALLOW' }]);
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type: 'KHATA',
+          amountMinor: 100,
+          familyAccountId: 'family-1',
+          idempotencyKey: 'khata-denied',
+        })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Pharmacy counter permission required.',
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
   it('denies Khata tender when the cashier has no branch assignment', async () => {
     const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
     await expect(
@@ -637,6 +664,16 @@ describe('counter receipt authorization', () => {
         idempotencyKey: 'khata-clinical-only',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('denies finance-only Khata account reads without a branch assignment', async () => {
+    const f = fixture([{ capability: 'reports:financial', effect: 'ALLOW' }]);
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalled();
     expect(f.db.$transaction).not.toHaveBeenCalled();
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
@@ -815,4 +852,45 @@ describe('counter receipt authorization', () => {
       })
     );
   });
+});
+
+it('DEV-295 authorizes the actual shipped Cashier template after canonical migration', async () => {
+  const template = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'cashier')!;
+  expect(template.capabilities).toContain('pharmacy:counter');
+  expect(template.capabilities).not.toContain('pharmacy.counter');
+  const permissions = template.capabilities.map((capability) => ({
+    capability,
+    effect: 'ALLOW' as const,
+  }));
+  const f = fixture(permissions);
+  assign(f, ['branch-a']);
+  await expect(
+    f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+  ).resolves.toMatchObject({ saleId: 'sale-a' });
+  await expect(
+    f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+  ).resolves.toMatchObject({ receiptNumber: 7 });
+  await expect(
+    f.caller().returnHistory({ branchId: 'branch-a', saleId: 'sale-a' })
+  ).resolves.toEqual([{ id: 'return-1' }]);
+  for (const type of ['CASH', 'CARD'] as const) {
+    await expect(
+      f.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-11-03'),
+        type,
+        amountMinor: 100,
+        idempotencyKey: `template-${type}`,
+      })
+    ).resolves.toEqual({ tenderId: 'tender-1' });
+  }
+  const denied = fixture(permissions, 'EMPLOYEE', [
+    { capability: 'pharmacy:counter', effect: 'DENY' },
+  ]);
+  assign(denied, ['branch-a']);
+  await expect(
+    denied.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
 });

@@ -5,6 +5,7 @@ import { hotelPropertyRouter } from './hotel-property';
 import { hotelRatesRouter } from './hotel-rates';
 import { restaurantPromotionsRouter } from './restaurant-promotions';
 import { platformHealthRouter } from './platform-health';
+import { platformAIUsageRouter } from './platform-ai-usage';
 import { pharmacyOfflineRouter } from './pharmacy-offline';
 import { dashboardRouter } from './dashboard';
 import { projectsRouter } from './projects';
@@ -57,7 +58,9 @@ import { restaurantCateringRouter } from './restaurant-catering';
 import { restaurantGrowthRouter } from './restaurant-growth';
 import { pharmacyMedicineRouter } from './pharmacy-medicine';
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
+import { pharmacyPackLabelRouter } from './pharmacy-pack-label';
 import { pharmacyInventoryRouter } from './pharmacy-inventory';
+import { pharmacyOwnerImportRouter } from './pharmacy-owner-import';
 import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
 import { pharmacyDispensingRouter } from './pharmacy-dispensing';
 import { pharmacySafetyRouter } from './pharmacy-safety';
@@ -68,12 +71,15 @@ import { pharmacyFinanceRouter } from './pharmacy-finance';
 import { pharmacyOnboardingRouter } from './pharmacy-onboarding';
 import { pharmacyOrderingRouter } from './pharmacy-ordering';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
+import { aiSettingsRouter } from './ai-settings';
 
 export const appRouter = router({
+  aiSettings: aiSettingsRouter,
   hotelProperty: hotelPropertyRouter,
   hotelRates: hotelRatesRouter,
   restaurantPromotions: restaurantPromotionsRouter,
   platformHealth: platformHealthRouter,
+  platformAIUsage: platformAIUsageRouter,
   pharmacyOffline: pharmacyOfflineRouter,
   dashboard: dashboardRouter,
   projects: projectsRouter,
@@ -126,7 +132,9 @@ export const appRouter = router({
   restaurantGrowth: restaurantGrowthRouter,
   pharmacyMedicine: pharmacyMedicineRouter,
   pharmacyPurchasing: pharmacyPurchasingRouter,
+  pharmacyPackLabel: pharmacyPackLabelRouter,
   pharmacyInventory: pharmacyInventoryRouter,
+  pharmacyOwnerImport: pharmacyOwnerImportRouter,
   pharmacyPrescriptions: pharmacyPrescriptionsRouter,
   pharmacyDispensing: pharmacyDispensingRouter,
   pharmacySafety: pharmacySafetyRouter,

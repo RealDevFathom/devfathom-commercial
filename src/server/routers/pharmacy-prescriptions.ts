@@ -67,7 +67,7 @@ const fileProcedure = publicProcedure
     const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
     if (
       !hasModule(ctx.entitlements, 'pharmacy-dispensing') ||
-      !(await can(subject, 'pharmacy:dispense', undefined, options))
+      !(await can(subject, 'pharmacy:prescriptions', undefined, options))
     ) {
       throw new TRPCError({
         code: 'FORBIDDEN',
@@ -126,6 +126,16 @@ export const pharmacyPrescriptionsRouter = router({
       if (input?.branchId && !selectedBranch)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
 
+      // Prescription access is narrower than dispensing (tenant admins may
+      // capture without an exact dispense grant). Report whether the caller can
+      // also record fills / refill reminders so the console hides actions that
+      // the `pharmacy:dispense` gate would refuse.
+      const canDispense = await can(
+        subjectFromSession(ctx.session.user),
+        'pharmacy:dispense',
+        undefined,
+        { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+      );
       const [patients, prescribers, medicines, prescriptions, reminderCaptures] = await Promise.all(
         [
           ctx.db.pharmacyPatient.findMany({ orderBy: { displayName: 'asc' } }),
@@ -161,6 +171,7 @@ export const pharmacyPrescriptionsRouter = router({
       return {
         branches,
         selectedBranchId: selectedBranch?.id ?? null,
+        canDispense,
         patients: patients.map(maskedPatient),
         prescribers,
         medicines,
@@ -379,7 +390,7 @@ export const pharmacyPrescriptionsRouter = router({
       });
     }),
 
-  readPatient: auditedProtectedProcedure
+  readPatient: capabilityProcedure('pharmacy:prescriptions')
     .input(z.object({ patientId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       const patient = await ctx.db.pharmacyPatient.findFirstOrThrow({
@@ -393,7 +404,7 @@ export const pharmacyPrescriptionsRouter = router({
       return maskedPatient(patient);
     }),
 
-  exportPatient: auditedProtectedProcedure
+  exportPatient: capabilityProcedure('pharmacy:prescriptions')
     .input(z.object({ patientId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       const patient = await ctx.db.pharmacyPatient.findFirstOrThrow({
@@ -409,7 +420,7 @@ export const pharmacyPrescriptionsRouter = router({
         patientId: patient.id,
         export: true,
       });
-      return patient;
+      return { ...patient, ...maskedPatient(patient) };
     }),
 
   // Recording a fill is a dispensing act: require the exact-grant-only

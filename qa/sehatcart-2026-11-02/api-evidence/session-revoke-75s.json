@@ -1,0 +1,23 @@
+{
+  "before": {
+    "label": "before sign-out (copied cookie)",
+    "trpcStatus": 200,
+    "sessionUser": {
+      "status": "ACTIVE",
+      "sessionRevoked": false,
+      "reason": null
+    },
+    "at": "2026-11-03 00:40:40 PKT"
+  },
+  "after": {
+    "label": "after sign-out + 75s (replayed copied cookie)",
+    "trpcStatus": 200,
+    "sessionUser": {
+      "status": "ACTIVE",
+      "sessionRevoked": false,
+      "reason": null
+    },
+    "at": "2026-11-03 00:41:55 PKT"
+  },
+  "waitMs": 75000
+}
