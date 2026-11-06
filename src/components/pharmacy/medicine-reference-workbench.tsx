@@ -751,8 +751,8 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                   <div className="mt-2 space-y-1 text-xs text-text-muted">
                     {!reviewAssertionIds.length ? (
                       <p id={reviewNoteId}>
-                        Accept, reject, and defer apply to unreviewed assertions. Every assertion
-                        on this candidate already has a review decision.
+                        Accept, reject, and defer apply to unreviewed assertions. Every assertion on
+                        this candidate already has a review decision.
                       </p>
                     ) : null}
                     {!publishAssertionIds.length ? (
