@@ -17,6 +17,7 @@ import {
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
+import { prescriptionDateValue } from '@/lib/pharmacy/prescription-validity';
 import {
   configuredRxOcrAdapterName,
   proposeRxPrefill,
@@ -35,6 +36,10 @@ import {
 
 const purpose = z.enum(['DISPENSING', 'REMINDERS', 'LOYALTY', 'MARKETING']);
 const channel = z.enum(['IN_PERSON', 'PHONE', 'SMS', 'WHATSAPP', 'EMAIL']);
+const prescriptionDate = z.date().refine(
+  (value) => value.toISOString() === `${prescriptionDateValue(value)}T00:00:00.000Z`,
+  'Prescription validity must be a calendar date.'
+);
 
 async function requireCounterPatientAccess(
   ctx: Pick<TRPCContext, 'db' | 'requestMeta'> & {
@@ -300,8 +305,8 @@ export const pharmacyPrescriptionsRouter = router({
           custodyState: z
             .enum(['NOT_HELD', 'HELD_AT_PHARMACY', 'RETURNED_TO_PATIENT', 'TRANSFERRED'])
             .optional(),
-          validFrom: z.date(),
-          validUntil: z.date(),
+          validFrom: prescriptionDate,
+          validUntil: prescriptionDate,
           authorizedRepeats: z.number().int().nonnegative(),
           lines: z
             .array(
@@ -319,6 +324,10 @@ export const pharmacyPrescriptionsRouter = router({
             .max(30),
         })
         .strict()
+        .refine((value) => value.validUntil >= value.validFrom, {
+          message: 'Valid through must be on or after valid from.',
+          path: ['validUntil'],
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const { lines, ...prescription } = input;

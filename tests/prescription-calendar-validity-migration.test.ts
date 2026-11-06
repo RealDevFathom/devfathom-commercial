@@ -1,0 +1,69 @@
+// @vitest-environment node
+import { readFileSync } from 'node:fs';
+
+import { Client } from 'pg';
+import { describe, expect, it } from 'vitest';
+
+const databaseUrl = process.env.DATABASE_URL;
+const sql = readFileSync(
+  'prisma/migrations/20261024000100_prescription_calendar_validity/migration.sql',
+  'utf8'
+);
+
+(databaseUrl ? describe : describe.skip)('prescription calendar-validity migration', () => {
+  it('retains entered calendar dates when the database session is west of UTC', async () => {
+    const client = new Client({ connectionString: databaseUrl });
+    await client.connect();
+
+    try {
+      await client.query('BEGIN');
+      await client.query("SET LOCAL TIME ZONE 'America/Los_Angeles'");
+      await client.query(`
+        CREATE TEMP TABLE pharmacy_prescriptions (
+          "validFrom" timestamp(3) NOT NULL,
+          "validUntil" timestamp(3) NOT NULL
+        ) ON COMMIT DROP
+      `);
+      await client.query(`
+        INSERT INTO pharmacy_prescriptions ("validFrom", "validUntil")
+        VALUES
+          ('2024-02-29 00:00:00', '2024-03-01 00:00:00'),
+          ('2026-10-22 00:00:00', '2026-10-31 00:00:00')
+      `);
+
+      await client.query(sql);
+
+      const result = await client.query<{
+        validFrom: string;
+        validUntil: string;
+        validFromType: string;
+        validUntilType: string;
+      }>(`
+        SELECT
+          "validFrom"::text AS "validFrom",
+          "validUntil"::text AS "validUntil",
+          pg_typeof("validFrom")::text AS "validFromType",
+          pg_typeof("validUntil")::text AS "validUntilType"
+        FROM pharmacy_prescriptions
+        ORDER BY "validFrom"
+      `);
+      expect(result.rows).toEqual([
+        {
+          validFrom: '2024-02-29',
+          validUntil: '2024-03-01',
+          validFromType: 'date',
+          validUntilType: 'date',
+        },
+        {
+          validFrom: '2026-10-22',
+          validUntil: '2026-10-31',
+          validFromType: 'date',
+          validUntilType: 'date',
+        },
+      ]);
+    } finally {
+      await client.query('ROLLBACK');
+      await client.end();
+    }
+  });
+});

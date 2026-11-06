@@ -2,6 +2,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import type { LedgerScope } from './stock-ledger';
+import { prescriptionIsValidForOrganization } from './prescription-validity';
 
 const REASONS = {
   PRESCRIPTION_NOT_FOUND:
@@ -89,7 +90,15 @@ export async function resolvePrescriptionReference(
     (sale?.customer && sale.customer.patientId !== input.patientId)
   )
     throw new PharmacyRxReferenceError('PRESCRIPTION_PATIENT_MISMATCH');
-  if (line.prescription.validFrom > now || line.prescription.validUntil <= now)
+  if (
+    !(await prescriptionIsValidForOrganization(
+      db,
+      scope.organizationId,
+      line.prescription.validFrom,
+      line.prescription.validUntil,
+      now
+    ))
+  )
     throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_IN_DATE');
   const filled = line.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0);
   if (
@@ -197,7 +206,15 @@ export async function recordCompletedPrescriptionReference(
     (sale?.customer && sale.customer.patientId !== line.prescription.patientId)
   )
     throw new PharmacyRxReferenceError('PRESCRIPTION_PATIENT_MISMATCH');
-  if (line.prescription.validFrom > now || line.prescription.validUntil <= now)
+  if (
+    !(await prescriptionIsValidForOrganization(
+      db,
+      scope.organizationId,
+      line.prescription.validFrom,
+      line.prescription.validUntil,
+      now
+    ))
+  )
     throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_IN_DATE');
   const filled = line.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0);
   if (

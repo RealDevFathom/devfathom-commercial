@@ -10,6 +10,10 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Field, WorkspaceState, fieldClass } from './field';
 import { MedicationCard } from './medication-card';
+import {
+  formatPrescriptionDate,
+  prescriptionCalendarDate,
+} from '@/lib/pharmacy/prescription-validity';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -209,8 +213,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
         sourceKind: String(data.get('sourceKind')) as 'PAPER_IMAGE' | 'WHATSAPP_PHOTO',
         sourceFileRef: evidence.url,
         custodyState: String(data.get('custodyState')) as 'NOT_HELD' | 'HELD_AT_PHARMACY',
-        validFrom: new Date(String(data.get('validFrom'))),
-        validUntil: new Date(String(data.get('validUntil'))),
+        validFrom: prescriptionCalendarDate(String(data.get('validFrom'))),
+        validUntil: prescriptionCalendarDate(String(data.get('validUntil'))),
         authorizedRepeats: Number(data.get('authorizedRepeats')),
         lines: [
           {
@@ -535,8 +539,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                             </td>
                             <td className="py-4">{rx.prescriber.name}</td>
                             <td className="py-4 tabular-nums">
-                              {rx.validFrom.toLocaleDateString()}–
-                              {rx.validUntil.toLocaleDateString()}
+                              {formatPrescriptionDate(rx.validFrom)}–
+                              {formatPrescriptionDate(rx.validUntil)}
                             </td>
                             <td className="py-4">
                               {line.medicine.productName}

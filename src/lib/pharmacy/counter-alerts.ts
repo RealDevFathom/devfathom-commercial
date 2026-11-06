@@ -92,7 +92,8 @@ export type CounterAlertLine = {
   prescription: {
     id: string;
     verified: boolean;
-    expiresAt: Date;
+    /** Organization-calendar validity computed by the server. */
+    inDate: boolean;
     remainingAuthorizedUnits: number;
   } | null;
   /**
@@ -176,7 +177,7 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
           remedy: 'A pharmacist must verify this prescription; a cashier cannot self-approve it.',
         });
       }
-      if (prescription.expiresAt.getTime() <= context.at.getTime()) {
+      if (!prescription.inDate) {
         push(alerts, {
           key: `rx-expired:${prescription.id}`,
           severity: 'SAFETY_BLOCK',

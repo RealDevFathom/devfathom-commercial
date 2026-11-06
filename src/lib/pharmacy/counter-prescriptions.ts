@@ -16,6 +16,7 @@
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { maskedPatient } from './patient-prescriptions';
+import { prescriptionIsValidOn } from './prescription-validity';
 
 export type CounterPrescriptionLine = {
   prescriptionLineId: string;
@@ -161,6 +162,11 @@ export async function readCounterPatientPanel(
   });
   if (!patient) throw new PharmacyCounterPrescriptionError('NOT_FOUND');
 
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { timezone: true },
+  });
+
   const masked = maskedPatient(patient);
   const consent = patient.consents[0];
 
@@ -178,9 +184,12 @@ export async function readCounterPatientPanel(
       custodyState: prescription.custodyState,
       validFrom: prescription.validFrom.toISOString(),
       validUntil: prescription.validUntil.toISOString(),
-      inDate:
-        prescription.validFrom.getTime() <= at.getTime() &&
-        prescription.validUntil.getTime() > at.getTime(),
+      inDate: prescriptionIsValidOn(
+        prescription.validFrom,
+        prescription.validUntil,
+        at,
+        organization?.timezone
+      ),
       authorizedRepeats: prescription.authorizedRepeats,
       lines: prescription.lines.map((line) => {
         const filledCanonicalUnits = line.fills.reduce(

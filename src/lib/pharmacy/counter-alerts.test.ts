@@ -88,7 +88,7 @@ describe('counterAlertsFor (POS-09)', () => {
           prescription: {
             id: 'rx-1',
             verified: true,
-            expiresAt: new Date('2026-12-01T00:00:00.000Z'),
+            inDate: true,
             remainingAuthorizedUnits: 30,
           },
         }),
@@ -96,6 +96,31 @@ describe('counterAlertsFor (POS-09)', () => {
       { at: AT }
     );
     expect(alerts).toEqual([]);
+  });
+
+  it('trusts organization-calendar validity instead of re-expiring a date in the browser', () => {
+    const prescription = {
+      id: 'rx-1',
+      verified: true,
+      remainingAuthorizedUnits: 30,
+    };
+    const regulatedLine = (inDate: boolean) =>
+      line({
+        medicine: medicine({ rx: true }),
+        prescription: { ...prescription, inDate },
+      });
+
+    // These instants straddle UTC midnight but are both still October 22 in
+    // America/Los_Angeles. The server-provided organization-calendar result is
+    // authoritative regardless of the counter device's timezone.
+    expect(
+      counterAlertsFor([regulatedLine(true)], { at: new Date('2026-10-23T00:00:00.000Z') })
+    ).toEqual([]);
+    expect(
+      counterAlertsFor([regulatedLine(false)], { at: new Date('2026-10-22T23:59:59.999Z') }).map(
+        (alert) => alert.code
+      )
+    ).toContain('PRESCRIPTION_EXPIRED');
   });
 
   it('blocks an unverified, expired, or over-drawn prescription separately', () => {
@@ -107,7 +132,7 @@ describe('counterAlertsFor (POS-09)', () => {
           prescription: {
             id: 'rx-1',
             verified: false,
-            expiresAt: new Date('2026-01-01T00:00:00.000Z'),
+            inDate: false,
             remainingAuthorizedUnits: 30,
           },
         }),
@@ -130,7 +155,7 @@ describe('counterAlertsFor (POS-09)', () => {
           prescription: {
             id: 'rx-1',
             verified: false,
-            expiresAt: new Date('2026-12-01T00:00:00.000Z'),
+            inDate: true,
             remainingAuthorizedUnits: 30,
           },
         }),
@@ -215,7 +240,7 @@ describe('counterAlertsFor (POS-09)', () => {
           prescription: {
             id: 'rx-1',
             verified: true,
-            expiresAt: new Date('2026-12-01T00:00:00.000Z'),
+            inDate: true,
             remainingAuthorizedUnits: 30,
           },
         }),

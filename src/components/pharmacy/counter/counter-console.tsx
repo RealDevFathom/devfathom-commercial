@@ -685,7 +685,7 @@ function ScopedPharmacyCounterConsole({
           ? {
               id: prescriptionLine.entry.prescriptionLineId,
               verified: prescriptionLine.entry.verified,
-              expiresAt: new Date(prescriptionLine.prescription.validUntil),
+              inDate: prescriptionLine.prescription.inDate,
               remainingAuthorizedUnits:
                 prescriptionLine.entry.remainingAuthorizedUnits +
                 (line.controlled && prescriptionLine.entry.verified ? line.canonicalUnits : 0),

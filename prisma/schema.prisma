@@ -12453,8 +12453,8 @@ model Prescription {
   sourceKind                PrescriptionSourceKind
   sourceFileRef             String
   custodyState              PrescriptionCustodyState          @default(NOT_HELD)
-  validFrom                 DateTime
-  validUntil                DateTime
+  validFrom                 DateTime                          @db.Date
+  validUntil                DateTime                          @db.Date
   authorizedRepeats         Int                               @default(0)
   capturedByUserId          String
   capturedAt                DateTime                          @default(now())
