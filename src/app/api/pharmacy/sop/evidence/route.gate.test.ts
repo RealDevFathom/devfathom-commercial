@@ -99,6 +99,15 @@ function context(enabledModules: string[]) {
   // the only db call the route itself makes on a brand-new upload.
   const db: Record<string, unknown> = {
     pharmacySopEvidenceCapture: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    // The in-transaction share-lock re-check before attaching proof.
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    restaurantSopOccurrence: {
+      findFirst: vi.fn().mockResolvedValue({
+        status: 'IN_PROGRESS',
+        assignedStaffProfileId: 'staff_me',
+        claimedByStaffProfileId: null,
+      }),
+    },
   };
   db.$transaction = vi.fn(async (work: (tx: unknown) => Promise<unknown>) => work(db));
   return {

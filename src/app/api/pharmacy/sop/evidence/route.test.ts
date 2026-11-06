@@ -83,6 +83,15 @@ function makeDb() {
       findMany: vi.fn().mockResolvedValue([]),
     },
     restaurantSopEvidence: { findFirst: vi.fn().mockResolvedValue(null) },
+    // The in-transaction share-lock re-check before attaching proof.
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    restaurantSopOccurrence: {
+      findFirst: vi.fn().mockResolvedValue({
+        status: 'IN_PROGRESS',
+        assignedStaffProfileId: 'staff_me',
+        claimedByStaffProfileId: null,
+      }),
+    },
   };
   db.$transaction.mockImplementation(async (work: (tx: unknown) => Promise<unknown>) => work(db));
   return db;
@@ -245,6 +254,41 @@ describe('POST pharmacy SOP evidence', () => {
     });
     expect(mocks.putUpload).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['sent for review from another tab during the upload', { status: 'SUBMITTED' }],
+    ['now late and in review', { status: 'LATE' }],
+    ['claimed by someone else meanwhile', { assignedStaffProfileId: 'staff_other' }],
+    ['gone', null],
+  ])(
+    'refuses proof when the procedure was %s after authorization: 409 conflict, nothing kept',
+    async (_label, change) => {
+      db.restaurantSopOccurrence.findFirst.mockResolvedValueOnce(
+        change === null
+          ? null
+          : {
+              status: 'IN_PROGRESS',
+              assignedStaffProfileId: 'staff_me',
+              claimedByStaffProfileId: null,
+              ...change,
+            }
+      );
+      const response = await POST(request());
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        error: PHARMACY_SOP_CHANGED_MESSAGE,
+        conflict: true,
+      });
+      // The re-check runs under a share lock inside the attach transaction.
+      expect(String(db.$queryRaw.mock.calls[0]?.[0]?.strings?.join('') ?? '')).toContain(
+        'FOR SHARE'
+      );
+      expect(mocks.attachEvidence).not.toHaveBeenCalled();
+      expect(db.pharmacySopEvidenceCapture.createMany).not.toHaveBeenCalled();
+      // The file stored before the re-check is removed.
+      expect(mocks.deleteUpload).toHaveBeenCalled();
+    }
+  );
 
   it('refuses an unauthenticated request before building a context', async () => {
     mocks.resolveTenantActor.mockResolvedValueOnce(null);

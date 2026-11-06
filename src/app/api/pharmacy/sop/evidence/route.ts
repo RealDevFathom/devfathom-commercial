@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import { TRPCError } from '@trpc/server';
+import { Prisma } from '@/generated/prisma/client';
 
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
@@ -221,6 +222,22 @@ export async function POST(request: Request) {
     // One transaction: the engine row and its receipt commit together or not
     // at all (a request-level transaction is reused by the engine helper).
     const evidence = await inTransaction(ctx.db, async (tx) => {
+      // Re-check under a share lock, in this transaction: authorization ran
+      // before the (possibly slow) storage write, and the engine also accepts
+      // SUBMITTED/LATE. A procedure sent for review or closed meanwhile from
+      // another tab must not receive proof. INVALID_STATE answers 409 with the
+      // conflict flag and the stored file is removed (catch block below).
+      await tx.$queryRaw(
+        Prisma.sql`SELECT 1 FROM "restaurant_sop_occurrences" WHERE "id" = ${target.occurrenceId} AND "organizationId" = ${tenantId} FOR SHARE`
+      );
+      const current = await tx.restaurantSopOccurrence.findFirst({
+        where: { id: target.occurrenceId, organizationId: tenantId },
+        select: { status: true, assignedStaffProfileId: true, claimedByStaffProfileId: true },
+      });
+      const owner = current?.assignedStaffProfileId ?? current?.claimedByStaffProfileId ?? null;
+      if (!current || current.status !== 'IN_PROGRESS' || owner !== target.uploaderStaffProfileId) {
+        throw new SopExecutionError(PHARMACY_SOP_CHANGED_MESSAGE, 'INVALID_STATE');
+      }
       const attached = await attachEvidence(tx, {
         occurrenceId: target.occurrenceId,
         occurrenceStepId: target.occurrenceStepId,

@@ -888,12 +888,44 @@ async function assertPharmacySubmissionRequirements(
     select: { occurrenceStepId: true, recordType: true, recordId: true, note: true },
   });
 
+  // A goods receipt cancelled or reversed after it was linked no longer stands,
+  // so its link stops counting (linking already refuses such receipts).
+  const receiptLinks = links.filter((link) => link.recordType === 'GOODS_RECEIPT');
+  const voidedReceipts = new Set(
+    receiptLinks.length === 0
+      ? []
+      : (
+          await ctx.db.pharmacyGoodsReceipt.findMany({
+            where: {
+              id: { in: receiptLinks.map((link) => link.recordId) },
+              organizationId: sessionScope(ctx).organizationId,
+              branchId: site.pharmacyBranchId,
+              status: { in: ['CANCELLED', 'REVERSED'] },
+            },
+            select: { id: true },
+          })
+        ).map((receipt) => receipt.id)
+  );
+
   for (const step of occ.steps) {
     const required = requiredRecordTypeOf(packStepFor(pack, step.templateStep));
     if (!required) continue;
     const linked = links.some(
-      (link) => link.recordType === required && link.occurrenceStepId === step.id
+      (link) =>
+        link.recordType === required &&
+        link.occurrenceStepId === step.id &&
+        !(link.recordType === 'GOODS_RECEIPT' && voidedReceipts.has(link.recordId))
     );
+    if (
+      !linked &&
+      required === 'GOODS_RECEIPT' &&
+      receiptLinks.some((link) => link.occurrenceStepId === step.id)
+    ) {
+      throw new TRPCError({
+        code: 'PRECONDITION_FAILED',
+        message: `The receipt linked to “${step.templateStep.title}” was cancelled or reversed. Link the current receipt before submitting.`,
+      });
+    }
     if (!linked) {
       throw new TRPCError({
         code: 'PRECONDITION_FAILED',

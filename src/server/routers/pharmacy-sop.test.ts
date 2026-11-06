@@ -776,6 +776,32 @@ describe('submit', () => {
     expect(mocks.engine.submitOccurrence).not.toHaveBeenCalled();
   });
 
+  it('stops counting a goods receipt that was cancelled or reversed after it was linked', async () => {
+    const links = [{ step: 1, recordType: 'GOODS_RECEIPT', recordId: 'grn_1' }];
+    arrangeSubmission({ pack: receiving, links, notes: { 3: 'Cold box fine', 4: 'None' } });
+    db.pharmacyGoodsReceipt.findMany.mockResolvedValue([{ id: 'grn_1' }]);
+    await expect(caller().submit(OCC_INPUT)).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: expect.stringContaining('was cancelled or reversed'),
+    });
+    expect(db.pharmacyGoodsReceipt.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: { in: ['grn_1'] },
+          organizationId: 'org_1',
+          branchId: SITE.pharmacyBranchId,
+          status: { in: ['CANCELLED', 'REVERSED'] },
+        }),
+      })
+    );
+    expect(mocks.engine.submitOccurrence).not.toHaveBeenCalled();
+
+    // A receipt that still stands counts as before.
+    arrangeSubmission({ pack: receiving, links, notes: { 3: 'Cold box fine', 4: 'None' } });
+    db.pharmacyGoodsReceipt.findMany.mockResolvedValue([]);
+    await expect(caller().submit(OCC_INPUT)).resolves.toMatchObject({ status: 'SUBMITTED' });
+  });
+
   it('requires an excursion note when a linked temperature reading is out of range', async () => {
     const links = [
       { step: 1, recordType: 'TEMPERATURE_LOG', recordId: 'log_fridge' },
