@@ -28,11 +28,13 @@ const priorCatalogDigests = {
   // 'pharmacy:inventory', 'pharmacy:counter', 'pharmacy:close', 'pharmacy:manage'.
   // #247 / #479 (3369c68b): the Owner template gains exact 'pharmacy:safety'.
   // DEV-751 (#1418): generic sop:* actions in the pharmacy capability catalog and the
-  // appended pharmacy SOP role-template grants. Its pin was 81bdc13b….
+  // appended pharmacy SOP role-template grants.
+  // DEV-17 (#994): pharmacy:procurement-approve on the Manager and Owner / Operator
+  // templates. Develop's pin with both was 259c422c….
   // DEV-739 (#1413, Saad, DEV-32): day close is managers and owners only, so
   // 'pharmacy:close' moves from the Pharmacist template (#654) to the Manager template.
-  // Restoring only those two template lines reproduces 81bdc13b…; nothing else changed.
-  PHARMACY: '90b4f45a731df5735677b166f1af6f66e313cf43e0450cad2a763043cb5ef614',
+  // Restoring only those two template lines reproduces 259c422c…; nothing else changed.
+  PHARMACY: '79c9eeb9106f321094a14f06fe8fcf267b084738f6dd2bfb0c916bda6f132377',
 };
 
 const property = {

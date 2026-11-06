@@ -21,11 +21,18 @@ export const intendedPharmacyGrants = {
     'pharmacy:counter',
     'pharmacy:close',
     'pharmacy:manage',
+    'pharmacy:procurement-approve',
   ],
   // Day close: owners, administrators and managers (DEV-32, DEV-739); no default
   // pharmacist grant. A role that grants pharmacy:close decides, not the profession.
   pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
-  manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement', 'pharmacy:close'],
+  manager: [
+    'pharmacy:manage',
+    'pharmacy:orders',
+    'pharmacy:procurement',
+    'pharmacy:procurement-approve',
+    'pharmacy:close',
+  ],
   cashier: ['pharmacy:counter', 'pharmacy:orders'],
   procurement: ['pharmacy:procurement'],
   inventory: ['pharmacy:inventory'],

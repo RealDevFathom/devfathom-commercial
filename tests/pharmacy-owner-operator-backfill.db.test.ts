@@ -31,10 +31,18 @@ const previousTemplate = [
   'pharmacy:catalogue-review',
   'pharmacy:safety',
 ];
-const template = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner-operator')!;
-// DEV-751 (#1418) appends sop:* grants for new tenants; this backfill never adds them
-// (existing tenants opt in through docs/operations/pharmacy-sop-rollout/up.sql).
-const backfilled = template.capabilities.filter((capability) => !capability.startsWith('sop:'));
+const ownerOperator = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner-operator')!;
+// `pharmacy:procurement-approve` joined the template later and is backfilled by
+// its own migration (20261106200200_pharmacy_purchasing_authz, covered by
+// tests/pharmacy-procurement-approve-backfill.db.test.ts). DEV-751 (#1418) appends
+// sop:* grants for new tenants; this backfill never adds them (existing tenants opt
+// in through docs/operations/pharmacy-sop-rollout/up.sql).
+const template = {
+  ...ownerOperator,
+  capabilities: ownerOperator.capabilities.filter(
+    (capability) => capability !== 'pharmacy:procurement-approve' && !capability.startsWith('sop:')
+  ),
+};
 
 async function grants(roleId: string) {
   const rows = await client.query<{ capability: string; effect: string }>(
@@ -95,13 +103,13 @@ async function grants(roleId: string) {
   it('adds every missing template capability to the system Owner / Operator role', async () => {
     expect(template.capabilities).toEqual(expect.arrayContaining(previousTemplate));
     expect(await grants(id('system'))).toEqual(
-      [...backfilled].sort().map((capability) => ({ capability, effect: 'ALLOW' }))
+      [...template.capabilities].sort().map((capability) => ({ capability, effect: 'ALLOW' }))
     );
   });
 
   it('keeps an existing DENY and adds the remaining grants', async () => {
     expect(await grants(id('denied'))).toEqual(
-      [...backfilled].sort().map((capability) => ({
+      [...template.capabilities].sort().map((capability) => ({
         capability,
         effect: capability === 'pharmacy:close' ? 'DENY' : 'ALLOW',
       }))

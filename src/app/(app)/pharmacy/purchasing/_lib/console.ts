@@ -1,3 +1,4 @@
+import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import { ZodError } from 'zod';
 
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -84,6 +85,11 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
     message:
       'Whoever raised the demand or drafted the order cannot approve it. Ask a second person to decide.',
   },
+  SELF_VERIFICATION: {
+    message:
+      'Whoever filed a licence cannot also verify it. Ask a colleague with purchasing access to verify it from the licence list.',
+    field: 'verified',
+  },
   INVALID_TRANSITION: {
     message: 'The document has already moved on. Reload the page to see its current state.',
   },
@@ -147,6 +153,8 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
 };
 
 const KNOWN_REJECTIONS = new Set([
+  'SELF_VERIFICATION',
+  APPROVAL_BLOCKED,
   'DUPLICATE_SERIAL',
   'EXPIRED_PACK',
   'GS1_INVALID',

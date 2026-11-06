@@ -61,7 +61,19 @@ function contextStub() {
     session: actor.session,
     organization: actor.organization,
     entitlements: { organizationId: 'org-1', enabledModules: ['pharmacy-procurement'] },
-    db: {},
+    // The purchasing pages re-check procurement access on the live user row (#994).
+    db: {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          organizationRole: {
+            permissions: ['pharmacy:procurement', 'pharmacy:procurement-approve'].map(
+              (capability) => ({ capability, effect: 'ALLOW' })
+            ),
+          },
+          permissionOverrides: [],
+        }),
+      },
+    },
   };
 }
 
@@ -360,6 +372,11 @@ describe('receiving page supplier hint, by the stored setting', () => {
       ],
       suppliers: [],
       approvers: [{ id: 'user-2', name: 'Bilal', email: 'bilal@example.test' }],
+      // The direct-purchase form, and so its supplier hint, renders only when the
+      // branch has a procurement approver (#246, #994).
+      procurementApprovers: [
+        { id: 'user-2', name: 'Bilal', email: 'bilal@example.test', branchIds: ['branch-1'] },
+      ],
     };
     return {
       ...callerFor([]),

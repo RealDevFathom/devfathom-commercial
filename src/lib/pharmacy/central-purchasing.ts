@@ -1,3 +1,4 @@
+import { actorIsPharmacyOwner } from './procurement-access';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { allocateTransfer } from './inventory-operations';
 import type { InterbranchTransferSuggestion } from './interbranch-transfer-suggestions';
@@ -17,6 +18,9 @@ export class CentralPurchasingError extends Error {
 type Scope = { organizationId: string; actorId: string };
 
 export async function purchasingAccess(db: ScopedDb, scope: Scope, branchId?: string) {
+  if (await actorIsPharmacyOwner(db, scope.organizationId, scope.actorId)) {
+    return { organizationWide: true, branchIds: branchId ? [branchId] : undefined };
+  }
   const grants = await db.pharmacyCentralPurchasingAccess.findMany({
     where: { organizationId: scope.organizationId, userId: scope.actorId },
     select: { branchId: true },
@@ -40,10 +44,18 @@ async function requireOrganizationPurchaser(db: ScopedDb, scope: Scope) {
 /** INV-10: exact PUR-07 demand and coverage, grouped without forecasting. */
 export async function centralDemand(db: ScopedDb, scope: Scope, branchId?: string) {
   const access = await purchasingAccess(db, scope, branchId);
+  const branches = await db.pharmacyBranch.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      active: true,
+      ...(access.branchIds ? { id: { in: access.branchIds } } : {}),
+    },
+    select: { id: true },
+  });
   const rows = await db.pharmacyStockSignal.findMany({
     where: {
       organizationId: scope.organizationId,
-      ...(access.branchIds ? { branchId: { in: access.branchIds } } : {}),
+      branchId: { in: branches.map((branch) => branch.id) },
       status: { in: ['OPEN', 'ACKNOWLEDGED'] },
       kind: { in: ['LOW_STOCK', 'STOCKOUT', 'INBOUND_COVERAGE'] },
     },

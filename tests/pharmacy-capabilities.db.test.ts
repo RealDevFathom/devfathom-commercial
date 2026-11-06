@@ -54,12 +54,16 @@ const ownerPvSafetyMigration = readFileSync(
 const dayClosePhase2 = readFileSync('docs/operations/sql/pharmacy-day-close-phase2.sql', 'utf8')
   .replace(/^BEGIN;$/m, '')
   .replace(/^COMMIT;$/m, '');
-// DEV-751 (#1418) appends sop:* grants to the role templates for new tenants only.
-// Existing tenants opt in through docs/operations/pharmacy-sop-rollout/up.sql
-// (tests/pharmacy-sop-role-grants.db.test.ts); no migration writes them, so the
-// installed roles here are seeded and expected without them.
-const withoutSop = (capabilities: readonly string[]) =>
-  capabilities.filter((capability) => !capability.startsWith('sop:'));
+// Template grants these migrations never write, so the installed roles here are seeded
+// and expected without them:
+// - DEV-751 (#1418) sop:* grants, for new tenants only. Existing tenants opt in through
+//   docs/operations/pharmacy-sop-rollout/up.sql (tests/pharmacy-sop-role-grants.db.test.ts).
+// - #994 'pharmacy:procurement-approve', backfilled by its own migration
+//   (20261106200200_pharmacy_purchasing_authz, tests/pharmacy-procurement-approve-backfill.db.test.ts).
+const installedHere = (capabilities: readonly string[]) =>
+  capabilities.filter(
+    (capability) => !capability.startsWith('sop:') && capability !== 'pharmacy:procurement-approve'
+  );
 const expiry = new Date('2035-01-02T00:00:00.000Z');
 const expired = new Date('2020-01-02T00:00:00.000Z');
 const legacy: Record<string, string[]> = {
@@ -106,7 +110,7 @@ const legacy: Record<string, string[]> = {
         `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,"updatedAt") VALUES ($1,$2,$3,$1,$1,'Pharmacy','Staff',now())`,
         [id(`user_${template.key}`), org, id(template.key)]
       );
-      for (const capability of legacy[template.key] ?? withoutSop(template.capabilities)) {
+      for (const capability of legacy[template.key] ?? installedHere(template.capabilities)) {
         await client.query(
           `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,$4,'ALLOW')`,
           [id(`${template.key}_${capability}`), org, id(template.key), capability]
@@ -262,7 +266,7 @@ const legacy: Record<string, string[]> = {
       // An installed Manager gains the template's 'pharmacy:close' only in rollout
       // phase 2, after the branch-assignment close gate is live (DEV-739).
       const expected = [
-        ...withoutSop(template.capabilities).filter(
+        ...installedHere(template.capabilities).filter(
           (capability) => !(template.key === 'manager' && capability === 'pharmacy:close')
         ),
         ...(template.key === 'owner' ? ['pharmacy:orders'] : []),
@@ -530,7 +534,7 @@ const legacy: Record<string, string[]> = {
           [id('manager')]
         )
       ).rows.map((row) => row.capability)
-    ).toEqual(withoutSop(managerTemplate.capabilities).sort());
+    ).toEqual(installedHere(managerTemplate.capabilities).sort());
     const orgs = [org, other, third, restaurant, lookalike, late];
     const snapshot = () =>
       client

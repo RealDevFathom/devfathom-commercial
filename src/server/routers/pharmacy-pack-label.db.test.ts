@@ -40,7 +40,9 @@ const ORG_B = `dev752_b_${suffix}`;
 const BRANCH_A = `dev752_ba_${suffix}`;
 const BRANCH_A2 = `dev752_ba2_${suffix}`;
 const BRANCH_B = `dev752_bb_${suffix}`;
-const RECEIVER = 'dev752_receiver';
+// One receiver per tenant: a live member of that tenant, so the purchasing
+// router's deny-by-default checks (#994) run for real against PostgreSQL.
+const receiverFor = (organizationId: string) => `${organizationId}_receiver`;
 const RECEIVED_AT = new Date('2026-10-20T09:00:00.000Z');
 
 let withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
@@ -61,7 +63,10 @@ function context(db: ScopedDb, organizationId: string) {
       seatLimit: 10,
       activeSeats: 1,
     },
-    session: { expires: 'later', user: { id: RECEIVER, role: 'ADMIN', status: 'ACTIVE' } },
+    session: {
+      expires: 'later',
+      user: { id: receiverFor(organizationId), role: 'EMPLOYEE', status: 'ACTIVE', organizationId },
+    },
     organization: { id: organizationId },
     support: null,
     requestMeta: { ip: null, userAgent: null },
@@ -102,6 +107,19 @@ async function branch(db: ScopedDb, organizationId: string, id: string) {
         provinceCode: 'PB',
       },
     ],
+    skipDuplicates: true,
+  });
+  // The receiver works at every branch the case creates; branch scope is what
+  // the location checks below are about, not whether the receiver is assigned.
+  // A branch id already taken by another tenant is skipped above, so there is
+  // no branch here to assign.
+  const created = await db.pharmacyBranch.findFirst({
+    where: { id, organizationId },
+    select: { id: true },
+  });
+  if (!created) return;
+  await db.pharmacyBranchAssignment.createMany({
+    data: [{ organizationId, branchId: id, userId: receiverFor(organizationId) }],
     skipDuplicates: true,
   });
 }
@@ -218,6 +236,16 @@ function lot(f: Fixture, batchNumber: string, receivedPacks: number, expiry: str
   };
 }
 
+/**
+ * These receipts name a purchase order, so drafting never needs an approver PIN.
+ * Narrow away the `{ blocked }` outcome, and fail loudly if it ever appears.
+ */
+function assertDrafted<R>(result: R): asserts result is Exclude<R, { blocked: string }> {
+  if (result && typeof result === 'object' && 'blocked' in result) {
+    throw new Error(`Goods receipt draft was blocked: ${String(result.blocked)}`);
+  }
+}
+
 function receipt(f: Fixture, label: string, lines: ReturnType<typeof lot>[]) {
   return {
     reference: `GRN-${tag(label)}`,
@@ -262,6 +290,29 @@ describeIfDatabase('DEV-752 pack-photo receiving against PostgreSQL', () => {
            (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
          VALUES ($1, $1, $1, $1, 'PHARMACY', 'ONBOARDING', 'SHARED', now(), now())`,
         [id]
+      );
+      // The receiver: an active member holding only the Goods-in capability.
+      await owner.query(
+        `INSERT INTO organization_departments (id, "organizationId", key, name, "updatedAt")
+         VALUES ($1, $2, 'Pharmacy', 'Pharmacy', now())`,
+        [`${id}_department`, id]
+      );
+      await owner.query(
+        `INSERT INTO organization_roles (id, "organizationId", key, name, "isSystem", "updatedAt")
+         VALUES ($1, $2, 'receiving', 'Receiving', false, now())`,
+        [`${id}_receiving_role`, id]
+      );
+      await owner.query(
+        `INSERT INTO organization_role_permissions
+           (id, "organizationId", "organizationRoleId", capability, effect)
+         VALUES ($1, $2, $3, 'pharmacy:procurement', 'ALLOW')`,
+        [`${id}_receiving_grant`, id, `${id}_receiving_role`]
+      );
+      await owner.query(
+        `INSERT INTO users
+           (id, "organizationId", name, email, role, department, title, "organizationRoleId", "updatedAt")
+         VALUES ($1, $2, 'Receiver', $1 || '@dev752.test', 'EMPLOYEE', 'Pharmacy', 'Receiver', $3, now())`,
+        [receiverFor(id), id, `${id}_receiving_role`]
       );
     }
     const { createFixturePackLabelOcrAdapter } = await import('@/lib/pharmacy/pack-label-ocr');
@@ -330,6 +381,7 @@ describeIfDatabase('DEV-752 pack-photo receiving against PostgreSQL', () => {
         ])
       )
     );
+    assertDrafted(drafted);
     expect(drafted.lines.map((line) => line.purchaseOrderLineId)).toEqual([
       f.purchaseOrderLineId,
       f.purchaseOrderLineId,
@@ -389,6 +441,7 @@ describeIfDatabase('DEV-752 pack-photo receiving against PostgreSQL', () => {
         ])
       )
     );
+    assertDrafted(drafted);
     await withTenantDb(ORG_A, (db) =>
       purchasingCaller(db, ORG_A).postGoodsReceipt({
         branchId: f.branchId,
@@ -421,6 +474,7 @@ describeIfDatabase('DEV-752 pack-photo receiving against PostgreSQL', () => {
         ])
       )
     );
+    assertDrafted(drafted);
     await withTenantDb(ORG_A, (db) =>
       purchasingCaller(db, ORG_A).postGoodsReceipt({
         branchId: f.branchId,
@@ -476,6 +530,7 @@ describeIfDatabase('DEV-752 pack-photo receiving against PostgreSQL', () => {
         ])
       )
     );
+    assertDrafted(drafted);
     expect(
       await withTenantDb(ORG_A, (db) =>
         db.pharmacyPurchaseOrder.findFirstOrThrow({

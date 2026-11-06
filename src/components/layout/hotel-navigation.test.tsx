@@ -46,6 +46,9 @@ vi.mock('@/lib/trpc', () => ({
     pharmacySafety: {
       access: { useQuery: () => ({ data: { allowed: false } }) },
     },
+    pharmacyAccess: {
+      navigation: { useQuery: () => ({ data: undefined }) },
+    },
     pharmacySop: {
       access: {
         useQuery: () => ({ data: { canComplete: false, canVerify: false, canManage: false } }),

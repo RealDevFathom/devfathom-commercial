@@ -412,4 +412,23 @@ describe('camera renewal audit redaction before resolver suppression (F3-R1)', (
     });
     expect(value.previousGrantId).toBe('synthetic');
   });
+
+  it('never retains a camera gateway base URL, including a rejected one (DEV-740)', async () => {
+    const { toAuditJson } = await vi.importActual<typeof import('./audit')>('./audit');
+    const value = {
+      branchId: 'branch_a',
+      name: 'Main',
+      baseUrl: 'https://reader:synthetic-secret@10.0.0.5/',
+      nested: { BASEURL: 'https://camera-gateway.example.internal/' },
+      baseUrlLabel: 'label',
+    };
+    const out = toAuditJson(value);
+    expect(out).toEqual({
+      ...value,
+      baseUrl: '[REDACTED]',
+      nested: { BASEURL: '[REDACTED]' },
+    });
+    expect(JSON.stringify(out)).not.toContain('synthetic-secret');
+    expect(JSON.stringify(out)).not.toContain('10.0.0.5');
+  });
 });

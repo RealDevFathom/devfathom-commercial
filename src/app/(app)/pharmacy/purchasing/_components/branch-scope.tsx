@@ -100,6 +100,23 @@ export function NoBranchState({ surface }: { surface: string }) {
   );
 }
 
+/**
+ * The workspace has active branches, but none the operator is assigned to. The
+ * server refuses branch-owned reads and writes outside an assignment, so the
+ * surface says so instead of offering a branch whose board cannot load.
+ */
+export function UnassignedBranchState({ surface }: { surface: string }) {
+  return (
+    <SectionCard title={`${surface} needs a branch assignment`} titleLevel={2}>
+      <EmptyState
+        title="You are not assigned to a branch"
+        detail={`${surface} works on one branch at a time, and only at a branch you are assigned to. This workspace has active branches, but none of them is assigned to you. A workspace administrator can assign you to the branch you work at.`}
+        steps={[{ label: 'Review branch assignments', href: '/pharmacy/settings/branches' }]}
+      />
+    </SectionCard>
+  );
+}
+
 export function ChooseBranchState({
   branches,
   route,

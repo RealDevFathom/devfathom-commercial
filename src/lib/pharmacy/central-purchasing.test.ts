@@ -12,6 +12,8 @@ const scope = { organizationId: 'org_chain', actorId: 'user_branch' };
 
 function fakeDb(overrides: Record<string, unknown> = {}) {
   return {
+    user: { findUnique: async () => null },
+    pharmacyBranch: { findMany: async () => [{ id: 'branch_a' }, { id: 'branch_b' }] },
     pharmacyCentralPurchasingAccess: {
       findMany: async () => [{ branchId: 'branch_a' }],
     },
@@ -31,10 +33,17 @@ describe('INV-10 central purchasing access', () => {
     } satisfies Partial<CentralPurchasingError>);
   });
 
-  it('allows an organization purchaser to aggregate every branch', async () => {
+  it('restricts organization-wide demand to active tenant branches', async () => {
     let query: { where?: { branchId?: unknown } } = {};
+    let branchQuery: unknown;
     const db = fakeDb({
       pharmacyCentralPurchasingAccess: { findMany: async () => [{ branchId: null }] },
+      pharmacyBranch: {
+        findMany: async (input: unknown) => {
+          branchQuery = input;
+          return [{ id: 'branch_a' }, { id: 'branch_b' }];
+        },
+      },
       pharmacyStockSignal: {
         findMany: async (input: typeof query) => {
           query = input;
@@ -47,7 +56,10 @@ describe('INV-10 central purchasing access', () => {
     });
     const result = await centralDemand(db, { ...scope, actorId: 'user_central' });
     expect(result).toMatchObject({ organizationWide: true, branches: ['branch_a', 'branch_b'] });
-    expect(query.where?.branchId).toBeUndefined();
+    expect(branchQuery).toMatchObject({
+      where: { organizationId: scope.organizationId, active: true },
+    });
+    expect(query.where?.branchId).toEqual({ in: ['branch_a', 'branch_b'] });
   });
 
   it('denies a branch purchaser creating the organization PO', async () => {
@@ -291,5 +303,31 @@ describe('INV-10 receipt allocation', () => {
     expect(evidence).toEqual([
       expect.objectContaining({ quantityUnits: 10, transferId: 'transfer' }),
     ]);
+  });
+});
+
+it('gives an installed owner central branch access without duplicate grant rows', async () => {
+  const db = fakeDb({
+    user: {
+      findUnique: async () => ({
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationRole: {
+          key: 'owner',
+          isSystem: true,
+          permissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+    },
+    pharmacyCentralPurchasingAccess: {
+      findMany: async () => {
+        throw new Error('Owner must not need duplicate grants');
+      },
+    },
+  });
+  expect(await centralDemand(db, scope, 'branch_a')).toMatchObject({
+    organizationWide: true,
+    branches: ['branch_a'],
   });
 });

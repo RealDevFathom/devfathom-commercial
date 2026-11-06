@@ -102,40 +102,52 @@ function isUnexpectedInternalError(error: TRPCError): boolean {
   );
 }
 
-const t = initTRPC.context<TRPCContext>().create({
-  transformer: superjson,
-  errorFormatter({ shape, error }) {
-    // tRPC sets `cause` to a ZodError for input-validation failures (BAD_REQUEST)
-    // *and* for a raw `schema.parse()` that throws inside a procedure body
-    // (INTERNAL_SERVER_ERROR). Gate on the code so an internal failure never
-    // reaches the client wearing a field-level message, and never publishes
-    // internal schema field names in `data.validation`.
-    //
-    // The first half is narrower than it reads: tRPC has already placed the raw
-    // serialized ZodError into `shape.message` before this formatter runs, and
-    // with `validation` null we pass `shape.message` through unchanged — so,
-    // outside production, the field name still reaches the client, in raw
-    // serialized form (the errorFormatter test pins exactly that string,
-    // `"path": ["internalOnlyField"]` and all). The gate governs `data.validation`
-    // and the FORMATTED message, not the pass-through.
-    const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
-    // In production an unexpected failure (that ZodError included) keeps its own
-    // message on the server, where the tRPC route's `onError` logs it, and the
-    // client is told only that something went wrong. Deliberate errors and every
-    // other code are untouched; outside production the pass-through is unchanged.
-    const withheld = process.env.NODE_ENV === 'production' && isUnexpectedInternalError(error);
-    // Never publish the server stack. tRPC attaches `data.stack` outside
-    // production, which leaks file paths and bundle chunk names onto ordinary
-    // client errors (e.g. an intentional 403). Drop it for every error code.
-    const data = { ...shape.data, validation: validation?.fields ?? null };
-    delete data.stack;
-    return {
-      ...shape,
-      message: withheld ? INTERNAL_ERROR_MESSAGE : (validation?.message ?? shape.message),
-      data,
-    };
-  },
-});
+/**
+ * Per-procedure metadata. `capabilities` is the explicit permission annotation
+ * `denyByDefaultProcedure` reads: every listed ABAC action must allow the caller.
+ * A procedure built on that base with no annotation is refused (#979, PR J).
+ */
+export type ProcedureMeta = {
+  capabilities?: readonly Action[];
+};
+
+const t = initTRPC
+  .context<TRPCContext>()
+  .meta<ProcedureMeta>()
+  .create({
+    transformer: superjson,
+    errorFormatter({ shape, error }) {
+      // tRPC sets `cause` to a ZodError for input-validation failures (BAD_REQUEST)
+      // *and* for a raw `schema.parse()` that throws inside a procedure body
+      // (INTERNAL_SERVER_ERROR). Gate on the code so an internal failure never
+      // reaches the client wearing a field-level message, and never publishes
+      // internal schema field names in `data.validation`.
+      //
+      // The first half is narrower than it reads: tRPC has already placed the raw
+      // serialized ZodError into `shape.message` before this formatter runs, and
+      // with `validation` null we pass `shape.message` through unchanged — so,
+      // outside production, the field name still reaches the client, in raw
+      // serialized form (the errorFormatter test pins exactly that string,
+      // `"path": ["internalOnlyField"]` and all). The gate governs `data.validation`
+      // and the FORMATTED message, not the pass-through.
+      const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
+      // In production an unexpected failure (that ZodError included) keeps its own
+      // message on the server, where the tRPC route's `onError` logs it, and the
+      // client is told only that something went wrong. Deliberate errors and every
+      // other code are untouched; outside production the pass-through is unchanged.
+      const withheld = process.env.NODE_ENV === 'production' && isUnexpectedInternalError(error);
+      // Never publish the server stack. tRPC attaches `data.stack` outside
+      // production, which leaks file paths and bundle chunk names onto ordinary
+      // client errors (e.g. an intentional 403). Drop it for every error code.
+      const data = { ...shape.data, validation: validation?.fields ?? null };
+      delete data.stack;
+      return {
+        ...shape,
+        message: withheld ? INTERNAL_ERROR_MESSAGE : (validation?.message ?? shape.message),
+        data,
+      };
+    },
+  });
 
 export const router = t.router;
 export const publicProcedure = t.procedure;
@@ -273,6 +285,56 @@ const requireLicensedModule = t.middleware(async ({ ctx, next, path }) => {
   return next();
 });
 
+/** The refusal for a missing capability, shared by every capability guard below. */
+function capabilityRefusal(action: Action) {
+  return new TRPCError({
+    code: 'FORBIDDEN',
+    message:
+      action === 'pharmacy:dispense'
+        ? 'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.'
+        : 'You do not have permission for this action.',
+  });
+}
+
+/**
+ * Session, temporary-password and demo checks, then every action in `actions`
+ * through the ABAC engine. All must allow; the first refusal wins.
+ */
+async function assertCapabilities(
+  ctx: TRPCContext,
+  path: string,
+  type: 'query' | 'mutation' | 'subscription',
+  actions: readonly Action[]
+): Promise<Session> {
+  const session = ctx.session;
+  if (!session?.user) {
+    throw new TRPCError({
+      code: 'UNAUTHORIZED',
+      message: 'You must be logged in to access this resource',
+    });
+  }
+  // Empty actor id must fail closed before any ABAC/DB lookup (#994 / DEV-17).
+  if (!session.user.id) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+  assertSessionUsable(session.user);
+  assertTemporaryPasswordChanged(session.user, path);
+  assertDemoProcedureAllowed(ctx, path, type);
+  const subject = subjectFromSession(session.user);
+  for (const action of actions) {
+    const allowed = await can(subject, action, undefined, {
+      db: ctx.db as Prisma.TransactionClient,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    });
+    if (!allowed) throw capabilityRefusal(action);
+  }
+  return session;
+}
+
 // Capability guard — the ABAC engine is the single decision point. The role is
 // re-read from the DB by the jwt() callback, so a demoted user loses access
 // within the revalidation window. Resource-level conditions (e.g. "this
@@ -280,33 +342,39 @@ const requireLicensedModule = t.middleware(async ({ ctx, next, path }) => {
 // a second `can(...)` call with the loaded resource's attributes.
 function requireCapability(action: Action) {
   return t.middleware(async ({ ctx, next, path, type }) => {
-    if (!ctx.session?.user) {
-      throw new TRPCError({
-        code: 'UNAUTHORIZED',
-        message: 'You must be logged in to access this resource',
-      });
-    }
-    assertSessionUsable(ctx.session.user);
-    assertTemporaryPasswordChanged(ctx.session.user, path);
-    assertDemoProcedureAllowed(ctx, path, type);
-    const subject = subjectFromSession(ctx.session.user);
-    const allowed = await can(subject, action, undefined, {
-      db: ctx.db as Prisma.TransactionClient,
-      source: 'TRPC',
-      ip: ctx.requestMeta.ip,
-    });
-    if (!allowed) {
-      throw new TRPCError({
-        code: 'FORBIDDEN',
-        message:
-          action === 'pharmacy:dispense'
-            ? 'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.'
-            : 'You do not have permission for this action.',
-      });
-    }
-    return next({ ctx: { ...ctx, session: ctx.session } });
+    const session = await assertCapabilities(ctx, path, type, [action]);
+    return next({ ctx: { ...ctx, session } });
   });
 }
+
+/**
+ * Deny-by-default guard: the procedure must carry `.meta({ capabilities })`
+ * naming at least one ABAC action, and the caller must hold every one of them.
+ * A procedure that forgot its annotation is refused for everybody — nobody
+ * reaches it on authentication and module entitlement alone.
+ */
+const requireDeclaredCapabilities = t.middleware(async ({ ctx, next, path, type, meta }) => {
+  const actions = meta?.capabilities ?? [];
+  if (actions.length === 0) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+  const session = await assertCapabilities(ctx, path, type, actions);
+  const organizationId = ctx.entitlements?.organizationId;
+  if (
+    !organizationId ||
+    session.user.organizationId !== organizationId ||
+    !(await ctx.db.user.findUnique({
+      where: { id: session.user.id, organizationId, status: 'ACTIVE' },
+      select: { id: true },
+    }))
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'No active tenant actor on this request.' });
+  }
+  return next({ ctx: { ...ctx, session } });
+});
 
 // Protected procedure — audit (outer) wraps the auth guard.
 export const protectedProcedure = t.procedure
@@ -355,3 +423,15 @@ export const hrProcedure = t.procedure
 export function capabilityProcedure(action: Action) {
   return t.procedure.use(auditAll).use(requireCapability(action)).use(requireLicensedModule);
 }
+
+/**
+ * Deny-by-default tenant procedure (#979, PR J). Audits like
+ * `capabilityProcedure`, but takes its permission from the procedure's own
+ * `.meta({ capabilities: [...] })`; without that annotation every caller is
+ * refused. Routers that must never fall back to "any signed-in member with the
+ * module" build on this instead of `protectedProcedure`.
+ */
+export const denyByDefaultProcedure = t.procedure
+  .use(auditAll)
+  .use(requireDeclaredCapabilities)
+  .use(requireLicensedModule);
