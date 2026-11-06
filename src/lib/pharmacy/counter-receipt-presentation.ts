@@ -8,6 +8,7 @@ import {
   formatReceiptDate,
   formatReceiptIssuedAt,
   receiptTitle,
+  receiptCashReceived,
   type CounterReceipt,
   type CounterReceiptLine,
   type CounterReceiptLocale,
@@ -27,6 +28,8 @@ const labels = {
     payments: 'ادائیگی کی تفصیل دستیاب نہیں',
   },
 } as const;
+
+const cashReceivedLabels: Partial<Record<CounterReceiptLocale, string>> = { en: 'Cash received' };
 
 /**
  * Show integer-minor-unit arithmetic that exactly reconciles to the stored
@@ -122,6 +125,7 @@ export function buildCounterReceiptPreview(
   ];
   if (!amounts.every(Number.isSafeInteger)) throw new Error('Receipt amounts are invalid.');
   const strings = COUNTER_RECEIPT_STRINGS[locale];
+  const cashReceived = receiptCashReceived(receipt.tenders);
   const ntn = receipt.taxIdentity?.ntn?.trim();
   const strn = receipt.taxIdentity?.strn?.trim();
   const identity = receipt.taxIdentity;
@@ -161,6 +165,11 @@ export function buildCounterReceiptPreview(
         `${strings.discount}: ${formatMinor(receipt.totals.discountMinor)}`,
         `${strings.net}: ${formatMinor(receipt.totals.netMinor)}`,
         `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor)}`,
+        ...(cashReceived !== null
+          ? [
+              `${cashReceivedLabels[locale] ?? `${strings.tenderName.CASH} ${strings.tendered}`}: ${formatMinor(cashReceived)}`,
+            ]
+          : []),
         `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
       ],
       payments: receipt.tenders.length

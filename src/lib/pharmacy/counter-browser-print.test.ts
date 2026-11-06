@@ -170,6 +170,12 @@ describe('isolated Pharmacy browser receipt', () => {
     const cashIndex = facts.totals.indexOf('Cash received: 8.00');
     expect(cashIndex).toBeGreaterThanOrEqual(0);
     expect(facts.totals[cashIndex + 1]).toBe('Change: 1.00');
+    const browser = buildCounterBrowserReceipt(source, 'en', 'THERMAL');
+    expect(browser).toContain('Cash received: 8.00');
+    expect(browser.indexOf('Cash received: 8.00')).toBeLessThan(browser.indexOf('Change: 1.00'));
+    const urdu = buildCounterBrowserReceipt(source, 'ur', 'THERMAL');
+    expect(urdu).toContain('8.00');
+    expect(urdu).not.toContain('Cash received:');
   });
 
   it('does not invent cash received for legacy or non-cash receipts', () => {

@@ -36,6 +36,7 @@ import {
   formatMinor,
   formatReceiptDate,
   formatReceiptIssuedAt,
+  receiptCashReceived,
   type CounterReceipt,
   type CounterReceiptLocale,
   type PharmacyReceiptTaxIdentity,
@@ -79,23 +80,10 @@ function escPosFacts(
 ): ReceiptPreviewFacts {
   const strings = COUNTER_RECEIPT_STRINGS.en;
   const date = `${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}`;
-  const cashTenders = receipt.tenders.filter((tender) => tender.type === 'CASH');
-  if (
-    cashTenders.some(
-      (tender) =>
-        tender.cashReceivedMinor != null &&
-        (!Number.isSafeInteger(tender.cashReceivedMinor) || tender.cashReceivedMinor < 0)
-    )
-  ) {
-    throw new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
-  }
-  // Older receipts may not record the cash handed over. Do not infer it from
-  // the total tendered, which can also include non-cash payments.
-  const cashReceived =
-    cashTenders.length && cashTenders.every((tender) => tender.cashReceivedMinor != null)
-      ? cashTenders.reduce((sum, tender) => sum + tender.cashReceivedMinor!, 0)
-      : null;
-  if (cashReceived !== null && !Number.isSafeInteger(cashReceived)) {
+  let cashReceived: number | null;
+  try {
+    cashReceived = receiptCashReceived(receipt.tenders);
+  } catch {
     throw new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
   }
   return {

@@ -294,6 +294,23 @@ export class PharmacyCounterReceiptError extends Error {
   }
 }
 
+/** Sum recorded cash only; legacy receipts may not retain the amount handed over. */
+export function receiptCashReceived(tenders: CounterReceipt['tenders']): number | null {
+  const cash = tenders.filter((tender) => tender.type === 'CASH');
+  for (const tender of cash) {
+    if (
+      tender.cashReceivedMinor != null &&
+      (!Number.isSafeInteger(tender.cashReceivedMinor) || tender.cashReceivedMinor < 0)
+    ) {
+      throw new Error('Receipt cash received is invalid.');
+    }
+  }
+  if (!cash.length || cash.some((tender) => tender.cashReceivedMinor == null)) return null;
+  const total = cash.reduce((sum, tender) => sum + tender.cashReceivedMinor!, 0);
+  if (!Number.isSafeInteger(total)) throw new Error('Receipt cash received is invalid.');
+  return total;
+}
+
 /**
  * The thermal print job for this receipt, as a seam `RECEIPT` document.
  *
