@@ -91,21 +91,20 @@ const SOP_BUSINESS_DATE = '2026-08-27';
 const SOP_TEMPLATE_NAME = 'Opening food-safety check';
 const SOP_STEP_TITLE = 'Record cold-storage temperature';
 /**
- * The occurrence is a PERSON-target assignment owned by the seeded operator.
- * `assertOccurrenceOwner` (src/lib/restaurant/sop-execution.ts) rejects every
- * command whose acting staff profile is not that owner — including the board's
- * default "Current web user" — so the owner must be chosen explicitly even
- * though the signed-in actor holds `*`.
- *
- * That gate guards START, COMPLETE STEP and SUBMIT alike, and each of the three
- * is a separate server-rendered form render, so the owner is selected once per
- * command below. `verify` is deliberately NOT owner-gated (the assertion is
- * absent from that path), which is what makes the manager's co-signature on a
- * different person's work a real approval rather than self-approval.
+ * The roster/assignment legs below still pick the seeded operator as the person
+ * a new assignment or shift is FOR (that is a target, not an actor).
  */
 const SOP_OWNER_STAFF_NAME = 'E2E Operator';
-/** A different person signs the verification, so co-signature is real. */
-const SOP_VERIFIER_STAFF_NAME = 'E2E Manager';
+/**
+ * Every SOP command is recorded against the signed-in user's own staff profile;
+ * the board offers no "who did it" picker and the server ignores any client actor
+ * id (H5). The seeded PERSON-target occurrence is therefore owned by the signed-in
+ * admin's staff profile, which `assertOccurrenceOwner` requires for START,
+ * COMPLETE STEP and SUBMIT, and the same session records the verification.
+ */
+const SOP_SESSION_STAFF_NAME = 'Alex Carter';
+/** `seed-restaurant-e2e.ts` IDS.alexStaff — the restaurantAdmin's staff profile. */
+const SOP_SESSION_STAFF_PROFILE_ID = 'staff_chai_chowk_alex';
 const SOP_COMPLETION_NOTE = 'Walk-in chiller held at 3C at open.';
 const SOP_VERIFICATION_REASON = 'Temperature log matches the chiller display.';
 
@@ -403,9 +402,6 @@ test('the seeded daily SOP is completed, submitted LATE past its window, and ver
 
     // ── Start ────────────────────────────────────────────────────────────────
     const operatorControls = sopForm(page, 'Start SOP');
-    await operatorControls.getByLabel('Acting staff').selectOption({
-      label: SOP_OWNER_STAFF_NAME,
-    });
     await runSopCommand(
       page,
       boardUrl,
@@ -424,9 +420,6 @@ test('the seeded daily SOP is completed, submitted LATE past its window, and ver
       SOP_OCCURRENCE_STEP_REQUIREMENT,
       async () => {
         const stepForm = sopForm(page, 'Complete step');
-        await stepForm.getByLabel('Completing staff').selectOption({
-          label: SOP_OWNER_STAFF_NAME,
-        });
         await stepForm.getByLabel('Completion note').fill(SOP_COMPLETION_NOTE);
         await runSopCommand(
           page,
@@ -440,25 +433,14 @@ test('the seeded daily SOP is completed, submitted LATE past its window, and ver
         const checklistStep = main(page).getByRole('listitem').filter({ hasText: SOP_STEP_TITLE });
         await expect(checklistStep).toContainText('Complete');
         await expect(checklistStep).toContainText(`Note: ${SOP_COMPLETION_NOTE}`);
-        await expect(checklistStep).toContainText(`Completed by ${SOP_OWNER_STAFF_NAME}`);
+        await expect(checklistStep).toContainText(`Completed by ${SOP_SESSION_STAFF_NAME}`);
         await expect(sopCard(page, 'In progress')).toContainText('OPENING · 1/1 steps');
       }
     );
 
     // ── Submit after the window closed ───────────────────────────────────────
-    // The owner must be re-selected for THIS command. `Submit for review` lives
-    // in the same single `Operator controls` form as `Start SOP`, and that form
-    // has one uncontrolled, server-rendered `Acting staff` select whose default
-    // option carries an empty value ("Current web user"). The Server Function
-    // reads an empty value as "no acting staff", and `submitOccurrence` is
-    // owner-gated, so it would answer `A completing staff profile is required.`
-    // The selection made for `start` cannot carry over: `runSopCommand` ends
-    // every command with a full navigation back to the board, which re-renders
-    // the select at its default.
+    // Recorded as the signed-in staff profile, like every SOP command.
     const submitControls = sopForm(page, 'Submit for review');
-    await submitControls.getByLabel('Acting staff').selectOption({
-      label: SOP_OWNER_STAFF_NAME,
-    });
     // The seeded window ended 2026-08-28T03:00Z, so `submitOccurrence` records
     // LATE rather than SUBMITTED. That is the assertion — not a tolerance.
     await runSopCommand(
@@ -507,15 +489,12 @@ test('the seeded daily SOP is completed, submitted LATE past its window, and ver
         resolved: false,
         step_completed: true,
         step_note: SOP_COMPLETION_NOTE,
-        step_actor: fixture.operator.staffProfileId,
+        step_actor: SOP_SESSION_STAFF_PROFILE_ID,
       },
     ]);
 
     // ── Verify ───────────────────────────────────────────────────────────────
     const verifierControls = sopForm(page, 'Verify');
-    await verifierControls.getByLabel('Verifier').selectOption({
-      label: SOP_VERIFIER_STAFF_NAME,
-    });
     await verifierControls.getByLabel('Verification reason').fill(SOP_VERIFICATION_REASON);
     await runSopCommand(
       page,
@@ -565,7 +544,7 @@ test('the seeded daily SOP is completed, submitted LATE past its window, and ver
         status: 'VERIFIED',
         resolved: true,
         action: 'VERIFY',
-        actor: fixture.manager.staffProfileId,
+        actor: SOP_SESSION_STAFF_PROFILE_ID,
         reason: SOP_VERIFICATION_REASON,
         // Single-signature verification; only a waiver carries a co-authorization.
         co_authorization: null,
