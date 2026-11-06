@@ -483,6 +483,7 @@ export default async function PharmacyMarketingPage({
                 <select className={control} name="field">
                   <option value="receiptCount">Completed receipt count</option>
                   <option value="daysSinceLastReceipt">Days since last receipt</option>
+                  <option value="churnScore">Churn score (0–100, nightly)</option>
                 </select>
               </label>
               <label className="block text-sm">

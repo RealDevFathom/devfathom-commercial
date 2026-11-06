@@ -20,7 +20,11 @@ export type RfmCustomerFacts = {
   receiptCount: number;
   completedSalesMinor: number;
   observedPeriods: number;
-  /** Supplied by the churn-scoring feature (#729); it is never recomputed here. */
+  /**
+   * Supplied by the churn-scoring feature (#729); it is never recomputed here.
+   * On a 0–1 scale: convert the stored 0–100 `PharmacyCustomerChurnScore.churnScore`
+   * with `churnScoreToUnitInterval` from `./churn-scoring`.
+   */
   churnScore: number;
   hasDrugPurchase: boolean;
   refillDue: boolean;

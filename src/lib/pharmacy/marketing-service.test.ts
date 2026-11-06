@@ -107,14 +107,20 @@ function database() {
         return data;
       }),
     },
+    pharmacyCustomerChurnScore: {
+      findMany: vi.fn(async () => churnScores),
+    },
   };
 }
+let churnScores: Array<{ customerId: string; churnScore: number; scoredAt: Date }> = [];
+const scoredAt = new Date('2026-10-05T20:00:00Z'); // last night's run
 beforeEach(() => {
   row = campaign();
   captures = [];
   exclusions = [];
   optIn = true;
   revokedAt = null;
+  churnScores = [];
   dateOfBirth = null;
   mock = database();
   db = mock as unknown as ScopedDb;
@@ -289,6 +295,87 @@ describe('persisted capture workflow', () => {
     );
     await expect(captureMarketingCampaign(db, scope, row.id, now)).rejects.toThrow('500-customer');
     expect(captures).toEqual([]);
+  });
+});
+
+describe('churn score segments (#729)', () => {
+  const churnRule = (operator: 'eq' | 'gte' | 'lte', value: number) => {
+    mock.pharmacyMarketingSegment.findFirst.mockResolvedValue({
+      definition: { version: 1, all: [{ field: 'churnScore', operator, value }] },
+    });
+  };
+
+  it('accepts churnScore rules from 0 to 100 and rejects out-of-range values', () => {
+    const parse = (value: number) =>
+      marketingDraftInput.safeParse({
+        branchId: 'branch-a',
+        name: 'Win back',
+        templateId: 't',
+        definition: { version: 1, all: [{ field: 'churnScore', operator: 'gte', value }] },
+        scheduledAt: now,
+        quietHours: row.quietHours,
+        frequencyCap: row.frequencyCap,
+        promotesRegulatedItem: false,
+      }).success;
+    expect(parse(0)).toBe(true);
+    expect(parse(70)).toBe(true);
+    expect(parse(100)).toBe(true);
+    expect(parse(101)).toBe(false);
+  });
+
+  it('matches customers by their current branch churn score', async () => {
+    churnRule('gte', 70);
+    churnScores = [{ customerId: 'customer-a', churnScore: 82, scoredAt }];
+    expect(await previewMarketingCampaign(db, scope, row.id, now)).toMatchObject({ prepared: 1 });
+    expect(mock.pharmacyCustomerChurnScore.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        customerId: { in: ['customer-a'] },
+        scoredAt: { gte: new Date(now.getTime() - 48 * 3_600_000) },
+      },
+      select: { customerId: true, churnScore: true, scoredAt: true },
+    });
+    churnScores = [{ customerId: 'customer-a', churnScore: 40, scoredAt }];
+    expect(await previewMarketingCampaign(db, scope, row.id, now)).toMatchObject({ prepared: 0 });
+  });
+
+  it('fails closed for customers without a nightly score', async () => {
+    churnRule('lte', 100);
+    churnScores = [];
+    expect(await captureMarketingCampaign(db, scope, row.id, now)).toMatchObject({
+      prepared: 0,
+      exclusions: {},
+    });
+    expect(captures).toEqual([]);
+  });
+
+  it("ignores a score that predates the customer's latest receipt", async () => {
+    churnRule('gte', 70);
+    churnScores = [{ customerId: 'customer-a', churnScore: 90, scoredAt }];
+    mock.pharmacySale.groupBy.mockResolvedValue([
+      {
+        customerId: 'customer-a',
+        _count: { _all: 3 },
+        // Bought this morning, after last night's scoring run.
+        _max: { completedAt: new Date('2026-10-06T05:00:00Z') },
+      },
+    ]);
+    expect(await previewMarketingCampaign(db, scope, row.id, now)).toMatchObject({ prepared: 0 });
+  });
+
+  it('still applies consent after a churn match', async () => {
+    churnRule('gte', 70);
+    churnScores = [{ customerId: 'customer-a', churnScore: 90, scoredAt }];
+    optIn = false;
+    await captureMarketingCampaign(db, scope, row.id, now);
+    expect(captures).toEqual([]);
+    expect(exclusions[0]).toMatchObject({ customerId: 'customer-a', reason: 'OPTED_OUT' });
+  });
+
+  it('does not read churn scores for rules that do not use them', async () => {
+    await previewMarketingCampaign(db, scope, row.id, now);
+    expect(mock.pharmacyCustomerChurnScore.findMany).not.toHaveBeenCalled();
   });
 });
 

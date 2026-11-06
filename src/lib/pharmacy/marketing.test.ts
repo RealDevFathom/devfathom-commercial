@@ -12,6 +12,15 @@ describe('pharmacy marketing invariants', () => {
     }
   );
 
+  it('accepts the nightly churn score as a retail segment field', () => {
+    expect(() =>
+      validateSegmentDefinition({
+        version: 1,
+        all: [{ field: 'churnScore', operator: 'gte', value: 70 }],
+      })
+    ).not.toThrow();
+  });
+
   it('fails closed for regulated-item outreach while D10 is unapproved', () => {
     expect(() =>
       buildCapturePlan({

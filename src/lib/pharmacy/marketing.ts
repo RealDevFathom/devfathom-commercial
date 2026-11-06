@@ -5,6 +5,8 @@ export const MARKETING_SEGMENT_FIELDS = [
   'restockInterest',
   'frontShopMarginMinor',
   'familyAccount',
+  // #729 — nightly RFM churn score (0–100, higher = more likely churned).
+  'churnScore',
 ] as const;
 
 export type MarketingSegmentField = (typeof MARKETING_SEGMENT_FIELDS)[number];
