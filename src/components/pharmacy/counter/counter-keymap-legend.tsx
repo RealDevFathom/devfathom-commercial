@@ -46,6 +46,11 @@ export function CounterKeymapLegend({
   const [captureError, setCaptureError] = useState<string | null>(null);
   function capture(action: CounterAction, event: React.KeyboardEvent<HTMLButtonElement>) {
     if (editing !== action) return;
+    if (event.key === 'Tab') {
+      setEditing(null);
+      setCaptureError(null);
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     if (event.key === 'Escape') {
@@ -53,6 +58,7 @@ export function CounterKeymapLegend({
       setCaptureError(null);
       return;
     }
+    if (event.key === 'Shift') return;
     if (!/^F([2-9]|10)$/.test(event.key) || event.metaKey || event.ctrlKey || event.altKey) {
       setCaptureError('Choose F2 to F10, with Shift if needed.');
       return;
@@ -87,7 +93,11 @@ export function CounterKeymapLegend({
           value={keymap.preset.key}
           disabled={disabled}
           title={disabled ? 'Finish the payment first' : undefined}
-          onChange={(event) => onPresetChange(event.target.value as CounterKeymapPresetKey)}
+          onChange={(event) => {
+            setEditing(null);
+            setCaptureError(null);
+            onPresetChange(event.target.value as CounterKeymapPresetKey);
+          }}
           className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
         >
           {Object.values(COUNTER_KEYMAP_PRESETS).map((preset) => (
@@ -158,6 +168,12 @@ export function CounterKeymapLegend({
                     setCaptureError(null);
                   }}
                   onKeyDown={(event) => capture(action, event)}
+                  onBlur={() => {
+                    if (editing === action) {
+                      setEditing(null);
+                      setCaptureError(null);
+                    }
+                  }}
                 >
                   {editing === action ? 'Press the new key' : 'Change'}
                 </Button>

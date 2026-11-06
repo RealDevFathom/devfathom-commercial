@@ -50,4 +50,23 @@ describe('counter shortcut preference', () => {
     fireEvent.keyDown(change, { key: 'F5', shiftKey: true });
     expect(onBindingsChange).toHaveBeenCalledWith({ focusSearch: { key: 'F5', shift: true } });
   });
+
+  it('lets Tab leave key capture and clears the pending prompt and error', () => {
+    const onBindingsChange = vi.fn();
+    render(
+      <CounterKeymapLegend
+        keymap={resolveCounterKeymap({ preset: 'devfathom' })}
+        onPresetChange={vi.fn()}
+        onBindingsChange={onBindingsChange}
+      />
+    );
+    const change = screen.getByRole('button', { name: 'Change Focus scan and search' });
+    fireEvent.click(change);
+    fireEvent.keyDown(change, { key: 'F3' });
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(fireEvent.keyDown(change, { key: 'Tab', cancelable: true })).toBe(true);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(change).toHaveAccessibleName('Change Focus scan and search');
+    expect(onBindingsChange).not.toHaveBeenCalled();
+  });
 });
