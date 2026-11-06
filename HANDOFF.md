@@ -6,13 +6,17 @@ https://linear.app/devfathom/issue/DEV-258. GitHub issue: #441.
 
 ## Resume here
 
-- **Status: resumed, finishing.** On 2026-11-06 Saad asked for the remaining DEV-258 fixes, full QA and a
-  security review on the final commit, then a merge into `develop` and closing the verified issues.
-  GitHub CI/CD stays disabled, and there is no deploy and no force-push.
-- **Next action:** run the final checks on the PR head, merge #1226 into `develop`, verify the change on
-  the merge commit, then close DEV-258 and #441. The results are recorded in the PR #1226 description and
-  on DEV-258.
-- **Uncommitted / half-written:** nothing.
+- **Status: complete. No further action for DEV-258.** All final checks passed on the code at `9246b61`
+  (`develop` @ `ea75045` merged in). PR #1226 is being merged into `develop`, after which DEV-258 and #441
+  are closed.
+  - Static checks: typecheck 0 errors, lint 0 errors, build passes.
+  - Database: migrations apply on a fresh DB and on a DB upgraded from `develop`, no new drift, seed
+    passes twice.
+  - Tests: the DB tests pass as an admin URL and as the restricted `gate_runtime` role, and the agency
+    seed test passes 14/14. The full suite has the same 48 failures as `develop`, none new.
+  - Runtime QA over HTTP passes, and the security review and the adversarial review found nothing.
+  - The PR #1226 description has the details.
+- GitHub CI/CD is disabled: no GitHub checks ran, and none are counted as passing.
 - **DEV-618:** PR #1240 was merged into `develop` by another owner on 2026-11-03 (`918d835`). This session
   has no DEV-618 work outstanding.
 
