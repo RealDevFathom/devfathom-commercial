@@ -275,6 +275,8 @@ function makeState() {
       originalAt: Date | null;
       correctedAt: Date;
       reason: string;
+      adjustedByUserId: string;
+      adjustedByStaffProfileId: string | null;
       createdAt: Date;
     }[],
     commands: [] as {
