@@ -132,9 +132,20 @@ function matchesComparator(value: Date | null, comparator: Comparator) {
   return true;
 }
 
-function matches(row: Record<string, unknown>, where: Record<string, unknown> = {}) {
+function matches(row: Record<string, unknown>, where: Record<string, unknown> = {}): boolean {
   return Object.entries(where).every(([field, condition]) => {
     if (condition === undefined) return true;
+    if (field === 'OR') {
+      return (condition as Record<string, unknown>[]).some((clause) => matches(row, clause));
+    }
+    if (field === 'adjustments') {
+      const { some, none } = condition as Record<string, Record<string, unknown> | undefined>;
+      const rows = state.adjustments.filter((a) => a.shiftId === row.id);
+      return (
+        (!some || rows.some((a) => matches(a, some))) &&
+        !(none && rows.some((a) => matches(a, none)))
+      );
+    }
     if (condition === null) return row[field] === null || row[field] === undefined;
     if (condition instanceof Date) return (row[field] as Date)?.getTime() === condition.getTime();
     if (typeof condition === 'object') {
@@ -349,14 +360,14 @@ function makeDb() {
         const shift = request && state.shifts.find((s) => s.id === request.shiftId);
         return shift && shift.branchId === branchId ? [{ shiftId: shift.id }] : [];
       }
-      if (text.includes('FOR UPDATE')) {
-        const shift = state.shifts.find((s) => s.id === sql.values[0]);
-        return shift ? [{ id: shift.id }] : [];
-      }
       if (text.includes('"staffProfileId", "version"')) {
         const [id, organizationId] = sql.values as string[];
         const shift = state.shifts.find((s) => s.id === id && s.organizationId === organizationId);
         return shift ? [{ staffProfileId: shift.staffProfileId, version: shift.version }] : [];
+      }
+      if (text.includes('FOR UPDATE')) {
+        const shift = state.shifts.find((s) => s.id === sql.values[0]);
+        return shift ? [{ id: shift.id }] : [];
       }
       throw new Error(`Unexpected raw SQL: ${text}`);
     }),
@@ -403,6 +414,21 @@ function makeDb() {
         Object.assign(row, data);
         return row;
       }),
+      updateMany: vi.fn(
+        async ({
+          where,
+          data: { version, ...data },
+        }: {
+          where: Record<string, unknown>;
+          data: Partial<ShiftRow> & { version?: { increment: number } };
+        }) => {
+          const rows = state.shifts.filter((s) => matches(s, where));
+          for (const row of rows) {
+            Object.assign(row, data, version ? { version: row.version + version.increment } : {});
+          }
+          return { count: rows.length };
+        }
+      ),
     },
     restaurantShiftEvent: {
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
@@ -737,6 +763,69 @@ describe('restaurantShifts.cancel', () => {
     await expect(
       caller('EMPLOYEE').cancel({ id: 'shift_emp', expectedVersion: 1 })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  describe('with the real shifts lib', () => {
+    beforeEach(async () => {
+      const actual =
+        await vi.importActual<typeof import('@/lib/restaurant/shifts')>('@/lib/restaurant/shifts');
+      mocks.cancelShift.mockImplementation(actual.cancelShift);
+    });
+
+    it('locks the shift and refuses to cancel attendance opened by a clock-in correction', async () => {
+      await caller('MANAGER').correctTime({
+        shiftId: 'shift_emp',
+        branchId: 'branch_1',
+        kind: 'CLOCK_IN',
+        correctedAt: at('2026-09-20T09:00:00Z'),
+        reason: 'Reader was offline',
+      });
+      expect(state.shifts.find((s) => s.id === 'shift_emp')!.clockedInAt).toBeNull();
+
+      await expect(
+        caller('MANAGER').cancel({ id: 'shift_emp', expectedVersion: 1 })
+      ).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'This shift cannot be cancelled while the employee is clocked in.',
+      });
+      expect(state.rawSql).toContainEqual(
+        expect.stringMatching(/"staffProfileId", "version"[\s\S]*FOR UPDATE/)
+      );
+      expect(state.shifts.find((s) => s.id === 'shift_emp')).toMatchObject({
+        status: 'SCHEDULED',
+        cancelledAt: null,
+        version: 1,
+      });
+      expect(eventsOf('CANCELLED')).toHaveLength(0);
+
+      vi.setSystemTime(at('2026-09-20T17:00:00Z'));
+      await expect(
+        caller('EMPLOYEE').clockOut({ shiftId: 'shift_emp', idempotencyKey: 'co' })
+      ).resolves.toMatchObject({
+        clockedOutAt: at('2026-09-20T17:00:00Z'),
+        attendanceStatus: 'COMPLETE',
+      });
+    });
+
+    it('cancels a shift whose raw clock-in was closed by a clock-out correction', async () => {
+      await caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'ci' });
+      vi.setSystemTime(at('2026-09-20T18:00:00Z'));
+      await caller('MANAGER').correctTime({
+        shiftId: 'shift_emp',
+        branchId: 'branch_1',
+        kind: 'CLOCK_OUT',
+        correctedAt: at('2026-09-20T17:00:00Z'),
+        reason: 'Forgot clock-out',
+      });
+      expect(state.shifts.find((s) => s.id === 'shift_emp')!.clockedOutAt).toBeNull();
+
+      await expect(
+        caller('MANAGER').cancel({ id: 'shift_emp', expectedVersion: 1, reason: 'Wrong day' })
+      ).resolves.toMatchObject({ status: 'CANCELLED', cancelReason: 'Wrong day', version: 2 });
+      expect(eventsOf('CANCELLED')).toEqual([
+        expect.objectContaining({ shiftId: 'shift_emp', reason: 'Wrong day' }),
+      ]);
+    });
   });
 });
 

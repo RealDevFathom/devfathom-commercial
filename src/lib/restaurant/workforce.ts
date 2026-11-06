@@ -139,8 +139,12 @@ export const WORKFORCE_SHIFT_SELECT = {
 
 type WorkforceShift = Prisma.RestaurantShiftGetPayload<{ select: typeof WORKFORCE_SHIFT_SELECT }>;
 
+type ClockAdjustments = {
+  adjustments: ReadonlyArray<{ kind: string; breakId: string | null; correctedAt: Date }>;
+};
+
 function adjustedAt(
-  shift: WorkforceShift,
+  shift: ClockAdjustments,
   kind: 'CLOCK_IN' | 'CLOCK_OUT',
   original: Date | null
 ): Date | null {
@@ -148,6 +152,20 @@ function adjustedAt(
     .filter((row) => row.kind === kind && row.breakId === null)
     .at(-1);
   return latest?.correctedAt ?? original;
+}
+
+/**
+ * Effective clock-in/out: the latest shift-level correction of each kind wins
+ * over the raw punch, exactly as `presentWorkforceShift` presents it.
+ * `adjustments` must be ordered by `createdAt`, then `id`, ascending.
+ */
+export function effectiveClockTimes(
+  shift: ClockAdjustments & { clockedInAt: Date | null; clockedOutAt: Date | null }
+) {
+  return {
+    clockedInAt: adjustedAt(shift, 'CLOCK_IN', shift.clockedInAt),
+    clockedOutAt: adjustedAt(shift, 'CLOCK_OUT', shift.clockedOutAt),
+  };
 }
 
 function adjustedBreakAt(

@@ -1,5 +1,6 @@
 import 'server-only';
 
+import type { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
@@ -8,6 +9,7 @@ import {
   businessDateToUtcDate,
   resolveBusinessDate,
 } from './business-date';
+import { effectiveClockTimes } from './workforce';
 
 /**
  * Completion wave — branch-scoped staff shift scheduling and the shift
@@ -332,6 +334,24 @@ export async function updateShift(
   }))!;
 }
 
+const CANCEL_ATTENDANCE_SELECT = {
+  id: true,
+  status: true,
+  clockedInAt: true,
+  clockedOutAt: true,
+  adjustments: {
+    where: { breakId: null, kind: { in: ['CLOCK_IN', 'CLOCK_OUT'] } },
+    select: { kind: true, breakId: true, correctedAt: true },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  },
+} satisfies Prisma.RestaurantShiftSelect;
+
+/** An effective clock-in with no effective clock-out: the employee is still on the clock. */
+function hasOpenAttendance(shift: Parameters<typeof effectiveClockTimes>[0]): boolean {
+  const { clockedInAt, clockedOutAt } = effectiveClockTimes(shift);
+  return clockedInAt !== null && clockedOutAt === null;
+}
+
 /**
  * Withdraw a shift from the roster. Cancellation is a soft state, not a delete:
  * a published roster keeps the row (and its reason) while the shift stops
@@ -345,9 +365,12 @@ export async function cancelShift(
   options: { now: Date; reason?: string | null },
   cas?: ShiftCas
 ) {
+  // Attendance is the raw punches plus manager corrections. The router holds
+  // the shift row lock (every attendance writer takes it first), so this read
+  // stays true until the conditional write below commits.
   const existing = await db.restaurantShift.findUnique({
     where: { id },
-    select: { id: true, status: true, clockedInAt: true, clockedOutAt: true },
+    select: CANCEL_ATTENDANCE_SELECT,
   });
   if (!existing) {
     throw new ShiftError('Shift not found.', 'SHIFT_NOT_FOUND');
@@ -355,7 +378,7 @@ export async function cancelShift(
   if (existing.status === 'CANCELLED') {
     throw new ShiftError('This shift is already cancelled.', 'ALREADY_CANCELLED');
   }
-  if (existing.clockedInAt && !existing.clockedOutAt) {
+  if (hasOpenAttendance(existing)) {
     throw new ShiftError(
       'This shift cannot be cancelled while the employee is clocked in.',
       'ACTIVE_ATTENDANCE'
@@ -375,19 +398,23 @@ export async function cancelShift(
       id: existing.id,
       ...(cas ? { organizationId: cas.organizationId, version: cas.expectedVersion } : {}),
       status: { not: 'CANCELLED' },
-      OR: [{ clockedInAt: null }, { clockedOutAt: { not: null } }],
+      OR: [
+        { clockedInAt: null, adjustments: { none: { kind: 'CLOCK_IN', breakId: null } } },
+        { clockedOutAt: { not: null } },
+        { adjustments: { some: { kind: 'CLOCK_OUT', breakId: null } } },
+      ],
     },
     data: cas ? { ...data, version: { increment: 1 } } : data,
   });
   if (won.count !== 1) {
     const current = await db.restaurantShift.findUnique({
       where: { id: existing.id },
-      select: { status: true, clockedInAt: true, clockedOutAt: true },
+      select: CANCEL_ATTENDANCE_SELECT,
     });
     if (current?.status === 'CANCELLED') {
       throw new ShiftError('This shift is already cancelled.', 'ALREADY_CANCELLED');
     }
-    if (current?.clockedInAt && !current.clockedOutAt) {
+    if (current && hasOpenAttendance(current)) {
       throw new ShiftError(
         'This shift cannot be cancelled while the employee is clocked in.',
         'ACTIVE_ATTENDANCE'

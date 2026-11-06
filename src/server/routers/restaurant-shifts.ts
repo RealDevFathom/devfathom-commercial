@@ -96,10 +96,17 @@ async function branchForShift(ctx: TRPCContext, shiftId: string) {
   return shift.branchId;
 }
 
-async function managerShift(tx: Prisma.TransactionClient, organizationId: string, shiftId: string) {
+async function managerShift(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  shiftId: string,
+  options: { lock?: boolean } = {}
+) {
   const rows = await tx.$queryRaw<Array<{ staffProfileId: string; version: number }>>(
     Prisma.sql`SELECT "staffProfileId", "version" FROM "restaurant_shifts"
-      WHERE "id" = ${shiftId} AND "organizationId" = ${organizationId}`
+      WHERE "id" = ${shiftId} AND "organizationId" = ${organizationId}${
+        options.lock ? Prisma.sql` FOR UPDATE` : Prisma.empty
+      }`
   );
   if (!rows[0]) throw new TRPCError({ code: 'NOT_FOUND', message: 'Shift not found.' });
   return rows[0];
@@ -235,7 +242,9 @@ export const restaurantShiftsRouter = router({
       try {
         await managerAuthorization(ctx, await branchForShift(ctx, input.id));
         const shift = await ctx.db.$transaction(async (tx) => {
-          await managerShift(tx, ctx.entitlements.organizationId, input.id);
+          // Clock-in, clock-out and time corrections lock this row first, so
+          // attendance cannot change while cancelShift checks it.
+          await managerShift(tx, ctx.entitlements.organizationId, input.id, { lock: true });
           const cancelled = await cancelShift(
             tx as unknown as ScopedDb,
             input.id,
