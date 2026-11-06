@@ -68,12 +68,16 @@ function fixture(
     twoFactorSecret: null as string | null,
     organizationRole: { key: 'owner', isSystem: true } as { key: string; isSystem: boolean } | null,
   };
+  // Permission rules of other members (approvers) by id; every other read is the session member.
+  const rulesById: Record<string, typeof member> = {};
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
     $executeRaw: vi.fn().mockResolvedValue(1),
     $transaction: vi.fn(),
     user: {
-      findUnique: vi.fn(async () => member),
+      findUnique: vi.fn(async (args?: { where?: { id?: string } }) =>
+        args?.where?.id && rulesById[args.where.id] ? rulesById[args.where.id] : member
+      ),
       findFirst: vi.fn(async (): Promise<Record<string, unknown> | null> => ({ ...approver })),
     },
     twoFactorRecoveryCode: {
@@ -134,6 +138,7 @@ function fixture(
   return {
     db,
     member,
+    rulesById,
     approver,
     user,
     context,
@@ -749,8 +754,23 @@ describe('Khata router trust and recovery boundary', () => {
     // Password, code and reason never enter the audit input.
     expect(f.context.audit.detail).toMatchObject({ skipInput: true });
   });
+  function approverRules(
+    f: ReturnType<typeof fixture>,
+    id: string,
+    permissions: string[],
+    overrides: Permission[] = []
+  ) {
+    f.rulesById[id] = {
+      ...f.member,
+      organizationRole: {
+        permissions: permissions.map((capability) => ({ capability, effect: 'ALLOW' })),
+      },
+      permissionOverrides: overrides,
+    };
+  }
   it('lets a second-person manager approve the cashier tender', async () => {
     const f = fixture();
+    approverRules(f, 'manager-b', ['pharmacy:manage']);
     f.db.user.findFirst.mockResolvedValue({
       ...f.approver,
       id: 'manager-b',
@@ -789,6 +809,66 @@ describe('Khata router trust and recovery boundary', () => {
       f.caller().authorizeKhataOverride({ ...approval, approverEmail: 'manager@example.test' })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'OWNER_ACTION_REQUIRED' });
     expect(f.db.$executeRaw).not.toHaveBeenCalled();
+  });
+  it.each([
+    [
+      'a manager with a user DENY on pharmacy:manage',
+      'EMPLOYEE',
+      'manager',
+      ['pharmacy:manage'],
+      'pharmacy:manage',
+    ],
+    [
+      'a manager with a user DENY on pharmacy:*',
+      'EMPLOYEE',
+      'manager',
+      ['pharmacy:manage'],
+      'pharmacy:*',
+    ],
+    ['an owner with a user DENY on pharmacy:*', 'EMPLOYEE', 'owner', ['pharmacy:*'], 'pharmacy:*'],
+    [
+      'an owner-operator with a user DENY on pharmacy:manage',
+      'EMPLOYEE',
+      'owner-operator',
+      ['pharmacy:orders'],
+      'pharmacy:manage',
+    ],
+    ['an ADMIN with a user DENY on admin:access', 'ADMIN', 'owner', [], 'admin:access'],
+    ['an ADMIN with a user DENY on *', 'ADMIN', 'owner', [], '*'],
+  ])('refuses %s at issuance', async (_label, role, key, permissions, denied) => {
+    const f = fixture();
+    approverRules(f, 'approver-b', permissions, [{ capability: denied, effect: 'DENY' }]);
+    f.db.user.findFirst.mockResolvedValue({
+      ...f.approver,
+      id: 'approver-b',
+      email: 'manager@example.test',
+      role,
+      organizationRole: { key, isSystem: true },
+    });
+    await expect(
+      f.caller().authorizeKhataOverride({ ...approval, approverEmail: 'manager@example.test' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'OWNER_ACTION_REQUIRED' });
+    expect(f.db.$executeRaw).not.toHaveBeenCalled();
+    expect(recordAuthAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'approver-b',
+        reason: 'Khata override approval refused: Approver permission denied',
+      })
+    );
+  });
+  it('lets an owner-operator without a DENY approve', async () => {
+    const f = fixture();
+    // The owner-operator template carries no pharmacy:manage grant.
+    approverRules(f, 'approver-b', ['pharmacy:orders', 'pharmacy:dispense']);
+    f.db.user.findFirst.mockResolvedValue({
+      ...f.approver,
+      id: 'approver-b',
+      email: 'manager@example.test',
+      role: 'EMPLOYEE',
+      organizationRole: { key: 'owner-operator', isSystem: true },
+    });
+    await f.caller().authorizeKhataOverride({ ...approval, approverEmail: 'manager@example.test' });
+    expect(f.db.$executeRaw).toHaveBeenCalledOnce();
   });
   it('lets a tenant ADMIN approve without a branch assignment', async () => {
     const f = fixture();
@@ -892,6 +972,8 @@ describe('Khata router trust and recovery boundary', () => {
   });
   it('consumes bound evidence once when the tender uses it', async () => {
     const f = fixture();
+    // The approver is the session owner: the owner template grants pharmacy:*.
+    f.member.organizationRole.permissions.push({ capability: 'pharmacy:*', effect: 'ALLOW' });
     routeRaw(f, evidence(), approverRow);
     await f.caller().tender({
       ...input,
@@ -937,6 +1019,52 @@ describe('Khata router trust and recovery boundary', () => {
   it('observes approver branch unassignment inside the tender transaction', async () => {
     const f = fixture();
     routeRaw(f, evidence(), { ...approverRow, branchAssigned: false });
+    await expect(
+      f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        overrideReason: 'Exception',
+        approvalId,
+      })
+    ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    expect(f.db.$executeRaw).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['manager', 'pharmacy:manage', ['pharmacy:manage']],
+    ['manager', 'pharmacy:*', ['pharmacy:manage']],
+    ['owner', 'pharmacy:*', ['pharmacy:*']],
+  ])(
+    'observes a DENY added after issuance for a %s on %s inside the tender transaction',
+    async (roleKey, denied, permissions) => {
+      const f = fixture();
+      approverRules(f, 'manager-b', permissions, [{ capability: denied, effect: 'DENY' }]);
+      routeRaw(
+        f,
+        { ...evidence(), approverId: 'manager-b' },
+        { ...approverRow, id: 'manager-b', roleKey }
+      );
+      await expect(
+        f.caller().tender({
+          ...input,
+          amountMinor: 101,
+          ownerOverride: true,
+          overrideReason: 'Exception',
+          approvalId,
+        })
+      ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+      expect(f.db.$executeRaw).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    }
+  );
+  it('observes an ADMIN approver admin:access DENY inside the tender transaction', async () => {
+    const f = fixture();
+    approverRules(f, 'admin-b', [], [{ capability: 'admin:access', effect: 'DENY' }]);
+    routeRaw(
+      f,
+      { ...evidence(), approverId: 'admin-b' },
+      { ...approverRow, id: 'admin-b', role: 'ADMIN', roleKey: null, isSystem: null }
+    );
     await expect(
       f.caller().tender({
         ...input,

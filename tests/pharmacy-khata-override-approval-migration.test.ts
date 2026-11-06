@@ -18,7 +18,9 @@ describe('Khata override approval evidence migration', () => {
     expect(sql).toContain('OLD."consumedAt" IS NOT NULL');
     expect(sql).toContain('NEW."consumedAt" IS NULL');
     expect(sql).toContain('NEW."consumedAt" IS NOT DISTINCT FROM OLD."consumedAt"');
-    expect(sql).toContain('ROW(NEW."id", NEW."organizationId", NEW."branchId", NEW."approverId", NEW."saleId"');
+    expect(sql).toContain(
+      'ROW(NEW."id", NEW."organizationId", NEW."branchId", NEW."approverId", NEW."saleId"'
+    );
     expect(sql).toContain('BEFORE UPDATE OR DELETE');
   });
 

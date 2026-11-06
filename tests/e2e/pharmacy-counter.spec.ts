@@ -612,16 +612,16 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
         }
       }
     }
-    const override = page.getByLabel('Owner: authorize limit increase');
+    const override = page.getByLabel('Owner or manager: authorize limit increase');
     await override.focus();
     await override.press('Space');
     await page
       .getByLabel('Family Khata account')
       .locator('..')
       .screenshot({ path: testInfo.outputPath('khata-owner-auth.png') });
-    await page
-      .getByLabel('Owner password (current account)')
-      .fill(process.env.PHARMACY_E2E_ADMIN_PASSWORD!);
+    // Approver email stays blank: the signed-in ADMIN approves.
+    await page.getByLabel('Approver password').fill(process.env.PHARMACY_E2E_ADMIN_PASSWORD!);
+    await page.getByLabel('Reason for limit increase').fill('E2E limit increase');
     await pressControl(page.getByRole('button', { name: 'Take payment' }));
     await expect(page.getByText('Settled', { exact: true })).toBeVisible();
     const popupPromise = page.waitForEvent('popup');
@@ -653,6 +653,22 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
         ).rows[0].count
       )
     ).toBe(1);
+    const approvals = await db.query(
+      'SELECT id, "consumedAt" FROM pharmacy_khata_override_approvals WHERE "familyAccountId"=$1',
+      [familyId]
+    );
+    expect(approvals.rows).toHaveLength(1);
+    expect(approvals.rows[0].consumedAt).not.toBeNull();
+    const [decision] = (
+      await db.query(
+        'SELECT reasons FROM pharmacy_khata_limit_decisions WHERE "familyAccountId"=$1',
+        [familyId]
+      )
+    ).rows;
+    expect(decision.reasons).toMatchObject({
+      overrideReason: 'E2E limit increase',
+      approvalId: approvals.rows[0].id,
+    });
     expect(
       Number(
         (

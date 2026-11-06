@@ -51,6 +51,17 @@ async function fixture(
       update: { isSystem: true },
       create: { organizationId, key: 'owner', name: 'Owner', isSystem: true },
     });
+    // The owner template's grant: approval authority is re-checked through the ABAC engine.
+    await db.organizationRolePermission.upsert({
+      where: {
+        organizationRoleId_capability: {
+          organizationRoleId: ownerRole.id,
+          capability: 'pharmacy:*',
+        },
+      },
+      update: { effect: 'ALLOW' },
+      create: { organizationId, organizationRoleId: ownerRole.id, capability: 'pharmacy:*' },
+    });
     const approver = await db.user.upsert({
       where: { organizationId_email: { organizationId, email: `${organizationId}@owner.test` } },
       update: { status: 'ACTIVE', organizationRoleId: ownerRole.id },
@@ -257,7 +268,12 @@ suite('family Khata restricted PostgreSQL', () => {
   });
   it('audits a fresh owner override and preserves append-only history', async () => {
     const approvalId = await inScope(a, (db) => issueApproval(db, a, 200));
-    const override = { ...a, amountMinor: 200, ownerOverride: true, overrideReason: 'Approved exception' };
+    const override = {
+      ...a,
+      amountMinor: 200,
+      ownerOverride: true,
+      overrideReason: 'Approved exception',
+    };
     await inScope(a, (db) => khata.authorizeKhataCharge(db, a, override, { approvalId }));
     // Single-use: the evidence is consumed and its consumption cannot be undone.
     const [evidence] = await inScope(a, (db) =>
@@ -277,7 +293,10 @@ suite('family Khata restricted PostgreSQL', () => {
     ).rejects.toThrow();
     await expect(
       inScope(a, (db) =>
-        db.$executeRawUnsafe('DELETE FROM pharmacy_khata_override_approvals WHERE id=$1', approvalId)
+        db.$executeRawUnsafe(
+          'DELETE FROM pharmacy_khata_override_approvals WHERE id=$1',
+          approvalId
+        )
       )
     ).rejects.toThrow();
     const decision = await inScope(a, (db) =>
@@ -301,6 +320,47 @@ suite('family Khata restricted PostgreSQL', () => {
         db.pharmacyKhataEvent.deleteMany({ where: { familyAccountId: a.familyAccountId } })
       )
     ).rejects.toThrow();
+  });
+  it('re-checks approver DENY overrides at consumption and ignores expired ones', async () => {
+    const override = {
+      ...sibling,
+      amountMinor: 500,
+      ownerOverride: true,
+      overrideReason: 'Approved exception',
+    };
+    const deny = (expiresAt: Date | null) => ({
+      organizationId: orgA,
+      userId: sibling.approverId,
+      capability: 'pharmacy:*',
+      effect: 'DENY' as const,
+      reason: 'Investigation',
+      expiresAt,
+    });
+    const approvalId = await inScope(sibling, (db) => issueApproval(db, sibling, 500));
+    // A DENY added after issuance refuses consumption; the whole tender rolls back.
+    await expect(
+      inScope(sibling, async (db) => {
+        await db.userPermissionOverride.create({ data: deny(null) });
+        return khata.authorizeKhataCharge(db, sibling, override, { approvalId });
+      })
+    ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
+    await inScope(sibling, async (db) => {
+      expect(await db.userPermissionOverride.count({ where: { userId: sibling.approverId } })).toBe(
+        0
+      );
+      await db.userPermissionOverride.create({ data: deny(new Date(Date.now() - 60_000)) });
+      await khata.authorizeKhataCharge(db, sibling, override, { approvalId });
+    });
+    const decision = await inScope(sibling, (db) =>
+      db.pharmacyKhataLimitDecision.findFirst({
+        where: { familyAccountId: sibling.familyAccountId },
+      })
+    );
+    expect(decision).toMatchObject({
+      appliedLimitMinor: 1100,
+      ownerActorId: sibling.approverId,
+      reasons: expect.objectContaining({ approvalId }),
+    });
   });
 });
 

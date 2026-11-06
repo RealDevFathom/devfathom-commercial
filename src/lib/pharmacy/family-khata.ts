@@ -1,6 +1,8 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
+import { capabilityMatches } from '@/lib/abac/capabilities';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { auditPatientRead } from './patient-prescriptions';
@@ -236,6 +238,39 @@ export function isKhataOverrideApprover(row: {
   );
 }
 
+/**
+ * Capability gate on top of `isKhataOverrideApprover`, so an explicit DENY (user override
+ * or role rule) revokes approval exactly as the ABAC engine decides it. ADMIN keeps the
+ * `admin:access` gate; owner and manager templates grant `pharmacy:manage`. The
+ * owner-operator template does not, so only a matching unexpired DENY refuses it.
+ */
+export async function khataApproverCapable(
+  db: ScopedDb,
+  approver: { id: string; status: string | null; role?: string | null; roleKey?: string | null }
+) {
+  const subject = subjectFromSession(approver);
+  if (approver.role === 'ADMIN')
+    return can(subject, 'admin:access', undefined, { db, source: 'TRPC' });
+  if (approver.roleKey !== 'owner-operator')
+    return can(subject, 'pharmacy:manage', undefined, { db, source: 'TRPC' });
+  const now = new Date();
+  const user = await db.user.findUnique({
+    where: { id: approver.id },
+    select: {
+      organizationRole: { select: { permissions: { select: { capability: true, effect: true } } } },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  if (!user) return false;
+  return ![...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])].some(
+    (rule) =>
+      rule.effect === 'DENY' && capabilityMatches(rule.capability, 'pharmacy:manage', 'DENY')
+  );
+}
+
 type KhataLimitDecisionInput = {
   familyAccountId: string;
   suggestion: KhataHealthSuggestion;
@@ -403,7 +438,13 @@ export async function readSaleKhataStatement(
 export async function authorizeKhataCharge(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean; overrideReason?: string },
+  input: {
+    saleId: string;
+    familyAccountId: string;
+    amountMinor: number;
+    ownerOverride?: boolean;
+    overrideReason?: string;
+  },
   approval: { approvalId?: string }
 ) {
   await db.$queryRaw(
@@ -450,7 +491,10 @@ export async function authorizeKhataCharge(
     if (!evidence || !reason) throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
     // The approver authorized a final limit, not an open-ended amount: a charge that landed
     // after approval must not push the account past the figure they saw.
-    if (!Number.isSafeInteger(evidence.approvedLimitMinor) || projected > evidence.approvedLimitMinor)
+    if (
+      !Number.isSafeInteger(evidence.approvedLimitMinor) ||
+      projected > evidence.approvedLimitMinor
+    )
       throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
     // Re-check the approver inside the tender transaction: a role change, deactivation or
     // branch unassignment after the approval was issued must still refuse the override.
@@ -477,6 +521,9 @@ export async function authorizeKhataCharge(
       FOR SHARE OF u`);
     const approver = approvers[0];
     if (!approver || !isKhataOverrideApprover(approver))
+      throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+    // A DENY added after issuance must still refuse consumption.
+    if (!(await khataApproverCapable(db, approver)))
       throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
     const consumed = await db.$executeRaw(Prisma.sql`
       UPDATE pharmacy_khata_override_approvals SET "consumedAt"=NOW()

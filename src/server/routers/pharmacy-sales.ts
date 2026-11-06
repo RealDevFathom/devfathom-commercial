@@ -47,6 +47,7 @@ import {
   authorizeKhataCharge,
   FamilyKhataError,
   isKhataOverrideApprover,
+  khataApproverCapable,
   readSaleKhataAccounts,
   readSaleKhataStatement,
 } from '@/lib/pharmacy/family-khata';
@@ -978,6 +979,13 @@ export const pharmacySalesRouter = router({
           })
         )
           return refuse('Not an active owner or manager');
+        if (
+          !(await khataApproverCapable(ctx.db, {
+            ...approver,
+            roleKey: approver.organizationRole?.key ?? null,
+          }))
+        )
+          return refuse('Approver permission denied');
         // Same branch boundary the counter applies: only a tenant ADMIN is exempt.
         if (
           approver.role !== 'ADMIN' &&
