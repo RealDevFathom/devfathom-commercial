@@ -177,6 +177,56 @@ async function tokenContext(db: ScopedDb, key: string, value: string) {
   await db.$executeRaw(Prisma.sql`SELECT set_config(${key},${value},true)`);
 }
 
+export const pendingOfflinePaymentsSchema = z.object({ cursor: id.optional() }).strict();
+
+/** Server-recovered offline holds only. Absence here is never proof of no local funds. */
+export function listPendingOfflinePayments(
+  scope: LedgerScope,
+  raw: z.input<typeof pendingOfflinePaymentsSchema>
+) {
+  const { cursor } = pendingOfflinePaymentsSchema.parse(raw);
+  return inScope(scope, async (db) => {
+    const canResolve = await allowed(db, scope, true);
+    if (!canResolve) await authorize(db, scope);
+    const where = {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      source: 'OFFLINE_HOLD',
+    };
+    if (
+      cursor &&
+      !(await db.pharmacyPaymentAttempt.findFirst({
+        where: { ...where, id: cursor },
+        select: { id: true },
+      }))
+    )
+      throw new PaymentCollectionError('NOT_FOUND');
+    const records = await db.pharmacyPaymentAttempt.findMany({
+      where: { ...where, state: { notIn: ['SETTLED', 'RELEASED'] } },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      take: 21,
+      select: {
+        id: true,
+        saleId: true,
+        method: true,
+        amountMinor: true,
+        currency: true,
+        state: true,
+        createdAt: true,
+      },
+    });
+    const items = records
+      .slice(0, 20)
+      .map((row) => ({
+        ...row,
+        canResolve:
+          canResolve && ['RAAST', 'JAZZCASH', 'EASYPAISA', 'BANK_TRANSFER'].includes(row.method),
+      }));
+    return { items, nextCursor: records.length > 20 ? items.at(-1)!.id : null };
+  });
+}
+
 /** Read-only recovery is authorized from current stored membership, never a submitted role. */
 export function recoverPaymentCollection(
   scope: LedgerScope,

@@ -2716,6 +2716,14 @@ function ScopedPharmacyCounterConsole({
                 Review payment status
               </Button>
             ) : null}
+            <Link
+              href={`/pharmacy/counter/pending-payments?branchId=${encodeURIComponent(branchId)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={buttonVariants({ variant: 'outline', className: 'mt-3 min-h-11 w-full' })}
+            >
+              Pending offline payments <span className="sr-only">(opens a new tab)</span>
+            </Link>
             <div className="mt-3 grid grid-cols-3 gap-2" aria-label="Bill actions">
               <Button
                 variant="outline"
