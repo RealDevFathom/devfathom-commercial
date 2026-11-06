@@ -1,0 +1,22 @@
+[
+  { "goto": "/pharmacy/marketing" },
+  { "wait": 1500 },
+  { "fill": { "label": "Period start (UTC)" }, "value": "2026-10-01" },
+  { "fill": { "label": "Exclusive cutoff (UTC)" }, "value": "2026-11-03" },
+  { "click": { "role": "button", "name": "Generate insights" } },
+  { "wait": 6000 },
+  {
+    "eval": "[...document.querySelectorAll('main section, main [class*=card]')].map(s=>s.innerText.replace(/\\s+/g,' ')).filter(t=>/AI growth insights/.test(t)).map(t=>t.slice(0,900)).slice(0,1)",
+    "max": 1200
+  },
+  { "fill": { "label": "Basket period start (UTC)" }, "value": "2026-10-01" },
+  { "fill": { "label": "Basket exclusive cutoff (UTC)" }, "value": "2026-11-03" },
+  { "click": { "role": "button", "name": "Find bundle proposals" } },
+  { "wait": 5000 },
+  {
+    "eval": "[...document.querySelectorAll('main section, main [class*=card]')].map(s=>s.innerText.replace(/\\s+/g,' ')).filter(t=>/Basket bundle proposals/.test(t)).map(t=>t.slice(0,900)).slice(0,1)",
+    "max": 1200,
+    "shot": "own-marketing-generate2",
+    "full": true
+  }
+]

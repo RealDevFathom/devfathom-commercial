@@ -2,6 +2,8 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
+import { Upload } from 'lucide-react';
+import pharmacyStyles from '@/components/pharmacy/auth-screens.module.css';
 import type { LoginVertical } from '../vertical';
 
 type Fields = Record<string, string[]>;
@@ -10,6 +12,7 @@ export function RequestForm({ vertical }: { vertical: Exclude<LoginVertical, 'de
   const [error, setError] = useState('');
   const [fields, setFields] = useState<Fields>({});
   const [reference, setReference] = useState('');
+  const [licenceFileName, setLicenceFileName] = useState('');
   const resultRef = useRef<HTMLDivElement>(null);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -65,7 +68,9 @@ export function RequestForm({ vertical }: { vertical: Exclude<LoginVertical, 'de
                 ? 'email'
                 : name === 'phone'
                   ? 'tel'
-                  : undefined
+                  : vertical === 'pharmacy' && name === 'address'
+                    ? 'street-address'
+                    : undefined
           }
           aria-invalid={!!fields[name]}
           aria-describedby={fields[name] || hint ? `${name}-help` : undefined}
@@ -96,11 +101,21 @@ export function RequestForm({ vertical }: { vertical: Exclude<LoginVertical, 'de
         <label htmlFor={name} className="block">
           {label}
         </label>
-        <select id={name} name={name}>
+        <select
+          id={name}
+          name={name}
+          aria-invalid={vertical === 'pharmacy' ? !!fields[name] : undefined}
+          aria-describedby={vertical === 'pharmacy' && fields[name] ? `${name}-help` : undefined}
+        >
           {options.map((option) => (
             <option key={option}>{option}</option>
           ))}
         </select>
+        {vertical === 'pharmacy' && fields[name] && (
+          <p id={`${name}-help`} className="text-xs leading-5 text-destructive">
+            {fields[name].join(' ')}
+          </p>
+        )}
       </div>
     );
   }
@@ -122,18 +137,24 @@ export function RequestForm({ vertical }: { vertical: Exclude<LoginVertical, 'de
       </div>
     );
   return (
-    <form onSubmit={submit} className="mt-10 space-y-8" aria-busy={pending}>
+    <form
+      onSubmit={submit}
+      className={`${vertical === 'pharmacy' ? 'mt-9' : 'mt-10'} space-y-8`}
+      aria-busy={pending}
+    >
       <input type="hidden" name="vertical" value={vertical} />
-      <div ref={resultRef} tabIndex={-1}>
-        {error && (
-          <p
-            role="alert"
-            className="rounded-[var(--radius-sm)] border border-destructive p-4 text-sm text-destructive"
-          >
-            {error}
-          </p>
-        )}
-      </div>
+      {(error || vertical !== 'pharmacy') && (
+        <div ref={resultRef} tabIndex={-1}>
+          {error && (
+            <p
+              role="alert"
+              className="rounded-[var(--radius-sm)] border border-destructive p-4 text-sm text-destructive"
+            >
+              {error}
+            </p>
+          )}
+        </div>
+      )}
       <fieldset disabled={pending} className="space-y-5">
         <legend>
           {vertical === 'pharmacy'
@@ -167,7 +188,14 @@ export function RequestForm({ vertical }: { vertical: Exclude<LoginVertical, 'de
         {vertical === 'pharmacy' ? (
           <>
             <div className="grid gap-5 sm:grid-cols-2">
-              {field('branchName', 'Branch name', 'text', 'Model Town')}
+              {field(
+                'branchName',
+                'Branch name',
+                'text',
+                'Model Town',
+                true,
+                'Printed on customer receipts.'
+              )}
               {field('address', 'Premises address', 'text', 'Shop number and street')}
             </div>
             <div className="grid gap-5 sm:grid-cols-2">
@@ -254,14 +282,49 @@ export function RequestForm({ vertical }: { vertical: Exclude<LoginVertical, 'de
                 false
               )}
             </div>
-            {field(
-              'licenceCopy',
-              'Licence copy',
-              'file',
-              '',
-              true,
-              'Upload a photo or scan of the licence. PDF, JPG or PNG, up to 1 MB. Stored privately with your request.'
-            )}
+            <div className="space-y-2">
+              <span id="licenceCopy-label" className="text-sm font-semibold">
+                Licence copy
+              </span>
+              <label htmlFor="licenceCopy" className={pharmacyStyles.upload}>
+                <span
+                  aria-hidden="true"
+                  className="grid size-10 shrink-0 place-items-center rounded-full bg-[var(--accent-quiet)] text-accent-brand"
+                >
+                  <Upload className="size-[18px]" />
+                </span>
+                <span className="min-w-0 space-y-1">
+                  <span className="block break-words text-sm font-semibold">
+                    {licenceFileName || 'Upload a photo or scan of the licence'}
+                  </span>
+                  <span
+                    id="licenceCopy-hint"
+                    className="block text-xs font-normal leading-5 text-text-muted"
+                  >
+                    PDF, JPG or PNG, up to 1 MB. Stored privately with your request.
+                  </span>
+                </span>
+                <input
+                  id="licenceCopy"
+                  name="licenceCopy"
+                  type="file"
+                  required
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  className="sr-only"
+                  aria-labelledby="licenceCopy-label"
+                  aria-invalid={!!fields.licenceCopy}
+                  aria-describedby={
+                    fields.licenceCopy ? 'licenceCopy-hint licenceCopy-help' : 'licenceCopy-hint'
+                  }
+                  onChange={(event) => setLicenceFileName(event.target.files?.[0]?.name ?? '')}
+                />
+              </label>
+              {fields.licenceCopy && (
+                <p id="licenceCopy-help" className="text-xs leading-5 text-destructive">
+                  {fields.licenceCopy.join(' ')}
+                </p>
+              )}
+            </div>
           </fieldset>
           <fieldset disabled={pending} className="space-y-5 border-t border-border-subtle pt-8">
             <legend>Pharmacist on record</legend>
@@ -298,7 +361,7 @@ export function RequestForm({ vertical }: { vertical: Exclude<LoginVertical, 'de
         </fieldset>
       )}
       <fieldset disabled={pending} className="space-y-5 border-t border-border-subtle pt-8">
-        <legend>Your contact details</legend>
+        <legend>{vertical === 'pharmacy' ? 'Your account' : 'Your contact details'}</legend>
         <div className="grid gap-5 sm:grid-cols-2">
           {field('ownerName', 'Your name')}
           {field('phone', 'Mobile', 'tel', '+92 300 1234567')}

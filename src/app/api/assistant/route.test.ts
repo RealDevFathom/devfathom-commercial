@@ -61,6 +61,8 @@ function approval(toolName: string) {
 
 beforeEach(async () => {
   vi.stubEnv('AI_PROVIDER', 'google');
+  vi.stubEnv('AI_MODEL', 'inert-model');
+  vi.stubEnv('GOOGLE_GENERATIVE_AI_API_KEY', 'inert-test-key');
   vi.clearAllMocks();
   vi.spyOn(console, 'error').mockImplementation(() => {});
   const [userKey, orgKey] = assistantRateKeys('server-user', 'server-org');
@@ -197,7 +199,7 @@ describe('assistant API scope', () => {
     expect(failed.status).toBe(503);
     expect(await failed.text()).not.toContain('private payload');
     expect(vi.mocked(console.error).mock.calls).toEqual([
-      ['ASSISTANT_PROVIDER_UNAVAILABLE'],
+      ['ASSISTANT_PROVIDER_UNAVAILABLE', { reason: 'MODEL_CREATE_FAILED', provider: 'google' }],
       ['ASSISTANT_REQUEST_FAILED'],
     ]);
   });
@@ -386,7 +388,7 @@ describe('global availability', () => {
         const response = await POST(request({ messages }));
         expect(response.status).toBe(503);
         expect(await response.json()).toEqual({
-          error: 'Ask Fathom is currently unavailable. No cached answer was used.',
+          error: "Ask Fathom isn't set up yet, contact support.",
         });
       }
       expect(mocks.entitlements).not.toHaveBeenCalled();
@@ -399,6 +401,50 @@ describe('global availability', () => {
       expect((await POST(request({ messages: [user] }))).status).toBe(403);
     }
   );
+
+  it.each([
+    ['AI_MODEL', { AI_MODEL: undefined }, { missing: ['AI_MODEL'], invalid: [] }],
+    [
+      'the provider key',
+      { GOOGLE_GENERATIVE_AI_API_KEY: '' },
+      { missing: ['GOOGLE_GENERATIVE_AI_API_KEY'], invalid: [] },
+    ],
+    [
+      'both',
+      { AI_MODEL: ' ', GOOGLE_GENERATIVE_AI_API_KEY: undefined },
+      { missing: ['AI_MODEL', 'GOOGLE_GENERATIVE_AI_API_KEY'], invalid: [] },
+    ],
+    ['a valid model', { AI_MODEL: '<model>' }, { missing: [], invalid: ['AI_MODEL'] }],
+  ])(
+    'refuses a selected provider without %s before building the model, and logs names only',
+    async (_label, env, gap) => {
+      for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+      const response = await POST(request({ messages: [user] }));
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        error: "Ask Fathom isn't set up yet, contact support.",
+      });
+      expect(mocks.model).not.toHaveBeenCalled();
+      expect(mocks.stream).not.toHaveBeenCalled();
+      expect(console.error).toHaveBeenCalledWith('ASSISTANT_PROVIDER_UNAVAILABLE', {
+        reason: gap.invalid.length ? 'INVALID_MODEL' : 'MISSING_CONFIG',
+        provider: 'google',
+        ...gap,
+      });
+      expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain('inert-test-key');
+    }
+  );
+
+  it('names AI_PROVIDER in the diagnostic when the provider is unset', async () => {
+    vi.stubEnv('AI_PROVIDER', undefined);
+    expect((await POST(request({ messages: [user] }))).status).toBe(503);
+    expect(console.error).toHaveBeenCalledWith('ASSISTANT_PROVIDER_UNAVAILABLE', {
+      reason: 'DISABLED',
+      provider: null,
+      missing: ['AI_PROVIDER'],
+      invalid: [],
+    });
+  });
 });
 
 describe('assistant request limits', () => {

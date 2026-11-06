@@ -94,7 +94,7 @@ describe('assistant unavailable with real shared provider', () => {
         const result = await POST(request(continuation));
         expect(result.status).toBe(503);
         expect(await result.json()).toEqual({
-          error: 'Ask Fathom is currently unavailable. No cached answer was used.',
+          error: "Ask Fathom isn't set up yet, contact support.",
         });
       }
       policy.actor.mockResolvedValueOnce(null);

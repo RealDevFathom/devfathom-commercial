@@ -2,6 +2,7 @@
 
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterCart } from '@/lib/pharmacy/counter';
+import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import { formatMinor, formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
 
 export type CounterCartPanelProps = {
@@ -9,6 +10,7 @@ export type CounterCartPanelProps = {
   state: 'idle' | 'loading' | 'ready' | 'error';
   error?: string | null;
   onRetry: () => void;
+  alerts?: readonly CounterAlert[];
   /** The instant near-expiry is measured from; injectable for tests. */
   now?: Date;
 };
@@ -44,11 +46,12 @@ export function CounterCartPanel({
   state,
   error,
   onRetry,
+  alerts = [],
   now = new Date(),
 }: CounterCartPanelProps) {
   if (state === 'idle' || (state === 'ready' && cart === null)) {
     return (
-      <p className="text-sm text-text-muted">
+      <p className="p-4 text-sm text-text-muted">
         No bill is open. Search for a medicine and add a line to start one.
       </p>
     );
@@ -56,7 +59,7 @@ export function CounterCartPanel({
 
   if (state === 'loading') {
     return (
-      <p className="text-sm text-text-muted" role="status">
+      <p className="p-4 text-sm text-text-muted" role="status">
         Loading the bill…
       </p>
     );
@@ -64,7 +67,7 @@ export function CounterCartPanel({
 
   if (state === 'error' || cart === null) {
     return (
-      <div className="space-y-2" role="alert">
+      <div className="space-y-2 p-4" role="alert">
         <p className="text-sm text-destructive">{error ?? 'The bill could not be loaded.'}</p>
         <button
           type="button"
@@ -81,7 +84,7 @@ export function CounterCartPanel({
     // UX rules 1 and 9: name no identifier the operator cannot act on, and say
     // how to populate the empty state rather than only that it is empty.
     return (
-      <p className="text-sm text-text-muted">
+      <p className="p-4 text-sm text-text-muted">
         This bill is open with no lines yet. Scan or search a medicine, choose its sale unit, then
         add it to the cart.
       </p>
@@ -89,129 +92,173 @@ export function CounterCartPanel({
   }
 
   return (
-    <div className="space-y-2">
-      <ul className="divide-y divide-border-subtle" aria-label="Cart lines">
-        {cart.lines.map((line) => (
-          <li key={line.saleLineId} className="py-2">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="min-w-0 truncate text-sm font-semibold text-text-strong">
-                {line.quantity} × {line.medicineName}
-                {line.strength ? (
-                  <span className="ml-1 font-normal text-text-body">{line.strength}</span>
-                ) : null}
-              </span>
-              <span className="w-24 shrink-0 text-right font-mono text-sm tabular-nums text-text-strong">
-                {formatMinor(line.lineTotalMinor)}
-              </span>
-            </div>
-            <p className="truncate text-xs text-text-muted">
-              {line.presentation} · {line.saleUnit.toLowerCase()} · {line.canonicalUnits} units · Gross{' '}
-              {formatMinor(line.lineTotalMinor + line.discountMinor)}
-              {line.discountMinor > 0 ? ` · less ${formatMinor(line.discountMinor)}` : ''}
-            </p>
-            {line.controlled ||
-            line.rx ||
-            line.restricted ||
-            line.highAlert ||
-            line.lasa ||
-            line.coldChain ? (
-              <div className="mt-1 flex flex-wrap gap-1">
-                {line.controlled ? (
-                  <StatusPill
-                    status="controlled"
-                    tone="danger"
-                    label="Controlled"
-                    className="shrink-0"
-                  />
-                ) : null}
-                {line.rx ? (
-                  <StatusPill
-                    status="prescription"
-                    tone="warning"
-                    label="Prescription only"
-                    className="shrink-0"
-                  />
-                ) : null}
-                {line.restricted ? (
-                  <StatusPill
-                    status="restricted"
-                    tone="warning"
-                    label="Restricted"
-                    className="shrink-0"
-                  />
-                ) : null}
-                {line.highAlert ? (
-                  <StatusPill
-                    status="high-alert"
-                    tone="danger"
-                    label="High alert"
-                    className="shrink-0"
-                  />
-                ) : null}
-                {line.lasa ? (
-                  <StatusPill
-                    status="look-alike"
-                    tone="warning"
-                    label="Look-alike"
-                    className="shrink-0"
-                  />
-                ) : null}
-                {line.coldChain ? (
-                  <StatusPill
-                    status="cold-chain"
-                    tone="info"
-                    label="Cold chain"
-                    className="shrink-0"
-                  />
-                ) : null}
-              </div>
-            ) : null}
-
-            <ul className="mt-1" aria-label={`FEFO allocation for ${line.medicineName}`}>
-              {line.allocations.map((allocation) => (
-                <li
-                  key={allocation.inventoryLotId}
-                  className="flex flex-wrap items-center gap-x-2 text-xs text-text-muted"
+    <div className="min-w-0 overflow-x-auto">
+      <table role="table" className="block w-full lg:table" aria-label="Cart lines">
+        <thead className="sr-only bg-surface-sunken lg:not-sr-only lg:table-header-group">
+          <tr
+            role="row"
+            className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase"
+          >
+            {['#', 'Medicine', 'Unit × qty', 'Batch · Expiry', 'Amount'].map((heading) => (
+              <th
+                key={heading}
+                scope="col"
+                role="columnheader"
+                className="py-2 pr-4 text-left font-medium first:pl-4 last:text-right"
+              >
+                {heading}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        {cart.lines.map((line, index) => {
+          const lineAlerts = alerts.filter((alert) => alert.saleLineRef === line.saleLineId);
+          return (
+            <tbody
+              key={line.saleLineId}
+              role="rowgroup"
+              className="block border-t border-border-subtle lg:table-row-group"
+            >
+              <tr
+                role="row"
+                className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] gap-x-3 gap-y-1 p-4 align-top hover:bg-surface-sunken/50 lg:table-row"
+              >
+                <td
+                  role="cell"
+                  className="row-span-3 font-mono text-xs tabular-nums text-text-muted lg:px-4 lg:py-3"
                 >
-                  <span className="font-mono tabular-nums">Batch {allocation.batchNumber}</span>
-                  <span className="font-mono tabular-nums">
-                    Exp {formatReceiptDate(allocation.expiresAt)}
-                  </span>
-                  <span className="font-mono tabular-nums">{allocation.canonicalUnits} units</span>
-                  {allocation.stockLocationCode ? (
-                    <span className="font-mono tabular-nums">{allocation.stockLocationCode}</span>
-                  ) : null}
-                  {allocation.overridden ? (
-                    <StatusPill status="override" tone="warning" label="Batch override" />
-                  ) : (
-                    <StatusPill status="fefo" tone="neutral" label="FEFO" />
-                  )}
-                  <NearExpiryPill expiresAt={allocation.expiresAt} now={now} />
-                </li>
-              ))}
-            </ul>
-          </li>
-        ))}
-      </ul>
-
-      <dl className="space-y-1 border-t border-border-subtle pt-2 text-sm">
-        {(
-          [
-            ['Gross', cart.totals.grossMinor],
-            ['Discount', cart.totals.discountMinor],
-            ['Total', cart.totals.netMinor],
-            ['Tendered', cart.totals.tenderedMinor],
-            ['Balance', cart.totals.netMinor - cart.totals.tenderedMinor],
-          ] as const
-        ).map(([label, value]) => (
-          <div key={label} className="flex justify-between gap-2">
-            <dt className="text-text-muted">{label}</dt>
-            <dd className="w-24 shrink-0 text-right font-mono tabular-nums text-text-strong">
-              {formatMinor(value)}
-            </dd>
-          </div>
-        ))}
-      </dl>
+                  {index + 1}
+                </td>
+                <th
+                  scope="row"
+                  role="rowheader"
+                  className="min-w-0 text-left font-normal lg:w-2/5 lg:py-3 lg:pr-4"
+                >
+                  <p className="text-sm font-semibold text-text-strong">
+                    {line.medicineName}
+                    {line.strength ? (
+                      <span className="ml-1 font-normal text-text-body">{line.strength}</span>
+                    ) : null}
+                  </p>
+                  <p className="mt-1 text-xs text-text-muted">
+                    {line.presentation} · {line.saleUnit.toLowerCase()} · {line.canonicalUnits}{' '}
+                    units @ {formatMinor(line.unitPriceMinor)}
+                    {line.discountMinor > 0 ? ` · less ${formatMinor(line.discountMinor)}` : ''}
+                  </p>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {line.controlled ? (
+                      <StatusPill status="controlled" tone="danger" label="Controlled" />
+                    ) : null}
+                    {line.rx ? (
+                      <StatusPill status="prescription" tone="warning" label="Prescription only" />
+                    ) : null}
+                    {line.restricted ? (
+                      <StatusPill status="restricted" tone="warning" label="Restricted" />
+                    ) : null}
+                    {line.highAlert ? (
+                      <StatusPill status="high-alert" tone="danger" label="High alert" />
+                    ) : null}
+                    {line.lasa ? (
+                      <StatusPill status="look-alike" tone="warning" label="Look-alike" />
+                    ) : null}
+                    {line.coldChain ? (
+                      <StatusPill status="cold-chain" tone="info" label="Cold chain" />
+                    ) : null}
+                  </div>
+                </th>
+                <td role="cell" className="col-span-2 col-start-2 row-start-2 lg:py-3 lg:pr-4">
+                  <p className="font-mono text-sm font-semibold tabular-nums text-text-strong">
+                    {line.quantity} × {line.saleUnit.toLowerCase()}
+                  </p>
+                  <p className="text-xs text-text-muted">{line.canonicalUnits} units</p>
+                </td>
+                <td role="cell" className="col-span-2 col-start-2 row-start-3 lg:py-3 lg:pr-4">
+                  <ul
+                    className="space-y-2"
+                    aria-label={`Batch allocation for ${line.medicineName}`}
+                  >
+                    {line.allocations.map((allocation) => (
+                      <li
+                        key={allocation.inventoryLotId}
+                        className="space-y-1 text-xs text-text-muted"
+                      >
+                        <div className="flex flex-wrap gap-x-2 font-mono tabular-nums">
+                          <span className="font-semibold text-text-strong">
+                            Batch {allocation.batchNumber}
+                          </span>
+                          <span>Exp {formatReceiptDate(allocation.expiresAt)}</span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          {allocation.stockLocationCode ? (
+                            <span className="font-mono">Rack {allocation.stockLocationCode}</span>
+                          ) : null}
+                          <span className="font-mono tabular-nums">
+                            {allocation.canonicalUnits} units
+                          </span>
+                          {allocation.overridden ? (
+                            <StatusPill status="override" tone="warning" label="Batch override" />
+                          ) : allocation.overridden === false ? (
+                            <StatusPill status="fefo" tone="neutral" label="FEFO" />
+                          ) : null}
+                          <NearExpiryPill expiresAt={allocation.expiresAt} now={now} />
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </td>
+                <td
+                  role="cell"
+                  className="col-start-3 row-start-1 text-right font-mono text-sm font-semibold tabular-nums text-text-strong lg:py-3 lg:pr-4"
+                >
+                  {formatMinor(line.lineTotalMinor)}
+                </td>
+              </tr>
+              {lineAlerts.length > 0 ? (
+                <tr role="row" className="block lg:table-row">
+                  <td role="cell" className="hidden lg:table-cell" />
+                  <td role="cell" colSpan={4} className="block px-4 pb-3 lg:table-cell lg:pl-0">
+                    <div className="space-y-2">
+                      {lineAlerts.map((alert) => (
+                        <div
+                          key={alert.key}
+                          role={alert.severity === 'SAFETY_BLOCK' ? 'alert' : undefined}
+                          className={
+                            alert.severity === 'SAFETY_BLOCK'
+                              ? 'rounded-md bg-destructive/10 p-3 text-xs text-destructive'
+                              : 'rounded-md bg-surface-sunken p-3 text-xs text-text-body'
+                          }
+                        >
+                          <div className="flex flex-wrap items-center gap-2 font-semibold">
+                            <StatusPill
+                              status={alert.severity}
+                              tone={
+                                alert.severity === 'SAFETY_BLOCK'
+                                  ? 'danger'
+                                  : alert.severity === 'CLINICAL_ADVICE'
+                                    ? 'warning'
+                                    : 'neutral'
+                              }
+                              label={
+                                alert.severity === 'SAFETY_BLOCK'
+                                  ? 'Safety block'
+                                  : alert.severity === 'CLINICAL_ADVICE'
+                                    ? 'Clinical advice'
+                                    : 'Commercial'
+                              }
+                            />
+                            <span>{alert.message}</span>
+                          </div>
+                          {alert.remedy ? <p className="mt-1">{alert.remedy}</p> : null}
+                        </div>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          );
+        })}
+      </table>
     </div>
   );
 }
@@ -292,7 +339,7 @@ export function CounterLotOverride({
     return (
       <button
         type="button"
-        className={buttonClass}
+        className="inline-flex min-h-11 items-center text-xs font-semibold text-text-strong underline underline-offset-4 hover:text-text-body focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
         aria-expanded={false}
         disabled={disabled}
         onClick={() => onChange({ inventoryLotId: null, reason: '' })}
