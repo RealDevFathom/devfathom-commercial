@@ -118,21 +118,29 @@ const t = initTRPC.context<TRPCContext>().create({
     // Input validation remains friendly. Raw schema failures in a resolver are
     // internal errors, not input validation, and must not expose field names.
     const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
-    const isPrismaError = error.cause instanceof Prisma.PrismaClientKnownRequestError;
-    const prismaError = isPrismaError
-      ? PRISMA_ERROR_MESSAGES[error.cause!.code as keyof typeof PRISMA_ERROR_MESSAGES]
+    // Only a Prisma error whose raw text is still the message is sanitized: a
+    // TRPCError that a router worded on purpose keeps its own message and code.
+    const prismaCause =
+      error.cause instanceof Prisma.PrismaClientKnownRequestError &&
+      error.message === error.cause.message
+        ? error.cause
+        : null;
+    const prismaError = prismaCause
+      ? PRISMA_ERROR_MESSAGES[prismaCause.code as keyof typeof PRISMA_ERROR_MESSAGES]
       : undefined;
+    // Only tRPC's unexpected-error wrapper takes the mapped code and status.
+    const remapped = error.code === 'INTERNAL_SERVER_ERROR' ? prismaError : undefined;
     // The route's onError logger retains original diagnostics server-side.
-    const withheld = isPrismaError || isUnexpectedInternalError(error);
+    const withheld = prismaCause !== null || isUnexpectedInternalError(error);
     const data = { ...shape.data, validation: validation?.fields ?? null };
     delete data.stack;
-    if (prismaError) {
-      data.code = prismaError.trpcCode;
-      data.httpStatus = prismaError.httpStatus;
+    if (remapped) {
+      data.code = remapped.trpcCode;
+      data.httpStatus = remapped.httpStatus;
     }
     return {
       ...shape,
-      code: prismaError?.code ?? shape.code,
+      code: remapped?.code ?? shape.code,
       message:
         prismaError?.message ??
         (withheld ? INTERNAL_ERROR_MESSAGE : (validation?.message ?? shape.message)),

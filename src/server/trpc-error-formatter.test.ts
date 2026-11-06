@@ -84,6 +84,44 @@ const testRouter = router({
       clientVersion: 'test',
     });
   }),
+  deliberateDuplicate: publicProcedure.query(() => {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: 'A template with this name already exists.',
+      cause: new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on Client_name_key',
+        {
+          code: 'P2002',
+          clientVersion: 'test',
+        }
+      ),
+    });
+  }),
+  deliberateWriteConflict: publicProcedure.query(() => {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: 'Reload the current version before trying again.',
+      cause: new Prisma.PrismaClientKnownRequestError(
+        'Transaction failed due to a write conflict',
+        {
+          code: 'P2034',
+          clientVersion: 'test',
+        }
+      ),
+    });
+  }),
+  unwordedConflict: publicProcedure.query(() => {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      cause: new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on Client_name_key',
+        {
+          code: 'P2002',
+          clientVersion: 'test',
+        }
+      ),
+    });
+  }),
 });
 
 async function call(path: string, input?: unknown) {
@@ -114,14 +152,40 @@ describe('trpc errorFormatter', () => {
     ['staleUpdate', 'NOT_FOUND', 404, 'Record not found.'],
     ['duplicate', 'CONFLICT', 409, 'A record with those details already exists.'],
     ['foreignKey', 'CONFLICT', 409, 'This change conflicts with a related record.'],
-  ])('maps Prisma failures without exposing ORM details (%s)', async (path, code, status, message) => {
-    const error = await call(path);
-    expect(error).toMatchObject({ message, data: { code, httpStatus: status } });
-    expect(JSON.stringify(error)).not.toMatch(/prisma\.|Invalid .*invocation|Client_name_key/i);
-  });
+  ])(
+    'maps Prisma failures without exposing ORM details (%s)',
+    async (path, code, status, message) => {
+      const error = await call(path);
+      expect(error).toMatchObject({ message, data: { code, httpStatus: status } });
+      expect(JSON.stringify(error)).not.toMatch(/prisma\.|Invalid .*invocation|Client_name_key/i);
+    }
+  );
 
   it('withholds unknown Prisma errors in every environment', async () => {
     expect((await call('unknownPrisma')).message).toBe(GENERIC);
+  });
+
+  it.each([
+    ['deliberateDuplicate', 'A template with this name already exists.'],
+    ['deliberateWriteConflict', 'Reload the current version before trying again.'],
+  ])('preserves deliberate errors with a Prisma cause (%s)', async (path, message) => {
+    const error = await call(path);
+    expect(error).toMatchObject({
+      message,
+      code: -32009,
+      data: { code: 'CONFLICT', httpStatus: 409 },
+      transportStatus: 409,
+    });
+  });
+
+  it('sanitizes raw Prisma text without changing a deliberate code', async () => {
+    const error = await call('unwordedConflict');
+    expect(error).toMatchObject({
+      message: 'A record with those details already exists.',
+      data: { code: 'CONFLICT', httpStatus: 409 },
+      transportStatus: 409,
+    });
+    expect(JSON.stringify(error)).not.toMatch(/prisma\.|Invalid .*invocation|Client_name_key/i);
   });
 
   it('reformats input-validation failures', async () => {
