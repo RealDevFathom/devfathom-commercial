@@ -20,14 +20,16 @@ vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
   resolveOrganizationEntitlements: vi.fn(),
 }));
-vi.mock('@/server/audit', async () => ({
-  // The integrated addLine labels its audit row through the real merge helper.
-  annotateAudit: (await vi.importActual<typeof import('@/server/audit')>('@/server/audit'))
-    .annotateAudit,
-  ipFromHeaders: vi.fn(() => null),
-  isAuditExcludedPath: vi.fn(() => false),
-  recordTrpcAudit: vi.fn(),
-}));
+vi.mock('@/server/audit', async (importOriginal) => {
+  // Keep real annotateAudit + toAuditJson so PIN-redaction assertions exercise the helper.
+  const actual = await importOriginal<typeof import('@/server/audit')>();
+  return {
+    ...actual,
+    ipFromHeaders: vi.fn(() => null),
+    isAuditExcludedPath: vi.fn(() => false),
+    recordTrpcAudit: vi.fn(),
+  };
+});
 vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/sales')>()),
   addSaleLine: vi.fn(),

@@ -1968,6 +1968,8 @@ describe('DEV-618 counter composition', () => {
         blockedBy: null,
       },
     ]);
+    // DEV-203 / #482: non-FEFO batch needs owner/manager PIN (not client approvalPolicy).
+    mocks.queries.counterApprovers = query([{ id: 'manager-profile', name: 'Manager' }]);
     mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'added-line' });
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(row));
@@ -1994,6 +1996,10 @@ describe('DEV-618 counter composition', () => {
     fireEvent.change(within(next).getByLabelText('Override reason'), {
       target: { value: 'Patient needs longer dating' },
     });
+    fireEvent.change(within(next).getByLabelText('Approving manager'), {
+      target: { value: 'manager-profile' },
+    });
+    fireEvent.change(within(next).getByLabelText('Manager PIN'), { target: { value: '1234' } });
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F6' });
     await waitFor(() =>
       expect(mocks.mutations.addLine).toHaveBeenCalledWith(
@@ -2004,11 +2010,12 @@ describe('DEV-618 counter composition', () => {
           override: {
             inventoryLotId: 'lot-later',
             reason: 'Patient needs longer dating',
-            approvalPolicy: 'PHARMACIST_ON_DUTY',
           },
+          managerApproval: { staffProfileId: 'manager-profile', pin: '1234' },
         })
       )
     );
+    expect(mocks.mutations.addLine!.mock.calls[0]![0].override).not.toHaveProperty('approvalPolicy');
     const added = await screen.findByText('2 × Paracetamol added with a recorded batch override.');
     expect(added.closest('[role="status"]')).toBeInTheDocument();
     expect(
