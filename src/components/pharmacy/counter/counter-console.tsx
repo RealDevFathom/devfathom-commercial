@@ -722,6 +722,16 @@ function ScopedPharmacyCounterConsole({
     { patientId: patientId ?? '' },
     { enabled: patientId !== null }
   );
+  const purchaseHistoryQuery = trpc.pharmacyPrescriptions.counterPurchaseHistory.useQuery(
+    { patientId: patientId ?? '', branchId },
+    {
+      enabled: Boolean(patientId && branchId && checksOpen && checksMode === 'patient'),
+      retry: false,
+      staleTime: 0,
+      gcTime: 0,
+      refetchOnWindowFocus: true,
+    }
+  );
   const lotOptionsQuery = trpc.pharmacySales.counterLotOptions.useQuery(
     { branchId, medicineId: activeRow?.medicineId ?? '' },
     { enabled: Boolean(branchId && activeRow) && lotOverride !== null }
@@ -3072,6 +3082,14 @@ function ScopedPharmacyCounterConsole({
           alerts={alerts}
           acknowledgementScope={saleId && branchId ? { branchId, saleId } : null}
           patient={patient}
+          purchaseHistory={
+            checksOpen &&
+            checksMode === 'patient' &&
+            !purchaseHistoryQuery.isFetching &&
+            !purchaseHistoryQuery.isError
+              ? purchaseHistoryQuery.data
+              : undefined
+          }
           candidates={patientsQuery.data?.patients ?? []}
           query={patientQuery}
           state={

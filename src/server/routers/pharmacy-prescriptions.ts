@@ -1,3 +1,5 @@
+import { readCounterPurchaseHistory } from '@/lib/pharmacy/counter-purchase-history';
+import { recordAudit } from '@/server/audit';
 import { writePatientConsent } from '@/lib/pharmacy/consent-writer';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -522,6 +524,67 @@ export const pharmacyPrescriptionsRouter = router({
         }
         throw error;
       }
+    }),
+
+  counterPurchaseHistory: auditedProtectedProcedure
+    .input(z.object({ patientId: z.string().min(1), branchId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const user = ctx.session.user;
+      if (
+        user.organizationId !== organizationId ||
+        !(await can(subjectFromSession(user), 'pharmacy:dispense', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+        }))
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      return ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const [member, assignment] = await Promise.all([
+          db.user.findFirst({
+            where: { id: user.id, organizationId, status: 'ACTIVE' },
+            select: { id: true },
+          }),
+          db.pharmacyBranchAssignment.findFirst({
+            where: {
+              organizationId,
+              userId: user.id,
+              branchId: input.branchId,
+              active: true,
+              branch: { organizationId, active: true },
+            },
+            select: { id: true },
+          }),
+        ]);
+        if (!member || !assignment) throw new TRPCError({ code: 'FORBIDDEN' });
+        const patient = await db.pharmacyPatient.findFirst({
+          where: { id: input.patientId, organizationId },
+          select: { id: true },
+        });
+        if (!patient) throw new TRPCError({ code: 'NOT_FOUND' });
+        const result = await readCounterPurchaseHistory(db, {
+          organizationId,
+          branchId: input.branchId,
+          patientId: patient.id,
+        });
+        await recordAudit(
+          {
+            organizationId,
+            actorId: user.id,
+            source: 'TRPC',
+            category: 'PHARMACY_PATIENT',
+            operation: 'READ',
+            action: 'pharmacy.patient.purchase_history.read',
+            targetType: 'PharmacyPatient',
+            targetId: patient.id,
+            metadata: { protected: true, purpose: 'DISPENSING', branchId: input.branchId },
+          },
+          db
+        );
+        return result;
+      });
     }),
 
   /**

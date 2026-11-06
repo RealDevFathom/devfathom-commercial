@@ -539,6 +539,14 @@ export type CounterRxPanelProps = {
    */
   acknowledgementScope?: { branchId: string; saleId: string } | null;
   patient: CounterPatientPanel | null;
+  purchaseHistory?: {
+    state: 'ready' | 'consent_needed' | 'not_linked';
+    purchases: ReadonlyArray<{
+      saleId: string;
+      completedAt: string | null;
+      medicines: readonly string[];
+    }>;
+  };
   candidates: ReadonlyArray<{ patientId: string; displayName: string; phone: string | null }>;
   query: string;
   state: 'idle' | 'loading' | 'ready' | 'error' | 'denied';
@@ -581,6 +589,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
       alerts,
       acknowledgementScope = null,
       patient,
+      purchaseHistory,
       candidates,
       query,
       state,
@@ -725,6 +734,32 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   )}
                 </div>
               </div>
+
+              {!controlledOnly && purchaseHistory ? (
+                <section aria-label="Recent purchases" className="space-y-2">
+                  <h4 className="font-semibold text-text-strong">Recent purchases</h4>
+                  {purchaseHistory.state === 'consent_needed' ? (
+                    <p>Consent needed to show purchase history.</p>
+                  ) : purchaseHistory.state === 'not_linked' ? (
+                    <p>No linked customer history.</p>
+                  ) : purchaseHistory.purchases.length === 0 ? (
+                    <p>No recent purchases at this branch.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {purchaseHistory.purchases.map((purchase) => (
+                        <li key={purchase.saleId}>
+                          <span>
+                            {purchase.completedAt
+                              ? formatReceiptDate(purchase.completedAt)
+                              : 'Date unavailable'}
+                          </span>{' '}
+                          · {purchase.medicines.join(', ')}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              ) : null}
 
               {patient.prescriptions.length === 0 ? (
                 <p className="text-sm text-text-muted">

@@ -129,7 +129,11 @@ vi.mock('@/lib/trpc', () => {
         'authenticatePack',
         'substituteProposals',
       ]),
-      pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
+      pharmacyPrescriptions: router([
+        'counterPatients',
+        'counterPatientPanel',
+        'counterPurchaseHistory',
+      ]),
       pharmacySafety: router(['controlledPharmacists']),
     },
   };
@@ -330,6 +334,7 @@ beforeEach(() => {
     'substituteProposals',
     'counterPatients',
     'counterPatientPanel',
+    'counterPurchaseHistory',
     'controlledPharmacists',
   ])
     mocks.queries[name] = query();

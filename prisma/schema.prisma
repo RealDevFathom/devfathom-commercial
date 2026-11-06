@@ -12377,6 +12377,8 @@ model PatientConsent {
   purpose          PatientConsentPurpose
   channel          PatientConsentChannel
   version          Int
+  /// Purpose-wide insertion order; null on legacy records with unknown cross-channel order.
+  purposeSequence  Int?
   granted          Boolean
   recordedByUserId String
   source           PatientConsentSource              @default(LEGACY)

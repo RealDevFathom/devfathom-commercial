@@ -374,6 +374,36 @@ describe('CounterRxPanel checks', () => {
     expect(screen.getByLabelText('Emergency supply, no prescription')).toBeDisabled();
   });
 
+  it('shows purchase history only in the server-provided consent state', () => {
+    const { rerender } = render(
+      <CounterRxPanel
+        {...props({ patient, purchaseHistory: { state: 'consent_needed', purchases: [] } })}
+      />
+    );
+    expect(screen.getByText('Consent needed to show purchase history.')).toBeInTheDocument();
+    rerender(
+      <CounterRxPanel
+        {...props({
+          patient,
+          purchaseHistory: {
+            state: 'ready',
+            purchases: [
+              {
+                saleId: 'sale-1',
+                completedAt: '2026-10-21T00:00:00.000Z',
+                medicines: ['Synthetic medicine'],
+              },
+            ],
+          },
+        })}
+      />
+    );
+    expect(screen.getByRole('region', { name: 'Recent purchases' })).toHaveTextContent(
+      'Synthetic medicine'
+    );
+    expect(screen.queryByText('03001111457')).not.toBeInTheDocument();
+  });
+
   it('stops controlled authorization when no independent pharmacist is available', () => {
     render(
       <CounterRxPanel {...props({ patient, controlled: authorization({ pharmacists: [] }) })} />
