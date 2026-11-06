@@ -18,21 +18,17 @@ function fixture() {
         .mockResolvedValue({ gtin: '08901234567890', batchNumber: 'LOT-7', expiresOn: '251231' }),
     },
     medicineBarcode: {
-      findFirst: vi
-        .fn()
-        .mockResolvedValue({
-          packLevelId: 'pack-a',
-          presentation: { id: 'presentation-a', organizationId: 'org-a', medicineId: 'medicine-a' },
-        }),
+      findFirst: vi.fn().mockResolvedValue({
+        packLevelId: 'pack-a',
+        presentation: { id: 'presentation-a', organizationId: 'org-a', medicineId: 'medicine-a' },
+      }),
     },
     pharmacyManufacturingBatch: {
-      findFirst: vi
-        .fn()
-        .mockResolvedValue({
-          id: 'batch-a',
-          expiresAt: new Date('2025-12-31T00:00:00Z'),
-          state: 'ACTIVE',
-        }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'batch-a',
+        expiresAt: new Date('2025-12-31T00:00:00Z'),
+        state: 'ACTIVE',
+      }),
     },
     pharmacyInventoryLot: { findFirst: vi.fn().mockResolvedValue({ id: 'lot-a' }) },
   };
@@ -40,7 +36,10 @@ function fixture() {
 describe('revalidate scan against line', () => {
   it('uses only a dispensing scan from the requested tenant and branch', async () => {
     const db = fixture();
-    expect(await revalidatePackLineEvidence(db as never, input)).toEqual({ status: 'VERIFIED' });
+    expect(await revalidatePackLineEvidence(db as never, input)).toEqual({
+      status: 'VERIFIED',
+      evidence: { manufacturingBatchId: 'batch-a', packLevelId: 'pack-a' },
+    });
     expect(db.pharmacyPackAuthenticationScan.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
@@ -85,7 +84,10 @@ describe('revalidate scan against line', () => {
       expiresAt: new Date('2026-12-31T00:00:00Z'),
       state: 'ACTIVE',
     });
-    expect(await revalidatePackLineEvidence(db as never, input)).toEqual({ status: 'MISMATCH' });
+    expect(await revalidatePackLineEvidence(db as never, input)).toEqual({
+      status: 'MISMATCH',
+      evidence: { manufacturingBatchId: 'batch-a', packLevelId: 'pack-a' },
+    });
     db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
       id: 'batch-a',
       expiresAt: new Date('2025-12-31T00:00:00Z'),
@@ -93,7 +95,10 @@ describe('revalidate scan against line', () => {
     });
     expect(
       await revalidatePackLineEvidence(db as never, { ...input, packLevelId: 'other' })
-    ).toEqual({ status: 'MISMATCH' });
+    ).toEqual({
+      status: 'MISMATCH',
+      evidence: { manufacturingBatchId: 'batch-a', packLevelId: 'pack-a' },
+    });
   });
   it('normalizes GS1 day 00 and blocks a known recall even without receipt', async () => {
     const db = fixture();
@@ -102,7 +107,10 @@ describe('revalidate scan against line', () => {
       batchNumber: 'LOT-7',
       expiresOn: '251200',
     });
-    expect(await revalidatePackLineEvidence(db as never, input)).toEqual({ status: 'VERIFIED' });
+    expect(await revalidatePackLineEvidence(db as never, input)).toEqual({
+      status: 'VERIFIED',
+      evidence: { manufacturingBatchId: 'batch-a', packLevelId: 'pack-a' },
+    });
     db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
       id: 'batch-a',
       expiresAt: new Date('2025-12-31T00:00:00Z'),

@@ -112,7 +112,13 @@ describe.skipIf(!enabled)('pack line evidence restricted database', () => {
     });
   }, 60000);
   it('recomputes historical verdicts from branch receipt and current authoritative expiry', async () => {
-    expect(await act((db) => verify(db, input))).toEqual({ status: 'MISMATCH' });
+    expect(await act((db) => verify(db, input))).toEqual({
+      status: 'MISMATCH',
+      evidence: {
+        manufacturingBatchId: fixture.medicines.otc.batchId,
+        packLevelId: input.packLevelId,
+      },
+    });
     expect(
       await act((db) => verify(db, { ...input, branchId: branch, scanId: missingReceipt }))
     ).toEqual({ status: 'UNVERIFIED' });

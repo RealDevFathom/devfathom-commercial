@@ -90,5 +90,11 @@ export async function revalidatePackLineEvidence(
     barcode.presentation.medicineId !== input.medicineId ||
     barcode.presentation.id !== input.presentationId ||
     barcode.packLevelId !== input.packLevelId;
-  return { status: expiryMismatch || lineMismatch ? ('MISMATCH' as const) : ('VERIFIED' as const) };
+  return {
+    status: expiryMismatch || lineMismatch ? ('MISMATCH' as const) : ('VERIFIED' as const),
+    // This identifies the branch-received manufacturing batch, not a specific
+    // allocation lot or a unique physical pack. The caller must compare the
+    // effective allocations under the integration's locks.
+    evidence: { manufacturingBatchId: batch.id, packLevelId: barcode.packLevelId },
+  };
 }
