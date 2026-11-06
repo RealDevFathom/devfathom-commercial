@@ -380,5 +380,15 @@
    "verdict": "PASS",
    "details": "At f38b4007c the web print-bridge POST rejects any caller document through a strict schema. It enforces restaurant:configure on the server before the branch lookup, transaction and enqueue, and the server writes the test receipt. The org comes from the session, the branch is checked against the org, and the service re-reads branch and routes under lock with org scope. No new raw SQL. Non-blocking: the caller's idempotencyKey is still printed as the receipt reference"
   }
+ },
+ "1057": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "First review FAIL (the server ignores the form's uploaderStaffProfileId, but the proof form still showed a required Uploading staff select of every active staff member and posted it), fixed in 70d7e309c and 111cdb0c9. Re-review: 70d7e309c removes the select, the staff prop and the no-staff gate, and adds a text-text-muted line \"Recorded under your linked staff profile.\"; page.tsx keeps its staff query. 111cdb0c9 makes the file label sm:col-span-2, so the grid has no empty half column. Tests assert no uploaderStaffProfileId field and the attribution line; vitest related 32/32, eslint and prettier clean. Browser visual QA (viewports, themes) was not run"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "The route no longer reads uploaderStaffProfileId. After the sop:complete check it takes the uploader from the session user's single ACTIVE staff profile in the org (take 2) and fails before storage on zero or several; attachEvidence's owner check still applies. The route test posts a forged id and gets the session-derived id. 70d7e309c/111cdb0c9 also stop the form posting the field, so a posted value has no effect"
+  }
  }
 }

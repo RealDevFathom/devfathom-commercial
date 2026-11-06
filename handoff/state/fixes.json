@@ -299,5 +299,12 @@
   "what": "ignored Uploading staff select removed from the SOP proof form; file input spans the form",
   "initialFailure": "no machine run (QA finding only)",
   "noInitialRun": true
+ },
+ "1063": {
+  "sha": "5b19dd9e80168d4c8863a33f0a83d38c73eaf1e8",
+  "initialSha": "328b3edd4c65d24f35931974fcdd684f0897c206",
+  "what": "same-amount currency relabel at commit covered in vitest (unit and DB acceptance)",
+  "initialFailure": "no machine run (QA finding only)",
+  "noInitialRun": true
  }
 }
