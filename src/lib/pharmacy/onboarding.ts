@@ -21,6 +21,7 @@ import type { PrismaClient } from '@/generated/prisma/client';
 import { isPackageCompatibleWithVertical, roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
 import { assertStoredBranchMayOperate, BranchOperationDeniedError } from './regulatory';
+import { readSupplierCompliancePolicy } from './supplier-compliance-policy';
 
 export type PharmacyOnboardingGate =
   | 'ORG_TYPE'
@@ -164,6 +165,8 @@ export type PharmacyReadiness = {
   ready: boolean;
   /** P0 gates that are not PASSED, in walk order. */
   blocking: readonly PharmacyOnboardingGate[];
+  /** DEV-753: false only when supplier checks are turned off. Absent reads as on. */
+  supplierChecksEnabled?: boolean;
 };
 
 function nonEmpty(value: string | null | undefined): boolean {
@@ -244,6 +247,8 @@ export async function evaluatePharmacyReadiness(
   const requiredRoleKeys = roleTemplatesForVertical('PHARMACY')
     .filter((template) => template.key !== 'owner-operator')
     .map((template) => template.key);
+  // DEV-753: the owner's supplier checks. Never rejects; a missing or unreadable row is on.
+  const supplierPolicy = readSupplierCompliancePolicy(db, organizationId);
 
   const [
     organization,
@@ -294,7 +299,14 @@ export async function evaluatePharmacyReadiness(
     }),
     // INV-01 receipt: a lot exists but is only opening stock once received.
     db.pharmacyInventoryLot.count({ where: { organizationId, receivedAt: { not: null } } }),
-    db.pharmacySupplier.count({ where: { organizationId, authorized: true, active: true } }),
+    // With supplier checks off, an active supplier counts whether or not it is authorized.
+    supplierPolicy.then(({ checksEnabled }) =>
+      db.pharmacySupplier.count({
+        where: checksEnabled
+          ? { organizationId, authorized: true, active: true }
+          : { organizationId, active: true },
+      })
+    ),
   ]);
 
   const evidence: PharmacyReadinessEvidence = {
@@ -312,7 +324,10 @@ export async function evaluatePharmacyReadiness(
     PARTIES_AND_BALANCES: supplierCount > 0,
   };
 
-  return evaluateReadiness(organizationId, claims as PharmacyGateClaim[], evidence);
+  return {
+    ...evaluateReadiness(organizationId, claims as PharmacyGateClaim[], evidence),
+    supplierChecksEnabled: (await supplierPolicy).checksEnabled,
+  };
 }
 
 /**

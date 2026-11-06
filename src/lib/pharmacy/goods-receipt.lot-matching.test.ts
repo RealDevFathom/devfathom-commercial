@@ -145,6 +145,8 @@ function receiptDb(input: {
       return Promise.resolve([{ id: receipt.id }]);
     }),
     medicine: { findMany: vi.fn().mockResolvedValue([]) },
+    // DEV-753/DEV-466: the posting gate reads supersession across the licence register.
+    pharmacySupplierLicence: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyGoodsReceipt: {
       findFirst: vi.fn().mockResolvedValue(receipt),
       update: vi.fn().mockResolvedValue({}),
