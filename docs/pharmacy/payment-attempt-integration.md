@@ -36,9 +36,9 @@ follow-up migration; no current caller may update `state` directly.
 `pharmacy_assert_no_payment_attempt(organizationId, branchId, saleId)` locks the
 scoped sale row and refuses any unresolved attempt. Call it in the **same
 transaction**, before bill edits or stock reversal, and keep the sale lock until
-commit. The line, allocation, sale-status, tender-insert and linked stock-reversal
+commit. The line, allocation, sale-status, tender/refund-insert and linked stock-reversal
 triggers also enforce this boundary, so a forgotten application check rolls the
-transaction back. `applyPharmacyTender` checks it before a provider call.
+transaction back. Tender and refund settlement check it before a provider call.
 
 An absent attempt alone is not proof of non-payment. Preserve existing tender,
 sale-status, prescription, branch and stock checks. Historical tender records

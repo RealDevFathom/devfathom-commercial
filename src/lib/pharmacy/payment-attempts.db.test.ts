@@ -5,7 +5,7 @@ import { db } from '@/lib/db';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { addSaleLine, createSale } from './sales';
 import { receiveLot, reverseMovements } from './stock-ledger';
-import { applyPharmacyTender, readPharmacyTenderOutcome } from './settlement';
+import { applyPharmacyTender, readPharmacyTenderOutcome, refundPharmacyTender } from './settlement';
 import { prepareExternalPaymentAttempt, readExternalPaymentAttempt } from './payment-attempts';
 
 const url = process.env.WHA1364_RECEIPT_TEST_DATABASE_URL;
@@ -437,5 +437,65 @@ describeDatabase('durable payment attempt foundation on restricted PostgreSQL', 
     expect(await readExternalPaymentAttempt(scope, prepared.attempt.id)).toMatchObject({
       state: 'PREPARED',
     });
+  });
+
+  it('refuses a prior partial-tender refund before a provider call and at the database boundary', async () => {
+    const f = await fixture();
+    let providerCalls = 0;
+    const adapter = {
+      name: 'CERTIFIED_TEST_PROVIDER',
+      certified: true,
+      execute: async () => {
+        providerCalls++;
+        return { approved: true, providerRef: 'synthetic-partial-approval' };
+      },
+    };
+    const paid = await transaction((db) =>
+      applyPharmacyTender(db, scope, {
+        ...f.input,
+        type: 'CARD',
+        amountMinor: 400,
+        adapter,
+      })
+    );
+    expect(providerCalls).toBe(1);
+    if (!('tenderId' in paid) || typeof paid.tenderId !== 'string')
+      throw new Error('Missing test tender');
+    const originalTenderId = paid.tenderId;
+    await prepareExternalPaymentAttempt(scope, await reservation(f, randomUUID(), 550));
+    providerCalls = 0;
+    await expect(
+      transaction((db) =>
+        refundPharmacyTender(db, scope, {
+          originalTenderId,
+          deviceId: f.input.deviceId,
+          businessDate,
+          amountMinor: 100,
+          reason: 'Synthetic refund while payment is uncertain',
+          idempotencyKey: randomUUID(),
+          adapter,
+        })
+      )
+    ).rejects.toThrow('PAYMENT_ATTEMPT_UNRESOLVED');
+    expect(providerCalls).toBe(0);
+    await expect(
+      transaction((db) =>
+        db.pharmacyRefund.create({
+          data: {
+            organizationId: org,
+            branchId: branch,
+            saleId: f.sale.id,
+            originalTenderId,
+            businessDate,
+            amountMinor: 100,
+            reason: 'Direct refund bypass',
+            actorId: scope.actorId,
+          },
+        })
+      )
+    ).rejects.toThrow('PAYMENT_ATTEMPT_UNRESOLVED');
+    expect(
+      await transaction((db) => db.pharmacyRefund.count({ where: { saleId: f.sale.id } }))
+    ).toBe(0);
   });
 });
