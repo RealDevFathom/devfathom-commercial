@@ -82,7 +82,7 @@ export function CounterUpsellList({
               disabled={disabled}
               onClick={() => onChoose(suggestion)}
             >
-              Find item
+              Find it
             </Button>
           </li>
         ))}
@@ -115,7 +115,7 @@ export function CounterUpsellSuggestions({
   if (!enabled) return null;
   if (query.isSuccess && query.data.length === 0) return null;
   return (
-    <SectionCard compact eyebrow="Counter · Upsell" title="Complementary items">
+    <SectionCard compact title="Often bought with this bill">
       <CounterUpsellList
         suggestions={query.data ?? []}
         state={query.isLoading ? 'loading' : query.isError ? 'error' : 'ready'}

@@ -51,6 +51,7 @@ export function CounterDuplicateSaltAcknowledge({
     return (
       <span className="mt-2 flex items-center gap-2" role="status">
         <StatusPill status="acknowledged" tone="success" label="Acknowledged" />
+        <span className="text-xs text-text-muted">Saved with the sale.</span>
       </span>
     );
   }

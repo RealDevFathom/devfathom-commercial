@@ -56,6 +56,7 @@ describe('CounterDuplicateSaltAcknowledge (#724)', () => {
     );
     expect(screen.queryByRole('button', { name: 'Acknowledge' })).not.toBeInTheDocument();
     expect(screen.getByText('Acknowledged')).toBeInTheDocument();
+    expect(screen.getByText('Saved with the sale.')).toBeInTheDocument();
   });
 
   it('keeps the control available and reports a failed acknowledgement', () => {

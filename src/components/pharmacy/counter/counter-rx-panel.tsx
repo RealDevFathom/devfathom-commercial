@@ -1089,7 +1089,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               onChange={(event) => controlled.onChange('refSerial', event.target.value)}
             />
             <p className="text-xs text-text-muted">
-              Leave the earlier serial blank unless this repeats a previous entry. PIN is cleared
+              Leave it blank unless this sale repeats an earlier register entry. PIN is cleared
               after each attempt.
             </p>
           </section>

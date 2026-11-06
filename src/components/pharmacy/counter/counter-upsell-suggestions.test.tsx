@@ -46,7 +46,7 @@ describe('#730 counter upsell suggestions', () => {
         onRetry={vi.fn()}
       />
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Find item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Find it' }));
     expect(onChoose).toHaveBeenCalledWith(suggestion);
   });
 
@@ -60,7 +60,7 @@ describe('#730 counter upsell suggestions', () => {
         onRetry={vi.fn()}
       />
     );
-    expect(screen.getByRole('button', { name: 'Find item' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Find it' })).toBeDisabled();
   });
 
   it('renders loading, empty and retryable error states', () => {
