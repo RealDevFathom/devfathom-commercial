@@ -242,6 +242,11 @@ model PharmacyBranch {
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
   branchAssignments                        PharmacyBranchAssignment[]
+  sopSite                                  PharmacySopSite?
+  sopRecordLinks                           PharmacySopRecordLink[]
+  sopEvidenceCaptures                      PharmacySopEvidenceCapture[]
+  sopSiteSettings                          PharmacySopSiteSetting[]
+  sopReworkNotes                           PharmacySopReworkNote[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -266,6 +271,151 @@ model PharmacyBranchAssignment {
   @@unique([organizationId, branchId, userId], map: "pharmacy_branch_assignments_org_branch_user_key")
   @@index([organizationId, userId, active])
   @@map("pharmacy_branch_assignments")
+}
+
+/// DEV-751: binds one pharmacy branch to the shared SOP engine. The engine's
+/// tables key every assignment and occurrence to an engine branch row
+/// (`restaurant_branches`), which carries the timezone and business-day cutoff
+/// the recurrence engine needs. A pharmacy branch gets exactly one such "SOP
+/// site" row, created only when a manager explicitly enables SOPs there; nothing
+/// backfills it. `sopBranchId` references `restaurant_branches` through a
+/// composite (organizationId, id) foreign key expressed in SQL only, so the
+/// restaurant models stay untouched. Pharmacy authorization never reads the
+/// engine branch: scope always comes from `pharmacy_branch_assignments`.
+model PharmacySopSite {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  pharmacyBranchId String
+  sopBranchId      String
+  enabledByUserId  String
+  createdAt        DateTime @default(now())
+
+  pharmacyBranch PharmacyBranch @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_sop_sites_org_id_key")
+  @@unique([organizationId, pharmacyBranchId], map: "pharmacy_sop_sites_org_branch_key")
+  @@unique([organizationId, sopBranchId], map: "pharmacy_sop_sites_org_sop_branch_key")
+  @@map("pharmacy_sop_sites")
+}
+
+/// DEV-751: the existing pharmacy record an SOP occurrence step points at.
+enum PharmacySopRecordType {
+  TEMPERATURE_LOG
+  CONTROLLED_REGISTER_ENTRY
+  GOODS_RECEIPT
+  MANUFACTURING_BATCH
+  RECALL_NOTICE
+}
+
+/// DEV-751: APPEND-ONLY link from an SOP occurrence (and optionally one step) to
+/// an existing pharmacy record — a temperature log, controlled-register entry,
+/// goods receipt, batch or recall. The link is proof that the checklist was done
+/// against the real record; it never creates, posts or edits that record, and it
+/// is never a parallel ledger. `occurrenceId`/`occurrenceStepId` reference the
+/// shared engine tables through SQL-only foreign keys. DB-enforced append-only
+/// (SELECT+INSERT RLS, no updatedAt).
+model PharmacySopRecordLink {
+  id                     String                @id @default(cuid())
+  organizationId         String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  pharmacyBranchId       String
+  occurrenceId           String
+  occurrenceStepId       String?
+  recordType             PharmacySopRecordType
+  recordId               String
+  linkedByStaffProfileId String
+  linkedByUserId         String
+  note                   String?
+  createdAt              DateTime              @default(now())
+
+  pharmacyBranch PharmacyBranch @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_sop_record_links_org_id_key")
+  @@unique([organizationId, occurrenceId, recordType, recordId], map: "pharmacy_sop_record_links_identity_key")
+  @@index([organizationId, pharmacyBranchId, occurrenceId], map: "pharmacy_sop_record_links_occurrence_idx")
+  @@index([organizationId, recordType, recordId], map: "pharmacy_sop_record_links_record_idx")
+  @@map("pharmacy_sop_record_links")
+}
+
+/// DEV-751: how a pharmacy SOP capture receipt came to exist.
+enum PharmacySopCaptureSource {
+  /// Written by the pharmacy evidence route right after the engine stored the proof.
+  UPLOAD
+  /// Written by the one-off legacy backfill for proof whose HMAC-bound name
+  /// verified under the secret in force when the backfill ran.
+  LEGACY_HMAC_BACKFILL
+}
+
+/// DEV-751: APPEND-ONLY, server-issued receipt that one engine evidence row was
+/// captured through the pharmacy workspace. This is the durable provenance
+/// record: it does not depend on any secret, so rotating AUTH_SECRET never makes
+/// earlier pharmacy proof look foreign. Only server code writes it, from the
+/// evidence id the engine returned; no client-supplied receipt identity is ever
+/// accepted. `evidenceId`/`occurrenceId` reference the shared engine tables
+/// through SQL-only composite foreign keys, and a trigger checks the receipt
+/// matches its evidence row and the pharmacy branch's SOP site.
+model PharmacySopEvidenceCapture {
+  id                       String                   @id @default(cuid())
+  organizationId           String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  pharmacyBranchId         String
+  occurrenceId             String
+  evidenceId               String
+  contentHash              String
+  source                   PharmacySopCaptureSource
+  capturedByStaffProfileId String?
+  capturedByUserId         String?
+  createdAt                DateTime                 @default(now())
+
+  pharmacyBranch PharmacyBranch @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_sop_evidence_captures_org_id_key")
+  @@unique([organizationId, evidenceId], map: "pharmacy_sop_evidence_captures_org_evidence_key")
+  @@index([organizationId, pharmacyBranchId, occurrenceId], map: "pharmacy_sop_evidence_captures_occurrence_idx")
+  @@map("pharmacy_sop_evidence_captures")
+}
+
+/// DEV-751: APPEND-ONLY per-branch SOP settings history; the newest row for a
+/// pharmacy branch is in force. With no row, automatic scheduling is OFF: a
+/// branch opts in explicitly. Settings never gate any pharmacy workflow.
+model PharmacySopSiteSetting {
+  id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  pharmacyBranchId    String
+  autoScheduleEnabled Boolean
+  changedByUserId     String
+  reason              String?
+  createdAt           DateTime @default(now())
+
+  pharmacyBranch PharmacyBranch @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_sop_site_settings_org_id_key")
+  @@index([organizationId, pharmacyBranchId, createdAt], map: "pharmacy_sop_site_settings_branch_time_idx")
+  @@map("pharmacy_sop_site_settings")
+}
+
+/// DEV-751: APPEND-ONLY rework note. After a reviewer sends a procedure back,
+/// the engine keeps its steps completed (re-completing is a no-op), so what the
+/// worker changed in response is recorded here: one or more notes, optionally
+/// per step, written after the latest send-back. Resubmission requires at least
+/// one. `occurrenceId`, `occurrenceStepId` and `rejectionVerificationId`
+/// reference the shared engine tables through SQL-only foreign keys; the author
+/// is server-derived. Never gates any pharmacy workflow.
+model PharmacySopReworkNote {
+  id                      String   @id @default(cuid())
+  organizationId          String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  pharmacyBranchId        String
+  occurrenceId            String
+  occurrenceStepId        String?
+  rejectionVerificationId String
+  note                    String
+  authorStaffProfileId    String
+  authorUserId            String
+  createdAt               DateTime @default(now())
+
+  pharmacyBranch PharmacyBranch @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_sop_rework_notes_org_id_key")
+  @@index([organizationId, pharmacyBranchId, occurrenceId], map: "pharmacy_sop_rework_notes_occurrence_idx")
+  @@map("pharmacy_sop_rework_notes")
 }
 
 /// INV-10 — the deliberately narrow doorway into the chain purchasing view.

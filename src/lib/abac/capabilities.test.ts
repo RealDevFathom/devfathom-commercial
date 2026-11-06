@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { PHARMACY_CHECKED_CAPABILITIES, PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import {
+  PHARMACY_CHECKED_CAPABILITIES,
+  PHARMACY_ROLE_TEMPLATES,
+  PHARMACY_SOP_TEMPLATE_GRANTS,
+} from '@/lib/vertical-catalog';
 import { EXACT_GRANT_ONLY_ACTIONS, capabilityMatches } from './capabilities';
 import { ALL_ACTIONS } from './policies';
 
@@ -29,8 +33,15 @@ export const intendedPharmacyGrants = {
 
 describe('canonical capability contract (#130)', () => {
   it('grants exactly the intended actions to every pharmacy template', () => {
+    // DEV-751: the SOP grants are a separate, append-only map (they never touch a
+    // pharmacy operation grant), so the contract is base grants + SOP grants.
     expect(Object.fromEntries(PHARMACY_ROLE_TEMPLATES.map((r) => [r.key, r.capabilities]))).toEqual(
-      intendedPharmacyGrants
+      Object.fromEntries(
+        Object.entries(intendedPharmacyGrants).map(([key, grants]) => [
+          key,
+          [...grants, ...(PHARMACY_SOP_TEMPLATE_GRANTS[key] ?? [])],
+        ])
+      )
     );
     for (const role of PHARMACY_ROLE_TEMPLATES) {
       for (const grant of role.capabilities) {

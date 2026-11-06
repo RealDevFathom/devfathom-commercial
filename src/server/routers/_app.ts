@@ -65,6 +65,7 @@ import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
 import { pharmacySupplierComplianceRouter } from './pharmacy-supplier-compliance';
 import { pharmacyDispensingRouter } from './pharmacy-dispensing';
 import { pharmacySafetyRouter } from './pharmacy-safety';
+import { pharmacySopRouter } from './pharmacy-sop';
 import { pharmacySalesRouter } from './pharmacy-sales';
 import { pharmacyBranchAssignmentsRouter } from './pharmacy-branch-assignments';
 import { pharmacyReportsRouter } from './pharmacy-reports';
@@ -140,6 +141,7 @@ export const appRouter = router({
   pharmacySupplierCompliance: pharmacySupplierComplianceRouter,
   pharmacyDispensing: pharmacyDispensingRouter,
   pharmacySafety: pharmacySafetyRouter,
+  pharmacySop: pharmacySopRouter,
   pharmacySales: pharmacySalesRouter,
   pharmacyBranchAssignments: pharmacyBranchAssignmentsRouter,
   pharmacyReports: pharmacyReportsRouter,

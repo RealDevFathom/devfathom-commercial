@@ -279,7 +279,9 @@ export async function installSopPack(
 /** Shared vertical seam: materialise a validated pack on the existing SOP engine. */
 export async function installSopPackDefinition(
   db: ScopedDb,
-  pack: SopPack,
+  // Install reads only identity and steps; a vertical's pack need not carry the
+  // restaurant `suggestedRecurrence` shape (pharmacy suggests no time of day).
+  pack: Pick<SopPack, 'key' | 'name' | 'description' | 'category' | 'steps'>,
   opts: { now?: Date } = {}
 ): Promise<InstallPackResult> {
   const packKey = pack.key;
