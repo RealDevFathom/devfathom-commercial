@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { BranchAssignmentRequired } from '@/components/pharmacy/inventory/branch-assignment-required';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
@@ -23,7 +24,10 @@ import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
+import {
+  admittedInventoryBranchIds,
+  pharmacyInventoryRouter,
+} from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
 
 import { BreakPackForm } from './break-pack-form';
@@ -130,7 +134,25 @@ export default async function PharmacyInventoryPage({
     orderBy: { name: 'asc' },
     select: { id: true, name: true, city: true },
   });
-  const branch = branches.find((item) => item.id === query.branch) ?? branches[0] ?? null;
+  // DEV-660: the gated stock reads admit only a branch the actor is assigned to (or
+  // any branch, for a verified tenant ADMIN), so only those branches are offered.
+  // `branches` still names the other side of a transfer.
+  const admitted = await admittedInventoryBranchIds(ctx);
+  const workingBranches = branches.filter((item) => admitted.has(item.id));
+  const branch =
+    workingBranches.find((item) => item.id === query.branch) ?? workingBranches[0] ?? null;
+  if (!branch && branches.length > 0) {
+    return (
+      <main className="min-w-0 space-y-6">
+        <PageHeader
+          eyebrow="Pharmacy operations"
+          heading="Inventory"
+          description="Lots, counts, transfers, recalls, and ranked stock actions."
+        />
+        <BranchAssignmentRequired canAssign={ctx.session.user.role === 'ADMIN'} />
+      </main>
+    );
+  }
   if (!branch) {
     return (
       <main className="min-w-0 space-y-6">
@@ -156,73 +178,66 @@ export default async function PharmacyInventoryPage({
   }
 
   const caller = pharmacyInventoryRouter.createCaller(ctx);
-  const [
-    organizationLocations,
-    lots,
-    counts,
-    transfers,
-    recalls,
-    signals,
-    users,
-    nearExpiry,
-    temperatureLogs,
-  ] = await Promise.all([
-    ctx.db.pharmacyStockLocation.findMany({
-      where: { organizationId, active: true },
-      orderBy: { name: 'asc' },
-    }),
-    ctx.db.pharmacyInventoryLot.findMany({
-      where: { organizationId, branchId: branch.id },
-      orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
-      include: {
-        batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
-        balances: { include: { location: true } },
-      },
-    }),
-    ctx.db.pharmacyInventoryCount.findMany({
-      where: { organizationId, branchId: branch.id },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-      include: { lines: true },
-    }),
-    ctx.db.pharmacyInterbranchTransfer.findMany({
-      where: { organizationId, OR: [{ fromBranchId: branch.id }, { toBranchId: branch.id }] },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-      include: { lines: true },
-    }),
-    ctx.db.pharmacyRecallNotice.findMany({
-      where: { organizationId },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-      include: { acknowledgements: true },
-    }),
-    ctx.db.pharmacyStockSignal.findMany({
-      where: {
-        organizationId,
-        branchId: branch.id,
-        status: { in: ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] },
-      },
-      orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
-      take: 50,
-      include: {
-        medicine: { select: { productName: true } },
-        location: { select: { name: true } },
-      },
-    }),
-    ctx.db.user.findMany({
-      where: { organizationId, status: 'ACTIVE', id: { not: ctx.session.user.id } },
-      orderBy: { name: 'asc' },
-      select: { id: true, name: true, title: true },
-    }),
-    caller.nearExpiryBoard({ branchId: branch.id }),
-    ctx.db.pharmacyTemperatureLog.findMany({
-      where: { organizationId, branchId: branch.id },
-      orderBy: { recordedAt: 'desc' },
-      take: 20,
-      include: { location: { select: { name: true } } },
-    }),
-  ]);
+  // DEV-660: the gated read admits the branch (and, for a tenant ADMIN without an
+  // assignment, writes the exception's audit row) before any direct stock read.
+  const nearExpiry = await caller.nearExpiryBoard({ branchId: branch.id });
+  const [organizationLocations, lots, counts, transfers, recalls, signals, users, temperatureLogs] =
+    await Promise.all([
+      ctx.db.pharmacyStockLocation.findMany({
+        where: { organizationId, active: true },
+        orderBy: { name: 'asc' },
+      }),
+      ctx.db.pharmacyInventoryLot.findMany({
+        where: { organizationId, branchId: branch.id },
+        orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
+        include: {
+          batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
+          balances: { include: { location: true } },
+        },
+      }),
+      ctx.db.pharmacyInventoryCount.findMany({
+        where: { organizationId, branchId: branch.id },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        include: { lines: true },
+      }),
+      ctx.db.pharmacyInterbranchTransfer.findMany({
+        where: { organizationId, OR: [{ fromBranchId: branch.id }, { toBranchId: branch.id }] },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        include: { lines: true },
+      }),
+      ctx.db.pharmacyRecallNotice.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        include: { acknowledgements: true },
+      }),
+      ctx.db.pharmacyStockSignal.findMany({
+        where: {
+          organizationId,
+          branchId: branch.id,
+          status: { in: ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] },
+        },
+        orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
+        take: 50,
+        include: {
+          medicine: { select: { productName: true } },
+          location: { select: { name: true } },
+        },
+      }),
+      ctx.db.user.findMany({
+        where: { organizationId, status: 'ACTIVE', id: { not: ctx.session.user.id } },
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true, title: true },
+      }),
+      ctx.db.pharmacyTemperatureLog.findMany({
+        where: { organizationId, branchId: branch.id },
+        orderBy: { recordedAt: 'desc' },
+        take: 20,
+        include: { location: { select: { name: true } } },
+      }),
+    ]);
   const branchNames = new Map(branches.map((item) => [item.id, item.name]));
   const locations = organizationLocations.filter((item) => item.branchId === branch.id);
   const destinationLocations = organizationLocations.filter((item) => item.branchId !== branch.id);
@@ -444,7 +459,7 @@ export default async function PharmacyInventoryPage({
           <label className="min-w-64 flex-1 text-sm text-text-body">
             Branch
             <select className={inputClass} defaultValue={branch.id} name="branch">
-              {branches.map((item) => (
+              {workingBranches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name} · {item.city}
                 </option>
@@ -958,11 +973,14 @@ export default async function PharmacyInventoryPage({
                     <Submit>Dispatch</Submit>
                   </form>
                 ) : null}
+                {/* DEV-660: stock is received at the destination, by someone assigned there,
+                    so the action is offered only while that branch is the working branch. */}
                 {['DISPATCHED', 'PARTIALLY_RECEIVED'].includes(transfer.status) &&
+                transfer.toBranchId === branch.id &&
                 transfer.lines[0] ? (
                   <form action={perform}>
                     <input name="action" type="hidden" value="receive-transfer" />
-                    <input name="branchId" type="hidden" value={transfer.toBranchId} />
+                    <input name="branchId" type="hidden" value={branch.id} />
                     <input name="transferId" type="hidden" value={transfer.id} />
                     <input name="lineId" type="hidden" value={transfer.lines[0].id} />
                     <input

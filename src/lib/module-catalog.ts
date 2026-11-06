@@ -226,6 +226,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // mandatory medicine identity in Core — the registry key is
   // `pharmacy-procurement` (vertical-catalog), not `pharmacy-core`.
   pharmacyPurchasing: 'pharmacy-procurement',
+  // DEV-752: pack-photo batch/expiry suggestions on the receiving bench.
+  pharmacyPackLabel: 'pharmacy-procurement',
   // PH-INV (INV-01..04): the batch/lot stock ledger is licensed as Pharmacy
   // Inventory, separately from the mandatory medicine identity in Core.
   pharmacyInventory: 'pharmacy-inventory',

@@ -32,6 +32,7 @@ import {
   isPackageCompatibleWithVertical,
   mandatoryModulesForVertical,
   modulesForVertical,
+  PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS,
   RESTAURANT_CAPABILITIES,
   RESTAURANT_MODULES,
   roleTemplatesForVertical,
@@ -996,6 +997,13 @@ async function bootstrapOrganization(
     primaryContactEmail: input.primaryContactEmail,
     notes: input.notes,
   });
+  // `*` never reaches the exact-grant-only pharmacy actions; a pharmacy's bootstrap
+  // admin also holds pharmacy:safety so a solo pharmacy can file and review PV (#479).
+  const adminCapabilities: readonly string[] = demo
+    ? RESTAURANT_CAPABILITIES
+    : input.vertical === 'PHARMACY'
+      ? ['*', ...PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS]
+      : ['*'];
   const adminRole = await db.organizationRole.create({
     data: {
       organizationId: organization.id,
@@ -1004,7 +1012,7 @@ async function bootstrapOrganization(
       description: 'Full organization administration',
       isSystem: true,
       permissions: {
-        create: (demo ? RESTAURANT_CAPABILITIES : ['*']).map((capability) => ({
+        create: adminCapabilities.map((capability) => ({
           organizationId: organization.id,
           capability,
           effect: 'ALLOW' as const,
@@ -1125,7 +1133,7 @@ async function bootstrapOrganization(
   // gate working, and pre-seeding a profile here would be exactly the "seed data
   // fakes readiness" move PLAT-03 exists to refuse.
   if (input.vertical === 'PHARMACY') {
-    await db.pharmacyBranch.create({
+    const mainBranch = await db.pharmacyBranch.create({
       data: {
         organizationId: organization.id,
         // The same stable code the restaurant path uses; the operator-facing
@@ -1135,6 +1143,17 @@ async function bootstrapOrganization(
         addressLine: input.firstBranchAddress!,
         city: input.firstBranchCity!,
         provinceCode: input.firstBranchProvinceCode!,
+      },
+    });
+    // #479 — branch-scoped pharmacy work (pharmacovigilance filing and review
+    // included) requires an active assignment. Assign the bootstrap
+    // administrator to MAIN, as the restaurant path does, so a solo pharmacy
+    // is not refused on its own first branch.
+    await db.pharmacyBranchAssignment.create({
+      data: {
+        organizationId: organization.id,
+        branchId: mainBranch.id,
+        userId: admin.id,
       },
     });
   }

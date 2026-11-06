@@ -769,18 +769,33 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'reports:financial',
 ] as const;
 
+/**
+ * Exact grants added to a PHARMACY tenant's bootstrap `admin` role beside its `*`.
+ * The wildcard never reaches pharmacy:safety, and a new pharmacy's only user sits on
+ * that role, so without this a solo pharmacy could not file or review PV reports.
+ */
+export const PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS: readonly string[] = ['pharmacy:safety'];
+
 const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   {
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+    // `pharmacy:*` never reaches the exact-grant-only actions. The Owner holds an
+    // explicit `pharmacy:safety` so a solo pharmacy can still file and review
+    // pharmacovigilance reports (#479). It deliberately does NOT receive
+    // pharmacy:dispense or pharmacy:catalogue-review: clinical powers stay with the
+    // pharmacist and the opt-in owner-operator template.
+    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial', 'pharmacy:safety'],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
     // for business/cashier guards that require literal ADMIN; EMPLOYEE plus this
     // template is not equivalent. Provisioning does not assign it to existing owners.
     // These grants neither verify clinical qualifications nor permit self-review/signing.
+    // Sole exception: in a tenant with no other active staff, a pharmacovigilance report
+    // may be marked READY by its own maker only after fresh server-side PIN
+    // reauthentication, with a durable audit row (pharmacy-reports PV:SOLO_OWNER_PIN).
     // #975: a proprietor runs the whole shop, so the template also grants the
     // operational actions (Goods-in, stock, counter, day close, management). Every
     // grant stays exact (no wildcard), so the separation-of-duties caps remain

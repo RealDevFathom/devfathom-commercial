@@ -522,7 +522,10 @@ describe('optional pharmacy Owner / Operator', () => {
         capabilities: role.capabilities.filter((grant) => !grant.startsWith('sop:')),
       }))
     ).toEqual([
-      { key: 'owner', capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'] },
+      {
+        key: 'owner',
+        capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial', 'pharmacy:safety'],
+      },
       {
         key: 'pharmacist',
         capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
