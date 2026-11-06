@@ -52,6 +52,12 @@ const lot = {
   id: 'lot-a',
   supplierName: 'Supplier',
   unitsPerPack: 10,
+  packLevelId: 'strip',
+  packLevel: {
+    presentation: {
+      packLevels: [{ id: 'strip', level: 'STRIP', parentPackLevelId: null, unitsPerParent: 10 }],
+    },
+  },
   receivedAt: new Date('2026-01-01'),
   batch: {
     medicineId: 'medicine',
@@ -213,6 +219,31 @@ describe('Quarantine resolution forms', () => {
 afterEach(cleanup);
 
 describe('Inventory pack-action integration', () => {
+  it('shows a lot-specific box and loose-unit equivalent from its hierarchy', async () => {
+    lots.mockResolvedValue([
+      {
+        ...lot,
+        unitsPerPack: 100,
+        packLevelId: 'box',
+        packLevel: {
+          presentation: {
+            packLevels: [
+              { id: 'box', level: 'BOX', parentPackLevelId: null, unitsPerParent: 1 },
+              { id: 'strip', level: 'STRIP', parentPackLevelId: 'box', unitsPerParent: 10 },
+              { id: 'unit', level: 'UNIT', parentPackLevelId: 'strip', unitsPerParent: 10 },
+            ],
+          },
+        },
+        balances: [{ ...available, onHandUnits: 570, sealedPacks: 5, looseUnits: 70 }],
+      },
+    ]);
+    await show();
+    expect(
+      screen.getByText(
+        '5 sealed boxes + 70 loose units (7 strip equivalents + 0 units; 570 units total)'
+      )
+    ).toBeVisible();
+  });
   it('passes exact lot/location balances and preserves FEFO query and available totals', async () => {
     await show();
     expect(mocks.form.mock.calls[0][0]).toEqual({
@@ -236,7 +267,7 @@ describe('Inventory pack-action integration', () => {
         orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
       })
     );
-    expect(screen.getByText('34 units · 3 sealed + 4 loose')).toBeVisible();
+    expect(screen.getByText('3 sealed strips + 4 loose units (34 units)')).toBeVisible();
     expect(nearExpiry).toHaveBeenCalledExactlyOnceWith({ branchId: branch.id });
   });
 

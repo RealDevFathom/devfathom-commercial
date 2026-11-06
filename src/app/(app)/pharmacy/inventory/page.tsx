@@ -22,6 +22,7 @@ import { hasModule } from '@/lib/entitlements';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
+import { inventoryBalanceDisplay } from '@/lib/pharmacy/inventory-balance-display';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
@@ -176,6 +177,7 @@ export default async function PharmacyInventoryPage({
       orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
       include: {
         batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
+        packLevel: { include: { presentation: { include: { packLevels: true } } } },
         balances: { include: { location: true } },
       },
     }),
@@ -530,8 +532,12 @@ export default async function PharmacyInventoryPage({
                       />
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {balance.onHandUnits} units · {balance.sealedPacks} sealed +{' '}
-                      {balance.looseUnits} loose
+                      {inventoryBalanceDisplay({
+                        ...balance,
+                        unitsPerPack: lot.unitsPerPack,
+                        packLevelId: lot.packLevelId,
+                        packLevels: lot.packLevel.presentation.packLevels,
+                      })}
                     </TableCell>
                     <TableCell className="whitespace-normal align-top text-right">
                       <BreakPackForm
