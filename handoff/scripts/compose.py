@@ -16,7 +16,7 @@ def jload(p, default=None):
 
 
 reviews = {}
-for f in os.listdir(S):
+for f in sorted(os.listdir(S), key=lambda x: os.path.getmtime(os.path.join(S, x))):  # newest review wins
     if f.startswith("review-") and f.endswith(".json") and not f.startswith("review-args"):
         for r in jload(f"{S}/{f}", []):
             reviews[str(r["n"])] = r
