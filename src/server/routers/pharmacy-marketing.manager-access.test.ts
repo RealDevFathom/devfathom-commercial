@@ -190,7 +190,11 @@ const calls: Array<[string, (c: Caller) => Promise<unknown>, () => ReturnType<ty
       }),
     () => mocks.approveTemplate,
   ],
-  ['approve', (c) => c.approve({ branchId, campaignId: 'campaign-a' }), () => mocks.approveCampaign],
+  [
+    'approve',
+    (c) => c.approve({ branchId, campaignId: 'campaign-a' }),
+    () => mocks.approveCampaign,
+  ],
   ['capture', (c) => c.capture({ branchId, campaignId: 'campaign-a' }), () => mocks.capture],
   ['attributeReceipts', (c) => c.attributeReceipts(period), () => mocks.attribute],
   [
@@ -241,22 +245,31 @@ describe('pharmacy marketing: manager-or-owner gate', () => {
     expect(mocks.organization).not.toHaveBeenCalled();
   });
 
-  it.each(calls)('%s refuses a tenant ADMIN assigned the cashier role', async (_name, run, domain) => {
-    await expect(run(caller(cashierAdmin))).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(domain()).not.toHaveBeenCalled();
-  });
+  it.each(calls)(
+    '%s refuses a tenant ADMIN assigned the cashier role',
+    async (_name, run, domain) => {
+      await expect(run(caller(cashierAdmin))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(domain()).not.toHaveBeenCalled();
+    }
+  );
 
-  it.each(calls)('%s refuses a manager whose pharmacy:manage is DENIED', async (_name, run, domain) => {
-    await expect(
-      run(
-        caller({
-          ...manager,
-          overrides: [...(manager.overrides ?? []), { capability: 'pharmacy:manage', effect: 'DENY' }],
-        })
-      )
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(domain()).not.toHaveBeenCalled();
-  });
+  it.each(calls)(
+    '%s refuses a manager whose pharmacy:manage is DENIED',
+    async (_name, run, domain) => {
+      await expect(
+        run(
+          caller({
+            ...manager,
+            overrides: [
+              ...(manager.overrides ?? []),
+              { capability: 'pharmacy:manage', effect: 'DENY' },
+            ],
+          })
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(domain()).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(calls)('%s lets a manager through', async (_name, run, domain) => {
     await expect(run(caller(manager))).resolves.toBeDefined();
@@ -268,10 +281,13 @@ describe('pharmacy marketing: manager-or-owner gate', () => {
     expect(domain()).toHaveBeenCalledTimes(1);
   });
 
-  it.each(nonReportCalls)('%s lets a solo owner with no role through', async (_name, run, domain) => {
-    await expect(run(caller(soloOwner))).resolves.toBeDefined();
-    expect(domain()).toHaveBeenCalledTimes(1);
-  });
+  it.each(nonReportCalls)(
+    '%s lets a solo owner with no role through',
+    async (_name, run, domain) => {
+      await expect(run(caller(soloOwner))).resolves.toBeDefined();
+      expect(domain()).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it('refuses a demotion to cashier during model latency before saving', async () => {
     const c = caller(manager);

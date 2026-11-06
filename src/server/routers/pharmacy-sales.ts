@@ -494,7 +494,7 @@ const closeDate = z
 // Closing the day and opening, moving or closing a drawer are manager-or-owner
 // actions: a cashier cannot reconcile or close their own drawer. An explicit
 // `pharmacy:close` grant is also accepted; only the Owner / Operator template
-// carries it (migration 20261101200000 removed it from existing Pharmacist
+// carries it (migration 20261101200300 removed it from existing Pharmacist
 // roles). A tenant ADMIN with no organization role (a solo
 // owner) keeps full access; an ADMIN with an assigned role is bounded by it.
 const managerOrOwnerAllowed = (ctx: TRPCContext, alsoAccepted: readonly Action[] = []) =>

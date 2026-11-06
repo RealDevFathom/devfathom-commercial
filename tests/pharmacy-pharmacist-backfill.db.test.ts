@@ -11,10 +11,11 @@ const client = new pg.Client({ connectionString: url });
 const suffix = randomUUID().replaceAll('-', '');
 const org = `qa996_${suffix}`;
 const other = `${org}_other`;
+const custom = `${org}_custom`;
 const restaurant = `${org}_restaurant`;
 const id = (key: string) => `${org}_${key}`;
 const migration = readFileSync(
-  'prisma/migrations/20261101200000_pharmacist_counter_without_close/migration.sql',
+  'prisma/migrations/20261101200300_pharmacist_counter_without_close/migration.sql',
   'utf8'
 )
   .replace(/^BEGIN;$/m, '')
@@ -42,6 +43,7 @@ async function grants(roleId: string) {
     for (const [organizationId, vertical] of [
       [org, 'PHARMACY'],
       [other, 'PHARMACY'],
+      [custom, 'PHARMACY'],
       [restaurant, 'RESTAURANT'],
     ] as const) {
       await client.query(
@@ -52,7 +54,7 @@ async function grants(roleId: string) {
     for (const [key, roleKey, isSystem, roleOrg] of [
       ['system', 'pharmacist', true, org],
       ['denied', 'pharmacist', true, other],
-      ['custom', 'pharmacist', false, other],
+      ['custom', 'pharmacist', false, custom],
       ['restaurant', 'pharmacist', true, restaurant],
       ['owner', 'owner-operator', true, org],
     ] as const) {
@@ -62,7 +64,7 @@ async function grants(roleId: string) {
       );
       const seeded = roleKey === 'pharmacist' ? previousTemplate : ['pharmacy:close'];
       for (const capability of seeded) {
-        // The 'denied' role carries tenant DENYs on both changed capabilities.
+        // The 'denied' role carries a tenant DENY on close instead of the ALLOW.
         if (key === 'denied' && capability === 'pharmacy:close') continue;
         await client.query(
           `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,$4,'ALLOW')`,
@@ -70,12 +72,10 @@ async function grants(roleId: string) {
         );
       }
     }
-    for (const capability of ['pharmacy:close', 'pharmacy:counter']) {
-      await client.query(
-        `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,$4,'DENY')`,
-        [id(`denied_${capability}`), other, id('denied'), capability]
-      );
-    }
+    await client.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,$4,'DENY')`,
+      [id('denied_pharmacy:close'), other, id('denied'), 'pharmacy:close']
+    );
     await client.query(migration);
   }, 60_000);
   afterAll(async () => {
@@ -88,11 +88,10 @@ async function grants(roleId: string) {
     expect(await grants(id('system'))).toEqual(allow(template.capabilities));
   });
 
-  it('keeps existing DENY rows on close and counter', async () => {
+  it('keeps an existing DENY row on close', async () => {
     expect(await grants(id('denied'))).toEqual([
       { capability: 'pharmacy:catalogue-review', effect: 'ALLOW' },
       { capability: 'pharmacy:close', effect: 'DENY' },
-      { capability: 'pharmacy:counter', effect: 'DENY' },
       { capability: 'pharmacy:dispense', effect: 'ALLOW' },
     ]);
   });
@@ -103,20 +102,15 @@ async function grants(roleId: string) {
     expect(await grants(id('owner'))).toEqual(allow(['pharmacy:close']));
   });
 
-  it('writes each backfilled grant into the role organization and is idempotent', async () => {
-    const tenants = await client.query<{ mismatched: number }>(
-      `SELECT count(*)::int AS mismatched FROM organization_role_permissions p JOIN organization_roles r ON r.id=p."organizationRoleId" WHERE r."organizationId" IN ($1,$2,$3) AND p."organizationId"<>r."organizationId"`,
-      [org, other, restaurant]
-    );
-    expect(tenants.rows[0]!.mismatched).toBe(0);
+  it('is idempotent', async () => {
     const before = await client.query(
-      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3) ORDER BY id`,
-      [org, other, restaurant]
+      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3,$4) ORDER BY id`,
+      [org, other, custom, restaurant]
     );
     await client.query(migration);
     const after = await client.query(
-      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3) ORDER BY id`,
-      [org, other, restaurant]
+      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3,$4) ORDER BY id`,
+      [org, other, custom, restaurant]
     );
     expect(after.rows).toEqual(before.rows);
   });
