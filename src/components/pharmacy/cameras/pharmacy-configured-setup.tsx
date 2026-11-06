@@ -152,7 +152,7 @@ export function PharmacyConfiguredSetup({
             <Input name="name" required maxLength={120} />
           </label>
           <div>
-            <label className="text-sm font-medium text-text-strong">
+            <label className="block text-sm font-medium text-text-strong">
               Gateway URL
               <Input
                 name="baseUrl"
@@ -237,7 +237,7 @@ export function PharmacyConfiguredSetup({
             />
           </div>
           <div>
-            <label className="text-sm font-medium text-text-strong">
+            <label className="block text-sm font-medium text-text-strong">
               Gateway stream path
               <Input
                 name="sourceRef"

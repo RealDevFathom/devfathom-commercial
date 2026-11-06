@@ -81,11 +81,16 @@ export function CameraLivePlayer({
         20_000
       );
     };
+    // Native HLS reports a refused or failed load (for example an unbound camera's
+    // 502) and an unsupported format alike as MEDIA_ERR_SRC_NOT_SUPPORTED (4), so
+    // only a decode error (3) is certainly a codec problem.
     const mediaError = () =>
       stop(
-        media.error?.code === 3 || media.error?.code === 4
+        media.error?.code === 3
           ? 'This stream or codec is unsupported. Ask the gateway owner to check the video format.'
-          : 'Video unavailable or access ended. Close and reopen live view to request access.'
+          : media.error?.code === 4
+            ? 'Video unavailable or its format is unsupported. Run Check configured connection, or ask the gateway owner to check the stream.'
+            : 'Video unavailable or access ended. Close and reopen live view to request access.'
       );
     media.addEventListener('playing', playing);
     media.addEventListener('waiting', waiting);

@@ -159,3 +159,14 @@ test('a 403 from the stream endpoint under hls.js stops immediately and releases
   expect(screen.getByRole('status')).toHaveTextContent('access ended');
   expect(onRelease).toHaveBeenCalledWith('g1');
 });
+
+test.each([
+  [3, 'codec is unsupported'],
+  [4, 'Run Check configured connection'],
+])('native media error %i shows an accurate stopped state and releases', async (code, text) => {
+  const { video, onRelease } = await open();
+  Object.defineProperty(video, 'error', { configurable: true, value: { code } });
+  act(() => void video.dispatchEvent(new Event('error')));
+  expect(screen.getByRole('status')).toHaveTextContent(text);
+  expect(onRelease).toHaveBeenCalledWith('g1');
+});
