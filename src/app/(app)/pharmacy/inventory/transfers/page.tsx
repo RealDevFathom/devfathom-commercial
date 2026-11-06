@@ -59,6 +59,7 @@ function Empty({ children }: { children: React.ReactNode }) {
 }
 
 const SUCCESS: Record<TransferAction, string> = {
+  submitDraft: 'Draft submitted. A different colleague must approve it before dispatch.',
   allocate: 'Transfer allocated. A colleague must approve it before dispatch.',
   approve: 'Transfer approved. Print the packing slip and dispatch it.',
   dispatch: 'Transfer dispatched. The stock is now in transit.',
@@ -180,6 +181,8 @@ export default async function PharmacyTransfersPage({
       const transferId = String(data.get('transferId') ?? '').trim();
       if (action === 'allocate')
         await actionCaller.allocateTransfer(allocateInput(data, ALLOCATE_ROWS));
+      else if (action === 'submitDraft')
+        await actionCaller.submitTransferDraft({ branchId, transferId });
       else if (action === 'approve') await actionCaller.approveTransfer({ branchId, transferId });
       else if (action === 'dispatch')
         await actionCaller.dispatchTransfer({

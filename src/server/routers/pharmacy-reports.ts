@@ -1,3 +1,9 @@
+import {
+  executeLostDemandAction,
+  loadLostDemandAdvice,
+  saveLostDemandConfig,
+} from '@/lib/pharmacy/lost-demand-operations';
+import { lostDemandTriggerConfigSchema } from '@/lib/pharmacy/lost-demand-procurement';
 import { readRepeatPurchasing, validateRepeatFilters } from '@/lib/pharmacy/repeat-purchasing';
 import {
   readPharmacyMarketingReport,
@@ -178,6 +184,73 @@ async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
 }
 
 export const pharmacyReportsRouter = router({
+  lostDemandAdvice: reports
+    .input(z.object({ branchId: z.string().trim().min(1).max(128) }).strict())
+    .query(async ({ ctx, input }) => {
+      const available = await scope(ctx);
+      await requireFinancialReports(ctx);
+      if (!available.branches.some((row) => row.id === input.branchId))
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      return loadLostDemandAdvice(ctx.db, {
+        organizationId: available.organizationId,
+        branchId: input.branchId,
+      });
+    }),
+  updateLostDemandConfig: reports
+    .input(
+      z
+        .object({
+          branchId: z.string().trim().min(1).max(128),
+          config: lostDemandTriggerConfigSchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      await requireOwnerBranch(ctx, input.branchId);
+      if (
+        !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:procurement', undefined, {
+          db: ctx.db,
+        }))
+      )
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      return ctx.db.$transaction((db) =>
+        saveLostDemandConfig(
+          db as typeof ctx.db,
+          {
+            organizationId: ctx.entitlements.organizationId,
+            branchId: input.branchId,
+            actorId: ctx.session!.user.id,
+          },
+          input.config
+        )
+      );
+    }),
+  actOnLostDemandAdvice: reports
+    .input(
+      z
+        .object({
+          branchId: z.string().trim().min(1).max(128),
+          adviceId: z.string().regex(/^[a-f0-9]{64}$/),
+          action: z.enum(['DRAFT_PO', 'DRAFT_TRANSFER', 'IGNORE']),
+          pin: z.string().regex(/^\d{4,8}$/),
+          supplierId: z.string().trim().min(1).max(128).optional(),
+          fromBranchId: z.string().trim().min(1).max(128).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const available = await scope(ctx);
+      await requireFinancialReports(ctx);
+      if (!available.branches.some((row) => row.id === input.branchId))
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      const requiredModule =
+        input.action === 'DRAFT_TRANSFER' ? 'pharmacy-inventory' : 'pharmacy-procurement';
+      if (!hasModule(ctx.entitlements, requiredModule)) throw new TRPCError({ code: 'FORBIDDEN' });
+      return executeLostDemandAction(
+        { organizationId: available.organizationId, userId: ctx.session!.user.id },
+        input
+      );
+    }),
   categoryGrowth: reports
     .input(
       filters

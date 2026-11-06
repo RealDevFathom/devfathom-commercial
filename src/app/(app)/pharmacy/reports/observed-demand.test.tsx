@@ -1,5 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import {
+  DEFAULT_LOST_DEMAND_TRIGGER_CONFIG,
+  type LostDemandTrigger,
+} from '@/lib/pharmacy/lost-demand-procurement';
 import type { demandAggregate } from '@/lib/pharmacy/sales';
 import { ObservedDemand } from './observed-demand';
 
@@ -28,6 +32,63 @@ const report: Awaited<ReturnType<typeof demandAggregate>> = {
 };
 
 describe('observed demand evidence', () => {
+  const highValueReport = {
+    ...report,
+    rows: report.rows.map((row) => ({
+      ...row,
+      _sum: { ...row._sum, estimatedValueMinor: 1_500_000_000 },
+    })),
+  };
+  const alerts = {
+    at: new Date('2026-09-02Z'),
+    config: DEFAULT_LOST_DEMAND_TRIGGER_CONFIG,
+    walkOutRateEvaluated: false,
+    visits: 0,
+    alerts: [
+      {
+        scope: 'SKU' as const,
+        key: 'item-a',
+        medicineIds: ['item-a'],
+        requests: 3,
+        estimatedLossMinor: 1_500_000_000,
+        fired: ['REQUESTS', 'ESTIMATED_LOSS'] as LostDemandTrigger[],
+      },
+    ],
+  };
+
+  it('renders valid monetary aggregates above the per-event database limit', () => {
+    const html = renderToStaticMarkup(
+      <ObservedDemand report={highValueReport} alerts={alerts} failed={false} selected financial />
+    );
+    expect(html).toContain('Recorded demand events');
+    expect(html).toContain('Procurement review recommended');
+    expect(html).toContain('estimated loss');
+    expect(html).toContain('15000000.00');
+  });
+
+  it('never derives alerts from the selected-period report total', () => {
+    const html = renderToStaticMarkup(
+      <ObservedDemand report={highValueReport} failed={false} selected financial />
+    );
+    expect(html).not.toContain('Procurement review recommended');
+  });
+
+  it('hides financial-derived trigger output without financial permission', () => {
+    const html = renderToStaticMarkup(
+      <ObservedDemand
+        report={highValueReport}
+        alerts={alerts}
+        failed={false}
+        selected
+        financial={false}
+      />
+    );
+    expect(html).toContain('Procurement review recommended');
+    expect(html).not.toContain('estimated loss');
+    expect(html).not.toContain('estimated value');
+    expect(html).not.toContain('15000000');
+  });
+
   it('distinguishes observations, units, null estimates and exclusions', () => {
     const html = renderToStaticMarkup(
       <ObservedDemand report={report} failed={false} selected financial />

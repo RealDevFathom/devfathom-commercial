@@ -25,6 +25,7 @@ const BLOCKED_MUTATIONS = new Set([
   'organizationAdmin.updateEmail',
   'organizationAdmin.updateMember',
   'organizationAdmin.upsertRole',
+  'pharmacyOperatorPin.setPin',
   'restaurantDevices.initiateEnrollment',
   'restaurantDevices.revoke',
   'restaurantDevices.rotate',

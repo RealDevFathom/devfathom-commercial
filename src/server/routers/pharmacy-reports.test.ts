@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 
 const mocks = vi.hoisted(() => ({
+  lostAdvice: vi.fn(),
+  lostAction: vi.fn(),
+  lostSetting: vi.fn(),
   raw: vi.fn().mockResolvedValue([]),
   repeatRead: vi.fn().mockResolvedValue({ horizons: [] }),
   can: vi.fn<typeof import('@/lib/abac').can>(async () => false),
@@ -29,6 +32,11 @@ vi.mock('@/lib/pharmacy/branch-comparison', () => ({
   readPharmacyBranchComparison: mocks.comparisonRead,
 }));
 
+vi.mock('@/lib/pharmacy/lost-demand-operations', () => ({
+  loadLostDemandAdvice: mocks.lostAdvice,
+  executeLostDemandAction: mocks.lostAction,
+  saveLostDemandConfig: mocks.lostSetting,
+}));
 vi.mock('@/lib/pharmacy/stock-signals-operations', () => ({
   roleDashboard: mocks.stockDashboard,
   ownerDigest: mocks.stockDigest,
@@ -812,6 +820,77 @@ describe('repeat purchasing authorization', () => {
       caller().repeatPurchasing({ ...input, supplierId: 'supplier' } as typeof input)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.repeatRead).not.toHaveBeenCalled();
+  });
+});
+
+describe('lost-demand production router gates', () => {
+  const input = {
+    branchId: 'branch_1',
+    adviceId: 'a'.repeat(64),
+    action: 'DRAFT_PO' as const,
+    pin: '4821',
+    supplierId: 'supplier_1',
+  };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+  });
+  it('uses the trusted session actor and passes only validated action input to the production boundary', async () => {
+    mocks.lostAction.mockResolvedValue({ id: 'po_1', status: 'DRAFT' });
+    await caller().actOnLostDemandAdvice(input);
+    expect(mocks.lostAction).toHaveBeenCalledWith(
+      { organizationId: 'org_1', userId: 'user_admin' },
+      input
+    );
+  });
+  it('denies financial access before loading distributor prices or invoking a draft action', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'reports:financial'
+    );
+    await expect(caller().lostDemandAdvice({ branchId: 'branch_1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller().actOnLostDemandAdvice(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.lostAdvice).not.toHaveBeenCalled();
+    expect(mocks.lostAction).not.toHaveBeenCalled();
+  });
+  it('enforces procurement/inventory licensing and branch membership for writes', async () => {
+    vi.mocked(hasModule).mockImplementation(
+      (_entitlements, module) => module === 'pharmacy-reports'
+    );
+    await expect(caller().actOnLostDemandAdvice(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      caller().actOnLostDemandAdvice({ ...input, action: 'DRAFT_TRANSFER' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().actOnLostDemandAdvice({ ...input, branchId: 'foreign' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.lostAction).not.toHaveBeenCalled();
+  });
+  it('refuses a non-owner settings change and invalid branch windows without writing', async () => {
+    const config = {
+      requestsInWindow: 3,
+      requestWindowDays: 7,
+      estimatedLossMinor: 1000000,
+      lossWindowDays: 30,
+      walkOutRateBps: 1000,
+    };
+    await expect(
+      caller('EMPLOYEE').updateLostDemandConfig({ branchId: 'branch_1', config })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().updateLostDemandConfig({
+        branchId: 'branch_1',
+        config: { ...config, lossWindowDays: 0 },
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.lostSetting).not.toHaveBeenCalled();
   });
 });
 

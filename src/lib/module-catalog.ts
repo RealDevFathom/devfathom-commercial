@@ -235,6 +235,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacySafety: 'pharmacy-safety',
   pharmacySales: 'pharmacy-counter',
   pharmacyBranchAssignments: 'pharmacy-core',
+  // Owner/manager approval PIN enrolment — pharmacy-native, not restaurant-core.
+  pharmacyOperatorPin: 'pharmacy-core',
   pharmacyCameras: 'pharmacy-core',
   pharmacyMarketing: 'pharmacy-crm',
   pharmacyFinance: 'pharmacy-finance',
@@ -293,6 +295,7 @@ export function alternativeModulesForProcedure(path: string): readonly string[] 
 export function moduleForProcedure(path: string): string | null {
   // Inviting workspace users is baseline administration in every vertical.
   if (path === 'team.inviteMember') return 'admin';
+  if (path === 'pharmacySales.lostDemandAlerts') return 'pharmacy-reports';
   if (
     ACCOUNT_PROCEDURES.has(path) ||
     ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES.has(path)
@@ -389,6 +392,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/reports', 'pharmacy-reports'],
   ['/pharmacy/medicines', 'pharmacy-core'],
   ['/pharmacy/settings/branches', 'pharmacy-core'],
+  ['/pharmacy/settings/pin', 'pharmacy-core'],
   ['/pharmacy/marketing', 'pharmacy-crm'],
   ['/pharmacy/loyalty', 'pharmacy-crm'],
   ['/pharmacy/cameras', 'pharmacy-core'],

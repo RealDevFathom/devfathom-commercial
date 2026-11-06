@@ -91,7 +91,7 @@ export function packingSlipFor(transfer: TransferBoardRow): PackingSlip {
   };
 }
 
-export type TransferAction = 'allocate' | 'approve' | 'dispatch' | 'receive';
+export type TransferAction = 'submitDraft' | 'allocate' | 'approve' | 'dispatch' | 'receive';
 
 /**
  * Domain reasons arrive as bare codes from the router. The operator gets the
@@ -101,6 +101,14 @@ export type TransferAction = 'allocate' | 'approve' | 'dispatch' | 'receive';
 export function transferErrorMessage(action: TransferAction, error: unknown): string {
   const reason = error instanceof Error ? error.message : '';
   switch (reason) {
+    case 'TRANSFER_SURPLUS_CHANGED':
+      return 'The source no longer has the approved surplus. Refresh and review this draft.';
+    case 'TRANSFER_STOCK_CHANGED':
+      return 'Source stock or destination storage changed. Refresh and review this draft.';
+    case 'TRANSFER_FORBIDDEN':
+      return 'Pharmacy inventory permission is required to submit this draft.';
+    case 'BRANCH_NOT_AVAILABLE':
+      return 'This draft requires active source and destination branches.';
     case 'COAUTH_REQUIRED':
       return action === 'approve'
         ? 'Approval needs a colleague other than the person who allocated this transfer.'
