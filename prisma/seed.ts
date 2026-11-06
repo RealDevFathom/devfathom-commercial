@@ -11,6 +11,7 @@ import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js
 import { AGENCY_SUITE_MODULES, syncPlatformCatalog } from './catalog-sync.js';
 import { upsertPlatformAdmin } from './platform-admin.js';
 import { upsertStagingAdmin } from './staging-admin.js';
+import { advanceInvoiceNumberSequence } from '../src/lib/finance/invoice-number.js';
 
 // Seed writes through row-level security as a platform admin. Use the migration
 // role when it is set so the application role can stay NOSUPERUSER NOBYPASSRLS.
@@ -35,7 +36,16 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   }
   const password = await hash(seedPassword, 12);
 
-  if (await tx.invoice.findUnique({ where: { invoiceNumber: 'INV-2026-001' } })) {
+  if (
+    await tx.invoice.findUnique({
+      where: {
+        organizationId_invoiceNumber: {
+          organizationId: 'org_devfathom',
+          invoiceNumber: 'INV-2026-001',
+        },
+      },
+    })
+  ) {
     await tx.user.updateMany({
       where: {
         organizationId: 'org_devfathom',
@@ -940,6 +950,15 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         sentAt: inv.status !== 'DRAFT' ? new Date(inv.date) : null,
       },
     });
+  }
+
+  // Direct seed inserts must advance the same allocator used by application
+  // creates, otherwise the first real invoice could reuse a seeded number.
+  for (const [year, lastNumber] of [
+    [2025, 8],
+    [2026, 5],
+  ] as const) {
+    await advanceInvoiceNumberSequence(tx, 'org_devfathom', year, lastNumber);
   }
 
   // Transactions — Income from paid invoices

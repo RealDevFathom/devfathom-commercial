@@ -7,6 +7,7 @@ import { logActivity } from '../activity';
 import { notify } from '@/lib/notifications';
 import { optionalWebsiteUrl } from '@/lib/validators';
 import { assertInOrganization, workspaceId } from '../org-refs';
+import { reserveInvoiceNumber } from '@/lib/finance/invoice-number';
 
 // Contract `value` shares the Decimal(12,2) money columns used across finance, so
 // the largest value Postgres will accept is 9,999,999,999.99 — bound it here so an
@@ -493,29 +494,27 @@ export const clientsRouter = router({
         });
       }
 
-      // FIN-09: scope the sequence to THIS year's invoices so it resets each Jan.
       const year = new Date().getFullYear();
-      const count = await ctx.db.invoice.count({
-        where: { invoiceNumber: { startsWith: `INV-${year}-` } },
-      });
-      const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
       const dueDate = new Date(Date.now() + input.dueInDays * 24 * 60 * 60 * 1000);
 
-      const invoice = await ctx.db.invoice.create({
-        data: {
-          invoiceNumber,
-          clientId: contract.clientId,
-          projectId: contract.projectId,
-          items: [{ description: contract.title, quantity: 1, rate: amount, amount }],
-          subtotal: amount,
-          tax: 0,
-          total: amount,
-          currency: contract.currency,
-          status: 'DRAFT',
-          dueDate,
-          notes: `Generated from contract "${contract.title}"`,
-        },
-        include: { client: { select: { name: true } } },
+      const invoice = await ctx.db.$transaction(async (tx) => {
+        const invoiceNumber = await reserveInvoiceNumber(tx, workspaceId(ctx), year);
+        return tx.invoice.create({
+          data: {
+            invoiceNumber,
+            clientId: contract.clientId,
+            projectId: contract.projectId,
+            items: [{ description: contract.title, quantity: 1, rate: amount, amount }],
+            subtotal: amount,
+            tax: 0,
+            total: amount,
+            currency: contract.currency,
+            status: 'DRAFT',
+            dueDate,
+            notes: `Generated from contract "${contract.title}"`,
+          },
+          include: { client: { select: { name: true } } },
+        });
       });
 
       logActivity(ctx.db, ctx.session.user.id, {

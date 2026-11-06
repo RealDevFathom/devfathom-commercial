@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
+import { reserveInvoiceNumber } from '@/lib/finance/invoice-number';
 import {
   isPersistableMoney,
   MAX_MONEY,
@@ -95,28 +96,25 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
     );
   }
 
-  // FIN-09: per-year sequence — scope the count to this year so it resets to -001.
   const year = new Date().getFullYear();
-  const count = await ctx.db.invoice.count({
-    where: { invoiceNumber: { startsWith: `INV-${year}-` } },
-  });
-  const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
-
-  const invoice = await ctx.db.invoice.create({
-    data: {
-      invoiceNumber,
-      clientId: parsed.data.clientId,
-      projectId: parsed.data.projectId || null,
-      items,
-      subtotal,
-      tax,
-      total,
-      currency: parsed.data.currency,
-      status: 'DRAFT',
-      dueDate: new Date(parsed.data.dueDate),
-      notes: parsed.data.notes,
-    },
-    include: { client: { select: { name: true } } },
+  const invoice = await ctx.db.$transaction(async (tx) => {
+    const invoiceNumber = await reserveInvoiceNumber(tx, ctx.organizationId, year);
+    return tx.invoice.create({
+      data: {
+        invoiceNumber,
+        clientId: parsed.data.clientId,
+        projectId: parsed.data.projectId || null,
+        items,
+        subtotal,
+        tax,
+        total,
+        currency: parsed.data.currency,
+        status: 'DRAFT',
+        dueDate: new Date(parsed.data.dueDate),
+        notes: parsed.data.notes,
+      },
+      include: { client: { select: { name: true } } },
+    });
   });
 
   logActivity(ctx.db, ctx.userId, {

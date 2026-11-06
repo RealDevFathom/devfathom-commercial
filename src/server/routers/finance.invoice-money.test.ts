@@ -41,6 +41,9 @@ function caller() {
       findUnique: mocks.findUnique,
       update: mocks.update,
     },
+    invoiceNumberSequence: {
+      upsert: vi.fn().mockResolvedValue({ lastNumber: 1 }),
+    },
     payment: {
       findUnique: mocks.paymentFindUnique,
       delete: mocks.paymentDelete,

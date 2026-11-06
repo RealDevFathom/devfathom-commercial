@@ -25,13 +25,18 @@ describe('POST /api/v1/invoices money calculation', () => {
   });
 
   it('rounds each half-cent line and the tax half up before persisting totals', async () => {
+    const tx = {
+      invoiceNumberSequence: {
+        upsert: vi.fn().mockResolvedValue({ lastNumber: 1 }),
+      },
+      invoice: { create: mocks.create },
+    };
     const authCtx = {
       userId: 'user-1',
+      organizationId: 'org-1',
       db: {
-        invoice: {
-          count: vi.fn().mockResolvedValue(0),
-          create: mocks.create,
-        },
+        ...tx,
+        $transaction: vi.fn(async (work: (client: typeof tx) => Promise<unknown>) => work(tx)),
       },
     };
     const handler = POST as unknown as (authCtx: unknown, request: Request) => Promise<Response>;
@@ -63,6 +68,13 @@ describe('POST /api/v1/invoices money calculation', () => {
           tax: 0.01,
           total: 2.03,
         }),
+      })
+    );
+    expect(tx.invoiceNumberSequence.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId_year: { organizationId: 'org-1', year: new Date().getFullYear() },
+        },
       })
     );
   });
