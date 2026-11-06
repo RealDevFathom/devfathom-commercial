@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
+import { CountVarianceThresholdSettings } from '@/components/pharmacy/count-variance-threshold-settings';
 import { OperatingModeSettings } from '@/components/pharmacy/operating-mode-settings';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -13,10 +14,7 @@ export default async function OperatingModePage() {
   // Only an authorization refusal means "not available to you"; any other
   // failure (database, configuration) must surface instead of being disguised.
   const settings = await caller.get().catch((error: unknown) => {
-    if (
-      error instanceof TRPCError &&
-      (error.code === 'FORBIDDEN' || error.code === 'UNAUTHORIZED')
-    )
+    if (error instanceof TRPCError && (error.code === 'FORBIDDEN' || error.code === 'UNAUTHORIZED'))
       return null;
     throw error;
   });
@@ -30,6 +28,11 @@ export default async function OperatingModePage() {
         />
         <SectionCard title="Role separation" titleLevel={2}>
           <OperatingModeSettings initialMode={settings.pharmacyOperatingMode} />
+        </SectionCard>
+        <SectionCard title="Stock count approval threshold" titleLevel={2}>
+          <CountVarianceThresholdSettings
+            initialUnits={settings.pharmacyCountVarianceThresholdUnits}
+          />
         </SectionCard>
       </main>
     );

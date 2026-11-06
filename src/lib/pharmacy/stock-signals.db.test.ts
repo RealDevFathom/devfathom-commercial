@@ -397,6 +397,11 @@ describeIfDatabase('PUR-07 — facts come off the ledger, not off the caller', (
     const signal = await inOrg(ORG_A, async (db) => {
       const { lot } = await stockLot(db, fixture, { units: 100, label: 'partial-confidence' });
       await approveSafetyStock(db, fixture, 120);
+      // A count snapshots the organization's threshold; the inserted value is ignored.
+      await db.organization.update({
+        where: { id: fixture.organizationId },
+        data: { pharmacyCountVarianceThresholdUnits: 5 },
+      });
       const count = await db.pharmacyInventoryCount.create({
         data: {
           organizationId: fixture.organizationId,

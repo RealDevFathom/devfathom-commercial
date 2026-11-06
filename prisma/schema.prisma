@@ -4905,6 +4905,8 @@ model Organization {
   isDemo                   Boolean                    @default(false)
   askFathomEnabled         Boolean                    @default(true)
   pharmacyOperatingMode    PharmacyOperatingMode      @default(STAFFED)
+  /// Units of stock-count variance tolerated before approval. Owner-set only; 0..10 (DB check).
+  pharmacyCountVarianceThresholdUnits Int           @default(0)
   lastDemoResetAt          DateTime?
   gracePeriodDays          Int                        @default(0)
   activatedAt              DateTime?
