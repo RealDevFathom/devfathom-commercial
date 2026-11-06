@@ -52,7 +52,6 @@ const RETIRED = `harden_branch_retired_${suffix}`;
 const FOREIGN = `harden_branch_foreign_${suffix}`;
 const UNKNOWN = `harden_branch_unknown_${suffix}`;
 const ACTOR = `harden_actor_${suffix}`;
-const COUNTER_ROLE = `harden_counter_role_${suffix}`;
 const DEVICE = 'counter-device-1';
 const businessDate = new Date('2026-10-20T00:00:00.000Z');
 type Refusal = { code: string; message: string };
@@ -162,23 +161,27 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
     await createBranch(OTHER_ORG, FOREIGN);
     await withTenantDb(ORG, async (db) => {
       await seedDepartments(db, [ORG], ['LEADERSHIP']);
-      await db.organizationRole.create({
-        data: {
-          id: COUNTER_ROLE,
-          key: COUNTER_ROLE,
-          name: 'Counter operator',
-          permissions: { create: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
-        },
-      });
-      await db.user.create({
-        data: {
+      // The drawers need a counter grant and an assignment (DEV-279). The administrator
+      // stays role-less, the legacy owner shape, and gets pharmacy:counter as a user
+      // override. Upsert, so this also works when an earlier step created the row.
+      await db.user.upsert({
+        where: { id: ACTOR },
+        create: {
           id: ACTOR,
           name: 'Drawer test administrator',
           email: `${ACTOR}@example.test`,
           department: 'LEADERSHIP',
           title: 'Administrator',
           role: 'ADMIN',
-          organizationRoleId: COUNTER_ROLE,
+        },
+        update: {},
+      });
+      await db.userPermissionOverride.create({
+        data: {
+          userId: ACTOR,
+          capability: 'pharmacy:counter',
+          effect: 'ALLOW',
+          reason: 'DEV-279 drawer test',
         },
       });
       await db.pharmacyBranchAssignment.createMany({
