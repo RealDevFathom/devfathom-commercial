@@ -13,7 +13,12 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import {
+  retirePharmacyRegulatoryRules,
+  seedPharmacyRegulatoryProfile,
+} from '@/lib/test-support/pharmacy-regulatory';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -34,6 +39,7 @@ const organizationId = `sbs659_${run}`;
 const scope = { organizationId, branchId: `sbs659_branch_${run}`, actorId: 'sbs659-actor' };
 const businessDate = new Date('2026-10-22T00:00:00.000Z');
 let catalog: { locationId: string };
+const ruleSetIds: string[] = [];
 
 const tenant = <T>(work: (db: ScopedDb) => Promise<T>, timeout = 30_000) =>
   withTenantDb(organizationId, work, { userId: scope.actorId, timeout });
@@ -79,7 +85,12 @@ beforeAll(async () => {
     });
     return { locationId: location.id };
   });
+  ruleSetIds.push(await seedPharmacyRegulatoryProfile(withPlatformDb, tenant, scope.branchId));
 }, 60_000);
+
+afterAll(async () => {
+  if (TEST_DATABASE_URL) await retirePharmacyRegulatoryRules(withPlatformDb, ruleSetIds);
+});
 
 /**
  * A medicine of its own (so FEFO cannot pick another test's lot), one safe batch with 20

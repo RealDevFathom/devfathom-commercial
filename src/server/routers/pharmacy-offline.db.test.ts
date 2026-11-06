@@ -1,9 +1,13 @@
 // @vitest-environment node
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  retirePharmacyRegulatoryRules,
+  seedPharmacyRegulatoryProfile,
+} from '@/lib/test-support/pharmacy-regulatory';
 import type { CounterReplay } from './pharmacy-offline';
 import type { ManualTenderType } from '@/lib/pharmacy/manual-payments';
 
@@ -22,6 +26,8 @@ const ORG_A = `org_wha1191_a_${suffix}`;
 const BRANCH_A = `branch_a_${suffix}`;
 
 const ACTOR = 'user_pharmacist';
+/** Branches whose sale-gate regulatory profile is seeded, mapped to the rule-set id. */
+const regulatedBranches = new Map<string, string>();
 
 const NOW = new Date('2026-09-02T09:00:00.000Z');
 const LATER = new Date('2027-10-01T00:00:00.000Z');
@@ -218,6 +224,12 @@ beforeAll(async () => {
   );
 }, 180_000);
 
+afterAll(async () => {
+  if (!TEST_DATABASE_URL) return;
+  const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+  await retirePharmacyRegulatoryRules(withPlatformDb, [...regulatedBranches.values()]);
+});
+
 // Mock only the web identity/entitlement boundary; transactions, signatures,
 // stock, quota, command log, receipts and forced RLS use migrated PostgreSQL.
 vi.mock('@/lib/tenancy/tenant-actor', () => ({
@@ -241,6 +253,18 @@ vi.mock('@/lib/rate-limit', () => ({
 
 async function setup(manualType?: ManualTenderType, allowReferenceSkip = false) {
   const fixture = await scenario(ORG_A, manualType ? tag('merchant-branch') : BRANCH_A, 'transport');
+  // Replay creates and tenders the sale through the persisted regulatory gate.
+  if (!regulatedBranches.has(fixture.branchId)) {
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    regulatedBranches.set(
+      fixture.branchId,
+      await seedPharmacyRegulatoryProfile(
+        withPlatformDb,
+        (work) => inOrg(ORG_A, work),
+        fixture.branchId
+      )
+    );
+  }
   if (manualType) await inOrg(ORG_A, (db) => db.pharmacyBranch.update({
     where: { id: fixture.branchId }, data: { manualPaymentSettings: {
       [manualType]: { destination: 'Merchant till', allowReferenceSkip },

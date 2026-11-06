@@ -20,6 +20,10 @@ import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  retirePharmacyRegulatoryRules,
+  seedPharmacyRegulatoryProfile,
+} from '@/lib/test-support/pharmacy-regulatory';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -49,6 +53,7 @@ let directory: string;
 
 const describeDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const run = randomUUID().slice(0, 8);
+const ruleSetIds: string[] = [];
 const businessDate = new Date('2026-09-29T09:00:00.000Z');
 const DAY_MS = 86_400_000;
 
@@ -82,6 +87,7 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
+  if (TEST_DATABASE_URL) await retirePharmacyRegulatoryRules(withPlatformDb, ruleSetIds);
   vi.unstubAllEnvs();
   if (directory) await rm(directory, { recursive: true, force: true });
 });
@@ -184,6 +190,9 @@ async function setupTenant(label: string, options: { camera?: boolean } = {}) {
     });
     return { medicineId: medicine.id, presentationId: presentation.id, packLevelId: pack.id };
   });
+  ruleSetIds.push(
+    await seedPharmacyRegulatoryProfile(platform, (work) => tenant(scope, work), scope.branchId)
+  );
   const camera =
     options.camera === false
       ? null

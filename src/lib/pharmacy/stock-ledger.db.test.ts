@@ -27,9 +27,13 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  retirePharmacyRegulatoryRules,
+  seedPharmacyRegulatoryProfile,
+} from '@/lib/test-support/pharmacy-regulatory';
 
 import { PharmacyInventoryError } from './inventory';
 
@@ -51,6 +55,7 @@ const BRANCH_A_TWO = `branch_a_two_${suffix}`;
 const BRANCH_A_THREE = `branch_a_three_${suffix}`;
 const BRANCH_GUC = `branch_guc_${suffix}`;
 const ACTOR = 'user_pharmacist';
+const ruleSetIds: string[] = [];
 
 /** Fixed instants, so no case depends on the wall clock. */
 const NOW = new Date('2026-09-02T09:00:00.000Z');
@@ -313,6 +318,12 @@ beforeAll(async () => {
   deps = { withTenantDb: scopedDb.withTenantDb, ledger, operations, drap };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
 }, 120_000);
+
+afterAll(async () => {
+  if (!TEST_DATABASE_URL) return;
+  const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+  await retirePharmacyRegulatoryRules(withPlatformDb, ruleSetIds);
+});
 
 // ── INV-01 — the append-only ledger and its projection ──────────────────────
 
@@ -1655,6 +1666,24 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     const sales = await import('./sales');
     const safety = await import('./sale-batch-safety');
     const fixture = await scenario(ORG_A, BRANCH_A, 'claim-checkout');
+    // createSale runs the persisted regulatory gate: an ACTIVE organization and a branch profile.
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    await withPlatformDb((db) =>
+      db.organization.upsert({
+        where: { id: ORG_A },
+        update: { status: 'ACTIVE' },
+        create: {
+          id: ORG_A,
+          slug: ORG_A,
+          legalName: 'Recall tests',
+          displayName: 'Recall tests',
+          status: 'ACTIVE',
+        },
+      })
+    );
+    ruleSetIds.push(
+      await seedPharmacyRegulatoryProfile(withPlatformDb, (work) => inOrg(ORG_A, work), BRANCH_A)
+    );
     const { lot, presentationId } = await inOrg(ORG_A, async (db) => {
       const medicine = await db.medicine.update({
         where: { id: fixture.medicineId },

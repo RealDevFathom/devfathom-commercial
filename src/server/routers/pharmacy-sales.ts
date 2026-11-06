@@ -70,6 +70,10 @@ import {
 } from '@/lib/pharmacy/customer-loyalty';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { PharmacySaleBatchError } from '@/lib/pharmacy/sale-batch-safety';
+import {
+  assertStoredPharmacyMayOperate,
+  BranchOperationDeniedError,
+} from '@/lib/pharmacy/regulatory';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -234,6 +238,8 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof BranchOperationDeniedError)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyRxSaleDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyRxReferenceError)
@@ -867,6 +873,7 @@ export const pharmacySalesRouter = router({
             message: 'Khata fields require Khata tender.',
           });
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        // applyPharmacyTender enforces the persisted regulatory gate in this transaction.
         return await ctx.db.$transaction((tx) =>
           applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
         );
@@ -883,6 +890,10 @@ export const pharmacySalesRouter = router({
         }));
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
+        // Fail before any Khata limit work; applyPharmacyTender re-checks under the same locks.
+        await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+          name: 'pharmacy.sale.tender',
+        });
         await bindKhataBranch(db, scope);
         await db.$queryRaw(
           Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
@@ -1008,11 +1019,16 @@ export const pharmacySalesRouter = router({
     }),
   create: protectedProcedure
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) =>
-        createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
-      )
-    ),
+    .mutation(async ({ ctx, input }) => {
+      try {
+        // createSale enforces the persisted regulatory gate in this transaction.
+        return await ctx.db.$transaction(async (tx) =>
+          createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
   addLine: protectedProcedure
     .input(
       z

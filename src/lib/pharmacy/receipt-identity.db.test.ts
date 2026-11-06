@@ -7,6 +7,10 @@ import { addSaleLine, createSale, returnSaleLine } from './sales';
 import { receiveLot } from './stock-ledger';
 import { applyPharmacyTender, refundPharmacyTender } from './settlement';
 import { readCounterReceipt } from './counter';
+import {
+  retirePharmacyRegulatoryRules,
+  seedPharmacyRegulatoryProfile,
+} from '@/lib/test-support/pharmacy-regulatory';
 import { afterAll } from 'vitest';
 
 const url = process.env.WHA1364_RECEIPT_TEST_DATABASE_URL;
@@ -37,6 +41,14 @@ function transaction<T>(work: (db: ScopedDb) => Promise<T>, organizationId = org
     { timeout: 30000 }
   );
 }
+function platformTransaction<T>(work: (db: ScopedDb) => Promise<T>) {
+  if (!client) throw new Error('Isolated receipt database required');
+  return client.$transaction(async (tx) => {
+    await tx.$queryRawUnsafe("SELECT set_config('app.is_platform_admin', 'true', true)");
+    return work(tx as ScopedDb);
+  });
+}
+const ruleSetIds: string[] = [];
 beforeAll(async () => {
   if (!client) return;
   const [role] = await client.$queryRawUnsafe<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>(
@@ -66,8 +78,14 @@ beforeAll(async () => {
       },
     })
   );
+  ruleSetIds.push(
+    await seedPharmacyRegulatoryProfile(platformTransaction, (work) => transaction(work), branch)
+  );
 });
-afterAll(() => client?.$disconnect());
+afterAll(async () => {
+  if (client) await retirePharmacyRegulatoryRules(platformTransaction, ruleSetIds);
+  await client?.$disconnect();
+});
 
 async function fixture() {
   return transaction(async (db) => {

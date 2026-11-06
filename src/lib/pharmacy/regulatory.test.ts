@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/server/audit', () => ({ recordAudit: vi.fn() }));
+
 import {
   assertBranchMayOperate,
+  assertStoredPharmacyMayOperate,
   BranchOperationDeniedError,
   evaluateBranchRegulatoryStatus,
   type BranchRegulatoryState,
@@ -124,6 +128,110 @@ describe('assertBranchMayOperate', () => {
     const state = validState();
     state.ruleSet.licenceCategories = { provisional: true, values: ['PHARMACY'] };
     expectDenied(state, 'RULE_SET_UNCONFIRMED');
+  });
+});
+
+describe('assertStoredPharmacyMayOperate', () => {
+  const sqlOf = (call: unknown[]) => (call[0] as TemplateStringsArray).join('?');
+
+  function storedDb(status: string | null, profile: unknown = null) {
+    const order: string[] = [];
+    const db = {
+      $queryRaw: vi.fn(async (strings: TemplateStringsArray) => {
+        order.push(strings.join('?').includes('organizations') ? 'lock:org' : 'lock:profile');
+        return [];
+      }),
+      organization: {
+        findUnique: vi.fn(async () => {
+          order.push('read:org');
+          return status === null ? null : { status };
+        }),
+      },
+      branchRegulatoryProfile: {
+        findFirst: vi.fn(async () => {
+          order.push('read:profile');
+          return profile;
+        }),
+      },
+    };
+    return { db, order };
+  }
+
+  it('refuses an onboarding organization before inspecting its branch profile', async () => {
+    const { db } = storedDb('ONBOARDING');
+
+    await expect(
+      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', {
+        name: 'pharmacy.sale.create',
+      })
+    ).rejects.toEqual(new BranchOperationDeniedError('ORGANIZATION_NOT_ACTIVE'));
+    expect(db.branchRegulatoryProfile.findFirst).not.toHaveBeenCalled();
+  });
+
+  it.each(['PROSPECT', 'SUSPENDED', 'TERMINATED', 'PURGING', 'PURGED', null])(
+    'refuses a %s organization',
+    async (status) => {
+      const { db } = storedDb(status);
+
+      await expect(
+        assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', {
+          name: 'pharmacy.sale.tender',
+        })
+      ).rejects.toEqual(new BranchOperationDeniedError('ORGANIZATION_NOT_ACTIVE'));
+    }
+  );
+
+  it.each(['ACTIVE', 'GRACE'])(
+    'lets a %s organization through to the branch profile check',
+    async (status) => {
+      const { db } = storedDb(status);
+
+      // No profile: the denial now comes from the branch, proving the lifecycle check passed.
+      await expect(
+        assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', {
+          name: 'pharmacy.sale.tender',
+        })
+      ).rejects.toEqual(new BranchOperationDeniedError('PROFILE_MISSING'));
+      expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalled();
+    }
+  );
+
+  it('admits a GRACE organization whose branch has a valid profile', async () => {
+    const { auditDenied: _auditDenied, ruleSet, ...profile } = validState();
+    const { db } = storedDb('GRACE', { ...profile, jurisdictionRuleSet: ruleSet });
+
+    await expect(
+      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', {
+        name: 'pharmacy.sale.create',
+        at,
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it('share-locks the organization and open branch profiles before reading them', async () => {
+    const { db, order } = storedDb('ACTIVE');
+
+    await expect(
+      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', {
+        name: 'pharmacy.sale.create',
+      })
+    ).rejects.toEqual(new BranchOperationDeniedError('PROFILE_MISSING'));
+    expect(order).toEqual(['lock:org', 'lock:profile', 'read:org', 'read:profile']);
+    const [orgLock, profileLock] = db.$queryRaw.mock.calls.map(sqlOf);
+    expect(orgLock).toMatch(/FROM organizations WHERE id = \? FOR SHARE/);
+    expect(profileLock).toMatch(/pharmacy_branch_regulatory_profiles[\s\S]*FOR SHARE/);
+    expect(db.$queryRaw.mock.calls[0]!.slice(1)).toEqual(['org-a']);
+    expect(db.$queryRaw.mock.calls[1]!.slice(1)).toEqual(['org-a', 'branch-a']);
+  });
+
+  it('refuses an active organization when the branch has no effective profile', async () => {
+    const { db } = storedDb('ACTIVE');
+
+    await expect(
+      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', {
+        name: 'pharmacy.sale.tender',
+      })
+    ).rejects.toEqual(new BranchOperationDeniedError('PROFILE_MISSING'));
   });
 });
 
