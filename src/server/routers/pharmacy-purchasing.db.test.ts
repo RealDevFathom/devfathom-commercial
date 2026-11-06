@@ -133,7 +133,13 @@ describeIfDatabase('purchase-order decision concurrency against PostgreSQL', () 
       [`pur472_licence_${suffix}`, organizationId, supplierId]
     );
     // Procurement is checked against live tenant users, and a branchless order
-    // is reviewed only by organization-wide purchasers.
+    // is reviewed only by organization-wide purchasers. Each user belongs to
+    // one of the tenant's own departments.
+    await owner.query(
+      `INSERT INTO organization_departments (id, "organizationId", key, name, "updatedAt")
+       VALUES ($1, $2, 'Pharmacy', 'Pharmacy', now())`,
+      [`pur472_department_${suffix}`, organizationId]
+    );
     for (const reviewerId of reviewerIds) {
       await owner.query(
         `INSERT INTO users
