@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { assertInOrganization } from '../org-refs';
 import { router, capabilityProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
+import { requireSopActor } from '@/lib/restaurant/sop-actor';
 import {
   SopTemplateError,
   addStep,
@@ -613,10 +614,14 @@ export const restaurantSopRouter = router({
   // capability would lock every barista out of their own list.
 
   /** Unclaimed pool items at a branch this operator is eligible to take. */
+  // `staffProfileId` stays accepted for client compatibility but is ignored: the
+  // queue owner is always the caller's own session staff profile.
   listClaimablePool: completeProcedure
-    .input(z.object({ staffProfileId: z.string(), branchId: z.string() }).strict())
-    .query(({ ctx, input }) =>
-      listClaimablePoolOccurrences(ctx.db, input.staffProfileId, { branchId: input.branchId })
+    .input(z.object({ staffProfileId: z.string().optional(), branchId: z.string() }).strict())
+    .query(async ({ ctx, input }) =>
+      listClaimablePoolOccurrences(ctx.db, await requireSopActor(ctx, input.branchId), {
+        branchId: input.branchId,
+      })
     ),
 
   /**
@@ -624,9 +629,11 @@ export const restaurantSopRouter = router({
    * unioned and de-duplicated (see `listStaffSopOccurrences`).
    */
   listMySopOccurrences: completeProcedure
-    .input(z.object({ staffProfileId: z.string(), branchId: z.string() }).strict())
-    .query(({ ctx, input }) =>
-      listStaffSopOccurrences(ctx.db, input.staffProfileId, { branchId: input.branchId })
+    .input(z.object({ staffProfileId: z.string().optional(), branchId: z.string() }).strict())
+    .query(async ({ ctx, input }) =>
+      listStaffSopOccurrences(ctx.db, await requireSopActor(ctx, input.branchId), {
+        branchId: input.branchId,
+      })
     ),
 
   /**
@@ -636,9 +643,18 @@ export const restaurantSopRouter = router({
    * IS an error.
    */
   claimOccurrence: completeProcedure
-    .input(z.object({ occurrenceId: z.string(), staffProfileId: z.string() }).strict())
+    .input(z.object({ occurrenceId: z.string(), staffProfileId: z.string().optional() }).strict())
     .mutation(async ({ ctx, input }) => {
-      const outcome = await claimSopOccurrence(ctx.db, input.occurrenceId, input.staffProfileId);
+      // The claimant is the caller's session staff profile; a supplied
+      // `staffProfileId` is ignored so no one can claim on another's behalf.
+      // Resolved against the occurrence's branch, so a multi-branch employee
+      // claims as their profile for that branch.
+      const target = await ctx.db.restaurantSopOccurrence.findUnique({
+        where: { id: input.occurrenceId },
+        select: { branchId: true },
+      });
+      const claimant = await requireSopActor(ctx, target?.branchId);
+      const outcome = await claimSopOccurrence(ctx.db, input.occurrenceId, claimant);
       if (outcome.status === 'NOT_CLAIMABLE') {
         throw new TRPCError({
           code: outcome.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'FORBIDDEN',

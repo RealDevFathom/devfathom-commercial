@@ -10,10 +10,12 @@
  * key stops it being written — but neither stops a DEACTIVATED branch of the
  * caller's own organization: its open drawer could take cash movements and be
  * closed, and it could be cut a daily close. `scopeFor` refuses a branch that is
- * not an active branch of the caller's organization; every one of these
- * procedures must reach that refusal before it reads or writes anything. And the
- * close family's typed refusals (a drawer still open, a second cut without a
- * reason) must reach the caller as typed errors, the way the drawer family's do.
+ * not an active branch of the caller's organization; the drawer mutations and
+ * the cash tender reach it through `branchScopeOrForbidden`, which words it as
+ * FORBIDDEN. Every one of these procedures must reach that refusal before it
+ * reads or writes anything. And the close family's typed refusals (a drawer
+ * still open, a second cut without a reason) must reach the caller as typed
+ * errors, the way the drawer family's do.
  *
  * Requires TEST_DATABASE_URL: a disposable, migrated database reached as the
  * restricted runtime role (neither SUPERUSER nor BYPASSRLS — asserted first).
@@ -138,6 +140,7 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
     withTenantDb = scoped.withTenantDb;
     withPlatformDb = scoped.withPlatformDb;
     const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
+    const { seedDepartments } = await import('@/lib/test-support/departments');
     await assertRlsEnforcingRole(withPlatformDb);
     await withPlatformDb((db) =>
       db.$executeRawUnsafe(
@@ -156,6 +159,38 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
     await createBranch(ORG, ACTIVE);
     await createBranch(ORG, RETIRED);
     await createBranch(OTHER_ORG, FOREIGN);
+    await withTenantDb(ORG, async (db) => {
+      await seedDepartments(db, [ORG], ['LEADERSHIP']);
+      // The drawers need a counter grant and an assignment (DEV-279). The administrator
+      // stays role-less, the legacy owner shape, and gets pharmacy:counter as a user
+      // override. Upsert, so this also works when an earlier step created the row.
+      await db.user.upsert({
+        where: { id: ACTOR },
+        create: {
+          id: ACTOR,
+          name: 'Drawer test administrator',
+          email: `${ACTOR}@example.test`,
+          department: 'LEADERSHIP',
+          title: 'Administrator',
+          role: 'ADMIN',
+        },
+        update: {},
+      });
+      await db.userPermissionOverride.create({
+        data: {
+          userId: ACTOR,
+          capability: 'pharmacy:counter',
+          effect: 'ALLOW',
+          reason: 'DEV-279 drawer test',
+        },
+      });
+      await db.pharmacyBranchAssignment.createMany({
+        data: [
+          { userId: ACTOR, branchId: ACTIVE },
+          { userId: ACTOR, branchId: RETIRED },
+        ],
+      });
+    });
     // A drawer opened while the branch traded, then the branch was deactivated.
     const drawer = await asAdmin((c) =>
       c.openDrawer({ branchId: RETIRED, deviceId: DEVICE, businessDate, openingFloatMinor: 500 })
@@ -178,7 +213,7 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
             businessDate,
             openingFloatMinor: 0,
           }),
-        NOT_IN_WORKSPACE,
+        OUTSIDE,
       ],
       [
         'drawerMovement',
@@ -190,12 +225,12 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
             amountMinor: 200,
             reason: 'Courier',
           }),
-        NOT_IN_WORKSPACE,
+        OUTSIDE,
       ],
       [
         'closeDrawer',
         (c) => c.closeDrawer({ branchId, drawerSessionId, countedCashMinor: 500 }),
-        NOT_IN_WORKSPACE,
+        OUTSIDE,
       ],
       ['dailyClose', (c) => c.dailyClose({ branchId, businessDate }), NOT_IN_WORKSPACE],
       ['closePreview', (c) => c.closePreview({ branchId, businessDate }), NOT_IN_WORKSPACE],
@@ -239,7 +274,7 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
             reason: 'Returned medicine',
             idempotencyKey: `refund-${branchId}`,
           }),
-        NOT_IN_WORKSPACE,
+        OUTSIDE,
       ],
     ] as Array<[string, (c: Awaited<ReturnType<typeof sales>>) => Promise<unknown>, Refusal]>;
 
@@ -346,5 +381,27 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
         db.organization.update({ where: { id: ORG }, data: { timezone: 'America/Chicago' } })
       );
     }
+  });
+
+  it('does not let an authorized branch move or close another branch’s drawer (DEV-279)', async () => {
+    // The caller is cleared for ACTIVE, but names the drawer still open on RETIRED.
+    const before = await rowsFor(RETIRED);
+    await expect(
+      asAdmin((c) =>
+        c.drawerMovement({
+          branchId: ACTIVE,
+          drawerSessionId: retiredDrawerId,
+          kind: 'PAID_OUT',
+          amountMinor: 100,
+          reason: 'Cross-branch attempt',
+        })
+      )
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DRAWER_NOT_OPEN' });
+    await expect(
+      asAdmin((c) =>
+        c.closeDrawer({ branchId: ACTIVE, drawerSessionId: retiredDrawerId, countedCashMinor: 0 })
+      )
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DRAWER_NOT_OPEN' });
+    expect(await rowsFor(RETIRED)).toEqual(before);
   });
 });
