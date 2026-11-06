@@ -228,7 +228,7 @@ async function seedProvisionalProfile(organizationId: string) {
     await db.query(
       `INSERT INTO pharmacy_branch_regulatory_profiles
        (id,"organizationId","branchId",version,"effectiveFrom","provinceCode","jurisdictionRuleSetId",premises,"licenceCategory","licenceNumber","licenceValidFrom","licenceValidTo","licenceEvidenceFileRef","permittedSchedules","qualifiedPersonRegistration","qualifiedPersonValidFrom","qualifiedPersonValidTo","qualifiedPersonCoverageRosterRef","fiscalStatus","retentionPolicy")
-       VALUES ('e2e_pharmacy_profile_provisional',$1,$2,1,'2026-09-02T00:00:00.000Z','PK-PB','pk_pb_provisional_v1','{}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
+       VALUES ('e2e_pharmacy_profile_provisional',$1,$2,1,'2026-09-02T00:00:00.000Z','PK-PB','pk_pb_provisional_v1','{"addressLine":"12 Clifton Road, Karachi","city":"Karachi"}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
       [organizationId, pharmacyBranchId]
     );
   });
@@ -258,7 +258,7 @@ async function seedMinimalReadiness(organizationId: string) {
     await db.query(
       `INSERT INTO pharmacy_branch_regulatory_profiles
        (id,"organizationId","branchId",version,"effectiveFrom","provinceCode","jurisdictionRuleSetId",premises,"licenceCategory","licenceNumber","licenceValidFrom","licenceValidTo","licenceEvidenceFileRef","permittedSchedules","qualifiedPersonRegistration","qualifiedPersonValidFrom","qualifiedPersonValidTo","qualifiedPersonCoverageRosterRef","fiscalStatus","retentionPolicy")
-       VALUES ('e2e_pharmacy_profile_confirmed',$1,$2,2,'2026-09-02T01:00:00.000Z','PK-PB','e2e_pk_pb_confirmed','{}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
+       VALUES ('e2e_pharmacy_profile_confirmed',$1,$2,2,'2026-09-02T01:00:00.000Z','PK-PB','e2e_pk_pb_confirmed','{"addressLine":"12 Clifton Road, Karachi","city":"Karachi"}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
       [organizationId, pharmacyBranchId]
     );
     await db.query(

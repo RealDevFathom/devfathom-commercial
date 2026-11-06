@@ -290,11 +290,14 @@ describe('regulatoryProfileBindingDenial', () => {
       'BRANCH_INACTIVE'
     );
     expect(
-      regulatoryProfileBindingDenial({ ...bound, premises: { addressLine: '', city: '' } }, {
-        ...site,
-        addressLine: '',
-        city: '',
-      })
+      regulatoryProfileBindingDenial(
+        { ...bound, premises: { addressLine: '', city: '' } },
+        {
+          ...site,
+          addressLine: '',
+          city: '',
+        }
+      )
     ).toBe('PROFILE_PREMISES_MISMATCH');
   });
 });

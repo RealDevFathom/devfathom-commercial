@@ -308,6 +308,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       const saved = await caller(db).saveRegulatoryProfile({
         ...profile,
         branchId: secondBranchId,
+        premisesAddressLine: '9 Link Road',
         licenceValidTo: expiryDate,
       });
       expect(saved.version).toBe(1);
