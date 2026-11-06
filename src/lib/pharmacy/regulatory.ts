@@ -84,6 +84,11 @@ function permits(values: readonly string[], value: string): boolean {
  * placeholder) must never be resurrected after that instant, so it is also
  * compared against the instant.
  *
+ * A placeholder closed by an operator save also gets a date-only end (UTC
+ * midnight of the successor's start day). Its start and any lock keep instant
+ * semantics, but that end is held until the successor's workspace day starts,
+ * so superseding a placeholder west of UTC leaves no gap either.
+ *
  * In the database the shapes cannot be told apart directly. The workspace day
  * is within a day of the instant (UTC offsets are under 24 hours), so the only
  * date-only end later than the workspace day that the instant can already have
@@ -102,7 +107,11 @@ export function effectiveRegulatoryProfileWhere(at: Date, calendarDate: Date) {
       {
         isPlaceholder: true,
         effectiveFrom: { lte: at },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+        OR: [
+          { effectiveTo: null },
+          { effectiveTo: { gt: at } },
+          { effectiveTo: { equals: nextCalendarDate(calendarDate) } },
+        ],
       },
       {
         isPlaceholder: false,
@@ -132,12 +141,13 @@ export function isRegulatoryProfileEffective(
   at: Date,
   calendarDate: Date
 ): boolean {
+  const end = profile.effectiveTo;
   if (profile.isPlaceholder) {
     return (
-      profile.effectiveFrom <= at && (profile.effectiveTo === null || profile.effectiveTo > at)
+      profile.effectiveFrom <= at &&
+      (end === null || end > at || end.getTime() === nextCalendarDate(calendarDate).getTime())
     );
   }
-  const end = profile.effectiveTo;
   return (
     profile.effectiveFrom <= calendarDate &&
     (end === null ||

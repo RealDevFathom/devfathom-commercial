@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { evaluatePharmacyReadiness, PHARMACY_ONBOARDING_STEPS } from '@/lib/pharmacy/onboarding';
 import { assertStoredBranchMayOperate } from '@/lib/pharmacy/regulatory';
+import { matchesFilter } from '@/lib/testing/prisma-filter';
 
 vi.mock('@/lib/platform/auth', () => ({ assertPlatformCapability: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
@@ -42,32 +43,6 @@ type ProfileWhere = {
 };
 
 type Row = Record<string, unknown>;
-
-function matchesField(value: unknown, condition: unknown): boolean {
-  if (condition === null) return value === null;
-  if (condition instanceof Date) return value instanceof Date && +value === +condition;
-  if (typeof condition !== 'object') return value === condition;
-  return Object.entries(condition as Record<string, unknown>).every(([op, operand]) => {
-    if (op === 'equals') return matchesField(value, operand);
-    if (!(value instanceof Date) || !(operand instanceof Date)) return false;
-    if (op === 'gt') return value > operand;
-    if (op === 'lte') return value <= operand;
-    throw new Error(`Unsupported operator ${op}`);
-  });
-}
-
-/** Evaluates a Prisma-style filter (AND/OR, gt/lte/equals, null) the way Postgres would. */
-function matchesFilter(row: Row, filter: Record<string, unknown>): boolean {
-  return Object.entries(filter).every(([key, condition]) => {
-    if (key === 'OR') {
-      return (condition as Record<string, unknown>[]).some((part) => matchesFilter(row, part));
-    }
-    if (key === 'AND') {
-      return (condition as Record<string, unknown>[]).every((part) => matchesFilter(row, part));
-    }
-    return matchesField(row[key], condition);
-  });
-}
 
 function matchesEffectiveWindow(row: Row, where: ProfileWhere): boolean {
   if (!where.OR) return false;
@@ -241,6 +216,41 @@ describe('operator profile handover west of UTC', () => {
       new Date(instant)
     );
     expect(readiness.ready).toBe(ready);
+  });
+
+  it.each([
+    ['2026-10-22T00:00:00.000Z', true],
+    ['2026-10-22T04:59:59.999Z', true],
+    ['2026-10-22T05:00:00.000Z', false],
+  ])(
+    'holds a placeholder closed by an operator save until workspace midnight (%s)',
+    async (instant, ready) => {
+      db = fixture('America/Chicago', handover, {
+        isPlaceholder: true,
+        effectiveFrom: new Date('2026-10-01T10:00:00.000Z'),
+      });
+      const readiness = await evaluatePharmacyReadiness(
+        db as unknown as PrismaClient,
+        profile.organizationId,
+        new Date(instant)
+      );
+      expect(readiness.ready).toBe(ready);
+    }
+  );
+
+  it('lets the stored guard operate on a closed placeholder before workspace midnight', async () => {
+    db = fixture('America/Chicago', handover, {
+      isPlaceholder: true,
+      effectiveFrom: new Date('2026-10-01T10:00:00.000Z'),
+    });
+    await expect(
+      assertStoredBranchMayOperate(
+        db as unknown as PrismaClient,
+        profile.organizationId,
+        profile.branchId,
+        { name: 'DISPENSE', at: new Date('2026-10-22T02:00:00.000Z'), schedule: 'RX' }
+      )
+    ).resolves.toBeUndefined();
   });
 
   it('still closes an operator profile superseded at an instant west of UTC', async () => {
