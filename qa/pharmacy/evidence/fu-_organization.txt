@@ -1,0 +1,538 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Organization
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+ORGANIZATION CONTROL
+QA Clifton Chemist
+
+Manage your workspace identity, people, access, and licensed capabilities.
+
+LIFECYCLE
+
+ONBOARDING
+
+DEPLOYMENT
+
+SHARED
+
+SEATS
+
+1/10
+
+PACKAGE
+
+Custom
+
+License and modules
+
+Your platform operator controls package, contract, seat ceiling, and expiry.
+
+API access
+
+DISABLED
+
+NONE
+
+Administration
+
+ENABLED
+
+BASELINE
+
+Agency Core
+
+DISABLED
+
+NONE
+
+Audit logs
+
+DISABLED
+
+NONE
+
+Banquets and Events
+
+DISABLED
+
+NONE
+
+Central Reservations
+
+DISABLED
+
+NONE
+
+Channels and Booking Engine
+
+DISABLED
+
+NONE
+
+Chat
+
+DISABLED
+
+NONE
+
+Clients
+
+DISABLED
+
+NONE
+
+Custom domains
+
+DISABLED
+
+NONE
+
+Customers and Loyalty
+
+DISABLED
+
+NONE
+
+Dashboard
+
+ENABLED
+
+BASELINE
+
+Data controls
+
+DISABLED
+
+NONE
+
+Email
+
+DISABLED
+
+NONE
+
+Enterprise SSO
+
+DISABLED
+
+NONE
+
+Finance
+
+DISABLED
+
+NONE
+
+Folio and Billing
+
+DISABLED
+
+NONE
+
+Front Desk
+
+DISABLED
+
+NONE
+
+Guest Journey and Upsell
+
+DISABLED
+
+NONE
+
+HR
+
+DISABLED
+
+NONE
+
+Hotel Core
+
+DISABLED
+
+NONE
+
+Hotel Marketing
+
+DISABLED
+
+NONE
+
+Hotel Reports
+
+DISABLED
+
+NONE
+
+Integrations and Devices
+
+DISABLED
+
+NONE
+
+Inventory
+
+DISABLED
+
+NONE
+
+Maintenance
+
+DISABLED
+
+NONE
+
+Meetings
+
+DISABLED
+
+NONE
+
+Menu and Costing
+
+DISABLED
+
+NONE
+
+Night Audit
+
+DISABLED
+
+NONE
+
+Notes
+
+DISABLED
+
+NONE
+
+Notifications
+
+ENABLED
+
+BASELINE
+
+POS and Fulfilment
+
+DISABLED
+
+NONE
+
+Partner API and GL
+
+DISABLED
+
+NONE
+
+Payments
+
+DISABLED
+
+NONE
+
+Performance reviews
+
+DISABLED
+
+NONE
+
+Pharmacy CRM
+
+ENABLED
+
+PACKAGE
+
+Pharmacy Core
+
+ENABLED
+
+PACKAGE
+
+Pharmacy Counter
+
+ENABLED
+
+PACKAGE
+
+Pharmacy Dispensing
+
+ENABLED
+
+PACKAGE
+
+Pharmacy Finance
+
+ENABLED
+
+PACKAGE
+
+Pharmacy Inventory
+
+ENABLED
+
+PACKAGE
+
+Pharmacy Procurement
+
+ENABLED
+
+PACKAGE
+
+Pharmacy Reports
+
+ENABLED
+
+PACKAGE
+
+Pharmacy Safety
+
+ENABLED
+
+PACKAGE
+
+Projects
+
+DISABLED
+
+NONE
+
+Purchasing
+
+DISABLED
+
+NONE
+
+Reservations
+
+DISABLED
+
+NONE
+
+Restaurant Core
+
+DISABLED
+
+NONE
+
+Restaurant Insights
+
+DISABLED
+
+NONE
+
+Restaurant Workforce
+
+DISABLED
+
+NONE
+
+SCIM provisioning
+
+DISABLED
+
+NONE
+
+SOP and Compliance
+
+DISABLED
+
+NONE
+
+Travel Agents
+
+DISABLED
+
+NONE
+
+Webhooks
+
+DISABLED
+
+NONE
+
+White-label branding
+
+DISABLED
+
+NONE
+
+Ask Fathom chat
+
+Control company access to the Ask Fathom chat assistant.
+
+Turning chat off closes Ask Fathom for this company. Reports, Insights, and other enabled module AI remain available under their own permissions.
+
+Enable Ask Fathom chat
+Save chat setting
+
+Saved setting: chat on.
+
+Workspace profile
+DISPLAY NAME
+TIMEZONE
+LOCALE
+PRIMARY CONTACT
+CONTACT EMAIL
+Save profile
+Workspace brand
+
+Applied to this organization’s workspace UI.
+
+PRIMARY
+ACCENT
+LOGO URL
+MARK URL
+FAVICON URL
+SUPPORT EMAIL
+SENDER NAME
+Apply brand
+People and access
+
+1 licensed seats are currently occupied.
+
+Pharmacy Owner
+
+owner@qa-clifton.test · Organization administrator
+
+ACTIVE
+Custom roles
+
+Deny rules win. Use exact actions or namespace wildcards.
+
+Auditor
+
+0 members
+
+ALLOW pharmacy.audit
+
+Cashier
+
+0 members
+
+ALLOW pharmacy.counter · ALLOW pharmacy:orders
+
+Finance
+
+0 members
+
+ALLOW pharmacy.finance
+
+Inventory
+
+0 members
+
+ALLOW pharmacy.inventory
+
+Manager
+
+0 members
+
+ALLOW pharmacy.manage · ALLOW pharmacy:orders
+
+Organization administrator
+
+1 members
+
+ALLOW *
+
+Owner
+
+0 members
+
+ALLOW pharmacy.* · ALLOW pharmacy:orders
+
+Owner / Operator
+
+0 members
+
+ALLOW pharmacy:catalogue-review · ALLOW pharmacy:dispense · ALLOW pharmacy:orders · ALLOW pharmacy:safety · ALLOW reports:financial · ALLOW reports:operational
+
+Pharmacist
+
+0 members
+
+ALLOW pharmacy.dispense · ALLOW pharmacy:catalogue-review
+
+Procurement
+
+0 members
+
+ALLOW pharmacy.procurement
+
+ROLE KEY
+
+Use lowercase letters, numbers, dots, underscores, and hyphens.
+
+ROLE NAME
+DESCRIPTION
+PERMISSION JSON
+Create role
+Domains
+
+Publish the TXT record exactly, then retry verification.
+
+Add
+Primary workspace domain
+Identity and SCIM
+
+Identity connections are configured by the platform team.
+
+No enterprise identity connection.
+
+Token
+Email delivery
+
+Provider credentials are encrypted and never shown again.
+
+PROVIDER
+SENDER NAME
+FROM ADDRESS
+REPLY-TO
+PROVIDER API KEY
+PROVIDER CONFIGURATION JSON
+Save email settings
+Lifecycle, contract, module, deployment, and destructive data controls remain platform-managed.

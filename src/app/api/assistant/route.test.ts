@@ -388,7 +388,7 @@ describe('global availability', () => {
         const response = await POST(request({ messages }));
         expect(response.status).toBe(503);
         expect(await response.json()).toEqual({
-          error: 'Ask Fathom is currently unavailable. No cached answer was used.',
+          error: "Ask Fathom isn't set up yet, contact support.",
         });
       }
       expect(mocks.entitlements).not.toHaveBeenCalled();
@@ -422,7 +422,7 @@ describe('global availability', () => {
       const response = await POST(request({ messages: [user] }));
       expect(response.status).toBe(503);
       expect(await response.json()).toEqual({
-        error: 'Ask Fathom is currently unavailable. No cached answer was used.',
+        error: "Ask Fathom isn't set up yet, contact support.",
       });
       expect(mocks.model).not.toHaveBeenCalled();
       expect(mocks.stream).not.toHaveBeenCalled();

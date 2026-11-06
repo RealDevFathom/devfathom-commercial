@@ -22,7 +22,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   INSUFFICIENT_STOCK: 'There is not enough safe stock on hand for this quantity.',
   BLOCKED_STOCK:
     'This batch cannot be dispensed — it is expired, quarantined or recalled. Choose another batch.',
-  // #633: a batch on the bill changed after its line was added; payment is refused.
+  // #659: a batch on the bill changed after its line was added; payment is refused.
   SALE_BATCH_RECALLED:
     'A batch on this bill was recalled after it was added, so it cannot be sold. Void the bill and sell from a safe batch.',
   SALE_BATCH_QUARANTINED:
