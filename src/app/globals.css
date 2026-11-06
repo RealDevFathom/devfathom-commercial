@@ -1723,14 +1723,29 @@
    Unlayered so a component's `outline-none` utility cannot drop the edge.
    ============================================================ */
 [data-theme='dark']
-  :is(.text-primary, .hover\:text-primary, .group-hover\:text-primary, .data-checked\:text-primary) {
+  :is(
+    .text-primary,
+    .hover\:text-primary,
+    .group-hover\:text-primary,
+    .data-checked\:text-primary
+  ) {
   --primary: var(--text-link);
 }
 
+/* A `text-primary` link that hovers to `text-primary-hover` would otherwise
+   fade to the dark brand's hover fill; keep it readable and still changing. */
+[data-theme='dark'] .hover\:text-primary-hover {
+  --primary-hover: var(--text-body);
+}
+
 [data-theme='dark']
-  :is(button, a, [role='button'], [data-slot='button'], [aria-current='page'] > span).bg-primary:not(
-    :focus-visible
-  ) {
+  :is(
+    button,
+    a,
+    [role='button'],
+    [data-slot='button'],
+    [aria-current='page'] > span
+  ).bg-primary:not(:focus-visible) {
   outline: 1px solid var(--primary-edge);
   outline-offset: -1px;
 }
@@ -1762,13 +1777,14 @@
  * them) draw focus on the rounded group, not the bare inner input, so the ring
  * follows the field's corners instead of squaring off inside it.
  */
-[data-slot='input-group'] :is([data-slot='command-input'], [data-slot='input-group-control']):focus-visible {
+[data-slot='input-group']
+  :is([data-slot='command-input'], [data-slot='input-group-control']):focus-visible {
   outline: none;
 }
 
 [data-slot='input-group']:has(
-    :is([data-slot='command-input'], [data-slot='input-group-control']):focus-visible
-  ) {
+  :is([data-slot='command-input'], [data-slot='input-group-control']):focus-visible
+) {
   outline: 2px solid var(--ring);
   outline-offset: 0;
 }
@@ -1779,8 +1795,8 @@
   }
 
   [data-slot='input-group']:has(
-      :is([data-slot='command-input'], [data-slot='input-group-control']):focus-visible
-    ) {
+    :is([data-slot='command-input'], [data-slot='input-group-control']):focus-visible
+  ) {
     outline-color: Highlight;
   }
 }

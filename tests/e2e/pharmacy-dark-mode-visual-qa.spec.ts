@@ -22,7 +22,7 @@ const routes = [
   { name: 'settings', path: '/settings' },
 ] as const;
 
-async function useDarkTheme(page: Page) {
+async function applyDarkTheme(page: Page) {
   await page.evaluate(() => {
     localStorage.setItem('theme', 'dark');
     document.documentElement.setAttribute('data-theme', 'dark');
@@ -86,7 +86,7 @@ test.describe('pharmacy dark-theme contrast visual QA', () => {
         await page.setViewportSize(viewport);
         for (const route of routes) {
           await page.goto(route.path);
-          await useDarkTheme(page);
+          await applyDarkTheme(page);
           await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
           await expect(page.locator('main, [role="main"], #main-content').first()).toBeVisible();
 
@@ -95,8 +95,7 @@ test.describe('pharmacy dark-theme contrast visual QA', () => {
 
           expect(
             await page.evaluate(
-              () =>
-                document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+              () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
             ),
             `${name} must not overflow horizontally`
           ).toBe(false);
@@ -108,7 +107,7 @@ test.describe('pharmacy dark-theme contrast visual QA', () => {
     await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'dark' });
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/pharmacy/counter');
-    await useDarkTheme(page);
+    await applyDarkTheme(page);
     const card = await hexToRgb(page, await cardColour(page));
 
     // Inputs: the boundary must hold 3:1 against the card.
@@ -137,7 +136,7 @@ test.describe('pharmacy dark-theme contrast visual QA', () => {
 
     // Settings: notification toggles differ on vs off; Profile Edit and API Docs read.
     await page.goto('/settings');
-    await useDarkTheme(page);
+    await applyDarkTheme(page);
     const toggles = page.getByRole('switch');
     await expect(toggles.first()).toBeVisible();
     const tracks = await toggles.evaluateAll((nodes) =>

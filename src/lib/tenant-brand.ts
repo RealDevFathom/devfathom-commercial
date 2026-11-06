@@ -58,23 +58,51 @@ function contrastColor(hex: string): string {
   return (red * 299 + green * 587 + blue * 114) / 1000 > 145 ? '#111110' : '#FFFCF6';
 }
 
-/**
- * The hover fill for a tenant primary: the brand moved 16% toward its own
- * foreground, so a hovered primary button visibly changes in both themes. Using
- * the brand itself as the hover colour left the button inert on hover.
- */
-function hoverColor(hex: string): string {
-  const base = hex.replace('#', '');
-  const toward = contrastColor(hex).replace('#', '');
-  const channel = (value: string, offset: number) =>
-    Number.parseInt(value.slice(offset, offset + 2), 16);
-  return `#${[0, 2, 4]
-    .map((offset) =>
-      Math.round(channel(base, offset) * 0.84 + channel(toward, offset) * 0.16)
+function channels(hex: string): number[] {
+  const value = hex.replace('#', '');
+  return [0, 2, 4].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16));
+}
+
+/** WCAG 2 relative luminance of a `#RRGGBB` colour. */
+function luminance(hex: string): number {
+  const [red, green, blue] = channels(hex).map((channel) => {
+    const value = channel / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!;
+}
+
+/** WCAG 2 contrast ratio between two `#RRGGBB` colours. */
+function contrastRatio(a: string, b: string): number {
+  const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (high! + 0.05) / (low! + 0.05);
+}
+
+/** `hex` moved 16% of the way toward `toward`. */
+function mixToward(hex: string, toward: string): string {
+  const target = channels(toward);
+  return `#${channels(hex)
+    .map((value, index) =>
+      Math.round(value * 0.84 + target[index]! * 0.16)
         .toString(16)
         .padStart(2, '0')
     )
     .join('')}`;
+}
+
+/**
+ * The hover fill for a tenant primary: the brand moved 16% toward its own
+ * foreground, so a hovered primary button visibly changes in both themes. Using
+ * the brand itself as the hover colour left the button inert on hover. When
+ * moving toward the label would drop it below 4.5:1 (mid-tone brands such as
+ * coral #bd3f2a), the fill moves 16% away from the label instead, which can
+ * only raise the label contrast.
+ */
+function hoverColor(hex: string): string {
+  const foreground = contrastColor(hex);
+  const toward = mixToward(hex, foreground);
+  if (contrastRatio(toward, foreground) >= 4.5) return toward;
+  return mixToward(hex, foreground === '#FFFCF6' ? '#000000' : '#ffffff');
 }
 
 export function tenantBrandTokens(brand: TenantBrand): Record<string, string> {

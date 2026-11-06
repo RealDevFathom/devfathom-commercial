@@ -109,9 +109,10 @@ Dark theme guards against a dark tenant primary (the default saved brand is the 
 `globals.css`: every `text-primary` use re-points `--primary` to `--text-link`, and
 primary-filled buttons, links and the active navigation pill carry a 1px `--primary-edge`
 outline (3:1 on the card even at the 50% disabled opacity) that brightens on hover. A tenant
-primary's hover fill is the brand moved 16% toward its foreground, so hover always changes.
-Dark borders keep `--input` / `--border-strong` at 3:1 on the card and card hairlines
-(`--border-subtle`) at 1.75:1. Do not re-solve these per screen.
+primary's hover fill is the brand moved 16% toward its foreground, or 16% away from it when
+moving toward the label would drop the label below 4.5:1, so hover always changes. Dark borders
+keep `--input` / `--border-strong` at 3:1 on the card and card hairlines (`--border-subtle`) at
+1.75:1. Do not re-solve these per screen.
 
 ### Semantic color tokens
 

@@ -81,7 +81,9 @@ describe('dark theme text', () => {
   it('holds muted, faint and link text well above AA on every dark surface', () => {
     for (const surface of surfaces) {
       expect(contrast(token('text-muted'), token(surface)), surface).toBeGreaterThanOrEqual(7);
-      expect(contrast(token('muted-foreground'), token(surface)), surface).toBeGreaterThanOrEqual(7);
+      expect(contrast(token('muted-foreground'), token(surface)), surface).toBeGreaterThanOrEqual(
+        7
+      );
       expect(contrast(token('text-faint'), token(surface)), surface).toBeGreaterThanOrEqual(4.5);
       expect(contrast(token('text-link'), token(surface)), surface).toBeGreaterThanOrEqual(7);
     }
@@ -93,7 +95,9 @@ describe('dark theme text', () => {
   });
 
   it('re-points --primary to the link token for every text-role use in dark', () => {
-    const rule = globals.match(/\[data-theme='dark'\]\s*:is\(([^)]*)\)\s*\{\s*--primary:\s*var\(--text-link\);/);
+    const rule = globals.match(
+      /\[data-theme='dark'\]\s*:is\(([^)]*)\)\s*\{\s*--primary:\s*var\(--text-link\);/
+    );
     expect(rule, 'dark text-primary remap is missing').not.toBeNull();
     for (const utility of [
       '.text-primary',
@@ -103,6 +107,13 @@ describe('dark theme text', () => {
     ]) {
       expect(rule![1]).toContain(utility);
     }
+  });
+
+  it('keeps a hovered text-primary link readable in dark', () => {
+    expect(globals).toMatch(
+      /\[data-theme='dark'\]\s+\.hover\\:text-primary-hover\s*\{\s*--primary-hover:\s*var\(--text-body\);/
+    );
+    expect(contrast(token('text-body'), token('surface-card'))).toBeGreaterThanOrEqual(4.5);
   });
 });
 
