@@ -24,7 +24,6 @@
 !public/licenses/ibm-plex-mono-OFL.txt
 !public/licenses/instrument-sans-OFL.txt
 !public/manifest.json
-!scripts/load-local-env.ts
 !src/app/(app)/api-docs/api-docs-content.tsx
 !src/app/(app)/api-docs/page.tsx
 !src/app/(app)/audit-logs/audit-content.tsx

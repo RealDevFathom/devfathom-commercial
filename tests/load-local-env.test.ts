@@ -1,14 +1,25 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import {
-  loadLocalEnvironment,
-  requireEnvironment,
-  resolvePrismaDatasourceUrl,
-} from '../scripts/load-local-env';
+import { loadLocalEnvironment, requireEnvironment } from '../scripts/load-local-env';
+
+type PrismaConfigModule = typeof import('../prisma.config');
+let resolvePrismaDatasourceUrl: PrismaConfigModule['resolvePrismaDatasourceUrl'];
+
+beforeAll(async () => {
+  // Importing the config evaluates its datasource for the current argv; present it
+  // as an offline `prisma generate` so the import never needs database credentials.
+  const argv = process.argv;
+  process.argv = ['node', 'prisma', 'generate'];
+  try {
+    ({ resolvePrismaDatasourceUrl } = await import('../prisma.config'));
+  } finally {
+    process.argv = argv;
+  }
+});
 
 const directories: string[] = [];
 
@@ -98,9 +109,9 @@ describe('loadLocalEnvironment', () => {
   });
 
   it('rejects a whitespace-only required variable', () => {
-    expect(() => requireEnvironment('DATABASE_URL', { NODE_ENV: 'test', DATABASE_URL: '   ' })).toThrow(
-      'Missing required environment variable: DATABASE_URL'
-    );
+    expect(() =>
+      requireEnvironment('DATABASE_URL', { NODE_ENV: 'test', DATABASE_URL: '   ' })
+    ).toThrow('Missing required environment variable: DATABASE_URL');
   });
 
   it('trims a required variable before returning it', () => {
@@ -110,6 +121,16 @@ describe('loadLocalEnvironment', () => {
         DATABASE_URL: '  postgres://localhost/db  ',
       })
     ).toBe('postgres://localhost/db');
+  });
+});
+
+describe('prisma.config.ts', () => {
+  it('imports only packages, never a local file that release artifacts may omit', () => {
+    const source = readFileSync(join(__dirname, '..', 'prisma.config.ts'), 'utf8');
+    const specifiers = [...source.matchAll(/(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g)].map(
+      (match) => match[1]
+    );
+    expect(specifiers.sort()).toEqual(['dotenv', 'prisma/config']);
   });
 });
 
@@ -147,14 +168,11 @@ describe('resolvePrismaDatasourceUrl', () => {
     ['--config', 'generate', 'migrate', 'deploy'],
     ['--schema', 'generate', 'db', 'seed'],
     ['--telemetry-information', 'generate', 'studio'],
-  ])(
-    'requires DATABASE_URL for database command `prisma %s`',
-    (...command) => {
-      expect(() => resolvePrismaDatasourceUrl({ NODE_ENV: 'test' }, cli(...command))).toThrow(
-        'Missing required environment variable: DATABASE_URL'
-      );
-    }
-  );
+  ])('requires DATABASE_URL for database command `prisma %s`', (...command) => {
+    expect(() => resolvePrismaDatasourceUrl({ NODE_ENV: 'test' }, cli(...command))).toThrow(
+      'Missing required environment variable: DATABASE_URL'
+    );
+  });
 
   it('requires DATABASE_URL when the command cannot be identified', () => {
     expect(() => resolvePrismaDatasourceUrl({ NODE_ENV: 'test' }, ['node', 'loader'])).toThrow(
@@ -177,7 +195,9 @@ describe('resolvePrismaDatasourceUrl', () => {
 
   it('falls back to a trimmed DATABASE_URL for database and offline commands', () => {
     const environment: NodeJS.ProcessEnv = { NODE_ENV: 'test', DATABASE_URL: ' postgres://app ' };
-    expect(resolvePrismaDatasourceUrl(environment, cli('migrate', 'deploy'))).toBe('postgres://app');
+    expect(resolvePrismaDatasourceUrl(environment, cli('migrate', 'deploy'))).toBe(
+      'postgres://app'
+    );
     expect(resolvePrismaDatasourceUrl(environment, cli('generate'))).toBe('postgres://app');
   });
 });
