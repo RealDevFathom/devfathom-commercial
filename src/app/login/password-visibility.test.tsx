@@ -38,12 +38,15 @@ import { PlatformLoginForm } from '../platform/(auth)/login/platform-login-form'
 import { ResetPasswordForm } from '../reset-password/[token]/reset-password-form';
 import { AcceptInviteForm } from '../invite/[token]/accept-invite-form';
 
-function expectAccessiblePasswordToggle(password: HTMLInputElement, confirmation?: HTMLInputElement) {
+function expectAccessiblePasswordToggle(
+  password: HTMLInputElement,
+  confirmation?: HTMLInputElement
+) {
   const toggle = screen.getByRole('button', { name: 'Show password' });
 
   expect(toggle).not.toHaveAttribute('tabindex');
   expect(toggle).toHaveProperty('tabIndex', 0);
-  expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  expect(toggle).not.toHaveAttribute('aria-pressed');
   toggle.focus();
   expect(toggle).toHaveFocus();
 
@@ -56,7 +59,7 @@ function expectAccessiblePasswordToggle(password: HTMLInputElement, confirmation
   expect(password).toHaveAttribute('type', 'text');
   expect(password).toHaveValue('correct horse battery staple');
   expect(toggle).toHaveAccessibleName('Hide password');
-  expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  expect(toggle).not.toHaveAttribute('aria-pressed');
   if (confirmation) {
     expect(confirmation).toHaveAttribute('type', 'text');
     expect(confirmation).toHaveValue('correct horse battery staple');
@@ -66,7 +69,7 @@ function expectAccessiblePasswordToggle(password: HTMLInputElement, confirmation
   expect(password).toHaveAttribute('type', 'password');
   expect(password).toHaveValue('correct horse battery staple');
   expect(toggle).toHaveAccessibleName('Show password');
-  expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  expect(toggle).not.toHaveAttribute('aria-pressed');
   if (confirmation) {
     expect(confirmation).toHaveAttribute('type', 'password');
     expect(confirmation).toHaveValue('correct horse battery staple');
@@ -76,7 +79,10 @@ function expectAccessiblePasswordToggle(password: HTMLInputElement, confirmation
 describe('password visibility controls', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ enrollmentOnly: false })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ enrollmentOnly: false }))
+    );
   });
 
   it('is keyboard reachable and toggles the tenant login password without changing it', () => {
