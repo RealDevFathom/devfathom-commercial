@@ -262,7 +262,8 @@
   "initialSha": "69469ed2d43eb180a56ceaedf2a3044c1da7cbe2",
   "what": "ab89e8b2b holds pg, @types/pg, @prisma/adapter-pg and @prisma/client at develop's versions; df59d8e68 restores Bun's lockfile blank-line layout",
   "initialFailure": "no machine run (QA finding only)",
-  "noInitialRun": true
+  "noInitialRun": true,
+  "lead": "head df59d8e680, which has the fix commits ab89e8b2b (pg, @types/pg, @prisma/adapter-pg and @prisma/client held at develop's versions) and df59d8e68 (lockfile blank-line layout)"
  },
  "1067": {
   "sha": "8155fc93a21ade0f56bfd9080fd920df3db303e2",
@@ -282,6 +283,20 @@
   "sha": "477cdfe25883cf209abfa1c0764c445e499e75ef",
   "initialSha": "dc17a4e99f7242633d146bbe4a4dacdf79c2265c",
   "what": "netSales added to the DailyRow source-close type and to the Insights fixtures, plus a componentized-refund Insights test",
+  "initialFailure": "no machine run (QA finding only)",
+  "noInitialRun": true
+ },
+ "1052": {
+  "sha": "f38b4007c1a96f07c62fb9498ecc143f38c48e7f",
+  "initialSha": "7629f9f99c94d6869f43d8bca2fdc4c6ec1823ee",
+  "what": "read-only branch staff printer-test 403 test; Prettier on route.ts",
+  "initialFailure": "no machine run (QA finding and Prettier)",
+  "noInitialRun": true
+ },
+ "1057": {
+  "sha": "111cdb0c91a323ed1d3e7284ad1284f59428f7a9",
+  "initialSha": "55e555d4a56f43ea9cb2ea4090626b7fffea9ae2",
+  "what": "ignored Uploading staff select removed from the SOP proof form; file input spans the form",
   "initialFailure": "no machine run (QA finding only)",
   "noInitialRun": true
  }

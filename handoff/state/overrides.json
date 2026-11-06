@@ -276,7 +276,7 @@
  "985": {
   "qa": {
    "verdict": "PASS",
-   "details": "Verified against DEV-10 / #978. Confirm, accept/reject/defer and publish now track pending state per row: a ref-guarded key set that is cleared in finally. Both queues are invalidated after an import and after each decision. Disabled review and publish controls get visible notes linked by aria-describedby, and a missing grant gets its own message. A real-ABAC router test covers Owner / Operator against wildcard Owner. Develop's workbench is unchanged, the merge is clean and the tsc/build failures come from develop. The only follow-up was a formatting-only commit (Prettier) in 22bb45b4a0"
+   "details": "Verified against DEV-10 / #978. Confirm, accept/reject/defer and publish now track pending state per row: a ref-guarded key set that is cleared in finally. Both queues are invalidated after an import and after each decision. Disabled review and publish controls get visible notes linked by aria-describedby, and a missing grant gets its own message. A real-ABAC router test covers Owner / Operator against wildcard Owner. Develop's workbench is unchanged, and the merge is clean. The only follow-up was a formatting-only commit (Prettier) in 22bb45b4a0"
   },
   "security": {
    "verdict": "PASS",
@@ -369,6 +369,16 @@
   "security": {
    "verdict": "PASS",
    "details": "Re-checked at 032cd874e. requirePlatformRead('/platform/audit') still runs before withPlatformDb and requires audit:read, which only SUPER_ADMIN and AUDITOR hold, so the cross-tenant user lookup is reachable only by platform-authorized callers. The lookup is still a parameterised Prisma contains on a q of at most 100 characters, selects only IDs and is now capped at 201 rows. The notice is fixed text and shows no names, emails or IDs. No vulnerability found"
+  }
+ },
+ "1052": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "First review FAIL (no test covered the issue's acceptance path: a branch-linked read-only user without restaurant:configure must get 403), fixed in f38b4007c. Re-review: the new primary/assignment test gives a branch-linked user with money:read and orders:read but no restaurant:configure, and asserts 403, the permission message, the configure check, no branch lookup, no transaction and no enqueue. It fails if the gate is changed back to money:read, removed, or moved after the branch check. route.ts changed formatting only, Prettier passes, and the route tests pass 21/21"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "At f38b4007c the web print-bridge POST rejects any caller document through a strict schema. It enforces restaurant:configure on the server before the branch lookup, transaction and enqueue, and the server writes the test receipt. The org comes from the session, the branch is checked against the org, and the service re-reads branch and routes under lock with org scope. No new raw SQL. Non-blocking: the caller's idempotencyKey is still printed as the receipt reference"
   }
  }
 }

@@ -49,7 +49,9 @@ if tc["newErrors"]:
     fail.append("typecheck")
     parts.append(f"typecheck FAIL: {len(tc['newErrors'])} new error(s): " + "; ".join(e[:180] for e in tc["newErrors"][:3]))
 elif tc["exit"] == 0:
-    parts.append("typecheck: 0 errors" + (f" (also clears the {len(tc['fixedBaselineErrors'])} errors already on develop)" if tc["fixedBaselineErrors"] else ""))
+    # TS2307 "Cannot find module" lines in the develop baseline came from a stale install in the baseline checkout, not from develop's code
+    _fixed = [e for e in tc["fixedBaselineErrors"] if "TS2307" not in e]
+    parts.append("typecheck: 0 errors" + (f" (also clears the {len(_fixed)} errors already on develop)" if _fixed else ""))
 elif tc["exit"] >= 128:
     fail.append("typecheck")
     parts.append(f"typecheck did not complete (signal {tc['exit'] - 128})")
@@ -111,6 +113,22 @@ else:
                 msg += (f"; {', '.join(files)} only {'fails' if len(files) == 1 else 'fail'} under the gate's runtime DB role "
                         f"(needs CREATE ROLE) and {'passes' if len(files) == 1 else 'pass'} on this PR with a superuser role")
     parts.append(msg)
+# dependency-only PRs: full suite on the head, failing files re-run at the merge-base
+fs = jload(f"{cdir}/fullsuite.json")
+if fs is not None:
+    parts = [x for x in parts if not x.startswith(("tests:", "related tests"))]
+    fail = [x for x in fail if x != "tests"]
+    if not fs.get("complete"):
+        fail.append("tests"); parts.append("full test suite did not complete")
+    else:
+        msg = (f"tests: only package.json and bun.lock changed, so the full suite ran (`vitest run`, DB suites on a local gate-equivalent Postgres 16): "
+               f"{fs['files']} files, {fs['passed']} passed" + (f", {fs['skipped']} skipped" if fs['skipped'] else ""))
+        if fs["attributable"]:
+            fail.append("tests"); msg += f"; FAIL: {len(fs['attributable'])} failure(s) not seen at the merge-base: " + "; ".join(a[:160] for a in fs["attributable"][:3])
+        if fs["preexisting"]:
+            files = sorted({x.split(' > ')[0] for x in fs["preexisting"]})
+            msg += f"; {len(fs['preexisting'])} failure(s) in {len(files)} file(s) also fail at its merge-base {fs['mergeBase'][:10]} (pre-existing)"
+        parts.append(msg)
 # build
 b = s["build"]
 if b["exit"] == 0:
@@ -122,7 +140,9 @@ else:
 fx = fixes.get(n)
 lead = f"head {head[:10]}"
 if fx and fx["sha"] == head:
-    if fx.get("noInitialRun"):
+    if fx.get("lead"):
+        lead = fx["lead"]
+    elif fx.get("noInitialRun"):
         lead = f"head {head[:10]}, which includes fix commit {fx['sha'][:10]} ({fx['what']})"
     elif fx["initialFailure"].startswith("nothing"):
         lead = (f"the first run on {fx['initialSha'][:10]} passed; fix commit {fx['sha'][:10]} ({fx['what']}) addresses the review "

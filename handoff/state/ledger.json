@@ -598,5 +598,16 @@
   "posted": true,
   "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/1117#issuecomment-6694502456",
   "reason": "Posted verdict comment; PR open, base develop, head matched."
+ },
+ "985": {
+  "pr": 985,
+  "head": "22bb45b4a0832f4de0302159c1d6f64f251ec380",
+  "machine": "PASS",
+  "qa": "PASS",
+  "security": "PASS",
+  "machineFail": [],
+  "posted": true,
+  "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/985#issuecomment-6695469045",
+  "reason": "Posted verdict comment; PR open, base develop, head matched."
  }
 }

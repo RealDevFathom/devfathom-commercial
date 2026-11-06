@@ -953,13 +953,13 @@
   "dev": "DEV-10",
   "branch": "inky/issue-978",
   "head": "22bb45b4a0832f4de0302159c1d6f64f251ec380",
-  "status": "in progress",
+  "status": "done",
   "qa": "PASS",
   "security": "PASS",
-  "machine": null,
-  "comment": null,
+  "machine": "PASS",
+  "comment": "https://github.com/RealDevFathom/devfathom-commercial/pull/985#issuecomment-6695469045",
   "fix": "22bb45b4a0832f4de0302159c1d6f64f251ec380",
-  "next": "re-check queued for fix 22bb45b4a0; then `python3 handoff/scripts/compose.py 985` and post comments/985.md"
+  "next": "none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/985#issuecomment-6695469045)"
  },
  {
   "pr": 984,
@@ -1440,7 +1440,7 @@
   "machine": null,
   "comment": null,
   "fix": "df59d8e68095dc11f7f7c2176b4d4c6ed3838905",
-  "next": "re-check queued for fix df59d8e680; then `python3 handoff/scripts/compose.py 1170` and post comments/1170.md"
+  "next": "`python3 handoff/scripts/compose.py 1170`, then post comments/1170.md via the poster workflow"
  },
  {
   "pr": 1169,
@@ -1563,14 +1563,14 @@
   "pr": 1057,
   "dev": "DEV-156",
   "branch": "codex/linear-mention-dev-156-qa]-sev2]-restaurant-sop-evidence",
-  "head": "55e555d4a56f43ea9cb2ea4090626b7fffea9ae2",
+  "head": "111cdb0c91a323ed1d3e7284ad1284f59428f7a9",
   "status": "in progress",
   "qa": "FAIL",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 51"
+  "fix": "111cdb0c91a323ed1d3e7284ad1284f59428f7a9",
+  "next": "re-check queued for fix 111cdb0c91; then `python3 handoff/scripts/compose.py 1057` and post comments/1057.md"
  },
  {
   "pr": 1055,
@@ -1583,7 +1583,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 52"
+  "next": "wait for machine checks queued at position 51"
  },
  {
   "pr": 1054,
@@ -1596,7 +1596,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 53"
+  "next": "wait for machine checks queued at position 52"
  },
  {
   "pr": 1053,
@@ -1609,20 +1609,20 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 54"
+  "next": "wait for machine checks queued at position 53"
  },
  {
   "pr": 1052,
   "dev": "DEV-168",
   "branch": "codex/linear-mention-dev-168-qa]-sev2]-printing-read-only-user",
-  "head": "7629f9f99c94d6869f43d8bca2fdc4c6ec1823ee",
+  "head": "f38b4007c1a96f07c62fb9498ecc143f38c48e7f",
   "status": "in progress",
-  "qa": "FAIL",
+  "qa": "PASS",
   "security": "PASS",
   "machine": null,
   "comment": null,
-  "fix": null,
-  "next": "wait for machine checks queued at position 55"
+  "fix": "f38b4007c1a96f07c62fb9498ecc143f38c48e7f",
+  "next": "re-check queued for fix f38b4007c1; then `python3 handoff/scripts/compose.py 1052` and post comments/1052.md"
  },
  {
   "pr": 1051,
@@ -1648,7 +1648,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 56"
+  "next": "wait for machine checks queued at position 54"
  },
  {
   "pr": 964,
@@ -1661,7 +1661,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 57"
+  "next": "wait for machine checks queued at position 55"
  },
  {
   "pr": 963,
@@ -1674,7 +1674,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 58"
+  "next": "wait for machine checks queued at position 56"
  },
  {
   "pr": 962,
@@ -1687,7 +1687,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 59"
+  "next": "wait for machine checks queued at position 57"
  },
  {
   "pr": 961,
@@ -1700,7 +1700,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 60"
+  "next": "wait for machine checks queued at position 58"
  },
  {
   "pr": 906,
@@ -1713,7 +1713,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 61"
+  "next": "wait for machine checks queued at position 59"
  },
  {
   "pr": 903,
@@ -1726,7 +1726,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 62"
+  "next": "wait for machine checks queued at position 60"
  },
  {
   "pr": 902,
@@ -1739,7 +1739,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 63"
+  "next": "wait for machine checks queued at position 61"
  },
  {
   "pr": 888,
@@ -1752,7 +1752,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 64"
+  "next": "wait for machine checks queued at position 62"
  },
  {
   "pr": 887,
@@ -1765,7 +1765,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 65"
+  "next": "wait for machine checks queued at position 63"
  },
  {
   "pr": 886,
@@ -1778,7 +1778,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 66"
+  "next": "wait for machine checks queued at position 64"
  },
  {
   "pr": 882,
@@ -1791,7 +1791,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 67"
+  "next": "wait for machine checks queued at position 65"
  },
  {
   "pr": 875,
@@ -1804,7 +1804,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 68"
+  "next": "wait for machine checks queued at position 66"
  },
  {
   "pr": 872,
@@ -1817,7 +1817,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 69"
+  "next": "wait for machine checks queued at position 67"
  },
  {
   "pr": 864,
@@ -1843,7 +1843,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 70"
+  "next": "wait for machine checks queued at position 68"
  },
  {
   "pr": 862,
@@ -1856,7 +1856,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 71"
+  "next": "wait for machine checks queued at position 69"
  },
  {
   "pr": 854,
@@ -1869,7 +1869,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 72"
+  "next": "wait for machine checks queued at position 70"
  },
  {
   "pr": 853,
@@ -1882,7 +1882,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 73"
+  "next": "wait for machine checks queued at position 71"
  },
  {
   "pr": 850,
@@ -1895,7 +1895,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 74"
+  "next": "wait for machine checks queued at position 72"
  },
  {
   "pr": 841,
@@ -1908,7 +1908,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 75"
+  "next": "wait for machine checks queued at position 73"
  },
  {
   "pr": 838,
@@ -1921,7 +1921,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 76"
+  "next": "wait for machine checks queued at position 74"
  },
  {
   "pr": 305,
@@ -1934,7 +1934,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 77"
+  "next": "wait for machine checks queued at position 75"
  },
  {
   "pr": 304,
@@ -1947,7 +1947,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 78"
+  "next": "wait for machine checks queued at position 76"
  },
  {
   "pr": 286,
@@ -1960,7 +1960,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 79"
+  "next": "wait for machine checks queued at position 77"
  },
  {
   "pr": 275,
@@ -1973,7 +1973,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 80"
+  "next": "wait for machine checks queued at position 78"
  },
  {
   "pr": 262,
@@ -1986,7 +1986,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 81"
+  "next": "wait for machine checks queued at position 79"
  },
  {
   "pr": 261,
@@ -1999,7 +1999,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 82"
+  "next": "wait for machine checks queued at position 80"
  },
  {
   "pr": 259,
@@ -2012,7 +2012,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 83"
+  "next": "wait for machine checks queued at position 81"
  },
  {
   "pr": 253,
@@ -2025,7 +2025,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 84"
+  "next": "wait for machine checks queued at position 82"
  },
  {
   "pr": 212,
@@ -2038,7 +2038,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 85"
+  "next": "wait for machine checks queued at position 83"
  },
  {
   "pr": 149,
@@ -2051,7 +2051,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 86"
+  "next": "wait for machine checks queued at position 84"
  },
  {
   "pr": 146,
@@ -2064,7 +2064,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 87"
+  "next": "wait for machine checks queued at position 85"
  },
  {
   "pr": 145,
@@ -2077,7 +2077,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 88"
+  "next": "wait for machine checks queued at position 86"
  },
  {
   "pr": 144,
@@ -2090,7 +2090,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 89"
+  "next": "wait for machine checks queued at position 87"
  },
  {
   "pr": 140,
@@ -2103,7 +2103,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 90"
+  "next": "wait for machine checks queued at position 88"
  },
  {
   "pr": 136,
@@ -2116,7 +2116,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 91"
+  "next": "wait for machine checks queued at position 89"
  },
  {
   "pr": 133,
@@ -2129,7 +2129,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 92"
+  "next": "wait for machine checks queued at position 90"
  },
  {
   "pr": 105,
@@ -2142,7 +2142,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 93"
+  "next": "wait for machine checks queued at position 91"
  },
  {
   "pr": 104,
@@ -2155,7 +2155,7 @@
   "machine": null,
   "comment": null,
   "fix": null,
-  "next": "wait for machine checks queued at position 94"
+  "next": "wait for machine checks queued at position 92"
  },
  {
   "pr": 59,

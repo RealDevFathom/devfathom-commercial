@@ -1,6 +1,6 @@
 # PR review handoff log
 
-_Generated 2026-11-06 20:51 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
+_Generated 2026-11-06 21:03 UTC from the live run state by `handoff/scripts/gen-handoff.py`. Do not hand-edit item sections; edit the resume note instead._
 
 ## Resume here
 
@@ -20,14 +20,24 @@ _Generated 2026-11-06 20:51 UTC from the live run state by `handoff/scripts/gen-
     - #105: QA PASS override. The skeptics refuted the expired-cutoff blocker; it stays as an owner note.
   - **Fixes:** 11 fixes are planned in `fix-g3-w-othb.json` (#1067, #1063, #1059, #1057, #1052, #888, #875, #864, #262, #146 and #144). Specs are in `fixspec/`. #1059, #1067 and #864 run now as Agent fixers; the other 8 follow in batches of three.
   - **Closed or merged since:** #1120, #1086, #66, #63, #59, #57, #56 and #37 (dropped from the queue).
+- **Update 2026-11-06 21:10 UTC.**
+  - **Posted:** #1117 (PASS/FAIL superseded/PASS) and #985 (PASS/PASS/PASS).
+  - **Fixed and pushed, re-checks queued.**
+    - Re-review PASS: #1067 (8155fc93a), #864 (032cd874e), #1052 (f38b4007c).
+    - Re-review running: #1059 (477cdfe25), #1057 (70d7e309c + 111cdb0c9, the file input now spans the form).
+    - Fixer still running: #1063.
+    - Not started, waiting for the heavy.lock backlog to drain: #888, #875, #262, #146, #144.
+  - **#1170:** machine re-check PASS at df59d8e68. A dependency-only PR selects no related tests, so `deps-suite.sh 1170` runs the full vitest suite on the head and re-runs failing files at the merge-base, writing `checks/1170/<sha>/fullsuite.json`. `ready-to-post.py` now holds dependency-only PRs until that file exists. Run the same script for #1171, #1169, #305 and #304 after their lane checks.
+  - **Composer fix:** it no longer claims that a PR "clears" the 5 TS2307 "Cannot find module" lines in `baseline/typecheck.errors`. Those come from a stale install in the baseline checkout, not from develop's code.
+  - **Follow-up for owners (outside scope, not changed):** `pharmacy-reports.ts:600-605` `commandCentre` rethrows raw `error.message` (found in the #1067 re-review).
 - **Half-written / uncommitted:** nothing outside the partial patches above.
 
 ## Progress
 
 - Scope: every open PR into develop without a QA+Security verdict comment: group 1 #1172-#1194 (22, plus #1223 and #1224 opened during the run; #1225 is this tracking PR and is not reviewed), group 2 #1148-#1166 (18), group 3 the other 127 (pharmacy first). 118 older PRs already had verdict comments and are out of scope.
-- Status: done 54 · in progress 115 · blocked 0 · not started 0 (of 169)
-- Machine-check queue (94 left, two lanes, runs serially per lane): 1066 1067 864 1059 1064 1062 1051 1004 1001 1000 997 996 993 984 955 1003 1002 1171 982 966 960 959 956 954 953 951 950 949 947 946 945 942 941 940 934 929 915 855 814 812 …
-- Last finished checks: #1118@ba2c5d21, #1068@53af03e4, #1117@404c9f9a, #1101@776d2233, #1005@9d3baf26, #1117@404c9f9a
+- Status: done 55 · in progress 114 · blocked 0 · not started 0 (of 169)
+- Machine-check queue (92 left, two lanes, runs serially per lane): 864 1059 1052 1064 1057 1062 1051 1004 1001 1000 997 996 993 984 955 1003 1002 1171 982 966 960 959 956 954 953 951 950 949 947 946 945 942 941 940 934 929 915 855 814 812 …
+- Last finished checks: #1117@404c9f9a, #1101@776d2233, #1005@9d3baf26, #1117@404c9f9a, #985@22bb45b4, #1170@df59d8e6
 
 ### Posted verdicts
 
@@ -87,6 +97,7 @@ _Generated 2026-11-06 20:51 UTC from the live run state by `handoff/scripts/gen-
 | #1006 | DEV-53 | PASS | PASS | PASS | 63af85e15b | https://github.com/RealDevFathom/devfathom-commercial/pull/1006#issuecomment-6590488301 |
 | #1005 | DEV-50 | PASS | PASS | PASS | 9d3baf26f6 | https://github.com/RealDevFathom/devfathom-commercial/pull/1005#issuecomment-6694239432 |
 | #986 | DEV-8 | PASS | PASS | PASS | 88ebf1fd19 | https://github.com/RealDevFathom/devfathom-commercial/pull/986#issuecomment-6694181097 |
+| #985 | DEV-10 | PASS | PASS | PASS | 22bb45b4a0 | https://github.com/RealDevFathom/devfathom-commercial/pull/985#issuecomment-6695469045 |
 
 ## Rules in force
 
@@ -818,14 +829,14 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
 - Decisions: qa verdict set to PASS by hand: Checked all five DEV-8 surfaces against the merge-base and develop. The PR gates each one on vertical === 'PHARMACY': it hides the notification matrix and the /projects shortcut, removes Claude Code and CLAUDE.md text everywhere and tasks scopes for pharmacy, replaces the temporary-password add-staf | security verdict set to PASS by hand: Checked every changed path: vertical gating in settings, topbar, team, organization and api-docs; the api-docs page's server-side resolveTenantActor call; and the reused invite modal. Its server mutation team.inviteMember is unchanged: adminProcedure, admin-module gated, role template scoped to the 
 
-### #985 · DEV-10 · in progress
+### #985 · DEV-10 · done
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/985 · branch `inky/issue-978` · head `22bb45b4a0` · group 3
 - Title: feat(#978): Pharmacy catalogue review: accept/reject/defer disabled for owner despite pharmacy:catalogue-review
-- Verdicts: machine pending · QA PASS · Security PASS
-- Done so far: fix commit 22bb45b4a0 (Prettier on medicine-reference-workbench.tsx; first run on 2390c2e7f9 failed on Prettier: src/components/pharmacy/medicine-reference-workbench.tsx unformatted); QA+Security reviews complete
-- Next step: re-check queued for fix 22bb45b4a0; then `python3 handoff/scripts/compose.py 985` and post comments/985.md
-- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 985` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/985`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
-- Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
+- Verdicts: machine PASS · QA PASS · Security PASS
+- Done so far: checks on 22bb45b4a0: typecheck exit 2 (0 new vs baseline); eslint 0 errors; tests 18 passed / 0 failed in 0 files; build exit 0; fix commit 22bb45b4a0 (Prettier on medicine-reference-workbench.tsx; first run on 2390c2e7f9 failed on Prettier: src/components/pharmacy/medicine-reference-workbench.tsx unformatted); QA+Security reviews complete; verdict comment https://github.com/RealDevFathom/devfathom-commercial/pull/985#issuecomment-6695469045
+- Next step: none: verdict comment posted (https://github.com/RealDevFathom/devfathom-commercial/pull/985#issuecomment-6695469045)
+- Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 985` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/985`; tests `bunx vitest related --run src/components/pharmacy/medicine-reference-workbench.test.tsx src/components/pharmacy/medicine-reference-workbench.tsx src/server/routers/pharmacy-medicine.owner-operator.test.ts` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
+- Known failures: typecheck baseline: the 4 errors already on develop (counter-console.test.tsx, duplicate-salt-acknowledgement.db.test.ts, pharmacy-inventory.test.ts, restaurant-catering.test.ts)
 - Decisions: qa verdict set to PASS by hand: Verified against DEV-10 / #978. Confirm, accept/reject/defer and publish now track pending state per row: a ref-guarded key set that is cleared in finally. Both queues are invalidated after an import and after each decision. Disabled review and publish controls get visible notes linked by aria-descr | security verdict set to PASS by hand: The PR only changes the client workbench and adds tests. Server enforcement is unchanged: proposals still go through capabilityProcedure('pharmacy:catalogue-review'), and review/publish/candidates through adminProcedure. Tenant scope is still enforced by RLS, there is no new raw SQL or HTML sink, an
 
 ### #984 · DEV-9 · in progress
@@ -1183,11 +1194,11 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 ### #1170 · PR #1170 (Dependabot; no DEV-<n> Linear issue or GitHub #<n> issue cited) · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1170 · branch `dependabot/bun/develop/production-minor-d4c3b1f27e` · head `df59d8e680` · group 3
 - Title: chore(deps): bump the production-minor group across 1 directory with 21 updates
-- Verdicts: machine pending · QA PASS · Security PASS
-- Done so far: fix commit df59d8e680 (ab89e8b2b holds pg, @types/pg, @prisma/adapter-pg and @prisma/client at develop's versions; df59d8e68 restores Bun's lockfile blank-line layout; first run on 69469ed2d4 failed on no machine run (QA finding only)); QA+Security reviews complete
-- Next step: re-check queued for fix df59d8e680; then `python3 handoff/scripts/compose.py 1170` and post comments/1170.md
+- Verdicts: machine ran, see below · QA PASS · Security PASS
+- Done so far: checks on df59d8e680: typecheck exit 0 (0 new vs baseline); eslint 0 errors; tests 0 passed / 0 failed in 0 files; build exit 0; fix commit df59d8e680 (ab89e8b2b holds pg, @types/pg, @prisma/adapter-pg and @prisma/client at develop's versions; df59d8e68 restores Bun's lockfile blank-line layout; first run on 69469ed2d4 failed on no machine run (QA finding only)); QA+Security reviews complete
+- Next step: `python3 handoff/scripts/compose.py 1170`, then post comments/1170.md via the poster workflow
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1170` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1170`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
-- Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
+- Known failures: none
 - Decisions: qa verdict set to PASS by hand: First review FAIL (the bump moves pg to 8.23.1 and @prisma/adapter-pg/@prisma/client to 7.10.1, but assertLockedDrivers() in prisma/fresh-database-adapter.ts only accepts pg 8.22.0 and Prisma 7.9.1 and pins pg's lib files by sha256, so the private initializer threw 'Private initializer driver reject | security verdict set to PASS by hand: Checked at ab89e8b2b. The held lock entries keep the merge-base sha512 integrity hashes byte for byte. All 1624 entries come from the default registry with sha512 integrity, with no git, tarball or custom-registry sources. trustedDependencies (unrs-resolver) and overrides are unchanged. None of the 
 
 ### #1169 · none (Dependabot PR #1169; title cites no DEV-<n> Linear issue and no GitHub #<n> issue) · in progress
@@ -1279,11 +1290,11 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
 ### #1057 · DEV-156 · in progress
-- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1057 · branch `codex/linear-mention-dev-156-qa]-sev2]-restaurant-sop-evidence` · head `55e555d4a5` · group 3
+- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1057 · branch `codex/linear-mention-dev-156-qa]-sev2]-restaurant-sop-evidence` · head `111cdb0c91` · group 3
 - Title: fix(restaurant): prevent SOP evidence attribution spoofing
 - Verdicts: machine pending · QA FAIL · Security PASS
-- Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 51
+- Done so far: fix commit 111cdb0c91 (ignored Uploading staff select removed from the SOP proof form; file input spans the form; first run on 55e555d4a5 failed on no machine run (QA finding only)); QA+Security reviews complete
+- Next step: re-check queued for fix 111cdb0c91; then `python3 handoff/scripts/compose.py 1057` and post comments/1057.md
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1057` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1057`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: The server now ignores the form's uploaderStaffProfileId, but the proof-capture form still shows a required "Uploading staff" select of every active staff member in the org and posts it. The control looks like it chooses
@@ -1293,7 +1304,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(restaurant): keep close and rollup refund math aligned
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 52
+- Next step: wait for machine checks queued at position 51
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1055` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1055`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: security verdict set to PASS by hand: Security: the change is a pure in-memory refactor that pulls the refund math into a shared helper. It changes no queries, tenant/branch scoping, RLS transactions, input schemas, permission checks, raw SQL or logging, so I found no vulnerability. Not a security failure: no vulnerability was found, an | superseded-by-develop (qa) confirmed by skeptics: Develop already meets the issue in full, and this PR adds nothing the issue still needs. Commit e2c0d638b, 'fix(#589): Restaurant: refund-aware day-close totals always fail insight-rollup reconciliation (#222)', is an an | superseded-by-develop (security) confirmed by skeptics: develop already fixed this issue, and the PR changes no behaviour. Commit e2c0d638b, "fix(#589): Restaurant: refund-aware day-close totals always fail insight-rollup reconciliation" (#222), is an ancestor of merge-base 4
@@ -1303,7 +1314,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(restaurant): enforce low-stock branch authorization
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 53
+- Next step: wait for machine checks queued at position 52
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1054` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1054`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: security verdict set to PASS by hand: Checked create/update/delete low-stock paths: branch is resolved from the location or rule and resolveRestaurantActor (active staff, assignment or restaurant:configure, in-org active branch) runs server-side before each writer. RLS and composite tenant FKs back org scope, and the PR has no raw SQL.  | F1 (qa) confirmed by skeptics: Develop already fully satisfies the issue, so the PR is superseded. Its production change only moves existing code into a helper and does not change behaviour. | F2 (qa) confirmed by skeptics: The new test 'allows low-stock rule mutations after resolving an assigned active branch' fails on the delete step. mocks.deleteLowStockRule is a bare vi.fn() that returns undefined, so the router's `.catch(mapInventoryEr | SEC-1 (security) confirmed by skeptics: Superseded: develop already fully satisfies DEV-179. Commit 439c41045 "fix(#548): Low-stock rules: Low-stock mutations bypass branch assignment authorization (#205)" is on origin/develop (and at this PR's merge-base), an
@@ -1313,19 +1324,19 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(restaurant): resolve all-channel menus at POS
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 54
+- Next step: wait for machine checks queued at position 53
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1053` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1053`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
 ### #1052 · DEV-168 · in progress
-- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1052 · branch `codex/linear-mention-dev-168-qa]-sev2]-printing-read-only-user` · head `7629f9f99c` · group 3
+- PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1052 · branch `codex/linear-mention-dev-168-qa]-sev2]-printing-read-only-user` · head `f38b4007c1` · group 3
 - Title: fix(printing): prevent read-only users from fabricating print jobs
-- Verdicts: machine pending · QA FAIL · Security PASS
-- Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 55
+- Verdicts: machine pending · QA PASS · Security PASS
+- Done so far: fix commit f38b4007c1 (read-only branch staff printer-test 403 test; Prettier on route.ts; first run on 7629f9f99c failed on no machine run (QA finding and Prettier)); QA+Security reviews complete
+- Next step: re-check queued for fix f38b4007c1; then `python3 handoff/scripts/compose.py 1052` and post comments/1052.md
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1052` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1052`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
-- Decisions: F1 (qa) confirmed by skeptics: The issue's acceptance path has no test: a read-only user (orders:read/money:read but no restaurant:configure) who does have branch access must now get 403. On develop this exact case was the passing 'allows %s branch su
+- Decisions: qa verdict set to PASS by hand: First review FAIL (no test covered the issue's acceptance path: a branch-linked read-only user without restaurant:configure must get 403), fixed in f38b4007c. Re-review: the new primary/assignment test gives a branch-linked user with money:read and orders:read but no restaurant:configure, and assert | security verdict set to PASS by hand: At f38b4007c the web print-bridge POST rejects any caller document through a strict schema. It enforces restaurant:configure on the server before the branch lookup, transaction and enqueue, and the server writes the test receipt. The org comes from the session, the branch is checked against the org, | F1 (qa) confirmed by skeptics: The issue's acceptance path has no test: a read-only user (orders:read/money:read but no restaurant:configure) who does have branch access must now get 403. On develop this exact case was the passing 'allows %s branch su
 
 ### #1051 · DEV-175 · in progress
 - PR: https://github.com/RealDevFathom/devfathom-commercial/pull/1051 · branch `codex/linear-mention-dev-175-qa]-sev2]-menu-import-approving-a` · head `b0d20bc672` · group 3
@@ -1342,7 +1353,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: feat(ask-fathom): remove forced requestLeave tool_choice
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 56
+- Next step: wait for machine checks queued at position 54
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 1007` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/1007`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1351,7 +1362,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: feat(hotel): reservations, front desk, folio ledger, housekeeping, rate plans (salvage)
 - Verdicts: machine pending · QA FAIL · Security FAIL
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 57
+- Next step: wait for machine checks queued at position 55
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 964` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/964`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: An existing governance test will now fail. It pins every `hotel_` table as a closed list. The PR's migrations add 11 new hotel_ tables, and the list was not updated. | F2 (qa) confirmed by skeptics: Reservation create never checks the party against the room type's capacity or its active flag. One stay unit always consumes one unit of supply, whatever the party size. A 20-adult party can be booked into a 2-adult room | SEC-1 (security) confirmed by skeptics: The MAX_STAY_NIGHTS bound only takes effect after the work it is meant to prevent. reservationCreateInput (reservations.ts:89), availabilityInput (hotel-reservations.ts:45) and ratePlanQuoteInput (hotel-rate-plans.ts:34)
@@ -1361,7 +1372,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: chore: Growth G1 models follow-up (salvage; likely superseded)
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 58
+- Next step: wait for machine checks queued at position 56
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 963` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/963`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: security verdict set to PASS by hand: Checked the new growth migration and schema. All five tables get FORCE RLS with the standard org policy and composite tenant FKs, and the WhatsApp key CHECK matches the secret-crypto v1 envelope. The PR has no app code, raw SQL, secrets or UI changes. No security defect; the only blocker is that the | F1-superseded (qa) confirmed by skeptics: The PR restores the abandoned Growth G1 data model (CustomerMetrics, GrowthSettings, Campaign, CampaignRecipient, MessageTemplate, and campaign/recipient FKs on pharmacy_message_logs). No issue asks for it, and develop h | superseded-by-develop-growth-design (security) confirmed by skeptics: The PR adds a second campaign domain: org-wide campaigns, campaign_recipients, message_templates, growth_settings and customer_metrics. It sits beside develop's accepted, branch-scoped marketing model (pharmacy_campaigns
@@ -1371,7 +1382,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix: Agency REST projects verify clientId/memberIds belong to org (salvage)
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 59
+- Next step: wait for machine checks queued at position 57
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 962` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/962`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1380,7 +1391,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix: Restaurant comp gated on orders:complimentary, add orders:comp (salvage)
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 60
+- Next step: wait for machine checks queued at position 58
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 961` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/961`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: security verdict set to PASS by hand: The PR's net diff against merge-base 8b203969 is empty: commit 5dda02176 reverts every line of the salvaged 1f9a44241, so it introduces no vulnerability. On develop, POST /checkout/comp is a side-effect-free 403. The retained compLine is gated on the catalogued orders:complimentary capability, which | F1-superseded-empty-diff (qa) confirmed by skeptics: The PR adds nothing. Commit 5dda02176 ('revert(#961): restore develop comp denial and checkout protections') undoes every hunk of the salvaged commit 1f9a44241 across all 8 files. The net diff against the merge-base is e | SEC-961-1 (security) confirmed by skeptics: The PR is a no-op. `git diff $(git merge-base origin/develop pr/961) pr/961` is 0 bytes because the second commit 5dda02176 ('revert(#961): restore develop comp denial and checkout protections') undoes every hunk of the 
@@ -1390,7 +1401,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#640): [QA][sev3] API docs advertise PATCH /api/v1/projects/{id} and /clients/{id}, but routes export only GET/DELETE
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 61
+- Next step: wait for machine checks queued at position 59
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 906` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/906`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: security verdict set to PASS by hand: Security review: the PR changes only docs/admin-platform/api.md and adds a Vitest file that reads files. No runtime code, auth, tenant scoping, SQL, secrets or permission paths changed, and I found no vulnerability.test.ts pinning both rows to the routes. Close as superseded. Not a security failure: | superseded-by-develop (qa) confirmed by skeptics: Develop already satisfies the whole issue, and the PR adds nothing develop still lacks. Commit a7c26f27f, 'fix(#613): [sev3] API docs advertise PATCH ... (#174)', landed after merge-base 902831af3. It rewrote api.md:80-8 | SEC-906-1 (security) confirmed by skeptics: The PR is superseded, not vulnerable. Develop commit a7c26f27f (#174), made after the merge-base 902831af3d51, already removed the PATCH claims. On origin/develop, api.md lists `GET /api/v1/projects/{id}`, `DELETE /api/v
@@ -1400,7 +1411,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#572): [QA][sev3] Tax profiles: Preset effective dates start at UTC midnight instead of branch midnight
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 62
+- Next step: wait for machine checks queued at position 60
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 903` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/903`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: security verdict set to PASS by hand: activate stays admin-only on the server (adminProcedure). The branch lookup is filtered by organizationId inside the RLS-scoped tenant transaction. effectiveFrom is now checked with z.iso.date(), and the raw SQL is unchanged and parameterized. No vulnerability found. The only blocker is that the PR  | F1-superseded (qa) confirmed by skeptics: Develop already contains this PR's whole fix, through commit 5947f24a5 'fix(#540): Tax profiles: Preset effective dates start at UTC midnight instead of branch midnight (#187)'. Issue #572/DEV-182 is a copy of #540. The  | SEC-903-1 (security) confirmed by skeptics: Superseded, not a vulnerability. Develop already contains commit 5947f24a5, "fix(#540): Tax profiles: Preset effective dates start at UTC midnight instead of branch midnight (#187)". Issue #572 / DEV-182 is a copy of #54
@@ -1410,7 +1421,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#551): [QA][sev3] Persisted role grants bypass mandatory resignation-review resource constraints
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 63
+- Next step: wait for machine checks queued at position 61
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 902` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/902`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1419,7 +1430,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#448): [QA][sev3] Agency invoices: create form has no tax input (always sends tax 0) and discounts aren't supported anywhere
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 64
+- Next step: wait for machine checks queued at position 62
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 888` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/888`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: The issue names the printed invoice as one of three surfaces missing a discount. The PR adds the print row but no test covers it. No print-invoice test exists anywhere in pr/888, under src or tests.
@@ -1429,7 +1440,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#438): [QA][sev3] Agency invoice status dropdown offers transitions the server rejects
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 65
+- Next step: wait for machine checks queued at position 63
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 887` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/887`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: superseded-by-develop (qa) confirmed by skeptics: Develop already fully satisfies the issue on its own (commit 648268017, 'fix(#396): [sev3] Agency invoice status dropdown offers transitions the server rejects (#134)', landed after this PR's merge-base 902831af3d51). Th | SEC-887-1 (security) confirmed by skeptics: Superseded: develop already fully satisfies the issue independently. Commit 648268017 'fix(#396): [sev3] Agency invoice status dropdown offers transitions the server rejects (#134)' (#396 is the original that #438/DEV-26
@@ -1439,7 +1450,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#429): [QA][sev3] Resending an invite while an old-token accept is mid-hash lets the old request claim the new row
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 66
+- Next step: wait for machine checks queued at position 64
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 886` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/886`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1448,7 +1459,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#383): #282 pg_trgm grant migration grants nothing when the migrator doesn't own the extension
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 67
+- Next step: wait for machine checks queued at position 65
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 882` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/882`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1457,7 +1468,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#371): No way to reverse a mistaken comp; recut locked after any tender
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 68
+- Next step: wait for machine checks queued at position 66
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 875` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/875`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: The issue's key acceptance path, reversing a comp on a bill that already has a partial tender, has no test. reverseCompLine's negative paths (BILL_NOT_OPEN on a settled or void bill, NOT_COMPED) are untested too. | F2 (qa) confirmed by skeptics: The new reversal endpoint has no route test. Its authorization (the 'authorised' half of the issue) is unverified: the orders:complimentary capability gate, the 404 for a bill outside the device branch before any PIN che
@@ -1467,7 +1478,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#367): Order ticket shows live gross service, not the bill's service
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 69
+- Next step: wait for machine checks queued at position 67
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 872` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/872`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: security verdict set to PASS by hand: Checked getOrderForBranch and its route: withTerminalAuth with withTenantDb org scope, branchId from the device context, orderId checked by zod, bills limited to the order's non-VOID rows, no raw SQL, no new fields exposed. No vulnerability found. Not a security failure: no vulnerability was found,  | F1-superseded (qa) confirmed by skeptics: Develop already fully satisfies the issue, and the PR changes no behaviour. The fix (51763bc89 'fix(#274)', the same defect copied to #367/DEV-305) was already in this PR's merge-base 902831af. All the PR adds is a cosme | superseded-by-develop (security) confirmed by skeptics: Not a vulnerability. The PR's only production change (lines 569-572 at the PR head) moves the existing expression `order.bills.length > 0 ? money(billedServiceCharge) : quoted.serviceCharge` into a `ticketServiceCharge` 
@@ -1487,7 +1498,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#310): [QA][P3][Auth] Show/hide password toggle is keyboard-unreachable (tabindex="-1") and below minimum target size on both login forms
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 70
+- Next step: wait for machine checks queued at position 68
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 863` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/863`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1496,7 +1507,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#308): [QA][P3][UI] Studio token migration is incomplete — duplicate :root scales, live legacy abyss/brass utilities, and controls that bypass the radius scale
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 71
+- Next step: wait for machine checks queued at position 69
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 862` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/862`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: B1 (qa) confirmed by skeptics: The PR cannot merge into develop, and the globals.css conflict is not a mechanical one. Since the merge-base, develop added --surface-fog, --selection-background and --selection-foreground to the Studio :root and dark bl | B2 (qa) confirmed by skeptics: Develop added a new rounded-[3px] control after the merge-base (#697, commit 2b2d8a3e3), and this PR does not migrate it. With develop plus this PR, the issue's control-radius requirement is still unmet, and the PR's own
@@ -1506,7 +1517,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#570): [QA][sev2] Daily close: Unbilled active orders can create unpayable bills after close
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 72
+- Next step: wait for machine checks queued at position 70
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 854` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/854`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: security verdict set to PASS by hand: Checked the cutBills/openOrder closed-day guards, the cutClose/correctClose guard under the branch-day advisory lock (parameterized $executeRaw), org/branch scoping, error mapping and the close-packet permission split. The PR introduces no vulnerability. Not a security failure: no vulnerability was  | F1 (qa) confirmed by skeptics: Superseded. Develop already satisfies DEV-184 independently, and the PR adds nothing the issue still needs. Its conflicts with develop are not mechanical: both sides implement the same feature with different field names  | superseded-by-develop-793bf360a (security) confirmed by skeptics: Superseded, not a vulnerability. Issue #570 / DEV-184 is a copy of fork issue #538, and develop already merged the fix for it as 793bf360a (PR #202), after this PR's merge-base 9daab3f7. At the develop tip: (1) loadClose
@@ -1516,7 +1527,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#568): [QA][sev2] Daily close: Future dates can be closed before trading begins
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 73
+- Next step: wait for machine checks queued at position 71
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 853` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/853`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: security verdict set to PASS by hand: Checked the cut/correct routes. cash:close is enforced on the server, branchId comes from the authenticated device and all queries run in the tenant transaction. The advisory-lock SQL stays parameterized, the zod YYYY-MM-DD bound makes the string compare safe and errors return a generic 400. No vuln | F1 (qa) confirmed by skeptics: Develop already fixes the issue on its own. The PR's main change, a future-date guard in cutClose, duplicates develop commit 0da44e442 "fix(#536): Daily close: Future dates can be closed before trading begins (#200)". Th | SEC-853-1 (security) confirmed by skeptics: Superseded: develop already does what the issue asks. Commit 0da44e442 "fix(#536): Daily close: Future dates can be closed before trading begins (#200)" is on origin/develop, and #568/DEV-185 is a copy of #536. Develop's
@@ -1526,7 +1537,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#458): [QA][sev2] Agency invoice print/PDF shows DevFathom as the seller instead of the agency
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 74
+- Next step: wait for machine checks queued at position 72
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 850` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/850`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1535,7 +1546,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#440): [QA][sev2] Agency invoices: Mark paid sets PAID without recording a payment, so the balance is wrong and payment entry is hidden
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 75
+- Next step: wait for machine checks queued at position 73
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 841` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/841`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: superseded-by-develop (qa) confirmed by skeptics: Develop already fixes DEV-259 independently, by forbidding direct PAID and requiring a payment. The PR's own merge-base 9daab3f7 already had this rejection, from c3e44dd41 on Oct 22. What remains in the PR is a reversal 
@@ -1545,7 +1556,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#435): [QA][sev2] Agency team: team:setRole is never checked, so an ADMIN denied it can still grant or revoke roles
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 76
+- Next step: wait for machine checks queued at position 74
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 838` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/838`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: The three new 'member profile saves' tests (lines 88-114) fail at the PR head. Clicking Edit renders EditMemberForm, which calls useEntitlements() and trpc.organizationAdmin.departments.useQuery. The test mocks neither,  | F2 (qa) confirmed by skeptics: The test 'invites when team:setRole is allowed' fails. With findFirst mocked to null, the assistant inviteMember tool goes on to the seat check (added on develop by #884), which the test does not mock. That check then re
@@ -1555,7 +1566,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: chore(deps-dev): bump eslint from 9.39.5 to 10.11.0
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 77
+- Next step: wait for machine checks queued at position 75
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 305` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/305`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: The PR adds nothing develop needs. Its titled change (eslint 10.11.0) was reverted by the second commit. What remains is a range-floor change, "^9" to "^9.39.5", that resolves to the same package develop already installs
@@ -1565,7 +1576,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: chore(deps-dev): bump typescript from 5.9.3 to 7.0.2
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 78
+- Next step: wait for machine checks queued at position 76
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 304` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/304`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: The PR's only stated requirement, bumping typescript to 7.0.2, is not delivered. The head commit reverses it and pins 5.9.3, which develop already installs. Merging would put a commit titled 'bump typescript from 5.9.3 t
@@ -1575,7 +1586,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: recover: dead-letter exhausted stale jobs; idempotent dead-job requeue
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 79
+- Next step: wait for machine checks queued at position 77
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 286` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/286`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1584,7 +1595,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#508): Future-dated approved resignations never execute scheduled offboarding
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 80
+- Next step: wait for machine checks queued at position 78
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 275` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/275`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: The legacy backfill treats `reviewedAt >= lastWorkingDay` as proof the account was already offboarded. That is only true for the tRPC router. At the merge base the assistant tool reviewResignation never deactivated anyon
@@ -1594,7 +1605,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#556): Menu import: Approving a line imports variant prices the reviewer cannot see
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 81
+- Next step: wait for machine checks queued at position 79
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 262` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/262`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: The PR changes how base fields are reviewed, which DEV-175 did not ask for. The editor now prefills name, category, description, price and currency from the OCR values, and the server now treats a blank (null) name or pr | F2 (qa) confirmed by skeptics: Three key acceptance paths have no test. (a) Review refuses a variant list longer or shorter than the extracted list (:757). (b) Commit refuses stored reviewedVariants whose length differs from extractedVariants (:1096). | F3 (qa) confirmed by skeptics: The conflict with develop is not mechanical. Develop's #557 fix (0ad4e5ee1) adds per-variant currency to resolved variants and rejects foreign variant prices, but the PR's reviewedVariants carry no currency. If the PR si
@@ -1604,7 +1615,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#554): SOP escalation: Configured escalation policies never receive production jobs
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 82
+- Next step: wait for machine checks queued at position 80
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 261` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/261`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1-merged-typecheck-claimToken (qa) confirmed by skeptics: Semantic conflict with develop: the textual merge is clean, but the merged tree fails `tsc --noEmit`. Develop's #569 change (a28dead46) made `claimToken: string` a required field of `ClaimedJob`. This PR's new test 're-e
@@ -1614,7 +1625,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#539): Tax quotation: Multi-quantity previews round tax differently from settlement
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 83
+- Next step: wait for machine checks queued at position 81
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 259` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/259`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: security verdict set to PASS by hand: Checked: auth and capability guards (orders:manage, terminal order-taking capability, device-branch check) are unchanged; no org-scope or raw SQL changes; the new quantity cap of 100 is enforced server-side in zod and in addItem/adjustItem; errors stay as authored domain messages. No vulnerability f | F1 (qa) confirmed by skeptics: Develop already satisfies the issue independently, so the PR is superseded. | F2 (qa) confirmed by skeptics: Unrelated behaviour change: a new hard cap of 100 units per order line is enforced server-side in addItem/adjustItem and in three Zod schemas. The issue does not ask for it, and the UI and offline queue do not enforce it | superseded-by-develop-856 (security) confirmed by skeptics: This PR's core change for DEV-183 is already on develop. Commit a72c43b54 ("fix(#571): Tax quotation: Multi-quantity previews round tax differently from settlement (#856)"; GH #571 is the issue DEV-183 links to) quotes e
@@ -1624,7 +1635,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#222): Dark-theme info status pill nearly invisible on branch settings
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 84
+- Next step: wait for machine checks queued at position 82
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 253` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/253`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1633,7 +1644,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#567): SOP verification: A verifier can invent the second identity for an SOP waiver
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 85
+- Next step: wait for machine checks queued at position 83
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 212` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/212`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1642,7 +1653,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#169): [Platform][sev4] JWT session cookie is reissued on every session read
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 86
+- Next step: wait for machine checks queued at position 84
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 149` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/149`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
@@ -1651,7 +1662,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#7): [P2][Admin] Documented local setup cannot work — seed and prisma.config read .env only, 
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 87
+- Next step: wait for machine checks queued at position 85
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 146` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/146`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: Semantic conflict with develop that becomes a deploy regression on merge. The PR makes prisma.config.ts depend on scripts/load-local-env.ts. Develop's release packager is an explicit allowlist that copies only scripts/st
@@ -1661,7 +1672,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#6): [P3][Auth] Show/hide password toggle is keyboard-unreachable (tabindex="-1") and below min
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 88
+- Next step: wait for machine checks queued at position 86
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 145` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/145`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: The PR adds aria-pressed to a toggle whose accessible name already changes. When the password is revealed the button reads "Hide password" with aria-pressed=true, so assistive tech hears "Hide password, toggle button, pr
@@ -1671,7 +1682,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#4): [P3][UI] Studio token migration is incomplete — duplicate :root scales, live legacy abys
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 89
+- Next step: wait for machine checks queued at position 87
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 144` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/144`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1-stale-vs-develop-rounded-3px (qa) confirmed by skeptics: Develop plus this PR does not meet the radius requirement. Develop added a new rounded-[3px] control after the merge-base. After merge it is not migrated, and the PR's own guard test fails. The branch also conflicts with | F2-typography-token-loss (qa) confirmed by skeptics: Deleting the legacy :root block also deletes its unlayered typography overrides. Only --tracking-tight and --tracking-caps were carried into the Studio block. So line-height and letter-spacing change across the product, 
@@ -1681,7 +1692,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#639): [sev2] AI routing: no seeded model prices and a provider-wide $3/$15 fallback make the Ant
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 90
+- Next step: wait for machine checks queued at position 88
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 140` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/140`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: The issue asks for a test of effective-date precedence (and a fail-closed one). Those tests exercise effectiveModelPrice and pricedAIUsage, which only the tests call. Production prices usage through three copies of an in | F2 (qa) confirmed by skeptics: Schema drift. AiModelPrice declares `@@index([provider, model, effectiveFrom])` next to an `@@unique` on the same columns. The migration creates only the unique index, so the schema expects an index `ai_model_prices_prov | F3 (qa) confirmed by skeptics: This changes behaviour outside the issue. `maxOutputTokens: AI_GENERATION_LIMITS.maxOutputTokensPerStep` (4096) is now passed to every streamText call, including the existing non-budget path (Azure/Groq/Google/Vertex thr
@@ -1691,7 +1702,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#409): [sev3] Agency invoice list always shows $ even for PKR invoices
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 91
+- Next step: wait for machine checks queued at position 89
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 136` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/136`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: superseded-by-develop (qa) confirmed by skeptics: Develop already fully satisfies DEV-251, and the PR's production change does nothing that develop lacks. The PR only exports InvoiceRow and moves the existing expression into a local variable. | unrelated-mise-toml (qa) confirmed by skeptics: The PR adds a new tool-version file that pins bun. This has nothing to do with the invoice currency issue. | SUPERSEDED-DEV-251 (security) confirmed by skeptics: Not a vulnerability. This is an integration and supersession blocker. The PR adds nothing develop still needs to satisfy DEV-251. The merge-base already rendered moneyLabel(Number(inv.total), inv.currency), via 943979db5
@@ -1701,7 +1712,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#11): [P2][Admin] Audit ledger shows raw actor IDs, cannot be searched by actor, and silently tr
 - Verdicts: machine pending · QA FAIL · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 92
+- Next step: wait for machine checks queued at position 90
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 133` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/133`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: F1 (qa) confirmed by skeptics: Migration 20261026120000 adds the FK platform_audit_logs_actorPlatformUserId_fkey (NOT VALID, which still checks every new insert). This existing DB test runs executePlatformCommand with an actor that is never inserted i
@@ -1711,7 +1722,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#258): Reminder quiet-hour skips counted as skippedNoConsent; weekly dedupe key uses UTC epoch we
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 93
+- Next step: wait for machine checks queued at position 91
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 105` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/105`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 - Decisions: qa verdict set to PASS by hand: Checked DEV-316 against pr/105 @4ccf84c2. skippedQuietHours is correct (tests at the 22:00 and 07:59 boundaries). The Asia/Karachi ISO-week key is correct (Monday-midnight test; year-boundary math checked). Develop still lacks both. Two independent checks did not confirm the one reported blocker. Th | F1 (qa) refuted by skeptics: The rollout guard the issue's QA comment required (old epoch-week workers vs new Karachi-week workers) runs only while `now < LEGACY_WEEK_COMPATIBILITY_END`, and that end time has already passed (2026-11-02T19:00Z; `date
@@ -1721,7 +1732,7 @@ Effects are intended to sy | also fail on develop/merge-base (pre-existing): src
 - Title: fix(#257): Show password toggle has tabindex -1
 - Verdicts: machine pending · QA PASS · Security PASS
 - Done so far: QA+Security reviews complete
-- Next step: wait for machine checks queued at position 94
+- Next step: wait for machine checks queued at position 92
 - Rerun checks: `bash handoff/scripts/check-pr.sh <lane-worktree> devfathom_gate_lane_a_test 104` (typecheck `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit`; lint `bunx eslint src/` + `python3 handoff/scripts/format-check.py pr/104`; tests `bunx vitest related --run <no code files>` with gate env; build `NODE_OPTIONS=--max-old-space-size=8192 NEXT_BUILD_SKIP_TYPECHECK=1 bun run build`)
 - Known failures: u | n | k | n | o | w | n |   | ( | c | h | e | c | k | s |   | n | o | t |   | r | u | n | )
 
