@@ -2,15 +2,23 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 
 const mocks = vi.hoisted(() => ({
-  raw: vi.fn().mockResolvedValue([]),
   repeatRead: vi.fn().mockResolvedValue({ horizons: [] }),
   can: vi.fn<typeof import('@/lib/abac').can>(async () => false),
   branchFindMany: vi.fn(),
   settingUpsert: vi.fn(),
   userFindUnique: vi.fn(),
   branchFindFirst: vi.fn(),
+  assignmentFindMany: vi.fn(),
+  userFindFirst: vi.fn(),
+  userCount: vi.fn(),
+  credentialFindFirst: vi.fn(),
+  credentialUpdate: vi.fn(),
+  verifyPin: vi.fn(),
+  queryRaw: vi.fn(),
+  auditCreate: vi.fn(),
   reportFindFirst: vi.fn(),
   reportFindMany: vi.fn(),
+  reportCreate: vi.fn(),
   reportUpdate: vi.fn(),
   reportUpdateManyAndReturn: vi.fn(),
   stockDashboard: vi.fn(),
@@ -27,6 +35,13 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/pharmacy/branch-comparison', () => ({
   readPharmacyBranchComparison: mocks.comparisonRead,
+}));
+
+vi.mock('@/lib/restaurant/operator-credentials', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/restaurant/operator-credentials')>(
+    '@/lib/restaurant/operator-credentials'
+  )),
+  verifyOperatorCredential: mocks.verifyPin,
 }));
 
 vi.mock('@/lib/pharmacy/stock-signals-operations', () => ({
@@ -78,21 +93,34 @@ import { hasModule } from '@/lib/entitlements';
 import type { TRPCContext } from '../trpc';
 import { pharmacyReportsRouter } from './pharmacy-reports';
 
-function context(role = 'ADMIN') {
-  return {
-    db: {
-      $queryRaw: mocks.raw,
-      $transaction: mocks.transaction,
-      pharmacyBranch: { findMany: mocks.branchFindMany, findFirst: mocks.branchFindFirst },
-      pharmacyPharmacovigilanceReport: {
-        findFirst: mocks.reportFindFirst,
-        findMany: mocks.reportFindMany,
-        update: mocks.reportUpdate,
-        updateManyAndReturn: mocks.reportUpdateManyAndReturn,
-      },
-      pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
-      user: { findUnique: mocks.userFindUnique },
+function context(role = 'ADMIN', audit: TRPCContext['audit'] = { detail: {} }) {
+  const db = {
+    $queryRaw: mocks.queryRaw,
+    auditLog: { create: mocks.auditCreate },
+    user: {
+      findFirst: mocks.userFindFirst,
+      findUnique: mocks.userFindUnique,
+      count: mocks.userCount,
     },
+    pharmacyBranchAssignment: { findMany: mocks.assignmentFindMany },
+    restaurantOperatorCredential: {
+      findFirst: mocks.credentialFindFirst,
+      update: mocks.credentialUpdate,
+    },
+    pharmacyBranch: { findMany: mocks.branchFindMany, findFirst: mocks.branchFindFirst },
+    pharmacyPharmacovigilanceReport: {
+      findFirst: mocks.reportFindFirst,
+      findMany: mocks.reportFindMany,
+      create: mocks.reportCreate,
+      update: mocks.reportUpdate,
+      updateManyAndReturn: mocks.reportUpdateManyAndReturn,
+    },
+    pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
+  };
+  // Interactive transactions run against the same mocked client delegates.
+  Object.assign(mocks.comparisonTx, db);
+  return {
+    db: { ...db, $transaction: mocks.transaction },
     entitlements: {
       organizationId: 'org_1',
       enabledModules: ['pharmacy-reports'],
@@ -105,12 +133,12 @@ function context(role = 'ADMIN') {
     organization: { id: 'org_1' },
     support: null,
     requestMeta: { ip: null, userAgent: null },
-    audit: { detail: {} },
+    audit,
   } as unknown as TRPCContext;
 }
 
-function caller(role = 'ADMIN') {
-  return pharmacyReportsRouter.createCaller(context(role));
+function caller(role = 'ADMIN', audit: TRPCContext['audit'] = { detail: {} }) {
+  return pharmacyReportsRouter.createCaller(context(role, audit));
 }
 
 function pvCaller() {
@@ -227,6 +255,7 @@ describe('normal Reports daily work pack', () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.branchFindFirst.mockReset();
   mocks.transaction.mockImplementation((run) => run(mocks.comparisonTx));
 });
 
@@ -443,6 +472,189 @@ describe('pharmacy owner digest capability boundary', () => {
 });
 
 describe('RX-08 pharmacovigilance state boundaries', () => {
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_1' }]);
+  });
+
+  const filing = {
+    branchId: 'branch_1',
+    kind: 'ADVERSE_DRUG_REACTION' as const,
+    occurredAt: new Date('2026-09-15'),
+    assertedDescription: 'Patient reported nausea.',
+  };
+
+  it('requires pharmacy:safety or pharmacy:dispense before tenant data access to file a report', async () => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(pvCaller().createPharmacovigilanceReport(filing)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+
+    expect(mocks.can.mock.calls.map((call) => call[1])).toEqual([
+      'pharmacy:safety',
+      'pharmacy:dispense',
+    ]);
+    expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+    expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+    expect(mocks.reportCreate).not.toHaveBeenCalled();
+  });
+
+  it('lets an assigned pharmacist with only pharmacy:dispense file, review, submit and export', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
+    mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
+    mocks.reportCreate.mockResolvedValue({ id: 'pv_1' });
+
+    await expect(caller('EMPLOYEE').createPharmacovigilanceReport({ ...filing })).resolves.toEqual({
+      id: 'pv_1',
+    });
+    expect(mocks.reportCreate).toHaveBeenCalledOnce();
+
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'DRAFT',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      createdByUserId: 'other',
+    });
+    mocks.reportUpdateManyAndReturn.mockResolvedValue([{ id: 'pv_1', state: 'UNDER_REVIEW' }]);
+    await expect(
+      caller('EMPLOYEE').transitionPharmacovigilanceReport({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'UNDER_REVIEW',
+      })
+    ).resolves.toEqual({ id: 'pv_1', state: 'UNDER_REVIEW' });
+
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      externalReference: null,
+      externalFailureReason: null,
+      createdByUserId: 'other',
+    });
+    mocks.reportUpdateManyAndReturn.mockResolvedValue([{ id: 'pv_1' }]);
+    await expect(
+      caller('EMPLOYEE').recordPharmacovigilanceSubmission({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'PENDING',
+      })
+    ).resolves.toEqual({ id: 'pv_1' });
+
+    mocks.reportFindMany.mockResolvedValue([]);
+    await expect(
+      caller('EMPLOYEE').exportPharmacovigilanceDrap({
+        branchId: 'branch_1',
+        from: new Date('2026-09-01'),
+        to: new Date('2026-09-30'),
+      })
+    ).resolves.toMatchObject({ format: 'DRAP_PHARMACOVIGILANCE_V1', reports: [] });
+  });
+
+  it('still blocks a pharmacist from marking their own report READY in a staffed pharmacy', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
+    mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'UNDER_REVIEW',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      createdByUserId: 'user_admin',
+    });
+    mocks.userFindFirst.mockResolvedValue({
+      role: 'EMPLOYEE',
+      organizationRole: { key: 'pharmacist' },
+    });
+    mocks.userCount.mockResolvedValue(2);
+
+    await expect(
+      caller('EMPLOYEE').transitionPharmacovigilanceReport({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'READY',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+  });
+
+  it('denies PV review and export to a catalogue-review-only or counter-only user', async () => {
+    mocks.can.mockImplementation(async (_subject, action) =>
+      ['pharmacy:catalogue-review', 'pharmacy:counter', 'pharmacy:*'].includes(action)
+    );
+    await expect(
+      caller('EMPLOYEE').transitionPharmacovigilanceReport({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'UNDER_REVIEW',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller('EMPLOYEE').exportPharmacovigilanceDrap({
+        branchId: 'branch_1',
+        from: new Date('2026-09-01'),
+        to: new Date('2026-09-30'),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+    expect(mocks.reportFindFirst).not.toHaveBeenCalled();
+    expect(mocks.reportFindMany).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'transitionPharmacovigilanceReport',
+      () =>
+        pvCaller().transitionPharmacovigilanceReport({
+          id: 'pv_1',
+          branchId: 'branch_1',
+          state: 'UNDER_REVIEW',
+        }),
+    ],
+    [
+      'recordPharmacovigilanceSubmission',
+      () =>
+        pvCaller().recordPharmacovigilanceSubmission({
+          id: 'pv_1',
+          branchId: 'branch_1',
+          state: 'PENDING',
+        }),
+    ],
+    [
+      'exportPharmacovigilanceDrap',
+      () =>
+        pvCaller().exportPharmacovigilanceDrap({
+          branchId: 'branch_1',
+          from: new Date('2026-09-01'),
+          to: new Date('2026-09-30'),
+        }),
+    ],
+  ])(
+    'requires pharmacy:safety or pharmacy:dispense before tenant data access for %s',
+    async (_procedure, invoke) => {
+      mocks.can.mockResolvedValue(false);
+
+      await expect(invoke()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+      expect(mocks.can.mock.calls.map((call) => call[1])).toEqual([
+        'pharmacy:safety',
+        'pharmacy:dispense',
+      ]);
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'user_admin' }),
+        'pharmacy:safety',
+        undefined,
+        expect.objectContaining({ source: 'TRPC' })
+      );
+      expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+      expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+      expect(mocks.reportFindFirst).not.toHaveBeenCalled();
+      expect(mocks.reportFindMany).not.toHaveBeenCalled();
+      expect(mocks.reportCreate).not.toHaveBeenCalled();
+      expect(mocks.reportUpdate).not.toHaveBeenCalled();
+    }
+  );
+
   it('completing internal review does not mark the report externally submitted', async () => {
     mocks.reportFindFirst.mockResolvedValue({
       id: 'pv_1',
@@ -470,7 +682,7 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
         data: expect.not.objectContaining({ externalSubmissionState: expect.anything() }),
       })
     );
-    expect(result.externalSubmissionState).toBe('NOT_SUBMITTED');
+    expect(result).toMatchObject({ externalSubmissionState: 'NOT_SUBMITTED' });
   });
 
   it('records a failed submission without changing or deleting the report', async () => {
@@ -815,13 +1027,299 @@ describe('repeat purchasing authorization', () => {
   });
 });
 
+describe('PV safety capability, assignment and licence boundary', () => {
+  const operations = [
+    [
+      'capture',
+      (api: ReturnType<typeof caller>) =>
+        api.createPharmacovigilanceReport({
+          branchId: 'branch_1',
+          kind: 'ADVERSE_DRUG_REACTION',
+          occurredAt: new Date(),
+          assertedDescription: 'Human report',
+        }),
+    ],
+    [
+      'transition',
+      (api: ReturnType<typeof caller>) =>
+        api.transitionPharmacovigilanceReport({
+          id: 'pv_1',
+          branchId: 'branch_1',
+          state: 'UNDER_REVIEW',
+        }),
+    ],
+    [
+      'submission',
+      (api: ReturnType<typeof caller>) =>
+        api.recordPharmacovigilanceSubmission({
+          id: 'pv_1',
+          branchId: 'branch_1',
+          state: 'PENDING',
+        }),
+    ],
+    [
+      'export',
+      (api: ReturnType<typeof caller>) =>
+        api.exportPharmacovigilanceDrap({
+          branchId: 'branch_1',
+          from: new Date('2026-09-01'),
+          to: new Date('2026-09-30'),
+        }),
+    ],
+  ] as const;
+  beforeEach(() => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:safety');
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_1' }]);
+    mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
+    // READY permits both UNDER_REVIEW and a PENDING submission under #480 rules.
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      externalReference: null,
+      externalFailureReason: null,
+      createdByUserId: 'other',
+    });
+    mocks.reportFindMany.mockResolvedValue([]);
+    mocks.reportCreate.mockResolvedValue({ id: 'pv_1' });
+    mocks.reportUpdateManyAndReturn.mockResolvedValue([{ id: 'pv_1' }]);
+  });
+  function expectNoReports() {
+    for (const read of [
+      mocks.reportFindFirst,
+      mocks.reportFindMany,
+      mocks.reportCreate,
+      mocks.reportUpdate,
+      mocks.reportUpdateManyAndReturn,
+    ])
+      expect(read).not.toHaveBeenCalled();
+  }
+  it.each(operations)(
+    'allows safety without operational reports permission: %s',
+    async (_name, invoke) => {
+      await invoke(caller('EMPLOYEE'));
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.anything(),
+        'pharmacy:safety',
+        undefined,
+        expect.anything()
+      );
+      expect(mocks.assignmentFindMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org_1', userId: 'user_admin', active: true },
+        select: { branchId: true },
+      });
+    }
+  );
+  it.each(operations)('denies reports-only before DB access: %s', async (_name, invoke) => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'reports:operational');
+    await expect(invoke(caller('EMPLOYEE'))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+    expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
+    expectNoReports();
+  });
+  it.each(operations)('denies another assigned tenant branch: %s', async (_name, invoke) => {
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_2' }]);
+    await expect(invoke(caller('EMPLOYEE'))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+    expectNoReports();
+  });
+  it.each(operations)(
+    'denies absent reports licence before DB access: %s',
+    async (_name, invoke) => {
+      vi.mocked(hasModule).mockReturnValue(false);
+      await expect(invoke(caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+      expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+      expectNoReports();
+    }
+  );
+  it.each(operations)(
+    'denies inactive, foreign or nonexistent assigned branch: %s',
+    async (_name, invoke) => {
+      mocks.branchFindFirst.mockResolvedValue(null);
+      await expect(invoke(caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expectNoReports();
+    }
+  );
+});
+
+describe('PV maker/checker approval', () => {
+  const input = { id: 'pv_1', branchId: 'branch_1', state: 'READY' as const };
+  const credential = {
+    id: 'cred_1',
+    credentialHash: 'stored-hash',
+    failedAttempts: 0,
+    lockedUntil: null,
+  };
+  let audit: TRPCContext['audit'];
+  beforeEach(() => {
+    audit = { detail: {} };
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_1' }]);
+    mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'UNDER_REVIEW',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      createdByUserId: 'user_admin',
+    });
+    mocks.reportUpdateManyAndReturn.mockResolvedValue([{ id: 'pv_1', state: 'READY' }]);
+    mocks.userFindFirst.mockResolvedValue({ role: 'ADMIN', organizationRole: { key: 'owner' } });
+    mocks.userCount.mockResolvedValue(0);
+    mocks.credentialFindFirst.mockResolvedValue(credential);
+    mocks.verifyPin.mockResolvedValue(true);
+    mocks.auditCreate.mockResolvedValue({ id: 'audit_1' });
+  });
+  it('requires fresh PIN for solo owner approval, without changing the report', async () => {
+    await expect(
+      caller('ADMIN', audit).transitionPharmacovigilanceReport(input)
+    ).resolves.toMatchObject({ blocked: expect.any(String) });
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+    expect(mocks.verifyPin).not.toHaveBeenCalled();
+    expect(audit.detail).toMatchObject({
+      skipInput: true,
+      metadata: { policy: 'PV:SOLO_OWNER_PIN', reauthenticated: false },
+    });
+  });
+  it('permits solo owner with a verified PIN and audits server reauthentication evidence', async () => {
+    await caller('ADMIN', audit).transitionPharmacovigilanceReport({ ...input, pin: '1234' });
+    expect(mocks.verifyPin).toHaveBeenCalledWith('PIN', '1234', 'stored-hash');
+    expect(mocks.credentialFindFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_1',
+        type: 'PIN',
+        revokedAt: null,
+        deviceId: null,
+        staffProfile: { organizationId: 'org_1', userId: 'user_admin', status: 'ACTIVE' },
+      },
+    });
+    expect(mocks.reportUpdateManyAndReturn).toHaveBeenCalledWith({
+      where: {
+        id: 'pv_1',
+        branchId: 'branch_1',
+        organizationId: 'org_1',
+        state: 'UNDER_REVIEW',
+        externalSubmissionState: 'NOT_SUBMITTED',
+      },
+      data: { state: 'READY', reviewedByUserId: 'user_admin' },
+    });
+    // The organization lock is taken only on the solo-owner readiness path.
+    expect(mocks.queryRaw).toHaveBeenCalledTimes(2);
+    expect(mocks.credentialUpdate).toHaveBeenCalledWith({
+      where: { id: 'cred_1' },
+      data: { failedAttempts: 0, lockedUntil: null },
+    });
+    expect(audit.detail).toMatchObject({
+      skipInput: true,
+      metadata: {
+        policy: 'PV:SOLO_OWNER_PIN',
+        actorId: 'user_admin',
+        reportId: 'pv_1',
+        reauthenticated: true,
+        reauthenticatedAt: expect.any(String),
+      },
+    });
+    expect(JSON.stringify(audit)).not.toContain('1234');
+    expect(mocks.auditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_1',
+        actorId: 'user_admin',
+        action: 'pv_solo_owner_approval',
+        targetId: 'pv_1',
+        input: '[skipped]',
+        metadata: expect.objectContaining({ policy: 'PV:SOLO_OWNER_PIN', branchId: 'branch_1' }),
+      }),
+    });
+  });
+  it.each([1, 2])(
+    'requires a second approver with %s other active staff even with owner PIN',
+    async (count) => {
+      mocks.userCount.mockResolvedValue(count);
+      await expect(
+        caller('ADMIN', audit).transitionPharmacovigilanceReport({ ...input, pin: '1234' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.userCount).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org_1',
+          id: { not: 'user_admin' },
+          status: { in: ['ACTIVE', 'ON_LEAVE'] },
+        },
+      });
+      expect(mocks.verifyPin).not.toHaveBeenCalled();
+      expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+    }
+  );
+  it('allows a different safety-capable reviewer without owner PIN', async () => {
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'UNDER_REVIEW',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      createdByUserId: 'maker',
+    });
+    await caller('EMPLOYEE', audit).transitionPharmacovigilanceReport(input);
+    expect(mocks.reportUpdateManyAndReturn).toHaveBeenCalled();
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
+    expect(mocks.userCount).not.toHaveBeenCalled();
+    expect(mocks.verifyPin).not.toHaveBeenCalled();
+  });
+  it('rejects solo non-owner self approval despite safety capability', async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      role: 'EMPLOYEE',
+      organizationRole: { key: 'pharmacist' },
+    });
+    await expect(
+      caller('EMPLOYEE', audit).transitionPharmacovigilanceReport({ ...input, pin: '1234' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+  });
+  it('refuses approval if durable solo audit evidence cannot be written', async () => {
+    mocks.auditCreate.mockRejectedValueOnce(new Error('audit unavailable'));
+    await expect(
+      caller('ADMIN', audit).transitionPharmacovigilanceReport({ ...input, pin: '1234' })
+    ).rejects.toThrow('audit unavailable');
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+  });
+  it('commits a failed PIN strike without approving', async () => {
+    mocks.verifyPin.mockResolvedValue(false);
+    await expect(
+      caller('ADMIN', audit).transitionPharmacovigilanceReport({ ...input, pin: '0000' })
+    ).resolves.toHaveProperty('blocked');
+    expect(mocks.credentialUpdate).toHaveBeenCalledWith({
+      where: { id: 'cred_1' },
+      data: { failedAttempts: 1, lockedUntil: null },
+    });
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+    expect(audit.detail).toMatchObject({ skipInput: true, metadata: { reauthenticated: false } });
+  });
+  it.each([null, { ...credential, lockedUntil: new Date('2099-01-01') }])(
+    'denies missing/revoked/device-bound or locked PIN: %j',
+    async (record) => {
+      mocks.credentialFindFirst.mockResolvedValue(record);
+      await expect(
+        caller('ADMIN', audit).transitionPharmacovigilanceReport({ ...input, pin: '1234' })
+      ).resolves.toHaveProperty('blocked');
+      expect(mocks.verifyPin).not.toHaveBeenCalled();
+      expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+    }
+  );
+  it('rolls back solo approval evidence when a concurrent lifecycle change wins', async () => {
+    mocks.reportUpdateManyAndReturn.mockResolvedValue([]);
+    await expect(
+      caller('ADMIN', audit).transitionPharmacovigilanceReport({ ...input, pin: '1234' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+});
+
 describe('category growth report input boundaries', () => {
   const input = { from: '2026-02-01', to: '2026-02-01', configuration: [] };
   beforeEach(() => {
     mocks.can.mockResolvedValue(true);
     vi.mocked(hasModule).mockReturnValue(true);
     mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
-    mocks.raw.mockResolvedValue([]);
+    mocks.queryRaw.mockResolvedValue([]);
   });
 
   it.each([
@@ -835,7 +1333,7 @@ describe('category growth report input boundaries', () => {
     await expect(caller().categoryGrowth({ ...input, ...overrides })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     });
-    expect(mocks.raw).not.toHaveBeenCalled();
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
   });
 
   it('rejects more than 100 authorized branches before SQL', async () => {
@@ -843,14 +1341,14 @@ describe('category growth report input boundaries', () => {
       Array.from({ length: 101 }, (_, i) => ({ id: `b${i}`, name: `Branch ${i}` }))
     );
     await expect(caller().categoryGrowth(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(mocks.raw).not.toHaveBeenCalled();
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
   });
 
   it.each(['2026-02-01', '2026-05-01'])(
     'accepts an inclusive range ending %s and converts the cutoff once',
     async (to) => {
       await caller().categoryGrowth({ ...input, to });
-      const query = mocks.raw.mock.calls[0][0];
+      const query = mocks.queryRaw.mock.calls[0][0];
       expect(query.values.slice(-2)).toEqual([
         new Date('2026-02-01T00:00:00.000Z'),
         new Date(new Date(`${to}T00:00:00.000Z`).getTime() + 86_400_000),
