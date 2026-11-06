@@ -28,36 +28,86 @@ const PROPOSAL = {
   warnings: [],
 };
 
-function harness(onSubmit = vi.fn((event: Event) => event.preventDefault())) {
+type Location = { id: string; label: string };
+type HarnessOptions = {
+  /** Locations offered to the reader. */
+  locations?: Location[];
+  defaultLocationId?: string | null;
+  /** Initial values of the main line's capture fields (keyed by field prefix). */
+  line?: Partial<Record<string, string>>;
+  /** Hidden GS1 payload already on the line (as after a 2D scan). */
+  gs1Payload?: string;
+  serialLocked?: boolean;
+  siblings?: { key: string; batch: string; packs: string }[];
+};
+
+const TWO_LOCATIONS: Location[] = [
+  { id: 'loc-a', label: 'Front shelf' },
+  { id: 'loc-b', label: 'Cold room' },
+];
+
+function harness(options: HarnessOptions = {}) {
+  const onSubmit = vi.fn((event: Event) => event.preventDefault());
+  const locations = options.locations ?? [{ id: 'loc-a', label: 'Front shelf' }];
+  const defaultLocationId =
+    options.defaultLocationId === undefined ? 'loc-a' : options.defaultLocationId;
+  const line = options.line ?? {};
+  const siblings = options.siblings ?? [];
   const view = render(
     <form data-testid="receipt" onSubmit={(event) => onSubmit(event.nativeEvent)}>
-      <input name="batchNumber:pol-1" defaultValue="" />
-      <input name="printedExpiry:pol-1" type="date" defaultValue="" />
-      <select name="expiryPrecision:pol-1" defaultValue="MONTH">
+      <input name="batchNumber:pol-1" defaultValue={line.batchNumber ?? ''} />
+      <input name="printedExpiry:pol-1" type="date" defaultValue={line.printedExpiry ?? ''} />
+      <select name="expiryPrecision:pol-1" defaultValue={line.expiryPrecision ?? 'MONTH'}>
         <option value="MONTH">Month</option>
         <option value="DAY">Day</option>
       </select>
-      <input name="receivedPacks:pol-1" defaultValue="" />
-      <input name="serialNumber:pol-1" defaultValue="" />
-      <select name="stockLocation:pol-1" defaultValue="loc-a">
-        <option value="loc-a">Front shelf</option>
+      <input name="receivedPacks:pol-1" defaultValue={line.receivedPacks ?? ''} />
+      <input name="serialNumber:pol-1" defaultValue={line.serialNumber ?? ''} />
+      {options.gs1Payload !== undefined ? (
+        <input name="gs1Payload:pol-1" type="hidden" defaultValue={options.gs1Payload} />
+      ) : null}
+      <select
+        name="stockLocation:pol-1"
+        defaultValue={line.stockLocation ?? defaultLocationId ?? ''}
+      >
+        {locations.length ? (
+          locations.map((location) => (
+            <option key={location.id} value={location.id}>
+              {location.label}
+            </option>
+          ))
+        ) : (
+          <option value="">No location</option>
+        )}
       </select>
+      {siblings.map((sibling) => (
+        <fieldset key={sibling.key}>
+          <input name={`batchNumber:${sibling.key}`} defaultValue={sibling.batch} />
+          <input name={`receivedPacks:${sibling.key}`} defaultValue={sibling.packs} />
+        </fieldset>
+      ))}
       <PackPhotoReader
         branchId="branch-a"
-        defaultLocationId="loc-a"
+        defaultLocationId={defaultLocationId}
         fieldKey="pol-1"
-        locations={[{ id: 'loc-a', label: 'Front shelf' }]}
+        locations={locations}
         lotLabel="Lot 1"
         medicineName="Synthetic 500 mg"
         outstandingPacks={10}
         packLevel="STRIP"
         purchaseOrderId="po-1"
         purchaseOrderLineId="pol-1"
+        serialLocked={options.serialLocked}
+        siblingFieldKeys={siblings.length ? siblings.map((sibling) => sibling.key) : undefined}
         unitsPerPack={10}
       />
     </form>
   );
-  return { ...view, onSubmit };
+  const receipt = view.getByTestId('receipt') as HTMLFormElement;
+  /** Current value of a receipt capture field for the main line. */
+  const lineValue = (name: string) =>
+    (receipt.elements.namedItem(`${name}:pol-1`) as HTMLInputElement | HTMLSelectElement).value;
+  return { ...view, onSubmit, receipt, lineValue };
 }
 
 const photo = () => new File([new Uint8Array([1, 2, 3])], 'pack.jpg', { type: 'image/jpeg' });
@@ -77,15 +127,31 @@ beforeEach(() => {
   URL.revokeObjectURL = vi.fn();
 });
 
-async function openAndRead() {
+async function openAndRead(
+  ready: () => Promise<unknown> = () => screen.findByDisplayValue('SYN-B2741')
+) {
   fireEvent.click(screen.getByRole('button', { name: /Read batch and expiry/ }));
   await act(async () => {
     fireEvent.change(screen.getByLabelText('Photo of one pack'), {
       target: { files: [photo()] },
     });
   });
-  await screen.findByDisplayValue('SYN-B2741');
+  await ready();
 }
+
+const packsField = () => screen.getByLabelText('Packs with this exact batch and expiry');
+const confirmBox = () =>
+  screen.getByLabelText(/I checked this batch and expiry/) as HTMLInputElement;
+const applyButton = () => screen.getByRole('button', { name: 'Use for lot 1' });
+
+/** Type a count, tick the confirmation and press "Use for lot 1". */
+function countConfirmApply(packs: string) {
+  fireEvent.change(packsField(), { target: { value: packs } });
+  if (!confirmBox().checked) fireEvent.click(confirmBox());
+  fireEvent.click(applyButton());
+}
+
+const ONE_AT_A_TIME = /one at a time/;
 
 describe('PackPhotoReader', () => {
   it('sends only a re-encoded JPEG for the chosen line, never the original file', async () => {
@@ -201,5 +267,351 @@ describe('PackPhotoReader', () => {
     ) as HTMLInputElement;
     fireEvent.change(batch, { target: { value: 'TYPED-1' } });
     expect(batch.value).toBe('TYPED-1');
+  });
+});
+
+const AMBIGUOUS = {
+  ...PROPOSAL,
+  expiry: {
+    kind: 'ambiguous',
+    printed: 'EXP 03/04/2028',
+    candidates: [
+      { date: '2028-04-03', precision: 'DAY' },
+      { date: '2028-03-04', precision: 'DAY' },
+    ],
+    confidence: 0.88,
+  },
+  warnings: [
+    {
+      code: 'EXPIRY_AMBIGUOUS',
+      message:
+        'The printed expiry could be read as day-month or month-day. Choose the date that matches the pack.',
+    },
+  ],
+};
+
+const UNREADABLE = {
+  ...PROPOSAL,
+  batch: { value: null, confidence: 0 },
+  expiry: { kind: 'unreadable', printed: null, confidence: 0 },
+  warnings: [
+    {
+      code: 'BATCH_UNREADABLE',
+      message: 'The batch number could not be read clearly from the photo. Type it from the pack.',
+    },
+    {
+      code: 'EXPIRY_UNREADABLE',
+      message: 'The expiry could not be read as one clear date. Type it from the pack.',
+    },
+  ],
+};
+
+const SERIALIZED = {
+  ...PROPOSAL,
+  serialPrinted: true,
+  warnings: [
+    {
+      code: 'SERIAL_PRINTED',
+      message:
+        "This pack prints its own serial number. Serialized packs must be received one pack at a time by scanning each pack's 2D code, and a serial is never copied from one pack to another.",
+    },
+  ],
+};
+
+describe('PackPhotoReader capture input', () => {
+  it('opens the rear camera and accepts only JPEG, PNG and WebP', () => {
+    harness();
+    fireEvent.click(screen.getByRole('button', { name: /Read batch and expiry/ }));
+    const input = screen.getByLabelText('Photo of one pack') as HTMLInputElement;
+    expect(input.type).toBe('file');
+    expect(input.getAttribute('capture')).toBe('environment');
+    expect(input.accept.split(',')).toEqual(['image/jpeg', 'image/png', 'image/webp']);
+  });
+
+  it('sends nothing and leaves the line alone when the capture is cancelled', async () => {
+    const createImageBitmap = vi.fn(async () => ({ width: 40, height: 20, close: vi.fn() }));
+    vi.stubGlobal('createImageBitmap', createImageBitmap);
+    const { lineValue } = harness({
+      line: {
+        batchNumber: 'HAND-7',
+        printedExpiry: '2029-01-31',
+        expiryPrecision: 'DAY',
+        receivedPacks: '3',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Read batch and expiry/ }));
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Photo of one pack'), { target: { files: [] } });
+    });
+    expect(createImageBitmap).not.toHaveBeenCalled();
+    expect(h.mutateAsync).not.toHaveBeenCalled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByLabelText('Batch number')).toBeNull();
+    expect([
+      lineValue('batchNumber'),
+      lineValue('printedExpiry'),
+      lineValue('expiryPrecision'),
+      lineValue('receivedPacks'),
+      lineValue('stockLocation'),
+    ]).toEqual(['HAND-7', '2029-01-31', 'DAY', '3', 'loc-a']);
+  });
+});
+
+describe('PackPhotoReader review of uncertain reads', () => {
+  it('makes the receiver choose between two readings of an ambiguous expiry', async () => {
+    h.mutateAsync.mockResolvedValue(AMBIGUOUS);
+    const { lineValue } = harness();
+    await openAndRead();
+    const expiry = screen.getByLabelText('Printed expiry') as HTMLInputElement;
+    const precision = screen.getByLabelText('Expiry precision') as HTMLSelectElement;
+    expect(expiry.value).toBe('');
+    expect(precision.value).toBe('');
+    expect(screen.getByText(/could be read as day-month or month-day/)).toBeInTheDocument();
+    const first = screen.getByRole('radio', { name: '2028-04-03' }) as HTMLInputElement;
+    const second = screen.getByRole('radio', { name: '2028-03-04' }) as HTMLInputElement;
+    expect([first.checked, second.checked]).toEqual([false, false]);
+
+    countConfirmApply('7');
+    expect(screen.getByText('Enter the printed expiry date.')).toBeInTheDocument();
+    expect([
+      lineValue('batchNumber'),
+      lineValue('printedExpiry'),
+      lineValue('receivedPacks'),
+    ]).toEqual(['', '', '']);
+
+    fireEvent.click(second);
+    expect(expiry.value).toBe('2028-03-04');
+    expect(precision.value).toBe('DAY');
+    expect(second.checked).toBe(true);
+    // Choosing a reading is an edit, so the earlier confirmation no longer counts.
+    expect(confirmBox().checked).toBe(false);
+
+    countConfirmApply('7');
+    expect([
+      lineValue('batchNumber'),
+      lineValue('printedExpiry'),
+      lineValue('expiryPrecision'),
+      lineValue('receivedPacks'),
+    ]).toEqual(['SYN-B2741', '2028-03-04', 'DAY', '7']);
+  });
+
+  it('invents nothing for an unreadable label and waits for typed batch, date and precision', async () => {
+    h.mutateAsync.mockResolvedValue(UNREADABLE);
+    const { lineValue } = harness();
+    await openAndRead(() => screen.findByText(/batch number could not be read clearly/));
+    expect(screen.getByText(/expiry could not be read as one clear date/)).toBeInTheDocument();
+    const batch = screen.getByLabelText('Batch number') as HTMLInputElement;
+    const expiry = screen.getByLabelText('Printed expiry') as HTMLInputElement;
+    const precision = screen.getByLabelText('Expiry precision') as HTMLSelectElement;
+    expect([batch.value, expiry.value, precision.value]).toEqual(['', '', '']);
+    expect(
+      screen.getByText('Not readable on the photo. Type it from the pack.')
+    ).toBeInTheDocument();
+    expect(screen.getByText(/No expiry was readable/)).toBeInTheDocument();
+
+    countConfirmApply('4');
+    expect(lineValue('batchNumber')).toBe('');
+    expect(screen.getByText('Type the batch number printed on the pack.')).toBeInTheDocument();
+
+    fireEvent.change(batch, { target: { value: 'SYN-HAND-9' } });
+    countConfirmApply('4');
+    expect(lineValue('batchNumber')).toBe('');
+    expect(screen.getByText('Enter the printed expiry date.')).toBeInTheDocument();
+
+    fireEvent.change(expiry, { target: { value: '2028-09-15' } });
+    countConfirmApply('4');
+    expect(lineValue('batchNumber')).toBe('');
+    expect(
+      screen.getByText(/Choose whether the pack prints a month or an exact day/)
+    ).toBeInTheDocument();
+
+    fireEvent.change(precision, { target: { value: 'DAY' } });
+    countConfirmApply('4');
+    expect([
+      lineValue('batchNumber'),
+      lineValue('printedExpiry'),
+      lineValue('expiryPrecision'),
+      lineValue('receivedPacks'),
+    ]).toEqual(['SYN-HAND-9', '2028-09-15', 'DAY', '4']);
+  });
+
+  it('files the receiver’s corrected batch and drops a confirmation given before the edit', async () => {
+    h.mutateAsync.mockResolvedValue(PROPOSAL);
+    const { lineValue } = harness();
+    await openAndRead();
+    fireEvent.change(packsField(), { target: { value: '2' } });
+    fireEvent.click(confirmBox());
+    expect(confirmBox().checked).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('Batch number'), { target: { value: 'SYN-B2747' } });
+    expect(confirmBox().checked).toBe(false);
+    fireEvent.click(applyButton());
+    expect(lineValue('batchNumber')).toBe('');
+    expect(
+      screen.getByText('Confirm you checked the values against the pack and the count.')
+    ).toBeInTheDocument();
+
+    fireEvent.click(confirmBox());
+    fireEvent.click(applyButton());
+    expect(lineValue('batchNumber')).toBe('SYN-B2747');
+    expect(lineValue('receivedPacks')).toBe('2');
+  });
+});
+
+describe('PackPhotoReader serialized packs', () => {
+  it('refuses a bulk count for a pack that prints its own serial, and accepts one', async () => {
+    h.mutateAsync.mockResolvedValue(SERIALIZED);
+    const { lineValue } = harness();
+    await openAndRead();
+    expect(screen.getByText(/prints its own serial number/)).toBeInTheDocument();
+    expect(packsField()).toHaveAttribute('max', '1');
+
+    countConfirmApply('5');
+    expect(screen.getByText(ONE_AT_A_TIME)).toBeInTheDocument();
+    expect(lineValue('receivedPacks')).toBe('');
+    expect(lineValue('batchNumber')).toBe('');
+
+    countConfirmApply('1');
+    expect(lineValue('receivedPacks')).toBe('1');
+    expect(lineValue('batchNumber')).toBe('SYN-B2741');
+  });
+
+  it('refuses a bulk count on a line that already carries a scanned serial', async () => {
+    h.mutateAsync.mockResolvedValue(PROPOSAL);
+    const { lineValue } = harness({ line: { serialNumber: 'SYN-SN-0001' } });
+    await openAndRead();
+    countConfirmApply('3');
+    expect(screen.getByText(ONE_AT_A_TIME)).toBeInTheDocument();
+    expect([lineValue('batchNumber'), lineValue('receivedPacks')]).toEqual(['', '']);
+    expect(lineValue('serialNumber')).toBe('SYN-SN-0001');
+  });
+
+  it('refuses to overwrite a lot that was filled from a 2D scan', async () => {
+    h.mutateAsync.mockResolvedValue(PROPOSAL);
+    const { lineValue } = harness({
+      gs1Payload: '(01)09501101530003(10)SYN-SCAN(17)280630(21)SYN-SN-9',
+      line: { batchNumber: 'SYN-SCAN', printedExpiry: '2028-06-30', receivedPacks: '1' },
+    });
+    await openAndRead();
+    countConfirmApply('1');
+    expect(screen.getByRole('alert')).toHaveTextContent('This lot was filled from a 2D scan');
+    expect([
+      lineValue('batchNumber'),
+      lineValue('printedExpiry'),
+      lineValue('receivedPacks'),
+    ]).toEqual(['SYN-SCAN', '2028-06-30', '1']);
+    expect(screen.queryByText(/Nothing is in stock yet/)).toBeNull();
+  });
+});
+
+describe('PackPhotoReader shelf choice', () => {
+  it('moves the line to the shelf the receiver picks in the reader', async () => {
+    h.mutateAsync.mockResolvedValue(PROPOSAL);
+    const { lineValue } = harness({ locations: TWO_LOCATIONS });
+    await openAndRead();
+    fireEvent.change(screen.getByLabelText('Receive into (optional)'), {
+      target: { value: 'loc-b' },
+    });
+    countConfirmApply('7');
+    expect(lineValue('stockLocation')).toBe('loc-b');
+  });
+
+  it('leaves the line’s shelf alone when the reader’s shelf is not touched', async () => {
+    h.mutateAsync.mockResolvedValue(PROPOSAL);
+    const { lineValue, receipt } = harness({ locations: TWO_LOCATIONS });
+    // The receiver changed the line's shelf before taking the photo.
+    fireEvent.change(receipt.elements.namedItem('stockLocation:pol-1') as HTMLSelectElement, {
+      target: { value: 'loc-b' },
+    });
+    await openAndRead();
+    expect((screen.getByLabelText('Receive into (optional)') as HTMLSelectElement).value).toBe(
+      'loc-b'
+    );
+    countConfirmApply('7');
+    expect(lineValue('batchNumber')).toBe('SYN-B2741');
+    expect(lineValue('stockLocation')).toBe('loc-b');
+  });
+
+  it('does not write its stale shelf over a line shelf changed while the reader was open', async () => {
+    h.mutateAsync.mockResolvedValue(PROPOSAL);
+    const { lineValue, receipt } = harness({ locations: TWO_LOCATIONS });
+    await openAndRead();
+    expect((screen.getByLabelText('Receive into (optional)') as HTMLSelectElement).value).toBe(
+      'loc-a'
+    );
+    fireEvent.change(receipt.elements.namedItem('stockLocation:pol-1') as HTMLSelectElement, {
+      target: { value: 'loc-b' },
+    });
+    countConfirmApply('7');
+    expect(lineValue('batchNumber')).toBe('SYN-B2741');
+    expect(lineValue('stockLocation')).toBe('loc-b');
+  });
+
+  it('keeps the line’s location when the receiver picks a shelf then switches back', async () => {
+    h.mutateAsync.mockResolvedValue(PROPOSAL);
+    const { lineValue } = harness({ locations: TWO_LOCATIONS });
+    await openAndRead();
+    const shelf = screen.getByLabelText('Receive into (optional)');
+    fireEvent.change(shelf, { target: { value: 'loc-b' } });
+    fireEvent.change(shelf, { target: { value: '' } });
+    expect(
+      (screen.getByRole('option', { name: 'Keep the line’s location' }) as HTMLOptionElement)
+        .selected
+    ).toBe(true);
+    countConfirmApply('7');
+    expect(lineValue('batchNumber')).toBe('SYN-B2741');
+    expect(lineValue('stockLocation')).toBe('loc-a');
+  });
+
+  it('explains a branch with no stock location and offers no shelf choice', async () => {
+    h.mutateAsync.mockResolvedValue(PROPOSAL);
+    harness({ locations: [], defaultLocationId: null });
+    await openAndRead();
+    expect(screen.getByText(/This branch has no active stock location/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Receive into (optional)')).toBeNull();
+  });
+});
+
+describe('PackPhotoReader counts', () => {
+  it('shows the pack-to-unit conversion for the count and in the filled status', async () => {
+    h.mutateAsync.mockResolvedValue(PROPOSAL);
+    harness();
+    await openAndRead();
+    const hint = () => document.getElementById(packsField().getAttribute('aria-describedby')!);
+    expect(hint()).toHaveTextContent('1 STRIP = 10 units');
+    fireEvent.change(packsField(), { target: { value: '7' } });
+    expect(hint()).toHaveTextContent('7 STRIP × 10 = 70 units');
+    expect(hint()).toHaveTextContent('10 STRIP outstanding');
+    fireEvent.click(confirmBox());
+    fireEvent.click(applyButton());
+    expect(screen.getByRole('status')).toHaveTextContent('7 STRIP (70 units)');
+  });
+
+  it('measures over-receipt against the balance left after the line’s other lots', async () => {
+    h.mutateAsync.mockResolvedValue(PROPOSAL);
+    const { lineValue } = harness({
+      siblings: [{ key: 'pol-1.lot2', batch: 'SYN-B9000', packs: '6' }],
+    });
+    await openAndRead();
+    countConfirmApply('7');
+    expect(lineValue('receivedPacks')).toBe('7');
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent(/More than the 4 packs still outstanding/);
+    expect(status).toHaveTextContent(/over-receipt/);
+  });
+
+  it('ignores a sibling lot slot whose batch is still blank', async () => {
+    h.mutateAsync.mockResolvedValue(PROPOSAL);
+    const { lineValue } = harness({
+      siblings: [{ key: 'pol-1.lot2', batch: '', packs: '6' }],
+    });
+    await openAndRead();
+    countConfirmApply('7');
+    expect(lineValue('receivedPacks')).toBe('7');
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('7 STRIP (70 units)');
+    expect(status).not.toHaveTextContent(/outstanding/);
+    expect(status).not.toHaveTextContent(/over-receipt/);
   });
 });
