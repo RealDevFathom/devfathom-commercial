@@ -965,6 +965,114 @@ async function assertPharmacySubmissionRequirements(
   }
 }
 
+/**
+ * A procedure without a separate excursion step (opening, closing) documents
+ * an out-of-range reading on the temperature step itself. Submission requires
+ * that note, and a done step cannot be edited outside a send-back, so the note
+ * is required before the step is marked done: otherwise the procedure could
+ * never be submitted.
+ */
+async function assertExcursionNoteBeforeCompletion(
+  ctx: TRPCContext,
+  site: PharmacySopSiteRef,
+  occurrenceId: string,
+  input: { templateStepId: string; note?: string | null }
+): Promise<void> {
+  if (input.note?.trim()) return;
+  const steps = await ctx.db.restaurantSopOccurrenceStep.findMany({
+    where: { occurrenceId },
+    select: {
+      id: true,
+      templateStepId: true,
+      completed: true,
+      templateStep: { select: { title: true } },
+    },
+  });
+  if (steps.some((step) => EXCURSION_STEP.test(step.templateStep.title))) return;
+  const step = steps.find((candidate) => candidate.templateStepId === input.templateStepId);
+  // The engine reports an unknown step, and a repeat call on a done step
+  // stays the engine's no-op.
+  if (!step || step.completed) return;
+  const links = await ctx.db.pharmacySopRecordLink.findMany({
+    where: {
+      occurrenceId,
+      occurrenceStepId: step.id,
+      pharmacyBranchId: site.pharmacyBranchId,
+      recordType: 'TEMPERATURE_LOG',
+    },
+    select: { recordId: true, note: true },
+  });
+  const undocumented = links.filter((link) => !link.note?.trim());
+  if (undocumented.length === 0) return;
+  const outOfRange = await ctx.db.pharmacyTemperatureLog.findFirst({
+    where: {
+      id: { in: undocumented.map((link) => link.recordId) },
+      branchId: site.pharmacyBranchId,
+      outOfRange: true,
+    },
+    select: { id: true },
+  });
+  if (!outOfRange) return;
+  throw new TRPCError({
+    code: 'PRECONDITION_FAILED',
+    message:
+      'A linked temperature reading is out of range. Write what happened and what you did in this step’s note before marking it done.',
+  });
+}
+
+/**
+ * The same rule for a reading linked where no later note can reach it: to a
+ * step already done (after a send-back) or to no step at all. Without a
+ * separate excursion step, submission needs a note on the link or its step,
+ * and neither a done step's note nor an existing link's note can change, so
+ * an out-of-range reading linked there without either could never be submitted.
+ */
+async function assertExcursionNoteBeforeLateLink(
+  ctx: TRPCContext,
+  site: PharmacySopSiteRef,
+  occurrenceId: string,
+  input: {
+    occurrenceStepId: string | null;
+    recordType: PharmacySopRecordType;
+    recordId: string;
+    note?: string | null;
+  }
+): Promise<void> {
+  if (input.recordType !== 'TEMPERATURE_LOG' || input.note?.trim()) return;
+  const steps = await ctx.db.restaurantSopOccurrenceStep.findMany({
+    where: { occurrenceId },
+    select: {
+      id: true,
+      completed: true,
+      note: true,
+      templateStep: { select: { title: true } },
+    },
+  });
+  if (steps.some((step) => EXCURSION_STEP.test(step.templateStep.title))) return;
+  if (input.occurrenceStepId) {
+    const step = steps.find((candidate) => candidate.id === input.occurrenceStepId);
+    // An open step takes the note before it is marked done (checked there),
+    // and a done step's own note already counts at submission.
+    if (!step || !step.completed || step.note?.trim()) return;
+  }
+  // Linking the same reading again stays the adapter's no-op.
+  const existing = await ctx.db.pharmacySopRecordLink.findFirst({
+    where: { occurrenceId, recordType: 'TEMPERATURE_LOG', recordId: input.recordId },
+    select: { id: true },
+  });
+  if (existing) return;
+  const outOfRange = await ctx.db.pharmacyTemperatureLog.findFirst({
+    where: { id: input.recordId, branchId: site.pharmacyBranchId, outOfRange: true },
+    select: { id: true },
+  });
+  if (!outOfRange) return;
+  throw new TRPCError({
+    code: 'PRECONDITION_FAILED',
+    message:
+      'This reading is out of range. Write what happened and what you did with it before linking it.',
+  });
+}
+
 // ── Schemas ───────────────────────────────────────────────────────────────────
 
 const ID = z.string().trim().min(1).max(200);
@@ -2357,6 +2465,10 @@ export const pharmacySopRouter = router({
           input.pharmacyBranchId,
           input.occurrenceId
         );
+        await assertExcursionNoteBeforeCompletion(ctx, site, occurrence.id, {
+          templateStepId: input.templateStepId,
+          note: input.note,
+        });
         const result = await completeStep(ctx.db, {
           occurrenceId: occurrence.id,
           templateStepId: input.templateStepId,
@@ -2405,6 +2517,12 @@ export const pharmacySopRouter = router({
           input.occurrenceStepId ?? null,
           input.recordType
         );
+        await assertExcursionNoteBeforeLateLink(ctx, site, occurrence.id, {
+          occurrenceStepId: input.occurrenceStepId ?? null,
+          recordType: input.recordType,
+          recordId: input.recordId,
+          note: input.note,
+        });
         // A refrigerator step takes only a cold-chain reading, the ambient step
         // only an ambient one (checked by the adapter against the location).
         const result = await linkPharmacySopRecord(ctx.db, {

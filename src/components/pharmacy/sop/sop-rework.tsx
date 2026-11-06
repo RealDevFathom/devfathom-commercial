@@ -123,6 +123,10 @@ export function RecordLinkList({
             {facts.length ? (
               <p className="text-xs break-words text-text-muted">{facts.join(' · ')}</p>
             ) : null}
+            {/* What happened, written with the link (an out-of-range reading). */}
+            {link.note?.trim() ? (
+              <p className="text-sm break-words whitespace-pre-wrap text-text-body">{link.note}</p>
+            ) : null}
           </li>
         );
       })}
