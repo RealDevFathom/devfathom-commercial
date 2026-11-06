@@ -172,6 +172,70 @@ async function scenario(
   });
 }
 
+/**
+ * An ACTIVE user of the fixture's tenant with an active assignment to its
+ * branch: the co-signer writeOff requires (#430), and since DEV-124 a user the
+ * custody record's witness reference must resolve to.
+ */
+const witnesses = new Map<string, Promise<string>>();
+function witnessFor(fixture: Scenario): Promise<string> {
+  const key = `${fixture.organizationId}:${fixture.branchId}`;
+  let witness = witnesses.get(key);
+  if (!witness) {
+    witness = (async () => {
+      const witnessId = `witness_${fixture.branchId}`;
+      const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+      await withPlatformDb((db) =>
+        db.organization.createMany({
+          data: [
+            {
+              id: fixture.organizationId,
+              slug: fixture.organizationId,
+              legalName: 'Recall tests',
+              displayName: 'Recall tests',
+            },
+          ],
+          skipDuplicates: true,
+        })
+      );
+      await inOrg(fixture.organizationId, async (db) => {
+        await db.organizationDepartment.createMany({
+          data: [{ organizationId: fixture.organizationId, key: 'PHARMACY', name: 'Pharmacy' }],
+          skipDuplicates: true,
+        });
+        await db.user.createMany({
+          data: [
+            {
+              id: witnessId,
+              organizationId: fixture.organizationId,
+              name: 'Write-off witness',
+              email: `${witnessId}@example.invalid`,
+              department: 'PHARMACY',
+              title: 'Pharmacist',
+              status: 'ACTIVE',
+            },
+          ],
+          skipDuplicates: true,
+        });
+        await db.pharmacyBranchAssignment.createMany({
+          data: [
+            {
+              organizationId: fixture.organizationId,
+              branchId: fixture.branchId,
+              userId: witnessId,
+              active: true,
+            },
+          ],
+          skipDuplicates: true,
+        });
+      });
+      return witnessId;
+    })();
+    witnesses.set(key, witness);
+  }
+  return witness;
+}
+
 function scopeOf(fixture: Scenario) {
   return {
     organizationId: fixture.organizationId,
@@ -598,6 +662,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
 
   it('writes quarantined stock off with custody evidence', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'quarantine-write-off');
+    const witness = await witnessFor(fixture);
     const result = await inOrg(ORG_A, async (db) => {
       const { lot } = await stockLot(db, fixture, {
         expiresAt: LATER,
@@ -616,7 +681,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         stockLocationId: fixture.locationId,
         units: 10,
         disposition: 'QUARANTINE',
-        witnessId: 'user_witness',
+        witnessId: witness,
         reason: 'Recall destruction',
         evidenceRef: 'destruction-certificate-1',
         idempotencyKey: tag('quarantine-write-off-destroy'),
@@ -632,7 +697,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       quantityUnits: -10,
     });
     expect(result.written.custody).toMatchObject({
-      witnessId: 'user_witness',
+      witnessId: witness,
       evidenceRef: 'destruction-certificate-1',
     });
     expect(result.balances).toEqual(
@@ -642,6 +707,45 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       ])
     );
   });
+
+  it.each(['a name that is no user', "another tenant's user"] as const)(
+    'refuses custody evidence whose witness is %s (DEV-124)',
+    async (kind) => {
+      const fixture = await scenario(ORG_A, BRANCH_A, 'forged-witness');
+      const foreign = await witnessFor(await scenario(ORG_B, BRANCH_B, 'forged-witness-foreign'));
+      const witnessId = kind === 'a name that is no user' ? tag('no-such-user') : foreign;
+      // The reference is DEFERRABLE INITIALLY DEFERRED, so PostgreSQL refuses
+      // it when the transaction commits; nothing it wrote survives.
+      const forged = inOrg(ORG_A, async (db) => {
+        const { lot } = await stockLot(db, fixture, {
+          expiresAt: LATER,
+          units: 10,
+          label: 'forged-witness',
+        });
+        const movement = await db.pharmacyStockMovement.findFirstOrThrow({
+          where: { inventoryLotId: lot.id },
+        });
+        // Straight at the table, past writeOff's own witness check: the
+        // database alone must refuse it.
+        await db.pharmacyCustodyRecord.create({
+          data: {
+            organizationId: ORG_A,
+            branchId: BRANCH_A,
+            movementId: movement.id,
+            actorId: ACTOR,
+            witnessId,
+            reason: 'Forged co-signature',
+            evidenceRef: 'none',
+          },
+        });
+      });
+      await expect(forged).rejects.toThrow(/ForeignKeyConstraintViolation|foreign key/i);
+      const custody = await inOrg(ORG_A, (db) =>
+        db.pharmacyCustodyRecord.count({ where: { witnessId } })
+      );
+      expect(custody).toBe(0);
+    }
+  );
 
   it('releases manually quarantined stock back to available', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'quarantine-release');
@@ -679,6 +783,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     'does not %s units reserved by a live DRAP recall quarantine',
     async (operation) => {
       const fixture = await scenario(ORG_A, BRANCH_A, 'drap-release-guard');
+      const witness = await witnessFor(fixture);
       const result = await inOrg(ORG_A, async (db) => {
         const { lot } = await recalledLot(db, fixture);
 
@@ -695,7 +800,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
             : deps.operations.writeOff(db, scopeOf(fixture), {
                 ...input,
                 disposition: 'QUARANTINE',
-                witnessId: 'user_witness',
+                witnessId: witness,
                 evidenceRef: 'destruction-certificate',
                 idempotencyKey: tag('drap-write-off-guard-attempt'),
               })
@@ -728,6 +833,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     async (operation, manualArrangement) => {
       const { ingestDrapNotice, reverseRecallQuarantine } = await import('./drap-monitoring');
       const fixture = await scenario(ORG_A, BRANCH_A, 'mixed-recall-arrangement');
+      const witness = await witnessFor(fixture);
       const scope = scopeOf(fixture);
       const { lot, recallId } = await inOrg(ORG_A, async (db) => {
         const { lot } = await stockLot(db, fixture, {
@@ -792,7 +898,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
             : await deps.operations.writeOff(db, scope, {
                 ...input,
                 disposition: 'QUARANTINE',
-                witnessId: 'user_witness',
+                witnessId: witness,
                 evidenceRef: 'destruction-certificate',
                 idempotencyKey: tag('manual-arrangement-write-off'),
               });
@@ -838,6 +944,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     'preserves the recall reserve during a concurrent manual release and %s',
     async (operation) => {
       const fixture = await scenario(ORG_A, BRANCH_A, 'mixed-quarantine-race');
+      const witness = await witnessFor(fixture);
       const { lot, recall } = await inOrg(ORG_A, (db) => recalledLot(db, fixture, 10));
       const input = {
         inventoryLotId: lot.id,
@@ -882,7 +989,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
           : deps.operations.writeOff(db, scopeOf(fixture), {
               ...input,
               disposition: 'QUARANTINE',
-              witnessId: 'user_witness',
+              witnessId: witness,
               evidenceRef: 'destruction-certificate',
               idempotencyKey: tag('mixed-write-off-second'),
             });

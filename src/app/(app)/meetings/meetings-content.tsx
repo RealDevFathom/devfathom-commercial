@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, memo } from 'react';
+import { useState, useMemo, useCallback, useId, memo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -29,6 +29,11 @@ import { TimePicker } from '@/components/ui/time-picker';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { computePunctuality } from '@/lib/meeting-occurrence';
+import {
+  followStartDate,
+  meetingFormInstants,
+  meetingFormTimeOrderError,
+} from '@/lib/meetings/time-order';
 import { format, isToday, isTomorrow } from 'date-fns';
 
 const recurrenceLabels: Record<string, string> = {
@@ -95,8 +100,13 @@ export function MeetingsContent() {
       {showCreate && (
         <CreateMeetingForm
           onSubmit={createMeeting.mutate}
-          onClose={() => setShowCreate(false)}
+          onClose={() => {
+            setShowCreate(false);
+            // A refusal belongs to the attempt it answered, not the next form.
+            createMeeting.reset();
+          }}
           isPending={createMeeting.isPending}
+          serverError={createMeeting.error?.message ?? null}
           team={team}
         />
       )}
@@ -180,6 +190,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
   onSubmit,
   onClose,
   isPending,
+  serverError,
   team,
 }: {
   onSubmit: (input: {
@@ -193,12 +204,16 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
   }) => void;
   onClose: () => void;
   isPending: boolean;
+  /** The server's refusal of the last submit, shown when the form itself found nothing. */
+  serverError?: string | null;
   team?: Array<{ id: string; name: string; avatar: string | null }>;
 }) {
+  const timeErrorId = useId();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState('');
   const [startTime, setStartTime] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [endTime, setEndTime] = useState('');
   const [location, setLocation] = useState('');
   const [recurrence, setRecurrence] = useState<'daily' | 'weekly' | 'biweekly' | 'monthly' | ''>(
@@ -206,13 +221,26 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
   );
   const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
 
+  // DEV-249: the same rule the server applies, checked as the times are picked
+  // so a meeting that ends at or before it starts cannot be submitted. Both
+  // sides are full instants, so a meeting that runs past midnight is allowed.
+  const range = { startDate: date, startTime, endDate, endTime };
+  const timeOrderError = meetingFormTimeOrderError(range);
+  const formError = timeOrderError ?? serverError ?? null;
+
+  const changeStartDate = (next: string) => {
+    setEndDate(followStartDate(date, next, endDate));
+    setDate(next);
+  };
+
   const handleCreate = () => {
-    if (!title.trim() || !date || !startTime || !endTime) return;
+    if (!title.trim() || !date || !startTime || !endTime || timeOrderError) return;
+    const instants = meetingFormInstants(range);
     onSubmit({
       title: title.trim(),
       description: description.trim() || undefined,
-      startTime: new Date(`${date}T${startTime}`),
-      endTime: new Date(`${date}T${endTime}`),
+      startTime: instants.startTime,
+      endTime: instants.endTime,
       location: location || undefined,
       recurrence: recurrence || null,
       attendeeIds,
@@ -239,7 +267,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Sprint Planning"
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
           <div>
@@ -248,7 +276,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               value={location}
               onChange={(e) => setLocation(e.target.value)}
               placeholder="Google Meet, Zoom, Office..."
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
         </div>
@@ -259,18 +287,19 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="What's this meeting about?"
-            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div>
-            <label className="block text-xs font-medium text-foreground mb-1">Date *</label>
+            <label className="block text-xs font-medium text-foreground mb-1">Start date *</label>
             <input
               type="date"
+              aria-label="Start date"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+              onChange={(e) => changeStartDate(e.target.value)}
+              className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
             />
           </div>
           <div>
@@ -279,7 +308,20 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               value={startTime}
               onChange={setStartTime}
               aria-label="Start time"
-              className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">End date *</label>
+            <input
+              type="date"
+              aria-label="End date"
+              value={endDate}
+              min={date || undefined}
+              onChange={(e) => setEndDate(e.target.value)}
+              aria-invalid={timeOrderError ? true : undefined}
+              aria-describedby={timeOrderError ? timeErrorId : undefined}
+              className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
             />
           </div>
           <div>
@@ -288,10 +330,17 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               value={endTime}
               onChange={setEndTime}
               aria-label="End time"
-              className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              invalid={!!timeOrderError}
+              aria-describedby={timeOrderError ? timeErrorId : undefined}
+              className="min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
         </div>
+        {formError && (
+          <p id={timeErrorId} role="alert" className="text-xs text-destructive">
+            {formError}
+          </p>
+        )}
 
         {/* Recurrence */}
         <div>
@@ -362,7 +411,9 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           </button>
           <button
             onClick={handleCreate}
-            disabled={!title.trim() || !date || !startTime || !endTime || isPending}
+            disabled={
+              !title.trim() || !date || !startTime || !endTime || !!timeOrderError || isPending
+            }
             className="flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {isPending ? (
@@ -412,12 +463,14 @@ const MeetingCard = memo(function MeetingCard({
   const [eDesc, setEDesc] = useState('');
   const [eDate, setEDate] = useState('');
   const [eStart, setEStart] = useState('');
+  const [eEndDate, setEEndDate] = useState('');
   const [eEnd, setEEnd] = useState('');
   const [eLoc, setELoc] = useState('');
   const [eRecurrence, setERecurrence] = useState<'daily' | 'weekly' | 'biweekly' | 'monthly' | ''>(
     ''
   );
   const [eAttendees, setEAttendees] = useState<string[]>([]);
+  const editTimeErrorId = useId();
 
   const updateMeeting = trpc.meetings.update.useMutation({
     onSuccess: () => {
@@ -460,21 +513,37 @@ const MeetingCard = memo(function MeetingCard({
     setEDesc(meeting.description || '');
     setEDate(format(s, 'yyyy-MM-dd'));
     setEStart(format(s, 'HH:mm'));
+    // The end keeps its own date: a meeting that runs past the viewer's
+    // midnight must not be read back as ending before it starts.
+    setEEndDate(format(e, 'yyyy-MM-dd'));
     setEEnd(format(e, 'HH:mm'));
     setELoc(meeting.location || '');
     setERecurrence((meeting.recurrence as typeof eRecurrence) || '');
     setEAttendees(meeting.attendees.map((a) => a.user.id));
+    // A refusal belongs to the edit it answered, not the next one.
+    updateMeeting.reset();
     setIsEditing(true);
   };
 
+  // DEV-249: the server's rule, applied while editing, on full instants.
+  const editRange = { startDate: eDate, startTime: eStart, endDate: eEndDate, endTime: eEnd };
+  const editTimeOrderError = meetingFormTimeOrderError(editRange);
+  const editFormError = editTimeOrderError ?? updateMeeting.error?.message ?? null;
+
+  const changeEditStartDate = (next: string) => {
+    setEEndDate(followStartDate(eDate, next, eEndDate));
+    setEDate(next);
+  };
+
   const handleSave = () => {
-    if (!eTitle.trim() || !eDate || !eStart || !eEnd) return;
+    if (!eTitle.trim() || !eDate || !eStart || !eEnd || editTimeOrderError) return;
+    const instants = meetingFormInstants(editRange);
     updateMeeting.mutate({
       id: meeting.id,
       title: eTitle.trim(),
       description: eDesc.trim() || null,
-      startTime: new Date(`${eDate}T${eStart}`),
-      endTime: new Date(`${eDate}T${eEnd}`),
+      startTime: instants.startTime,
+      endTime: instants.endTime,
       location: eLoc || null,
       recurrence: eRecurrence || null,
       attendeeIds: eAttendees,
@@ -500,7 +569,7 @@ const MeetingCard = memo(function MeetingCard({
               <input
                 value={eTitle}
                 onChange={(e) => setETitle(e.target.value)}
-                className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                className="w-full min-h-11 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
             <div>
@@ -509,18 +578,21 @@ const MeetingCard = memo(function MeetingCard({
                 value={eLoc}
                 onChange={(e) => setELoc(e.target.value)}
                 placeholder="Google Meet..."
-                className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                className="w-full min-h-11 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
               />
             </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div>
-              <label className="block text-[10px] font-medium text-foreground mb-1">Date</label>
+              <label className="block text-[10px] font-medium text-foreground mb-1">
+                Start date
+              </label>
               <input
                 type="date"
+                aria-label="Start date"
                 value={eDate}
-                onChange={(e) => setEDate(e.target.value)}
-                className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                onChange={(e) => changeEditStartDate(e.target.value)}
+                className="w-full min-h-11 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
             <div>
@@ -529,7 +601,20 @@ const MeetingCard = memo(function MeetingCard({
                 value={eStart}
                 onChange={setEStart}
                 aria-label="Start time"
-                className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                className="min-h-11 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-medium text-foreground mb-1">End date</label>
+              <input
+                type="date"
+                aria-label="End date"
+                value={eEndDate}
+                min={eDate || undefined}
+                onChange={(e) => setEEndDate(e.target.value)}
+                aria-invalid={editTimeOrderError ? true : undefined}
+                aria-describedby={editTimeOrderError ? editTimeErrorId : undefined}
+                className="w-full min-h-11 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
               />
             </div>
             <div>
@@ -538,10 +623,17 @@ const MeetingCard = memo(function MeetingCard({
                 value={eEnd}
                 onChange={setEEnd}
                 aria-label="End time"
-                className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                invalid={!!editTimeOrderError}
+                aria-describedby={editTimeOrderError ? editTimeErrorId : undefined}
+                className="min-h-11 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
           </div>
+          {editFormError && (
+            <p id={editTimeErrorId} role="alert" className="text-xs text-destructive">
+              {editFormError}
+            </p>
+          )}
           <div>
             <label className="block text-[10px] font-medium text-foreground mb-1">Repeat</label>
             <div className="flex gap-1">
@@ -603,7 +695,14 @@ const MeetingCard = memo(function MeetingCard({
             </button>
             <button
               onClick={handleSave}
-              disabled={!eTitle.trim() || !eDate || !eStart || !eEnd || updateMeeting.isPending}
+              disabled={
+                !eTitle.trim() ||
+                !eDate ||
+                !eStart ||
+                !eEnd ||
+                !!editTimeOrderError ||
+                updateMeeting.isPending
+              }
               className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
             >
               {updateMeeting.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save

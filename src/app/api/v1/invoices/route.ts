@@ -4,13 +4,8 @@ import { withApiAuth } from '@/lib/api-auth';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
 import { createWithNextInvoiceNumber } from '@/lib/finance/invoice-number';
-import {
-  isPersistableMoney,
-  MAX_MONEY,
-  multiplyMoney,
-  roundMoney,
-  sumMoney,
-} from '@/lib/finance/money';
+import { MAX_MONEY } from '@/lib/finance/money';
+import { computeInvoiceAmounts } from '@/lib/finance/invoice-amounts';
 
 export const GET = withApiAuth('finance:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -54,6 +49,9 @@ const createInvoiceSchema = z.object({
   projectId: z.string().optional(),
   items: z.array(lineItemSchema).min(1).max(1_000),
   // subtotal/total are intentionally NOT accepted — they are derived server-side.
+  // #448: discount and tax are currency AMOUNTS (not rates). total = subtotal −
+  // discount + tax, and a discount above the subtotal is a 400.
+  discount: z.number().nonnegative().max(MAX_MONEY).default(0),
   tax: z.number().nonnegative().max(MAX_MONEY).default(0),
   currency: z.enum(['USD', 'PKR']).default('USD'),
   dueDate: z.string().datetime(),
@@ -71,30 +69,17 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
     );
   }
 
-  // FIN-01: derive line amounts, subtotal and total on the server from
-  // quantity × rate (+ tax). Client-sent subtotal/total are never used.
-  const items = parsed.data.items.map((it) => ({
-    description: it.description,
-    quantity: it.quantity,
-    rate: it.rate,
-    amount: multiplyMoney(it.quantity, it.rate),
-  }));
-  const subtotal = sumMoney(items.map((it) => it.amount));
-  const tax = roundMoney(parsed.data.tax);
-  const total = sumMoney([subtotal, tax]);
-  if (
-    items.some((item) => !isPersistableMoney(item.amount)) ||
-    !isPersistableMoney(subtotal) ||
-    !isPersistableMoney(total)
-  ) {
+  // FIN-01: derive line amounts, subtotal and total on the server with the one
+  // shared invoice calculation (lines rounded to cents, subtotal = Σ lines,
+  // total = subtotal − discount + tax). Client-sent subtotal/total are never used.
+  const computed = computeInvoiceAmounts(parsed.data);
+  if (!computed.ok) {
     return NextResponse.json(
-      {
-        error: 'Invalid input',
-        details: [{ message: 'Derived invoice amount exceeds the allowed range' }],
-      },
+      { error: 'Invalid input', details: [{ path: [computed.field], message: computed.message }] },
       { status: 400 }
     );
   }
+  const { items, subtotal, discount, tax, total } = computed.amounts;
 
   // Same per-organization, per-year INV sequence as finance.createInvoice.
   const invoice = await createWithNextInvoiceNumber(ctx.db, (tx, invoiceNumber) =>
@@ -105,6 +90,7 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
         projectId: parsed.data.projectId || null,
         items,
         subtotal,
+        discount,
         tax,
         total,
         currency: parsed.data.currency,

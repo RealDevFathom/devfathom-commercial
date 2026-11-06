@@ -18,13 +18,14 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
+import { readInvoiceIssuer } from '@/lib/finance/invoice-issuer';
 import { createWithNextInvoiceNumber } from '@/lib/finance/invoice-number';
 import {
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
   PAID_STATUS_ERROR,
 } from '@/lib/finance/invoice-status';
-import { multiplyMoney, roundMoney } from '@/lib/finance/money';
+import { computeInvoiceAmounts } from '@/lib/finance/invoice-amounts';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
 // Bound amounts here so an oversized input is a clean validation error, not a
@@ -63,8 +64,6 @@ function rollForwardDueDate(due: Date, interval: string, now: Date): Date {
   }
   return next;
 }
-
-const round2 = roundMoney;
 
 /** Display label for a money amount, e.g. "$1,200" / "Rs 50,000". */
 const moneyLabel = (amount: number, currency: string) =>
@@ -287,7 +286,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
   tools.getInvoice = tool({
     description:
-      'Full detail for ONE invoice: client + primary contact, project, line items, subtotal/tax/total, status and key dates. Identify it by its invoice number (e.g. "INV-2026-001") or by client name. Use for "show invoice <number>", "what is on <client>\'s invoice", "the line items on that invoice". ADMIN ONLY.',
+      'Full detail for ONE invoice: the issuer (this workspace\'s legal name, invoice address and tax ID), client + primary contact, project, line items, subtotal/discount/tax/total, status and key dates. Identify it by its invoice number (e.g. "INV-2026-001") or by client name. Use for "show invoice <number>", "what is on <client>\'s invoice", "the line items on that invoice". ADMIN ONLY.',
     inputSchema: z.object({
       invoiceNumber: z.string().nullish().describe('Invoice number, e.g. "INV-2026-001"'),
       clientName: z
@@ -334,13 +333,17 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         invoiceId = clientInvoices[0].id;
       }
 
-      const invoice = await db.invoice.findUnique({
-        where: { id: invoiceId },
-        include: {
-          client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
-          project: { select: { name: true } },
-        },
-      });
+      const [invoice, issuer] = await Promise.all([
+        db.invoice.findUnique({
+          where: { id: invoiceId, organizationId: h.ctx.organizationId },
+          include: {
+            client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+            project: { select: { name: true } },
+          },
+        }),
+        // #458: the seller on the invoice is this workspace, never DevFathom.
+        readInvoiceIssuer(db, h.ctx.organizationId),
+      ]);
       if (!invoice) return { error: 'That invoice was not found.' };
 
       const rawItems = Array.isArray(invoice.items)
@@ -358,9 +361,11 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         status: invoice.status,
         client: invoice.client.name,
         clientContact: primary ? { name: primary.name, email: primary.email ?? null } : null,
+        issuer,
         project: invoice.project?.name ?? null,
         currency: invoice.currency,
         subtotal: Number(invoice.subtotal),
+        discount: Number(invoice.discount),
         tax: Number(invoice.tax),
         total: Number(invoice.total),
         dueDate: invoice.dueDate,
@@ -455,7 +460,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
   tools.createInvoice = tool({
     description:
-      'Create a DRAFT invoice for a client. Give the client name, the line items as [{ description, quantity, unitPrice }] (totals are computed for you), an optional tax amount, currency and due date. Use for "invoice <client> for ...", "draft an invoice". ADMIN ONLY.',
+      'Create a DRAFT invoice for a client. Give the client name, the line items as [{ description, quantity, unitPrice }] (totals are computed for you), an optional discount amount and tax amount (both money amounts, not percentages), currency and due date. Total = subtotal − discount + tax. Use for "invoice <client> for ...", "draft an invoice". ADMIN ONLY.',
     inputSchema: z.object({
       clientName: z.string().describe('Client to bill (fuzzy name match)'),
       projectName: z.string().nullish().describe('Optional project to attach the invoice to'),
@@ -469,13 +474,27 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         )
         .min(1)
         .describe('Line items; each amount = quantity × unitPrice'),
+      discount: nonNegativeMoney()
+        .nullish()
+        .describe(
+          'Discount amount (not a percentage) taken off the subtotal (default 0); cannot exceed it'
+        ),
       tax: nonNegativeMoney().nullish().describe('Tax amount to add to the subtotal (default 0)'),
       currency: z.enum(['USD', 'PKR']).nullish().describe('Default USD'),
       dueDate: z.string().describe('ISO date the invoice is due'),
       notes: z.string().nullish(),
     }),
     needsApproval: true,
-    execute: async ({ clientName, projectName, items, tax, currency, dueDate, notes }) => {
+    execute: async ({
+      clientName,
+      projectName,
+      items,
+      discount,
+      tax,
+      currency,
+      dueDate,
+      notes,
+    }) => {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
 
       const rc = await resolveClient(clientName);
@@ -494,15 +513,24 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         resolvedProject = rp.value.name;
       }
 
-      const lineItems = items.map((it) => ({
-        description: it.description,
-        quantity: it.quantity,
-        rate: it.unitPrice,
-        amount: multiplyMoney(it.quantity, it.unitPrice),
-      }));
-      const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
-      const taxAmount = round2(tax ?? 0);
-      const total = round2(subtotal + taxAmount);
+      // #448: the one shared invoice calculation (same as the router and REST).
+      const computed = computeInvoiceAmounts({
+        items: items.map((it) => ({
+          description: it.description,
+          quantity: it.quantity,
+          rate: it.unitPrice,
+        })),
+        discount,
+        tax,
+      });
+      if (!computed.ok) return { error: computed.message };
+      const {
+        items: lineItems,
+        subtotal,
+        discount: discountAmount,
+        tax: taxAmount,
+        total,
+      } = computed.amounts;
       const invCurrency = currency ?? 'USD';
 
       // Same per-organization, per-year INV sequence as the tRPC mutation. The
@@ -516,6 +544,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
             projectId,
             items: lineItems,
             subtotal,
+            discount: discountAmount,
             tax: taxAmount,
             total,
             currency: invCurrency,
@@ -556,6 +585,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         client: invoice.client.name,
         project: resolvedProject ?? null,
         subtotal,
+        discount: discountAmount,
         tax: taxAmount,
         total,
         currency: invCurrency,

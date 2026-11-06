@@ -131,3 +131,88 @@ describe('CreateInvoiceForm', () => {
     expect(screen.getByRole('button', { name: 'Remove line item' })).toBeDisabled();
   });
 });
+
+describe('CreateInvoiceForm tax and discount (#448)', () => {
+  beforeEach(() => {
+    mocks.mutate.mockClear();
+  });
+
+  const total = (label: string) =>
+    screen.getByText(label, { selector: 'dt' }).nextElementSibling?.textContent;
+
+  function fill(lines: Array<[string, string, string]>) {
+    const { container } = render(<CreateInvoiceForm onClose={vi.fn()} />);
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'client-1' } });
+    fireEvent.change(container.querySelector('input[type="date"]')!, {
+      target: { value: '2026-11-30' },
+    });
+    lines.forEach(([description, quantity, rate], index) => {
+      if (index > 0) fireEvent.click(screen.getByRole('button', { name: 'Add line item' }));
+      fireEvent.change(screen.getAllByPlaceholderText('Description')[index], {
+        target: { value: description },
+      });
+      fireEvent.change(screen.getAllByPlaceholderText('Qty')[index], {
+        target: { value: quantity },
+      });
+      fireEvent.change(screen.getAllByPlaceholderText('Rate')[index], { target: { value: rate } });
+    });
+  }
+
+  it('previews and submits the cent-exact amounts the server will persist', () => {
+    fill([
+      ['Pack', '3', '0.335'],
+      ['Retainer', '2', '19.995'],
+    ]);
+    fireEvent.change(screen.getByLabelText('Discount (USD)'), { target: { value: '1.005' } });
+    fireEvent.change(screen.getByLabelText('Tax (USD)'), { target: { value: '3.335' } });
+
+    expect(screen.getByText('$1.01', { selector: 'span' })).toBeInTheDocument();
+    expect(screen.getByText('$39.99', { selector: 'span' })).toBeInTheDocument();
+    expect(total('Subtotal')).toBe('$41');
+    expect(total('Discount')).toBe('−$1.01');
+    expect(total('Tax')).toBe('$3.34');
+    expect(total('Total')).toBe('$43.33');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create Invoice' }));
+
+    expect(mocks.mutate).toHaveBeenCalledOnce();
+    const sent = mocks.mutate.mock.calls[0][0];
+    expect(sent).toMatchObject({
+      clientId: 'client-1',
+      items: [
+        { description: 'Pack', quantity: 3, rate: 0.335, amount: 1.01 },
+        { description: 'Retainer', quantity: 2, rate: 19.995, amount: 39.99 },
+      ],
+      discount: 1.01,
+      tax: 3.34,
+    });
+    expect(sent).not.toHaveProperty('subtotal');
+    expect(sent).not.toHaveProperty('total');
+  });
+
+  it('sends zero tax and discount when both are left blank', () => {
+    fill([['Consulting', '1', '100']]);
+
+    expect(total('Total')).toBe('$100');
+    fireEvent.click(screen.getByRole('button', { name: 'Create Invoice' }));
+
+    expect(mocks.mutate).toHaveBeenCalledWith(expect.objectContaining({ discount: 0, tax: 0 }));
+  });
+
+  it('flags a discount above the subtotal and refuses to submit it', () => {
+    fill([['Consulting', '1', '100']]);
+    const discount = screen.getByLabelText('Discount (USD)');
+    fireEvent.change(discount, { target: { value: '100.01' } });
+
+    const error = screen.getByText('Discount cannot be more than the subtotal.');
+    expect(discount).toHaveAttribute('aria-invalid', 'true');
+    expect(discount).toHaveAttribute('aria-describedby', error.id);
+    expect(total('Subtotal')).toBe('$100');
+    expect(total('Total')).toBe('—');
+    const submit = screen.getByRole('button', { name: 'Create Invoice' });
+    expect(submit).toBeDisabled();
+
+    fireEvent.click(submit);
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+});

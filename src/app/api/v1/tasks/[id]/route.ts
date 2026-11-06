@@ -4,6 +4,7 @@ import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { canAccessProject, canManageProject, projectIdOfTask } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
+import { completedAtForColumnChange, entersDone } from '@/lib/task-completion';
 
 export const GET = withApiAuth(
   'tasks:read',
@@ -188,13 +189,20 @@ export const PATCH = withApiAuth(
         newOrder = (maxOrder._max.order ?? -1) + 1;
       }
 
-      // Apply the primary update
+      // Apply the primary update. DEV-250: only a column move can change
+      // completedAt — entering done stamps it, leaving clears it, done-to-done
+      // keeps it; a plain field edit never touches it.
       const task = await tx.task.update({
         where: { id },
         data: {
           ...data,
           ...(dueDate !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
-          ...(isColumnMove && columnId && { columnId, order: newOrder }),
+          ...(isColumnMove &&
+            targetColumn && {
+              columnId: targetColumn.id,
+              order: newOrder,
+              ...completedAtForColumnChange(existing.column.name, targetColumn.name),
+            }),
         },
       });
 
@@ -232,13 +240,9 @@ export const PATCH = withApiAuth(
       return task;
     })(authCtx.db);
 
-    // Activity log: task_completed fires only when entering Done from a different column
-    if (
-      isColumnMove &&
-      targetColumn &&
-      targetColumn.name === 'Done' &&
-      existing.column.name !== 'Done'
-    ) {
+    // Activity log: task_completed fires only when entering a done column from a
+    // non-done one — the same transition that set completedAt above.
+    if (isColumnMove && targetColumn && entersDone(existing.column.name, targetColumn.name)) {
       logActivity(authCtx.db, authCtx.userId, {
         type: 'task_completed',
         message: `completed task "${updated.title}" in ${targetColumn.board.project.name}`,

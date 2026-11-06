@@ -13,7 +13,9 @@
  *
  * Exits non-zero if any case fails — gate model/tool changes with it.
  */
-import 'dotenv/config';
+// First: loads .env.local and .env (real environment wins) before anything below reads it.
+import { requireDatabaseUrl } from '../prisma/load-env';
+
 import { generateText, stepCountIs } from 'ai';
 import { db } from '../src/lib/db';
 import { createAIModel } from '../src/lib/ai/provider';
@@ -551,6 +553,7 @@ function judge(c: Case, r: Awaited<ReturnType<typeof runCase>>): string[] {
 }
 
 async function main() {
+  requireDatabaseUrl(['DATABASE_URL']);
   const admin = await db.user.findFirst({
     where: { role: 'ADMIN', status: 'ACTIVE' },
     select: { id: true, name: true, role: true },

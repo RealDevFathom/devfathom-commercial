@@ -123,8 +123,8 @@ export const dashboardRouter = router({
       ctx.db.task.count({
         where: {
           ...(isAdmin ? {} : { assignees: { some: { userId } } }),
-          column: { name: 'Done' },
-          updatedAt: {
+          // DEV-250: completed = entered a done column this week, not edited this week.
+          completedAt: {
             gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
           },
         },

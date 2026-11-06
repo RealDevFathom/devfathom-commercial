@@ -158,7 +158,7 @@ Create a new task. The column's default assignees are auto-added in addition to 
   }
   \`\`\`
 - **Response:** \`{ data: Task }\` (201 Created)
-- **Side effects:** logs \`task_created\` activity
+- **Side effects:** logs \`task_created\` activity. Creating straight into a done column (Done, Complete, Completed, Shipped or Closed) sets \`completedAt\`.
 
 ### \`GET /tasks/:id\`
 Get full task with comments, checklists, labels, assignees.
@@ -167,7 +167,7 @@ Get full task with comments, checklists, labels, assignees.
 - **Response:** \`{ data: Task }\` with deeply-included relations
 
 ### \`PATCH /tasks/:id\`
-Update a task. Setting \`columnId\` triggers a proper column move — reorders both source and target columns and adds the target column's default assignees (additive, idempotent). If the move enters the "Done" column, logs \`task_completed\`.
+Update a task. Setting \`columnId\` triggers a proper column move — reorders both source and target columns and adds the target column's default assignees (additive, idempotent). If the move enters a done column (Done, Complete, Completed, Shipped or Closed) from a non-done one, sets \`completedAt\` and logs \`task_completed\`; moving out of done clears \`completedAt\`. \`completedAt\` is read-only and other edits never change it.
 
 - **Scope:** \`tasks:write\`
 - **Body (all fields optional):**
@@ -339,6 +339,7 @@ Schedule a meeting. The token's user is auto-added as an attendee.
     "attendeeIds": ["userId"]
   }
   \`\`\`
+- **Validation:** \`endTime\` must be strictly after \`startTime\`. An end at or before the start is rejected with 400 and \`{ error, details: [{ path: ["endTime"], message }] }\`.
 - **Response:** \`{ data: Meeting }\` (201)
 
 ---
@@ -382,11 +383,10 @@ Create an invoice. \`finance:write\`. Logs \`invoice_created\`.
 {
   "clientId": "string (required)",
   "items": [
-    { "description": "string", "quantity": 1, "rate": 100, "amount": 100 }
+    { "description": "string", "quantity": 1, "rate": 100 }
   ],
-  "subtotal": 100,
+  "discount": 0,
   "tax": 0,
-  "total": 100,
   "currency": "USD | PKR",
   "dueDate": "ISO 8601 (required)",
   "projectId": "string",
@@ -394,8 +394,15 @@ Create an invoice. \`finance:write\`. Logs \`invoice_created\`.
 }
 \`\`\`
 
+\`discount\` and \`tax\` are amounts in the invoice currency (not percentages), default 0. The
+server derives every figure: each line \`amount\` = quantity × rate rounded to cents, \`subtotal\` =
+the sum of those line amounts, \`total\` = subtotal − discount + tax. A line \`amount\`, \`subtotal\`
+or \`total\` in the body is ignored. A negative value or a discount above the subtotal is a 400.
+
 ### \`GET /invoices/:id\` / \`PATCH /invoices/:id\`
 Get or update invoice status. \`finance:read\` / \`finance:write\`.
+GET also returns \`issuer: { "name", "address", "taxId" }\` — the token's own workspace as the
+seller (its legal name, invoice address and tax ID; an unset address or tax ID is \`null\`).
 PATCH body: \`{ "status": "DRAFT | SENT | OVERDUE | CANCELLED" }\`.
 The PATCH endpoint enforces valid status transitions and logs \`invoice_sent\` activity. To mark an
 invoice PAID, record its payment through the mark-paid workflow instead.

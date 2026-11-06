@@ -1,21 +1,22 @@
+// First: loads .env.local and .env (real environment wins) before anything below reads it.
+import { MIGRATION_DATABASE_URL_VARIABLES, requireDatabaseUrl } from './load-env.js';
+
 import { Prisma, PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { hash } from 'bcryptjs';
-import { config } from 'dotenv';
-
-config({ path: '.env' });
-config({ path: '.env.local', override: true });
 
 import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
+import { completedAtForColumnChange } from '../src/lib/task-completion.js';
 import { AGENCY_SUITE_MODULES, syncPlatformCatalog } from './catalog-sync.js';
-import { upsertPlatformAdmin } from './platform-admin.js';
+import { reportPlatformAdmin, upsertPlatformAdmin } from './platform-admin.js';
+import { conflictingSeedDataMessage } from './seed-failure.js';
 import { upsertStagingAdmin } from './staging-admin.js';
 
 // Seed writes through row-level security as a platform admin. Use the migration
 // role when it is set so the application role can stay NOSUPERUSER NOBYPASSRLS.
 const pool = new pg.Pool({
-  connectionString: process.env.MIGRATION_DATABASE_URL?.trim() || process.env.DATABASE_URL,
+  connectionString: requireDatabaseUrl(MIGRATION_DATABASE_URL_VARIABLES),
 });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
@@ -734,6 +735,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
             priority: task.priority as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT',
             dueDate: task.dueDate ? new Date(task.dueDate) : null,
             createdById: alex.id,
+            ...completedAtForColumnChange(null, column.name),
             assignees: {
               create: task.assigneeIds.map((id: string) => ({ userId: id })),
             },
@@ -1504,13 +1506,28 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   console.log('\nAdmin accounts: alex@company.com, jordan@company.com');
 }
 
-async function main() {
-  await prisma.$transaction(
+/**
+ * Every seed transaction writes through row-level security as the platform
+ * admin, scoped to the DevFathom organization. `set_config(..., true)` lasts for
+ * one transaction only, so each transaction sets it again.
+ */
+async function setSeedContext(tx: Prisma.TransactionClient) {
+  await tx.$executeRawUnsafe(
+    `SELECT set_config('app.is_platform_admin', 'true', true),
+            set_config('app.current_organization_id', 'org_devfathom', true)`
+  );
+}
+
+/**
+ * The platform catalog, the DevFathom organization with its departments and
+ * roles, the platform operator and the staging administrator. Committed in its
+ * own transaction, before any demo data, so a demo-data failure can never roll
+ * the platform operator back with it.
+ */
+async function seedPlatformFoundation() {
+  return prisma.$transaction(
     async (tx) => {
-      await tx.$executeRawUnsafe(
-        `SELECT set_config('app.is_platform_admin', 'true', true),
-                set_config('app.current_organization_id', 'org_devfathom', true)`
-      );
+      await setSeedContext(tx);
 
       const suite = await tx.platformPackage.upsert({
         where: { key: 'agency-suite' },
@@ -1634,11 +1651,11 @@ async function main() {
         },
       });
 
-      // Runs ahead of seedTenantData because that function returns early once
+      // Here rather than with the demo data: seedTenantData returns early once
       // seed data is present, refreshing the eight @company.com tenant users and
-      // nothing else. A rotated PLATFORM_ADMIN_PASSWORD has to land on every
+      // nothing else, and a rotated PLATFORM_ADMIN_PASSWORD has to land on every
       // deployment, not only the one that creates the administrator.
-      await upsertPlatformAdmin(tx);
+      const platformAdmin = await upsertPlatformAdmin(tx);
       // The staging workspace administrator (ADMIN_EMAIL / ADMIN_PASSWORD) is
       // not one of the demo @company.com users. Create it on every deploy,
       // including the early return inside seedTenantData.
@@ -1647,14 +1664,31 @@ async function main() {
         organizationRoleId: adminRole.id,
       });
 
+      return { adminRoleId: adminRole.id, memberRoleId: memberRole.id, platformAdmin };
+    },
+    { maxWait: 30_000, timeout: 300_000 }
+  );
+}
+
+let foundationCommitted = false;
+
+async function main() {
+  const foundation = await seedPlatformFoundation();
+  foundationCommitted = true;
+  console.log('✓ Platform catalog, DevFathom organization and roles committed');
+  reportPlatformAdmin(foundation.platformAdmin);
+
+  await prisma.$transaction(
+    async (tx) => {
+      await setSeedContext(tx);
       await seedTenantData(tx);
       await tx.user.updateMany({
         where: { organizationId: 'org_devfathom', role: 'ADMIN' },
-        data: { organizationRoleId: adminRole.id },
+        data: { organizationRoleId: foundation.adminRoleId },
       });
       await tx.user.updateMany({
         where: { organizationId: 'org_devfathom', role: { not: 'ADMIN' } },
-        data: { organizationRoleId: memberRole.id },
+        data: { organizationRoleId: foundation.memberRoleId },
       });
     },
     { maxWait: 30_000, timeout: 300_000 }
@@ -1969,7 +2003,14 @@ function getTasksForProject(projectName: string) {
 
 main()
   .catch((e) => {
-    console.error('❌ Seeding failed:', e);
+    const conflict = conflictingSeedDataMessage(e);
+    if (conflict) console.error(conflict);
+    else console.error('❌ Seeding failed:', e);
+    if (foundationCommitted) {
+      console.error(
+        '   The platform catalog, organization and operator were committed; only the demo data was rolled back.'
+      );
+    }
     process.exit(1);
   })
   .finally(async () => {

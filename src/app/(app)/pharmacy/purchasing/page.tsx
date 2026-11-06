@@ -7,6 +7,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { hasModule } from '@/lib/entitlements';
+import { resolvePharmacyAdvice } from '@/lib/pharmacy/dashboard-access';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import { resolveBranch } from './_components/branch-scope';
 import {
@@ -173,6 +174,12 @@ export default async function PharmacyPurchasingPage({
       }),
     ]);
   }
+
+  // DEV-594: reorder advice lives in Reports; offer it here, where orders are raised, to
+  // whoever the replenishment page itself admits — scoped to the branch in view.
+  const [reorderAdvice] = await resolvePharmacyAdvice(ctx.db, ctx.session.user, ctx.entitlements, [
+    'reorder',
+  ]);
 
   const hasUnavailable =
     openExceptions.kind === 'unavailable' || creditOutstanding.kind === 'unavailable';
@@ -365,6 +372,17 @@ export default async function PharmacyPurchasingPage({
               detail:
                 'Purchase returns and expiry claims with the supplier window each is racing, the debit notes they raise, and expected against received credit side by side.',
             },
+            ...(reorderAdvice
+              ? [
+                  {
+                    href: branchId
+                      ? `${reorderAdvice.href}?${new URLSearchParams({ branch: branchId })}`
+                      : reorderAdvice.href,
+                    title: reorderAdvice.label,
+                    detail: reorderAdvice.detail,
+                  },
+                ]
+              : []),
           ].map((card) => (
             <Link
               className="block rounded-[var(--radius-sm)] border border-border-subtle p-4 transition-colors hover:bg-muted focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"

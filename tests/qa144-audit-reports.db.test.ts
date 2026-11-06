@@ -57,11 +57,12 @@ suite('QA #144 real PostgreSQL audits and reports (migrated disposable database)
   }, 30000);
   afterAll(async () => {
     if (owner) {
-      await owner.query('DELETE FROM audit_logs WHERE "organizationId"=$1', [org]);
       await owner.query('DELETE FROM restaurant_daily_closes WHERE "organizationId"=$1', [org]);
       await owner.query('DELETE FROM restaurant_drawer_sessions WHERE "organizationId"=$1', [org]);
       await owner.query('DELETE FROM users WHERE "organizationId"=$1', [org]);
       await owner.query('DELETE FROM organizations WHERE id=$1', [org]);
+      // audit_logs is append-only while its organization exists (DEV-155).
+      await owner.query('DELETE FROM audit_logs WHERE "organizationId"=$1', [org]);
       await owner.end();
     }
     const { db } = await import('@/lib/db');

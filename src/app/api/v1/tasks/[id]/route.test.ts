@@ -150,3 +150,59 @@ describe('PATCH /api/v1/tasks/:id assignees', () => {
     });
   });
 });
+
+describe('PATCH /api/v1/tasks/:id completedAt (DEV-250)', () => {
+  const patch = (body: unknown) =>
+    PATCH(
+      new Request('https://example.test/api/v1/tasks/task-1', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      { params: Promise.resolve({ id: 'task-1' }) }
+    );
+  const updateData = () =>
+    (mocks.db.task.update.mock.calls as unknown as Array<[{ data: Record<string, unknown> }]>)[0][0]
+      .data;
+  const inColumn = (name: string) => ({
+    id: 'task-1',
+    title: 'Private task',
+    columnId: 'source-column',
+    order: 0,
+    column: { id: 'source-column', name },
+  });
+  const target = (name: string) => ({
+    id: 'target-column',
+    name,
+    board: { project: { id: 'source-project', name: 'Source' } },
+    defaultAssignees: [],
+  });
+
+  it('stamps completedAt when the move enters a done column', async () => {
+    mocks.db.column.findUnique.mockResolvedValueOnce(target('Done'));
+    expect((await patch({ columnId: 'target-column' })).status).toBe(200);
+    expect(updateData()).toMatchObject({
+      columnId: 'target-column',
+      completedAt: expect.any(Date),
+    });
+  });
+
+  it('clears completedAt when the move leaves done', async () => {
+    mocks.db.task.findUnique.mockResolvedValueOnce(inColumn('Done'));
+    mocks.db.column.findUnique.mockResolvedValueOnce(target('In Progress'));
+    expect((await patch({ columnId: 'target-column' })).status).toBe(200);
+    expect(updateData()).toMatchObject({ completedAt: null });
+  });
+
+  it('keeps completedAt on a done-to-done move and never touches it on a plain edit', async () => {
+    mocks.db.task.findUnique.mockResolvedValueOnce(inColumn('Done'));
+    mocks.db.column.findUnique.mockResolvedValueOnce(target('Shipped'));
+    await patch({ columnId: 'target-column' });
+    expect(updateData()).not.toHaveProperty('completedAt');
+
+    mocks.db.task.update.mockClear();
+    mocks.db.task.findUnique.mockResolvedValueOnce(inColumn('Done'));
+    await patch({ title: 'Edited', completedAt: '2020-01-01T00:00:00.000Z' });
+    expect(updateData()).toEqual({ title: 'Edited' });
+  });
+});

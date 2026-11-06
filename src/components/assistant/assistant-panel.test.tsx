@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from 'next-auth';
 import { type UIMessage, type UIMessageChunk, createUIMessageStreamResponse } from 'ai';
@@ -20,11 +20,20 @@ vi.mock('@ai-sdk/react', async (importOriginal) => {
   return {
     ...actual,
     useChat: (options: Parameters<typeof actual.useChat>[0]) =>
-      actual.useChat({ ...options, messages: fixtures.messages }),
+      actual.useChat({
+        ...options,
+        // Seeded tool states win; otherwise keep the panel's restored history.
+        messages: fixtures.messages.length
+          ? fixtures.messages
+          : options && 'messages' in options
+            ? options.messages
+            : undefined,
+      }),
   };
 });
 
 import { AssistantPanel } from './assistant-panel';
+import { clearConversation } from './assistant-history';
 
 const user: Session['user'] = {
   id: 'synthetic-user-a',
@@ -88,6 +97,13 @@ function enter(text = 'Find my notes') {
   fireEvent.change(screen.getByLabelText('Your question'), { target: { value: text } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 }
+function asRole(role: string) {
+  fixtures.session.mockReturnValue({ data: { user: { ...user, role } }, status: 'authenticated' });
+}
+/** Rendered user bubbles; the composer's textarea is not a paragraph. */
+function userBubbles(text: string) {
+  return screen.queryAllByText(text, { selector: 'p' });
+}
 function tool(part: Record<string, unknown>, text?: string) {
   fixtures.messages = [
     {
@@ -128,7 +144,8 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock);
   Element.prototype.scrollTo = scrollTo;
   scrollTo.mockClear();
-  useAssistant.setState({ open: true });
+  clearConversation();
+  useAssistant.setState({ ...useAssistant.getInitialState(), open: true });
 });
 afterEach(() => {
   cleanup();
@@ -142,9 +159,14 @@ describe('Ask Fathom context and suggestions', () => {
       'RESTAURANT',
       ['restaurant-core', 'notes'],
       'Your restaurant workspace',
-      'Find notes I can access',
+      'What can you help me with?',
     ],
-    ['PHARMACY', ['pharmacy-core', 'notes'], 'Your pharmacy workspace', 'Find notes I can access'],
+    [
+      'PHARMACY',
+      ['pharmacy-core', 'notes'],
+      'Your pharmacy workspace',
+      'What can you help me with?',
+    ],
   ] as const)('uses canonical %s context', (vertical, modules, heading, suggestion) => {
     render(panel(entitlement(vertical, [...modules])));
     expect(screen.getByRole('heading', { name: heading })).toBeVisible();
@@ -153,33 +175,45 @@ describe('Ask Fathom context and suggestions', () => {
     expect(
       screen.queryByRole('button', { name: /financ|revenue|profit/i })
     ).not.toBeInTheDocument();
-    if (vertical !== 'AGENCY')
+    if (vertical !== 'AGENCY') {
       expect(screen.queryByRole('button', { name: /projects|tasks/i })).not.toBeInTheDocument();
+      // The server composes notes and meetings tools for Agency workspaces only.
+      expect(screen.queryByRole('button', { name: /notes|meetings/i })).not.toBeInTheDocument();
+    }
   });
   it('describes existing Restaurant and Catering reports only under the canonical core entitlement', () => {
+    asRole('ADMIN');
     const view = render(panel(entitlement('RESTAURANT', ['restaurant-core'])));
     expect(screen.getByText(/Restaurant and Catering reports/)).toBeVisible();
+    expect(screen.getByRole('button', { name: "What were today's settled sales?" })).toBeVisible();
     expect(screen.queryByRole('button', { name: /catering/i })).not.toBeInTheDocument();
     view.rerender(panel(entitlement('RESTAURANT', [])));
     expect(screen.getByText(/Restaurant reports are not enabled/)).toBeVisible();
     expect(screen.queryByText(/Catering/)).not.toBeInTheDocument();
   });
-  it('describes the existing Pharmacy report tool only when entitled', () => {
+  it('offers restaurant staff POS how-to examples instead of reports', () => {
+    render(panel(entitlement('RESTAURANT', ['restaurant-core', 'restaurant-pos'])));
+    expect(
+      screen.getByRole('button', { name: 'How do I split a bill at checkout?' })
+    ).toBeVisible();
+    expect(screen.queryByText(/Catering reports/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /sales|refund/i })).not.toBeInTheDocument();
+  });
+  it('describes the Pharmacy report tool to the owner only when entitled', () => {
+    asRole('ADMIN');
     const view = render(panel(entitlement('PHARMACY', ['pharmacy-reports'])));
-    expect(screen.getByText(/Report access is checked when you ask/)).toBeVisible();
+    expect(screen.getByText(/today's sales, expiring or low stock/)).toBeVisible();
     view.rerender(panel(entitlement('PHARMACY', [])));
     expect(screen.getByText(/Pharmacy reports are not enabled/)).toBeVisible();
   });
   it.each(['EMPLOYEE', 'HR', 'ADMIN'])(
     'does not infer financial grants from the %s role',
     (role) => {
-      fixtures.session.mockReturnValue({
-        data: { user: { ...user, role } },
-        status: 'authenticated',
-      });
+      asRole(role);
       render(panel(entitlement('AGENCY', ['finance'])));
-      expect(screen.queryByRole('button', { name: /finance/i })).not.toBeInTheDocument();
-      expect(screen.getByText(/No suggested actions/)).toBeVisible();
+      expect(screen.queryByRole('button', { name: /financ/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'What can you help me with?' })).toBeEnabled();
+      expect(screen.queryByText(/No suggested actions/)).not.toBeInTheDocument();
     }
   );
   it.each(['loading', 'unauthenticated'] as const)(
@@ -214,6 +248,53 @@ describe('Ask Fathom context and suggestions', () => {
   });
 });
 
+describe('Ask Fathom role-aware empty state', () => {
+  const pharmacy = () =>
+    entitlement('PHARMACY', ['pharmacy-core', 'pharmacy-counter', 'pharmacy-reports']);
+  const examples = () =>
+    within(screen.getByRole('list', { name: 'Try asking' }))
+      .getAllByRole('button')
+      .map((button) => button.textContent);
+
+  it('gives the owner report examples without access wording (DEV-584, DEV-605)', () => {
+    asRole('ADMIN');
+    render(panel(pharmacy()));
+    expect(examples()).toEqual([
+      "What were today's sales?",
+      'Which stock is expiring soon?',
+      'Which medicines are running low and need reordering?',
+      'How do I process a customer return?',
+      'What can you help me with?',
+    ]);
+    expect(
+      screen.queryByText(/No suggested actions|current access|Examples match your role/)
+    ).not.toBeInTheDocument();
+  });
+  it('gives the cashier counter examples and never promises reports (DEV-605)', () => {
+    render(panel(pharmacy()));
+    expect(examples()).toEqual([
+      'How do I check whether a medicine is in stock?',
+      'How do I process a customer return?',
+      'What can you help me with?',
+    ]);
+    expect(screen.getByText(/counter tasks/)).toBeVisible();
+    expect(screen.queryByText(/Report access is checked when you ask/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Ask about .*pharmacy reports/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /sales|expir|reorder/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Examples match your role/)).toBeVisible();
+  });
+  it('offers three to five tappable examples and sends the one tapped (DEV-593)', async () => {
+    render(panel(pharmacy()));
+    expect(examples().length).toBeGreaterThanOrEqual(3);
+    expect(examples().length).toBeLessThanOrEqual(5);
+    fireEvent.click(screen.getByRole('button', { name: 'How do I process a customer return?' }));
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).messages[0].parts[0].text).toBe(
+      'How do I process a customer return?'
+    );
+  });
+});
+
 describe('Ask Fathom request and result states', () => {
   it('shows setup guidance without retry or provider diagnostics and preserves the question', async () => {
     fetchMock.mockResolvedValueOnce(
@@ -239,51 +320,61 @@ describe('Ask Fathom request and result states', () => {
   });
   it('sends an entitled suggestion through the SDK and shows its response', async () => {
     render(panel());
-    fireEvent.click(screen.getByRole('button', { name: 'Find notes I can access' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show my open tasks' }));
     expect(await screen.findByText('Synthetic answer')).toBeVisible();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).messages[0].parts[0].text).toBe(
-      'Find notes I can access'
+      'Show my open tasks'
     );
     expect(screen.getByLabelText('Your question')).toHaveValue('');
   });
-  it('retains the draft on provider failure and requires review before an explicit retry', async () => {
+  it('explains a failure plainly and retries the same question without a second bubble (DEV-592)', async () => {
     fetchMock.mockResolvedValueOnce(
       new Response('synthetic provider diagnostic must not render', { status: 503 })
     );
     render(panel());
     enter();
-    expect(await screen.findByRole('alert')).toHaveTextContent('currently unavailable');
-    expect(screen.getByRole('alert')).toHaveTextContent('No cached answer was used');
-    expect(screen.getByRole('button', { name: 'Close assistant' })).toBeEnabled();
-    expect(screen.getByRole('textbox')).toBeEnabled();
-    expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      "Ask Fathom can't answer right now. Try again in a few minutes; if it keeps happening, contact support."
+    );
+    expect(alert).not.toHaveTextContent(/action results|cached/i);
     expect(screen.queryByText(/synthetic provider diagnostic/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Review and retry' }));
-    expect(screen.getByLabelText('Your question')).toHaveFocus();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(screen.getByRole('button', { name: 'Close assistant' })).toBeEnabled();
+    expect(screen.getByLabelText('Your question')).toBeEnabled();
+    expect(userBubbles('Find my notes')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Synthetic answer')).toBeVisible();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(userBubbles('Find my notes')).toHaveLength(1);
+    const retried = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)) as {
+      messages: UIMessage[];
+    };
+    expect(retried.messages.filter((message) => message.role === 'user')).toHaveLength(1);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
   it.each([401, 403])(
-    'shows permission denial for HTTP %s without a retry or discarded draft',
+    'shows permission denial for HTTP %s without a retry or a lost question',
     async (status) => {
       fetchMock.mockResolvedValueOnce(new Response('denied', { status }));
       render(panel());
       enter();
       expect(await screen.findByRole('alert')).toHaveTextContent('Permission denied');
-      expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
+      expect(userBubbles('Find my notes')).toHaveLength(1);
       expect(screen.getByLabelText('Your question')).toBeDisabled();
-      expect(screen.queryByRole('button', { name: 'Review and retry' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
     }
   );
-  it('shows an explicit empty response and retains its question', async () => {
+  it('shows an explicit empty response and retries its question in place', async () => {
     fetchMock.mockResolvedValueOnce(response());
     render(panel());
     enter();
     expect(await screen.findByText(/No answer was returned/)).toBeVisible();
-    expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    expect(userBubbles('Find my notes')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
   it('shows pending status and stops the request without claiming rollback', async () => {
     const signal = pendingFetch();
@@ -293,8 +384,66 @@ describe('Ask Fathom request and result states', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     await waitFor(() => expect(signal()?.aborted).toBe(true));
     expect(screen.getByText(/Completed actions are not undone/)).toBeVisible();
-    expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
+    expect(userBubbles('Find my notes')).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('ignores repeat Enter while a reply loads and locks the composer (DEV-600)', async () => {
+    pendingFetch();
+    render(panel());
+    enter('Loading question');
+    const box = screen.getByLabelText('Your question');
+    expect(await screen.findByText('Working on your request…')).toBeVisible();
+    expect(box).toHaveValue('');
+    expect(box).toHaveAttribute('readonly');
+    // Even text forced into the locked box cannot queue a second question.
+    fireEvent.change(box, { target: { value: 'Loading question' } });
+    for (let press = 0; press < 3; press++) fireEvent.keyDown(box, { key: 'Enter' });
+    await act(async () => {});
+    expect(userBubbles('Loading question')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('does not resend a failed question as a new bubble on Enter (DEV-600)', async () => {
+    fetchMock.mockImplementation(async () => new Response('down', { status: 503 }));
+    render(panel());
+    enter('Owner question');
+    await screen.findByRole('alert');
+    const box = screen.getByLabelText('Your question');
+    expect(box).toHaveValue('');
+    fireEvent.keyDown(box, { key: 'Enter' });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await act(async () => {});
+    expect(userBubbles('Owner question')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('explains an empty send instead of doing nothing (DEV-593)', () => {
+    render(panel());
+    const box = screen.getByLabelText('Your question');
+    const hint = 'Type a question first, or choose an example above.';
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(screen.queryByText(hint)).not.toBeInTheDocument();
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(screen.getByText(hint)).toBeVisible();
+    expect(box).toHaveAccessibleDescription(hint);
+    fireEvent.change(box, { target: { value: '   ' } });
+    expect(screen.queryByText(hint)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(screen.getByText(hint)).toBeVisible();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("lays out mixed Urdu and English by each paragraph's first strong character (DEV-599)", async () => {
+    const mixed = 'آج کی سیل کتنی ہے؟ Panadol 500mg کے 1,250 units اور PKR 45,300 کی ریفنڈ';
+    fetchMock.mockImplementation(async () => answer(mixed));
+    render(panel());
+    const box = screen.getByLabelText('Your question');
+    expect(box).toHaveAttribute('dir', 'auto');
+    expect(box).toHaveClass('[unicode-bidi:plaintext]');
+    enter(mixed);
+    await waitFor(() => expect(screen.getAllByText(mixed)).toHaveLength(2));
+    const [question, reply] = screen.getAllByText(mixed);
+    expect(question).toHaveAttribute('dir', 'auto');
+    expect(question).toHaveClass('[unicode-bidi:plaintext]');
+    expect(reply).toHaveAttribute('dir', 'auto');
   });
   it.each([true, false])('sends explicit approval=%s and waits for a result', async (approved) => {
     tool({ state: 'approval-requested', approval: { id: 'approval' } });
@@ -418,6 +567,117 @@ describe('Ask Fathom lifecycle and keyboard', () => {
     act(() => useAssistant.setState({ open: true }));
     expect(await screen.findByText('Synthetic answer')).toBeVisible();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('opens on the question box, keeps typing inside, and restores focus on close (DEV-603)', async () => {
+    useAssistant.setState({ open: false });
+    render(
+      <>
+        <button type="button">Launcher</button>
+        {panel()}
+      </>
+    );
+    const launcher = screen.getByRole('button', { name: 'Launcher' });
+    launcher.focus();
+    act(() => useAssistant.setState({ open: true }));
+    const box = await screen.findByLabelText('Your question');
+    await waitFor(() => expect(box).toHaveFocus());
+    expect(screen.getByRole('button', { name: 'Close assistant' })).not.toHaveFocus();
+    fireEvent.change(box, { target: { value: 'Typed straight away' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    expect(useAssistant.getState().open).toBe(true);
+    expect(userBubbles('Typed straight away')).toHaveLength(1);
+    fireEvent.keyDown(box, { key: 'Escape' });
+    await waitFor(() => expect(useAssistant.getState().open).toBe(false));
+    await waitFor(() => expect(launcher).toHaveFocus());
+  });
+  it('keeps the conversation when the panel remounts in the same session (DEV-604)', async () => {
+    const view = render(panel());
+    enter('Remembered question');
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    act(() => useAssistant.setState({ open: false }));
+    view.unmount();
+    act(() => useAssistant.setState({ open: true }));
+    render(panel());
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    expect(userBubbles('Remembered question')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('keeps the conversation while the session briefly reloads (DEV-604)', async () => {
+    const view = render(panel());
+    enter('Kept through loading');
+    await screen.findByText('Synthetic answer');
+    fixtures.session.mockReturnValue({ data: null, status: 'loading' });
+    view.rerender(panel());
+    expect(screen.queryByText('Kept through loading')).not.toBeInTheDocument();
+    fixtures.session.mockReturnValue({ data: { user }, status: 'authenticated' });
+    view.rerender(panel());
+    expect(await screen.findByText('Kept through loading')).toBeVisible();
+  });
+  it('never restores a conversation for another user (DEV-604)', async () => {
+    const view = render(panel());
+    enter('Private question');
+    await screen.findByText('Synthetic answer');
+    view.unmount();
+    fixtures.session.mockReturnValue({
+      data: { user: { ...user, id: 'synthetic-user-b' } },
+      status: 'authenticated',
+    });
+    const other = render(panel());
+    expect(screen.queryByText('Private question')).not.toBeInTheDocument();
+    other.unmount();
+    // The other identity replaced the tab's slot, so the first user starts fresh too.
+    fixtures.session.mockReturnValue({ data: { user }, status: 'authenticated' });
+    render(panel());
+    expect(screen.queryByText('Private question')).not.toBeInTheDocument();
+  });
+  it('discards the conversation when Ask Fathom is switched off (DEV-604)', async () => {
+    const view = render(panel());
+    enter('Before switch-off');
+    await screen.findByText('Synthetic answer');
+    act(() => useAssistant.setState({ askFathomEnabled: false, open: false }));
+    view.unmount();
+    act(() => useAssistant.setState({ askFathomEnabled: true, open: true }));
+    render(panel());
+    expect(screen.queryByText('Before switch-off')).not.toBeInTheDocument();
+  });
+  it('restores an interrupted question ready to retry (DEV-604, DEV-592)', async () => {
+    pendingFetch();
+    const view = render(panel());
+    enter('Interrupted question');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    view.unmount();
+    fetchMock.mockImplementation(async () => answer());
+    render(panel());
+    expect(userBubbles('Interrupted question')).toHaveLength(1);
+    expect(screen.getByText('This question has not been answered yet.')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    expect(userBubbles('Interrupted question')).toHaveLength(1);
+  });
+  it('follows the current theme through tokens when reopened (DEV-598)', async () => {
+    try {
+      render(panel());
+      enter();
+      await screen.findByText('Synthetic answer');
+      act(() => useAssistant.setState({ open: false }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      document.documentElement.setAttribute('data-theme', 'dark');
+      act(() => useAssistant.setState({ open: true }));
+      const dialog = await screen.findByRole('dialog', { name: 'Ask Fathom' });
+      // The surface reads the theme token; only opacity and position animate,
+      // so a theme switch can never leave it on the previous theme's colour.
+      expect(dialog).toHaveClass('bg-popover', 'transition-[opacity,translate]');
+      expect(dialog.className).not.toMatch(/(^|\s)transition(\s|$)/);
+      for (const element of [dialog, ...dialog.querySelectorAll('*')]) {
+        expect(element.getAttribute('class') ?? '').not.toMatch(
+          /rgba?\(|#[0-9a-f]{3,8}\b|\b(bg|text|border)-(white|black)\b/i
+        );
+        expect(element.getAttribute('style') ?? '').not.toMatch(/colou?r|background/i);
+      }
+    } finally {
+      document.documentElement.removeAttribute('data-theme');
+    }
   });
   it('honors reduced motion for scrolling and uses a named dialog', async () => {
     fixtures.reducedMotion = true;

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { workspaceTimezone } from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
 import { ScenarioConsole } from './scenario-console';
@@ -39,7 +40,8 @@ export default async function ReplenishmentPage({
       financial: ctx.session?.user?.role === 'ADMIN' && catalog.permissions.financial,
       initialBranchId: invalidBranch ? '' : branchId,
       invalidInitialBranch: invalidBranch,
-      today: new Date().toISOString().slice(0, 10),
+      timeZone: workspaceTimezone(actor.organization.timezone),
+      now: new Date().toISOString(),
     };
   } catch {
     // Contain read/access failures without exposing source error text.
@@ -49,7 +51,7 @@ export default async function ReplenishmentPage({
       <PageHeader
         eyebrow="Pharmacy reports"
         heading="Replenishment"
-        description="Inspect recorded consumption and supply, then compare explicit planning assumptions."
+        description="See what sold and what is in stock, then compare order plans using your own numbers."
       />
       <Link
         href="/pharmacy/reports"
@@ -60,14 +62,14 @@ export default async function ReplenishmentPage({
       {scopedProps ? (
         <ScenarioConsole {...scopedProps} />
       ) : (
-        <SectionCard title="Replenishment reports unavailable" titleLevel={2}>
+        <SectionCard title="Replenishment report couldn’t load" titleLevel={2}>
           <p role="alert" className="text-sm text-text-muted">
-            Report access, your session or source data is unavailable. Retry, or ask your workspace
-            administrator to check Pharmacy Reports access.
+            The replenishment report couldn’t load. Try again, or ask your workspace administrator
+            to check your Pharmacy Reports access.
           </p>
           <form action="/pharmacy/reports/replenishment" method="get" className="mt-4">
             <Button type="submit" variant="outline" className="min-h-11">
-              Retry report access
+              Try again
             </Button>
           </form>
         </SectionCard>

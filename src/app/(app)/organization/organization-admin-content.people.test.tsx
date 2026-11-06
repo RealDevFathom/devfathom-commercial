@@ -118,6 +118,49 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+describe('workspace profile invoice seller details (#458)', () => {
+  function withSellerDetails() {
+    const current = overviewData.current as { organization: Record<string, unknown> };
+    current.organization.invoiceAddress = '42 Market Street\nSeattle, WA 98101';
+    current.organization.invoiceTaxId = 'US-12-3456789';
+  }
+
+  it('keeps the stored address line breaks when another profile field is saved', () => {
+    withSellerDetails();
+    render(<OrganizationAdminContent />);
+
+    expect(screen.getByLabelText('Invoice address')).toHaveValue(
+      '42 Market Street\nSeattle, WA 98101'
+    );
+    fireEvent.change(screen.getByLabelText('Display name'), {
+      target: { value: 'Updated workspace' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+
+    expect(mutationFor('updateProfile').mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        displayName: 'Updated workspace',
+        invoiceAddress: '42 Market Street\nSeattle, WA 98101',
+        invoiceTaxId: 'US-12-3456789',
+      })
+    );
+  });
+
+  it('names the legal name the invoice prints and clears blank details', () => {
+    withSellerDetails();
+    render(<OrganizationAdminContent />);
+
+    expect(screen.getByText(/Client invoices print Clifton Chemist as the seller/)).toBeVisible();
+    fireEvent.change(screen.getByLabelText('Invoice address'), { target: { value: '  ' } });
+    fireEvent.change(screen.getByLabelText('Invoice tax ID'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+
+    expect(mutationFor('updateProfile').mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ invoiceAddress: null, invoiceTaxId: null })
+    );
+  });
+});
+
 describe('organization people and access — staff onboarding', () => {
   it('uses singular seat copy when the license limit is one', () => {
     const data = overviewData.current as { entitlements: { seatLimit: number } };

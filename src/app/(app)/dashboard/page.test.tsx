@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   loadHotelLanding: vi.fn(),
   createHotelCaller: vi.fn(),
   withTenantDb: vi.fn(),
+  resolvePharmacyDashboardAccess: vi.fn(),
   db: {},
 }));
 vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
@@ -17,6 +18,9 @@ vi.mock('@/lib/onboarding/setup-evaluator', () => ({
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.withTenantDb }));
 vi.mock('./pharmacy-dashboard-content', () => ({ PharmacyDashboardContent: () => null }));
+vi.mock('@/lib/pharmacy/dashboard-access', () => ({
+  resolvePharmacyDashboardAccess: mocks.resolvePharmacyDashboardAccess,
+}));
 vi.mock('./hotel-dashboard-content', () => ({ HotelDashboardContent: () => null }));
 vi.mock('@/lib/hotel/landing', () => ({ loadHotelLanding: mocks.loadHotelLanding }));
 vi.mock('@/server/routers/hotel-property', () => ({
@@ -155,6 +159,7 @@ describe('PHARMACY first-run capability gate', () => {
     ['ADMIN', true, true],
   ])('role %s, admin:access %s: loads checklist %s', async (role, allowed, loads) => {
     const user = { id: 'owner', role, status: 'ACTIVE' };
+    const access = { reports: true, tools: [], advice: [] };
     mocks.createSSRHelpers.mockResolvedValue({
       helpers: helpers(),
       session: { user },
@@ -162,6 +167,7 @@ describe('PHARMACY first-run capability gate', () => {
       entitlements: { vertical, enabledModules: [] },
     });
     mocks.can.mockResolvedValue(allowed);
+    mocks.resolvePharmacyDashboardAccess.mockResolvedValue(access);
     mocks.loadSetupChecklist.mockResolvedValue({ complete: false, items: [] });
     const page = await DashboardPage({});
     expect(mocks.withTenantDb).toHaveBeenCalledWith('tenant', expect.any(Function));
@@ -169,16 +175,35 @@ describe('PHARMACY first-run capability gate', () => {
     expect(mocks.loadSetupChecklist).toHaveBeenCalledTimes(loads ? 1 : 0);
     if (loads) expect(mocks.loadSetupChecklist).toHaveBeenCalledWith(mocks.db, 'tenant', vertical);
     expect(page.props.children.type).toBe(PharmacyDashboardContent);
-    expect(page.props.children.props).toEqual({ role });
+    expect(page.props.children.props).toEqual({ role, access });
   });
 
-  it('does not query setup evidence without a session', async () => {
+  it('resolves the dashboard from the viewer’s own grants, before render (DEV-602)', async () => {
+    const user = { id: 'cashier', role: 'EMPLOYEE', status: 'ACTIVE' };
+    const entitlements = { vertical, enabledModules: ['pharmacy-counter', 'pharmacy-reports'] };
+    const access = { reports: false, tools: [], advice: [] };
+    mocks.createSSRHelpers.mockResolvedValue({
+      helpers: helpers(),
+      session: { user },
+      organization: { id: 'tenant' },
+      entitlements,
+    });
+    mocks.can.mockResolvedValue(false);
+    mocks.resolvePharmacyDashboardAccess.mockResolvedValue(access);
+    const page = await DashboardPage({});
+    expect(mocks.resolvePharmacyDashboardAccess).toHaveBeenCalledWith(mocks.db, user, entitlements);
+    expect(page.props.children.props).toEqual({ role: 'EMPLOYEE', access });
+  });
+
+  it('does not query setup evidence without a session, and fails the dashboard closed', async () => {
     mocks.createSSRHelpers.mockResolvedValue({
       helpers: helpers(),
       organization: { id: 'tenant' },
       entitlements: { vertical, enabledModules: [] },
     });
-    await DashboardPage({});
+    const page = await DashboardPage({});
     expect(mocks.withTenantDb).not.toHaveBeenCalled();
+    expect(mocks.resolvePharmacyDashboardAccess).not.toHaveBeenCalled();
+    expect(page.props.children.props.access).toEqual({ reports: false, tools: [], advice: [] });
   });
 });

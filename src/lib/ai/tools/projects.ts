@@ -23,6 +23,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { matchScore, norm } from '@/lib/ai/context';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { lockProjectMembership } from '@/lib/projects/membership-lock';
+import { syncCompletionForColumnRename } from '@/lib/task-completion';
 
 export function buildProjectsTools(h: AssistantHelpers): ToolSet {
   const { db } = h;
@@ -1030,9 +1031,15 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       if (cr.kind === 'ambiguous')
         return { needsClarification: `Which column — ${cr.candidates.join(', ')}?` };
 
-      const updated = await db.column.update({
-        where: { id: cr.value.id },
-        data: { name: newName },
+      // DEV-250: renaming into (or out of) a done name completes (or reopens)
+      // every task already in the column — the same rule as the board's rename.
+      const updated = await db.$transaction(async (tx) => {
+        const column = await tx.column.update({
+          where: { id: cr.value.id },
+          data: { name: newName },
+        });
+        await syncCompletionForColumnRename(tx, column.id, cr.value.name, column.name);
+        return column;
       });
 
       h.audit({

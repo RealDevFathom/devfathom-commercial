@@ -489,7 +489,7 @@ export function PlatformCommandForm({
                 />
               )}
               {field.help ? (
-                <span className="mt-1.5 block text-[10px] leading-4 text-text-faint">
+                <span className="mt-1.5 block text-[10px] leading-4 text-text-muted">
                   {field.help}
                 </span>
               ) : null}

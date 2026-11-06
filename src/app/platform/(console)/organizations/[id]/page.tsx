@@ -1053,6 +1053,7 @@ export default async function OrganizationDetailPage({
                       compact
                       action="organization.user.password"
                       submitLabel="Reset password"
+                      confirm={`Reset the password for ${user.name} (${user.email}) at ${organization.displayName}? Every session they have ends now, they must choose a new password at next sign-in, and they are emailed that DevFathom support reset it. Prefer a support-access session when you only need to see their workspace.`}
                       fields={[
                         { name: 'id', label: 'User', type: 'hidden', defaultValue: user.id },
                         {
@@ -1060,7 +1061,7 @@ export default async function OrganizationDetailPage({
                           label: 'Temporary password',
                           type: 'password',
                           required: true,
-                          help: 'Minimum 12 characters. Existing sessions are revoked.',
+                          help: 'Minimum 12 characters. Existing sessions are revoked and the user must change it at next sign-in.',
                         },
                       ]}
                     />

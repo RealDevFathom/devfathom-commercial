@@ -60,3 +60,34 @@ describe('POST /api/v1/tasks assignees', () => {
     expect(mocks.db.task.create).not.toHaveBeenCalled();
   });
 });
+
+describe('POST /api/v1/tasks completedAt (DEV-250)', () => {
+  const post = () =>
+    POST(
+      new Request('https://example.test/api/v1/tasks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'Task', columnId: 'column-1' }),
+      })
+    );
+  const column = (name: string) => ({
+    id: 'column-1',
+    name,
+    board: { project: { id: 'project-1', name: 'Project' } },
+    defaultAssignees: [],
+  });
+  const createData = () =>
+    (mocks.db.task.create.mock.calls as unknown as Array<[{ data: Record<string, unknown> }]>)[0][0]
+      .data;
+
+  it.each([
+    ['Done', expect.any(Date)],
+    ['closed', expect.any(Date)],
+    ['To Do', null],
+  ])('creating into %s writes completedAt %s', async (name, completedAt) => {
+    mocks.db.column.findUnique.mockResolvedValueOnce(column(name) as never);
+    mocks.db.task.create.mockResolvedValueOnce({ id: 'task-1', title: 'Task' });
+    expect((await post()).status).toBe(201);
+    expect(createData()).toMatchObject({ columnId: 'column-1', completedAt });
+  });
+});

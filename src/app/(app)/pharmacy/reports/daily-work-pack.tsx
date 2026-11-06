@@ -1,3 +1,4 @@
+import { Info } from 'lucide-react';
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
@@ -5,31 +6,44 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
+import {
+  workPackCapNote,
+  workPackDate,
+  workPackEvidenceLabel,
+  workPackFactLabel,
+  workPackGroupLabels,
+  workPackMissingSourceNote,
+  workPackOperationalOnlyNote,
+  workPackSourceLabels,
+  workPackTime,
+} from './daily-work-pack-labels';
 
 type Reader = ReturnType<typeof pharmacyReportsRouter.createCaller>['dailyWorkPack'];
 type WorkPack = Awaited<ReturnType<Reader>>;
+type Evidence = WorkPack['groups'][number]['tasks'][number]['evidence'][number];
 export type DailyWorkPackProps = {
   read: Reader;
   filters: Omit<Parameters<Reader>[0], 'asOf'>;
   branches: { id: string; name: string }[];
   refreshFields: Record<string, string>;
+  /** Workspace IANA zone for dates; a missing or unknown zone reads as UTC. */
+  timeZone?: string | null;
+  /** Workspace currency code, shown beside amounts when known. */
+  currency?: string | null;
 };
 
-const sourceAnchor = (id: string) => `work-pack-source-${id}`;
-const fieldLabel = (key: string) =>
-  key
-    .replace(/Minor$/, '')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/^./, (letter) => letter.toUpperCase());
 const linkClass =
-  'inline-flex min-h-11 items-center break-all text-sm underline focus-visible:outline-2 focus-visible:outline-ring';
-const sourceNames: Record<WorkPack['sources'][number]['kind'], string> = {
-  'stock-dashboard': 'Stock dashboard',
-  'stock-digest': 'Your stock digest',
-  anomalies: 'Recorded anomalies',
-  expiry: 'Expiry advice',
-  'supplier-credit': 'Supplier credit',
-};
+  'inline-flex min-h-11 items-center break-words text-sm underline focus-visible:outline-2 focus-visible:outline-ring';
+/**
+ * DEV-601: the shared Button dims a disabled control with `opacity-50`, which leaves this
+ * outline button's label and border almost invisible on the dark card. Keep it at full
+ * opacity on contrast-checked tokens (`--text-muted` on `--surface-sunken`, 4.5:1+ in both
+ * themes). Remove once the shared Button stops dimming disabled controls with opacity.
+ */
+const refreshButtonClass =
+  'min-h-11 disabled:border-border-default disabled:bg-surface-sunken disabled:text-text-muted disabled:opacity-100';
+const disclosureClass =
+  'min-h-11 cursor-pointer py-3 text-sm font-medium text-text-strong focus-visible:outline-2 focus-visible:outline-ring';
 
 function Refresh({ fields, retry = false }: { fields: Record<string, string>; retry?: boolean }) {
   return (
@@ -37,8 +51,8 @@ function Refresh({ fields, retry = false }: { fields: Record<string, string>; re
       {Object.entries(fields).map(([name, value]) => (
         <input key={name} type="hidden" name={name} value={value} />
       ))}
-      <Button variant="outline" className="min-h-11" type="submit">
-        {retry ? 'Retry daily work pack' : 'Refresh daily work pack'}
+      <Button variant="outline" className={refreshButtonClass} type="submit">
+        {retry ? 'Try again' : 'Refresh'}
       </Button>
     </form>
   );
@@ -47,14 +61,34 @@ function Refresh({ fields, retry = false }: { fields: Record<string, string>; re
 export function DailyWorkPackLoading() {
   return (
     <SectionCard id="daily-work-pack" title="Daily work pack" titleLevel={2} aria-busy="true">
-      <p role="status" className="mb-4 text-sm text-text-muted">
-        Reading permitted work-pack sources. Other reports remain available.
+      <p role="status" className="mb-4 text-sm text-text-body">
+        Loading today&apos;s to-do list. The other reports on this page are ready to use.
       </p>
-      <Button variant="outline" className="min-h-11" disabled>
-        Refresh daily work pack
+      <Button variant="outline" className={refreshButtonClass} disabled>
+        Refresh
       </Button>
     </SectionCard>
   );
+}
+
+function amountText(value: number, currency: string | null | undefined) {
+  if (!Number.isSafeInteger(value)) return '—';
+  const amount = formatMinor(value).replace(/\B(?=(\d{3})+\.)/g, ',');
+  return currency && /^[A-Z]{3}$/.test(currency) ? `${currency} ${amount}` : amount;
+}
+
+function facts(evidence: Evidence, currency: string | null | undefined) {
+  return [
+    ...Object.entries(evidence.counts)
+      // Alert counts per kind list only the states that hold something.
+      .filter(([, count]) => evidence.reference.kind !== 'stock-kind' || count > 0)
+      .map(([key, count]) => ({ key, label: workPackFactLabel(key), value: String(count) })),
+    ...(evidence.amounts ?? []).map((amount) => ({
+      key: amount.key,
+      label: workPackFactLabel(amount.key),
+      value: amountText(amount.value, currency),
+    })),
+  ];
 }
 
 /** Server component: reuse the authenticated caller and stream separately from report figures. */
@@ -63,6 +97,8 @@ export async function DailyWorkPack({
   filters,
   branches,
   refreshFields,
+  timeZone,
+  currency,
 }: DailyWorkPackProps) {
   let pack: WorkPack | null = null;
   try {
@@ -74,190 +110,136 @@ export async function DailyWorkPack({
   if (!pack) {
     return (
       <SectionCard id="daily-work-pack" title="Daily work pack" titleLevel={2}>
-        <p role="alert" className="mb-4 text-sm text-text-muted">
-          Daily work pack could not load. Source data or report access may be unavailable. Retry
-          this read, or ask your workspace administrator to check access. No data was changed.
+        <p role="alert" className="mb-4 text-sm text-text-body">
+          The daily work pack couldn&apos;t load. Try again, or ask your workspace administrator to
+          check your report access. Nothing was changed.
         </p>
         <Refresh fields={refreshFields} retry />
       </SectionCard>
     );
   }
-  const branchName = (id: string) => branches.find((branch) => branch.id === id)?.name ?? id;
-  const tasks = pack.groups.flatMap((group) => group.tasks).filter((task) => task.evidence.length);
+  const branchName = (id: string) => branches.find((branch) => branch.id === id)?.name ?? 'Branch';
+  const tasks = pack.groups.flatMap((group) =>
+    group.tasks
+      .filter((task) => task.evidence.length)
+      .map((task) => ({ ...task, label: workPackGroupLabels[group.key] }))
+  );
+  const missingNote = workPackMissingSourceNote(pack, branchName);
+  const notes = [
+    missingNote,
+    workPackCapNote(pack),
+    pack.permissions.financial ? null : workPackOperationalOnlyNote,
+  ].filter((note): note is string => Boolean(note));
+  const nothingLoaded = pack.sources.every((source) => source.status !== 'available');
+  const updated = workPackTime(pack.readAt, timeZone);
   return (
     <SectionCard
       id="daily-work-pack"
-      eyebrow="Read-only preparation"
+      eyebrow="Today's to-do list"
       title="Daily work pack"
       titleLevel={2}
     >
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <StatusPill status={`${pack.completeness.status} coverage`} tone="warning" />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-text-body">
+          Things to check for {pack.scope.branchIds.map(branchName).join(', ')}.
+          {updated ? ` Updated ${updated}.` : ''}
+        </p>
         <Refresh fields={refreshFields} />
       </div>
-      <div className="space-y-2 text-sm text-text-muted">
-        <p>
-          Requested period: {pack.period.from} to {pack.period.to}. Branch scope:{' '}
-          {pack.scope.branchIds.map(branchName).join(', ')}.
-        </p>
-        <p className="break-words">
-          As of: {pack.asOf}. Read at: {pack.readAt}.
-        </p>
-        <p>
-          Each source keeps its own time basis below. Supplier, ingredient and batch filters do not
-          apply to this pack. Current records are not a historical snapshot.
-        </p>
-        <p>{pack.completeness.definition}</p>
-        <p>
-          Refresh rereads existing evidence; it does not refresh domain signals or create drafts. No
-          money or time saved is calculated. Amounts use pharmacy integer minor units, displayed to
-          two decimal places. Source currency is unknown; — means unavailable, not zero.
-        </p>
-        {!pack.permissions.financial ? (
-          <p>Operational evidence only. Financial sources were not queried for your role.</p>
-        ) : null}
-      </div>
+      {notes.length ? (
+        <div className="mt-4 flex gap-3 rounded-md border border-border-default bg-surface-sunken p-3 text-sm text-text-body">
+          <Info aria-hidden className="mt-0.5 size-4 shrink-0 text-warning" />
+          <div className="space-y-1">
+            {notes.map((note) => (
+              <p key={note}>{note}</p>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {tasks.length ? (
-        <ol className="mt-5 divide-y divide-border-subtle">
-          {tasks.map((task) => (
-            <li key={task.id} className="py-4">
-              <h3 className="font-semibold text-text-strong">
-                {task.title} · {branchName(task.branchId)}
-              </h3>
-              <div className="flex flex-wrap gap-x-4">
-                {task.nextActions.map((action) => (
-                  <Link key={action.href} href={action.href} prefetch={false} className={linkClass}>
-                    {action.label}
-                  </Link>
-                ))}
-              </div>
-              <details className="mt-2">
-                <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-                  Evidence and missing inputs
-                </summary>
-                <ul className="space-y-4 text-sm text-text-body">
-                  {task.evidence.map((evidence) => (
-                    <li
-                      key={evidence.id}
-                      className="min-w-0 space-y-2 border-l border-border-subtle pl-4"
+        <ol className="mt-4 divide-y divide-border-subtle">
+          {tasks.map((task) => {
+            const count = task.evidence.length;
+            return (
+              <li key={task.id} className="py-4">
+                <h3 className="font-semibold text-text-strong">{task.label.title}</h3>
+                <p className="mt-1 text-sm text-text-body">
+                  {branchName(task.branchId)} · {count} {count === 1 ? 'item' : 'items'} to check
+                </p>
+                <div className="flex flex-wrap gap-x-4">
+                  {task.nextActions.map((action) => (
+                    <Link
+                      key={action.href}
+                      href={action.href}
+                      prefetch={false}
+                      className={linkClass}
                     >
-                      <p className="break-all">
-                        {evidence.reference.kind}: {evidence.reference.id}
-                      </p>
-                      <StatusPill status={evidence.state} tone="neutral" />
-                      <div>
-                        <a
-                          href={`#${encodeURIComponent(sourceAnchor(evidence.sourceId))}`}
-                          className={linkClass}
-                        >
-                          Source:{' '}
-                          {
-                            sourceNames[
-                              pack.sources.find((source) => source.id === evidence.sourceId)!.kind
-                            ]
-                          }
-                        </a>
-                      </div>
-                      <dl className="space-y-2">
-                        {Object.entries(evidence.counts).map(([key, count]) => (
-                          <div key={key} className="flex flex-wrap gap-2">
-                            <dt className="break-all">{fieldLabel(key)}</dt>
-                            <dd className="font-mono tabular-nums">{count}</dd>
-                          </div>
-                        ))}
-                        {evidence.amounts?.map((amount) => (
-                          <div key={amount.key}>
-                            <dt className="break-all">{fieldLabel(amount.key)}</dt>
-                            <dd className="break-words font-mono tabular-nums">
-                              {Number.isSafeInteger(amount.value)
-                                ? `${formatMinor(amount.value)} (currency unknown)`
-                                : '—'}
-                            </dd>
-                            <dd className="text-text-muted">{amount.definition}</dd>
-                          </div>
-                        ))}
-                      </dl>
-                      <p className="break-words text-text-muted">
-                        Observed: {evidence.observedAt ?? 'Unavailable'}. Computed:{' '}
-                        {evidence.computedAt ?? 'Unavailable'}. Source freshness seconds:{' '}
-                        {evidence.freshnessSeconds ?? 'Unavailable'}. Source due/expiry time:{' '}
-                        {evidence.dueAt ?? 'Unavailable'}.
-                      </p>
-                      {evidence.missingInputs.map((reason) => (
-                        <p key={reason} className="text-text-muted">
-                          {reason}
-                        </p>
-                      ))}
-                    </li>
+                      {task.label.action}
+                    </Link>
                   ))}
-                </ul>
-                {Array.from(new Set(task.missingInputs)).map((reason) => (
-                  <p key={reason} className="mt-2 text-sm text-text-muted">
-                    {reason}
-                  </p>
-                ))}
-              </details>
-            </li>
-          ))}
+                </div>
+                <details>
+                  <summary className={disclosureClass}>
+                    Show {count === 1 ? 'the item' : `all ${count} items`}
+                  </summary>
+                  <ul className="space-y-3 text-sm text-text-body">
+                    {task.evidence.map((evidence) => {
+                      const label = workPackEvidenceLabel(evidence);
+                      const due = workPackDate(evidence.dueAt, timeZone);
+                      const rows = facts(evidence, currency);
+                      return (
+                        <li
+                          key={evidence.id}
+                          className="min-w-0 space-y-1 border-l border-border-default pl-4"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-text-strong">{label.title}</span>
+                            {label.state ? (
+                              <StatusPill status={label.state.label} tone={label.state.tone} />
+                            ) : null}
+                          </div>
+                          {due ? (
+                            <p>
+                              {label.due} {due}
+                            </p>
+                          ) : null}
+                          {rows.length ? (
+                            <dl className="flex flex-wrap gap-x-4 gap-y-1">
+                              {rows.map((row) => (
+                                <div key={row.key} className="flex flex-wrap gap-1">
+                                  <dt>{row.label}:</dt>
+                                  <dd className="font-mono tabular-nums">{row.value}</dd>
+                                </div>
+                              ))}
+                            </dl>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </details>
+              </li>
+            );
+          })}
         </ol>
-      ) : (
-        <p role="status" className="mt-5 text-sm text-text-muted">
-          No review evidence returned from available sources. This is not an all-clear result; check
-          source coverage and unavailable inputs below.
+      ) : nothingLoaded ? null : (
+        <p role="status" className="mt-4 text-sm text-text-body">
+          {missingNote
+            ? 'Nothing to review from the checks that loaded.'
+            : "Nothing to review from today's checks."}
         </p>
       )}
-      <h3 className="mt-6 font-semibold text-text-strong">Source coverage and freshness</h3>
-      <ul className="mt-3 divide-y divide-border-subtle">
-        {pack.sources.map((source) => (
-          <li
-            key={source.id}
-            id={sourceAnchor(source.id)}
-            tabIndex={-1}
-            className="space-y-2 py-4 text-sm focus-visible:outline-2 focus-visible:outline-ring"
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">
-                {sourceNames[source.kind]} · {branchName(source.scope.branchId)}
-              </span>
-              <StatusPill
-                status={source.status}
-                tone={source.status === 'unavailable' ? 'danger' : 'neutral'}
-              />
-              <StatusPill status={`${source.coverage} coverage`} tone="warning" />
-            </div>
-            <p className="text-text-muted">{source.timeBasis}</p>
-            <p className="text-text-muted">
-              Returned rows: {source.returnedRows ?? 'Unavailable'}. Row limit:{' '}
-              {source.rowLimit ?? 'Not established'}.{' '}
-              {source.limitReached ? 'Source cap reached; records may be omitted.' : ''}
-            </p>
-            <p className="break-words text-text-muted">
-              Window:{' '}
-              {source.window
-                ? `${source.window.from} to ${source.window.toExclusive} (exclusive end)`
-                : 'Not period-bounded'}
-              . Evaluated as of: {source.evaluatedAsOf ?? 'Unavailable'}. Read at: {source.readAt}.{' '}
-              Freshness:{' '}
-              {source.freshness === 'persisted-unverified'
-                ? 'Persisted; freshness unverified'
-                : 'Live inputs; not historical'}
-              .
-            </p>
-            {Array.from(
-              new Set([
-                ...source.missingInputs,
-                ...pack.missingInputs
-                  .filter((item) => item.sourceId === source.id)
-                  .map((item) => item.reason),
-              ])
-            ).map((reason) => (
-              <p key={reason} className="text-text-muted">
-                {reason}
-              </p>
-            ))}
-          </li>
-        ))}
-      </ul>
+      <details className="mt-2">
+        <summary className={disclosureClass}>What this list checks</summary>
+        <ul className="space-y-1 text-sm text-text-body">
+          {pack.sources.map((source) => (
+            <li key={source.id}>
+              {workPackSourceLabels[source.kind].name} · {branchName(source.scope.branchId)}:{' '}
+              {source.status === 'available' ? 'checked' : "couldn't load"}
+            </li>
+          ))}
+        </ul>
+      </details>
     </SectionCard>
   );
 }

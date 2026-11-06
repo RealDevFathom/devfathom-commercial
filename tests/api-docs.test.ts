@@ -33,4 +33,10 @@ describe('admin platform REST v1 documentation', () => {
       exportedMethods(`src/app/api/v1/${resource}/[id]/route.ts`)
     );
   });
+
+  it('matches the exported meetings route methods', () => {
+    expect(documentedMethods('meetings', '/api/v1/meetings')).toEqual(
+      exportedMethods('src/app/api/v1/meetings/route.ts')
+    );
+  });
 });

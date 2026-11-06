@@ -3,7 +3,9 @@
 // Run with:
 //   bunx tsx scripts/email-smoke.ts you@example.com
 // Falls back to BREVO_SENDER_EMAIL (the account owner) when no recipient given.
-import 'dotenv/config';
+// First: loads .env.local and .env (real environment wins) before anything below reads it.
+import '../prisma/load-env';
+
 import { sendEmail } from '../src/lib/email';
 
 async function main() {

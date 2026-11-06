@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { sortCurrencies } from '@/lib/finance/currency';
+import { computeInvoiceAmounts } from '@/lib/finance/invoice-amounts';
 import { createWithNextInvoiceNumber } from '@/lib/finance/invoice-number';
 import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
@@ -496,6 +497,14 @@ export const clientsRouter = router({
 
       const dueDate = new Date(Date.now() + input.dueInDays * 24 * 60 * 60 * 1000);
 
+      // #448: the one shared invoice calculation, so this single-line invoice
+      // obeys the same cent contract as a hand-keyed one.
+      const computed = computeInvoiceAmounts({
+        items: [{ description: contract.title, quantity: 1, rate: amount }],
+      });
+      if (!computed.ok) throw new TRPCError({ code: 'BAD_REQUEST', message: computed.message });
+      const { items, subtotal, discount, tax, total } = computed.amounts;
+
       // Same per-organization, per-year INV sequence as finance.createInvoice.
       const invoice = await createWithNextInvoiceNumber(ctx.db, (tx, invoiceNumber) =>
         tx.invoice.create({
@@ -503,10 +512,11 @@ export const clientsRouter = router({
             invoiceNumber,
             clientId: contract.clientId,
             projectId: contract.projectId,
-            items: [{ description: contract.title, quantity: 1, rate: amount, amount }],
-            subtotal: amount,
-            tax: 0,
-            total: amount,
+            items,
+            subtotal,
+            discount,
+            tax,
+            total,
             currency: contract.currency,
             status: 'DRAFT',
             dueDate,

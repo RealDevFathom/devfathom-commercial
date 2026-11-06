@@ -1,9 +1,26 @@
 'use client';
 
-import { useId, useState, useTransition, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, useTransition, type ReactNode } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { marketingAction } from './actions';
+import { actionButton } from './controls';
+
+type Control = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+
+/** The visible label of a control, without the text of anything nested in it. */
+function fieldName(field: Control) {
+  const label = field.labels?.[0];
+  const own = label
+    ? Array.from(label.childNodes)
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent)
+        .join('')
+        .replace(/\s+/g, ' ')
+        .trim()
+    : '';
+  return own || field.getAttribute('aria-label') || field.name;
+}
 
 export function MarketingActionForm({
   branchId,
@@ -23,8 +40,37 @@ export function MarketingActionForm({
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<Awaited<ReturnType<typeof marketingAction>> | null>(null);
   const feedbackId = useId();
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    const form = formRef.current;
+    if (!form) return;
+    // DEV-597: the browser stops an invalid submit before onSubmit runs, and its bubble is easy
+    // to miss (and never shows for a field inside a closed Advanced section). Open that section,
+    // mark each field and name them inline, so a click is never a silent no-op.
+    let problems: string[] = [];
+    const onInvalid = (event: Event) => {
+      const field = event.target as Control;
+      field.setAttribute('aria-invalid', 'true');
+      const section = field.closest('details');
+      if (section && !section.open) section.open = true;
+      problems.push(`${fieldName(field)}: ${field.validationMessage}`);
+      if (problems.length === 1)
+        queueMicrotask(() => {
+          setResult({ error: true, message: `Check before continuing:\n${problems.join('\n')}` });
+          problems = [];
+        });
+    };
+    const onEdit = (event: Event) => (event.target as Element).removeAttribute('aria-invalid');
+    form.addEventListener('invalid', onInvalid, true);
+    form.addEventListener('input', onEdit);
+    return () => {
+      form.removeEventListener('invalid', onInvalid, true);
+      form.removeEventListener('input', onEdit);
+    };
+  }, []);
   return (
     <form
+      ref={formRef}
       className="space-y-4"
       aria-busy={pending}
       aria-describedby={result ? feedbackId : undefined}
@@ -54,7 +100,7 @@ export function MarketingActionForm({
         <Button
           type="submit"
           variant={operation === 'preview' || operation === 'sandbox' ? 'outline' : 'default'}
-          className="min-h-11"
+          className={actionButton}
           disabled={pending || disabled}
         >
           {pending ? 'Working…' : label}

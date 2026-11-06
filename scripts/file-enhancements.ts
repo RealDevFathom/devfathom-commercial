@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
+import { completedAtForColumnChange } from '../src/lib/task-completion.js';
 
 const REPO = 'WhatTheStack1/DevFathom-Hub';
 const MILESTONE = 'Product Improvements';
@@ -188,18 +189,19 @@ async function main() {
       const title = `${e.title} (${e.id})`;
       const gh0 = ghMap[e.id] || {};
       const desc = `${issueBody(e)}\n\n**GitHub:** ${gh0.url ?? '—'}`;
-      const targetCol = colId[targetColumnFor(e.status)];
-      const existingTask = await prisma.task.findFirst({ where: { column: { boardId: board.id }, title: { endsWith: `(${e.id})` } }, select: { id: true } });
+      const targetName = targetColumnFor(e.status);
+      const targetCol = colId[targetName];
+      const existingTask = await prisma.task.findFirst({ where: { column: { boardId: board.id }, title: { endsWith: `(${e.id})` } }, select: { id: true, column: { select: { name: true } } } });
       let taskId: string;
       if (existingTask) {
         // select:{id} keeps the RETURNING clause to columns that exist on the
         // SHARED Neon DB. New schema columns (parentId/wipLimit/…) live only in the
         // generated client until the migration is deployed, so returning full rows
         // would 500 with P2022 ColumnNotFound. We only need the id (already known).
-        await prisma.task.update({ where: { id: existingTask.id }, data: { title, description: desc, priority: TIER_PRIORITY[e.tier], columnId: targetCol, order: i }, select: { id: true } });
+        await prisma.task.update({ where: { id: existingTask.id }, data: { title, description: desc, priority: TIER_PRIORITY[e.tier], columnId: targetCol, order: i, ...completedAtForColumnChange(existingTask.column.name, targetName) }, select: { id: true } });
         taskId = existingTask.id;
       } else {
-        const t = await prisma.task.create({ data: { title, description: desc, priority: TIER_PRIORITY[e.tier], columnId: targetCol, order: i, createdById: admin.id }, select: { id: true } });
+        const t = await prisma.task.create({ data: { title, description: desc, priority: TIER_PRIORITY[e.tier], columnId: targetCol, order: i, createdById: admin.id, ...completedAtForColumnChange(null, targetName) }, select: { id: true } });
         taskId = t.id;
       }
       intMap[e.id] = { taskId, status: targetColumnFor(e.status) };

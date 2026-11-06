@@ -32,7 +32,7 @@
     "db:seed": "bunx prisma db seed",
     "demo:seed": "tsx --tsconfig=scripts/tsconfig.json prisma/seed-demo/restaurant.ts",
     "db:studio": "bunx prisma studio",
-    "db:reset": "bunx prisma migrate reset",
+    "db:reset": "bunx prisma migrate reset && bunx prisma db seed",
     "assistant:eval": "tsx scripts/assistant-eval.ts",
     "assistant:diag": "tsx scripts/assistant-diag.ts",
     "ai:smoke": "tsx --tsconfig scripts/tsconfig.json scripts/ai-provider-smoke.ts",

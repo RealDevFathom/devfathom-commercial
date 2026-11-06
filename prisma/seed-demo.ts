@@ -26,14 +26,17 @@
  *
  *   bunx tsx prisma/seed-demo.ts
  */
+// First: loads .env.local and .env (real environment wins) before anything below reads it.
+import { requireDatabaseUrl } from './load-env.js';
+
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { randomBytes } from 'crypto';
 import { hash } from 'bcryptjs';
-import 'dotenv/config';
+import { completedAtForColumnChange } from '../src/lib/task-completion.js';
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new pg.Pool({ connectionString: requireDatabaseUrl(['DATABASE_URL']) });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
@@ -232,6 +235,7 @@ async function main() {
           dueDate: t.due ?? null,
           createdById: alex.id,
           createdAt: daysAgo(20 + (order % 10)),
+          ...completedAtForColumnChange(null, t.col),
           assignees: { create: t.assignees.map((u: any) => ({ userId: u.id })) },
           labels: label ? { create: [{ labelId: label.id }] } : undefined,
         },
@@ -252,7 +256,7 @@ async function main() {
 
   // ════════════════════════════════════════════════════════════════════════
   // 2. COMPLETED-WORK HISTORY  → powers /team/stats (velocity, leaderboards,
-  //    cycle time, sparkline). Done-column tasks with back-dated updatedAt.
+  //    cycle time, sparkline). Done-column tasks with back-dated completedAt.
   // ════════════════════════════════════════════════════════════════════════
   const HISTORY_TAG = 'auto-logged completed work';
   const historyExisting = await prisma.task.count({ where: { description: { contains: HISTORY_TAG } } });
@@ -292,10 +296,12 @@ async function main() {
             priority: pick(['LOW', 'MEDIUM', 'MEDIUM', 'HIGH'], i),
             createdById: mw.user.id,
             createdAt,
+            // the stats queries read completedAt (DEV-250): "completed then"
+            completedAt: doneAt,
             assignees: { create: [{ userId: mw.user.id }] },
           },
         });
-        // back-date the @updatedAt so the stats queries see it as "completed then"
+        // keep @updatedAt consistent with the back-dated completion
         await setTimestamp('tasks', task.id, 'updatedAt', doneAt);
         historyCount++;
       }

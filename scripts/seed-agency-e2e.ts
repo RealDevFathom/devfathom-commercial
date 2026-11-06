@@ -341,6 +341,8 @@ async function main() {
           order: 0,
           priority: 'HIGH',
           createdById: AGENCY_E2E.adminId,
+          // Back in "In Progress": not completed (src/lib/task-completion.ts).
+          completedAt: null,
         },
         create: {
           id: AGENCY_E2E.taskId,

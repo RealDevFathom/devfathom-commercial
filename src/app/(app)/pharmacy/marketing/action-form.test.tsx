@@ -69,3 +69,49 @@ it('does not invoke disabled actions even through form submission', () => {
   fireEvent.submit(screen.getByRole('button', { name: 'Save' }).closest('form')!);
   expect(mocks.action).not.toHaveBeenCalled();
 });
+it('names empty required dates inline instead of doing nothing (DEV-597)', async () => {
+  render(
+    <MarketingActionForm
+      branchId="branch-a"
+      operation="growth-generate"
+      label="Generate AI growth insights"
+    >
+      <label>
+        First day
+        <input name="firstDay" type="date" required />
+      </label>
+      <label>
+        Last day
+        <input name="lastDay" type="date" required />
+      </label>
+    </MarketingActionForm>
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Generate AI growth insights' }));
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('Check before continuing');
+  expect(alert).toHaveTextContent('First day:');
+  expect(alert).toHaveTextContent('Last day:');
+  expect(screen.getByLabelText('First day')).toHaveAttribute('aria-invalid', 'true');
+  expect(mocks.action).not.toHaveBeenCalled();
+  fireEvent.input(screen.getByLabelText('First day'), { target: { value: '2026-10-01' } });
+  expect(screen.getByLabelText('First day')).not.toHaveAttribute('aria-invalid');
+});
+it('opens a closed Advanced section to show the field that needs attention', async () => {
+  render(
+    <MarketingActionForm branchId="branch-a" operation="basket-generate" label="Find bundles">
+      <details>
+        <summary>Advanced</summary>
+        <label>
+          Most bundles to suggest
+          <input name="maximumProposals" type="number" required defaultValue="" />
+        </label>
+      </details>
+    </MarketingActionForm>
+  );
+  const advanced = screen.getByText('Advanced').closest('details')!;
+  expect(advanced.open).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Find bundles' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Most bundles to suggest:');
+  expect(advanced.open).toBe(true);
+  expect(mocks.action).not.toHaveBeenCalled();
+});

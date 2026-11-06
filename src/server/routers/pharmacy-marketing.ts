@@ -21,6 +21,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
+import { readAIConfig } from '@/lib/ai/provider';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
@@ -48,31 +49,28 @@ import {
   type MarketingScope,
 } from '@/lib/pharmacy/marketing-service';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
+import { MARKETING_ACCESS_DENIAL } from '@/lib/pharmacy/marketing-access';
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
   db: Pick<ScopedDb, 'organization' | 'pharmacyBranch'>;
 };
 
+const denied = (message: string) => new TRPCError({ code: 'FORBIDDEN', message });
+
+// One requirement at a time, so the denial names the one that is missing (DEV-606).
+// Ownership is checked first and alone: a non-owner never learns license or lifecycle state.
 async function owner(ctx: MarketingAccessContext) {
-  if (ctx.session?.user.role !== 'ADMIN' || !hasModule(ctx.entitlements, 'pharmacy-crm'))
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'Owner access and Pharmacy CRM are required.',
-    });
+  if (ctx.session?.user.role !== 'ADMIN') throw denied(MARKETING_ACCESS_DENIAL.OWNER);
+  if (!hasModule(ctx.entitlements, 'pharmacy-crm')) throw denied(MARKETING_ACCESS_DENIAL.LICENSE);
   const organization = await ctx.db.organization.findUnique({
     where: { id: ctx.entitlements.organizationId },
     select: { id: true, vertical: true, status: true, timezone: true },
   });
-  if (
-    !organization ||
-    organization.vertical !== 'PHARMACY' ||
-    !isTenantLifecycleAccessible(organization.status)
-  )
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'An active pharmacy workspace is required.',
-    });
+  if (!organization || organization.vertical !== 'PHARMACY')
+    throw denied(MARKETING_ACCESS_DENIAL.PHARMACY);
+  if (!isTenantLifecycleAccessible(organization.status))
+    throw denied(MARKETING_ACCESS_DENIAL.WORKSPACE);
   ctx.audit.detail = { action: 'pharmacy_marketing', skipInput: true };
   return organization;
 }
@@ -83,8 +81,7 @@ async function scope(ctx: MarketingAccessContext, branchId: string): Promise<Mar
     where: { organizationId: organization.id, id: branchId, active: true },
     select: { id: true },
   });
-  if (!branch)
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'An authorized active branch is required.' });
+  if (!branch) throw denied(MARKETING_ACCESS_DENIAL.BRANCH);
   return {
     organizationId: organization.id,
     branchId,
@@ -167,11 +164,12 @@ async function growthExecute<T>(
     const branchMatch = await db.$queryRaw<Array<{ allowed: boolean }>>(
       Prisma.sql`SELECT (NULLIF(current_setting('app.current_branch_id',true),'') IS NULL OR current_setting('app.current_branch_id',true)=${branchId}) AS allowed`
     );
-    if (!actor || !branchMatch[0]?.allowed)
-      throw new TRPCError({
-        code: 'FORBIDDEN',
-        message: 'Current owner and branch access are required.',
-      });
+    if (!actor)
+      throw denied('Your owner account is no longer active. Sign in again with the owner account.');
+    if (!branchMatch[0]?.allowed)
+      throw denied(
+        'You are signed in to a different branch. Switch to this branch, then try again.'
+      );
     // Snapshots contain Finance evidence. Match the ledger report gates for reads,
     // generation and review, and recheck them after provider latency before saving.
     for (const action of ['reports:operational', 'reports:financial'] as const) {
@@ -182,10 +180,9 @@ async function growthExecute<T>(
           ip: ctx.requestMeta.ip,
         }))
       )
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Financial report permission is required.',
-        });
+        throw denied(
+          'Growth insights use Finance figures, so they need the operational and financial report permissions. Add both to your role in Organization settings.'
+        );
     }
     try {
       return await fn(db as ScopedDb, resolved);
@@ -229,10 +226,9 @@ export const pharmacyMarketingRouter = router({
     const facts = await growthExecute(ctx, input.branchId, async (db, resolved) => {
       const settings = await readAskFathomSettings(db, resolved.organizationId);
       if (!settings?.askFathomEnabled)
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'AI insights are disabled. Manual campaigns remain available.',
-        });
+        throw denied(
+          'AI is turned off for your company. Turn on Ask Fathom in Organization settings, then try again. Manual campaigns remain available.'
+        );
       return buildPharmacyGrowthInput(db, resolved, input.from, input.cutoff);
     });
     const result = await generateGrowthRecommendations(facts);
@@ -240,6 +236,26 @@ export const pharmacyMarketingRouter = router({
       saveGrowthInsight(db, resolved, result)
     );
   }),
+  // What the page needs to explain a missing AI prerequisite (DEV-591). Booleans only:
+  // no provider name, model or credential leaves the server.
+  growthAvailability: protectedProcedure
+    .input(marketingScopeInput)
+    .query(async ({ ctx, input }) => {
+      const resolved = await scope(ctx, input.branchId);
+      const settings = await readAskFathomSettings(ctx.db, resolved.organizationId);
+      let providerReady = true;
+      try {
+        readAIConfig();
+      } catch {
+        providerReady = false;
+      }
+      return {
+        companyAiEnabled: settings?.askFathomEnabled === true,
+        providerReady,
+        // The company AI switch is an ADMIN-only control in Organization settings.
+        canManageAiSettings: ctx.session?.user.role === 'ADMIN',
+      };
+    }),
   reviewGrowth: protectedProcedure
     .input(growthReviewInput)
     .mutation(({ ctx, input }) =>

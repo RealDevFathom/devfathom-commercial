@@ -1451,3 +1451,39 @@ describe('purchasing PIN controls', () => {
     expect(screen.getByRole('button', { name: /^Approve$/ })).toBeDefined();
   });
 });
+
+describe('reorder advice entry point (DEV-594)', () => {
+  /** A purchasing member whose role also holds `extra`, with Pharmacy Reports licensed. */
+  function withReports(extra: string[]) {
+    const context = contextStub(['pharmacy-procurement', 'pharmacy-reports']);
+    context.db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: ['pharmacy:procurement', ...extra].map((capability) => ({
+          capability,
+          effect: 'ALLOW',
+        })),
+      },
+      permissionOverrides: [],
+    });
+    mocks.createTRPCContext.mockResolvedValue(context);
+  }
+
+  it('links a report viewer to reorder advice for the branch in view', async () => {
+    withReports(['reports:operational']);
+    render(await OverviewPage({ searchParams: params() }));
+    expect(screen.getByRole('link', { name: /^Reorder advice/ }).getAttribute('href')).toBe(
+      '/pharmacy/reports/replenishment?branch=branch-1'
+    );
+  });
+
+  it('offers no link to someone the replenishment page would refuse', async () => {
+    withReports([]);
+    render(await OverviewPage({ searchParams: params() }));
+    expect(screen.queryByRole('link', { name: /Reorder advice/ })).toBeNull();
+  });
+
+  it('offers no link when Pharmacy Reports is not licensed', async () => {
+    render(await OverviewPage({ searchParams: params() }));
+    expect(screen.queryByRole('link', { name: /Reorder advice/ })).toBeNull();
+  });
+});

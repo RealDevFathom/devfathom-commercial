@@ -221,9 +221,10 @@ describeIfDatabase('audit list cursor pagination, against PostgreSQL', () => {
     if (!deps) return;
     await deps.withPlatformDb(async (db) => {
       const organizationId = { in: [ORGANIZATION_A, ORGANIZATION_B] };
-      await db.auditLog.deleteMany({ where: { organizationId } });
       await db.user.deleteMany({ where: { organizationId } });
       await db.organization.deleteMany({ where: { id: organizationId } });
+      // audit_logs is append-only while its organization exists (DEV-155).
+      await db.auditLog.deleteMany({ where: { organizationId } });
     });
   }, 120_000);
 

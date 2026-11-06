@@ -6,14 +6,18 @@
 //   [ADMIN_NAME="..." ADMIN_TITLE="..." ADMIN_DEPARTMENT="LEADERSHIP"] \
 //   DATABASE_URL="..." bunx tsx prisma/create-admin.ts
 //
+// Unset variables fall back to .env.local, then .env (prisma/load-env.ts).
+//
 // ADMIN_DEPARTMENT, when given, must be a key from the TARGET organization's own
 // department catalog; it defaults to that organization's vertical default.
+// First: loads .env.local and .env (real environment wins) before anything below reads it.
+import { requireDatabaseUrl } from './load-env.js';
+
 import type { Prisma } from '../src/generated/prisma/client.js';
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { hash } from 'bcryptjs';
-import 'dotenv/config';
 
 import { adminDepartmentKeyForVertical } from '../src/lib/vertical-catalog.js';
 
@@ -38,7 +42,7 @@ if (PASSWORD.length < 8) {
   process.exit(1);
 }
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new pg.Pool({ connectionString: requireDatabaseUrl(['DATABASE_URL']) });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 

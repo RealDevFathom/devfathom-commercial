@@ -10,7 +10,7 @@ import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
 import { cn } from '@/lib/utils';
 
 const inputClass =
-  'flex h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-card px-4 text-sm text-text-strong placeholder:text-text-faint transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30';
+  'flex h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-card px-4 text-sm text-text-strong placeholder:text-text-muted transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30';
 
 export function ResetPasswordForm({ token }: { token: string }) {
   const router = useRouter();

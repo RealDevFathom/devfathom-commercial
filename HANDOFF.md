@@ -1,3 +1,277 @@
+# HANDOFF — claude-labelled Linear batch
+
+Last updated: 2026-11-06 23:10 UTC · Branch: `saad/nice-thompson-99m17p` · PR:
+[RealDevFathom/devfathom-commercial#1223](https://github.com/RealDevFathom/devfathom-commercial/pull/1223)
+(into `develop`, open) · Head: the merge `87fb5336` plus this docs commit
+
+## Resume here
+
+- **Saad (2026-11-06):** finish this session's assigned work, run current-head QA, Security and
+  local checks here, then merge #1223 into develop and close only verified-resolved linked issues.
+  GitHub CI/CD stays disabled; no deploy, workflow change or force-push.
+- **Since 2026-11-04:**
+  - A Codex owner merged develop (`ba24c89f`) and resolved DEV-721/DEV-512 (`1acec91c`). My
+    local resolution of the same conflicts (`b3e0b84f`) was never pushed and is superseded.
+  - `87fb5336` merges develop `1906b530` (#1226 invoice numbering, #1120 inventory access, #1421,
+    #1010, #1418, #1415, #1430). It wraps the DEV-252 amounts in #1226's locked per-organization
+    numbering, and keeps #1120's gated read before DEV-594's advice lookup. Two DEV-252 tests use
+    develop's transaction fixtures.
+- **Checks on `1acec91c` merged with develop `11660b31` (tree `f481844b`):**
+  - Static: typecheck 0, lint 0 errors, build passes, test:rls passes. Prettier fails on develop
+    too, and this branch adds no new unformatted file.
+  - Every gate lane matched develop or improved it. Main lane: 68 failed, against 74 on develop;
+    the 6 fixed are the DEV-577 witness cases. No lane had a new failure.
+  - Platform-login a11y passes 16/16 once `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` names the
+    installed Chromium. Bicep and the browser gate were not run.
+  - The independent QA and Security review (6 areas, 2 skeptics per finding) found no blocking or
+    major issue. Its minor notes are in the PR comments.
+- **Next step:** rerun the gate on the final head and on develop `1906b530`; merge only if nothing
+  regresses. Then close only the issues the per-issue verification rated RESOLVED.
+- **Not this session's:** the rest of DEV-582 (delegated to Codex on 3 Nov); #1413's dashboard
+  expectations, for whichever of #1413 and #1223 lands second; #1165's flag line.
+
+### Earlier (2026-11-04)
+
+- **Since 2026-11-04 02:15 UTC:**
+  - **`ef2719d5` (DEV-249):** the meetings form fields are 44px tall. The Studio visual QA matrix
+    is done; screenshots and `matrix.md` are in scratchpad `visual-qa-meetings/`. Every cell
+    passed except touch targets (34–38px), which this fixes.
+  - **`eb31d46f`:** merges develop (#1238, #1279, #1240, #1224, #1390). Two conflicts:
+    - `src/app/api/assistant/route.ts`: both import sets kept;
+    - `HANDOFF.md`: this section first, develop's sections after it, unchanged.
+
+    `tsc --noEmit` has 0 errors; `vitest src/app/api/assistant` is 109/109.
+
+  - **`efe660e5` and `b135a982` (DEV-155): security finding 1 is fixed.** Migration
+    `20261102150000_audit_logs_retention_purge_exception` lets the append-only trigger allow
+    DELETE only when all four hold:
+    1. `app.retention_purge_organization_id` names the row's tenant;
+    2. `app.current_organization_id` is that same tenant;
+    3. the tenant's vertical is PHARMACY;
+    4. #1165's `public.pharmacy_record_retention_deadline()` exists and returns a finite
+       deadline that has passed.
+
+    UPDATE stays refused. `search_path` puts `pg_temp` last and the tables are
+    schema-qualified. Suite `tests/tenant-audit-retention-purge.db.test.ts` has 12 cases and
+    never skips, because the QA gate counts a skip as a failure.
+
+  - **Review:** an independent adversarial review (3 lenses, 2 skeptics per finding) confirmed
+    two test gaps and a `search_path` gap. All are fixed in `b135a982`.
+  - **Posted:**
+    - #1165, the one-line flag change and two interplay notes:
+      https://github.com/RealDevFathom/devfathom-commercial/pull/1165#issuecomment-6621378839
+    - #1223, the security reply:
+      https://github.com/RealDevFathom/devfathom-commercial/pull/1223#issuecomment-6621380681
+    - The PR body is rewritten.
+    - Linear progress comments on DEV-155, DEV-249 and DEV-576 (no status changes).
+- **Next step:** wait for the Security and QA re-run on #1223 at `b135a982`. Then fix whatever
+  they find, or answer it.
+- **Waiting on others:**
+  - #1165's owner: apply the one-line flag change, and decide the orphaned-audit-row conflict.
+    #1165's guard refuses deleting the audit rows of a deleted organization, which breaks
+    `tests/tenant-audit-append-only.db.test.ts` teardown once both merge.
+  - The Security and QA re-run on #1223.
+- **Follow-ups to propose, not in this PR:**
+  - The pharmacy purge is blocked by `pharmacy_reject_append_only_change`.
+  - Invoice numbers collide across tenants.
+  - The rest of DEV-582: growth cards and marketing assist.
+- **Uncommitted / half-written:** nothing in this checkout.
+
+**Local DBs for the retention suite** (Postgres 16; start it with `pg_ctlcluster 16 main start`):
+
+| Database          | Owner                                                                           | Use                                        |
+| ----------------- | ------------------------------------------------------------------------------- | ------------------------------------------ |
+| `audit_ret_test`  | postgres, a superuser                                                           | runtime role `audit_ret_app`               |
+| `audit_gate_test` | `audit_gate_owner` (NOSUPERUSER NOBYPASSRLS CREATEROLE, like CI's `gate_owner`) | runtime role `audit_gate_runtime`          |
+| `audit_gate_1165` | `audit_gate_owner`                                                              | the same, plus #1165's retention migration |
+
+```bash
+OWNER_DATABASE_URL=postgresql://audit_gate_owner:audit-gate-owner-local@localhost:5432/audit_gate_test \
+  bunx vitest run tests/tenant-audit-retention-purge.db.test.ts
+```
+
+## Rules in force
+
+- PRs into `develop` only. Merge only as Saad authorized on 2026-11-06, after checks pass. Never
+  force-push or rewrite pushed commits. No GitHub Actions runs.
+- Commit messages are plain: no Co-Authored-By line, no model name, no Claude-Session
+  link. This applies from `09c6e54b` onward; the 14 earlier commits keep their old
+  trailers by instruction and are not rewritten.
+- Linear: do not change any issue's status. Mark an issue finished with a "✅ Finished"
+  comment (PR link + commit + what changed), and post a progress comment when status
+  changes.
+- UI work: read `docs/design-system/DEVFATHOM-STUDIO.md` first and do its visual QA matrix.
+
+## Items
+
+Status key: done = committed and pushed to PR #1223, with a "Finished" comment on Linear.
+
+### Done — code changes on PR #1223
+
+| DEV                       | GitHub     | Commit(s)              | Summary                                                                                                                                                                            |
+| ------------------------- | ---------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DEV-577                   | —          | `2013e66f`             | Stale router test given a valid witness. Kept #911's witness-first order.                                                                                                          |
+| DEV-155                   | #620       | `22e3e9cd`             | Migration `20261102090000`: `audit_logs` append-only trigger (55000). Allowed exceptions: FK SET NULL of a deleted actor, sanctioned purge, orphaned rows.                         |
+| DEV-325, DEV-329          | #340, #334 | `7ccc1050`             | Auth placeholders/divider and platform form help `text-text-faint` → `text-text-muted` (5.27:1 light / 6.60:1 dark).                                                               |
+| DEV-344                   | #315       | `7de50f12`             | Operator reset sets `mustChangePassword`, emails the user via `afterCommit`, page `confirm=`.                                                                                      |
+| DEV-124                   | #657       | `c866c940`             | Migration `20261102090100`: composite FK custody `witnessId` → `users`, NOT VALID then conditional VALIDATE. Fixed 5 stale stock-ledger DB fixtures.                               |
+| DEV-140                   | #640       | `435dea3c`             | API docs meetings row fixed and pinned by `tests/api-docs.test.ts`.                                                                                                                |
+| DEV-312                   | #359       | `ba9cc8f2`             | `consentKeyword` regression tests. The reported migration does not exist.                                                                                                          |
+| DEV-249                   | #451       | `ee72fb3e`             | Meetings end > start on every path. Migration `20261102090200` repairs bad rows and adds a CHECK.                                                                                  |
+| DEV-348                   | #311       | `922ad66e`             | `prisma/load-env.ts`: real env > `.env.local` > `.env`. Missing-URL error. Docs.                                                                                                   |
+| DEV-347                   | #312       | `8fabfc81`             | Seed runs in two transactions, logs the operator outcome, P2002 hint, `db:reset` chains the seed. **Caveat:** `prisma migrate reset` itself drops the extensions; see LOCAL_SETUP. |
+| DEV-243                   | #458       | `ed306846`, `f285299a` | Invoice print shows the agency issuer. Migration `20261102090350` adds `invoiceAddress` / `invoiceTaxId`.                                                                          |
+| DEV-252                   | #448       | `7eeda02a`             | Tax and discount. Shared cent-exact `invoice-amounts.ts`. Migration `20261102090400`.                                                                                              |
+| DEV-250                   | #450       | `09c6e54b`             | `Task.completedAt` kept on every write path; stats read it. Migration `20261102090300` with backfill.                                                                              |
+| DEV-579, DEV-580, DEV-581 | #1042      | `47d1a33d`             | Expiry advisor SQL: real table and column names, explicit tenant and branch scope. Postgres tests.                                                                                 |
+
+### Done — verified already fixed on develop (no code; "Finished" comment posted)
+
+- DEV-137
+- DEV-191
+- DEV-297 (superseded by `prisma/prepare-extensions.sql`)
+- DEV-310
+- DEV-337
+- DEV-346
+- DEV-308 (only the failures it names; see Known failures)
+
+### Blocked — human-only ops (comment posted, not marked finished)
+
+- **DEV-336:** SCIM credential rotation and remediation. Must be run by a human against
+  the live deployments.
+- **DEV-341:** staging Bicep what-if drift. Needs Azure access and someone to decide on
+  each change.
+
+### In progress — local agent worktrees, not yet on the branch
+
+| DEV                                                                             | Scope (files)                                                                                                                                                     | Next step                                                                                                                                                                             |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DEV-583, DEV-582                                                                | `src/lib/ai/**`, `src/app/api/assistant/**`, `askFathomSettings` in `src/server/routers/organization-admin.ts`, launcher in `src/components/layout/app-shell.tsx` | One shared provider-availability function; settings report unavailable, launcher disabled. Thread locale into every pharmacy AI tool.                                                 |
+| DEV-584, DEV-592, DEV-593, DEV-598, DEV-599, DEV-600, DEV-603, DEV-604, DEV-605 | `src/components/assistant/assistant-panel.tsx` and children                                                                                                       | Focus input on open; block duplicate submit; keep the conversation per session; theme via tokens; `dir="auto"`; role-aware empty state with examples; plain error message plus Retry. |
+| DEV-591, DEV-597, DEV-606, DEV-601 (marketing half)                             | `src/app/(app)/pharmacy/marketing/**`                                                                                                                             | Plain inputs with defaults (PKT dates → UTC); name the missing requirement on denial; dark-mode contrast.                                                                             |
+| DEV-595, DEV-596, DEV-601 (work-pack half)                                      | `src/app/(app)/pharmacy/reports/**` (`daily-work-pack.tsx`, `replenishment/**`)                                                                                   | Map enums to plain labels; one short missing-source note; PKT date picker; contrast.                                                                                                  |
+| DEV-594, DEV-602                                                                | `src/app/(app)/dashboard/pharmacy-dashboard-content.tsx`, dashboard data and layout save, labels in `src/lib/pharmacy/reports.ts`                                 | Cashier: no owner title or edit mode; check that the layout-save authorization is server-side; plain labels instead of table/permission keys; entry links to advice.                  |
+
+**Integration recipe** for each finished worktree commit:
+
+```bash
+git cherry-pick --no-commit <sha>
+git log -1 --format=%B <sha> | grep -viE '^(co-authored-by|claude-session):' > /tmp/msg
+git commit -F /tmp/msg
+```
+
+Then:
+
+- rerun that commit's tests;
+- scan the new commit messages with
+  `git log --format=%B origin/saad/nice-thompson-99m17p..HEAD | grep -iE 'co-authored|claude-session|opus|sonnet'`, which must print nothing;
+- push;
+- post a "Finished" comment on each DEV issue.
+
+**Migration timestamps already used on this branch:** `20261102090000`, `…090100`,
+`…090200`, `…090300`, `…090350`, `…090400`. Use a later value for any new migration.
+
+## Reviews
+
+PR #1223 at head `b135a982` (mergeable, clean):
+
+| Check                                                  | Verdict                          | Notes                                                                                                                                               |
+| ------------------------------------------------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Machine checks (GitHub check runs)                     | none reported                    | No check runs are attached to this PR. `qa.yml` did not run on it.                                                                                  |
+| Codex code review                                      | ✅ no findings                   | At `8fabfc81`.                                                                                                                                      |
+| Codex security review                                  | ✅ completed, no findings posted | At `8fabfc81`.                                                                                                                                      |
+| Security review (WhatTheStack1), at `b5e29ad0`         | ⚠️ 3 findings + 1 note           | Findings 2 and 3 were fixed in `9bf8e9a0`.                                                                                                          |
+| Security re-run, at `754101c2`                         | ⚠️ finding 1 still open          | Findings 2 and 3 were confirmed fixed.                                                                                                              |
+| Finding 1 fix (`efe660e5`, `b135a982`)                 | re-run requested                 | Reply: issuecomment-6621380681.                                                                                                                     |
+| Internal adversarial review of the retention exception | done                             | 6 findings. 2 confirmed (test gaps): fixed. 4 refuted: 1 hardening fixed anyway, 2 are #1165-side (posted there), 1 was integration with no defect. |
+| QA (human)                                             | not started on #1223             | —                                                                                                                                                   |
+
+Security finding 1, as decided by the user ("Narrow exception"): allow DELETE, never UPDATE,
+only with the purge flag, a matching tenant context, a pharmacy tenant, and #1165's deadline
+function saying the row is past retention. It is implemented in `20261102150000`. #1165 needs
+one line, `set_config('app.retention_purge_organization_id', <org>, true)` in
+`runPharmacyRecordRetentionJob`'s tenant transaction, which is posted on #1165. I won't push to
+its branch.
+
+## Checks: how to rerun, latest result
+
+**Local test database:** Postgres 16, `pg_ctlcluster 16 main start`. To build it:
+
+1. `CREATE DATABASE devfathom_test;`
+2. `EXTENSION_ADMIN_DATABASE_URL=<superuser url> bun prisma/prepare-extensions.ts`
+3. `DATABASE_URL=<superuser url> bunx prisma migrate deploy`
+4. Create a `devfathom_app` role (NOSUPERUSER NOBYPASSRLS) with the grants in `docs/LOCAL_SETUP.md` §3.
+
+DB tests read `TEST_DATABASE_URL`, set to the app-role URL. Some suites also need
+`OWNER_DATABASE_URL`, `PHARMACY_TEST_OWNER_DATABASE_URL` or
+`QA144_DATABASE_URL`/`QA144_OWNER_DATABASE_URL`.
+
+**First, after any schema change:** `bunx prisma generate`. A stale generated client
+caused false failures earlier.
+
+| Check           | Command                                                    | Latest result                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Typecheck       | `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit` | Not yet green-confirmed on the integrated branch; it was OOM-killed under agent load. Agents report 8 errors, all pre-existing, in `counter-console.test.tsx`, `tools-routing.test.ts`, `restaurant-reports.test.ts`, `duplicate-salt-acknowledgement.db.test.ts`, `pharmacy-inventory.test.ts`, `restaurant-catering.test.ts`. If a run picks up `.claude/worktrees`, exclude it. |
+| Lint            | `bunx eslint <changed files>`                              | Clean on changed files. `prisma/seed-demo.ts` has 48 `no-explicit-any` errors, the same as on develop.                                                                                                                                                                                                                                                                             |
+| Tests, per item | `bunx vitest run <files>` with the DB envs above           | All per-item suites pass (see commit bodies).                                                                                                                                                                                                                                                                                                                                      |
+| Platform suite  | `bunx vitest run src/lib/platform tests/platform-*`        | 12 failures, identical to develop.                                                                                                                                                                                                                                                                                                                                                 |
+| Full suite      | `bunx vitest run`                                          | Not rerun on the integrated branch yet.                                                                                                                                                                                                                                                                                                                                            |
+| Build           | `bun run build`                                            | Not run.                                                                                                                                                                                                                                                                                                                                                                           |
+
+## Known failures
+
+**Fail on develop as well** (baseline run at `47518cb`, stale generated client, no DB). 50 tests across 21 files:
+
+- `commands.opportunity-convert` (8)
+- `recipe-measurement-domains-migration` (7)
+- `pharmacy-baskets` (6)
+- `growth-review.db` (5)
+- `daily-close-clock` (4)
+- `commands.organization-create` (4)
+- `finance-evidence-review` (3)
+- `restaurant-recipe-concurrency` (2)
+- `tenders-posting` (2)
+- `whatsapp/message-log.db` (2)
+- `pharmacy/inventory` (2)
+- 1 each: `vertical-foundation`, `restaurant-tax`, `pharmacy-inventory`, `restaurant/reports.db`, `membership-lock.db`, `pharmacy/reports`, `offline-action-matrix`, `hotel/foundation`, `abac/index`, `restaurant-tax-console`
+
+Fixed on this branch: `pharmacy-inventory` (DEV-577).
+
+`membership-lock.db` passes when run with a real DB.
+
+**Also fail on develop when run with a DB, not caused here:**
+
+- `tests/pharmacy-capabilities.db.test.ts`: the template expects `pharmacy:close`.
+- `src/lib/restaurant/terminal-checkout.db.test.ts`: the daily-close cases.
+
+**New failures introduced by this branch:** none known.
+
+**Load-sensitive:** `src/app/(app)/meetings/meetings-content.test.tsx` pagination cases can
+exceed 5s under heavy parallel load. 9/9 pass when run alone.
+
+## Decisions and open questions
+
+- **DEV-577:** kept the witness-first order from #911 and fixed the stale test, rather than
+  reordering production checks.
+- **DEV-124:** added the FK NOT VALID, then validated it only when history is clean, so a
+  deploy never fails on pre-#911 evidence. Rows are never rewritten.
+- **DEV-155:** user deletion still works (FK SET NULL is allowed only when the actor row is
+  gone). Test cleanups delete audit rows after the organization. Fixtures that fake history
+  disable the trigger for one transaction.
+- **DEV-249:** repaired bad rows instead of using NOT VALID, because the occurrence
+  materializer updates meeting rows.
+- **DEV-347:** `db:reset` chains the seed, but `prisma migrate reset` drops `btree_gist` /
+  `pg_trgm`. _Open:_ decide on a real reset path (drop the DB → prepare-extensions →
+  migrate deploy → seed).
+- **DEV-583:** develop's AI provider env still needs to be configured by ops. The code only
+  makes availability honest.
+- **Follow-up, not in this PR:** invoice numbers are globally `@unique` but counted per
+  tenant, so a second agency collides. Queued as a separate suggested task.
+- **Tooling:** a local `commit-msg` hook to enforce plain messages was denied by the
+  permission classifier. The rule is enforced by hand with the scan above.
+
+---
+
 # Handoff log: DEV-258 (per-organization invoice numbers)
 
 Last updated: 2026-11-06 (UTC). Branch `saad/exciting-ramanujan-w973fo`, PR
@@ -66,10 +340,17 @@ NODE_OPTIONS=--max-old-space-size=8192 bun run build
 
 # HANDOFF — DEV-576 (top priority)
 
-Last updated: 2026-11-02 21:47 UTC
+Last updated: 2026-11-04 03:06 UTC
 
+- **MERGED:** #1238 merged into develop as `47ea6c8d` at about 01:00 UTC on 2026-11-03. QA and
+  Security were both PASS at head `f8177f10`.
+- **Still open:**
+  - The Bedrock live test, waiting on AWS approval of the Anthropic use-case form. It's wired;
+    re-run the smoke script once approval clears.
+  - Saad's browser check of Ask Fathom on develop. Develop runs release `96d372bd`, which has
+    the same app code as the merged head.
 - **Branch:** `feat/dev-576-ai-providers`, from `develop` @ `47518cbf`.
-- **PR:** [RealDevFathom/devfathom-commercial#1238](https://github.com/RealDevFathom/devfathom-commercial/pull/1238). Open into develop, not merged; this session watches it.
+- **PR:** [RealDevFathom/devfathom-commercial#1238](https://github.com/RealDevFathom/devfathom-commercial/pull/1238). Merged; no longer watched.
 - **Linear:** https://linear.app/devfathom/issue/DEV-576. The PR link and live results are posted there.
 - **Other work:** the claude-label batch lives on branch `saad/nice-thompson-99m17p`, PR
   https://github.com/RealDevFathom/devfathom-commercial/pull/1223, which has its own `HANDOFF.md`.

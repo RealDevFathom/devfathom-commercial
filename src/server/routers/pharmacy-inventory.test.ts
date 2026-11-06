@@ -1641,6 +1641,10 @@ describe('manual quarantine resolution authorization', () => {
       db.pharmacyRecallQuarantineAction.findMany.mockResolvedValue([
         { quantityUnits: 20, heldMovementId: 'recall-held-1' },
       ]);
+      // A valid co-signer, so the write-off reaches the recall-hold check this
+      // case is about. writeOff deliberately validates the witness before it
+      // reads stock (#430), so without one it stops at COAUTH_REQUIRED instead.
+      db.user.findFirst.mockResolvedValue({ id: 'witness' });
       const result =
         operation === 'release'
           ? caller().releaseQuarantinedPart(input)

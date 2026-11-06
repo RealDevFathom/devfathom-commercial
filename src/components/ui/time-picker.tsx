@@ -56,6 +56,13 @@ interface TimePickerProps {
   placeholder?: string;
   id?: string;
   'aria-label'?: string;
+  /**
+   * Shows the trigger in its error state. Pair it with `aria-describedby`
+   * naming the error text: ARIA does not support `aria-invalid` on a button,
+   * so the description is what tells assistive technology what is wrong.
+   */
+  invalid?: boolean;
+  'aria-describedby'?: string;
   disabled?: boolean;
 }
 
@@ -67,6 +74,8 @@ export function TimePicker({
   id,
   disabled,
   'aria-label': ariaLabel,
+  invalid,
+  'aria-describedby': ariaDescribedBy,
 }: TimePickerProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -177,12 +186,17 @@ export function TimePicker({
         type="button"
         disabled={disabled}
         aria-label={ariaLabel}
+        data-invalid={invalid || undefined}
+        aria-describedby={ariaDescribedBy}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => !disabled && (open ? setOpen(false) : openMenu())}
         onKeyDown={onKeyDown}
         className={cn(
           'flex w-full items-center justify-between gap-2 text-left disabled:cursor-not-allowed disabled:opacity-50',
+          // The treatment the shared inputs give `aria-invalid`, keyed on a data
+          // attribute instead, so a picker in error reads like any field in error.
+          'data-invalid:border-destructive data-invalid:ring-3 data-invalid:ring-destructive/20 dark:data-invalid:border-destructive/50 dark:data-invalid:ring-destructive/40',
           className
         )}
       >

@@ -101,6 +101,32 @@ export type PharmacyDashboardPreference = {
   widgets: Array<{ key: PharmacyWidgetKey; visible: boolean; span: 'compact' | 'wide' }>;
 };
 
+/** A page the dashboard offers, already checked against the viewer's grants. */
+export type PharmacyDashboardLink = { key: string; href: string; label: string; detail: string };
+
+/**
+ * What the signed-in viewer may see on the pharmacy dashboard, resolved on the
+ * server (`resolvePharmacyDashboardAccess`) before anything renders.
+ *
+ * `reports` is the `reports:operational` grant every command-centre read and the
+ * layout save check. Without it the dashboard asks Pharmacy Reports nothing,
+ * never offers edit mode, and shows the viewer's own tools instead.
+ */
+export type PharmacyDashboardAccess = {
+  reports: boolean;
+  /** The viewer's working pages, offered when the dashboard holds no reports. */
+  tools: readonly PharmacyDashboardLink[];
+  /** Advice pages the viewer's grants open (reorder, expiry, growth). */
+  advice: readonly PharmacyDashboardLink[];
+};
+
+/** Fail closed: no reports, no edit mode, nothing offered. */
+export const CLOSED_PHARMACY_DASHBOARD_ACCESS: PharmacyDashboardAccess = {
+  reports: false,
+  tools: [],
+  advice: [],
+};
+
 export function pharmacyDashboardDefault(
   role: string | null | undefined
 ): PharmacyDashboardPreference {

@@ -16,12 +16,33 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
-import { demandDateAfter, demandDateMs, demandInstantMs } from '@/lib/pharmacy/demand-evidence';
+import { demandDateAfter, demandDateMs } from '@/lib/pharmacy/demand-evidence';
 import type {
   PharmacyReplenishmentReport,
   PharmacyReplenishmentReportInput,
 } from '@/lib/pharmacy/replenishment-report';
 import { trpc } from '@/lib/trpc';
+import {
+  backtestStatusLabels,
+  dayLabel,
+  dayStateLabel,
+  forecastMethodLabels,
+  forecastStatusLabels,
+  goalResultLabel,
+  labelFor,
+  lastDayLabel,
+  orderStatusLabels,
+  planningBasisLabels,
+  planningStatusLabels,
+  plainReason,
+  policyLabel,
+  readTimeLabel,
+  replenishmentDates,
+  serverDay,
+  serverDayStart,
+  statusLabel,
+  stockCheckLabels,
+} from './replenishment-labels';
 
 type Props = {
   organizationId: string;
@@ -29,25 +50,29 @@ type Props = {
   financial: boolean;
   initialBranchId: string;
   invalidInitialBranch: boolean;
-  today: string;
+  /** Workspace IANA zone: picked dates are the workspace's calendar days. */
+  timeZone: string;
+  /** Server render time (ISO), so server and browser agree on the default dates. */
+  now: string;
 };
 type Medicine = { id: string; productName: string };
 type State = 'idle' | 'loading' | 'ready' | 'error' | 'denied' | 'stale';
 const selectClass =
   'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50';
+const money = ' (in paisa or cents)';
 const numericFields = [
-  ['dailyDemandUnits', 'Assumed daily demand (units)', false, 0],
-  ['currentQuantityUnits', 'Current policy order (units)', false, 0],
-  ['proposedQuantityUnits', 'Proposed policy order (units)', false, 0],
-  ['currentUnitPriceMinor', 'Current unit selling price (minor units)', false, 0],
-  ['proposedUnitPriceMinor', 'What-if unit selling price (minor units)', false, 0],
-  ['salesGoalMinor', 'Sales goal (minor units)', true, 0],
-  ['marginGoalMinor', 'Margin goal (minor units)', true, 0],
-  ['packSize', 'Order pack size (units)', false, 1],
+  ['dailyDemandUnits', 'Expected sales per day (units)', false, 0],
+  ['currentQuantityUnits', 'Your usual order (units)', false, 0],
+  ['proposedQuantityUnits', 'New order to compare (units)', false, 0],
+  ['currentUnitPriceMinor', `Selling price per unit now${money}`, false, 0],
+  ['proposedUnitPriceMinor', `Selling price per unit to try${money}`, false, 0],
+  ['salesGoalMinor', `Sales target${money}`, true, 0],
+  ['marginGoalMinor', `Profit target${money}`, true, 0],
+  ['packSize', 'Units per pack', false, 1],
   ['minimumOrderUnits', 'Minimum order (units)', false, 0],
-  ['unitCostMinor', 'Unit cost (integer minor units)', true, 0],
-  ['budgetMinor', 'Order budget (integer minor units)', true, 0],
-  ['storageLimitUnits', 'Net additional storage capacity (units)', true, 0],
+  ['unitCostMinor', `Cost per unit${money}`, true, 0],
+  ['budgetMinor', `Budget for this order${money}`, true, 0],
+  ['storageLimitUnits', 'Extra shelf space (units)', true, 0],
 ] as const;
 type NumericKey = (typeof numericFields)[number][0];
 type Draft = Record<NumericKey, string> & {
@@ -76,6 +101,7 @@ export function ScenarioConsole(props: Props) {
         props.financial,
         props.initialBranchId,
         props.invalidInitialBranch,
+        props.timeZone,
       ])}
       {...props}
     />
@@ -88,7 +114,8 @@ function ScenarioWorkspace({
   financial,
   initialBranchId,
   invalidInitialBranch,
-  today,
+  timeZone,
+  now,
 }: Props) {
   const utils = trpc.useUtils();
   const reportVersion = useRef(0);
@@ -100,6 +127,7 @@ function ScenarioWorkspace({
     },
     []
   );
+  const [dates] = useState(() => replenishmentDates(timeZone, new Date(now)));
   const [branchId, setBranchId] = useState(initialBranchId);
   const [search, setSearch] = useState('');
   const [medicines, setMedicines] = useState<Medicine[]>([]);
@@ -110,11 +138,11 @@ function ScenarioWorkspace({
   const [report, setReport] = useState<PharmacyReplenishmentReport | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState<Draft>({
-    historyStartDate: demandDateAfter(today, -7),
-    originDate: today,
+    historyStartDate: demandDateAfter(dates.latestForecastFrom, -7),
+    originDate: dates.latestForecastFrom,
     horizonDays: '7',
     method: 'RECENT_MEAN',
-    planningOrigin: demandDateAfter(today, 1),
+    planningOrigin: dates.defaultPlanStart,
     currency: '',
     arrivalAt: '',
     expiresAt: '',
@@ -166,6 +194,8 @@ function ScenarioWorkspace({
     event.preventDefault();
     const form = event.currentTarget;
     const invalid: Record<string, string> = {};
+    // Re-read the clock: the latest day the server accepts moves while the page is open.
+    const bounds = replenishmentDates(timeZone, new Date());
     const integer = (
       key: keyof Draft,
       minimum: number,
@@ -181,8 +211,12 @@ function ScenarioWorkspace({
         number < minimum ||
         number > maximum
       ) {
+        const range =
+          maximum === Number.MAX_SAFE_INTEGER
+            ? `${minimum} or more`
+            : `from ${minimum} to ${maximum}`;
         invalid[key] =
-          `Enter a whole number from ${minimum} to ${maximum}${optional ? ', or leave blank for unknown' : ''}.`;
+          `Enter a whole number ${range}${optional ? ', or leave it blank if you don’t know' : ''}.`;
       }
       return number;
     };
@@ -190,55 +224,58 @@ function ScenarioWorkspace({
       try {
         return demandDateMs(draft[key]);
       } catch {
-        invalid[key] = 'Enter a valid UTC calendar date.';
+        invalid[key] = 'Enter a valid date.';
         return NaN;
       }
     };
     if (!branches.some((branch) => branch.id === branchId))
-      invalid.branchId = 'Select an authorized branch.';
+      invalid.branchId = 'Choose one of your branches.';
     if (!medicines.some((medicine) => medicine.id === medicineId))
-      invalid.medicineId = 'Search and select a medicine.';
+      invalid.medicineId = 'Search for a medicine and choose it.';
     const start = date('historyStartDate');
     const origin = date('originDate');
     const days = (origin - start) / 86_400_000;
     if (days < 1 || days > 90)
-      invalid.historyStartDate = 'Use 1 to 90 history days before the exclusive end.';
-    if (origin > Date.now()) invalid.originDate = 'History must end no later than today (UTC).';
+      invalid.historyStartDate = 'Choose a date 1 to 90 days before “Forecast from”.';
+    if (origin > demandDateMs(bounds.latestForecastFrom))
+      invalid.originDate = `Choose ${dayLabel(bounds.latestForecastFrom)} or an earlier date.`;
     const horizonDays = integer('horizonDays', 1, 366)!;
     const input: PharmacyReplenishmentReportInput = {
       branchId,
       medicineId,
-      historyStartDate: draft.historyStartDate,
-      originDate: draft.originDate,
+      historyStartDate: Number.isNaN(start)
+        ? draft.historyStartDate
+        : serverDay(draft.historyStartDate),
+      originDate: Number.isNaN(origin) ? draft.originDate : serverDay(draft.originDate),
       horizonDays,
       method: draft.method,
     };
     if (manual && canPlan) {
       const planningOrigin = date('planningOrigin');
-      if (planningOrigin <= Date.now() || planningOrigin > Date.now() + 31 * 86_400_000)
-        invalid.planningOrigin = 'Use a future UTC day within 31 days.';
+      if (
+        planningOrigin < demandDateMs(bounds.earliestPlanStart) ||
+        planningOrigin > demandDateMs(bounds.latestPlanStart)
+      )
+        invalid.planningOrigin = `Choose a date from ${dayLabel(bounds.earliestPlanStart)} to ${dayLabel(bounds.latestPlanStart)}.`;
       const values = {} as Record<NumericKey, number | null>;
       for (const [key, , optional, minimum] of numericFields)
         values[key] = integer(key, minimum, Number.MAX_SAFE_INTEGER, optional);
       if (!Number.isSafeInteger(values.dailyDemandUnits! * horizonDays))
-        invalid.dailyDemandUnits = 'Demand across the horizon must be a safe whole-number total.';
+        invalid.dailyDemandUnits = 'Sales across all forecast days must be a smaller whole number.';
       if (!/^[A-Z]{3}$/.test(draft.currency))
-        invalid.currency = 'Enter a three-letter uppercase currency code.';
-      const instant = (key: 'arrivalAt' | 'expiresAt') => {
+        invalid.currency = 'Enter a three-letter currency code in capitals, for example PKR.';
+      const day = (key: 'arrivalAt' | 'expiresAt') => {
         if (!draft[key].trim()) return null;
-        try {
-          const ms = demandInstantMs(draft[key].trim());
-          if (key === 'arrivalAt' && ms < planningOrigin)
-            invalid[key] = 'Arrival must be on or after the planning origin.';
-          return new Date(ms).toISOString();
-        } catch {
-          invalid[key] =
-            'Use an ISO instant with timezone, for example 2026-09-16T12:00:00Z, or leave blank for unknown.';
-          return null;
-        }
+        const ms = date(key);
+        if (Number.isNaN(ms)) return null;
+        if (key === 'arrivalAt' && ms < planningOrigin)
+          invalid[key] = 'Arrival can’t be before the plan starts.';
+        return serverDayStart(draft[key]);
       };
       input.manualScenario = {
-        originDate: draft.planningOrigin,
+        originDate: Number.isNaN(planningOrigin)
+          ? draft.planningOrigin
+          : serverDay(draft.planningOrigin),
         dailyDemandUnits: values.dailyDemandUnits!,
         currentQuantityUnits: values.currentQuantityUnits!,
         proposedQuantityUnits: values.proposedQuantityUnits!,
@@ -257,8 +294,8 @@ function ScenarioWorkspace({
           unitCostMinor: values.unitCostMinor,
           budgetMinor: values.budgetMinor,
           storageLimitUnits: values.storageLimitUnits,
-          arrivalAt: instant('arrivalAt'),
-          expiresAt: instant('expiresAt'),
+          arrivalAt: day('arrivalAt'),
+          expiresAt: day('expiresAt'),
         },
       };
     }
@@ -300,8 +337,8 @@ function ScenarioWorkspace({
     label: string,
     type = 'text',
     optional = false,
-    min?: number,
-    max?: number
+    min?: number | string,
+    max?: number | string
   ) => (
     <div className="text-sm text-text-body" key={key}>
       <label htmlFor={`replenishment-${key}`}>{label}</label>
@@ -334,19 +371,25 @@ function ScenarioWorkspace({
   );
   if (!branches.length)
     return (
-      <SectionCard title="No reportable branches" titleLevel={2}>
-        <p role="status" className="text-sm text-text-muted">
-          An administrator must make an active branch available before you can read replenishment
-          evidence.
+      <SectionCard title="No branches to report on" titleLevel={2}>
+        <p role="status" className="text-sm text-text-body">
+          An administrator needs to make a branch available to you before you can see replenishment.
         </p>
       </SectionCard>
     );
+  const historyLatest = (() => {
+    try {
+      return demandDateAfter(draft.originDate, -1);
+    } catch {
+      return undefined;
+    }
+  })();
   return (
     <div className="space-y-6">
-      <SectionCard title="Report scope" titleLevel={2}>
+      <SectionCard title="Branch and medicine" titleLevel={2}>
         {invalidInitialBranch && !branchId && (
-          <p role="alert" className="mb-4 text-sm text-text-muted">
-            The requested branch is unavailable. Select an authorized branch.
+          <p role="alert" className="mb-4 text-sm text-text-body">
+            That branch isn’t available to you. Choose one of your branches.
           </p>
         )}
         <label className="block text-sm text-text-body">
@@ -367,7 +410,7 @@ function ScenarioWorkspace({
               setSearchState('idle');
             }}
           >
-            <option value="">Select an authorized branch</option>
+            <option value="">Choose a branch</option>
             {branches.map((branch) => (
               <option key={branch.id} value={branch.id}>
                 {branch.name}
@@ -408,15 +451,15 @@ function ScenarioWorkspace({
             Search medicines
           </Button>
         </form>
-        <div className="mt-3 text-sm text-text-muted" role="status">
-          {searchState === 'loading' && 'Searching permitted medicines…'}
+        <div className="mt-3 text-sm text-text-body" role="status">
+          {searchState === 'loading' && 'Searching medicines…'}
           {searchState === 'ready' &&
             (medicines.length
-              ? `${medicines.length} matches (maximum 25). Refine the search if needed.`
-              : 'No matching medicines. Try another name or alias.')}
-          {searchState === 'error' && 'Medicine search unavailable. Retry the search.'}
+              ? `${medicines.length} matches (up to 25 shown). Type more of the name to narrow it down.`
+              : 'No matching medicines. Try another name or spelling.')}
+          {searchState === 'error' && 'Medicine search isn’t working right now. Try again.'}
           {searchState === 'denied' &&
-            'Medicine search access denied. Ask your workspace administrator to check access.'}
+            'You don’t have access to medicine search. Ask your workspace administrator.'}
         </div>
         <label className="mt-4 block text-sm text-text-body">
           Medicine
@@ -433,7 +476,7 @@ function ScenarioWorkspace({
               setMedicineId(event.target.value);
             }}
           >
-            <option value="">Search and select a medicine</option>
+            <option value="">Search, then choose a medicine</option>
             {medicines.map((medicine) => (
               <option key={medicine.id} value={medicine.id}>
                 {medicine.productName}
@@ -448,36 +491,61 @@ function ScenarioWorkspace({
         )}
       </SectionCard>
       <form id="replenishment-report-form" onSubmit={submit} noValidate className="space-y-6">
-        <SectionCard title="Observation window" titleLevel={2}>
+        <SectionCard title="Dates" titleLevel={2}>
           <div className="grid gap-4 md:grid-cols-2">
-            {field('historyStartDate', 'History start (UTC)', 'date')}
-            {field('originDate', 'History end / forecast origin (exclusive, UTC)', 'date')}
-            {field('horizonDays', 'Planning / forecast horizon (days)', 'number', false, 1, 366)}
+            {field(
+              'historyStartDate',
+              'Use sales from',
+              'date',
+              false,
+              (() => {
+                try {
+                  return demandDateAfter(draft.originDate, -90);
+                } catch {
+                  return undefined;
+                }
+              })(),
+              historyLatest
+            )}
+            {field(
+              'originDate',
+              'Forecast from',
+              'date',
+              false,
+              undefined,
+              dates.latestForecastFrom
+            )}
+            {field('horizonDays', 'Days to forecast', 'number', false, 1, 366)}
             <label className="text-sm text-text-body">
-              Forecast method
+              Forecast based on
               <select
                 name="method"
                 value={draft.method}
                 className={selectClass}
                 onChange={(event) => change('method', event.target.value)}
               >
-                <option value="RECENT_MEAN">Recent mean</option>
-                <option value="WEEKLY_SEASONAL_NAIVE">Weekly seasonal naive</option>
+                {(
+                  Object.keys(forecastMethodLabels) as PharmacyReplenishmentReportInput['method'][]
+                ).map((method) => (
+                  <option key={method} value={method}>
+                    {forecastMethodLabels[method]}
+                  </option>
+                ))}
               </select>
             </label>
           </div>
-          <p className="mt-4 text-sm text-text-muted">
-            Use 1–90 history days and a 1–366 day horizon. Sales use business dates; demand coverage
-            uses UTC days. Current reads cannot reconstruct historical versions.
+          <p className="mt-4 text-sm text-text-body">
+            Dates are in {dates.zoneName}. The forecast uses sales up to the day before “Forecast
+            from”: up to 90 days of sales, forecasting up to 366 days ahead.
           </p>
         </SectionCard>
-        <SectionCard title="Manual planning assumptions" titleLevel={2}>
+        <SectionCard title="Try your own order plan" titleLevel={2}>
           {!canPlan ? (
             <>
-              <StatusPill status="REDACTED" tone="neutral" />
-              <p className="mt-3 text-sm text-text-muted">
-                Operational evidence is available. Planning requires financial report access;
-                monetary results are withheld.
+              <StatusPill status="Hidden for your role" tone="neutral" />
+              <p className="mt-3 text-sm text-text-body">
+                You can see sales and stock. Order plans need finance report access, so money
+                figures are hidden.
               </p>
             </>
           ) : (
@@ -492,29 +560,41 @@ function ScenarioWorkspace({
                     setManual(event.target.checked);
                   }}
                 />
-                Include a user-supplied scenario
+                Compare order plans using my numbers
               </label>
-              <p className="mt-2 text-sm text-text-muted">
-                USER_SUPPLIED_ASSUMPTIONS: enter a constant daily demand and hypothetical order
-                terms. Current policy means the order quantity you enter, not on-hand stock. These
-                inputs are not observed demand or a forecast guarantee. Sales and margin goals and
-                prices are configurable assumptions, never recorded facts.
+              <p className="mt-2 text-sm text-text-body">
+                {planningBasisLabels.USER_SUPPLIED_ASSUMPTIONS}: enter the sales you expect each day
+                and the orders you want to compare. “Your usual order” is the amount you normally
+                order, not the stock you have now. These numbers, prices and targets are your
+                estimates, not recorded sales.
               </p>
               {manual && (
                 <div className="mt-4 space-y-4">
-                  <p id="replenishment-unknown-help" className="text-sm text-text-muted">
-                    Leave optional cost, budget, capacity, arrival and expiry blank when unknown. An
-                    explicit 0 is a supplied assumption. Money uses integer minor units in your
-                    supplied currency. Arrival and expiry require an explicit timezone.
+                  <p id="replenishment-unknown-help" className="text-sm text-text-body">
+                    Leave a box blank if you don’t know it: blank means unknown, while 0 means zero.
+                    Enter money as whole paisa or cents in the currency you choose.
                   </p>
                   <div className="grid gap-4 md:grid-cols-2">
-                    {field('planningOrigin', 'Scenario origin (future UTC day)', 'date')}
-                    {field('currency', 'Scenario currency (three-letter code)')}
+                    {field(
+                      'planningOrigin',
+                      'Plan starts on',
+                      'date',
+                      false,
+                      dates.earliestPlanStart,
+                      dates.latestPlanStart
+                    )}
+                    {field('currency', 'Currency (for example PKR)')}
                     {numericFields.map(([key, label, optional, min]) =>
                       field(key, label + (optional ? ' (optional)' : ''), 'number', optional, min)
                     )}
-                    {field('arrivalAt', 'Assumed arrival (ISO instant, optional)', 'text', true)}
-                    {field('expiresAt', 'Assumed expiry (ISO instant, optional)', 'text', true)}
+                    {field(
+                      'arrivalAt',
+                      'Order arrives on (optional)',
+                      'date',
+                      true,
+                      draft.planningOrigin || undefined
+                    )}
+                    {field('expiresAt', 'Order expires on (optional)', 'date', true)}
                   </div>
                 </div>
               )}
@@ -523,7 +603,7 @@ function ScenarioWorkspace({
         </SectionCard>
         {Object.keys(errors).length > 0 && (
           <p role="alert" className="text-sm text-destructive">
-            Correct the marked inputs before requesting a report.
+            Fix the marked boxes, then show the report again.
           </p>
         )}
         <Button
@@ -532,37 +612,37 @@ function ScenarioWorkspace({
           disabled={!branchId || !medicineId || state === 'loading'}
         >
           {state === 'loading'
-            ? 'Reading replenishment report…'
+            ? 'Loading report…'
             : state === 'error' || state === 'denied'
-              ? 'Retry replenishment report'
-              : 'Read replenishment report'}
+              ? 'Try again'
+              : 'Show report'}
         </Button>
       </form>
       <SectionCard title="Report status" titleLevel={2} aria-busy={state === 'loading'}>
         <p
           role={state === 'error' || state === 'denied' ? 'alert' : 'status'}
-          className="text-sm text-text-muted"
+          className="text-sm text-text-body"
         >
-          {state === 'idle' && 'Select a branch and medicine, review dates, then read the report.'}
-          {state === 'stale' &&
-            'Inputs changed. Previous results are hidden; read again for the active scope and assumptions.'}
-          {state === 'loading' &&
-            'Reading authorized evidence. Editing inputs discards this pending result.'}
+          {state === 'idle' &&
+            'Choose a branch and medicine, check the dates, then show the report.'}
+          {state === 'stale' && 'You changed something. Show the report again to update it.'}
+          {state === 'loading' && 'Loading the report. Changing anything cancels this.'}
           {state === 'error' &&
-            'Replenishment evidence could not load for these inputs. Check dates and assumptions, then retry. No data was changed.'}
+            'The report couldn’t load for these choices. Check the dates and numbers, then try again. Nothing was changed.'}
           {state === 'denied' &&
-            'Report access denied or session expired. Ask your workspace administrator to check access, then retry.'}
-          {state === 'ready' &&
-            'Report read completed. Review source timestamps and missing prerequisites below.'}
+            'You don’t have access to this report, or your session ended. Ask your workspace administrator, then try again.'}
+          {state === 'ready' && 'Report ready. Read the notes with each section before acting.'}
         </p>
       </SectionCard>
       {report && (
         <ReportEvidence
           report={report}
           financial={financial}
-          branchName={branches.find((branch) => branch.id === branchId)?.name ?? branchId}
+          timeZone={timeZone}
+          method={draft.method}
+          branchName={branches.find((branch) => branch.id === branchId)?.name ?? 'Branch'}
           medicineName={
-            medicines.find((medicine) => medicine.id === medicineId)?.productName ?? medicineId
+            medicines.find((medicine) => medicine.id === medicineId)?.productName ?? 'Medicine'
           }
         />
       )}
@@ -573,11 +653,15 @@ function ScenarioWorkspace({
 function ReportEvidence({
   report,
   financial,
+  timeZone,
+  method,
   branchName,
   medicineName,
 }: {
   report: PharmacyReplenishmentReport;
   financial: boolean;
+  timeZone: string;
+  method: PharmacyReplenishmentReportInput['method'];
   branchName: string;
   medicineName: string;
 }) {
@@ -586,61 +670,79 @@ function ReportEvidence({
     financial && report.permissions.financial && report.planning.status === 'AVAILABLE'
       ? report.planning.decision
       : null;
+  const planning =
+    !financial || !report.permissions.financial
+      ? planningStatusLabels.REDACTED
+      : statusLabel(planningStatusLabels, report.planning.status);
+  const forecast = statusLabel(forecastStatusLabels, report.forecast.status);
+  const backtest = statusLabel(backtestStatusLabels, report.backtest.status);
+  const stock = labelFor(stockCheckLabels, supplyCoverage.status, {
+    ...stockCheckLabels.UNKNOWN,
+  });
+  const notes = Array.from(
+    new Set(
+      [
+        ...demand.missingInputs,
+        ...supply.limitations,
+        ...report.limitations,
+        ...(report.forecast.result
+          ? [...report.forecast.result.assumptions, ...report.forecast.result.unknowns]
+          : []),
+        ...report.backtest.reasons,
+        ...(decision ? [...decision.assumptions, ...decision.unknowns] : []),
+      ].map(plainReason)
+    )
+  );
+  const currency = decision?.money.currency ?? '';
+  const cash = (minor: number | null) =>
+    minor === null ? 'Unknown' : `${currency} ${formatMinor(minor)}`.trim();
   return (
     <div className="space-y-6">
-      <SectionCard title="Observed evidence" titleLevel={2}>
+      <SectionCard title="Recorded sales" titleLevel={2}>
         <p className="text-sm text-text-body">
           {branchName} · {medicineName}
         </p>
-        <p className="mt-2 break-words text-sm text-text-muted">
-          As of report read: {report.readAt}. History: {demand.period.startDate} to{' '}
-          {demand.period.endDateExclusive} (exclusive).
-        </p>
-        <p className="mt-2 break-words text-sm text-text-muted">
-          Demand provenance: {demand.provenance.kind} · {demand.provenance.reference}. Read at:{' '}
-          {demand.provenance.readAt}. Sources: {demand.provenance.sources.join(', ')}.
+        <p className="mt-2 break-words text-sm text-text-body">
+          Sales from {dayLabel(demand.period.startDate)} to{' '}
+          {lastDayLabel(demand.period.endDateExclusive)}. Checked{' '}
+          {readTimeLabel(report.readAt, timeZone)}.
         </p>
         <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          <Stat label="Units sold" value={units(demand.consumption.observedCanonicalUnits)} />
           <Stat
-            label="Recorded consumption (business dates)"
-            value={units(demand.consumption.observedCanonicalUnits)}
-          />
-          <Stat
-            label="Observed demand days"
+            label="Days with complete data"
             value={demand.coverage.observedDemandDays}
-            sub={`Of ${demand.coverage.requestedDays} requested UTC days`}
+            sub={`Of ${demand.coverage.requestedDays} days`}
           />
-          <Stat label="Unknown demand days" value={demand.coverage.unknownDays} />
-          <Stat label="Stockout-censored days" value={demand.coverage.censoredDays} />
+          <Stat label="Days without data" value={demand.coverage.unknownDays} />
+          <Stat label="Days it ran out" value={demand.coverage.censoredDays} />
         </div>
-        <p className="mt-4 text-sm text-text-muted">
-          Consumption is not uncensored demand. No recorded consumption does not establish zero
-          demand. Historical versions are unavailable; timestamps are not an ingestion watermark.
+        <p className="mt-4 text-sm text-text-body">
+          Units sold can be lower than real demand on days the medicine ran out. A day with no sales
+          recorded isn’t counted as zero.
         </p>
-        <p className="mt-2 text-sm text-text-muted">
-          Qualifying lines: {demand.coverage.qualifyingLineCount}; excluded lines:{' '}
-          {demand.coverage.excludedLineCount}. Business-date consumption days:{' '}
-          {demand.coverage.businessConsumptionDays}; UTC consumption days:{' '}
-          {demand.coverage.utcConsumptionDays}.
+        <p className="mt-2 text-sm text-text-body">
+          Sales lines counted: {demand.coverage.qualifyingLineCount}. Left out:{' '}
+          {demand.coverage.excludedLineCount}.
         </p>
         <details className="mt-4">
-          <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-            Daily UTC evidence
+          <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium text-text-strong focus-visible:outline-2 focus-visible:outline-ring">
+            Day by day
           </summary>
           {demand.days.length ? (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>UTC day</TableHead>
-                  <TableHead>Demand state</TableHead>
-                  <TableHead className="text-right">Recorded consumption units</TableHead>
+                  <TableHead>Day</TableHead>
+                  <TableHead>In stock all day?</TableHead>
+                  <TableHead className="text-right">Units sold</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {demand.days.map((day) => (
                   <TableRow key={day.date}>
-                    <TableCell>{day.date}</TableCell>
-                    <TableCell>{day.state}</TableCell>
+                    <TableCell>{dayLabel(day.date)}</TableCell>
+                    <TableCell>{dayStateLabel(day.state)}</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {units(day.observedCanonicalUnits)}
                     </TableCell>
@@ -649,220 +751,186 @@ function ReportEvidence({
               </TableBody>
             </Table>
           ) : (
-            <p className="text-sm text-text-muted">
-              No daily evidence returned. Coverage remains unknown.
-            </p>
+            <p className="text-sm text-text-body">No day-by-day sales came back.</p>
           )}
         </details>
       </SectionCard>
-      <SectionCard title="Supply coverage" titleLevel={2}>
-        <StatusPill status={`${supplyCoverage.status} stock completeness`} tone="warning" />
-        <p className="mt-3 text-sm text-text-muted">{supplyCoverage.reason}</p>
-        <p className="mt-2 break-words text-sm text-text-muted">
-          Supply provenance: {supply.inventorySource.kind} · {supply.inventorySource.reference}. As
-          of: {supply.inventorySource.asOf}.
-        </p>
+      <SectionCard title="Stock on hand" titleLevel={2}>
+        <StatusPill status={stock.label} tone={stock.tone} />
+        <p className="mt-3 text-sm text-text-body">{stock.detail}</p>
         <p className="mt-3 text-sm text-text-body">
-          Recorded eligible lots: {supplyCoverage.recordedEligibleLots}; excluded stock records:{' '}
-          {supply.excludedStock.length}; inbound records: {supply.inbound.length}. These are
-          returned record counts, not complete stock or guaranteed receipts.
+          Batches you can sell: {supplyCoverage.recordedEligibleLots}. Batches left out:{' '}
+          {supply.excludedStock.length}. Deliveries on the way: {supply.inbound.length}.
         </p>
         {!supply.stock.length && (
-          <p className="mt-2 text-sm text-text-muted">
-            Available stock quantity: Unknown. No eligible stock records returned; this does not
-            establish zero inventory.
+          <p className="mt-2 text-sm text-text-body">
+            No sellable batches are recorded for this medicine. Check the shelf before relying on
+            this.
           </p>
         )}
-        <p className="mt-2 text-sm text-text-muted">
-          Net storage capacity: {units(supply.constraints.storageLimitUnits)}. Demand and supply are
-          separate current reads, not an atomic snapshot.
+        <p className="mt-2 text-sm text-text-body">
+          Shelf space limit: {units(supply.constraints.storageLimitUnits)}.
         </p>
       </SectionCard>
-      <SectionCard title="Forecast and backtest" titleLevel={2}>
+      <SectionCard title="Forecast" titleLevel={2}>
         <div className="flex flex-wrap gap-3">
-          <StatusPill status={`Forecast: ${report.forecast.status}`} tone="warning" />
-          <StatusPill status={`Backtest: ${report.backtest.status}`} tone="warning" />
+          <StatusPill status={forecast.label} tone={forecast.tone} />
+          <StatusPill status={backtest.label} tone={backtest.tone} />
         </div>
         {!report.forecast.result && (
-          <p className="mt-3 text-sm text-text-muted">
-            Forecast unavailable: insufficient uncensored demand evidence. No forecast values have
-            been filled with zeros.
+          <p className="mt-3 text-sm text-text-body">
+            There isn’t enough complete sales data to forecast this medicine yet. Gaps are never
+            filled with zeros.
           </p>
         )}
         {report.forecast.result && (
           <>
-            <p className="mt-3 text-sm text-text-muted">
-              {report.forecast.result.label} · {report.forecast.result.source.kind}. Period:{' '}
-              {report.forecast.result.period.startDate} to{' '}
-              {report.forecast.result.period.endDateExclusive} (exclusive).
+            <p className="mt-3 text-sm text-text-body">
+              Based on {forecastMethodLabels[method].toLowerCase()}, from{' '}
+              {dayLabel(report.forecast.result.period.startDate)} to{' '}
+              {lastDayLabel(report.forecast.result.period.endDateExclusive)}.
             </p>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>UTC day</TableHead>
-                  <TableHead className="text-right">Conditional units</TableHead>
+                  <TableHead>Day</TableHead>
+                  <TableHead className="text-right">Expected units</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {report.forecast.result.days.map((day) => (
                   <TableRow key={day.date}>
-                    <TableCell>{day.date}</TableCell>
-                    <TableCell className="text-right">{units(day.units)}</TableCell>
+                    <TableCell>{dayLabel(day.date)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{units(day.units)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
-            {[...report.forecast.result.assumptions, ...report.forecast.result.unknowns].map(
-              (reason, index) => (
-                <p key={index} className="mt-2 text-sm text-text-muted">
-                  {reason}
-                </p>
-              )
-            )}
           </>
         )}
-        <p className="mt-3 text-sm text-text-muted">
-          Backtest unavailable: no eligible historical replay. Scenario coverage is not empirical
-          performance.
+        <p className="mt-3 text-sm text-text-body">
+          We can’t yet check this forecast against past sales, so treat it as a guide.
         </p>
-        {report.backtest.reasons.map((reason, index) => (
-          <p key={index} className="mt-2 text-sm text-text-muted">
-            {reason}
-          </p>
-        ))}
       </SectionCard>
-      <SectionCard title="Planning result" titleLevel={2}>
-        <StatusPill
-          status={!financial || !report.permissions.financial ? 'REDACTED' : report.planning.status}
-          tone="neutral"
-        />
-        <p className="mt-3 text-sm text-text-muted">
-          Basis: {report.planning.basis}. Read-only comparison; no order, reservation or approval is
-          created.
+      <SectionCard title="Order plan" titleLevel={2}>
+        <StatusPill status={planning.label} tone={planning.tone} />
+        <p className="mt-3 text-sm text-text-body">
+          Based on: {labelFor(planningBasisLabels, report.planning.basis, 'Your settings')}. This
+          only compares plans; it doesn’t place an order.
         </p>
         {(!financial || !report.permissions.financial || report.planning.status === 'REDACTED') && (
-          <p className="mt-2 text-sm text-text-muted">
-            Planning is withheld without financial report access. Monetary values are redacted.
+          <p className="mt-2 text-sm text-text-body">
+            Order plans need finance report access, so money figures are hidden.
           </p>
         )}
         {financial &&
           report.permissions.financial &&
           report.planning.status === 'NOT_REQUESTED' && (
-            <p className="mt-2 text-sm text-text-muted">
-              Enable the manual scenario and supply assumptions to compare order policies.
+            <p className="mt-2 text-sm text-text-body">
+              Tick “Compare order plans using my numbers” above to compare orders.
             </p>
           )}
         {report.planning.status === 'INSUFFICIENT_STOCK_EVIDENCE' && (
-          <p className="mt-2 text-sm text-text-muted">
-            Planning unavailable: eligible stock evidence is missing. Unknown inventory cannot
-            become a zero-stock scenario.
+          <p className="mt-2 text-sm text-text-body">
+            No sellable stock is recorded for this medicine, so there is nothing to plan from.
+            Missing stock is never treated as zero.
           </p>
         )}
         {decision && (
           <>
             <p className="mt-3 text-sm text-text-body">
-              {decision.label} · Assumed daily demand: {report.planning.dailyDemandUnits} units.
-              Period: {decision.demand.period.startDate} to{' '}
-              {decision.demand.period.endDateExclusive} (exclusive).
+              Expected sales: {report.planning.dailyDemandUnits} units a day, from{' '}
+              {dayLabel(decision.demand.period.startDate)} to{' '}
+              {lastDayLabel(decision.demand.period.endDateExclusive)}.
             </p>
-            <p className="mt-2 text-sm text-text-muted">
-              Currency: {decision.money.currency} (user supplied). {decision.money.definition}{' '}
-              Coverage: {decision.money.coverage}. Conditional outcomes use only recorded eligible
-              stock; completeness remains unknown.
+            <p className="mt-2 text-sm text-text-body">
+              Money is in {currency}, from the prices and costs you entered. Results use only the
+              stock batches on record.
             </p>
             <div className="mt-4 grid gap-4 lg:grid-cols-3">
-              {decision.scenarios.map((scenario) => (
-                <article
-                  key={scenario.policy}
-                  className="space-y-3 rounded-md border border-border-subtle p-4"
-                >
-                  <h3 className="font-semibold text-text-strong">
-                    {scenario.policy.replaceAll('_', ' ')}
-                  </h3>
-                  <StatusPill status={scenario.order.status} tone="neutral" />
-                  <dl className="space-y-2 text-sm text-text-body">
-                    <div>
-                      <dt>Requested order units</dt>
-                      <dd className="tabular-nums">{scenario.order.requestedUnits}</dd>
-                    </div>
-                    <div>
-                      <dt>Feasible order units</dt>
-                      <dd className="tabular-nums">{units(scenario.order.quantityUnits)}</dd>
-                    </div>
-                    <div>
-                      <dt>Committed order cash</dt>
-                      <dd className="tabular-nums">
-                        {scenario.order.committedCashMinor === null
-                          ? 'Unknown'
-                          : `${decision.money.currency} ${formatMinor(scenario.order.committedCashMinor)}`}
-                      </dd>
-                    </div>
-                    {scenario.outcome &&
-                      (
-                        [
-                          ['Conditional shortage units', scenario.outcome.shortageUnits],
-                          ['Conditional expired units', scenario.outcome.expiredUnits],
-                          ['Conditional ending stock units', scenario.outcome.endingStockUnits],
-                          ['Pending inbound units', scenario.outcome.pendingInboundUnits],
-                        ] as const
-                      ).map(([label, value]) => (
-                        <div key={label}>
-                          <dt>{label}</dt>
-                          <dd className="tabular-nums">{value}</dd>
-                        </div>
-                      ))}
-                  </dl>
-                  {!scenario.outcome && (
-                    <p className="text-sm text-text-muted">
-                      Outcome unknown: prerequisites are missing or the order is infeasible.
-                    </p>
-                  )}
-                  {scenario.order.reasons.map((reason, index) => (
-                    <p key={index} className="text-sm text-text-muted">
-                      {reason}
-                    </p>
-                  ))}
-                </article>
-              ))}
+              {decision.scenarios.map((scenario) => {
+                const order = labelFor(orderStatusLabels, scenario.order.status, {
+                  ...orderStatusLabels.UNKNOWN,
+                });
+                return (
+                  <article
+                    key={scenario.policy}
+                    className="space-y-3 rounded-md border border-border-subtle p-4"
+                  >
+                    <h3 className="font-semibold text-text-strong">
+                      {policyLabel(scenario.policy)}
+                    </h3>
+                    <StatusPill status={order.label} tone={order.tone} />
+                    <dl className="space-y-2 text-sm text-text-body">
+                      <div>
+                        <dt>Units asked for</dt>
+                        <dd className="tabular-nums">{scenario.order.requestedUnits}</dd>
+                      </div>
+                      <div>
+                        <dt>Units that fit your limits</dt>
+                        <dd className="tabular-nums">{units(scenario.order.quantityUnits)}</dd>
+                      </div>
+                      <div>
+                        <dt>Order cost</dt>
+                        <dd className="tabular-nums">{cash(scenario.order.committedCashMinor)}</dd>
+                      </div>
+                      {scenario.outcome &&
+                        (
+                          [
+                            ['Units short', scenario.outcome.shortageUnits],
+                            ['Units that would expire', scenario.outcome.expiredUnits],
+                            ['Units left at the end', scenario.outcome.endingStockUnits],
+                            ['Units still on the way', scenario.outcome.pendingInboundUnits],
+                          ] as const
+                        ).map(([label, value]) => (
+                          <div key={label}>
+                            <dt>{label}</dt>
+                            <dd className="tabular-nums">{value}</dd>
+                          </div>
+                        ))}
+                    </dl>
+                    {order.detail ? <p className="text-sm text-text-body">{order.detail}</p> : null}
+                    {!scenario.outcome && (
+                      <p className="text-sm text-text-body">
+                        We can’t work out the result for this plan yet.
+                      </p>
+                    )}
+                  </article>
+                );
+              })}
             </div>
             {report.planning.goalComparison && (
               <div className="mt-5">
-                <h3 className="font-semibold text-text-strong">Sales and margin goal what-if</h3>
-                <p className="mt-2 text-sm text-text-muted">
-                  {report.planning.goalComparison.label.replaceAll('_', ' ')}.{' '}
-                  {report.planning.goalComparison.definition}
+                <h3 className="font-semibold text-text-strong">Sales and profit targets</h3>
+                <p className="mt-2 text-sm text-text-body">
+                  Estimates from the prices and cost you entered, not recorded sales.
                 </p>
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Policy</TableHead>
-                      <TableHead className="text-right">Unit price</TableHead>
-                      <TableHead className="text-right">Sales estimate</TableHead>
-                      <TableHead className="text-right">Margin estimate</TableHead>
-                      <TableHead>Goal result</TableHead>
+                      <TableHead>Plan</TableHead>
+                      <TableHead className="text-right">Price per unit</TableHead>
+                      <TableHead className="text-right">Expected sales</TableHead>
+                      <TableHead className="text-right">Expected profit</TableHead>
+                      <TableHead>Targets</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {report.planning.goalComparison.scenarios.map((estimate) => (
                       <TableRow key={estimate.policy}>
-                        <TableCell>{estimate.policy.replaceAll('_', ' ')}</TableCell>
+                        <TableCell>{policyLabel(estimate.policy)}</TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {decision.money.currency}{' '}
-                          {formatMinor(estimate.assumptions.unitPriceMinor)}
+                          {cash(estimate.assumptions.unitPriceMinor)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {estimate.salesMinor === null
-                            ? 'Unknown'
-                            : `${decision.money.currency} ${formatMinor(estimate.salesMinor)}`}
+                          {cash(estimate.salesMinor)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {estimate.marginMinor === null
-                            ? 'Unknown'
-                            : `${decision.money.currency} ${formatMinor(estimate.marginMinor)}`}
+                          {cash(estimate.marginMinor)}
                         </TableCell>
                         <TableCell>
-                          Sales: {goalResult(estimate.goals.salesMet)}; margin:{' '}
-                          {goalResult(estimate.goals.marginMet)}
+                          Sales: {goalResultLabel(estimate.goals.salesMet)} · Profit:{' '}
+                          {goalResultLabel(estimate.goals.marginMet)}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -870,27 +938,24 @@ function ReportEvidence({
                 </Table>
               </div>
             )}
-            {[...decision.assumptions, ...decision.unknowns].map((reason, index) => (
-              <p key={index} className="mt-2 text-sm text-text-muted">
-                {reason}
-              </p>
-            ))}
           </>
         )}
       </SectionCard>
-      <SectionCard title="Missing prerequisites and limits" titleLevel={2}>
-        <ul className="list-disc space-y-2 pl-5 text-sm text-text-muted">
-          {Array.from(
-            new Set([...demand.missingInputs, ...supply.limitations, ...report.limitations])
-          ).map((reason) => (
-            <li key={reason}>{reason}</li>
-          ))}
-        </ul>
+      <SectionCard title="Notes on this report" titleLevel={2}>
+        <p className="text-sm text-text-body">
+          This report reads your current records. It doesn’t change stock or create orders.
+        </p>
+        <details className="mt-2">
+          <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium text-text-strong focus-visible:outline-2 focus-visible:outline-ring">
+            Technical notes
+          </summary>
+          <ul className="list-disc space-y-2 pl-5 text-sm text-text-body">
+            {notes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        </details>
       </SectionCard>
     </div>
   );
-}
-
-function goalResult(value: boolean | null) {
-  return value === null ? 'not evaluated' : value ? 'met' : 'not met';
 }

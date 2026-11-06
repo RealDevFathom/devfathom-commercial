@@ -145,6 +145,46 @@ export function passwordReset(p: {
   };
 }
 
+/**
+ * Out-of-band notice that a DevFathom platform operator, not the tenant, reset
+ * this account's password (DEV-344). The new password is never included.
+ */
+export function operatorPasswordReset(p: {
+  name: string;
+  organizationName: string;
+  resetLabel: string;
+}): EmailContent {
+  return {
+    subject: `Your DevFathom password was reset by DevFathom support`,
+    html: renderDocument({
+      preheader: `A DevFathom platform operator reset your password.`,
+      body: [
+        eyebrow('Security', palette.destructive),
+        heading('Your password was reset'),
+        paragraph(
+          `Hi ${firstName(p.name)} — a DevFathom platform operator reset the password for your <strong>${esc(
+            p.organizationName
+          )}</strong> account on ${esc(p.resetLabel)}. You have been signed out everywhere, and you will be asked to choose a new password the next time you sign in.`,
+          { html: true }
+        ),
+        callout(
+          `If you did not ask DevFathom support for this, tell your administrator immediately. The reset and the operator's reason are recorded in the DevFathom audit trail.`,
+          'warning'
+        ),
+      ].join(''),
+      footnote: 'This is an automated security message from DevFathom.',
+    }),
+    text: text([
+      `Your DevFathom password was reset by DevFathom support`,
+      ``,
+      `Hi ${p.name.split(' ')[0]} — a DevFathom platform operator reset the password for your ${p.organizationName} account on ${p.resetLabel}.`,
+      `You have been signed out everywhere and will be asked to choose a new password the next time you sign in.`,
+      ``,
+      `If you did not ask DevFathom support for this, tell your administrator immediately. The reset and the operator's reason are recorded in the DevFathom audit trail.`,
+    ]),
+  };
+}
+
 export function inviteMember(p: {
   name: string;
   inviterName?: string;

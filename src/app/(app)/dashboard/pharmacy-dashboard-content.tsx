@@ -15,8 +15,15 @@ import { isModuleGranted } from '@/lib/module-catalog';
 import {
   PHARMACY_WIDGET_REGISTRY,
   pharmacyDashboardDefault,
+  type PharmacyDashboardAccess,
+  type PharmacyDashboardLink,
   type PharmacyDashboardPreference,
 } from '@/lib/pharmacy/dashboard';
+import {
+  pharmacyReportPermissionLabel,
+  pharmacyReportRestriction,
+  pharmacyReportSourceLabel,
+} from '@/lib/pharmacy/report-labels';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
@@ -32,6 +39,11 @@ type CommandQuery = {
   isLoading: boolean;
   refetch: () => unknown;
 };
+const isDenied = (error: { data?: { code?: string | null } | null } | null | undefined) =>
+  ['FORBIDDEN', 'UNAUTHORIZED'].includes(error?.data?.code ?? '');
+/** The command centre is the owner's only when the viewer is the owner (DEV-602). */
+const commandCentreHeading = (role: string | null | undefined) =>
+  role === 'ADMIN' ? 'Owner command centre' : 'Operations command centre';
 const formatMetric = (key: string, value: number | null) =>
   value == null
     ? '—'
@@ -78,13 +90,13 @@ function WidgetState({
       </div>
     );
   if (query.error) {
-    const denied = ['FORBIDDEN', 'UNAUTHORIZED'].includes(query.error.data?.code ?? '');
+    const denied = isDenied(query.error);
     return (
       <div role={denied ? 'status' : 'alert'} className="space-y-3">
         <StatusPill status={denied ? 'Restricted' : 'Unavailable'} tone="warning" />
         <p className="text-sm text-text-body">
           {denied
-            ? `${item.permission} is required. No protected values are shown.`
+            ? pharmacyReportRestriction(item.permission)
             : 'This widget could not load. Other dashboard tools remain available.'}
         </p>
         {!denied ? (
@@ -99,9 +111,7 @@ function WidgetState({
     return (
       <div role="status" className="space-y-3">
         <StatusPill status="Restricted" tone="warning" />
-        <p className="text-sm text-text-body">
-          reports:financial is required. No protected values are shown.
-        </p>
+        <p className="text-sm text-text-body">{pharmacyReportRestriction('reports:financial')}</p>
       </div>
     );
   }
@@ -113,13 +123,18 @@ function WidgetState({
         sub="Choose a branch above to compare one location with the all-branch view."
       />
     );
-  const rows = item.metrics.map((key) => ({
-    contract: contracts.find((metric) => metric.key === key),
-    value: query.data?.metrics[key] ?? null,
-  }));
+  const rows = item.metrics.map((key) => {
+    const contract = contracts.find((metric) => metric.key === key);
+    // DEV-594: the contract's table names stay internal; the owner reads plain words.
+    return {
+      contract,
+      source: pharmacyReportSourceLabel(contract?.source),
+      value: query.data?.metrics[key] ?? null,
+    };
+  });
   return (
     <div className="grid gap-5 sm:grid-cols-2">
-      {rows.map(({ contract, value }, index) => (
+      {rows.map(({ contract, source, value }, index) => (
         <Stat
           key={item.metrics[index]}
           label={contract?.label ?? humanizeMetricKey(item.metrics[index]!)}
@@ -127,7 +142,9 @@ function WidgetState({
           sub={
             value == null
               ? 'Not available in this release'
-              : `Source: ${contract?.source ?? 'Not asserted'}`
+              : source
+                ? `Based on ${source}`
+                : 'Source not confirmed'
           }
         />
       ))}
@@ -135,24 +152,103 @@ function WidgetState({
   );
 }
 
-export function PharmacyDashboardContent({ role }: { role: string | null | undefined }) {
+export function PharmacyDashboardContent({
+  role,
+  access,
+}: {
+  role: string | null | undefined;
+  /** Resolved on the server from the viewer's own grants (DEV-602). */
+  access: PharmacyDashboardAccess;
+}) {
   // Every command-centre read is a Pharmacy Reports procedure, and each one refuses a workspace
   // without that module (FORBIDDEN). Ask them nothing there, as the counter does for its module.
   const { enabledModules } = useEntitlements();
+  // Each read — and the layout save — also needs reports:operational. A cashier or a pharmacist
+  // lacks it, so their dashboard asks Pharmacy Reports nothing and starts from their own tools.
+  if (!access.reports) return <RoleWorkspace tools={access.tools} />;
   return isModuleGranted('pharmacy-reports', enabledModules) ? (
-    <OwnerCommandCentre role={role} />
+    <CommandCentre role={role} advice={access.advice} />
   ) : (
-    <ReportsNotInPackage role={role} />
+    <ReportsNotInPackage role={role} advice={access.advice} />
   );
 }
 
-/** The same page frame, saying plainly why it holds no signals and what is still available. */
-function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
+/** Pages offered as cards, each already checked against the viewer's grants on the server. */
+function LinkCards({ links }: { links: readonly PharmacyDashboardLink[] }) {
+  return (
+    <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {links.map((link) => (
+        <li key={link.key}>
+          <Link
+            href={link.href}
+            className="block h-full rounded-[var(--radius-sm)] border border-border-subtle p-4 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span className="block font-medium text-text-strong">{link.label}</span>
+            <span className="mt-1 block text-sm text-text-muted">{link.detail}</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * DEV-594 — the advice pages (reorder, expiry, growth) the owner could not find,
+ * offered where they start the day. Rendered only with links the viewer can open.
+ */
+function AdviceCard({ advice }: { advice: readonly PharmacyDashboardLink[] }) {
+  if (!advice.length) return null;
+  return (
+    <SectionCard eyebrow="Advice" title="Advice for your shop" titleLevel={2}>
+      <p className="mb-4 max-w-2xl text-sm text-text-muted">
+        Each one reads your own shop records and suggests what to do next. Nothing changes until you
+        act on it.
+      </p>
+      <LinkCards links={advice} />
+    </SectionCard>
+  );
+}
+
+/** A viewer without report access: their working pages, and no owner layout to edit. */
+function RoleWorkspace({ tools }: { tools: readonly PharmacyDashboardLink[] }) {
   return (
     <div className="space-y-5">
       <PageHeader
         eyebrow="Pharmacy workspace"
-        heading="Owner command centre"
+        heading="Today’s work"
+        description="Start from the tools your role uses. Shop reports and the owner command centre open for owners and report viewers."
+      />
+      <SectionCard
+        eyebrow="Your tools"
+        title={tools.length ? 'Where to start' : 'No pharmacy tools assigned'}
+        titleLevel={2}
+      >
+        {tools.length ? (
+          <LinkCards links={tools} />
+        ) : (
+          <p role="status" className="max-w-2xl text-sm leading-6 text-text-body">
+            Your role does not include a pharmacy tool yet. Ask your workspace administrator to
+            assign the role you work in.
+          </p>
+        )}
+      </SectionCard>
+    </div>
+  );
+}
+
+/** The same page frame, saying plainly why it holds no signals and what is still available. */
+function ReportsNotInPackage({
+  role,
+  advice,
+}: {
+  role: string | null | undefined;
+  advice: readonly PharmacyDashboardLink[];
+}) {
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="Pharmacy workspace"
+        heading={commandCentreHeading(role)}
         description="Live operational signals with visible source, freshness and permission boundaries."
       />
       <SectionCard
@@ -179,11 +275,18 @@ function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
           </p>
         )}
       </SectionCard>
+      <AdviceCard advice={advice} />
     </div>
   );
 }
 
-function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
+function CommandCentre({
+  role,
+  advice,
+}: {
+  role: string | null | undefined;
+  advice: readonly PharmacyDashboardLink[];
+}) {
   const utils = trpc.useUtils();
   const branches = trpc.pharmacyReports.branches.useQuery(undefined, { retry: false });
   const catalog = trpc.pharmacyReports.catalog.useQuery(undefined, { retry: false });
@@ -199,6 +302,8 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
     enabled: Boolean(branches.data?.branches.length),
     retry: false,
   }) as unknown as CommandQuery;
+  // A refusal is correct denial (the grant changed since this page rendered), not a failed load.
+  const branchesDenied = isDenied(branches.error);
   const layout = editing ? draft : (preferences.data ?? fallback);
   const begin = () => {
     const next = structuredClone(preferences.data ?? fallback);
@@ -233,13 +338,15 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
     <div className="space-y-5">
       <PageHeader
         eyebrow="Pharmacy workspace"
-        heading="Owner command centre"
+        heading={commandCentreHeading(role)}
         description="Live operational signals with visible source, freshness and permission boundaries."
         actions={
-          <Button variant="outline" onClick={begin}>
-            <Pencil aria-hidden />
-            Edit dashboard
-          </Button>
+          branchesDenied ? null : (
+            <Button variant="outline" onClick={begin}>
+              <Pencil aria-hidden />
+              Edit dashboard
+            </Button>
+          )
         }
       />
       <SectionCard
@@ -268,14 +375,17 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
         <p className="mt-3 font-mono text-xs text-text-muted">
           {command.data
             ? `As of ${new Date(command.data.freshness.asOf).toLocaleString()} · ${command.data.freshness.source}`
-            : branches.error
-              ? 'Branches could not be loaded.'
-              : branches.data?.branches.length === 0
-                ? 'Waiting for a reportable branch.'
-                : 'Loading today’s figures…'}
+            : branchesDenied
+              ? 'Shop reports are not open to your account.'
+              : branches.error
+                ? 'Branches could not be loaded.'
+                : branches.data?.branches.length === 0
+                  ? 'Waiting for a reportable branch.'
+                  : 'Loading today’s figures…'}
         </p>
       </SectionCard>
-      {editing ? (
+      {branchesDenied ? null : <AdviceCard advice={advice} />}
+      {editing && !branchesDenied ? (
         <SectionCard
           eyebrow="Edit mode"
           title="Widget layout"
@@ -351,7 +461,17 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
           ) : null}
         </SectionCard>
       ) : null}
-      {branches.error ? (
+      {branchesDenied ? (
+        <SectionCard title="Shop reports are not open to you" titleLevel={2}>
+          <div role="status" className="space-y-3">
+            <StatusPill status="Restricted" tone="warning" />
+            <p className="text-sm text-text-body">
+              Your account cannot read shop reports, so no figures are shown. Ask your workspace
+              administrator if your work needs them.
+            </p>
+          </div>
+        </SectionCard>
+      ) : branches.error ? (
         <SectionCard title="Command centre unavailable">
           <div role="alert" className="space-y-3">
             <StatusPill status="Unavailable" tone="warning" />
@@ -390,7 +510,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                   className={cn('min-w-0', preference.span === 'wide' && 'lg:col-span-2')}
                 >
                   <SectionCard
-                    eyebrow={item.permission}
+                    eyebrow={pharmacyReportPermissionLabel(item.permission)}
                     title={item.label}
                     titleLevel={2}
                     actions={

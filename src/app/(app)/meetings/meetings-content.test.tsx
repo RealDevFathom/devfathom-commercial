@@ -16,10 +16,16 @@
  * matter how large Upcoming is, everything loaded is rendered, and whenever the
  * server says another PAST page exists the control that fetches it is on
  * screen.
+ *
+ * DEV-249 / #451 adds the time-order cases at the bottom: the create and edit
+ * forms refuse a meeting that ends at or before it starts, judged on full
+ * instants, so a meeting that runs past the viewer's midnight is allowed.
  */
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { MEETING_TIME_ORDER_MESSAGE } from '@/lib/meetings/time-order';
 
 const HOUR = 60 * 60 * 1000;
 
@@ -50,6 +56,8 @@ const mocks = vi.hoisted(() => ({
   pages: [] as Array<{ items: unknown[]; nextCursor?: string }>,
   hasNextPage: false,
   fetchNextPage: vi.fn(),
+  mutate: { create: vi.fn(), update: vi.fn(), delete: vi.fn() },
+  errors: {} as Partial<Record<'create' | 'update' | 'delete', { message: string }>>,
 }));
 
 vi.mock('next-auth/react', () => ({
@@ -61,7 +69,14 @@ vi.mock('next/link', () => ({
   ),
 }));
 vi.mock('@/lib/trpc', () => {
-  const mutation = () => ({ useMutation: () => ({ mutate: vi.fn(), isPending: false }) });
+  const mutation = (name: 'create' | 'update' | 'delete') => ({
+    useMutation: () => ({
+      mutate: mocks.mutate[name],
+      isPending: false,
+      error: mocks.errors[name] ?? null,
+      reset: vi.fn(),
+    }),
+  });
   return {
     trpc: {
       useUtils: () => ({
@@ -81,9 +96,9 @@ vi.mock('@/lib/trpc', () => {
             isFetchingNextPage: false,
           }),
         },
-        create: mutation(),
-        update: mutation(),
-        delete: mutation(),
+        create: mutation('create'),
+        update: mutation('update'),
+        delete: mutation('delete'),
       },
       team: { getAll: { useQuery: () => ({ data: [] }) } },
     },
@@ -183,5 +198,191 @@ describe('MeetingsContent pagination', () => {
 
     expect(screen.getByText('Past meeting 2')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('MeetingsContent time order (DEV-249)', () => {
+  beforeAll(() => {
+    // jsdom has no layout, so it has no `scrollIntoView`; the time picker calls
+    // it to keep the highlighted option visible.
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  beforeEach(() => {
+    mocks.upcoming = [];
+    mocks.pages = [];
+    mocks.hasNextPage = false;
+    mocks.errors = {};
+    mocks.mutate.create.mockClear();
+    mocks.mutate.update.mockClear();
+  });
+
+  /** Open a time picker by its accessible name and choose one option. */
+  const pick = (picker: 'Start time' | 'End time', option: string) => {
+    fireEvent.click(screen.getByRole('button', { name: picker }));
+    fireEvent.click(screen.getByRole('option', { name: option }));
+  };
+
+  const expectRangeRefused = (submit: HTMLElement) => {
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent(MEETING_TIME_ORDER_MESSAGE);
+    const end = screen.getByRole('button', { name: 'End time' });
+    expect(end).toHaveAttribute('data-invalid', 'true');
+    expect(end).toHaveAttribute('aria-describedby', alert.id);
+    expect(submit).toBeDisabled();
+  };
+
+  const openCreateForm = () => {
+    const { container } = render(<MeetingsContent />);
+    fireEvent.click(screen.getByRole('button', { name: /schedule meeting/i }));
+    fireEvent.change(screen.getByPlaceholderText('e.g. Sprint Planning'), {
+      target: { value: 'Sprint Planning' },
+    });
+    fireEvent.change(within(container).getByLabelText('Start date'), {
+      target: { value: '2030-01-15' },
+    });
+    return screen.getByRole('button', { name: 'Schedule' });
+  };
+
+  it('blocks creating a meeting that ends before or when it starts', () => {
+    const submit = openCreateForm();
+
+    pick('Start time', '10:00 AM');
+    pick('End time', '9:00 AM');
+    expectRangeRefused(submit);
+    fireEvent.click(submit);
+    expect(mocks.mutate.create).not.toHaveBeenCalled();
+
+    // Equal is refused too: a zero-length meeting is not a meeting.
+    pick('End time', '10:00 AM');
+    expectRangeRefused(submit);
+    fireEvent.click(submit);
+    expect(mocks.mutate.create).not.toHaveBeenCalled();
+  });
+
+  it('clears the refusal and submits once the end is after the start', () => {
+    const submit = openCreateForm();
+
+    pick('Start time', '10:00 AM');
+    pick('End time', '9:00 AM');
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+
+    pick('End time', '11:00 AM');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'End time' })).not.toHaveAttribute('data-invalid');
+    expect(submit).toBeEnabled();
+
+    fireEvent.click(submit);
+    expect(mocks.mutate.create).toHaveBeenCalledTimes(1);
+    const [input] = mocks.mutate.create.mock.calls[0] as [{ startTime: Date; endTime: Date }];
+    expect(input.startTime).toEqual(new Date(2030, 0, 15, 10, 0));
+    expect(input.endTime).toEqual(new Date(2030, 0, 15, 11, 0));
+  });
+
+  it('shows the server’s refusal when the form itself found nothing wrong', () => {
+    mocks.errors.create = { message: 'Session expired. Please log out and log back in.' };
+    openCreateForm();
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Session expired');
+    // Not attributed to the end time: the end time is not what is wrong.
+    expect(screen.getByRole('button', { name: 'End time' })).not.toHaveAttribute('data-invalid');
+  });
+
+  it('blocks saving an edit that moves the end before the start', () => {
+    const start = new Date(2030, 0, 15, 10, 0);
+    mocks.upcoming = [meeting('Standup', start)];
+    render(<MeetingsContent />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeEnabled();
+
+    pick('End time', '9:30 AM');
+    expectRangeRefused(save);
+    fireEvent.click(save);
+    expect(mocks.mutate.update).not.toHaveBeenCalled();
+
+    pick('End time', '10:30 AM');
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    expect(mocks.mutate.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'Standup',
+        startTime: start,
+        endTime: new Date(2030, 0, 15, 10, 30),
+      })
+    );
+  });
+
+  it('creates a meeting that runs past midnight once its end date is the next day', () => {
+    const submit = openCreateForm();
+    const endDate = screen.getByLabelText('End date');
+    // An end date that was never set follows the start date.
+    expect(endDate).toHaveValue('2030-01-15');
+
+    pick('Start time', '11:30 PM');
+    pick('End time', '12:30 AM');
+    // On one day, 00:30 is before 23:30.
+    expectRangeRefused(submit);
+    expect(endDate).toHaveAttribute('aria-invalid', 'true');
+
+    fireEvent.change(endDate, { target: { value: '2030-01-16' } });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(endDate).not.toHaveAttribute('aria-invalid');
+    expect(submit).toBeEnabled();
+
+    fireEvent.click(submit);
+    const [input] = mocks.mutate.create.mock.calls[0] as [{ startTime: Date; endTime: Date }];
+    expect(input.startTime).toEqual(new Date(2030, 0, 15, 23, 30));
+    expect(input.endTime).toEqual(new Date(2030, 0, 16, 0, 30));
+  });
+
+  it('refuses an end date before the start date', () => {
+    const submit = openCreateForm();
+    pick('Start time', '9:00 AM');
+    pick('End time', '10:00 AM');
+    expect(submit).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2030-01-14' } });
+    expectRangeRefused(submit);
+    fireEvent.click(submit);
+    expect(mocks.mutate.create).not.toHaveBeenCalled();
+  });
+
+  it('opens a meeting that crosses midnight without an error and saves it unchanged', () => {
+    // 23:30 to 00:30 the next day, in the viewer's own zone.
+    const start = new Date(2030, 0, 15, 23, 30);
+    mocks.upcoming = [meeting('Late sync', start)];
+    render(<MeetingsContent />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Start date')).toHaveValue('2030-01-15');
+    expect(screen.getByLabelText('End date')).toHaveValue('2030-01-16');
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeEnabled();
+
+    fireEvent.click(save);
+    expect(mocks.mutate.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'Late sync',
+        startTime: start,
+        endTime: new Date(2030, 0, 16, 0, 30),
+      })
+    );
+  });
+
+  it('keeps a cross-midnight meeting’s length when its start date moves', () => {
+    mocks.upcoming = [meeting('Late sync', new Date(2030, 0, 15, 23, 30))];
+    render(<MeetingsContent />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2030-01-20' } });
+    expect(screen.getByLabelText('End date')).toHaveValue('2030-01-21');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    // Pulling the end back onto the start date runs it backwards again.
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2030-01-20' } });
+    expectRangeRefused(screen.getByRole('button', { name: 'Save' }));
   });
 });

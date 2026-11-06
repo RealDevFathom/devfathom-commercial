@@ -24,6 +24,7 @@ import { hasModule } from '@/lib/entitlements';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
+import { resolvePharmacyAdvice } from '@/lib/pharmacy/dashboard-access';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
   admittedInventoryBranchIds,
@@ -201,63 +202,73 @@ export default async function PharmacyInventoryPage({
   // DEV-660: the gated read admits the branch (and, for a tenant ADMIN without an
   // assignment, writes the exception's audit row) before any direct stock read.
   const nearExpiry = await caller.nearExpiryBoard({ branchId: branch.id });
-  const [organizationLocations, lots, counts, transfers, recalls, signals, users, temperatureLogs] =
-    await Promise.all([
-      ctx.db.pharmacyStockLocation.findMany({
-        where: { organizationId, active: true },
-        orderBy: { name: 'asc' },
-      }),
-      ctx.db.pharmacyInventoryLot.findMany({
-        where: { organizationId, branchId: branch.id },
-        orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
-        include: {
-          batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
-          balances: { include: { location: true } },
-        },
-      }),
-      ctx.db.pharmacyInventoryCount.findMany({
-        where: { organizationId, branchId: branch.id },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-        include: { lines: true },
-      }),
-      ctx.db.pharmacyInterbranchTransfer.findMany({
-        where: { organizationId, OR: [{ fromBranchId: branch.id }, { toBranchId: branch.id }] },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-        include: { lines: true },
-      }),
-      ctx.db.pharmacyRecallNotice.findMany({
-        where: { organizationId },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-        include: { acknowledgements: true },
-      }),
-      ctx.db.pharmacyStockSignal.findMany({
-        where: {
-          organizationId,
-          branchId: branch.id,
-          status: { in: ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] },
-        },
-        orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
-        take: 50,
-        include: {
-          medicine: { select: { productName: true } },
-          location: { select: { name: true } },
-        },
-      }),
-      ctx.db.user.findMany({
-        where: { organizationId, status: 'ACTIVE', id: { not: ctx.session.user.id } },
-        orderBy: { name: 'asc' },
-        select: { id: true, name: true, title: true },
-      }),
-      ctx.db.pharmacyTemperatureLog.findMany({
-        where: { organizationId, branchId: branch.id },
-        orderBy: { recordedAt: 'desc' },
-        take: 20,
-        include: { location: { select: { name: true } } },
-      }),
-    ]);
+  const [
+    organizationLocations,
+    lots,
+    counts,
+    transfers,
+    recalls,
+    signals,
+    users,
+    temperatureLogs,
+    [expiryAdvice],
+  ] = await Promise.all([
+    ctx.db.pharmacyStockLocation.findMany({
+      where: { organizationId, active: true },
+      orderBy: { name: 'asc' },
+    }),
+    ctx.db.pharmacyInventoryLot.findMany({
+      where: { organizationId, branchId: branch.id },
+      orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
+      include: {
+        batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
+        balances: { include: { location: true } },
+      },
+    }),
+    ctx.db.pharmacyInventoryCount.findMany({
+      where: { organizationId, branchId: branch.id },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { lines: true },
+    }),
+    ctx.db.pharmacyInterbranchTransfer.findMany({
+      where: { organizationId, OR: [{ fromBranchId: branch.id }, { toBranchId: branch.id }] },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { lines: true },
+    }),
+    ctx.db.pharmacyRecallNotice.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { acknowledgements: true },
+    }),
+    ctx.db.pharmacyStockSignal.findMany({
+      where: {
+        organizationId,
+        branchId: branch.id,
+        status: { in: ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] },
+      },
+      orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
+      take: 50,
+      include: {
+        medicine: { select: { productName: true } },
+        location: { select: { name: true } },
+      },
+    }),
+    ctx.db.user.findMany({
+      where: { organizationId, status: 'ACTIVE', id: { not: ctx.session.user.id } },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, title: true },
+    }),
+    ctx.db.pharmacyTemperatureLog.findMany({
+      where: { organizationId, branchId: branch.id },
+      orderBy: { recordedAt: 'desc' },
+      take: 20,
+      include: { location: { select: { name: true } } },
+    }), // DEV-594: the expiry advisor is an owner report; offer it here only to whoever it admits.
+    resolvePharmacyAdvice(ctx.db, ctx.session.user, ctx.entitlements, ['expiry']),
+  ]);
   const branchNames = new Map(branches.map((item) => [item.id, item.name]));
   const locations = organizationLocations.filter((item) => item.branchId === branch.id);
   const destinationLocations = organizationLocations.filter((item) => item.branchId !== branch.id);
@@ -1131,6 +1142,19 @@ export default async function PharmacyInventoryPage({
               </div>
             ))}
           </div>
+          {expiryAdvice ? (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-border-subtle p-4">
+              <p className="min-w-0 flex-1 basis-56 text-sm text-text-muted">
+                {expiryAdvice.detail}
+              </p>
+              <Link
+                className={buttonVariants({ size: 'sm', variant: 'outline' })}
+                href={`${expiryAdvice.href}?${new URLSearchParams({ branch: branch.id })}`}
+              >
+                Open {expiryAdvice.label.toLowerCase()}
+              </Link>
+            </div>
+          ) : null}
         </SectionCard>
       </div>
 

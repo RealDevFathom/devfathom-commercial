@@ -7,6 +7,10 @@ import { countPastOccurrences, ON_TIME_THRESHOLD_MINUTES } from '@/lib/meeting-o
  * Per-member analytics powering the /team/stats dashboard and the personal
  * stats block on /team/[id]. Built as a few batched queries (rather than N
  * queries per user) so a team of 8 runs in well under 100ms.
+ *
+ * Completion is read from `Task.completedAt` — when the task entered a done
+ * column (src/lib/task-completion.ts) — never from `updatedAt`, which every
+ * ordinary edit bumps (DEV-250: editing an old Done task is not a completion).
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -95,63 +99,60 @@ export const teamStatsRouter = router({
         orderBy: { name: 'asc' },
       }),
 
-      // Open tasks = assigned to user, in a column NOT named 'Done'
+      // Open tasks = assigned to user, not completed (not in a done column)
       ctx.db.task.findMany({
         where: {
           assignees: { some: {} },
-          column: { name: { not: 'Done' } },
+          completedAt: null,
         },
         select: { id: true, assignees: { select: { userId: true } } },
       }),
 
-      // Completed this week = task in Done column, updated in last 7 days
+      // Completed this week = entered a done column in the last 7 days
       ctx.db.task.findMany({
         where: {
-          column: { name: 'Done' },
-          updatedAt: { gte: weekAgo },
+          completedAt: { gte: weekAgo },
           assignees: { some: {} },
         },
         select: {
           id: true,
-          createdAt: true,
-          updatedAt: true,
+          completedAt: true,
           assignees: { select: { userId: true } },
         },
       }),
 
-      // Completed last week = Done, updated 7–14 days ago (for week-over-week delta)
+      // Completed last week = entered done 7–14 days ago (for week-over-week delta)
       ctx.db.task.findMany({
         where: {
-          column: { name: 'Done' },
-          updatedAt: { gte: twoWeeksAgo, lt: weekAgo },
+          completedAt: { gte: twoWeeksAgo, lt: weekAgo },
           assignees: { some: {} },
         },
         select: { id: true, assignees: { select: { userId: true } } },
       }),
 
-      // Overdue = dueDate < now, not in Done
+      // Overdue = dueDate < now, not completed
       ctx.db.task.findMany({
         where: {
           dueDate: { lt: now },
-          column: { name: { not: 'Done' } },
+          completedAt: null,
           assignees: { some: {} },
         },
         select: { id: true, assignees: { select: { userId: true } } },
       }),
 
-      // Cycle time = all Done tasks (regardless of when completed) - used for avg
+      // Cycle time = the most recently completed tasks (createdAt → completedAt)
       ctx.db.task.findMany({
         where: {
-          column: { name: 'Done' },
+          completedAt: { not: null },
           assignees: { some: {} },
         },
         select: {
           createdAt: true,
-          updatedAt: true,
+          completedAt: true,
           assignees: { select: { userId: true } },
         },
         take: 500,
-        orderBy: { updatedAt: 'desc' },
+        orderBy: { completedAt: 'desc' },
       }),
 
       // Meetings invited — fetch the (meeting, attendee) pairs so we can count
@@ -193,18 +194,15 @@ export const teamStatsRouter = router({
 
       // Team velocity — tasks completed per day across all users, last 30 days
       ctx.db.task.findMany({
-        where: {
-          column: { name: 'Done' },
-          updatedAt: { gte: thirtyDaysAgo },
-        },
-        select: { updatedAt: true },
+        where: { completedAt: { gte: thirtyDaysAgo } },
+        select: { completedAt: true },
       }),
 
       // Sample of overdue tasks for the alerts section (titles for context)
       ctx.db.task.findMany({
         where: {
           dueDate: { lt: now },
-          column: { name: { not: 'Done' } },
+          completedAt: null,
           assignees: { some: {} },
         },
         select: {
@@ -253,14 +251,14 @@ export const teamStatsRouter = router({
       }
     }
 
-    // Completed this week + build sparkline
+    // Completed this week + build sparkline (bucketed by the day it entered done)
     const today = startOfDay(now);
     for (const t of completedThisWeekRows) {
       for (const a of t.assignees) {
         const s = byUser.get(a.userId);
         if (!s) continue;
         s.completedThisWeek++;
-        const daysAgo = diffDays(today, startOfDay(t.updatedAt));
+        const daysAgo = t.completedAt ? diffDays(today, startOfDay(t.completedAt)) : -1;
         if (daysAgo >= 0 && daysAgo < 7) {
           // index 0 = oldest (6 days ago), index 6 = today
           s.tasksDoneSparkline[6 - daysAgo]++;
@@ -284,10 +282,11 @@ export const teamStatsRouter = router({
       }
     }
 
-    // Cycle time (avg days from createdAt → updatedAt, for Done tasks)
+    // Cycle time (avg days from createdAt → completedAt, for completed tasks)
     const cycleSumByUser = new Map<string, { sum: number; count: number }>();
     for (const t of cycleTimeRows) {
-      const days = (t.updatedAt.getTime() - t.createdAt.getTime()) / DAY_MS;
+      if (!t.completedAt) continue;
+      const days = (t.completedAt.getTime() - t.createdAt.getTime()) / DAY_MS;
       if (days < 0 || days > 365) continue; // sanity filter
       for (const a of t.assignees) {
         const bucket = cycleSumByUser.get(a.userId) ?? { sum: 0, count: 0 };
@@ -371,7 +370,8 @@ export const teamStatsRouter = router({
     }
     const velocityIndex = new Map(velocity.map((v, i) => [v.date, i]));
     for (const t of velocityByDayRows) {
-      const key = t.updatedAt.toISOString().slice(0, 10);
+      if (!t.completedAt) continue;
+      const key = t.completedAt.toISOString().slice(0, 10);
       const i = velocityIndex.get(key);
       if (i !== undefined) velocity[i].count++;
     }
@@ -513,38 +513,36 @@ export const teamStatsRouter = router({
         ctx.db.task.count({
           where: {
             assignees: { some: { userId: input.userId } },
-            column: { name: { not: 'Done' } },
+            completedAt: null,
           },
         }),
         ctx.db.task.findMany({
           where: {
-            column: { name: 'Done' },
-            updatedAt: { gte: weekAgo },
+            completedAt: { gte: weekAgo },
             assignees: { some: { userId: input.userId } },
           },
-          select: { updatedAt: true },
+          select: { completedAt: true },
         }),
         ctx.db.task.count({
           where: {
-            column: { name: 'Done' },
-            updatedAt: { gte: twoWeeksAgo, lt: weekAgo },
+            completedAt: { gte: twoWeeksAgo, lt: weekAgo },
             assignees: { some: { userId: input.userId } },
           },
         }),
         ctx.db.task.count({
           where: {
             dueDate: { lt: now },
-            column: { name: { not: 'Done' } },
+            completedAt: null,
             assignees: { some: { userId: input.userId } },
           },
         }),
         ctx.db.task.findMany({
           where: {
-            column: { name: 'Done' },
+            completedAt: { not: null },
             assignees: { some: { userId: input.userId } },
           },
-          select: { createdAt: true, updatedAt: true },
-          orderBy: { updatedAt: 'desc' },
+          select: { createdAt: true, completedAt: true },
+          orderBy: { completedAt: 'desc' },
           take: 200,
         }),
         // All meetings this user is invited to — used to count past occurrences
@@ -579,18 +577,19 @@ export const teamStatsRouter = router({
       const today = startOfDay(now);
       const sparkline = [0, 0, 0, 0, 0, 0, 0];
       for (const t of completedThisWeek) {
-        const daysAgo = diffDays(today, startOfDay(t.updatedAt));
+        if (!t.completedAt) continue;
+        const daysAgo = diffDays(today, startOfDay(t.completedAt));
         if (daysAgo >= 0 && daysAgo < 7) sparkline[6 - daysAgo]++;
       }
 
-      // Cycle time
+      // Cycle time (createdAt → completedAt)
       let avgCycleTimeDays: number | null = null;
-      if (cycleTasks.length > 0) {
-        const total = cycleTasks.reduce(
-          (sum, t) => sum + (t.updatedAt.getTime() - t.createdAt.getTime()) / DAY_MS,
-          0
-        );
-        avgCycleTimeDays = Math.round((total / cycleTasks.length) * 10) / 10;
+      const cycleDays = cycleTasks.flatMap((t) =>
+        t.completedAt ? [(t.completedAt.getTime() - t.createdAt.getTime()) / DAY_MS] : []
+      );
+      if (cycleDays.length > 0) {
+        const total = cycleDays.reduce((sum, days) => sum + days, 0);
+        avgCycleTimeDays = Math.round((total / cycleDays.length) * 10) / 10;
       }
 
       // Meetings invited = sum of past occurrences across all meetings I'm on

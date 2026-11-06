@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useId } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -31,6 +31,11 @@ import { TimePicker } from '@/components/ui/time-picker';
 import { Stat } from '@/components/ui/stat';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import {
+  followStartDate,
+  meetingFormInstants,
+  meetingFormTimeOrderError,
+} from '@/lib/meetings/time-order';
 import { formatDistanceToNow, format } from 'date-fns';
 import { RevenueChart } from './revenue-chart';
 import { moneyListLabel, diffByCurrency } from '@/lib/finance/currency';
@@ -54,12 +59,14 @@ function NextMeetingBanner() {
   const [title, setTitle] = useState('');
   const [date, setDate] = useState('');
   const [startTime, setStartTime] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [endTime, setEndTime] = useState('');
   const [location, setLocation] = useState('');
   const [recurrence, setRecurrence] = useState<'daily' | 'weekly' | 'biweekly' | 'monthly' | ''>(
     ''
   );
   const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
+  const timeErrorId = useId();
 
   const createMeeting = trpc.meetings.create.useMutation({
     onSuccess: () => {
@@ -68,6 +75,7 @@ function NextMeetingBanner() {
       setTitle('');
       setDate('');
       setStartTime('');
+      setEndDate('');
       setEndTime('');
       setLocation('');
       setRecurrence('');
@@ -75,13 +83,32 @@ function NextMeetingBanner() {
     },
   });
 
+  // DEV-249: the same rule the server applies, checked as the times are picked
+  // so a meeting that ends at or before it starts cannot be submitted. Both
+  // sides are full instants, so a meeting that runs past midnight is allowed.
+  const range = { startDate: date, startTime, endDate, endTime };
+  const timeOrderError = meetingFormTimeOrderError(range);
+  const formError = timeOrderError ?? createMeeting.error?.message ?? null;
+
+  const closeCreate = () => {
+    setShowCreate(false);
+    // A refusal belongs to the attempt it answered, not the next form.
+    createMeeting.reset();
+  };
+
+  const changeStartDate = (next: string) => {
+    setEndDate(followStartDate(date, next, endDate));
+    setDate(next);
+  };
+
   const handleCreate = () => {
-    if (!title.trim() || !date || !startTime || !endTime) return;
+    if (!title.trim() || !date || !startTime || !endTime || timeOrderError) return;
+    const instants = meetingFormInstants(range);
     createMeeting.mutate({
       title: title.trim(),
       description: undefined,
-      startTime: new Date(`${date}T${startTime}`),
-      endTime: new Date(`${date}T${endTime}`),
+      startTime: instants.startTime,
+      endTime: instants.endTime,
       location: location || undefined,
       recurrence: recurrence || null,
       attendeeIds,
@@ -150,40 +177,38 @@ function NextMeetingBanner() {
           <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
             <Video className="h-4 w-4 text-primary" /> Schedule Meeting
           </h3>
-          <button
-            onClick={() => setShowCreate(false)}
-            className="text-muted-foreground hover:text-foreground"
-          >
+          <button onClick={closeCreate} className="text-muted-foreground hover:text-foreground">
             <X className="h-4 w-4" />
           </button>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <div className="col-span-2">
+          <div className="sm:col-span-2">
             <label className="block text-xs font-medium text-foreground mb-1">Title *</label>
             <input
               autoFocus
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Sprint Planning"
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
-          <div>
-            <label className="block text-xs font-medium text-foreground mb-1">Date *</label>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-            />
-          </div>
-          <div>
+          <div className="sm:col-span-2">
             <label className="block text-xs font-medium text-foreground mb-1">Location</label>
             <input
               value={location}
               onChange={(e) => setLocation(e.target.value)}
               placeholder="Google Meet, Zoom..."
-              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+              className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">Start date *</label>
+            <input
+              type="date"
+              aria-label="Start date"
+              value={date}
+              onChange={(e) => changeStartDate(e.target.value)}
+              className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
             />
           </div>
           <div>
@@ -192,7 +217,20 @@ function NextMeetingBanner() {
               value={startTime}
               onChange={setStartTime}
               aria-label="Start time"
-              className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-foreground mb-1">End date *</label>
+            <input
+              type="date"
+              aria-label="End date"
+              value={endDate}
+              min={date || undefined}
+              onChange={(e) => setEndDate(e.target.value)}
+              aria-invalid={timeOrderError ? true : undefined}
+              aria-describedby={timeOrderError ? timeErrorId : undefined}
+              className="w-full min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40"
             />
           </div>
           <div>
@@ -201,10 +239,17 @@ function NextMeetingBanner() {
               value={endTime}
               onChange={setEndTime}
               aria-label="End time"
-              className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              invalid={!!timeOrderError}
+              aria-describedby={timeOrderError ? timeErrorId : undefined}
+              className="min-h-11 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
         </div>
+        {formError && (
+          <p id={timeErrorId} role="alert" className="text-xs text-destructive">
+            {formError}
+          </p>
+        )}
         {/* Recurrence */}
         <div>
           <label className="block text-xs font-medium text-foreground mb-1.5">Repeat</label>
@@ -260,14 +305,21 @@ function NextMeetingBanner() {
         )}
         <div className="flex justify-end gap-2">
           <button
-            onClick={() => setShowCreate(false)}
+            onClick={closeCreate}
             className="rounded-xl px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
           >
             Cancel
           </button>
           <button
             onClick={handleCreate}
-            disabled={!title.trim() || !date || !startTime || !endTime || createMeeting.isPending}
+            disabled={
+              !title.trim() ||
+              !date ||
+              !startTime ||
+              !endTime ||
+              !!timeOrderError ||
+              createMeeting.isPending
+            }
             className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-40"
           >
             {createMeeting.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{' '}

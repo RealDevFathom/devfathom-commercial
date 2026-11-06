@@ -4,6 +4,7 @@ import { router, protectedProcedure } from '../trpc';
 import { assertProjectAccess } from '../authz';
 import { TRPCError } from '@trpc/server';
 import { trelloBoardSchema, trelloColorMap } from '@/types/trello';
+import { completedAtForColumnChange } from '@/lib/task-completion';
 
 // TRELLO-01: a non-parseable date string in a Trello export (`new Date(...)` →
 // Invalid Date) previously crashed the whole transactional import. Parse safely
@@ -206,7 +207,9 @@ export const trelloImportRouter = router({
           labelIdMap.set(label.id, created.id);
         }
 
-        // 3. Create columns from lists
+        // 3. Create columns from lists. Names are kept by id so each imported task
+        // can derive its completion state from the column it lands in (DEV-250).
+        const columnNameById = new Map<string, string>();
         for (let i = 0; i < lists.length; i++) {
           const list = lists[i];
           const column = await tx.column.create({
@@ -217,6 +220,7 @@ export const trelloImportRouter = router({
             },
           });
           listIdMap.set(list.id, column.id);
+          columnNameById.set(column.id, column.name);
         }
 
         // Add "Archived" column if including archived cards
@@ -232,6 +236,7 @@ export const trelloImportRouter = router({
               },
             });
             archivedColumnId = col.id;
+            columnNameById.set(col.id, col.name);
           }
         }
 
@@ -312,6 +317,7 @@ export const trelloImportRouter = router({
                 },
               });
               doneColumnId = doneCol.id;
+              columnNameById.set(doneCol.id, doneCol.name);
               createdDoneColumn = true;
             }
             columnId = doneColumnId;
@@ -349,6 +355,9 @@ export const trelloImportRouter = router({
               priority: 'MEDIUM',
               dueDate: safeDate(card.due),
               createdById: ctx.session.user.id,
+              // DEV-250: a card imported into a done column is completed as of
+              // the import, like any task created straight into done.
+              ...completedAtForColumnChange(null, columnNameById.get(columnId) ?? ''),
             },
           });
 

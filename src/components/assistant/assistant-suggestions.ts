@@ -2,27 +2,70 @@ import type { Session } from 'next-auth';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { isModuleGranted, type EntitlementView } from '@/lib/module-catalog';
 
-// Only tools already composed in lib/ai/tools.ts. These reads filter results to
-// the acting user. No privileged/financial suggestions: the current client
-// session has role/status, but no resolved ABAC grants (including overrides).
-export const ASSISTANT_SUGGESTION_CONDITIONS = [
-  { text: 'Show my open tasks', module: 'projects', tool: 'listMyTasks', vertical: 'AGENCY' },
-  {
-    text: 'Which projects are behind schedule?',
-    module: 'projects',
-    tool: 'findProjectsBehindSchedule',
-    vertical: 'AGENCY',
-  },
-  { text: 'Find notes I can access', module: 'notes', tool: 'searchNotes' },
-  { text: 'What meetings are on my schedule?', module: 'meetings', tool: 'listMeetings' },
-] as const;
+export type AssistantEntry = {
+  title: string;
+  description: string;
+  /** Tappable example questions, at most five. */
+  suggestions: string[];
+  canChat: boolean;
+  /** True only when the signed-in role, not the workspace's modules, narrows the examples. */
+  limitedByRole: boolean;
+};
+
+/** Answerable for every role: the server lists the tools it exposes for the request. */
+export const ASK_WHAT_IS_POSSIBLE = 'What can you help me with?';
+
+// Data examples name only tools composed in lib/ai/tools.ts under the same
+// vertical and module gates (notes and meetings tools are Agency-only there).
+// The client session carries the tenant role but no resolved ABAC grants, so
+// report questions are offered to the administrator (owner) role alone and the
+// server still re-checks every grant when they are asked. Front-line roles get
+// how-to questions for the modules they work in, which need no workspace data.
+function agencyExamples(modules: readonly string[]) {
+  const granted = (...keys: string[]) => keys.every((key) => isModuleGranted(key, modules));
+  return [
+    granted('projects') && 'Show my open tasks',
+    granted('projects') && 'Which projects are behind schedule?',
+    granted('notes', 'projects', 'clients') && 'Find notes I can access',
+    granted('meetings', 'projects') && 'What meetings are on my schedule?',
+  ];
+}
+
+function restaurantExamples(modules: readonly string[], owner: boolean) {
+  const reports = owner && isModuleGranted('restaurant-core', modules);
+  const pos = isModuleGranted('restaurant-pos', modules);
+  return [
+    reports && "What were today's settled sales?",
+    reports && 'How much was refunded today?',
+    !owner && pos && 'How do I take an order on the POS?',
+    !owner && pos && 'How do I split a bill at checkout?',
+  ];
+}
+
+function pharmacyExamples(modules: readonly string[], owner: boolean) {
+  const reports = owner && isModuleGranted('pharmacy-reports', modules);
+  const counter = isModuleGranted('pharmacy-counter', modules);
+  return [
+    reports && "What were today's sales?",
+    reports && 'Which stock is expiring soon?',
+    reports && 'Which medicines are running low and need reordering?',
+    !owner && counter && 'How do I check whether a medicine is in stock?',
+    counter && 'How do I process a customer return?',
+    owner && counter && !reports && 'How do I close the day at the counter?',
+  ];
+}
+
+function examples(candidates: (string | false)[]) {
+  const specific = candidates.filter((text): text is string => Boolean(text));
+  return [...specific.slice(0, 4), ASK_WHAT_IS_POSSIBLE];
+}
 
 export function assistantEntry(
   entitlements: EntitlementView,
   user: Session['user'] | undefined,
   sessionStatus: 'loading' | 'authenticated' | 'unauthenticated'
-) {
-  const neutral = { title: 'Ask Fathom', suggestions: [] as string[], canChat: false };
+): AssistantEntry {
+  const neutral = { title: 'Ask Fathom', suggestions: [], canChat: false, limitedByRole: false };
   if (sessionStatus === 'loading') {
     return { ...neutral, description: 'Loading your workspace access…' };
   }
@@ -40,36 +83,49 @@ export function assistantEntry(
     };
   }
   const vertical = entitlements.vertical;
-  if (vertical !== 'AGENCY' && vertical !== 'RESTAURANT' && vertical !== 'PHARMACY') {
-    return { ...neutral, description: 'Workspace context is unavailable. Reload to try again.' };
+  const modules = entitlements.enabledModules;
+  const owner = user.role === 'ADMIN';
+
+  if (vertical === 'AGENCY') {
+    return {
+      title: 'Your agency workspace',
+      description: 'Ask about your workspace, or start with one of the examples below.',
+      suggestions: examples(agencyExamples(modules)),
+      canChat: true,
+      limitedByRole: false,
+    };
   }
-
-  const suggestions = ASSISTANT_SUGGESTION_CONDITIONS.filter(
-    (suggestion) =>
-      (!('vertical' in suggestion) || suggestion.vertical === vertical) &&
-      isModuleGranted(suggestion.module, entitlements.enabledModules)
-  ).map(({ text }) => text);
-
-  const description =
-    vertical === 'AGENCY'
-      ? 'Ask about the workspace information you can access. Available starting points are shown below.'
-      : vertical === 'RESTAURANT'
-        ? isModuleGranted('restaurant-core', entitlements.enabledModules)
-          ? 'Ask about available workspace information or Restaurant and Catering reports. Report access is checked when you ask. Operational changes are unavailable here.'
-          : 'Ask about available workspace information. Restaurant reports are not enabled for this workspace.'
-        : isModuleGranted('pharmacy-reports', entitlements.enabledModules)
-          ? 'Ask about available workspace information or pharmacy reports. Report access is checked when you ask. Patient and clinical actions are unavailable here.'
-          : 'Ask about available workspace information. Pharmacy reports are not enabled for this workspace. Patient and clinical actions are unavailable here.';
-
-  return {
-    title:
-      vertical === 'AGENCY'
-        ? 'Your agency workspace'
-        : vertical === 'RESTAURANT'
-          ? 'Your restaurant workspace'
-          : 'Your pharmacy workspace',
-    description,
-    suggestions,
-    canChat: true,
-  };
+  if (vertical === 'RESTAURANT') {
+    const core = isModuleGranted('restaurant-core', modules);
+    return {
+      title: 'Your restaurant workspace',
+      description: !core
+        ? 'Ask how to use your workspace. Restaurant reports are not enabled for this workspace.'
+        : owner
+          ? 'Ask about Restaurant and Catering reports, such as settled sales and refunds. Operational changes are unavailable here.'
+          : 'Ask how to use your workspace, such as taking an order or splitting a bill. Operational changes are unavailable here.',
+      suggestions: examples(restaurantExamples(modules, owner)),
+      canChat: true,
+      limitedByRole: core && !owner,
+    };
+  }
+  if (vertical === 'PHARMACY') {
+    const reports = isModuleGranted('pharmacy-reports', modules);
+    const counter = isModuleGranted('pharmacy-counter', modules);
+    const focus = owner
+      ? reports
+        ? "Ask about today's sales, expiring or low stock, and other pharmacy reports."
+        : 'Ask how to use your pharmacy workspace. Pharmacy reports are not enabled for this workspace.'
+      : counter
+        ? 'Ask how to handle counter tasks, such as checking stock or processing a return.'
+        : 'Ask how to use your pharmacy workspace.';
+    return {
+      title: 'Your pharmacy workspace',
+      description: `${focus} Patient and clinical actions are unavailable here.`,
+      suggestions: examples(pharmacyExamples(modules, owner)),
+      canChat: true,
+      limitedByRole: reports && !owner,
+    };
+  }
+  return { ...neutral, description: 'Workspace context is unavailable. Reload to try again.' };
 }

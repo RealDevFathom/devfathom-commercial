@@ -17,13 +17,9 @@ import {
 } from '@/lib/finance/currency';
 import { createWithNextInvoiceNumber } from '@/lib/finance/invoice-number';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
-import {
-  isPersistableMoney,
-  MAX_MONEY,
-  multiplyMoney,
-  roundMoney,
-  sumMoney,
-} from '@/lib/finance/money';
+import { readInvoiceIssuer } from '@/lib/finance/invoice-issuer';
+import { MAX_MONEY, roundMoney, sumMoney } from '@/lib/finance/money';
+import { computeInvoiceAmounts, type InvoiceLineInput } from '@/lib/finance/invoice-amounts';
 
 type OutstandingInvoiceGroup = {
   currency: string;
@@ -63,21 +59,18 @@ const MONEY_MAX_MESSAGE = 'Amount must be 9,999,999,999.99 or less';
 const positiveMoney = () => z.number().positive().max(MAX_MONEY, MONEY_MAX_MESSAGE);
 const nonNegativeMoney = () => z.number().nonnegative().max(MAX_MONEY, MONEY_MAX_MESSAGE);
 
-function assertDerivedInvoiceMoney(
-  items: Array<{ amount: number }>,
-  subtotal: number,
-  total: number
-): void {
-  if (
-    items.some((item) => !isPersistableMoney(item.amount)) ||
-    !isPersistableMoney(subtotal) ||
-    !isPersistableMoney(total)
-  ) {
-    throw new TRPCError({
-      code: 'BAD_REQUEST',
-      message: 'Derived invoice amount exceeds the allowed range',
-    });
-  }
+// FIN-01 / #448: every invoice figure is derived on the server by the one shared
+// calculation — lines rounded to cents, subtotal = Σ lines, total = subtotal −
+// discount + tax — and a negative or out-of-range figure, or a discount above the
+// subtotal, is a clean BAD_REQUEST before anything is written.
+function invoiceAmountsOrThrow(input: {
+  items: readonly InvoiceLineInput[];
+  discount?: number | null;
+  tax?: number | null;
+}) {
+  const result = computeInvoiceAmounts(input);
+  if (!result.ok) throw new TRPCError({ code: 'BAD_REQUEST', message: result.message });
+  return result.amounts;
 }
 
 export const createInvoiceInputSchema = z.object({
@@ -94,9 +87,12 @@ export const createInvoiceInputSchema = z.object({
     )
     .min(1, 'Invoice must have at least one line item')
     .max(1_000, 'Invoice must have 1,000 line items or fewer'),
-  subtotal: nonNegativeMoney(),
+  // Accepted for backward compatibility and ignored: both are derived server-side.
+  subtotal: nonNegativeMoney().optional(),
+  // #448: discount and tax are currency AMOUNTS, never rates.
+  discount: nonNegativeMoney().default(0),
   tax: nonNegativeMoney().default(0),
-  total: nonNegativeMoney(),
+  total: nonNegativeMoney().optional(),
   currency: z.enum(['USD', 'PKR']).default('USD'),
   dueDate: z.date(),
   notes: z.string().optional(),
@@ -276,21 +272,34 @@ export const financeRouter = router({
       });
     }),
 
+  // Backs the print / Save-as-PDF view, which is also where the emailed invoice
+  // link lands. #458: the seller printed on it is the authenticated workspace.
+  // Both reads carry the workspace id explicitly on top of row-level security,
+  // so the invoice and its issuer always belong to the same tenant.
   getInvoiceById: adminProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      const invoice = await ctx.db.invoice.findUnique({
-        where: { id: input.id },
-        include: {
-          client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
-          project: { select: { id: true, name: true } },
-          // IMP-FIN-04: payments + computed paid/balance for the invoice detail view.
-          payments: { orderBy: { paidAt: 'desc' } },
-        },
-      });
+      const organizationId = workspaceId(ctx);
+      const [invoice, issuer] = await Promise.all([
+        ctx.db.invoice.findUnique({
+          where: { id: input.id, organizationId },
+          include: {
+            client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+            project: { select: { id: true, name: true } },
+            // IMP-FIN-04: payments + computed paid/balance for the invoice detail view.
+            payments: { orderBy: { paidAt: 'desc' } },
+          },
+        }),
+        readInvoiceIssuer(ctx.db, organizationId),
+      ]);
       if (!invoice) return null;
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
-      return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
+      return {
+        ...invoice,
+        issuer,
+        amountPaid,
+        balance: round2(Number(invoice.total) - amountPaid),
+      };
     }),
 
   createInvoice: adminProcedure.input(createInvoiceInputSchema).mutation(async ({ ctx, input }) => {
@@ -298,19 +307,10 @@ export const financeRouter = router({
     await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
     await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
     // FIN-01: never trust client-sent money. Derive every line `amount`, the
-    // `subtotal` and the `total` from quantity × rate (+ tax) on the server, so
-    // a request claiming subtotal/total = 0 (or a negative) cannot corrupt the
-    // stored figure or the paid/outstanding aggregates. Mirrors the AI tool.
-    const lineItems = input.items.map((it) => ({
-      description: it.description,
-      quantity: it.quantity,
-      rate: it.rate,
-      amount: multiplyMoney(it.quantity, it.rate),
-    }));
-    const subtotal = sumMoney(lineItems.map((it) => it.amount));
-    const tax = round2(input.tax ?? 0);
-    const total = sumMoney([subtotal, tax]);
-    assertDerivedInvoiceMoney(lineItems, subtotal, total);
+    // `subtotal` and the `total` (− discount + tax) on the server, so a request
+    // claiming subtotal/total = 0 (or a negative) cannot corrupt the stored figure
+    // or the paid/outstanding aggregates. Same calculation as REST and the AI tool.
+    const { items: lineItems, subtotal, discount, tax, total } = invoiceAmountsOrThrow(input);
 
     // INV-<year>-<n>, unique per organization and allocated under a per-tenant
     // lock in the insert's transaction (FIN-09: the sequence resets each year).
@@ -322,6 +322,7 @@ export const financeRouter = router({
           projectId: input.projectId || null,
           items: lineItems,
           subtotal,
+          discount,
           tax,
           total,
           currency: input.currency,
@@ -345,7 +346,9 @@ export const financeRouter = router({
 
   // IMP-FIN-01: full line-item edit of an unsettled invoice. Like createInvoice,
   // every line `amount`, the `subtotal` and the `total` are recomputed SERVER-SIDE
-  // from quantity × rate (+ tax) — a caller-supplied total is never trusted (FIN-01).
+  // (lines − discount + tax) — a caller-supplied total is never trusted (FIN-01).
+  // #448: an omitted discount keeps the stored one (re-checked against the new
+  // subtotal), so a client that predates discounts cannot silently drop one.
   // Only a DRAFT or SENT invoice may be edited; a PAID/CANCELLED/OVERDUE invoice is
   // settled or void and its figures are frozen.
   updateInvoice: adminProcedure
@@ -362,6 +365,7 @@ export const financeRouter = router({
           )
           .min(1)
           .max(1_000),
+        discount: nonNegativeMoney().optional(),
         tax: nonNegativeMoney().optional(),
         dueDate: z.date().optional(),
         notes: z.string().optional(),
@@ -369,17 +373,11 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Recompute money server-side, identical to createInvoice.
-      const lineItems = input.items.map((it) => ({
-        description: it.description,
-        quantity: it.quantity,
-        rate: it.rate,
-        amount: multiplyMoney(it.quantity, it.rate),
-      }));
-      const subtotal = sumMoney(lineItems.map((it) => it.amount));
-      const tax = round2(input.tax ?? 0);
-      const total = sumMoney([subtotal, tax]);
-      assertDerivedInvoiceMoney(lineItems, subtotal, total);
+      // Recompute money server-side, identical to createInvoice. Validate before
+      // taking the row lock; an omitted discount is resolved under the lock.
+      const amountsWith = (discount: number) =>
+        invoiceAmountsOrThrow({ items: input.items, tax: input.tax ?? 0, discount });
+      const requested = amountsWith(input.discount ?? 0);
 
       const invoice = await ctx.db.$transaction(async (tx) => {
         // Serialize edits with payment settlement. Without this lock, a payment can
@@ -387,7 +385,7 @@ export const financeRouter = router({
         await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.id} FOR UPDATE`;
         const current = await tx.invoice.findUnique({
           where: { id: input.id },
-          select: { status: true },
+          select: { status: true, discount: true },
         });
         if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
         if (current.status !== 'DRAFT' && current.status !== 'SENT') {
@@ -397,7 +395,9 @@ export const financeRouter = router({
           });
         }
 
-        const data: Record<string, unknown> = { items: lineItems, subtotal, tax, total };
+        const { items, subtotal, discount, tax, total } =
+          input.discount === undefined ? amountsWith(Number(current.discount ?? 0)) : requested;
+        const data: Record<string, unknown> = { items, subtotal, discount, tax, total };
         if (input.dueDate) data.dueDate = input.dueDate;
         if (input.notes !== undefined) data.notes = input.notes.trim() || null;
         if (input.status && input.status !== current.status) {
@@ -429,7 +429,7 @@ export const financeRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const invoice = await ctx.db.invoice.findUnique({
-        where: { id: input.id },
+        where: { id: input.id, organizationId: workspaceId(ctx) },
         include: {
           client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
         },
@@ -457,6 +457,9 @@ export const financeRouter = router({
         clientName: invoice.client.name,
         amountLabel: moneyLabel(Number(invoice.total), invoice.currency),
         dueDate: format(new Date(invoice.dueDate), 'MMM d, yyyy'),
+        // The link carries only the invoice id. The print view it opens signs the
+        // reader into their workspace and reads the invoice and its seller
+        // (getInvoiceById) under that workspace — never from the URL.
         url: `${appUrl()}/finance/invoices/${invoice.id}/print`,
       });
 

@@ -19,6 +19,7 @@ import { logAIProviderUnavailable, readAskFathomAvailability } from '@/lib/ai/as
 import { createAIModel } from '@/lib/ai/provider';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
+import { resolveAssistantLocale } from '@/lib/ai/locale';
 import { createAnswerGuardTransform, GroundingEvidence } from '@/lib/ai/grounding';
 import { assistantTurnTier } from '@/lib/ai/quick-lookup';
 import { limitToolCalls } from '@/lib/ai/tool-call-limit';
@@ -55,6 +56,14 @@ function recentUserText(messages: UIMessage[], count = 2): string {
     if (t.trim()) texts.push(t);
   }
   return texts.reverse().join(' \n ');
+}
+
+// DEV-582: the latest user message alone decides whether an English workspace answers in Urdu.
+function latestUserText(messages: UIMessage[]): string {
+  const latest = messages.findLast((m) => m.role === 'user');
+  return (latest?.parts ?? [])
+    .map((p) => (p.type === 'text' && typeof p.text === 'string' ? p.text : ''))
+    .join(' ');
 }
 
 const UNAVAILABLE = 'Ask Fathom is currently unavailable. No cached answer was used.';
@@ -167,6 +176,9 @@ async function respond(req: Request) {
     department: session.user.department,
     status: session.user.status,
     enabledModules: entitlements.enabledModules,
+    // DEV-582: the answer language every tool reads from the assistant context: the
+    // workspace locale, or Urdu when the user's latest message is written in Urdu script.
+    locale: resolveAssistantLocale(organization.locale, latestUserText(messages)),
   };
   // DEV-576 write ledger: approval-gated writes run once, only as proposed.
   const ledger = createActionLedgerContext({ organizationId: organization.id, userId: ctx.userId });

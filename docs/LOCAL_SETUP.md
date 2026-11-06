@@ -1,6 +1,6 @@
 # Running DevFathom Locally
 
-Last reviewed: 2026-10-21
+Last reviewed: 2026-11-02
 
 ## Prerequisites
 
@@ -52,6 +52,36 @@ openssl rand -base64 32
 
 Keep `.env.local` private. It is ignored by Git.
 
+### Which values win
+
+Every `prisma` CLI command (through `prisma.config.ts`), `bun run db:seed`, `prisma/seed-demo.ts`,
+`prisma/create-admin.ts`, `prisma/reset-admin-password.ts`, and the `platform:jobs`,
+`assistant:eval`, `assistant:diag`, and `email:smoke` scripts load environment files through
+`prisma/load-env.ts`, with the same precedence as Next.js:
+
+1. a variable already set in the process environment (exported in your shell, or set by CI or a
+   container);
+2. `.env.local`;
+3. `.env`.
+
+A file that does not exist is skipped silently. A value exported in the shell therefore overrides
+both files without editing them, for example `MIGRATION_DATABASE_URL=... bun run db:seed`. When no
+database URL is set anywhere, these commands stop with a message that names the variables and the
+files they searched, instead of failing to connect. The seed accepts `MIGRATION_DATABASE_URL` or
+`DATABASE_URL`; the other scripts read `DATABASE_URL`.
+
+`prisma/bootstrap.ts` is production-only and reads the real process environment only.
+
+### Required seed values
+
+- `SEED_PASSWORD` is mandatory. The seed refuses to run without it (it accepts `ADMIN_PASSWORD` as
+  a fallback) and assigns it to every seeded `@company.com` tenant user.
+- The platform operator needs **both** `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`.
+  Setting only one of them fails the seed. Leaving both unset leaves any existing operator
+  untouched, so a new database then has no account that can sign in to the platform.
+- `ADMIN_EMAIL` is optional. When it is set, `ADMIN_PASSWORD` is required too, and the seed creates
+  that separate workspace administrator.
+
 ## 2. Create the databases
 
 ```bash
@@ -72,9 +102,10 @@ GRANT CONNECT, TEMPORARY ON DATABASE devfathom TO devfathom_app;
 ```
 
 `DATABASE_URL` must use `devfathom_app`. `MIGRATION_DATABASE_URL` is the role that applies
-migrations and seed (a local superuser is enough). Prisma CLI and the seed read
-`MIGRATION_DATABASE_URL` from `.env` and `.env.local` when it is set, and otherwise fall
-back to `DATABASE_URL`. The running server reads `DATABASE_URL` only.
+migrations and seed (a local superuser is enough). Prisma CLI and the seed use
+`MIGRATION_DATABASE_URL` when it is set, and otherwise fall back to `DATABASE_URL`, resolved with
+the precedence in [Which values win](#which-values-win). The running server reads `DATABASE_URL`
+only.
 
 `next start` and any production process refuse to boot when that application role is
 `SUPERUSER` or `BYPASSRLS`, and when `CLIENT_IP_HEADER`, `TRUSTED_PROXY_CIDRS`, and
@@ -97,8 +128,9 @@ bun prisma/prepare-extensions.ts
 bunx prisma migrate deploy
 ```
 
-Prisma and the seed load `.env`, then `.env.local`. After migrate, grant the application role
-access to the objects the migration role owns:
+Prisma and the seed take an exported variable first, then `.env.local`, then `.env` (see
+[Which values win](#which-values-win)). After migrate, grant the application role access to the
+objects the migration role owns:
 
 ```sql
 GRANT USAGE ON SCHEMA public TO devfathom_app;
@@ -112,7 +144,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 
 `ALTER DEFAULT PRIVILEGES` applies to objects the current user creates later. Run it as the
 migration role. Then seed. The seed reads `MIGRATION_DATABASE_URL` when that variable is set,
-and it sets the platform-admin tenant setting inside its transaction:
+and it sets the platform-admin tenant setting inside each of its transactions:
 
 ```bash
 bun run db:seed
@@ -129,6 +161,22 @@ step has run. Bun loads `EXTENSION_ADMIN_DATABASE_URL` from `.env.local`; set it
 The seed creates the local DevFathom organization, platform operator, modules, users, and demo
 data. Platform login uses `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`; tenant login uses
 an email printed by the seed and the `SEED_PASSWORD` value.
+
+The seed is safe to re-run. It commits in two transactions:
+
+1. The platform catalog, the DevFathom organization with its departments and roles, the platform
+   operator, and the optional `ADMIN_EMAIL` administrator. This is committed first, so a failure in
+   the demo data cannot remove the operator. The seed prints `Platform operator created` or
+   `Platform operator updated`, or a warning when `PLATFORM_ADMIN_EMAIL` and
+   `PLATFORM_ADMIN_PASSWORD` are both unset.
+2. The demo users, clients, projects, finance, chat, and meetings. When the demo data is already
+   present, a re-run only refreshes the demo users' password from `SEED_PASSWORD` and prints
+   `Seed data already present`.
+
+A re-run therefore also applies a changed `SEED_PASSWORD` or `PLATFORM_ADMIN_PASSWORD`. If the seed
+reports that the database already contains conflicting seed data, the database holds rows the seed
+did not create, and re-running does not help. Rebuild it as described in
+[Resetting local data](#resetting-local-data).
 
 Never run `prisma db push`. This project relies on migration-only row-level security and tenant
 constraints.
@@ -343,7 +391,8 @@ bun run db:generate
 ### Admin login fails
 
 Confirm both `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD` were set before running the seed.
-Run `bun run db:seed` again after correcting them.
+The seed prints `Platform operator created` or `Platform operator updated` when they were, and a
+warning when both were unset. Run `bun run db:seed` again after correcting them.
 
 ### Optional integrations report missing configuration
 
@@ -370,4 +419,16 @@ This deletes the local database contents and rebuilds them:
 bun run db:reset
 ```
 
+The script runs `bunx prisma migrate reset && bunx prisma db seed`. `prisma migrate reset` asks for
+confirmation, drops the database's `public` schema, and re-applies every migration. Prisma 7 no
+longer runs the seed as part of a reset, so the script runs it afterwards with the same
+environment.
+
 Use it only when you are certain the configured database is disposable.
+
+Dropping `public` also drops the `btree_gist` and `pg_trgm` extensions installed there. The
+re-applied `20260830120000_btree_gist_public_execute_acl` migration then fails with `P0001`, as it
+does on a database where `bun prisma/prepare-extensions.ts` was skipped. On a server with the
+default `max_locks_per_transaction` the drop itself can fail first, with `out of shared memory`. If
+the reset stops at either point, rebuild the database instead: drop and re-create it (step 2), then
+run step 3 from `bun prisma/prepare-extensions.ts` through `bun run db:seed`.

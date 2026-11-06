@@ -22,6 +22,7 @@ import { computePunctuality } from '@/lib/meeting-occurrence';
 import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
 import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
 import { resolveRelevantOccurrence } from '@/lib/meetings/occurrences';
+import { meetingTimeOrderError, meetingTimeOrderErrorForPatch } from '@/lib/meetings/time-order';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 
 const DAY_MS = 86_400_000;
@@ -267,9 +268,10 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
         const end = parseDate(endTime);
         if (!end)
           return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
-        if (end.getTime() <= start.getTime()) {
-          return { error: 'The end time must be after the start time.' };
-        }
+        // DEV-249: the shared rule, so the assistant refuses exactly what the
+        // router, REST route and forms refuse, in the same words.
+        const timeOrderError = meetingTimeOrderError(start, end);
+        if (timeOrderError) return { error: timeOrderError };
 
         // Resolve every attendee name up front so we can ask for clarification
         // before creating anything.
@@ -404,18 +406,31 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
           // Keep the pair in step, as `meetings.update` does.
           data.recurrenceRule = legacyRecurrenceToRule(recurrence);
         }
+        const times: { startTime?: Date; endTime?: Date } = {};
         if (startTime != null) {
           const d = parseDate(startTime);
           if (!d)
             return { error: `Could not read the start time "${startTime}". Use an ISO datetime.` };
-          data.startTime = d;
+          data.startTime = times.startTime = d;
         }
         if (endTime != null) {
           const d = parseDate(endTime);
           if (!d)
             return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
-          data.endTime = d;
+          data.endTime = times.endTime = d;
         }
+
+        // DEV-249: judge the range the edit would leave stored. "Move the
+        // standup to 3pm" carries only a start, so it is compared against the
+        // stored end. Checked before the attendee replacement below so a
+        // refused edit writes nothing.
+        const timeOrderError = await meetingTimeOrderErrorForPatch(times, () =>
+          db.meeting.findUnique({
+            where: { id: meetingId },
+            select: { startTime: true, endTime: true },
+          })
+        );
+        if (timeOrderError) return { error: timeOrderError };
 
         // Replace the attendee list when provided (mirrors the router: the
         // acting user is always kept on the list).

@@ -11,6 +11,8 @@ import { loadSetupChecklist } from '@/lib/onboarding/setup-evaluator';
 import { loadHotelLanding } from '@/lib/hotel/landing';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { can, subjectFromSession } from '@/lib/abac';
+import { CLOSED_PHARMACY_DASHBOARD_ACCESS } from '@/lib/pharmacy/dashboard';
+import { resolvePharmacyDashboardAccess } from '@/lib/pharmacy/dashboard-access';
 import { hotelPropertyRouter } from '@/server/routers/hotel-property';
 
 export const metadata: Metadata = {
@@ -49,6 +51,16 @@ export default async function DashboardPage({
             : null
         )
       : null;
+
+  // DEV-602: the pharmacy dashboard follows the viewer's own grants. Resolved here,
+  // before render, so a cashier is never shown the owner command centre, its edit
+  // mode or the report reads that would refuse them.
+  const pharmacyAccess =
+    pharmacy && organizationId && user && ssr
+      ? await withTenantDb(organizationId, (db) =>
+          resolvePharmacyDashboardAccess(db, user, ssr.entitlements)
+        )
+      : CLOSED_PHARMACY_DASHBOARD_ACCESS;
 
   // Prefetch above-the-fold data on the server so it arrives hydrated. The
   // client QueryClient has staleTime 60s, so hydrated data is "fresh" and the
@@ -90,7 +102,7 @@ export default async function DashboardPage({
           isAdmin={ssr.session?.user?.role === 'ADMIN'}
         />
       ) : pharmacy ? (
-        <PharmacyDashboardContent role={ssr.session?.user?.role} />
+        <PharmacyDashboardContent role={ssr.session?.user?.role} access={pharmacyAccess} />
       ) : restaurant ? (
         <RestaurantDashboardContent
           enabledModules={ssr.entitlements.enabledModules}

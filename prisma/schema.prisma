@@ -3390,6 +3390,9 @@ model Task {
   createdById    String
   // IMP-PROJ-06: optional parent for subtasks (self-relation).
   parentId       String?
+  // DEV-250: when the task entered a done column; null while it is not done.
+  // Maintained only through src/lib/task-completion.ts — never from updatedAt.
+  completedAt    DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -3412,6 +3415,7 @@ model Task {
   @@index([createdById])
   @@index([parentId])
   @@index([organizationId])
+  @@index([organizationId, completedAt])
   @@map("tasks")
 }
 
@@ -3563,7 +3567,11 @@ model Invoice {
   clientId       String
   projectId      String?
   items          Json // [{description, quantity, rate, amount}]
+  /// #448: money is derived by src/lib/finance/invoice-amounts.ts — lines rounded
+  /// to cents, subtotal = Σ lines, total = subtotal − discount + tax. Discount and
+  /// tax are amounts; CHECKs keep discount within 0..subtotal.
   subtotal       Decimal       @db.Decimal(12, 2)
+  discount       Decimal       @default(0) @db.Decimal(12, 2)
   tax            Decimal       @default(0) @db.Decimal(12, 2)
   total          Decimal       @db.Decimal(12, 2)
   currency       Currency      @default(USD)
@@ -5058,6 +5066,10 @@ model Organization {
   dataResidency            String?
   primaryContactName       String?
   primaryContactEmail      String?
+  /// #458: the seller identity printed on this workspace's client invoices.
+  /// Optional; the print view omits a line when it is blank.
+  invoiceAddress           String?
+  invoiceTaxId             String?
   notes                    String?
   createdAt                DateTime                   @default(now())
   updatedAt                DateTime                   @updatedAt

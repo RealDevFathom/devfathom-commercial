@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Switch as StudioSwitch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/ui/page-header';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -305,6 +306,8 @@ export function OrganizationAdminContent() {
       locale: formValue(values, 'locale'),
       primaryContactName: formValue(values, 'primaryContactName') || null,
       primaryContactEmail: formValue(values, 'primaryContactEmail'),
+      invoiceAddress: formValue(values, 'invoiceAddress') || null,
+      invoiceTaxId: formValue(values, 'invoiceTaxId') || null,
     });
   };
   const submitBrand = (event: FormEvent<HTMLFormElement>) => {
@@ -427,6 +430,30 @@ export function OrganizationAdminContent() {
                 defaultValue={organization.primaryContactEmail ?? ''}
               />
             </label>
+            {/* #458: printed under the legal name as the seller on client invoices. */}
+            <label className="sm:col-span-2">
+              <span className={labelClass}>Invoice address</span>
+              <Textarea
+                name="invoiceAddress"
+                rows={3}
+                maxLength={500}
+                defaultValue={organization.invoiceAddress ?? ''}
+                placeholder="Street, city, region, postal code, country"
+              />
+            </label>
+            <label className="sm:col-span-2">
+              <span className={labelClass}>Invoice tax ID</span>
+              <Input
+                name="invoiceTaxId"
+                maxLength={100}
+                defaultValue={organization.invoiceTaxId ?? ''}
+                placeholder="VAT, GST, NTN or EIN"
+              />
+            </label>
+            <p className="-mt-2 text-xs text-muted-foreground sm:col-span-2">
+              Client invoices print {organization.legalName} as the seller, with this address and
+              tax ID when set.
+            </p>
             <div className="sm:col-span-2">
               <SubmitButton pending={profile.isPending}>Save profile</SubmitButton>
             </div>
@@ -602,10 +629,7 @@ export function OrganizationAdminContent() {
                         id: user.id,
                         role: formValue(values, 'role') as 'ADMIN' | 'HR' | 'EMPLOYEE',
                         status: formValue(values, 'status') as
-                          | 'ACTIVE'
-                          | 'INACTIVE'
-                          | 'ON_LEAVE'
-                          | 'INVITED',
+                          'ACTIVE' | 'INACTIVE' | 'ON_LEAVE' | 'INVITED',
                         organizationRoleId: formValue(values, 'organizationRoleId') || null,
                         title: formValue(values, 'title'),
                         department: formValue(values, 'department') as
