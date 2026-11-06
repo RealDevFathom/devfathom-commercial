@@ -231,7 +231,9 @@ type AddSaleLineInput = {
 };
 
 export async function addSaleLine(
-  db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput,
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: AddSaleLineInput,
   options: { applyCounterPromotions?: boolean } = {}
 ) {
   return addSaleLineWithAllocation(db, scope, input, undefined, options.applyCounterPromotions);
@@ -323,16 +325,21 @@ async function addSaleLineWithAllocation(
   const grossMinor = unitPriceMinor * input.quantity;
   // Price only after stock allocation has finished waiting for its locks.
   const promotionEvaluatedAt = new Date();
-  const promotion = applyCounterPromotions && !input.discountKind && !input.discountMinor
-    ? await priceCounterPromotion(db, scope, {
-        medicineId: input.medicineId,
-        regulated: medicine.rx || medicine.restricted || medicine.controlled,
-        grossMinor, costMinor, at: promotionEvaluatedAt,
-      })
-    : null;
+  const promotion =
+    applyCounterPromotions && !input.discountKind && !input.discountMinor
+      ? await priceCounterPromotion(db, scope, {
+          medicineId: input.medicineId,
+          regulated: medicine.rx || medicine.restricted || medicine.controlled,
+          grossMinor,
+          costMinor,
+          at: promotionEvaluatedAt,
+        })
+      : null;
   const discountMinor = promotion?.discountMinor ?? input.discountMinor ?? 0;
   const approvedByUserId = promotion?.promotion.createdByUserId ?? input.approvedByUserId;
-  const approvalPolicy = promotion ? `pharmacy-promotion:${promotion.promotion.id}` : input.approvalPolicy;
+  const approvalPolicy = promotion
+    ? `pharmacy-promotion:${promotion.promotion.id}`
+    : input.approvalPolicy;
   validateDiscount({
     regulated: medicine.rx || medicine.restricted || medicine.controlled,
     discountMinor,
@@ -382,15 +389,19 @@ async function addSaleLineWithAllocation(
   );
   await event(db, scope, sale.id, 'LINE_ADDED', undefined, {
     saleLineId: line.id,
-    ...(promotion ? {
-      promotionId: promotion.promotion.id, promotionName: promotion.promotion.name,
-      discountMinor, approvedByUserId: promotion.promotion.createdByUserId,
-      effectiveFrom: promotion.promotion.effectiveFrom.toISOString(),
-      effectiveTo: promotion.promotion.effectiveTo.toISOString(),
-      benefitBasisPoints: promotion.promotion.benefitBasisPoints,
-      benefitMinor: promotion.promotion.benefitMinor,
-      evaluatedAt: promotionEvaluatedAt.toISOString(),
-    } : {}),
+    ...(promotion
+      ? {
+          promotionId: promotion.promotion.id,
+          promotionName: promotion.promotion.name,
+          discountMinor,
+          approvedByUserId: promotion.promotion.createdByUserId,
+          effectiveFrom: promotion.promotion.effectiveFrom.toISOString(),
+          effectiveTo: promotion.promotion.effectiveTo.toISOString(),
+          benefitBasisPoints: promotion.promotion.benefitBasisPoints,
+          benefitMinor: promotion.promotion.benefitMinor,
+          evaluatedAt: promotionEvaluatedAt.toISOString(),
+        }
+      : {}),
   });
   return { line, allocation };
 }

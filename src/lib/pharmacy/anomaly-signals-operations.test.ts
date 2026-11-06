@@ -4,6 +4,7 @@ vi.mock('server-only', () => ({}));
 
 import {
   acknowledgePharmacyAnomalySignal,
+  readPharmacyAnomalyFacts,
   refreshPharmacyAnomalySignals,
   snoozePharmacyAnomalySignal,
 } from './anomaly-signals-operations';
@@ -68,6 +69,14 @@ describe('AI-04 invariant 29 operation boundary', () => {
     expect(forbidden.stockMovement).not.toHaveBeenCalled();
     expect(forbidden.purchaseOrder).not.toHaveBeenCalled();
     expect(forbidden.financePosting).not.toHaveBeenCalled();
+  });
+
+  it('excludes automatic promotion lines from staff discount-override facts', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    await readPharmacyAnomalyFacts({ $queryRaw: queryRaw } as never, filters, NOW);
+    const sql = queryRaw.mock.calls[1][0];
+    expect(sql.text).toContain('"discountMinor">0 OR l."approvedByUserId" IS NOT NULL');
+    expect(sql.text).toContain('"promotionId" IS NULL');
   });
 
   it('records acknowledgement and bounded snooze reasons without operational writes', async () => {

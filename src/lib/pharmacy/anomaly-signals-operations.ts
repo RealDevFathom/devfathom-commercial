@@ -108,7 +108,7 @@ export async function readPharmacyAnomalyFacts(
           JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId"
           WHERE s."branchId" IN (${branches}) AND s."status"='COMPLETED'
             AND s."businessDate">=${window.from} AND s."businessDate"<${window.to}
-            AND (l."discountMinor">0 OR l."approvedByUserId" IS NOT NULL)
+            AND (l."discountMinor">0 OR l."approvedByUserId" IS NOT NULL) AND l."promotionId" IS NULL
           GROUP BY s."branchId", s."createdByUserId" ORDER BY MAX(s."completedAt") DESC LIMIT 200`);
 
   const ghostReturn =

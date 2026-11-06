@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-const sql = readFileSync('prisma/migrations/20261101000727_pharmacy_promotions/migration.sql', 'utf8');
+const sql = readFileSync(
+  'prisma/migrations/20261101000727_pharmacy_promotions/migration.sql',
+  'utf8'
+);
 describe('#727 additive pharmacy promotions migration', () => {
   it('keeps tenant/branch isolation and composite foreign keys in the database', () => {
     expect(sql).toContain('ENABLE ROW LEVEL SECURITY');
