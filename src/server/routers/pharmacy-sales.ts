@@ -540,10 +540,14 @@ async function requireCloseIdentity(ctx: TRPCContext): Promise<boolean> {
   // The coarse ADMIN enum is the legacy owner/admin assignment when no
   // organization role exists. If one is assigned, it must itself be an
   // approved system role: an ADMIN with a Pharmacist role is still refused.
+  // `administrator` is the bootstrap Administrator system role that pharmacy
+  // workspaces created before the canonical templates still carry (see migration
+  // 20261029000258_pharmacy_administrator_reports); it is the same Administrator role.
   if (!['ADMIN', 'EMPLOYEE', 'HR'].includes(row.role)) throw refused();
   const assigned = row.organizationRole;
   const allowedRole = assigned
-    ? assigned.isSystem && ['owner', 'owner-operator', 'manager', 'admin'].includes(assigned.key)
+    ? assigned.isSystem &&
+      ['owner', 'owner-operator', 'manager', 'admin', 'administrator'].includes(assigned.key)
     : row.role === 'ADMIN';
   if (!allowedRole) throw refused();
 
@@ -593,16 +597,64 @@ async function requireCloseAccess(ctx: TRPCContext, branch: string): Promise<Led
   return scope;
 }
 
+/**
+ * The active branches the viewer may close, by the same predicates as
+ * `requireCloseAccess`'s branch half, in a fixed number of reads however many branches
+ * the organization has: every active branch for organization-wide reach, otherwise the
+ * active member's active assignments on active branches. Advisory only: every preview
+ * and close repeats the full gate.
+ */
+async function closableBranchIds(ctx: TRPCContext, organizationWide: boolean): Promise<string[]> {
+  const user = ctx.session!.user;
+  const organizationId = ctx.entitlements?.organizationId;
+  if (!organizationId || user.organizationId !== organizationId) return [];
+  const activeBranch = { organizationId, active: true };
+  if (organizationWide) {
+    const branches = await ctx.db.pharmacyBranch.findMany({
+      where: activeBranch,
+      select: { id: true },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+    });
+    return branches.map((branch) => branch.id);
+  }
+  const member = await ctx.db.user.findUnique({
+    where: { id: user.id },
+    select: { status: true, organizationId: true },
+  });
+  if (
+    !member ||
+    member.organizationId !== organizationId ||
+    !member.status ||
+    !ACTIVE_STATUSES.has(member.status)
+  )
+    return [];
+  const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: { organizationId, userId: user.id, active: true, branch: activeBranch },
+    select: { branchId: true },
+    orderBy: [{ branch: { name: 'asc' } }, { branchId: 'asc' }],
+  });
+  return [...new Set(assignments.map((assignment) => assignment.branchId))];
+}
+
 export const pharmacySalesRouter = router({
+  /**
+   * DEV-739: what the day-close page and the rail may offer this viewer: the branches
+   * the close procedures would admit them on. `allowed` only when there is at least one,
+   * so a manager assigned to no branch is not offered a close the server refuses.
+   */
   dayCloseAccess: protectedProcedure.query(async ({ ctx }) => {
+    const userId = ctx.session!.user.id;
+    const organizationId = ctx.session!.user.organizationId;
+    let organizationWide: boolean;
     try {
-      await requireCloseIdentity(ctx);
-      return { allowed: true, userId: ctx.session!.user.id, organizationId: ctx.session!.user.organizationId };
+      organizationWide = await requireCloseIdentity(ctx);
     } catch (error) {
       if (error instanceof TRPCError && error.code === 'FORBIDDEN')
-        return { allowed: false, userId: ctx.session!.user.id, organizationId: ctx.session!.user.organizationId };
+        return { allowed: false, branchIds: [] as string[], userId, organizationId };
       throw error;
     }
+    const branchIds = await closableBranchIds(ctx, organizationWide);
+    return { allowed: branchIds.length > 0, branchIds, userId, organizationId };
   }),
   manualPaymentSettings: protectedProcedure
     .input(z.object({ branchId }))

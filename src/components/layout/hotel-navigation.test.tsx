@@ -46,6 +46,8 @@ vi.mock('@/lib/trpc', () => ({
     pharmacySafety: {
       access: { useQuery: () => ({ data: { allowed: false } }) },
     },
+    // DEV-739: the rail asks the server whether to offer Day close.
+    pharmacySales: { dayCloseAccess: { useQuery: () => ({ data: undefined }) } },
   },
 }));
 vi.mock('motion/react', () => ({

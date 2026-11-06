@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
   access: true,
+  /** The branches `dayCloseAccess` names (DEV-739). */
+  closable: ['b'] as string[],
+  branches: [{ id: 'b', name: 'Main' }] as { id: string; name: string }[],
   loading: false,
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
@@ -38,10 +41,21 @@ vi.mock('@/components/entitlements-provider', () => ({
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     pharmacySales: {
-      dayCloseAccess: { useQuery: () => ({ data: { allowed: mocks.access, userId: 'owner', organizationId: 'org' }, isFetching: false, isError: false }) },
+      dayCloseAccess: {
+        useQuery: () => ({
+          data: {
+            allowed: mocks.access,
+            branchIds: mocks.access ? mocks.closable : [],
+            userId: 'owner',
+            organizationId: 'org',
+          },
+          isFetching: false,
+          isError: false,
+        }),
+      },
       counterBranches: {
         useQuery: () => ({
-          data: { branches: [{ id: 'b', name: 'Main' }], currency: 'USD', timezone: mocks.zone },
+          data: { branches: mocks.branches, currency: 'USD', timezone: mocks.zone },
           isSuccess: true,
         }),
       },
@@ -91,6 +105,8 @@ beforeEach(() => {
   mocks.zone = WORKSPACE_ZONE;
   mocks.role = 'ADMIN';
   mocks.access = true;
+  mocks.closable = ['b'];
+  mocks.branches = [{ id: 'b', name: 'Main' }];
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
@@ -197,6 +213,34 @@ describe('day-close console', () => {
       );
     }
   );
+  it('offers only the branches the server lets this viewer close (DEV-739)', () => {
+    mocks.branches = [
+      { id: 'a', name: 'Airport' },
+      { id: 'b', name: 'Main' },
+    ];
+    mocks.closable = ['b'];
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.queryByRole('option', { name: 'Airport' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Main' })).toBeInTheDocument();
+    for (const [input] of mocks.previewInput.mock.calls)
+      expect(input).toEqual(expect.objectContaining({ branchId: 'b' }));
+  });
+  it('stops, rather than moving to another branch, when the chosen branch is no longer closable', () => {
+    mocks.branches = [
+      { id: 'a', name: 'Airport' },
+      { id: 'b', name: 'Main' },
+    ];
+    mocks.closable = ['a', 'b'];
+    const view = render(<PharmacyDayCloseConsole />);
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'b' } });
+    expect(mocks.previewInput).toHaveBeenLastCalledWith(expect.objectContaining({ branchId: 'b' }));
+    mocks.previewInput.mockClear();
+    mocks.closable = ['a'];
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByText(/You can no longer close the branch you chose/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+  });
   it('shows permission denial for a denied role', () => {
     mocks.role = 'EMPLOYEE';
     mocks.access = false;

@@ -552,12 +552,35 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
     expect(db.$transaction).not.toHaveBeenCalled();
   });
 
-  it('reports the role decision for the UI without touching branches', async () => {
+  // DEV-739: the UI is offered what the close procedures would admit: the role decision
+  // first, then the branches that viewer may close (none means no offer).
+  it('reports the role decision for the UI, then the branches it may close', async () => {
     db.user.findUnique.mockResolvedValue(member(template('manager')));
-    await expect(caller('EMPLOYEE').dayCloseAccess()).resolves.toMatchObject({ allowed: true, userId: 'actor-1', organizationId: 'org-1' });
-    db.user.findUnique.mockResolvedValue(member([{ capability: 'pharmacy:close', effect: 'ALLOW' }], [], { key: 'pharmacist' }));
-    await expect(caller('EMPLOYEE').dayCloseAccess()).resolves.toMatchObject({ allowed: false });
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: BRANCH }]);
+    await expect(caller('EMPLOYEE').dayCloseAccess()).resolves.toEqual({
+      allowed: true,
+      branchIds: [BRANCH],
+      userId: 'actor-1',
+      organizationId: 'org-1',
+    });
+    // An eligible manager assigned to no branch is offered nothing.
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+    await expect(caller('EMPLOYEE').dayCloseAccess()).resolves.toMatchObject({
+      allowed: false,
+      branchIds: [],
+    });
+    // An ineligible role is refused before any branch or assignment is read.
+    db.pharmacyBranchAssignment.findMany.mockClear();
+    db.user.findUnique.mockResolvedValue(
+      member([{ capability: 'pharmacy:close', effect: 'ALLOW' }], [], { key: 'pharmacist' })
+    );
+    await expect(caller('EMPLOYEE').dayCloseAccess()).resolves.toMatchObject({
+      allowed: false,
+      branchIds: [],
+    });
     expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
   });
 
   it.each(closeProcedures)('%s refuses an ADMIN assigned the Pharmacist role', async (_name, run) => {

@@ -82,6 +82,7 @@ export function PharmacyDayCloseConsole() {
       key={`${user.organizationId}:${user.id}`}
       organizationId={user.organizationId}
       userId={user.id}
+      closable={access.data!.branchIds}
     />
   );
 }
@@ -89,11 +90,16 @@ export function PharmacyDayCloseConsole() {
 function DayCloseBranches({
   organizationId,
   userId,
+  closable,
 }: {
   organizationId: string;
   userId: string;
+  /** The branches the server would let this viewer close (`dayCloseAccess`). */
+  closable: readonly string[];
 }) {
   const branches = trpc.pharmacySales.counterBranches.useQuery();
+  // Only the branches this viewer may close; the server repeats the check on every call.
+  const options = branches.data?.branches.filter((branch) => closable.includes(branch.id)) ?? [];
   const [selected, setSelected] = useState('');
   const [picked, setPicked] = useState<string | null>(null);
   const timeZone = branches.data?.timezone;
@@ -101,7 +107,10 @@ function DayCloseBranches({
   // the zone is known, so a page left open past midnight keeps its day.
   const today = useMemo(() => (timeZone ? workspaceToday(timeZone) : ''), [timeZone]);
   const date = picked ?? today;
-  const branchId = selected || branches.data?.branches[0]?.id || '';
+  // A branch the operator chose that is no longer closable stops the form rather than
+  // moving it to another branch's drawers.
+  const lost = Boolean(selected) && !options.some((branch) => branch.id === selected);
+  const branchId = lost ? '' : selected || options[0]?.id || '';
   const currency = branches.data?.currency;
   return (
     <div className="space-y-6">
@@ -118,9 +127,14 @@ function DayCloseBranches({
               className="min-h-11 rounded-sm border border-border-default bg-surface-card px-3 focus-visible:outline-2 focus-visible:outline-ring"
               value={branchId}
               onChange={(e) => setSelected(e.target.value)}
-              disabled={branches.isLoading || !branches.data?.branches.length}
+              disabled={branches.isLoading || !options.length}
             >
-              {branches.data?.branches.map((b) => (
+              {!branchId && (
+                <option value="" disabled>
+                  Choose a branch
+                </option>
+              )}
+              {options.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
                 </option>
@@ -146,8 +160,13 @@ function DayCloseBranches({
             </Button>
           </p>
         )}
-        {branches.isSuccess && !branches.data.branches.length && (
-          <p>No active pharmacy branches are available.</p>
+        {branches.isSuccess && !options.length && (
+          <p>No active branch you can close is available.</p>
+        )}
+        {lost && options.length > 0 && (
+          <p role="status">
+            You can no longer close the branch you chose. Choose a branch to continue.
+          </p>
         )}
       </SectionCard>
       {branchId && currency && /^\d{4}-\d{2}-\d{2}$/.test(date) && (
