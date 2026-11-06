@@ -95,12 +95,31 @@ const SENSITIVE_SUBSTRINGS = [
   'cookie',
 ];
 
+// Staff, witness and owner PINs are reusable credentials. Match PIN as a whole word of the key
+// (pin, witnessPin, ownerPIN, staff_pin, pinCode, newPin) rather than as a substring, so
+// unrelated keys such as shippingAddress, spinner or pinnedAt remain useful in the audit trail.
+const PIN_WORDS = new Set(['pin', 'pins', 'pincode', 'passcode']);
+
+function keyWords(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+}
+
+export function isPinKey(key: string): boolean {
+  return keyWords(key).some((word) => PIN_WORDS.has(word));
+}
+
 function isSensitiveKey(key: string): boolean {
   const k = key.toLowerCase();
   // Camera renewal input can be audited before its resolver runs (including
   // denied or invalid requests). Match the identifier exactly, not all grants.
-  // Match PIN exactly so unrelated keys such as shippingAddress remain useful.
-  return k === 'pin' || k === 'previousgrantid' || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s));
+  return (
+    k === 'previousgrantid' || isPinKey(key) || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
+  );
 }
 
 const MAX_STRING = 20_000;

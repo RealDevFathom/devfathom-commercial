@@ -16,6 +16,8 @@ const attemptSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('return'),
     saleId: z.string(),
+    // The recovery record may say that a fresh witness is needed, but never stores the PIN.
+    requiresControlledWitness: z.boolean().optional(),
     input: z.object({
       branchId: z.string(),
       saleLineId: z.string(),
@@ -143,6 +145,10 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const [attempt, setAttempt] = useState<Attempt | null>(recovery.attempt);
   const [witnessStaffId, setWitnessStaffId] = useState('');
   const [witnessPin, setWitnessPin] = useState('');
+  // A saved return first replays its exact request without a credential, so a return that
+  // already committed reconciles even when no witness is available. Only a server refusal,
+  // meaning a new controlled mutation is still needed, asks for a fresh witness.
+  const [recoveryWitnessNeeded, setRecoveryWitnessNeeded] = useState(false);
   const [busy, setBusy] = useState(false);
   const latch = useRef(false);
   const [message, setMessage] = useState(
@@ -171,13 +177,13 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const maximumUnits =
     selectedLot?.returnableUnits ?? (line ? line.canonicalUnits - line.returnedUnits : 0);
   const tender = data?.tenders.find((row) => row.id === tenderId);
-  // A saved return keeps its own line; a fresh one uses the selected line.
-  const witnessLineId = attempt?.kind === 'return' ? attempt.input.saleLineId : lineId;
-  const witnessRequired = !!data?.lines.find((row) => row.id === witnessLineId)?.controlled;
-  const pharmacists = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
-    enabled: ready && online && witnessRequired,
-    retry: false,
-  });
+  const witnessRequired =
+    attempt?.kind === 'return' ? recoveryWitnessNeeded : !attempt && !!line?.controlled;
+  // Branch-scoped directory: requires receipt access to this branch and dispense capability.
+  const pharmacists = trpc.pharmacySales.controlledReturnWitnesses.useQuery(
+    { branchId },
+    { enabled: ready && online && witnessRequired, retry: false }
+  );
   const witnessReady = !witnessRequired || (!!witnessStaffId && witnessPinPattern.test(witnessPin));
   const witness: ControlledWitness | undefined =
     witnessRequired && witnessReady
@@ -201,6 +207,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     setMessage('');
     // A witness PIN is single-use: clear it whatever the outcome.
     setWitnessPin('');
+    let mutationSucceeded = false;
     try {
       // Write before sending; an ambiguous network outcome can only replay this exact request.
       // The witness PIN is deliberately excluded from persistent storage.
@@ -221,6 +228,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
             } catch {
               /* Keep recovery locked. */
             }
+          } else {
+            // The saved operation did not commit; recording it now needs a fresh witness.
+            setRecoveryWitnessNeeded(true);
           }
           setError(
             `Return not recorded. ${result.blocked}${retry ? ' Enter a fresh witness PIN and retry the saved return.' : ''}`
@@ -232,9 +242,11 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           ...next.input,
           businessDate: new Date(next.input.businessDate),
         });
+      mutationSucceeded = true;
       await history.refetch({ throwOnError: true });
       localStorage.removeItem(storageKey);
       setAttempt(null);
+      setRecoveryWitnessNeeded(false);
       setConfirmed(false);
       setUnits('1');
       setAmount('');
@@ -245,7 +257,13 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       );
     } catch (cause) {
       const code = (cause as { data?: { code?: string } })?.data?.code;
-      if (['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '')) {
+      // A rejected retry or failed history refresh says nothing about the original commit.
+      // Only a definitively rejected first mutation may release its operation key.
+      if (
+        !retry &&
+        !mutationSucceeded &&
+        ['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '')
+      ) {
         try {
           localStorage.removeItem(storageKey);
           setAttempt(null);
@@ -257,6 +275,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         `${counterErrorMessage(cause)} Check history before handing out cash; an unknown outcome must use the saved retry.`
       );
     } finally {
+      setWitnessPin('');
       latch.current = false;
       setBusy(false);
     }
@@ -294,8 +313,13 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       ) : pharmacists.isError ? (
         <p role="alert">
           {counterErrorMessage(pharmacists.error)}{' '}
-          <Button variant="outline" onClick={() => void pharmacists.refetch()}>
-            Reload pharmacists
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pharmacists.isFetching}
+            onClick={() => void pharmacists.refetch()}
+          >
+            Retry witness lookup
           </Button>
         </p>
       ) : pharmacists.data && pharmacists.data.length === 0 ? (
@@ -372,8 +396,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
             busy ||
             !online ||
             !ready ||
-            // A saved return waits for its line details so a controlled line gets a witness.
-            (attempt.kind === 'return' && (!data || !witnessReady))
+            // Reconciliation is tried without a credential first; a witness is required only
+            // after the server reports the saved return still needs a new controlled mutation.
+            (attempt.kind === 'return' && !witnessReady)
           }
         >
           Retry saved {attempt.kind}
@@ -635,6 +660,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                   {
                     kind: 'return',
                     saleId,
+                    requiresControlledWitness: !!line?.controlled,
                     input: {
                       branchId,
                       saleLineId: lineId,

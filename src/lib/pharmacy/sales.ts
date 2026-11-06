@@ -16,6 +16,7 @@ import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
 import { checkSafetyLease } from './offline-safety-lease';
 import { SNAPSHOT_SIGNING_KEY_ID, verifySnapshotSignature } from './offline-snapshots';
 import {
+  authorizeControlledRestorationActor,
   authorizeControlledRestoration,
   type ControlledRestorationPin,
 } from './controlled-restoration-authorization';
@@ -659,9 +660,6 @@ export async function returnSaleLine(
     },
   });
   if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
-  const witness = line.medicine.controlled
-    ? await authorizeControlledRestoration(db, scope, input.controlledWitness)
-    : undefined;
   const requestedDisposition = input.disposition ?? 'QUARANTINE';
   const disposition = input.lotId ? requestedDisposition : 'QUARANTINE';
   // Keep legacy request fingerprints stable; never infer physical identity from allocations.
@@ -669,6 +667,9 @@ export async function returnSaleLine(
   const { controlledWitness: _pin, ...fingerprintInput } = input;
   void _pin;
   const fingerprint = JSON.stringify({ ...fingerprintInput, disposition: requestedDisposition });
+  // Idempotency keys identify operations; they do not authorize callers to read their results.
+  // Re-check the regulated actor before resolving even an already committed controlled return.
+  if (line.medicine.controlled) await authorizeControlledRestorationActor(db, scope);
   const prior = await db.pharmacySaleEvent.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -717,6 +718,11 @@ export async function returnSaleLine(
     if (!saleReturn || !returnLine || !movement) throw new PharmacySaleError('INVALID_STATE');
     return { saleReturn, returnLine, movement, returnId: saleReturn.id, replayed: true };
   }
+  // An exact replay is a read of an operation already authorized and committed. Only a new
+  // controlled-stock mutation needs a fresh witness; credentials are never replay evidence.
+  const witness = line.medicine.controlled
+    ? await authorizeControlledRestoration(db, scope, input.controlledWitness)
+    : undefined;
   const returned =
     line.returnLines.reduce((sum, item) => sum + item.canonicalUnits, 0) +
     line.unidentifiedReturnHolds.reduce((sum, item) => sum + item.canonicalUnits, 0);

@@ -22,6 +22,7 @@ import {
   earlierRegisterEntry,
   EMERGENCY_NO_RX_WINDOW_MS,
   emergencyNoRxDecision,
+  listControlledPinWitnesses,
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
@@ -478,6 +479,19 @@ async function requireCounterReceiptAccess(
     return scope;
   }
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+}
+
+async function requireControlledReturnAccess(ctx: TRPCContext, branch: string) {
+  const scope = await requireCounterReceiptAccess(ctx, branch);
+  if (
+    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Dispense permission is required.' });
+  }
+  return scope;
 }
 
 const closeDate = z
@@ -1424,6 +1438,12 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         fail(error);
       }
+    }),
+  controlledReturnWitnesses: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireControlledReturnAccess(ctx, input.branchId);
+      return listControlledPinWitnesses(ctx.db, scope.organizationId, scope.actorId);
     }),
   returnLine: protectedProcedure
     .input(

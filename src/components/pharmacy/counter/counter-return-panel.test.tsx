@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   refetch: vi.fn(),
   history: {} as Record<string, unknown>,
   lookup: {} as Record<string, unknown>,
-  pharmacists: {} as Record<string, unknown>,
+  witnesses: {} as Record<string, unknown>,
+  witnessQuery: vi.fn(),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -16,10 +17,13 @@ vi.mock('@/lib/trpc', () => ({
       returnHistory: { useQuery: () => mocks.history },
       counterReceipt: { useQuery: () => ({}) },
       returnLine: { useMutation: () => ({ mutateAsync: mocks.returnLine }) },
+      controlledReturnWitnesses: {
+        useQuery: (input: unknown, options: { enabled?: boolean }) => {
+          mocks.witnessQuery(input, options);
+          return mocks.witnesses;
+        },
+      },
       refundTender: { useMutation: () => ({ mutateAsync: mocks.refund }) },
-    },
-    pharmacySafety: {
-      controlledPharmacists: { useQuery: () => mocks.pharmacists },
     },
   },
 }));
@@ -39,12 +43,19 @@ beforeEach(() => {
   mocks.refetch.mockResolvedValue({});
   mocks.returnLine.mockResolvedValue({});
   mocks.refund.mockResolvedValue({});
-  mocks.pharmacists = { data: [{ id: 'staff-w', name: 'Witness Pharmacist' }] };
   mocks.lookup = {
     isSuccess: true,
     data: [
       { id: 'sale', receiptNumber: 12, businessDate: new Date('2026-09-29'), receiptDeviceId: 'd' },
     ],
+  };
+  mocks.witnesses = {
+    isSuccess: true,
+    data: [
+      { id: 'witness', name: 'Dr Witness' },
+      { id: 'staff-w', name: 'Witness Pharmacist' },
+    ],
+    refetch: vi.fn(),
   };
   mocks.history = {
     refetch: mocks.refetch,
@@ -54,6 +65,7 @@ beforeEach(() => {
         {
           id: 'line',
           name: 'Medicine',
+          controlled: false,
           quantity: 1,
           saleUnit: 'STRIP',
           canonicalUnits: 10,
@@ -131,6 +143,209 @@ describe('counter returns', () => {
     );
     await screen.findByText(/Return recorded/);
   });
+  it('sends a controlled witness and reports a blocked result as an error', async () => {
+    const controlledHistory = mocks.history as {
+      data: { lines: Array<{ controlled: boolean }> };
+    };
+    controlledHistory.data.lines[0].controlled = true;
+    mocks.returnLine.mockResolvedValueOnce({
+      blocked: 'A different pharmacist must enter a fresh witness PIN.',
+    });
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
+    fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+      target: { value: 'seal unknown' },
+    });
+    fireEvent.change(screen.getByLabelText('Witnessing pharmacist'), {
+      target: { value: 'witness' },
+    });
+    fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '1234' } });
+    fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+    await waitFor(() =>
+      expect(mocks.returnLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          controlledWitness: { staffProfileId: 'witness', pin: '1234' },
+        })
+      )
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent('fresh witness PIN');
+    expect(screen.queryByText(/Return recorded/)).not.toBeInTheDocument();
+    expect(mocks.refetch).not.toHaveBeenCalled();
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
+  });
+  it.each([false, true])(
+    'reconciles a committed controlled return without a new witness (remount=%s)',
+    async (remount) => {
+      const controlledHistory = mocks.history as {
+        data: { lines: Array<{ controlled: boolean }> };
+      };
+      controlledHistory.data.lines[0].controlled = true;
+      mocks.returnLine.mockRejectedValueOnce(new Error('Disconnected'));
+      const view = render(<ReturnForm {...props} />);
+      chooseReceipt();
+      fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+      fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
+      fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+        target: { value: 'seal unknown' },
+      });
+      fireEvent.change(screen.getByLabelText('Witnessing pharmacist'), {
+        target: { value: 'witness' },
+      });
+      fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '1234' } });
+      fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+      fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+      await screen.findByRole('button', { name: 'Retry saved return' });
+      const first = mocks.returnLine.mock.calls[0][0];
+      const saved = localStorage.getItem('pharmacy-return:o:a:b')!;
+      expect(saved).not.toContain('1234');
+      expect(JSON.parse(saved)).toMatchObject({ requiresControlledWitness: true });
+
+      if (remount) {
+        view.unmount();
+        render(<ReturnForm {...props} />);
+      }
+      // No witness is available at all; reconciliation must not depend on the directory.
+      mocks.witnesses = { isSuccess: true, data: [], refetch: vi.fn() };
+      mocks.witnessQuery.mockClear();
+      expect(screen.queryByLabelText('Witness PIN')).toBeNull();
+      const retry = await screen.findByRole('button', { name: 'Retry saved return' });
+      await waitFor(() => expect(retry).toBeEnabled());
+      fireEvent.click(retry);
+      await waitFor(() => expect(mocks.returnLine).toHaveBeenCalledTimes(2));
+      // The exact original request is replayed with no credential.
+      const { controlledWitness: _pin, ...replay } = first;
+      void _pin;
+      expect(mocks.returnLine.mock.calls[1][0]).toEqual(replay);
+      await screen.findByText(/Return recorded/);
+      expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
+      expect(mocks.witnessQuery).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ enabled: true })
+      );
+    }
+  );
+  it('reconciles a saved controlled return while the witness directory is failing', async () => {
+    localStorage.setItem(
+      'pharmacy-return:o:a:b',
+      JSON.stringify({
+        kind: 'return',
+        saleId: 'sale',
+        requiresControlledWitness: true,
+        input: {
+          branchId: 'b',
+          saleLineId: 'line',
+          canonicalUnits: 1,
+          disposition: 'QUARANTINE',
+          reason: 'WRONG_ITEM',
+          integrityDecision: 'sealed',
+          idempotencyKey: 'same-key',
+        },
+      })
+    );
+    mocks.witnesses = { isError: true, error: new Error('Witness directory unavailable') };
+    mocks.history = {};
+    render(<ReturnForm {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry saved return' }));
+    await waitFor(() =>
+      expect(mocks.returnLine).toHaveBeenCalledWith(
+        expect.objectContaining({ idempotencyKey: 'same-key' })
+      )
+    );
+    expect(mocks.returnLine.mock.calls[0][0]).not.toHaveProperty('controlledWitness');
+  });
+  it('asks for a witness only after an uncommitted saved return is refused', async () => {
+    const controlledHistory = mocks.history as {
+      data: { lines: Array<{ controlled: boolean }> };
+    };
+    controlledHistory.data.lines[0].controlled = true;
+    localStorage.setItem(
+      'pharmacy-return:o:a:b',
+      JSON.stringify({
+        kind: 'return',
+        saleId: 'sale',
+        requiresControlledWitness: true,
+        input: {
+          branchId: 'b',
+          saleLineId: 'line',
+          canonicalUnits: 1,
+          disposition: 'QUARANTINE',
+          quarantineLocationId: 'q',
+          reason: 'WRONG_ITEM',
+          integrityDecision: 'sealed',
+          idempotencyKey: 'same-key',
+        },
+      })
+    );
+    mocks.returnLine.mockResolvedValueOnce({
+      blocked: 'A different pharmacist must enter a fresh witness PIN.',
+    });
+    render(<ReturnForm {...props} />);
+    expect(screen.queryByLabelText('Witness PIN')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry saved return' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('fresh witness PIN');
+    expect(mocks.returnLine.mock.calls[0][0]).not.toHaveProperty('controlledWitness');
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).toContain('same-key');
+    // One witness form, and the saved retry now waits for a fresh credential.
+    expect(screen.getAllByLabelText('Witnessing pharmacist')).toHaveLength(1);
+    expect(screen.getAllByLabelText('Witness PIN')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
+
+    mocks.returnLine.mockResolvedValueOnce({ blocked: 'Enter another fresh witness PIN.' });
+    fireEvent.change(screen.getByLabelText('Witnessing pharmacist'), {
+      target: { value: 'witness' },
+    });
+    fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '1234' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry saved return' }));
+    await waitFor(() => expect(mocks.returnLine).toHaveBeenCalledTimes(2));
+    expect(mocks.returnLine.mock.calls[1][0]).toMatchObject({
+      idempotencyKey: 'same-key',
+      controlledWitness: { staffProfileId: 'witness', pin: '1234' },
+    });
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).toContain('same-key');
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).not.toContain('1234');
+    expect(screen.getByLabelText('Witness PIN')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
+
+    mocks.returnLine.mockRejectedValueOnce(
+      Object.assign(new Error('Dispense permission is required.'), { data: { code: 'FORBIDDEN' } })
+    );
+    fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '5678' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry saved return' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Dispense permission'));
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).toContain('same-key');
+    expect(screen.getByLabelText('Witness PIN')).toHaveValue('');
+  });
+  it('explains a recovery witness lookup failure and offers retry', async () => {
+    localStorage.setItem(
+      'pharmacy-return:o:a:b',
+      JSON.stringify({
+        kind: 'return',
+        saleId: 'sale',
+        requiresControlledWitness: true,
+        input: {
+          branchId: 'b',
+          saleLineId: 'line',
+          canonicalUnits: 1,
+          disposition: 'QUARANTINE',
+          reason: 'WRONG_ITEM',
+          integrityDecision: 'sealed',
+          idempotencyKey: 'same-key',
+        },
+      })
+    );
+    const refetch = vi.fn();
+    mocks.witnesses = { isError: true, error: new Error('Witness directory unavailable'), refetch };
+    mocks.returnLine.mockResolvedValueOnce({ blocked: 'A fresh witness PIN is required.' });
+    render(<ReturnForm {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry saved return' }));
+    await screen.findByText('Witness directory unavailable', { exact: false });
+    expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry witness lookup' }));
+    expect(refetch).toHaveBeenCalledOnce();
+  });
   it('caps refunds at returned value and requires explicit cash fallback for card', () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();
@@ -170,6 +385,52 @@ describe('counter returns', () => {
       expect(mocks.refund.mock.calls[1][0]).toEqual(first);
     }
   );
+  it.each(['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'])(
+    'preserves an ambiguous refund after a recovery %s error',
+    async (code) => {
+      mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
+      render(<ReturnForm {...props} />);
+      chooseReceipt();
+      fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+      fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+      await screen.findByRole('alert');
+      const saved = localStorage.getItem('pharmacy-return:o:a:b');
+      expect(saved).not.toBeNull();
+
+      mocks.refund.mockRejectedValueOnce(
+        Object.assign(new Error('Recovery denied'), { data: { code } })
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Retry saved refund' }));
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Recovery denied'));
+      expect(localStorage.getItem('pharmacy-return:o:a:b')).toBe(saved);
+      expect(screen.getByRole('button', { name: 'Retry saved refund' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Confirm refund' })).toBeDisabled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry saved refund' }));
+      await screen.findByText(/Refund recorded/);
+      expect(mocks.refund.mock.calls[2][0]).toEqual(mocks.refund.mock.calls[0][0]);
+      expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
+    }
+  );
+  it('preserves a committed refund when refreshing history is forbidden', async () => {
+    mocks.refetch.mockRejectedValueOnce(
+      Object.assign(new Error('History denied'), { data: { code: 'FORBIDDEN' } })
+    );
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('History denied'));
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Confirm refund' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry saved refund' }));
+    await screen.findByText(/Refund recorded/);
+    expect(mocks.refund.mock.calls[1][0]).toEqual(mocks.refund.mock.calls[0][0]);
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
+  });
   it('fails closed when saved recovery is corrupt', () => {
     localStorage.setItem('pharmacy-return:o:a:b', 'broken');
     render(<ReturnForm {...props} />);
@@ -307,7 +568,14 @@ describe('controlled medicine returns', () => {
     mocks.returnLine.mockResolvedValueOnce({
       blocked: 'A different pharmacist must enter a fresh witness PIN.',
     });
+    mocks.returnLine.mockResolvedValueOnce({
+      blocked: 'A different pharmacist must enter a fresh witness PIN.',
+    });
     render(<ReturnForm {...props} />);
+    // Reconciliation is tried first with the exact saved request and no credential.
+    fireEvent.click(screen.getByRole('button', { name: 'Retry saved return' }));
+    await waitFor(() => expect(mocks.returnLine).toHaveBeenCalledWith(saved.input));
+    await screen.findByLabelText('Witnessing pharmacist');
     const retry = screen.getByRole('button', { name: 'Retry saved return' });
     expect(retry).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Witnessing pharmacist'), {
