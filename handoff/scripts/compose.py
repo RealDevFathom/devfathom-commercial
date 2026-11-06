@@ -122,7 +122,9 @@ else:
 fx = fixes.get(n)
 lead = f"head {head[:10]}"
 if fx and fx["sha"] == head:
-    if fx["initialFailure"].startswith("nothing"):
+    if fx.get("noInitialRun"):
+        lead = f"head {head[:10]}, which includes fix commit {fx['sha'][:10]} ({fx['what']})"
+    elif fx["initialFailure"].startswith("nothing"):
         lead = (f"the first run on {fx['initialSha'][:10]} passed; fix commit {fx['sha'][:10]} ({fx['what']}) addresses the review "
                 f"findings, and the re-run on that head gives")
     else:

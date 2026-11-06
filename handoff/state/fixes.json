@@ -250,5 +250,18 @@
   "initialSha": "996265a92faa8864543b68c3f800612c1e82b56a",
   "what": "rotate nightly churn scoring start branch per tick",
   "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "985": {
+  "sha": "22bb45b4a0832f4de0302159c1d6f64f251ec380",
+  "initialSha": "2390c2e7f987ba9b8f813d4899e1e2afa4e66ff1",
+  "what": "Prettier on medicine-reference-workbench.tsx",
+  "initialFailure": "Prettier: src/components/pharmacy/medicine-reference-workbench.tsx unformatted"
+ },
+ "1170": {
+  "sha": "ab89e8b2b1b6d0e69ea3539dce2ab116c0821dc6",
+  "initialSha": "69469ed2d43eb180a56ceaedf2a3044c1da7cbe2",
+  "what": "pg, @types/pg, @prisma/adapter-pg and @prisma/client held at develop's versions",
+  "initialFailure": "no machine run (QA finding only)",
+  "noInitialRun": true
  }
 }

@@ -565,5 +565,27 @@
   "posted": true,
   "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/1068#issuecomment-6693190695",
   "reason": "posted directly after head check"
+ },
+ "986": {
+  "pr": 986,
+  "head": "88ebf1fd190ab8a5fadcb07f0a52613182f64e16",
+  "machine": "PASS",
+  "qa": "PASS",
+  "security": "PASS",
+  "machineFail": [],
+  "posted": true,
+  "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/986#issuecomment-6694181097",
+  "reason": "Posted verdict comment; PR open, base develop, head matched."
+ },
+ "1005": {
+  "pr": 1005,
+  "head": "9d3baf26f63e29aef9d96ff269711ede93829a67",
+  "machine": "PASS",
+  "qa": "PASS",
+  "security": "PASS",
+  "machineFail": [],
+  "posted": true,
+  "url": "https://github.com/RealDevFathom/devfathom-commercial/pull/1005#issuecomment-6694239432",
+  "reason": "Posted verdict comment; PR open, base develop, head matched."
  }
 }

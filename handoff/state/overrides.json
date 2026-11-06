@@ -272,5 +272,73 @@
    "verdict": "PASS",
    "details": "Checked the 9d3baf2 changes. sharedSignInUrl builds the link only from deployment config and a fixed vertical value, URL-encoded. It never echoes the request host and cannot be used as an open redirect. The 404 is identical for every unknown address, so it does not reveal which workspaces exist. Removing the prefs keys keeps the schema strict. No auth, access-check or data-path changes"
   }
+ },
+ "985": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Verified against DEV-10 / #978. Confirm, accept/reject/defer and publish now track pending state per row: a ref-guarded key set that is cleared in finally. Both queues are invalidated after an import and after each decision. Disabled review and publish controls get visible notes linked by aria-describedby, and a missing grant gets its own message. A real-ABAC router test covers Owner / Operator against wildcard Owner. Develop's workbench is unchanged, the merge is clean and the tsc/build failures come from develop. The only follow-up was a formatting-only commit (Prettier) in 22bb45b4a0"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "The PR only changes the client workbench and adds tests. Server enforcement is unchanged: proposals still go through capabilityProcedure('pharmacy:catalogue-review'), and review/publish/candidates through adminProcedure. Tenant scope is still enforced by RLS, there is no new raw SQL or HTML sink, and the new router test checks that the wildcard Owner gets FORBIDDEN before any query runs. No blocking issues"
+  }
+ },
+ "986": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Checked all five DEV-8 surfaces against the merge-base and develop. The PR gates each one on vertical === 'PHARMACY': it hides the notification matrix and the /projects shortcut, removes Claude Code and CLAUDE.md text everywhere and tasks scopes for pharmacy, replaces the temporary-password add-staff form with the pharmacy role invite, and removes FIRM, 0 members and the HR notice from /team. Develop has none of this. Pharmacy and other verticals are covered by new tests. The tsc and build failures are already on develop. The only follow-up was a formatting-only commit (Prettier) in 88ebf1fd19"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked every changed path: vertical gating in settings, topbar, team, organization and api-docs; the api-docs page's server-side resolveTenantActor call; and the reused invite modal. Its server mutation team.inviteMember is unchanged: adminProcedure, admin-module gated, role template scoped to the org. The PR changes no server procedure, adds no raw SQL, adds no secrets and exposes no new data. Unassigned invitees stay fail-closed on pharmacy branch scope. No blocking issues"
+  }
+ },
+ "963": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the new growth migration and schema. All five tables get FORCE RLS with the standard org policy and composite tenant FKs, and the WhatsApp key CHECK matches the secret-crypto v1 envelope. The PR has no app code, raw SQL, secrets or UI changes. No security defect; the only blocker is that the PR is superseded, which the QA verdict covers"
+  }
+ },
+ "961": {
+  "security": {
+   "verdict": "PASS",
+   "details": "The PR's net diff against merge-base 8b203969 is empty: commit 5dda02176 reverts every line of the salvaged 1f9a44241, so it introduces no vulnerability. On develop, POST /checkout/comp is a side-effect-free 403. The retained compLine is gated on the catalogued orders:complimentary capability, which its audit row also records, and persistCoAuth rejects self-approval. No security defect; the only blocker is that the PR is superseded, which the QA verdict covers"
+  }
+ },
+ "903": {
+  "security": {
+   "verdict": "PASS",
+   "details": "activate stays admin-only on the server (adminProcedure). The branch lookup is filtered by organizationId inside the RLS-scoped tenant transaction. effectiveFrom is now checked with z.iso.date(), and the raw SQL is unchanged and parameterized. No vulnerability found. The only blocker is that the PR is superseded, which the QA verdict covers"
+  }
+ },
+ "259": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked: auth and capability guards (orders:manage, terminal order-taking capability, device-branch check) are unchanged; no org-scope or raw SQL changes; the new quantity cap of 100 is enforced server-side in zod and in addItem/adjustItem; errors stay as authored domain messages. No vulnerability found. The only blocker is that the PR is superseded, which the QA verdict covers"
+  }
+ },
+ "853": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked the cut/correct routes. cash:close is enforced on the server, branchId comes from the authenticated device and all queries run in the tenant transaction. The advisory-lock SQL stays parameterized, the zod YYYY-MM-DD bound makes the string compare safe and errors return a generic 400. No vulnerability. The only blocker is that the PR is superseded, which the QA verdict covers"
+  }
+ },
+ "1065": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked: catering:manage capability and restaurant-core entitlement still enforced server-side; org-scoped requireOrder/requireLineReferences unchanged; no raw SQL, secrets or new data exposure (only static zod messages). No vulnerability introduced. The only blocker is that the PR is superseded, which the QA verdict covers"
+  }
+ },
+ "1054": {
+  "security": {
+   "verdict": "PASS",
+   "details": "Checked create/update/delete low-stock paths: branch is resolved from the location or rule and resolveRestaurantActor (active staff, assignment or restaurant:configure, in-org active branch) runs server-side before each writer. RLS and composite tenant FKs back org scope, and the PR has no raw SQL. No vulnerability found, but develop already enforces this exactly (439c41045, #205). The only blocker is that the PR is superseded, which the QA verdict covers"
+  }
+ },
+ "105": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Checked DEV-316 against pr/105 @4ccf84c2. skippedQuietHours is correct (tests at the 22:00 and 07:59 boundaries). The Asia/Karachi ISO-week key is correct (Monday-midnight test; year-boundary math checked). Develop still lacks both. Two independent checks did not confirm the one reported blocker. That blocker is that the write-side legacy-key claim is time-boxed to LEGACY_WEEK_COMPATIBILITY_END (2026-11-02T19:00Z), so on a deploy now only the read-side guard applies. Note for the owner: move that cutoff to the real rollout week before merging if old and new workers can overlap. The branch also conflicts with develop's #294 refactor and needs a rebase"
+  }
  }
 }
