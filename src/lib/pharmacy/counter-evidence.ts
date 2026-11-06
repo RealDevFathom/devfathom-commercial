@@ -227,7 +227,9 @@ export async function runCounterEvidenceSnapshotJob(
   return captureCameraEvidence(db, {
     organizationId,
     evidenceId,
-    adapter: evidenceSnapshotAdapter(options.runtime ?? cameraGatewayRuntime),
+    adapter: evidenceSnapshotAdapter(options.runtime ?? cameraGatewayRuntime, {
+      vertical: 'pharmacy',
+    }),
     now: options.now ?? new Date(),
     finalAttempt: job.attempts >= job.maxAttempts,
   });
