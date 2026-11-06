@@ -7,6 +7,7 @@ S=${HANDOFF_STATE:-/tmp/claude-0/-home-user-devfathom-commercial/1e96b9b3-08d2-5
 H=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)  # sibling helper scripts
 LANE=$1; LANEDB=$2; N=$3; REF=${4:-pr/$N}
 cd "$LANE" || exit 2
+echo -500 > /proc/self/oom_score_adj 2>/dev/null || true  # lanes are the bottleneck: let the OOM killer pick ad-hoc tsc runs first
 export PGPASSWORD=gate-postgres-ci-only
 PG="psql -h 127.0.0.1 -p 55432 -U postgres -d postgres -v ON_ERROR_STOP=1 -q"
 
