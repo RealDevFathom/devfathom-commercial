@@ -51,13 +51,17 @@ const PIN_REFUSAL = {
 /**
  * Re-verify the owner's PIN. A refusal is audited (the shared audit middleware
  * records the failed call) under the export action it was protecting.
+ *
+ * The check commits in its own tenant transaction, not through `ctx.db`: the
+ * refusal below throws, and /api/trpc then rolls back the request transaction,
+ * which would otherwise discard the wrong-PIN strike and defeat the lockout.
  */
 async function requireOwnerPin(
   ctx: TRPCContext,
   owner: { organizationId: string; actorId: string },
   input: { pin: string; action: 'requested' | 'downloaded'; exportId?: string }
 ): Promise<void> {
-  const result = await verifyOwnerExportPin(ctx.db, {
+  const result = await verifyOwnerExportPin({
     organizationId: owner.organizationId,
     userId: owner.actorId,
     pin: input.pin,
@@ -143,7 +147,8 @@ async function ownerOrganizationId(
   );
   const isOwner =
     (role?.isSystem && role.key === 'owner') ||
-    (owner.role === 'ADMIN' && rules.some((rule) => rule.capability === '*' && rule.effect === 'ALLOW'));
+    (owner.role === 'ADMIN' &&
+      rules.some((rule) => rule.capability === '*' && rule.effect === 'ALLOW'));
   if (denied || !isOwner) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
   }
@@ -286,7 +291,11 @@ export const pharmacyDataExportRouter = router({
     .mutation(async ({ ctx, input }) => {
       const owner = await ownerOrganizationId(ctx);
       const { organizationId } = owner;
-      await requireOwnerPin(ctx, owner, { pin: input.pin, action: 'downloaded', exportId: input.id });
+      await requireOwnerPin(ctx, owner, {
+        pin: input.pin,
+        action: 'downloaded',
+        exportId: input.id,
+      });
       try {
         const archive = await readPharmacyDataExportArchive(ctx.db, {
           organizationId,

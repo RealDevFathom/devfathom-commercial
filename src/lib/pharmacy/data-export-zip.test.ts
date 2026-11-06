@@ -61,9 +61,15 @@ describe('owner data export ZIP writer', () => {
   it('refuses duplicate or path-traversal names', () => {
     const at = new Date('2026-10-31T00:00:00.000Z');
     const data = Buffer.from('x');
-    expect(() => buildZip([{ name: 'a.csv', data }, { name: 'a.csv', data }], at)).toThrow(
-      'Duplicate'
-    );
+    expect(() =>
+      buildZip(
+        [
+          { name: 'a.csv', data },
+          { name: 'a.csv', data },
+        ],
+        at
+      )
+    ).toThrow('Duplicate');
     expect(() => buildZip([{ name: '../a.csv', data }], at)).toThrow('Invalid');
     expect(() => buildZip([{ name: '/a.csv', data }], at)).toThrow('Invalid');
   });

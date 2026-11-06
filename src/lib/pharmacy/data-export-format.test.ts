@@ -26,22 +26,89 @@ import { registerPrintTotals } from './register-print';
 
 /** The Excel/CSV profiler's synonyms, normalized the way the profiler normalizes. */
 const PRESET_SYNONYMS = new Set([
-  'id', 'code', 'itemcode', 'productcode', 'sr', 'srno', 'serial', 'sno',
-  'product', 'productname', 'item', 'itemname', 'description', 'medicine', 'drug',
-  'pack', 'packsize', 'packing', 'uom', 'unit', 'unitofmeasure',
-  'barcode', 'ean', 'ean13', 'upc', 'gtin',
-  'batch', 'batchno', 'batchnumber', 'lot', 'lotno', 'lotnumber',
-  'expiry', 'expirydate', 'exp', 'expdate', 'expdt', 'expiredate',
-  'mrp', 'retailprice', 'saleprice', 'sellingprice', 'rate',
-  'cost', 'costprice', 'tradeprice', 'tp', 'purchaseprice', 'purchaserate',
-  'qty', 'quantity', 'stock', 'stockqty', 'onhand', 'balanceqty', 'closingqty',
-  'supplier', 'vendor', 'distributor', 'suppliername',
-  'customer', 'client', 'customername', 'account',
-  'balance', 'closingbalance', 'outstanding', 'amountdue', 'openingbalance',
+  'id',
+  'code',
+  'itemcode',
+  'productcode',
+  'sr',
+  'srno',
+  'serial',
+  'sno',
+  'product',
+  'productname',
+  'item',
+  'itemname',
+  'description',
+  'medicine',
+  'drug',
+  'pack',
+  'packsize',
+  'packing',
+  'uom',
+  'unit',
+  'unitofmeasure',
+  'barcode',
+  'ean',
+  'ean13',
+  'upc',
+  'gtin',
+  'batch',
+  'batchno',
+  'batchnumber',
+  'lot',
+  'lotno',
+  'lotnumber',
+  'expiry',
+  'expirydate',
+  'exp',
+  'expdate',
+  'expdt',
+  'expiredate',
+  'mrp',
+  'retailprice',
+  'saleprice',
+  'sellingprice',
+  'rate',
+  'cost',
+  'costprice',
+  'tradeprice',
+  'tp',
+  'purchaseprice',
+  'purchaserate',
+  'qty',
+  'quantity',
+  'stock',
+  'stockqty',
+  'onhand',
+  'balanceqty',
+  'closingqty',
+  'supplier',
+  'vendor',
+  'distributor',
+  'suppliername',
+  'customer',
+  'client',
+  'customername',
+  'account',
+  'balance',
+  'closingbalance',
+  'outstanding',
+  'amountdue',
+  'openingbalance',
 ]);
 const PRESET_HEADERS = new Set([
-  'code', 'product', 'pack', 'barcode', 'batch', 'expiry', 'mrp', 'cost', 'quantity',
-  'supplier', 'customer', 'balance',
+  'code',
+  'product',
+  'pack',
+  'barcode',
+  'batch',
+  'expiry',
+  'mrp',
+  'cost',
+  'quantity',
+  'supplier',
+  'customer',
+  'balance',
 ]);
 const normalize = (header: string) => header.toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -53,7 +120,13 @@ function seededDataset(): PharmacyExportDataset {
   const data = emptyDataset();
   data.branches.push({ code: 'br-1', branch_code: 'RWP', name: 'Saddar', city: 'Rawalpindi' });
   data.medicines.push(
-    { code: 'pk-1', product: 'Panadol 500mg', pack: 10, pack_level: 'STRIP', barcode: '8964000000011' },
+    {
+      code: 'pk-1',
+      product: 'Panadol 500mg',
+      pack: 10,
+      pack_level: 'STRIP',
+      barcode: '8964000000011',
+    },
     { code: 'pk-2', product: 'Panadol 500mg', pack: 200, pack_level: 'BOX', barcode: null },
     { code: 'pr-3', product: '=HYPERLINK("http://evil")', pack: null }
   );
@@ -69,7 +142,15 @@ function seededDataset(): PharmacyExportDataset {
       mrp: formatMinor(3_000),
       supplier: 'Muller & Phipps',
     },
-    { code: 'lot-2', product: 'Brufen', pack: 20, batch: 'B-2', expiry: '2027-01-31', quantity: 0, mrp: '25.00' }
+    {
+      code: 'lot-2',
+      product: 'Brufen',
+      pack: 20,
+      batch: 'B-2',
+      expiry: '2027-01-31',
+      quantity: 0,
+      mrp: '25.00',
+    }
   );
   data.customers.push(
     { code: 'c-1', customer: 'Ayesha Khan', balance: formatMinor(125_050) },
@@ -78,7 +159,12 @@ function seededDataset(): PharmacyExportDataset {
   );
   data.suppliers.push({ code: 's-1', supplier: 'Muller & Phipps', balance: formatMinor(990_000) });
   data.sales.push({ code: 'sale-1', customer: 'Ayesha Khan', net: formatMinor(3_000) });
-  data.saleLines.push({ code: 'line-1', sale_code: 'sale-1', product: 'Panadol 500mg', quantity: 10 });
+  data.saleLines.push({
+    code: 'line-1',
+    sale_code: 'sale-1',
+    product: 'Panadol 500mg',
+    quantity: 10,
+  });
   data.controlledRegister.push(
     {
       code: 'cr-1',
@@ -107,12 +193,23 @@ function seededDataset(): PharmacyExportDataset {
     }
   );
   data.medicines = data.medicines.map((row, index) => ({
-    brand_name: null, manufacturer: null, drap_registration_no: null,
-    product_family: 'PHARMACEUTICAL', rx: false, otc: false, restricted: false,
-    controlled: false, high_alert: false, lasa: false, cold_chain: false, saleable: false,
+    brand_name: null,
+    manufacturer: null,
+    drap_registration_no: null,
+    product_family: 'PHARMACEUTICAL',
+    rx: false,
+    otc: false,
+    restricted: false,
+    controlled: false,
+    high_alert: false,
+    lasa: false,
+    cold_chain: false,
+    saleable: false,
     medicine_code: index < 2 ? 'med-1' : 'med-2',
     presentation_code: index < 2 ? 'pr-1' : '',
-    presentation: index < 2 ? 'Tablet' : '', dosage_form: null, route: null,
+    presentation: index < 2 ? 'Tablet' : '',
+    dosage_form: null,
+    route: null,
     ...row,
   }));
   return data as PharmacyExportDataset;
@@ -179,10 +276,14 @@ describe('owner data export — import preset columns', () => {
   it('refuses conflicting medicine identities and duplicate source row identifiers', () => {
     const rows = [...seededDataset().medicines];
     rows[1] = { ...rows[1], product: 'A different medicine' };
-    expect(() => parsePharmacyExportCatalogue(exportRowsToCsv(PHARMACY_EXPORT_FILES.medicines, rows)))
-      .toThrow('valid, consistent catalogue rows');
-    expect(() => parsePharmacyExportCatalogue(exportRowsToCsv(PHARMACY_EXPORT_FILES.medicines, [rows[0]!, rows[0]!])))
-      .toThrow('valid, consistent catalogue rows');
+    expect(() =>
+      parsePharmacyExportCatalogue(exportRowsToCsv(PHARMACY_EXPORT_FILES.medicines, rows))
+    ).toThrow('valid, consistent catalogue rows');
+    expect(() =>
+      parsePharmacyExportCatalogue(
+        exportRowsToCsv(PHARMACY_EXPORT_FILES.medicines, [rows[0]!, rows[0]!])
+      )
+    ).toThrow('valid, consistent catalogue rows');
   });
 
   it('declares unique headers, and only preset headers normalize to a profiler synonym', () => {
@@ -227,7 +328,9 @@ describe('owner data export — import preset columns', () => {
         expect(catalogue.map((row) => row.pack)).toEqual([10, 200, null]);
         // The stock profiler still refuses catalogue rows without lot evidence.
         const stockProfile = profileTable(excelCsvProfiler, table);
-        expect(stockProfile.exceptions.some((exception) => exception.bucket === 'MISSING_BATCH')).toBe(true);
+        expect(
+          stockProfile.exceptions.some((exception) => exception.bucket === 'MISSING_BATCH')
+        ).toBe(true);
       } else {
         expect(devfathomCatalogueProfiler.resolveColumns(table)).toBeNull();
       }

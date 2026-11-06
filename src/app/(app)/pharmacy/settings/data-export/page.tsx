@@ -51,8 +51,8 @@ export default async function PharmacyDataExportPage() {
         <ul className="list-disc space-y-1 pl-5 text-sm text-text-body">
           <li>The archive is prepared in the background, usually within a few minutes.</li>
           <li>
-            Because the files include patient and khata records, you re-enter your PIN to request
-            an export and again to download it.
+            Because the files include patient and khata records, you re-enter your PIN to request an
+            export and again to download it.
           </li>
           <li>Its download link works for 24 hours, then the file is deleted.</li>
           <li>

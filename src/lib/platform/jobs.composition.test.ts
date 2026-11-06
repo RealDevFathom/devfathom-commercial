@@ -106,7 +106,8 @@ describe('composed platform worker boundaries', () => {
     await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1, failed: 0 });
     expect(m.dataExport).toHaveBeenCalledExactlyOnceWith(db, item, { exportId: 'exp-1' });
     expect(m.scope).toHaveBeenCalledWith(expect.any(Function), {
-      timeout: 300_000, isolationLevel: 'RepeatableRead',
+      timeout: 300_000,
+      isolationLevel: 'RepeatableRead',
     });
   });
 

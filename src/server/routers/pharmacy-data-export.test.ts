@@ -28,6 +28,12 @@ vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
   verifyOperatorCredential: vi.fn(async (_type: string, pin: string) => pin === '2468'),
 }));
 const PIN = '2468';
+// The PIN check commits in its own tenant transaction, never through ctx.db.
+const tenant = vi.hoisted(() => ({ withTenantDb: vi.fn() }));
+vi.mock('@/lib/tenancy/scoped-db', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tenancy/scoped-db')>()),
+  withTenantDb: tenant.withTenantDb,
+}));
 
 import type { TRPCContext } from '../trpc';
 import { pharmacyDataExportRouter } from './pharmacy-data-export';
@@ -138,6 +144,10 @@ function fixture(
   const db = Object.assign(database, {
     $transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(database)),
   });
+  // By default the independent PIN transaction sees the same tenant rows.
+  tenant.withTenantDb.mockImplementation(
+    async (_organizationId: string, run: (tx: unknown) => Promise<unknown>) => run(database)
+  );
   const context = {
     db,
     entitlements: {
@@ -195,6 +205,7 @@ beforeEach(() => {
   audit.annotateAudit.mockClear();
   audit.recordTrpcAudit.mockClear();
   storage.getUpload.mockClear();
+  tenant.withTenantDb.mockClear();
 });
 
 describe('pharmacy owner data export router', () => {
@@ -219,24 +230,33 @@ describe('pharmacy owner data export router', () => {
   it('allows the live system owner even when the session and database base roles are EMPLOYEE', async () => {
     const f = fixture({ role: 'EMPLOYEE', rows: [readyRow()] });
     f.currentUser.organizationRole = {
-      organizationId: 'org-a', key: 'owner', isSystem: true, permissions: [],
+      organizationId: 'org-a',
+      key: 'owner',
+      isSystem: true,
+      permissions: [],
     };
     await expect(f.caller.list()).resolves.toHaveLength(1);
-    await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN }))
-      .resolves.toMatchObject({ created: true });
-    await expect(f.caller.download({ id: 'exp-1', pin: PIN }))
-      .resolves.toMatchObject({ data: Buffer.from('PK-archive') });
+    await expect(
+      f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })
+    ).resolves.toMatchObject({ created: true });
+    await expect(f.caller.download({ id: 'exp-1', pin: PIN })).resolves.toMatchObject({
+      data: Buffer.from('PK-archive'),
+    });
     expect(f.db.user.findFirst).toHaveBeenCalledTimes(3);
     expect(f.db.user.findFirst).toHaveBeenCalledWith({
       where: { id: 'owner-1', organizationId: 'org-a', status: 'ACTIVE' },
       select: expect.objectContaining({
-        organizationRole: { select: expect.objectContaining({
-          organizationId: true, key: true, isSystem: true,
-          permissions: {
-            where: { organizationId: 'org-a' },
-            select: { organizationId: true, capability: true, effect: true },
-          },
-        }) },
+        organizationRole: {
+          select: expect.objectContaining({
+            organizationId: true,
+            key: true,
+            isSystem: true,
+            permissions: {
+              where: { organizationId: 'org-a' },
+              select: { organizationId: true, capability: true, effect: true },
+            },
+          }),
+        },
         permissionOverrides: {
           where: { organizationId: 'org-a', OR: [{ expiresAt: null }, { expiresAt: { gt: NOW } }] },
           select: { organizationId: true, capability: true, effect: true },
@@ -249,39 +269,66 @@ describe('pharmacy owner data export router', () => {
     const f = fixture({ role: 'EMPLOYEE' });
     f.currentUser.role = 'ADMIN';
     f.currentUser.organizationRole = null;
-    f.currentUser.permissionOverrides = [{
-      organizationId: 'org-a', capability: '*', effect: 'ALLOW',
-      expiresAt: new Date(NOW.getTime() + 60_000),
-    }];
-    await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN }))
-      .resolves.toMatchObject({ created: true });
+    f.currentUser.permissionOverrides = [
+      {
+        organizationId: 'org-a',
+        capability: '*',
+        effect: 'ALLOW',
+        expiresAt: new Date(NOW.getTime() + 60_000),
+      },
+    ];
+    await expect(
+      f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })
+    ).resolves.toMatchObject({ created: true });
   });
 
   it.each([
-    'ordinary admin', 'missing user', 'inactive owner', 'different actor', 'other tenant user',
-    'fake owner role', 'other tenant owner role', 'other tenant role grant',
-    'other tenant override', 'owner-operator employee', 'expired wildcard override',
+    'ordinary admin',
+    'missing user',
+    'inactive owner',
+    'different actor',
+    'other tenant user',
+    'fake owner role',
+    'other tenant owner role',
+    'other tenant role grant',
+    'other tenant override',
+    'owner-operator employee',
+    'expired wildcard override',
   ])('refuses %s before any export, import, or PIN access', async (scenario) => {
     const f = fixture({ rows: [readyRow()] });
     const role = f.currentUser.organizationRole!;
     switch (scenario) {
       case 'ordinary admin':
-        role.permissions = [{ organizationId: 'org-a', capability: 'admin:access', effect: 'ALLOW' }];
+        role.permissions = [
+          { organizationId: 'org-a', capability: 'admin:access', effect: 'ALLOW' },
+        ];
         break;
-      case 'missing user': f.db.user.findFirst.mockResolvedValue(null); break;
-      case 'inactive owner': f.currentUser.status = 'INACTIVE'; break;
-      case 'different actor': f.currentUser.id = 'other-user'; break;
-      case 'other tenant user': f.currentUser.organizationId = 'org-b'; break;
+      case 'missing user':
+        f.db.user.findFirst.mockResolvedValue(null);
+        break;
+      case 'inactive owner':
+        f.currentUser.status = 'INACTIVE';
+        break;
+      case 'different actor':
+        f.currentUser.id = 'other-user';
+        break;
+      case 'other tenant user':
+        f.currentUser.organizationId = 'org-b';
+        break;
       case 'fake owner role':
         Object.assign(role, { key: 'owner', isSystem: false, permissions: [] });
         break;
       case 'other tenant owner role':
         Object.assign(role, { key: 'owner', organizationId: 'org-b', permissions: [] });
         break;
-      case 'other tenant role grant': role.permissions[0]!.organizationId = 'org-b'; break;
+      case 'other tenant role grant':
+        role.permissions[0]!.organizationId = 'org-b';
+        break;
       case 'other tenant override':
         role.permissions = [];
-        f.currentUser.permissionOverrides = [{ organizationId: 'org-b', capability: '*', effect: 'ALLOW' }];
+        f.currentUser.permissionOverrides = [
+          { organizationId: 'org-b', capability: '*', effect: 'ALLOW' },
+        ];
         break;
       case 'owner-operator employee':
         f.currentUser.role = 'EMPLOYEE';
@@ -289,23 +336,29 @@ describe('pharmacy owner data export router', () => {
         break;
       case 'expired wildcard override':
         role.permissions = [];
-        f.currentUser.permissionOverrides = [{ organizationId: 'org-a', capability: '*', effect: 'ALLOW', expiresAt: NOW }];
+        f.currentUser.permissionOverrides = [
+          { organizationId: 'org-a', capability: '*', effect: 'ALLOW', expiresAt: NOW },
+        ];
         break;
     }
     await expectAllProceduresForbidden(f);
     expect(audit.recordTrpcAudit).toHaveBeenCalledTimes(5);
-    expect(audit.recordTrpcAudit.mock.calls.every(([entry]) => entry.outcome === 'FAILURE')).toBe(true);
+    expect(audit.recordTrpcAudit.mock.calls.every(([entry]) => entry.outcome === 'FAILURE')).toBe(
+      true
+    );
   });
 
   it.each(['*', 'admin:*', 'admin:access', 'pharmacy:*', 'pharmacy:manage'])(
-    'applies %s DENY before both ownership allowances', async (capability) => {
+    'applies %s DENY before both ownership allowances',
+    async (capability) => {
       for (const key of ['owner', 'admin']) {
         for (const source of ['role', 'override']) {
           const f = fixture({ rows: [readyRow()] });
           f.currentUser.organizationRole!.key = key;
-          const rules = source === 'role'
-            ? f.currentUser.organizationRole!.permissions
-            : f.currentUser.permissionOverrides;
+          const rules =
+            source === 'role'
+              ? f.currentUser.organizationRole!.permissions
+              : f.currentUser.permissionOverrides;
           rules.push({ organizationId: 'org-a', capability, effect: 'DENY' });
           await expectAllProceduresForbidden(f);
         }
@@ -324,7 +377,8 @@ describe('pharmacy owner data export router', () => {
   });
 
   it.each(['system role', 'wildcard grant', 'ADMIN status'])(
-    'rechecks %s revocation on the same caller without a session refresh', async (authority) => {
+    'rechecks %s revocation on the same caller without a session refresh',
+    async (authority) => {
       const f = fixture();
       const role = f.currentUser.organizationRole!;
       if (authority === 'system role') {
@@ -352,8 +406,9 @@ describe('pharmacy owner data export router', () => {
   it('fails closed if the live ownership lookup fails', async () => {
     const f = fixture();
     f.db.user.findFirst.mockRejectedValue(new Error('database unavailable'));
-    await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN }))
-      .rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+    await expect(
+      f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })
+    ).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
     expect(f.db.pharmacyDataExport.create).not.toHaveBeenCalled();
     expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
   });
@@ -361,84 +416,170 @@ describe('pharmacy owner data export router', () => {
   it('imports catalogue-only rows as audited drafts in the owner session tenant', async () => {
     const f = fixture({ role: 'EMPLOYEE' });
     Object.assign(f.currentUser.organizationRole!, { key: 'owner', permissions: [] });
-    const csv = exportRowsToCsv(PHARMACY_EXPORT_FILES.medicines, [{
-      code: 'foreign-id', medicine_code: 'foreign-id', product: 'Catalogue medicine',
-      product_family: 'PHARMACEUTICAL', rx: true, otc: false, restricted: false,
-      controlled: false, high_alert: false, lasa: false, cold_chain: false, saleable: true,
-    }]);
+    const csv = exportRowsToCsv(PHARMACY_EXPORT_FILES.medicines, [
+      {
+        code: 'foreign-id',
+        medicine_code: 'foreign-id',
+        product: 'Catalogue medicine',
+        product_family: 'PHARMACEUTICAL',
+        rx: true,
+        otc: false,
+        restricted: false,
+        controlled: false,
+        high_alert: false,
+        lasa: false,
+        cold_chain: false,
+        saleable: true,
+      },
+    ]);
     await expect(f.caller.importCatalogue({ csv })).resolves.toEqual({
-      sourceId: 'mig-source-1', batchId: 'mig-batch-1', exceptionCount: 0,
-      rows: 1, medicines: 1, presentations: 0, packs: 0,
+      sourceId: 'mig-source-1',
+      batchId: 'mig-batch-1',
+      exceptionCount: 0,
+      rows: 1,
+      medicines: 1,
+      presentations: 0,
+      packs: 0,
     });
     // Imported through the wizard: source evidence plus one profiled row per CSV row.
-    expect(f.db.pharmacyMigrationSource.create).toHaveBeenCalledWith({ data: expect.objectContaining({
-      kind: 'EXCEL_CSV', fileName: 'medicines.csv',
-    }) });
-    expect(f.db.pharmacyMigrationBatch.create).toHaveBeenCalledWith({ data: expect.objectContaining({
-      sourceId: 'mig-source-1', profilerVersion: 'devfathom-catalogue/1',
-    }) });
-    expect(f.db.pharmacyMigrationRow.createMany).toHaveBeenCalledWith({ data: [expect.objectContaining({
-      batchId: 'mig-batch-1', sourceKey: 'foreign-id', productName: 'Catalogue medicine',
-      batchNumber: null, expiryDate: null, mrpMinor: null,
-    })] });
+    expect(f.db.pharmacyMigrationSource.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        kind: 'EXCEL_CSV',
+        fileName: 'medicines.csv',
+      }),
+    });
+    expect(f.db.pharmacyMigrationBatch.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sourceId: 'mig-source-1',
+        profilerVersion: 'devfathom-catalogue/1',
+      }),
+    });
+    expect(f.db.pharmacyMigrationRow.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          batchId: 'mig-batch-1',
+          sourceKey: 'foreign-id',
+          productName: 'Catalogue medicine',
+          batchNumber: null,
+          expiryDate: null,
+          mrpMinor: null,
+        }),
+      ],
+    });
     expect(f.db.pharmacyMigrationException.createMany).not.toHaveBeenCalled();
-    expect(f.db.medicine.create).toHaveBeenCalledWith({ data: expect.objectContaining({
-      organizationId: 'org-a', productName: 'Catalogue medicine', saleable: false,
-      provenance: { create: expect.objectContaining({ sourceType: 'IMPORT', status: 'UNREVIEWED' }) },
-    }) });
-    expect(audit.annotateAudit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      action: 'pharmacy.dataExport.catalogueImported', metadata: expect.objectContaining({ medicines: 1 }),
-    }));
+    expect(f.db.medicine.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org-a',
+        productName: 'Catalogue medicine',
+        saleable: false,
+        provenance: {
+          create: expect.objectContaining({ sourceType: 'IMPORT', status: 'UNREVIEWED' }),
+        },
+      }),
+    });
+    expect(audit.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'pharmacy.dataExport.catalogueImported',
+        metadata: expect.objectContaining({ medicines: 1 }),
+      })
+    );
   });
 
   it('profiles multi-lot stock-lots.csv into one reviewable batch without duplicate exceptions', async () => {
     const f = fixture({ role: 'EMPLOYEE' });
     Object.assign(f.currentUser.organizationRole!, { key: 'owner', permissions: [] });
     const shared = {
-      product: 'Panadol 500mg', pack: 10, expiry: '2027-06-30', cost: '1.50', mrp: '25.00',
-      branch_code: 'MAIN', batch_state: 'ACTIVE', medicine_code: 'med-1',
+      product: 'Panadol 500mg',
+      pack: 10,
+      expiry: '2027-06-30',
+      cost: '1.50',
+      mrp: '25.00',
+      branch_code: 'MAIN',
+      batch_state: 'ACTIVE',
+      medicine_code: 'med-1',
     };
     const csv = exportRowsToCsv(PHARMACY_EXPORT_FILES.stockLots, [
-      { ...shared, code: 'lot-1:A:AVAILABLE', batch: 'B1', quantity: 40, lot_code: 'lot-1', location_code: 'A', disposition: 'AVAILABLE' },
-      { ...shared, code: 'lot-1:B:AVAILABLE', batch: 'B1', quantity: 20, lot_code: 'lot-1', location_code: 'B', disposition: 'AVAILABLE' },
-      { ...shared, code: 'lot-2:A:AVAILABLE', batch: 'B2', quantity: 30, lot_code: 'lot-2', location_code: 'A', disposition: 'AVAILABLE' },
+      {
+        ...shared,
+        code: 'lot-1:A:AVAILABLE',
+        batch: 'B1',
+        quantity: 40,
+        lot_code: 'lot-1',
+        location_code: 'A',
+        disposition: 'AVAILABLE',
+      },
+      {
+        ...shared,
+        code: 'lot-1:B:AVAILABLE',
+        batch: 'B1',
+        quantity: 20,
+        lot_code: 'lot-1',
+        location_code: 'B',
+        disposition: 'AVAILABLE',
+      },
+      {
+        ...shared,
+        code: 'lot-2:A:AVAILABLE',
+        batch: 'B2',
+        quantity: 30,
+        lot_code: 'lot-2',
+        location_code: 'A',
+        disposition: 'AVAILABLE',
+      },
     ]);
     await expect(f.caller.importStockLots({ csv })).resolves.toMatchObject({
-      sourceId: 'mig-source-1', batchId: 'mig-batch-1', rowCount: 3, exceptionCount: 0,
+      sourceId: 'mig-source-1',
+      batchId: 'mig-batch-1',
+      rowCount: 3,
+      exceptionCount: 0,
     });
-    expect(f.db.pharmacyMigrationBatch.create).toHaveBeenCalledWith({ data: expect.objectContaining({
-      profilerVersion: 'devfathom-stock-lots/1',
-    }) });
-    const persisted = (f.db.pharmacyMigrationRow.createMany.mock.calls[0] as unknown as [
-      { data: Array<{ sourceKey: string; rawPayload: Record<string, string> }> },
-    ])[0].data;
-    expect(persisted.map((row) => [row.sourceKey, row.rawPayload.lot_code, row.rawPayload.location_code]))
-      .toEqual([
-        ['lot-1:A:AVAILABLE', 'lot-1', 'A'],
-        ['lot-1:B:AVAILABLE', 'lot-1', 'B'],
-        ['lot-2:A:AVAILABLE', 'lot-2', 'A'],
-      ]);
+    expect(f.db.pharmacyMigrationBatch.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        profilerVersion: 'devfathom-stock-lots/1',
+      }),
+    });
+    const persisted = (
+      f.db.pharmacyMigrationRow.createMany.mock.calls[0] as unknown as [
+        { data: Array<{ sourceKey: string; rawPayload: Record<string, string> }> },
+      ]
+    )[0].data;
+    expect(
+      persisted.map((row) => [row.sourceKey, row.rawPayload.lot_code, row.rawPayload.location_code])
+    ).toEqual([
+      ['lot-1:A:AVAILABLE', 'lot-1', 'A'],
+      ['lot-1:B:AVAILABLE', 'lot-1', 'B'],
+      ['lot-2:A:AVAILABLE', 'lot-2', 'A'],
+    ]);
     expect(f.db.pharmacyMigrationException.createMany).not.toHaveBeenCalled();
     // Profiling only: no medicine or stock is written.
     expect(f.db.medicine.create).not.toHaveBeenCalled();
-    expect(audit.annotateAudit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      action: 'pharmacy.dataExport.stockLotsProfiled', targetId: 'mig-batch-1',
-    }));
+    expect(audit.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'pharmacy.dataExport.stockLotsProfiled',
+        targetId: 'mig-batch-1',
+      })
+    );
   });
 
   it('refuses a sheet that is not stock-lots.csv on the stock path before writing anything', async () => {
     const f = fixture();
-    await expect(f.caller.importStockLots({ csv: 'product,batch\nPanadol,B1' }))
-      .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      f.caller.importStockLots({ csv: 'product,batch\nPanadol,B1' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.db.pharmacyMigrationSource.create).not.toHaveBeenCalled();
     const employee = fixture({ role: 'EMPLOYEE' });
-    await expect(employee.caller.importStockLots({ csv: '' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(employee.caller.importStockLots({ csv: '' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
   });
 
   it('rejects a stock sheet on the catalogue path before writing anything', async () => {
     const f = fixture();
-    await expect(f.caller.importCatalogue({ csv: 'product,batch\nPanadol,B1' }))
-      .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      f.caller.importCatalogue({ csv: 'product,batch\nPanadol,B1' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.db.medicine.create).not.toHaveBeenCalled();
     expect(f.db.pharmacyMigrationSource.create).not.toHaveBeenCalled();
   });
@@ -446,21 +587,29 @@ describe('pharmacy owner data export router', () => {
   it.each(['EMPLOYEE', 'MANAGER'] as const)('refuses a %s with FORBIDDEN (403)', async (role) => {
     const f = fixture({ role, rows: [readyRow()] });
     await expect(f.caller.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(f.caller.importCatalogue({ csv: '' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })).rejects.toMatchObject(
-      { code: 'FORBIDDEN' }
-    );
-    await expect(f.caller.download({ id: 'exp-1', pin: PIN })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller.importCatalogue({ csv: '' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller.download({ id: 'exp-1', pin: PIN })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
     expect(f.db.pharmacyDataExport.create).not.toHaveBeenCalled();
     expect(storage.getUpload).not.toHaveBeenCalled();
   });
 
-  it.each(['session', 'context'])('refuses support impersonation identified by the %s', async (source) => {
-    const f = fixture({ support: source === 'session', rows: [readyRow()] });
-    if (source === 'context') Object.assign(f.context, { support: { supportSessionId: 'sup-1' } });
-    await expectAllProceduresForbidden(f);
-    expect(f.db.user.findFirst).not.toHaveBeenCalled();
-  });
+  it.each(['session', 'context'])(
+    'refuses support impersonation identified by the %s',
+    async (source) => {
+      const f = fixture({ support: source === 'session', rows: [readyRow()] });
+      if (source === 'context')
+        Object.assign(f.context, { support: { supportSessionId: 'sup-1' } });
+      await expectAllProceduresForbidden(f);
+      expect(f.db.user.findFirst).not.toHaveBeenCalled();
+    }
+  );
 
   it('refuses a workspace that is not a pharmacy', async () => {
     const f = fixture({ vertical: 'AGENCY' });
@@ -494,15 +643,15 @@ describe('pharmacy owner data export router', () => {
 
   it('rejects a range longer than 366 days or ending in the future', async () => {
     const f = fixture();
-    await expect(f.caller.request({ from: '2025-01-01', to: '2026-10-30', pin: PIN })).rejects.toMatchObject(
-      { code: 'BAD_REQUEST' }
-    );
-    await expect(f.caller.request({ from: '2026-10-01', to: '2026-11-02', pin: PIN })).rejects.toMatchObject(
-      { code: 'BAD_REQUEST' }
-    );
-    await expect(f.caller.request({ from: '2026-10-10', to: '2026-10-01', pin: PIN })).rejects.toMatchObject(
-      { code: 'BAD_REQUEST' }
-    );
+    await expect(
+      f.caller.request({ from: '2025-01-01', to: '2026-10-30', pin: PIN })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      f.caller.request({ from: '2026-10-01', to: '2026-11-02', pin: PIN })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      f.caller.request({ from: '2026-10-10', to: '2026-10-01', pin: PIN })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.db.pharmacyDataExport.create).not.toHaveBeenCalled();
   });
 
@@ -552,7 +701,9 @@ describe('pharmacy owner data export router', () => {
     await expect(
       f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(f.caller.importCatalogue({ csv: '' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller.importCatalogue({ csv: '' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
     expect(storage.getUpload).not.toHaveBeenCalled();
     expect(f.db.pharmacyDataExport.findMany).not.toHaveBeenCalled();
     expect(f.db.pharmacyDataExport.create).not.toHaveBeenCalled();
@@ -564,8 +715,14 @@ describe('pharmacy owner data export router', () => {
       f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: '0000' })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED', message: 'That PIN is not correct.' });
     expect(f.db.pharmacyDataExport.create).not.toHaveBeenCalled();
-    // The PIN check runs in its own transaction, so the strike survives the refusal.
-    expect(f.db.$transaction).toHaveBeenCalled();
+    // The PIN check commits in its own tenant transaction, not the request's
+    // ctx.db (which /api/trpc rolls back on the refusal), so the strike survives.
+    expect(tenant.withTenantDb).toHaveBeenCalledWith(
+      'org-a',
+      expect.any(Function),
+      expect.objectContaining({ userId: 'owner-1', skipDrain: true })
+    );
+    expect(f.db.$transaction).not.toHaveBeenCalled();
     expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
       where: { id: 'cred-1' },
       data: { failedAttempts: 1, lockedUntil: null },
@@ -613,7 +770,10 @@ describe('pharmacy owner data export router', () => {
     const none = fixture({ credential: null });
     await expect(
       none.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('Set up your staff PIN') });
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: expect.stringContaining('Set up your staff PIN'),
+    });
     const locked = fixture({
       rows: [readyRow()],
       credential: {
@@ -627,6 +787,53 @@ describe('pharmacy owner data export router', () => {
       code: 'TOO_MANY_REQUESTS',
     });
     expect(locked.db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
+    expect(storage.getUpload).not.toHaveBeenCalled();
+  });
+
+  it('keeps wrong-PIN strikes when the request transaction rolls back, so the fifth locks', async () => {
+    // /api/trpc runs a request in one transaction: ctx.db.$transaction re-enters
+    // it and any procedure error rolls it back. Model that: credential writes
+    // through ctx.db are discarded, only the independent PIN transaction commits.
+    const f = fixture({ rows: [readyRow()] });
+    const committed = {
+      id: 'cred-1',
+      credentialHash: 'hash',
+      failedAttempts: 0,
+      lockedUntil: null as Date | null,
+    };
+    f.db.restaurantOperatorCredential.findFirst.mockImplementation(async () => ({ ...committed }));
+    f.db.restaurantOperatorCredential.update.mockImplementation(async () => ({}));
+    const pinTx = {
+      $queryRaw: vi.fn(async () => []),
+      restaurantOperatorCredential: {
+        findFirst: vi.fn(async () => ({ ...committed })),
+        update: vi.fn(async (args: { data: Partial<typeof committed> }) => {
+          Object.assign(committed, args.data);
+          return {};
+        }),
+      },
+    };
+    tenant.withTenantDb.mockImplementation(
+      async (_organizationId: string, run: (tx: unknown) => Promise<unknown>) => run(pinTx)
+    );
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      await expect(
+        f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: '0000' })
+      ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+      expect(committed.failedAttempts).toBe(attempt);
+    }
+    // The fifth wrong PIN locks it; then even the right PIN is refused.
+    await expect(f.caller.download({ id: 'exp-1', pin: '0000' })).rejects.toMatchObject({
+      code: 'TOO_MANY_REQUESTS',
+    });
+    expect(committed.lockedUntil).toEqual(new Date(NOW.getTime() + 15 * 60 * 1000));
+    await expect(
+      f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })
+    ).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
+    expect(pinTx.restaurantOperatorCredential.update).toHaveBeenCalledTimes(5);
+    expect(f.db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(f.db.pharmacyDataExport.create).not.toHaveBeenCalled();
     expect(storage.getUpload).not.toHaveBeenCalled();
   });
 

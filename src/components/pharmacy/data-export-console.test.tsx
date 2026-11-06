@@ -22,7 +22,14 @@ describe('owner data export panel', () => {
   it('requests the chosen sales range with the re-entered PIN, then forgets the PIN', () => {
     const onRequest = vi.fn();
     render(
-      <DataExportPanel exports={[]} notice={null} pending={false} today="2026-10-31" onRequest={onRequest} onDownload={vi.fn()} />
+      <DataExportPanel
+        exports={[]}
+        notice={null}
+        pending={false}
+        today="2026-10-31"
+        onRequest={onRequest}
+        onDownload={vi.fn()}
+      />
     );
     expect(screen.getByText(/No export yet/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Sales from'), { target: { value: '2026-10-01' } });
@@ -37,7 +44,14 @@ describe('owner data export panel', () => {
   it('does not request an export without the PIN and says why', () => {
     const onRequest = vi.fn();
     render(
-      <DataExportPanel exports={[]} notice={null} pending={false} today="2026-10-31" onRequest={onRequest} onDownload={vi.fn()} />
+      <DataExportPanel
+        exports={[]}
+        notice={null}
+        pending={false}
+        today="2026-10-31"
+        onRequest={onRequest}
+        onDownload={vi.fn()}
+      />
     );
     fireEvent.click(screen.getByRole('button', { name: 'Download my data' }));
     expect(onRequest).not.toHaveBeenCalled();
@@ -48,7 +62,14 @@ describe('owner data export panel', () => {
   it('blocks an inverted range with a visible explanation', () => {
     const onRequest = vi.fn();
     render(
-      <DataExportPanel exports={[]} notice={null} pending={false} today="2026-10-31" onRequest={onRequest} onDownload={vi.fn()} />
+      <DataExportPanel
+        exports={[]}
+        notice={null}
+        pending={false}
+        today="2026-10-31"
+        onRequest={onRequest}
+        onDownload={vi.fn()}
+      />
     );
     fireEvent.change(screen.getByLabelText('Sales from'), { target: { value: '2026-10-31' } });
     fireEvent.change(screen.getByLabelText('Sales to'), { target: { value: '2026-10-01' } });
@@ -61,7 +82,14 @@ describe('owner data export panel', () => {
   it('downloads a ready archive only with the PIN and shows its row total', () => {
     const onDownload = vi.fn();
     render(
-      <DataExportPanel exports={[ready]} notice={null} pending={false} today="2026-10-31" onRequest={vi.fn()} onDownload={onDownload} />
+      <DataExportPanel
+        exports={[ready]}
+        notice={null}
+        pending={false}
+        today="2026-10-31"
+        onRequest={vi.fn()}
+        onDownload={onDownload}
+      />
     );
     // No plain link: the archive cannot be fetched without re-entering the PIN.
     expect(screen.queryByRole('link', { name: 'Download ZIP' })).toBeNull();
@@ -81,7 +109,14 @@ describe('owner data export panel', () => {
     render(
       <DataExportPanel
         exports={[
-          { ...ready, id: 'q', status: 'QUEUED', downloadable: false, sizeBytes: null, rowCounts: null },
+          {
+            ...ready,
+            id: 'q',
+            status: 'QUEUED',
+            downloadable: false,
+            sizeBytes: null,
+            rowCounts: null,
+          },
           { ...ready, id: 'x', status: 'EXPIRED', downloadable: false },
         ]}
         notice="Export requested."
@@ -91,7 +126,9 @@ describe('owner data export panel', () => {
         onDownload={onDownload}
       />
     );
-    const button = screen.getByRole('button', { name: 'Export being prepared' }) as HTMLButtonElement;
+    const button = screen.getByRole('button', {
+      name: 'Export being prepared',
+    }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(screen.queryByRole('button', { name: 'Download ZIP' })).toBeNull();
     expect(screen.getByText('Link expired')).toBeTruthy();

@@ -24,7 +24,13 @@ const lot = {
   medicine_code: 'med-1',
 };
 
-function row(lotCode: string, batch: string, location: string, disposition: string, quantity: number): ExportRow {
+function row(
+  lotCode: string,
+  batch: string,
+  location: string,
+  disposition: string,
+  quantity: number
+): ExportRow {
   return {
     ...lot,
     code: `${lotCode}:${location}:${disposition}`,
@@ -101,10 +107,14 @@ describe('DevFathom stock-lots adapter', () => {
     expect(() =>
       profileTable(
         devfathomStockLotsProfiler,
-        parseDelimitedText('code,product,pack,batch,expiry,mrp,quantity\nA,Panadol,10,B1,2027-01-01,25,10')
+        parseDelimitedText(
+          'code,product,pack,batch,expiry,mrp,quantity\nA,Panadol,10,B1,2027-01-01,25,10'
+        )
       )
     ).toThrow(UnrecognisedSourceError);
     const medicines = parseDelimitedText(exportRowsToCsv(PHARMACY_EXPORT_FILES.medicines, []));
-    expect(() => profileTable(devfathomStockLotsProfiler, medicines)).toThrow(UnrecognisedSourceError);
+    expect(() => profileTable(devfathomStockLotsProfiler, medicines)).toThrow(
+      UnrecognisedSourceError
+    );
   });
 });

@@ -83,17 +83,30 @@ export const PHARMACY_EXPORT_FILES = {
       col('saleable', 'Saleable flag.'),
       col('medicine_code', 'DevFathom medicine identifier.'),
       col('presentation_code', 'DevFathom presentation identifier.'),
-      col('strength_components', 'JSON array of ingredient names, exact strength values and units for this medicine.'),
-      col('pack_barcodes', 'JSON array of all barcodes for this effective pack, with type and normalized_code.'),
-      col('presentation_barcodes', 'JSON array of barcodes attached to the presentation rather than a pack, with type and normalized_code.'),
-      col('catalogue_encoding', 'apostrophe-v1: formula prefixes and literal leading apostrophes are reversibly escaped.'),
+      col(
+        'strength_components',
+        'JSON array of ingredient names, exact strength values and units for this medicine.'
+      ),
+      col(
+        'pack_barcodes',
+        'JSON array of all barcodes for this effective pack, with type and normalized_code.'
+      ),
+      col(
+        'presentation_barcodes',
+        'JSON array of barcodes attached to the presentation rather than a pack, with type and normalized_code.'
+      ),
+      col(
+        'catalogue_encoding',
+        'apostrophe-v1: formula prefixes and literal leading apostrophes are reversibly escaped.'
+      ),
     ],
   },
   medicineBarcodes: {
     name: 'medicine-barcodes.csv',
     title: 'All medicine barcodes',
     importable: false,
-    scope: 'Every barcode, including presentation-level barcodes and barcodes on historical or future packs. Current catalogue barcodes also appear in medicines.csv for import.',
+    scope:
+      'Every barcode, including presentation-level barcodes and barcodes on historical or future packs. Current catalogue barcodes also appear in medicines.csv for import.',
     columns: [
       col('code', 'DevFathom barcode identifier.'),
       col('medicine_code', 'Medicine identifier (medicines.csv medicine_code).'),
@@ -102,7 +115,10 @@ export const PHARMACY_EXPORT_FILES = {
       col('barcode_value', 'Original barcode text.'),
       col('barcode_type', 'GTIN, MANUFACTURER or INTERNAL.'),
       col('normalized_code', 'Stored normalized barcode identity.'),
-      col('catalogue_encoding', 'apostrophe-v1: remove one leading apostrophe from doubled apostrophes or protected formula text to recover the original cell.'),
+      col(
+        'catalogue_encoding',
+        'apostrophe-v1: remove one leading apostrophe from doubled apostrophes or protected formula text to recover the original cell.'
+      ),
     ],
   },
   stockLots: {
@@ -178,7 +194,10 @@ export const PHARMACY_EXPORT_FILES = {
     columns: [
       col('code', 'DevFathom supplier identifier.'),
       col('supplier', 'Supplier name.'),
-      col('balance', `Amount owed to the supplier after unsettled supplier credit; negative when the supplier owes the pharmacy. ${MONEY}`),
+      col(
+        'balance',
+        `Amount owed to the supplier after unsettled supplier credit; negative when the supplier owes the pharmacy. ${MONEY}`
+      ),
       col('purchased_total', `Posted purchase bills. ${MONEY}`),
       col('paid_total', `Posted payments allocated to those bills. ${MONEY}`),
       col('legal_name', 'Legal name.'),
@@ -191,9 +210,18 @@ export const PHARMACY_EXPORT_FILES = {
       col('active', 'true when the supplier is active.'),
       col('created_at', 'When the supplier was created (ISO 8601, UTC).'),
       col('credit_total', `Supplier credit notes received (supplier-credits.csv). ${MONEY}`),
-      col('credit_settled_total', `Part of those credits settled through posted payments. ${MONEY}`),
-      col('credit_remaining_total', `Credit still offsetting the balance: credit_total - credit_settled_total. ${MONEY}`),
-      col('open_claim_total', `Debit-note credit still expected from the supplier and not yet received; informational, not in balance. ${MONEY}`),
+      col(
+        'credit_settled_total',
+        `Part of those credits settled through posted payments. ${MONEY}`
+      ),
+      col(
+        'credit_remaining_total',
+        `Credit still offsetting the balance: credit_total - credit_settled_total. ${MONEY}`
+      ),
+      col(
+        'open_claim_total',
+        `Debit-note credit still expected from the supplier and not yet received; informational, not in balance. ${MONEY}`
+      ),
     ],
   },
   supplierCredits: {
@@ -210,7 +238,10 @@ export const PHARMACY_EXPORT_FILES = {
       col('branch_code', 'Branch short code.'),
       col('amount', `Credit note amount. ${MONEY}`),
       col('received_at', 'When the credit note was received (ISO 8601, UTC).'),
-      col('allocated_to_debit_notes', `Part allocated to debit notes (supplier-credit-allocations.csv). ${MONEY}`),
+      col(
+        'allocated_to_debit_notes',
+        `Part allocated to debit notes (supplier-credit-allocations.csv). ${MONEY}`
+      ),
       col('settled_through_payments', `Part settled through posted payments. ${MONEY}`),
       col('remaining', `amount - settled_through_payments; offsets the supplier balance. ${MONEY}`),
       col('created_at', 'When the credit note was recorded (ISO 8601, UTC).'),
@@ -271,7 +302,10 @@ export const PHARMACY_EXPORT_FILES = {
       col('customer', 'Customer display name, if any.'),
       col('customer_code', 'DevFathom customer identifier, if any.'),
       col('line_count', 'Number of lines.'),
-      col('gross', `Sum of quantity times unit price. ${MONEY}`),
+      col(
+        'gross',
+        `Sum of line gross: the amount charged before discount, as on the receipt. ${MONEY}`
+      ),
       col('discount', `Sum of line discounts. ${MONEY}`),
       col('net', `gross less discount. ${MONEY}`),
     ],
@@ -296,7 +330,10 @@ export const PHARMACY_EXPORT_FILES = {
         'cost',
         `Cost of one sale unit (not one canonical unit): the line's lot cost divided by sale_quantity, rounded up to the paisa. ${MONEY}`
       ),
-      col('gross', `sale_quantity times unit_price. ${MONEY}`),
+      col(
+        'gross',
+        `Amount charged for the line before discount, as recorded at sale (can exceed sale_quantity x unit_price by rounding when a line draws on lots with different prices). ${MONEY}`
+      ),
       col('discount', `Line discount. ${MONEY}`),
       col('net', `gross less discount. ${MONEY}`),
       col('discount_kind', 'DISCOUNT or PROMOTION, if discounted.'),
@@ -462,8 +499,10 @@ export function neutralizeSpreadsheetFormula(text: string): string {
 
 /** Reverse only our escape, including escaped literal apostrophes. */
 export function decodeSpreadsheetText(text: string): string {
-  if (text.startsWith("''") ||
-      (text.startsWith("'") && neutralizeSpreadsheetFormula(text.slice(1)) === text)) {
+  if (
+    text.startsWith("''") ||
+    (text.startsWith("'") && neutralizeSpreadsheetFormula(text.slice(1)) === text)
+  ) {
     return text.slice(1);
   }
   return text;
@@ -473,7 +512,9 @@ export function exportCsvCell(value: ExportCell, reversibleText = false): string
   if (value === null || value === undefined) return '';
   const text =
     typeof value === 'string'
-      ? reversibleText && value.startsWith("'") ? `'${value}` : neutralizeSpreadsheetFormula(value)
+      ? reversibleText && value.startsWith("'")
+        ? `'${value}`
+        : neutralizeSpreadsheetFormula(value)
       : String(value);
   return /[",\r\n]/.test(text) || text !== text.trim() ? `"${text.replaceAll('"', '""')}"` : text;
 }
@@ -484,9 +525,16 @@ export function exportRowsToCsv(spec: ExportFileSpec, rows: readonly ExportRow[]
   const reversibleText = headers.includes('catalogue_encoding');
   return [
     headers.join(','),
-    ...rows.map((row) => headers.map((header) => exportCsvCell(
-      header === 'catalogue_encoding' ? 'apostrophe-v1' : row[header], reversibleText
-    )).join(',')),
+    ...rows.map((row) =>
+      headers
+        .map((header) =>
+          exportCsvCell(
+            header === 'catalogue_encoding' ? 'apostrophe-v1' : row[header],
+            reversibleText
+          )
+        )
+        .join(',')
+    ),
   ]
     .join('\r\n')
     .concat('\r\n');
@@ -598,9 +646,9 @@ export function buildPharmacyExportReadme(
     '- Money is Pakistani rupees with two decimals; a negative balance is a credit.',
     '- Dates are YYYY-MM-DD in Pakistan time; timestamps are ISO 8601 in UTC.',
     '- Quantities are canonical (smallest sellable) units unless the column says packs.',
-    "- A text cell that a spreadsheet would run as a formula (starting with =, +, -, @, tab",
+    '- A text cell that a spreadsheet would run as a formula (starting with =, +, -, @, tab',
     "  or carriage return) is prefixed with an apostrophe ('). Plain numbers are unchanged.",
-    "- In catalogue CSVs marked apostrophe-v1, literal leading apostrophes are doubled.",
+    '- In catalogue CSVs marked apostrophe-v1, literal leading apostrophes are doubled.',
     '  The catalogue importer reverses this',
     '  encoding for apostrophe-v1 files, preserving the original text and whitespace.',
     '',
@@ -644,7 +692,10 @@ export function buildPharmacyExportFiles(
   meta: PharmacyExportMeta
 ): PharmacyExportFile[] {
   return [
-    { name: 'README.txt', data: Buffer.from(BOM + buildPharmacyExportReadme(dataset, meta), 'utf8') },
+    {
+      name: 'README.txt',
+      data: Buffer.from(BOM + buildPharmacyExportReadme(dataset, meta), 'utf8'),
+    },
     ...PHARMACY_EXPORT_FILE_KEYS.map((key) => ({
       name: PHARMACY_EXPORT_FILES[key].name,
       data: Buffer.from(BOM + exportRowsToCsv(PHARMACY_EXPORT_FILES[key], dataset[key]), 'utf8'),

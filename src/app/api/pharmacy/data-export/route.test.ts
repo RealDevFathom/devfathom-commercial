@@ -95,7 +95,9 @@ describe('/api/pharmacy/data-export', () => {
     );
     expect((await POST(post({ id: 'exp-1', pin: '2468' }))).status).toBe(403);
 
-    download.mockRejectedValueOnce(new TRPCError({ code: 'TOO_MANY_REQUESTS', message: 'Locked.' }));
+    download.mockRejectedValueOnce(
+      new TRPCError({ code: 'TOO_MANY_REQUESTS', message: 'Locked.' })
+    );
     expect((await POST(post({ id: 'exp-1', pin: '2468' }))).status).toBe(429);
   });
 

@@ -66,8 +66,22 @@ function seededDb() {
     },
     pharmacyBranch: {
       findMany: vi.fn(async () => [
-        { id: 'br-b', code: 'ISB', name: 'Blue Area', city: 'Islamabad', provinceCode: 'IS', active: true },
-        { id: 'br-a', code: 'RWP', name: 'Saddar', city: 'Rawalpindi', provinceCode: 'PB', active: true },
+        {
+          id: 'br-b',
+          code: 'ISB',
+          name: 'Blue Area',
+          city: 'Islamabad',
+          provinceCode: 'IS',
+          active: true,
+        },
+        {
+          id: 'br-a',
+          code: 'RWP',
+          name: 'Saddar',
+          city: 'Rawalpindi',
+          provinceCode: 'PB',
+          active: true,
+        },
       ]),
     },
     medicine: {
@@ -95,7 +109,15 @@ function seededDb() {
               dosageForm: 'Tablet',
               route: 'Oral',
               packLevels,
-              barcodes: [{ id: 'bc-1', type: 'GTIN', code: '8964000000011', normalizedCode: '8964000000011', packLevelId: 'pl-strip' as string | null }],
+              barcodes: [
+                {
+                  id: 'bc-1',
+                  type: 'GTIN',
+                  code: '8964000000011',
+                  normalizedCode: '8964000000011',
+                  packLevelId: 'pl-strip' as string | null,
+                },
+              ],
             },
           ],
         },
@@ -195,7 +217,14 @@ function seededDb() {
     pharmacyFamilyAccount: {
       findMany: vi.fn(async (args: { where: { branchId: string } }) =>
         args.where.branchId === 'br-a'
-          ? [{ id: 'fam-1', branchId: 'br-a', displayName: 'Khan family', payerCustomerId: 'cust-1' }]
+          ? [
+              {
+                id: 'fam-1',
+                branchId: 'br-a',
+                displayName: 'Khan family',
+                payerCustomerId: 'cust-1',
+              },
+            ]
           : []
       ),
     },
@@ -370,6 +399,7 @@ function seededDb() {
               canonicalUnitsPerSaleUnit: 10,
               canonicalUnits: 20,
               unitPriceMinor: 300,
+              grossMinor: 600,
               unitCostMinor: 25,
               discountKind: 'DISCOUNT',
               discountMinor: 50,
@@ -383,7 +413,14 @@ function seededDb() {
     },
     pharmacyControlledRegisterEntry: {
       findMany: vi.fn(async () => [
-        registerEntry({ id: 'cr-a2', branchId: 'br-a', serial: 2, balanceDelta: -10, runningBalance: 90, quantityCanonicalUnits: 10 }),
+        registerEntry({
+          id: 'cr-a2',
+          branchId: 'br-a',
+          serial: 2,
+          balanceDelta: -10,
+          runningBalance: 90,
+          quantityCanonicalUnits: 10,
+        }),
         registerEntry({
           id: 'cr-a1',
           branchId: 'br-a',
@@ -497,9 +534,10 @@ describe('export status view', () => {
       salesFrom: '2026-10-01',
       rowCounts: { medicines: 2 },
     });
-    expect(
-      viewPharmacyDataExport(base, new Date(base.expiresAt.getTime() + 1))
-    ).toMatchObject({ status: 'EXPIRED', downloadable: false });
+    expect(viewPharmacyDataExport(base, new Date(base.expiresAt.getTime() + 1))).toMatchObject({
+      status: 'EXPIRED',
+      downloadable: false,
+    });
   });
   it('reports a request stuck in the queue as failed', () => {
     const queued = { ...base, status: 'QUEUED' as const, expiresAt: null };
@@ -576,12 +614,35 @@ describe('collection', () => {
     const medicines = await db.medicine.findMany();
     const presentation = medicines[0]!.presentations[0]!;
     presentation.barcodes.push(
-      { id: 'bc-2', type: 'MANUFACTURER', code: '+second', normalizedCode: 'second', packLevelId: 'pl-strip' },
-      { id: 'bc-3', type: 'INTERNAL', code: '@presentation', normalizedCode: 'presentation', packLevelId: null },
-      { id: 'bc-4', type: 'GTIN', code: 'retired', normalizedCode: 'retired', packLevelId: 'retired-pack' },
+      {
+        id: 'bc-2',
+        type: 'MANUFACTURER',
+        code: '+second',
+        normalizedCode: 'second',
+        packLevelId: 'pl-strip',
+      },
+      {
+        id: 'bc-3',
+        type: 'INTERNAL',
+        code: '@presentation',
+        normalizedCode: 'presentation',
+        packLevelId: null,
+      },
+      {
+        id: 'bc-4',
+        type: 'GTIN',
+        code: 'retired',
+        normalizedCode: 'retired',
+        packLevelId: 'retired-pack',
+      }
     );
     db.medicine.findMany.mockResolvedValueOnce(medicines);
-    const { dataset } = await collectPharmacyDataExport(db as unknown as ScopedDb, 'org-a', RANGE, NOW);
+    const { dataset } = await collectPharmacyDataExport(
+      db as unknown as ScopedDb,
+      'org-a',
+      RANGE,
+      NOW
+    );
     expect(JSON.parse(String(dataset.medicines[0]!.strength_components))).toEqual([
       { ingredient: 'Paracetamol', value: '500', unit: 'mg' },
     ]);
@@ -592,11 +653,17 @@ describe('collection', () => {
     expect(JSON.parse(String(dataset.medicines[0]!.presentation_barcodes))).toEqual([
       { code: '@presentation', type: 'INTERNAL', normalized_code: 'presentation' },
     ]);
-    expect(dataset.medicineBarcodes).toEqual(presentation.barcodes.map((barcode) => ({
-      code: barcode.id, medicine_code: 'med-1', presentation_code: 'pr-1',
-      pack_level_code: barcode.packLevelId, barcode_value: barcode.code,
-      barcode_type: barcode.type, normalized_code: barcode.normalizedCode,
-    })));
+    expect(dataset.medicineBarcodes).toEqual(
+      presentation.barcodes.map((barcode) => ({
+        code: barcode.id,
+        medicine_code: 'med-1',
+        presentation_code: 'pr-1',
+        pack_level_code: barcode.packLevelId,
+        barcode_value: barcode.code,
+        barcode_type: barcode.type,
+        normalized_code: barcode.normalizedCode,
+      }))
+    );
   });
 
   it.each(['SUPPLIER_PAYMENT', 'CHEQUE', 'VOUCHER'])(
@@ -612,14 +679,23 @@ describe('collection', () => {
           where: { transaction: { kind: string | { in: string[] }; status: string } };
         };
         const filter = query.where.transaction;
-        return allocations.filter((row) =>
-          (typeof filter.kind === 'string' ? filter.kind === row.kind : filter.kind.in.includes(row.kind)) &&
-          row.status === filter.status
+        return allocations.filter(
+          (row) =>
+            (typeof filter.kind === 'string'
+              ? filter.kind === row.kind
+              : filter.kind.in.includes(row.kind)) && row.status === filter.status
         );
       });
-      const { dataset } = await collectPharmacyDataExport(db as unknown as ScopedDb, 'org-a', RANGE, NOW);
+      const { dataset } = await collectPharmacyDataExport(
+        db as unknown as ScopedDb,
+        'org-a',
+        RANGE,
+        NOW
+      );
       expect(dataset.suppliers[0]).toMatchObject({
-        purchased_total: '18.00', paid_total: '18.00', balance: '0.00',
+        purchased_total: '18.00',
+        paid_total: '18.00',
+        balance: '0.00',
       });
     }
   );
@@ -628,30 +704,54 @@ describe('collection', () => {
     const { db } = seededDb();
     db.pharmacySupplierCredit.findMany.mockResolvedValue([
       {
-        id: 'cr-1', branchId: 'br-a', supplierId: 'sup-1', reference: 'CN-1', amountMinor: 400,
-        receivedAt: new Date('2026-09-01T00:00:00.000Z'), createdAt: new Date('2026-09-01T01:00:00.000Z'),
+        id: 'cr-1',
+        branchId: 'br-a',
+        supplierId: 'sup-1',
+        reference: 'CN-1',
+        amountMinor: 400,
+        receivedAt: new Date('2026-09-01T00:00:00.000Z'),
+        createdAt: new Date('2026-09-01T01:00:00.000Z'),
       },
       {
-        id: 'cr-2', branchId: 'br-a', supplierId: 'sup-1', reference: 'CN-2', amountMinor: 200,
-        receivedAt: new Date('2026-09-05T00:00:00.000Z'), createdAt: new Date('2026-09-05T01:00:00.000Z'),
+        id: 'cr-2',
+        branchId: 'br-a',
+        supplierId: 'sup-1',
+        reference: 'CN-2',
+        amountMinor: 200,
+        receivedAt: new Date('2026-09-05T00:00:00.000Z'),
+        createdAt: new Date('2026-09-05T01:00:00.000Z'),
       },
     ]);
     db.pharmacyDebitNote.findMany.mockResolvedValue([
       {
-        id: 'dn-1', branchId: 'br-a', supplierId: 'sup-1', reference: 'DN-1', status: 'PARTIALLY_SETTLED',
-        expectedCreditMinor: 700, issuedAt: new Date('2026-08-30T00:00:00.000Z'), cancelledAt: null,
+        id: 'dn-1',
+        branchId: 'br-a',
+        supplierId: 'sup-1',
+        reference: 'DN-1',
+        status: 'PARTIALLY_SETTLED',
+        expectedCreditMinor: 700,
+        issuedAt: new Date('2026-08-30T00:00:00.000Z'),
+        cancelledAt: null,
         purchaseReturn: { reference: 'PR-1', kind: 'EXPIRY_CLAIM', status: 'DISPATCHED' },
       },
       {
-        id: 'dn-2', branchId: 'br-a', supplierId: 'sup-1', reference: 'DN-2', status: 'CANCELLED',
-        expectedCreditMinor: 900, issuedAt: new Date('2026-08-31T00:00:00.000Z'),
+        id: 'dn-2',
+        branchId: 'br-a',
+        supplierId: 'sup-1',
+        reference: 'DN-2',
+        status: 'CANCELLED',
+        expectedCreditMinor: 900,
+        issuedAt: new Date('2026-08-31T00:00:00.000Z'),
         cancelledAt: new Date('2026-09-02T00:00:00.000Z'),
         purchaseReturn: { reference: 'PR-2', kind: 'EXPIRY_CLAIM', status: 'CANCELLED' },
       },
     ]);
     db.pharmacySupplierCreditAllocation.findMany.mockResolvedValue([
       {
-        id: 'al-1', supplierCreditId: 'cr-1', debitNoteId: 'dn-1', amountMinor: 300,
+        id: 'al-1',
+        supplierCreditId: 'cr-1',
+        debitNoteId: 'dn-1',
+        amountMinor: 300,
         createdAt: new Date('2026-09-03T00:00:00.000Z'),
       },
     ]);
@@ -665,7 +765,12 @@ describe('collection', () => {
           ]
         : [{ sourceId: 'grn-1', amountMinor: 500 }];
     });
-    const { dataset } = await collectPharmacyDataExport(db as unknown as ScopedDb, 'org-a', RANGE, NOW);
+    const { dataset } = await collectPharmacyDataExport(
+      db as unknown as ScopedDb,
+      'org-a',
+      RANGE,
+      NOW
+    );
 
     // 18.00 purchased − 5.00 paid − (6.00 credited − 1.50 settled) = 8.50.
     expect(dataset.suppliers[0]).toMatchObject({
@@ -679,26 +784,42 @@ describe('collection', () => {
     });
     expect(dataset.supplierCredits).toEqual([
       expect.objectContaining({
-        code: 'cr-1', reference: 'CN-1', supplier: 'Muller & Phipps', supplier_code: 'sup-1',
-        amount: '4.00', allocated_to_debit_notes: '3.00', settled_through_payments: '0.00',
+        code: 'cr-1',
+        reference: 'CN-1',
+        supplier: 'Muller & Phipps',
+        supplier_code: 'sup-1',
+        amount: '4.00',
+        allocated_to_debit_notes: '3.00',
+        settled_through_payments: '0.00',
         remaining: '4.00',
       }),
       expect.objectContaining({
-        code: 'cr-2', amount: '2.00', allocated_to_debit_notes: '0.00',
-        settled_through_payments: '1.50', remaining: '0.50',
+        code: 'cr-2',
+        amount: '2.00',
+        allocated_to_debit_notes: '0.00',
+        settled_through_payments: '1.50',
+        remaining: '0.50',
       }),
     ]);
     expect(dataset.debitNotes).toEqual([
       expect.objectContaining({
-        code: 'dn-1', reference: 'DN-1', return_reference: 'PR-1', status: 'PARTIALLY_SETTLED',
-        expected_credit: '7.00', received_credit: '3.00', open_claim: '4.00',
+        code: 'dn-1',
+        reference: 'DN-1',
+        return_reference: 'PR-1',
+        status: 'PARTIALLY_SETTLED',
+        expected_credit: '7.00',
+        received_credit: '3.00',
+        open_claim: '4.00',
       }),
       expect.objectContaining({ code: 'dn-2', status: 'CANCELLED', open_claim: '0.00' }),
     ]);
     expect(dataset.supplierCreditAllocations).toEqual([
       expect.objectContaining({
-        code: 'al-1', credit_reference: 'CN-1', debit_note_reference: 'DN-1',
-        supplier: 'Muller & Phipps', amount: '3.00',
+        code: 'al-1',
+        credit_reference: 'CN-1',
+        debit_note_reference: 'DN-1',
+        supplier: 'Muller & Phipps',
+        amount: '3.00',
       }),
     ]);
     expect(db.pharmacyBookkeepingAllocation.findMany).toHaveBeenCalledWith({
@@ -780,7 +901,9 @@ describe('collection', () => {
       ['k-2', 'Ayesha Khan', '500.00'],
       ['k-3', 'Ayesha Khan', '300.00'],
     ]);
-    expect(queries.filter((text) => text.includes("set_config('app.current_branch_id'"))).toHaveLength(3);
+    expect(
+      queries.filter((text) => text.includes("set_config('app.current_branch_id'"))
+    ).toHaveLength(3);
     expect(db.$queryRaw.mock.calls.at(-1)![0]).toMatchObject({ values: ['prior-branch'] });
 
     // Suppliers: posted, unreversed bills (2 × 10.00 less 10%) less allocated payments.
@@ -856,6 +979,47 @@ describe('collection', () => {
     expect(costColumn?.description).toMatch(/one sale unit \(not one canonical unit\)/);
   });
 
+  it('exports the gross charged at sale, not sale_quantity times unit_price', async () => {
+    const { db } = seededDb();
+    const [sale] = await db.pharmacySale.findMany();
+    // A mixed-lot line stores the weighted gross; its unit price is that gross
+    // divided by the quantity, rounded down, so 2 x 1.02 is a paisa short of it.
+    const mixedLot = {
+      ...sale.lines[0],
+      id: 'sl-2',
+      saleUnit: 'UNIT',
+      quantity: 2,
+      canonicalUnitsPerSaleUnit: 1,
+      canonicalUnits: 2,
+      unitPriceMinor: 102,
+      grossMinor: 205,
+    };
+    db.pharmacySale.findMany.mockResolvedValueOnce([{ ...sale, lines: [...sale.lines, mixedLot] }]);
+    const { dataset } = await collectPharmacyDataExport(
+      db as unknown as ScopedDb,
+      'org-a',
+      RANGE,
+      NOW
+    );
+    expect(dataset.saleLines[1]).toMatchObject({
+      code: 'sl-2',
+      sale_quantity: 2,
+      unit_price: '1.02',
+      gross: '2.05',
+      discount: '0.50',
+      net: '1.55',
+    });
+    expect(dataset.sales).toEqual([
+      expect.objectContaining({
+        code: 'sale-1',
+        line_count: 2,
+        gross: '8.05',
+        discount: '1.00',
+        net: '7.05',
+      }),
+    ]);
+  });
+
   it('exports the controlled register exactly as the printed register shows it', async () => {
     const { db } = seededDb();
     const { dataset } = await collectPharmacyDataExport(
@@ -926,7 +1090,9 @@ describe('worker', () => {
         update: vi.fn(async () => ({})),
         updateMany: vi.fn(async () => ({ count: 1 })),
       },
-      platformJob: { createMany: vi.fn(async (args: { data: unknown[] }) => ({ count: args.data.length })) },
+      platformJob: {
+        createMany: vi.fn(async (args: { data: unknown[] }) => ({ count: args.data.length })),
+      },
     });
   }
   const job = { id: 'job-1', organizationId: 'org-a', attempts: 1, maxAttempts: 3 };
@@ -983,9 +1149,16 @@ describe('worker', () => {
 
   it('never uploads a stale request even before the retention sweep runs', async () => {
     const db = jobDb();
-    await expect(runPharmacyDataExportJob(db as unknown as ScopedDb, job, { exportId: 'exp-1' }, {
-      now: new Date(NOW.getTime() + 7 * 3_600_000),
-    })).resolves.toMatchObject({ skipped: 'stale' });
+    await expect(
+      runPharmacyDataExportJob(
+        db as unknown as ScopedDb,
+        job,
+        { exportId: 'exp-1' },
+        {
+          now: new Date(NOW.getTime() + 7 * 3_600_000),
+        }
+      )
+    ).resolves.toMatchObject({ skipped: 'stale' });
     expect(storage.putUpload).not.toHaveBeenCalled();
   });
 
@@ -1068,7 +1241,11 @@ describe('worker', () => {
     expect(storage.deleteUpload).toHaveBeenCalledWith('org-a/pharmacy-data-exports', 'exp-1.zip');
     expect(db.pharmacyDataExport.updateMany).toHaveBeenCalledTimes(1);
     expect(db.pharmacyDataExport.updateMany).toHaveBeenCalledWith({
-      where: { id: 'exp-1', organizationId: 'org-a', status: { in: ['READY', 'FAILED', 'QUEUED'] } },
+      where: {
+        id: 'exp-1',
+        organizationId: 'org-a',
+        status: { in: ['READY', 'FAILED', 'QUEUED'] },
+      },
       data: { status: 'EXPIRED', storageKey: null },
     });
   });

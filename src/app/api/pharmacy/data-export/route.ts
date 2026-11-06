@@ -16,7 +16,10 @@ const STATUS: Record<string, number> = {
   TOO_MANY_REQUESTS: 429,
 };
 
-const NO_STORE = { 'Cache-Control': 'private, no-store', 'Content-Type': 'text/plain; charset=utf-8' };
+const NO_STORE = {
+  'Cache-Control': 'private, no-store',
+  'Content-Type': 'text/plain; charset=utf-8',
+};
 
 const body = z.object({ id: z.string(), pin: z.string() }).strict();
 
@@ -53,7 +56,8 @@ export async function POST(request: Request) {
       return new Response('The request origin is not allowed.', { status: 403, headers: NO_STORE });
     }
     const parsed = body.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) return new Response('Export unavailable.', { status: 400, headers: NO_STORE });
+    if (!parsed.success)
+      return new Response('Export unavailable.', { status: 400, headers: NO_STORE });
     const actor = await resolveTenantActor({ request });
     if (!actor?.session.user?.id) return new Response('Unauthorized', { status: 401 });
     const context = await createTRPCContext({
@@ -62,9 +66,7 @@ export async function POST(request: Request) {
       organization: actor.organization,
       support: actor.support,
     });
-    const archive = await appRouter
-      .createCaller(context)
-      .pharmacyDataExport.download(parsed.data);
+    const archive = await appRouter.createCaller(context).pharmacyDataExport.download(parsed.data);
     const fileName = archive.fileName.replace(/[^A-Za-z0-9._-]/g, '_');
     return new Response(new Uint8Array(archive.data), {
       headers: {

@@ -3,8 +3,12 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 const archives = vi.hoisted(() => new Map<string, Buffer>());
 vi.mock('@/lib/storage', () => ({
-  putUpload: async (namespace: string, key: string, data: Buffer) => { archives.set(`${namespace}/${key}`, data); },
-  deleteUpload: async (namespace: string, key: string) => { archives.delete(`${namespace}/${key}`); },
+  putUpload: async (namespace: string, key: string, data: Buffer) => {
+    archives.set(`${namespace}/${key}`, data);
+  },
+  deleteUpload: async (namespace: string, key: string) => {
+    archives.delete(`${namespace}/${key}`);
+  },
   getUpload: async (namespace: string, key: string) => archives.get(`${namespace}/${key}`),
 }));
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -86,35 +90,78 @@ async function seed(organizationId: string, label: string, catalogueEdges = fals
       },
     });
     if (catalogueEdges) {
-      const ingredient = await db.ingredient.create({ data: {
-        organizationId, name: "'Paracetamol",
-      } });
-      await db.medicineStrengthComponent.create({ data: {
-        organizationId, medicineId: medicine.id, ingredientId: ingredient.id, value: '500.000001', unit: 'mg',
-      } });
-      await db.packLevel.create({ data: {
-        organizationId, presentationId: medicine.presentations[0]!.id,
-        versionGroupId: `box-${label}-${suffix}`, version: 1, level: 'BOX',
-        unitsPerParent: 100, effectiveFrom: new Date('2026-01-01'),
-      } });
-      await db.medicineBarcode.create({ data: {
-        organizationId, presentationId: medicine.presentations[0]!.id, packLevelId: packLevel.id,
-        type: 'INTERNAL', code: `catalogue${suffix}`, normalizedCode: `catalogue${suffix}`,
-      } });
-      await db.medicineBarcode.create({ data: {
-        organizationId, presentationId: medicine.presentations[0]!.id, packLevelId: packLevel.id,
-        type: 'MANUFACTURER', code: `+pack${suffix}`, normalizedCode: `pack${suffix}`,
-      } });
-      await db.medicineBarcode.create({ data: {
-        organizationId, presentationId: medicine.presentations[0]!.id, packLevelId: null,
-        type: 'INTERNAL', code: `'+presentation${suffix}`, normalizedCode: `presentation${suffix}`,
-      } });
-      await db.medicine.create({ data: {
-        organizationId, productName: `${label} Unpacked medicine`, productFamily: 'PHARMACEUTICAL',
-      } });
+      const ingredient = await db.ingredient.create({
+        data: {
+          organizationId,
+          name: "'Paracetamol",
+        },
+      });
+      await db.medicineStrengthComponent.create({
+        data: {
+          organizationId,
+          medicineId: medicine.id,
+          ingredientId: ingredient.id,
+          value: '500.000001',
+          unit: 'mg',
+        },
+      });
+      await db.packLevel.create({
+        data: {
+          organizationId,
+          presentationId: medicine.presentations[0]!.id,
+          versionGroupId: `box-${label}-${suffix}`,
+          version: 1,
+          level: 'BOX',
+          unitsPerParent: 100,
+          effectiveFrom: new Date('2026-01-01'),
+        },
+      });
+      await db.medicineBarcode.create({
+        data: {
+          organizationId,
+          presentationId: medicine.presentations[0]!.id,
+          packLevelId: packLevel.id,
+          type: 'INTERNAL',
+          code: `catalogue${suffix}`,
+          normalizedCode: `catalogue${suffix}`,
+        },
+      });
+      await db.medicineBarcode.create({
+        data: {
+          organizationId,
+          presentationId: medicine.presentations[0]!.id,
+          packLevelId: packLevel.id,
+          type: 'MANUFACTURER',
+          code: `+pack${suffix}`,
+          normalizedCode: `pack${suffix}`,
+        },
+      });
+      await db.medicineBarcode.create({
+        data: {
+          organizationId,
+          presentationId: medicine.presentations[0]!.id,
+          packLevelId: null,
+          type: 'INTERNAL',
+          code: `'+presentation${suffix}`,
+          normalizedCode: `presentation${suffix}`,
+        },
+      });
+      await db.medicine.create({
+        data: {
+          organizationId,
+          productName: `${label} Unpacked medicine`,
+          productFamily: 'PHARMACEUTICAL',
+        },
+      });
     }
     const location = await db.pharmacyStockLocation.create({
-      data: { organizationId, branchId: branch.id, code: `MAIN-${label}`, name: 'Main store', kind: 'STORE' },
+      data: {
+        organizationId,
+        branchId: branch.id,
+        code: `MAIN-${label}`,
+        name: 'Main store',
+        kind: 'STORE',
+      },
     });
     const batch = await db.pharmacyManufacturingBatch.create({
       data: {
@@ -253,49 +300,92 @@ suite('owner data export under forced PostgreSQL RLS', () => {
 
     // Complete the supported catalogue path, rather than just counting profiler rows.
     const target = `${orgA}_import`;
-    await withTenantDb(target, (db) => db.organization.create({ data: {
-      id: target, slug: target, legalName: 'Imported pharmacy', displayName: 'Imported pharmacy', vertical: 'PHARMACY',
-    } }));
+    await withTenantDb(target, (db) =>
+      db.organization.create({
+        data: {
+          id: target,
+          slug: target,
+          legalName: 'Imported pharmacy',
+          displayName: 'Imported pharmacy',
+          vertical: 'PHARMACY',
+        },
+      })
+    );
     const csv = files.find((file) => file.name === 'medicines.csv')!.data.toString('utf8');
     const imported = await withTenantDb(target, (db) =>
       workbench.importCatalogueSource(db, {
-        organizationId: target, fileName: 'medicines.csv', csv, now: NOW,
+        organizationId: target,
+        fileName: 'medicines.csv',
+        csv,
+        now: NOW,
       })
     );
     expect(imported).toEqual({
-      sourceId: expect.any(String), batchId: expect.any(String), exceptionCount: 0,
-      rows: 3, medicines: 2, presentations: 1, packs: 2,
+      sourceId: expect.any(String),
+      batchId: expect.any(String),
+      exceptionCount: 0,
+      rows: 3,
+      medicines: 2,
+      presentations: 1,
+      packs: 2,
     });
     // The wizard kept the file as evidence and one profiled row per CSV row, with no exceptions.
     const evidence = await withTenantDb(target, async (db) => ({
       source: await db.pharmacyMigrationSource.findMany(),
-      batch: await db.pharmacyMigrationBatch.findMany({ include: { rows: true, exceptions: true } }),
+      batch: await db.pharmacyMigrationBatch.findMany({
+        include: { rows: true, exceptions: true },
+      }),
     }));
     expect(evidence.source).toEqual([
-      expect.objectContaining({ id: imported.sourceId, kind: 'EXCEL_CSV', fileName: 'medicines.csv' }),
+      expect.objectContaining({
+        id: imported.sourceId,
+        kind: 'EXCEL_CSV',
+        fileName: 'medicines.csv',
+      }),
     ]);
-    expect(evidence.batch).toEqual([expect.objectContaining({
-      id: imported.batchId, status: 'PROFILED', rowCount: 3, exceptionCount: 0,
-      profilerVersion: 'devfathom-catalogue/1', exceptions: [],
-    })]);
+    expect(evidence.batch).toEqual([
+      expect.objectContaining({
+        id: imported.batchId,
+        status: 'PROFILED',
+        rowCount: 3,
+        exceptionCount: 0,
+        profilerVersion: 'devfathom-catalogue/1',
+        exceptions: [],
+      }),
+    ]);
     expect(evidence.batch[0]!.rows.map((row) => row.sourceKey).sort()).toEqual(
       dataset.medicines.map((row) => String(row.code)).sort()
     );
     const restored = await withTenantDb(target, (db) =>
       exporter.collectPharmacyDataExport(db, target, { from: '2026-10-01', to: '2026-10-30' }, NOW)
     );
-    const values = (rows: typeof dataset.medicines) => rows.map((row) =>
-      Object.fromEntries(Object.entries(row).filter(([key]) =>
-        !['code', 'medicine_code', 'presentation_code'].includes(key)
-      ))
-    ).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    const values = (rows: typeof dataset.medicines) =>
+      rows
+        .map((row) =>
+          Object.fromEntries(
+            Object.entries(row).filter(
+              ([key]) => !['code', 'medicine_code', 'presentation_code'].includes(key)
+            )
+          )
+        )
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
     expect(values(restored.dataset.medicines)).toEqual(values(dataset.medicines));
     expect(restored.dataset.stockLots).toEqual([]);
-    expect(await withTenantDb(target, (db) => db.medicine.findMany({
-      include: { provenance: true },
-    }))).toEqual([
-      expect.objectContaining({ saleable: false, provenance: [expect.objectContaining({ status: 'UNREVIEWED', sourceType: 'IMPORT' })] }),
-      expect.objectContaining({ saleable: false, provenance: [expect.objectContaining({ status: 'UNREVIEWED', sourceType: 'IMPORT' })] }),
+    expect(
+      await withTenantDb(target, (db) =>
+        db.medicine.findMany({
+          include: { provenance: true },
+        })
+      )
+    ).toEqual([
+      expect.objectContaining({
+        saleable: false,
+        provenance: [expect.objectContaining({ status: 'UNREVIEWED', sourceType: 'IMPORT' })],
+      }),
+      expect.objectContaining({
+        saleable: false,
+        provenance: [expect.objectContaining({ status: 'UNREVIEWED', sourceType: 'IMPORT' })],
+      }),
     ]);
   }, 60_000);
 
@@ -333,19 +423,30 @@ suite('owner data export under forced PostgreSQL RLS', () => {
   it('serializes simultaneous requests for deduplication and the fifth daily slot', async () => {
     const organizationId = `${orgA}_limits`;
     await seed(organizationId, 'limits');
-    const request = () => withTenantDb(organizationId, (db) => exporter.requestPharmacyDataExport(
-      db, { organizationId, actorId: ACTOR, range: { from: '2026-10-01', to: '2026-10-30' } }, NOW
-    ));
+    const request = () =>
+      withTenantDb(organizationId, (db) =>
+        exporter.requestPharmacyDataExport(
+          db,
+          { organizationId, actorId: ACTOR, range: { from: '2026-10-01', to: '2026-10-30' } },
+          NOW
+        )
+      );
     const wave = () => Promise.all(Array.from({ length: 6 }, request));
     const first = await wave();
     expect(first.filter((result) => result.created)).toHaveLength(1);
     expect(new Set(first.map((result) => result.export.id)).size).toBe(1);
     await withTenantDb(organizationId, async (db) => {
       await db.pharmacyDataExport.updateMany({ data: { status: 'FAILED' } });
-      await db.pharmacyDataExport.createMany({ data: Array.from({ length: 3 }, () => ({
-        organizationId, requestedByUserId: ACTOR, status: 'FAILED' as const, requestedAt: NOW,
-        salesFrom: new Date('2026-10-01'), salesTo: new Date('2026-10-30'),
-      })) });
+      await db.pharmacyDataExport.createMany({
+        data: Array.from({ length: 3 }, () => ({
+          organizationId,
+          requestedByUserId: ACTOR,
+          status: 'FAILED' as const,
+          requestedAt: NOW,
+          salesFrom: new Date('2026-10-01'),
+          salesTo: new Date('2026-10-30'),
+        })),
+      });
     });
     const fifth = await wave();
     expect(fifth.filter((result) => result.created)).toHaveLength(1);
@@ -354,83 +455,153 @@ suite('owner data export under forced PostgreSQL RLS', () => {
       db.pharmacyDataExport.updateMany({ data: { status: 'FAILED' } })
     );
     const denied = await Promise.allSettled(Array.from({ length: 3 }, request));
-    expect(denied.every((result) => result.status === 'rejected' &&
-      result.reason instanceof exporter.PharmacyDataExportError && result.reason.reason === 'RATE_LIMITED'
-    )).toBe(true);
+    expect(
+      denied.every(
+        (result) =>
+          result.status === 'rejected' &&
+          result.reason instanceof exporter.PharmacyDataExportError &&
+          result.reason.reason === 'RATE_LIMITED'
+      )
+    ).toBe(true);
   }, 60_000);
 
   it('collects stock and sales from one repeatable snapshot while a sale commits', async () => {
     const organizationId = `${orgA}_snapshot`;
     const seeded = await seed(organizationId, 'snapshot');
-    const collected = await withPlatformDb(async (db) => {
-      const { withOrganizationDefaults } = await import('@/lib/tenancy/scoped-db');
-      return withOrganizationDefaults(db, organizationId, async (tx) => {
-        // Interleave a committed sale after the stock query and before the sales query.
-        const interleaved = new Proxy(tx, {
-          get(target, key) {
-            if (key !== 'pharmacySale') return Reflect.get(target, key);
-            return { findMany: async (args: Parameters<typeof tx.pharmacySale.findMany>[0]) => {
-              await withTenantDb(organizationId, async (writer) => {
-                await writer.pharmacyStockMovement.create({ data: {
-                  organizationId, branchId: seeded.branchId, inventoryLotId: seeded.lotId,
-                  stockLocationId: seeded.locationId, kind: 'SALE', disposition: 'AVAILABLE',
-                  quantityUnits: -10, sealedPackDelta: -1, actorId: ACTOR,
-                  idempotencyKey: `snapshot-sale-${suffix}`, occurredAt: NOW,
-                } });
-                await writer.pharmacySale.create({ data: {
-                  organizationId, branchId: seeded.branchId, createdByUserId: ACTOR,
-                  status: 'COMPLETED', completedAt: NOW, businessDate: new Date('2026-10-15'),
-                } });
-              });
-              return target.pharmacySale.findMany(args);
-            } };
-          },
+    const collected = await withPlatformDb(
+      async (db) => {
+        const { withOrganizationDefaults } = await import('@/lib/tenancy/scoped-db');
+        return withOrganizationDefaults(db, organizationId, async (tx) => {
+          // Interleave a committed sale after the stock query and before the sales query.
+          const interleaved = new Proxy(tx, {
+            get(target, key) {
+              if (key !== 'pharmacySale') return Reflect.get(target, key);
+              return {
+                findMany: async (args: Parameters<typeof tx.pharmacySale.findMany>[0]) => {
+                  await withTenantDb(organizationId, async (writer) => {
+                    await writer.pharmacyStockMovement.create({
+                      data: {
+                        organizationId,
+                        branchId: seeded.branchId,
+                        inventoryLotId: seeded.lotId,
+                        stockLocationId: seeded.locationId,
+                        kind: 'SALE',
+                        disposition: 'AVAILABLE',
+                        quantityUnits: -10,
+                        sealedPackDelta: -1,
+                        actorId: ACTOR,
+                        idempotencyKey: `snapshot-sale-${suffix}`,
+                        occurredAt: NOW,
+                      },
+                    });
+                    await writer.pharmacySale.create({
+                      data: {
+                        organizationId,
+                        branchId: seeded.branchId,
+                        createdByUserId: ACTOR,
+                        status: 'COMPLETED',
+                        completedAt: NOW,
+                        businessDate: new Date('2026-10-15'),
+                      },
+                    });
+                  });
+                  return target.pharmacySale.findMany(args);
+                },
+              };
+            },
+          });
+          return exporter.collectPharmacyDataExport(
+            interleaved,
+            organizationId,
+            { from: '2026-10-01', to: '2026-10-30' },
+            NOW
+          );
         });
-        return exporter.collectPharmacyDataExport(interleaved, organizationId,
-          { from: '2026-10-01', to: '2026-10-30' }, NOW);
-      });
-    }, { isolationLevel: 'RepeatableRead' });
+      },
+      { isolationLevel: 'RepeatableRead' }
+    );
     expect(collected.dataset.stockLots[0]?.quantity).toBe(120);
     expect(collected.dataset.sales).toEqual([]);
-    const after = await withTenantDb(organizationId, (db) => exporter.collectPharmacyDataExport(
-      db, organizationId, { from: '2026-10-01', to: '2026-10-30' }, NOW
-    ));
+    const after = await withTenantDb(organizationId, (db) =>
+      exporter.collectPharmacyDataExport(
+        db,
+        organizationId,
+        { from: '2026-10-01', to: '2026-10-30' },
+        NOW
+      )
+    );
     expect(after.dataset.stockLots[0]?.quantity).toBe(110);
     expect(after.dataset.sales).toHaveLength(1);
   }, 60_000);
 
-  it.each(['QUEUED', 'FAILED'] as const)('collects uploads after rollback with a %s request and no storage metadata', async (status) => {
-    const organizationId = `${orgA}_rollback_${status}`;
-    await seed(organizationId, 'rollback');
-    const requested = await withTenantDb(organizationId, (db) => exporter.requestPharmacyDataExport(
-      db, { organizationId, actorId: ACTOR, range: { from: '2026-10-01', to: '2026-10-30' } }, NOW
-    ));
-    const exportId = requested.export.id;
-    const key = `${organizationId}/pharmacy-data-exports/${exportId}.zip`;
-    await expect(withPlatformDb(async (db) => {
-      await exporter.runPharmacyDataExportJob(db,
-        { id: 'rollback-job', organizationId, attempts: 1, maxAttempts: 1 }, { exportId }, { now: NOW });
-      expect(archives.has(key)).toBe(true);
-      throw new Error('commit rejected');
-    }, { isolationLevel: 'RepeatableRead' })).rejects.toThrow('commit rejected');
-    expect(await withTenantDb(organizationId, (db) => db.pharmacyDataExport.findUnique({
-      where: { id: exportId },
-    }))).toMatchObject({ status: 'QUEUED', storageKey: null, expiresAt: null });
-    if (status === 'FAILED') await withTenantDb(organizationId, (db) => db.pharmacyDataExport.update({
-      where: { id: exportId }, data: { status: 'FAILED' },
-    }));
-    const later = status === 'FAILED'
-      ? NOW
-      : new Date(NOW.getTime() + exporter.PHARMACY_DATA_EXPORT_STALE_MS + 1);
-    await withTenantDb(organizationId, (db) => exporter.expirePharmacyDataExports(db, later));
-    expect(archives.has(key)).toBe(false);
-    expect(await withTenantDb(organizationId, (db) => db.pharmacyDataExport.findUnique({
-      where: { id: exportId },
-    }))).toMatchObject({ status: 'EXPIRED' });
-    expect(await withPlatformDb((db) => exporter.runPharmacyDataExportJob(db,
-      { id: 'retry-job', organizationId, attempts: 2, maxAttempts: 2 }, { exportId }, { now: later }
-    ))).toMatchObject({ skipped: 'EXPIRED' });
-    expect(archives.has(key)).toBe(false);
-  }, 60_000);
-
+  it.each(['QUEUED', 'FAILED'] as const)(
+    'collects uploads after rollback with a %s request and no storage metadata',
+    async (status) => {
+      const organizationId = `${orgA}_rollback_${status}`;
+      await seed(organizationId, 'rollback');
+      const requested = await withTenantDb(organizationId, (db) =>
+        exporter.requestPharmacyDataExport(
+          db,
+          { organizationId, actorId: ACTOR, range: { from: '2026-10-01', to: '2026-10-30' } },
+          NOW
+        )
+      );
+      const exportId = requested.export.id;
+      const key = `${organizationId}/pharmacy-data-exports/${exportId}.zip`;
+      await expect(
+        withPlatformDb(
+          async (db) => {
+            await exporter.runPharmacyDataExportJob(
+              db,
+              { id: 'rollback-job', organizationId, attempts: 1, maxAttempts: 1 },
+              { exportId },
+              { now: NOW }
+            );
+            expect(archives.has(key)).toBe(true);
+            throw new Error('commit rejected');
+          },
+          { isolationLevel: 'RepeatableRead' }
+        )
+      ).rejects.toThrow('commit rejected');
+      expect(
+        await withTenantDb(organizationId, (db) =>
+          db.pharmacyDataExport.findUnique({
+            where: { id: exportId },
+          })
+        )
+      ).toMatchObject({ status: 'QUEUED', storageKey: null, expiresAt: null });
+      if (status === 'FAILED')
+        await withTenantDb(organizationId, (db) =>
+          db.pharmacyDataExport.update({
+            where: { id: exportId },
+            data: { status: 'FAILED' },
+          })
+        );
+      const later =
+        status === 'FAILED'
+          ? NOW
+          : new Date(NOW.getTime() + exporter.PHARMACY_DATA_EXPORT_STALE_MS + 1);
+      await withTenantDb(organizationId, (db) => exporter.expirePharmacyDataExports(db, later));
+      expect(archives.has(key)).toBe(false);
+      expect(
+        await withTenantDb(organizationId, (db) =>
+          db.pharmacyDataExport.findUnique({
+            where: { id: exportId },
+          })
+        )
+      ).toMatchObject({ status: 'EXPIRED' });
+      expect(
+        await withPlatformDb((db) =>
+          exporter.runPharmacyDataExportJob(
+            db,
+            { id: 'retry-job', organizationId, attempts: 2, maxAttempts: 2 },
+            { exportId },
+            { now: later }
+          )
+        )
+      ).toMatchObject({ skipped: 'EXPIRED' });
+      expect(archives.has(key)).toBe(false);
+    },
+    60_000
+  );
 });

@@ -14,12 +14,17 @@ beforeEach(() => {
 describe('tenant transaction isolation options', () => {
   it('sets platform isolation before installing scope or running collection queries', async () => {
     await withPlatformDb((tx) => tx.restaurantPrintRoute.findMany(), {
-      isolationLevel: 'RepeatableRead', timeout: 300_000,
+      isolationLevel: 'RepeatableRead',
+      timeout: 300_000,
     });
     expect(mocks.transaction.mock.calls[0][1]).toEqual({
-      maxWait: 10_000, timeout: 300_000, isolationLevel: 'RepeatableRead',
+      maxWait: 10_000,
+      timeout: 300_000,
+      isolationLevel: 'RepeatableRead',
     });
-    expect(mocks.scope.mock.invocationCallOrder[0]).toBeLessThan(mocks.query.mock.invocationCallOrder[0]);
+    expect(mocks.scope.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.query.mock.invocationCallOrder[0]
+    );
   });
 
   it('forwards explicit isolation while applying tenant and user scope before queries', async () => {

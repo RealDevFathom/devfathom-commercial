@@ -207,7 +207,10 @@ export function DataExportPanel({
                 const status = STATUS[item.status];
                 const rows = totalRows(item.rowCounts);
                 return (
-                  <tr className="border-b border-border-subtle hover:bg-surface-sunken" key={item.id}>
+                  <tr
+                    className="border-b border-border-subtle hover:bg-surface-sunken"
+                    key={item.id}
+                  >
                     <td className="px-2 py-3 text-text-body">
                       {formatKarachiDateTime(new Date(item.requestedAt))}
                     </td>
@@ -263,7 +266,10 @@ export function DataExportPanel({
  * POST the PIN with the export id (never in a URL) and save the attachment.
  * Returns the server's refusal text, or null once the file has been saved.
  */
-export async function downloadExportArchive(input: { id: string; pin: string }): Promise<string | null> {
+export async function downloadExportArchive(input: {
+  id: string;
+  pin: string;
+}): Promise<string | null> {
   const response = await fetch('/api/pharmacy/data-export', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

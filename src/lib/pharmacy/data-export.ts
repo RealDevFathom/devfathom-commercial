@@ -487,23 +487,33 @@ export async function collectPharmacyDataExport(
       cold_chain: medicine.coldChain,
       saleable: medicine.saleable,
       medicine_code: medicine.id,
-      strength_components: JSON.stringify(medicine.strengths.map((component) => ({
-        ingredient: component.ingredient.name, value: component.value.toString(), unit: component.unit,
-      }))),
+      strength_components: JSON.stringify(
+        medicine.strengths.map((component) => ({
+          ingredient: component.ingredient.name,
+          value: component.value.toString(),
+          unit: component.unit,
+        }))
+      ),
     };
     if (medicine.presentations.length === 0) {
       medicineRows.push({ code: medicine.id, ...shared });
       continue;
     }
     for (const presentation of medicine.presentations) {
-      const barcodeData = (barcode: typeof presentation.barcodes[number]) => ({
-        code: barcode.code, type: barcode.type, normalized_code: barcode.normalizedCode,
+      const barcodeData = (barcode: (typeof presentation.barcodes)[number]) => ({
+        code: barcode.code,
+        type: barcode.type,
+        normalized_code: barcode.normalizedCode,
       });
       for (const barcode of presentation.barcodes) {
         barcodeRows.push({
-          code: barcode.id, medicine_code: medicine.id, presentation_code: presentation.id,
-          pack_level_code: barcode.packLevelId, barcode_value: barcode.code,
-          barcode_type: barcode.type, normalized_code: barcode.normalizedCode,
+          code: barcode.id,
+          medicine_code: medicine.id,
+          presentation_code: presentation.id,
+          pack_level_code: barcode.packLevelId,
+          barcode_value: barcode.code,
+          barcode_type: barcode.type,
+          normalized_code: barcode.normalizedCode,
         });
       }
       const base = {
@@ -512,8 +522,9 @@ export async function collectPharmacyDataExport(
         dosage_form: presentation.dosageForm,
         route: presentation.route,
         presentation_code: presentation.id,
-        presentation_barcodes: JSON.stringify(presentation.barcodes
-          .filter((barcode) => barcode.packLevelId === null).map(barcodeData)),
+        presentation_barcodes: JSON.stringify(
+          presentation.barcodes.filter((barcode) => barcode.packLevelId === null).map(barcodeData)
+        ),
       };
       const conversions = packConversions(presentation.packLevels, now);
       if (conversions.length === 0) {
@@ -526,8 +537,11 @@ export async function collectPharmacyDataExport(
           ...base,
           pack: conversion.canonicalUnitsPerPack,
           pack_level: conversion.level,
-          pack_barcodes: JSON.stringify(presentation.barcodes
-            .filter((barcode) => barcode.packLevelId === conversion.packLevelId).map(barcodeData)),
+          pack_barcodes: JSON.stringify(
+            presentation.barcodes
+              .filter((barcode) => barcode.packLevelId === conversion.packLevelId)
+              .map(barcodeData)
+          ),
           barcode:
             presentation.barcodes.find((barcode) => barcode.packLevelId === conversion.packLevelId)
               ?.code ?? null,
@@ -1098,6 +1112,7 @@ export async function collectPharmacyDataExport(
           canonicalUnitsPerSaleUnit: true,
           canonicalUnits: true,
           unitPriceMinor: true,
+          grossMinor: true,
           unitCostMinor: true,
           discountKind: true,
           discountMinor: true,
@@ -1118,7 +1133,7 @@ export async function collectPharmacyDataExport(
     let gross = 0;
     let discount = 0;
     for (const line of sale.lines) {
-      const lineGross = line.quantity * line.unitPriceMinor;
+      const lineGross = line.grossMinor;
       gross += lineGross;
       discount += line.discountMinor;
       saleLineRows.push({
@@ -1216,7 +1231,10 @@ export async function collectPharmacyDataExport(
       balance_delta: entry.balanceDelta,
       batch: entry.batchNumber,
       qualified_person: chooseRegisterPersonName(
-        [...(staffNames.get(entry.witnessedByUserId) ?? []), userNames.get(entry.witnessedByUserId)],
+        [
+          ...(staffNames.get(entry.witnessedByUserId) ?? []),
+          userNames.get(entry.witnessedByUserId),
+        ],
         entry.witnessedByUserId
       ),
       pin_witnessed: Boolean(entry.signatureRef),
@@ -1313,7 +1331,14 @@ export async function runPharmacyDataExportJob(
     `);
     const request = await tx.pharmacyDataExport.findFirst({
       where: { id: exportId, organizationId },
-      select: { id: true, status: true, salesFrom: true, salesTo: true, requestedByUserId: true, requestedAt: true },
+      select: {
+        id: true,
+        status: true,
+        salesFrom: true,
+        salesTo: true,
+        requestedByUserId: true,
+        requestedAt: true,
+      },
     });
     if (!request) return { exportId, skipped: 'missing' };
     if (request.status !== 'QUEUED') return { exportId, skipped: request.status };
@@ -1457,7 +1482,11 @@ export async function expirePharmacyDataExports(db: ScopedDb, now: Date): Promis
       continue;
     }
     await db.pharmacyDataExport.updateMany({
-      where: { id: row.id, organizationId: row.organizationId, status: { in: ['READY', 'FAILED', 'QUEUED'] } },
+      where: {
+        id: row.id,
+        organizationId: row.organizationId,
+        status: { in: ['READY', 'FAILED', 'QUEUED'] },
+      },
       data: { status: 'EXPIRED', storageKey: null },
     });
     count += 1;
