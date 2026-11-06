@@ -8,6 +8,7 @@ const store = vi.hoisted(() => ({
   consents: [] as Row[],
   catalog: [] as Row[],
   placed: [] as unknown[],
+  activeTransactions: 0,
   failConsent: false,
   failCommit: false,
   failOrder: false,
@@ -91,6 +92,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       const logs = store.logs.map((row) => ({ ...row }));
       const consents = store.consents.map((row) => ({ ...row }));
       const placed = [...store.placed];
+      store.activeTransactions += 1;
       try {
         const result = await run(db);
         if (store.failCommit) throw new Error('transaction commit failed');
@@ -101,6 +103,8 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         store.consents = consents;
         store.placed = placed;
         throw error;
+      } finally {
+        store.activeTransactions -= 1;
       }
     },
   };
@@ -189,6 +193,7 @@ beforeEach(() => {
   store.logs = [];
   store.consents = [];
   store.placed = [];
+  store.activeTransactions = 0;
   store.catalog = [
     {
       id: 'row',
@@ -401,6 +406,63 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     await expect(
       handleInboundWhatsAppMessage('org_a', provider, message('Panadol 2 packs'))
     ).resolves.toBe('NO_CONSENT');
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('commits STOP and separate replay claims before acknowledgement, without resending on retry', async () => {
+    knownCustomer(true);
+    const stop = message('STOP');
+    const snapshot = () =>
+      structuredClone({
+        activeTransactions: store.activeTransactions,
+        customers: store.customers,
+        consents: store.consents,
+        logs: store.logs,
+      });
+    let stateAtSend: ReturnType<typeof snapshot> | undefined;
+    const sendText = provider.sendText.bind(provider);
+    const send = vi.spyOn(provider, 'sendText').mockImplementation(async (input) => {
+      stateAtSend = snapshot();
+      return sendText(input);
+    });
+
+    await expect(handleInboundWhatsAppMessage('org_a', provider, stop)).resolves.toBe('OPTED_OUT');
+    expect(stateAtSend).toEqual({
+      activeTransactions: 0,
+      customers: [
+        expect.objectContaining({
+          id: 'customer-1',
+          whatsappOptIn: false,
+          whatsappOptInChangedAt: stop.receivedAt,
+        }),
+      ],
+      consents: [
+        expect.objectContaining({ purpose: 'MARKETING', channel: 'WHATSAPP', granted: false }),
+      ],
+      logs: [
+        expect.objectContaining({
+          customerId: 'customer-1',
+          direction: 'INBOUND',
+          kind: 'OPT_OUT',
+          status: 'RECEIVED',
+          dedupeKey: `in:${stop.providerMessageId}`,
+          providerMessageId: stop.providerMessageId,
+        }),
+        expect.objectContaining({
+          customerId: 'customer-1',
+          direction: 'OUTBOUND',
+          kind: 'CONSENT_ACK',
+          status: 'PENDING',
+          dedupeKey: `out:${stop.providerMessageId}`,
+        }),
+      ],
+    });
+
+    const beforeReplay = snapshot();
+    store.failConsent = true;
+    await expect(handleInboundWhatsAppMessage('org_a', provider, stop)).resolves.toBe('DUPLICATE');
+    expect(snapshot()).toEqual(beforeReplay);
+    expect(send).toHaveBeenCalledTimes(1);
     expect(provider.calls).toHaveLength(1);
   });
 
