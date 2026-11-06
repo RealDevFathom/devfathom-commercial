@@ -89,7 +89,17 @@ export function GrowthPanel({
         )}
         {history?.insights.map((insight) => (
           <article key={insight.id} className="space-y-4 border-t border-border-subtle pt-4">
-            <StatusPill status={insight.status} label={insight.status.replaceAll('_', ' ')} />
+            <StatusPill
+              status={insight.status}
+              label={
+                {
+                  READY: 'Ready to review',
+                  UNAVAILABLE: 'Suggestions unavailable',
+                  INVALID: 'No suggestion generated',
+                  INSUFFICIENT_DATA: 'More evidence needed',
+                }[insight.status]
+              }
+            />
             <p className="break-words text-sm text-text-muted">
               {localTime(insight.snapshot.current.from, timeZone)} up to{' '}
               {localTime(insight.snapshot.current.cutoff, timeZone)} ({zone}). Saved{' '}
@@ -136,7 +146,11 @@ export function GrowthPanel({
               <p className="text-sm text-text-body">
                 {insight.status === 'INSUFFICIENT_DATA'
                   ? 'Insufficient aggregate evidence after privacy suppression. No recommendation generated.'
-                  : `AI insight unavailable (${insight.failureCode ?? 'OUTPUT'}). No substitute recommendation generated. Manual drafts remain available.`}
+                  : insight.failureCode === 'CONFIGURATION'
+                    ? "AI suggestions aren't set up yet. Contact support."
+                    : insight.failureCode === 'PROVIDER' || insight.failureCode === 'TIMEOUT'
+                      ? 'AI suggestions are not available right now. Manual drafts remain available.'
+                      : 'No suggestion could be generated from this evidence. Manual drafts remain available.'}
               </p>
             )}
             {insight.status === 'READY' &&

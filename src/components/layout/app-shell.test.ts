@@ -49,7 +49,7 @@ describe('AppShell module guard', () => {
       'utf8'
     );
     expect(topbar).toContain('href="/dashboard"');
-    expect(topbar).toContain('aria-label="Open dashboard"');
+    expect(topbar).toContain('<span className="sr-only">Open dashboard</span>');
     expect(topbar).toContain('text-text-body xl:inline-flex');
   });
 

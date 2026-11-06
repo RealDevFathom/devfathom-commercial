@@ -67,6 +67,7 @@ function latestUserText(messages: UIMessage[]): string {
 }
 
 const UNAVAILABLE = 'Ask Fathom is currently unavailable. No cached answer was used.';
+const NOT_CONFIGURED = "Ask Fathom isn't set up yet, contact support.";
 
 export async function POST(req: Request) {
   try {
@@ -152,7 +153,7 @@ async function respond(req: Request) {
   // disabled or incomplete provider (AI_PROVIDER, AI_MODEL, provider credentials) ends here.
   if (!check.provider.ready) {
     logAIProviderUnavailable('ASSISTANT_PROVIDER_UNAVAILABLE', check.provider);
-    return Response.json({ error: UNAVAILABLE }, { status: 503 });
+    return Response.json({ error: NOT_CONFIGURED }, { status: 503 });
   }
   // The routed chain can also be off (SuperAdmin switch) or have every candidate
   // at its monthly spend cap: answer with the same unavailable state before streaming.

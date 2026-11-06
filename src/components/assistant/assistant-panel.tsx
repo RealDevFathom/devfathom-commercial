@@ -173,7 +173,9 @@ function AssistantConversation({
   const { open, setOpen } = useAssistant();
   const [input, setInput] = useState('');
   const [emptyHint, setEmptyHint] = useState(false);
-  const [requestError, setRequestError] = useState<'permission' | 'provider' | null>(null);
+  const [requestError, setRequestError] = useState<
+    'permission' | 'configuration' | 'provider' | null
+  >(null);
   const [notice, setNotice] = useState<'empty' | 'stopped' | null>(null);
   // Set before the SDK reports `submitted` and held until every automatic
   // continuation settles, so a repeat Enter can never queue a second question.
@@ -195,7 +197,11 @@ function AssistantConversation({
         // The SDK reports provider errors through onError; sendMessage can resolve
         // on failure. The question stays in its bubble for an explicit retry.
         setRequestError(
-          error.message === 'ASSISTANT_PERMISSION_DENIED' ? 'permission' : 'provider'
+          error.message === 'ASSISTANT_PERMISSION_DENIED'
+            ? 'permission'
+            : error.message === 'ASSISTANT_NOT_CONFIGURED'
+              ? 'configuration'
+              : 'provider'
         );
       },
       onFinish: ({ isAbort, isError, message }) => {
@@ -242,7 +248,7 @@ function AssistantConversation({
 
   const busy = pending || status === 'submitted' || status === 'streaming';
   const failed = requestError !== null || status === 'error';
-  const denied = requestError === 'permission';
+  const denied = requestError === 'permission' || requestError === 'configuration';
   const last = messages.at(-1);
   const unanswered = !busy && last?.role === 'user';
   const canRetry =
@@ -371,8 +377,14 @@ function AssistantConversation({
               role="alert"
               className="space-y-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
             >
-              <p>{denied ? PERMISSION_COPY : UNAVAILABLE_COPY}</p>
-              {retryButton}
+              <p>
+                {requestError === 'permission'
+                  ? PERMISSION_COPY
+                  : requestError === 'configuration'
+                    ? "Ask Fathom isn't set up yet, contact support."
+                    : UNAVAILABLE_COPY}
+              </p>
+              {requestError !== 'configuration' && retryButton}
             </div>
           ) : statusText ? (
             <div role="status" className="space-y-2 text-sm text-muted-foreground">
