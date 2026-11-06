@@ -28,6 +28,14 @@ describe('evaluatePackAuthentication', () => {
     });
   });
 
+  it('does not flag GS1 day 00 when it resolves to the recorded month end', () => {
+    const monthEnd = parseGs1DataMatrix('(01)08901234567890(17)251200(10)LOT-7(21)SERIAL-9');
+    expect(evaluatePackAuthentication({ ...facts, parsed: monthEnd })).toMatchObject({
+      status: 'VERIFIED',
+      issues: [],
+    });
+  });
+
   it('keeps missing and non-GS1 codes advisory and never labels them counterfeit', () => {
     const result = evaluatePackAuthentication({ ...facts, parsed: parseGs1DataMatrix('') });
     expect(result).toMatchObject({ status: 'NOT_VERIFIABLE', advisory: true });

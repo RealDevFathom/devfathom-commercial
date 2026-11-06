@@ -40,9 +40,9 @@ export function evaluatePackAuthentication(
   if (facts.parsed.fields.batch && facts.knownMedicineId && !facts.recordedBatch)
     issues.push('UNKNOWN_BATCH');
   if (
-    facts.parsed.fields.expiry &&
+    facts.parsed.fields.expiryDate &&
     facts.recordedBatch &&
-    facts.parsed.fields.expiry !== facts.recordedBatch.expiry
+    facts.parsed.fields.expiryDate.slice(2).replaceAll('-', '') !== facts.recordedBatch.expiry
   )
     issues.push('EXPIRY_MISMATCH');
   if (facts.serialSeenOnDifferentPack) issues.push('DUPLICATE_SERIAL');

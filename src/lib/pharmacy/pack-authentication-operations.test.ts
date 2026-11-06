@@ -84,6 +84,35 @@ describe('pack authentication branch evidence', () => {
     expect(db.pharmacyInventoryLot.findFirst).not.toHaveBeenCalled();
   });
 
+  it('keeps an expiry discrepancy unverified when the branch has no receipt', async () => {
+    const db = fixture();
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
+      id: 'batch-a',
+      batchNumber: 'LOT-7',
+      expiresAt: new Date('2026-12-31T00:00:00Z'),
+      state: 'ACTIVE',
+    });
+    await expect(authenticatePharmacyPack(db as never, input)).resolves.toMatchObject({
+      status: 'NOT_VERIFIABLE',
+      advisory: true,
+      issues: expect.arrayContaining(['NOT_VERIFIABLE', 'EXPIRY_MISMATCH']),
+    });
+  });
+
+  it('retains the expiry discrepancy when a branch receipt exists', async () => {
+    const db = fixture({ received: true });
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
+      id: 'batch-a',
+      batchNumber: 'LOT-7',
+      expiresAt: new Date('2026-12-31T00:00:00Z'),
+      state: 'ACTIVE',
+    });
+    await expect(authenticatePharmacyPack(db as never, input)).resolves.toMatchObject({
+      status: 'FLAGGED',
+      issues: ['EXPIRY_MISMATCH'],
+    });
+  });
+
   it('keeps a known recall blocked even without a branch receipt', async () => {
     const db = fixture({ recalled: true });
     await expect(authenticatePharmacyPack(db as never, input)).resolves.toMatchObject({

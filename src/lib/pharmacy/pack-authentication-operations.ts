@@ -88,7 +88,7 @@ export async function authenticatePharmacyPack(
     input.source === 'DISPENSING' &&
     batch &&
     barcode?.packLevelId &&
-    evaluated.status === 'VERIFIED'
+    evaluated.status !== 'BLOCKED_RECALL'
       ? await db.pharmacyInventoryLot.findFirst({
           where: {
             organizationId: input.organizationId,
@@ -101,13 +101,13 @@ export async function authenticatePharmacyPack(
         })
       : null;
   const verdict =
-    input.source === 'DISPENSING' && evaluated.status === 'VERIFIED' && !branchReceipt
+    input.source === 'DISPENSING' && evaluated.status !== 'BLOCKED_RECALL' && !branchReceipt
       ? {
           ...evaluated,
           status: 'NOT_VERIFIABLE' as const,
-          issues: ['NOT_VERIFIABLE'] as typeof evaluated.issues,
+          issues: [...new Set(['NOT_VERIFIABLE' as const, ...evaluated.issues])],
           explanation:
-            'This pack and batch cannot be matched to a recorded receipt at this branch.',
+            `This pack and batch cannot be matched to a recorded receipt at this branch. ${evaluated.status !== 'VERIFIED' ? evaluated.explanation : ''}`.trim(),
           advisory: true,
         }
       : evaluated;
