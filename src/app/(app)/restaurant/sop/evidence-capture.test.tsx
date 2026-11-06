@@ -44,7 +44,6 @@ const props = {
   occurrenceId: 'occurrence-internal',
   occurrenceStepId: 'step-internal',
   purpose: 'photo' as const,
-  staff: [{ id: 'staff-internal', displayName: 'Mina Khan' }],
 };
 
 afterEach(() => {
@@ -53,14 +52,13 @@ afterEach(() => {
 });
 
 describe('EvidenceCapture', () => {
-  it('offers named tenant staff and mobile camera/file capture without exposing IDs as copy', () => {
+  it('offers mobile camera/file capture without exposing IDs as copy', () => {
     const { container } = render(<EvidenceCapture {...props} />);
 
-    expect(screen.getByLabelText('Uploading staff')).toHaveTextContent('Mina Khan');
     const file = screen.getByLabelText('Take or choose photo');
     expect(file).toHaveAttribute('accept', 'image/jpeg,image/png,image/webp');
     expect(file).toHaveAttribute('capture', 'environment');
-    expect(container).not.toHaveTextContent('staff-internal');
+    expect(container).not.toHaveTextContent('step-internal');
     expect(screen.getByText(/Photo proof required/)).toBeInTheDocument();
   });
 
@@ -70,9 +68,6 @@ describe('EvidenceCapture', () => {
     render(<EvidenceCapture {...props} />);
 
     const proof = new File(['proof'], 'proof.jpg', { type: 'image/jpeg' });
-    fireEvent.change(screen.getByLabelText('Uploading staff'), {
-      target: { value: 'staff-internal' },
-    });
     const fileInput = screen.getByLabelText('Take or choose photo');
     Object.defineProperty(fileInput, 'files', {
       configurable: true,
@@ -104,11 +99,11 @@ describe('EvidenceCapture', () => {
     );
   });
 
-  it('keeps signature capture keyboard/file based and disables upload without active staff', () => {
-    render(<EvidenceCapture {...props} purpose="signature" staff={[]} />);
+  it('keeps signature capture keyboard/file based and states server-side attribution', () => {
+    const { container } = render(<EvidenceCapture {...props} purpose="signature" />);
 
     expect(screen.getByLabelText('Choose signature image')).not.toHaveAttribute('capture');
-    expect(screen.getByRole('button', { name: 'Upload signature proof' })).toBeDisabled();
-    expect(screen.getByRole('status')).toHaveTextContent('No active restaurant staff profile');
+    expect(screen.getByText('Recorded under your linked staff profile.')).toBeInTheDocument();
+    expect(container.querySelector('[name="uploaderStaffProfileId"]')).toBeNull();
   });
 });
