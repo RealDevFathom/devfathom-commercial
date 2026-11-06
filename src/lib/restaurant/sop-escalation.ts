@@ -28,8 +28,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * Quiet hours (branch-local):
  *   policy.quietHoursStartMinutes / quietHoursEndMinutes — minutes-of-day in the
  *   branch timezone. When the current wall-clock minute falls inside the quiet
- *   window, delivery is DEFERRED (a FIRED event is NOT written; the job re-runs on
- *   the next opportunity). Deferral is not a failure — the handler returns normally.
+ *   window, delivery is DEFERRED (a FIRED event is NOT written). The completed
+ *   job releases its idempotency key so the next overdue sweep can enqueue the
+ *   step again after quiet hours. The same release applies to every other
+ *   recoverable deferral (delay not yet elapsed, policy inactive/inapplicable).
  *
  * Idempotency: each step fires AT MOST ONCE per policy × occurrence combination.
  * The FIRED event for a step is the logical guard, but a guard that is only read
@@ -79,7 +81,7 @@ type EscalationEvent = {
 };
 
 /** Minutes-of-day in the branch's local timezone, derived from an Intl formatter. */
-function localMinutesOfDay(branchTimezone: string, now: Date): number {
+export function localMinutesOfDay(branchTimezone: string, now: Date): number {
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: branchTimezone,
@@ -97,7 +99,11 @@ function localMinutesOfDay(branchTimezone: string, now: Date): number {
 }
 
 /** Returns true if `minuteOfDay` falls within the quiet window (wraps midnight). */
-function isQuietHour(minuteOfDay: number, startMinutes: number, endMinutes: number): boolean {
+export function isQuietHour(
+  minuteOfDay: number,
+  startMinutes: number,
+  endMinutes: number
+): boolean {
   if (startMinutes <= endMinutes) {
     return minuteOfDay >= startMinutes && minuteOfDay < endMinutes;
   }
@@ -161,6 +167,8 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
         select: {
           id: true,
           active: true,
+          scope: true,
+          branchId: true,
           stopOnAcknowledged: true,
           stopOnVerified: true,
           quietHoursStartMinutes: true,
@@ -178,7 +186,30 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
           },
         },
       });
-      if (!policy || !policy.active) return; // policy removed or deactivated
+      // Every non-terminal early return below completes this job without firing
+      // or stopping the chain. The worker then marks it SUCCEEDED, so the stable
+      // occurrence/policy/step key must be released or enqueue() would
+      // deduplicate every later sweep against this event-free row forever (e.g.
+      // after a delay increase, a quiet-hour deferral, or deactivate→reactivate).
+      // The producer re-derives due-ness from live policy state, so releasing the
+      // key cannot cause an early or duplicate fire.
+      const releaseQueueIdentity = () =>
+        tx.restaurantJob.update({
+          where: { id: job.id },
+          data: { idempotencyKey: null },
+        });
+
+      if (!policy || !policy.active) {
+        // policy removed or deactivated — a reactivated policy must be able to resume
+        await releaseQueueIdentity();
+        return;
+      }
+      // Jobs are durable input. Revalidate branch applicability here rather than
+      // trusting that every producer (or replay) paired the records correctly.
+      if (policy.scope === 'BRANCH' && policy.branchId !== occ.branchId) {
+        await releaseQueueIdentity();
+        return;
+      }
 
       // ── Fold event ledger ─────────────────────────────────────────────────
       const events: EscalationEvent[] = await tx.restaurantSopEscalationEvent.findMany({
@@ -187,8 +218,9 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
         select: { id: true, escalationStepId: true, kind: true, createdAt: true },
       });
 
-      const hasStopped = events.some((e) => e.kind === 'STOPPED');
-      if (hasStopped) return; // chain already halted
+      // A job can remain queued while acknowledgement, verification, or chain
+      // exhaustion durably stops the chain. Never replay work past that marker.
+      if (events.some((event) => event.kind === 'STOPPED')) return;
 
       // STOP: policy.stopOnVerified re-checked against live state (occ.status)
       // already done above; also check acknowledged
@@ -236,10 +268,20 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
       // predecessor, so it anchors to the occurrence's window close instead. The
       // comparison is strict-less-than, so a step whose delay has exactly elapsed
       // fires on this pass rather than waiting for the next one.
-      const lastFiredEvent = [...events].reverse().find((e) => e.kind === 'FIRED');
+      const policyStepIds = new Set(steps.map((step) => step.id));
+      const lastFiredEvent = [...events]
+        .reverse()
+        .find(
+          (e) =>
+            e.kind === 'FIRED' &&
+            e.escalationStepId !== null &&
+            policyStepIds.has(e.escalationStepId)
+        );
       const anchor = lastFiredEvent ? lastFiredEvent.createdAt : occ.windowEndsAt;
       if (now.getTime() - anchor.getTime() < nextStep.delayMinutes * 60_000) {
-        // Delay not yet elapsed — defer silently
+        // Delay not yet elapsed (e.g. the delay was raised while this job was
+        // queued) — defer and let a later sweep enqueue the step once it is due.
+        await releaseQueueIdentity();
         return;
       }
 
@@ -248,7 +290,8 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
         const branchTz = occ.branch?.timezone ?? 'UTC';
         const localMin = localMinutesOfDay(branchTz, now);
         if (isQuietHour(localMin, policy.quietHoursStartMinutes, policy.quietHoursEndMinutes)) {
-          // Quiet hours — defer without recording an event
+          // Quiet hours — defer; the next overdue sweep re-enqueues the step.
+          await releaseQueueIdentity();
           return;
         }
       }

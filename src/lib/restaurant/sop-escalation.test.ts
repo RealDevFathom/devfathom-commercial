@@ -31,6 +31,8 @@ const BASE_OCCURRENCE = {
 const BASE_POLICY = {
   id: 'policy_1',
   active: true,
+  scope: 'BRANCH',
+  branchId: 'branch_1',
   stopOnAcknowledged: true,
   stopOnVerified: true,
   quietHoursStartMinutes: null,
@@ -64,6 +66,7 @@ interface DbMocks {
   eventCreate: ReturnType<typeof vi.fn>;
   outboxCreateMany: ReturnType<typeof vi.fn>;
   queryRaw: ReturnType<typeof vi.fn>;
+  jobUpdate: ReturnType<typeof vi.fn>;
 }
 
 function makeDb(opts: {
@@ -102,6 +105,7 @@ function makeDb(opts: {
     }));
   const outboxCreateMany = vi.fn().mockResolvedValue({ count: 1 });
   const queryRaw = vi.fn().mockResolvedValue([{ id: 'occ_1' }]);
+  const jobUpdate = vi.fn().mockResolvedValue({ id: 'job_1' });
 
   const dbObj = {
     restaurantSopOccurrence: {
@@ -125,6 +129,7 @@ function makeDb(opts: {
     restaurantEventOutbox: {
       createMany: outboxCreateMany,
     },
+    restaurantJob: { update: jobUpdate },
     $queryRaw: queryRaw,
   };
   (dbObj as Record<string, unknown>).$transaction = vi.fn(async (fn: (tx: unknown) => unknown) =>
@@ -142,6 +147,7 @@ function makeDb(opts: {
       eventCreate,
       outboxCreateMany,
       queryRaw,
+      jobUpdate,
     },
   };
 }
@@ -167,6 +173,18 @@ function makeCtx(
 }
 
 describe('sopEscalationHandler', () => {
+  it('rejects a durable job that pairs an occurrence with another branch policy', async () => {
+    const { db, mocks } = makeDb({
+      policy: { ...BASE_POLICY, branchId: 'branch_2' },
+    });
+
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventFindMany).not.toHaveBeenCalled();
+    expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
+    expect(mocks.eventCreate).not.toHaveBeenCalled();
+  });
+
   it('keys escalation independently to each same-date INTERVAL occurrence id', async () => {
     const { db, mocks } = makeDb({});
     await sopEscalationHandler(makeCtx(db, { occurrenceId: 'interval_0930' }));
@@ -221,6 +239,17 @@ describe('sopEscalationHandler', () => {
     expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
   });
 
+  it('does not replay a queued job after the ledger has stopped the chain', async () => {
+    const { db, mocks } = makeDb({
+      events: [{ id: 'evt_stop', escalationStepId: null, kind: 'STOPPED' }],
+    });
+
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventCreate).not.toHaveBeenCalled();
+    expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
+  });
+
   it('stops when all steps are exhausted', async () => {
     const { db, mocks } = makeDb({
       events: [
@@ -234,7 +263,7 @@ describe('sopEscalationHandler', () => {
     expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
   });
 
-  it('does nothing during quiet hours', async () => {
+  it('releases the queue identity during quiet hours so a later sweep can retry', async () => {
     // 14:00 UTC = 840 min. Quiet window 13:00–15:00 (780–900).
     const { db, mocks } = makeDb({
       policy: { ...BASE_POLICY, quietHoursStartMinutes: 780, quietHoursEndMinutes: 900 },
@@ -243,6 +272,10 @@ describe('sopEscalationHandler', () => {
 
     expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
     expect(mocks.eventCreate).not.toHaveBeenCalled();
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: 'job_1' },
+      data: { idempotencyKey: null },
+    });
   });
 
   it('defers step 2 when 30-min delay has not elapsed since last FIRED', async () => {
@@ -254,6 +287,50 @@ describe('sopEscalationHandler', () => {
     await sopEscalationHandler(makeCtx(db));
 
     expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
+    // The SUCCEEDED-but-unfired job must not hold the step key forever.
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: 'job_1' },
+      data: { idempotencyKey: null },
+    });
+  });
+
+  it('releases the queue identity when a queued step delay was raised before execution', async () => {
+    // Enqueued when a 0-minute delay was due; the operator then raised it to 90
+    // minutes. The job must defer AND free its key so the next sweep can
+    // re-enqueue the step once the new delay elapses.
+    const { db, mocks } = makeDb({
+      policy: {
+        ...BASE_POLICY,
+        steps: [{ ...BASE_POLICY.steps[0], delayMinutes: 90 }, BASE_POLICY.steps[1]],
+      },
+    });
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventCreate).not.toHaveBeenCalled();
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: 'job_1' },
+      data: { idempotencyKey: null },
+    });
+  });
+
+  it('releases the queue identity when the policy is inactive so reactivation can resume', async () => {
+    const { db, mocks } = makeDb({ policy: { ...BASE_POLICY, active: false } });
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventFindMany).not.toHaveBeenCalled();
+    expect(mocks.eventCreate).not.toHaveBeenCalled();
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: 'job_1' },
+      data: { idempotencyKey: null },
+    });
+  });
+
+  it('keeps the queue identity once the step has fired', async () => {
+    const { db, mocks } = makeDb({});
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventCreate.mock.calls[0][0].data.kind).toBe('FIRED');
+    expect(mocks.jobUpdate).not.toHaveBeenCalled();
   });
 
   it('fires step 2 once the delay has exactly elapsed', async () => {

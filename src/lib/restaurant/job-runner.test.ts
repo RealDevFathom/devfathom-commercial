@@ -64,9 +64,22 @@ function createJobDb(seed: Row[] = []) {
   const jobs = new Map<string, Row>();
   const executions: Row[] = [];
   let seq = 0;
+  let cursor = 0;
   for (const row of seed) jobs.set(row.id as string, { ...row });
 
   const restaurantJob = {
+    findFirst: async ({ where }: { where: { idempotencyKey: string } }) => {
+      const row = [...jobs.values()].find(
+        (candidate) => candidate.idempotencyKey === where.idempotencyKey
+      );
+      return row ? { ...row } : null;
+    },
+    create: async ({ data }: { data: Row }) => {
+      const id = `job_${(seq += 1)}`;
+      const row = { id, createdAt: T0, ...data };
+      jobs.set(id, row);
+      return { ...row };
+    },
     findUnique: async ({ where }: { where: { id: string } }) => {
       const row = jobs.get(where.id);
       return row ? { ...row } : null;
@@ -97,7 +110,14 @@ function createJobDb(seed: Row[] = []) {
 
   const db = {
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
+    // Producer savepoints (SAVEPOINT / RELEASE / ROLLBACK TO) are no-ops here.
+    $executeRaw: async () => 0,
     $queryRaw: async (sql: { values: unknown[]; strings?: readonly string[] }) => {
+      // Persistent SOP-escalation traversal cursor upsert (tagged-template call,
+      // so the first argument is the TemplateStringsArray itself).
+      if (Array.isArray(sql) && (sql as readonly string[]).join('').includes('ON CONFLICT')) {
+        return [{ position: BigInt(cursor++) }];
+      }
       const now = sql.values[0] as Date;
       const typeFilter = sql.values[1] as string | undefined;
       const excludesType = sql.strings?.join('').includes('<>') ?? false;
@@ -235,6 +255,7 @@ describe('runRestaurantWorkerTick', () => {
       now: T0,
       outboxConsumers: registry,
       discoverOrganizations: async () => ['org_a', 'org_b'],
+      produceDueJobs: async () => 0,
       runInOrg: (orgId, work) => work(jobDbs[orgId]!.db),
       outboxClient: (orgId) => outboxDbs[orgId]!.db,
     });
@@ -250,6 +271,80 @@ describe('runRestaurantWorkerTick', () => {
     expect(orgB.jobs.jobs.get('b1')!.status).toBe('SUCCEEDED');
   });
 
+  it('services a later tenant after a large first-tenant escalation sweep', async () => {
+    const orgA = createJobDb();
+    const orgB = createJobDb([queuedJob({ id: 'b1' })]);
+    Object.assign(orgA.db, {
+      restaurantSopEscalationPolicy: {
+        count: async () => 50,
+        findMany: async ({ skip, take }: { skip: number; take: number }) =>
+          Array.from({ length: 50 }, (_, i) => ({
+            id: `policy_${i}`,
+            scope: 'ORG',
+            branchId: null,
+            stopOnAcknowledged: false,
+            quietHoursStartMinutes: null,
+            quietHoursEndMinutes: null,
+            steps: [{ id: `step_${i}`, delayMinutes: 0 }],
+          })).slice(skip, skip + take),
+      },
+      restaurantSopOccurrence: {
+        count: async () => 100,
+        findMany: async ({ skip, take }: { skip: number; take: number }) =>
+          Array.from({ length: 100 }, (_, i) => ({
+            id: `occ_${i}`,
+            branchId: 'branch_1',
+            windowEndsAt: T0,
+            branch: { timezone: 'UTC' },
+            escalationEvents: [],
+          })).slice(skip, skip + take),
+      },
+    });
+    Object.assign(orgB.db, {
+      restaurantSopEscalationPolicy: { count: async () => 0, findMany: async () => [] },
+      restaurantSopOccurrence: { count: async () => 0, findMany: async () => [] },
+    });
+    const dbs = { org_a: orgA.db, org_b: orgB.db };
+
+    const result = await runRestaurantWorkerTick({
+      workerId: 'worker-1',
+      now: T0,
+      discoverOrganizations: async () => ['org_a', 'org_b'],
+      runInOrg: (orgId, work) => work(dbs[orgId as keyof typeof dbs]),
+      outboxClient: () => createOutboxDb().db,
+    });
+
+    expect(result.organizations).toBe(2);
+    expect(orgA.jobs.size).toBe(500);
+    expect(orgB.jobs.get('b1')!.status).toBe('SUCCEEDED');
+  });
+
+  it('isolates a failing escalation producer so recovery and drain still run', async () => {
+    mocks.runRestaurantJob.mockResolvedValue(undefined);
+    const orgA = createJobDb([queuedJob({ id: 'a1' })]);
+    const orgB = createJobDb([queuedJob({ id: 'b1' })]);
+    const dbs = { org_a: orgA.db, org_b: orgB.db };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await runRestaurantWorkerTick({
+      workerId: 'worker-1',
+      now: T0,
+      discoverOrganizations: async () => ['org_a', 'org_b'],
+      produceDueJobs: async () => {
+        throw new Error('sweep exploded');
+      },
+      runInOrg: (orgId, work) => work(dbs[orgId as keyof typeof dbs]),
+      outboxClient: () => createOutboxDb().db,
+    });
+
+    expect(result.organizations).toBe(2);
+    expect(result.jobs.succeeded).toBe(2);
+    expect(orgA.jobs.get('a1')!.status).toBe('SUCCEEDED');
+    expect(orgB.jobs.get('b1')!.status).toBe('SUCCEEDED');
+    expect(consoleError).toHaveBeenCalledTimes(2);
+    consoleError.mockRestore();
+  });
+
   it('settles a failing handler as a retry and records the execution', async () => {
     mocks.runRestaurantJob.mockRejectedValue(new Error('handler exploded'));
     const org = createJobDb([queuedJob({ id: 'j1' })]);
@@ -258,6 +353,7 @@ describe('runRestaurantWorkerTick', () => {
       workerId: 'worker-1',
       now: T0,
       discoverOrganizations: async () => ['org_a'],
+      produceDueJobs: async () => 0,
       runInOrg: (_orgId, work) => work(org.db),
       outboxClient: () => createOutboxDb().db,
     });
@@ -288,6 +384,7 @@ describe('runRestaurantWorkerTick', () => {
       workerId: 'worker-1',
       now: T0,
       discoverOrganizations: async () => ['org_a'],
+      produceDueJobs: async () => 0,
       runInOrg: (_orgId, work) => work(org.db),
       outboxClient: () => createOutboxDb().db,
     });
@@ -313,6 +410,7 @@ describe('runRestaurantWorkerTick', () => {
       workerId: 'worker-1',
       now: T0,
       discoverOrganizations: async () => ['org_a'],
+      produceDueJobs: async () => 0,
       runInOrg: (_orgId, work) => work(org.db),
       outboxClient: () => createOutboxDb().db,
     });
@@ -335,12 +433,66 @@ describe('runRestaurantWorkerTick', () => {
       now: T0,
       signal: controller.signal,
       discoverOrganizations: discover,
+      produceDueJobs: async () => 0,
       runInOrg: runInOrg as never,
       outboxClient: () => createOutboxDb().db,
     });
 
     expect(result.organizations).toBe(0);
     expect(runInOrg).not.toHaveBeenCalled();
+  });
+
+  it('produces and drains an escalation job when the tenant queue starts empty', async () => {
+    const org = createJobDb();
+    Object.assign(org.db, {
+      restaurantSopEscalationPolicy: {
+        count: async () => 1,
+        findMany: async () => [
+          {
+            id: 'policy_1',
+            scope: 'BRANCH',
+            branchId: 'branch_1',
+            stopOnAcknowledged: false,
+            quietHoursStartMinutes: null,
+            quietHoursEndMinutes: null,
+            steps: [{ id: 'step_1', delayMinutes: 0 }],
+          },
+        ],
+      },
+      restaurantSopOccurrence: {
+        count: async () => 1,
+        findMany: async () => [
+          {
+            id: 'occ_1',
+            branchId: 'branch_1',
+            windowEndsAt: T0,
+            branch: { timezone: 'UTC' },
+            escalationEvents: [],
+          },
+        ],
+      },
+    });
+
+    expect(org.jobs.size).toBe(0);
+    const result = await runRestaurantWorkerTick({
+      workerId: 'worker-1',
+      now: T0,
+      discoverOrganizations: async () => ['org_with_due_occurrence'],
+      runInOrg: (_orgId, work) => work(org.db),
+      outboxClient: () => createOutboxDb().db,
+    });
+
+    expect(result.jobs).toMatchObject({ claimed: 1, succeeded: 1 });
+    expect(mocks.runRestaurantJob).toHaveBeenCalledWith(
+      expect.objectContaining({ job: expect.objectContaining({ type: 'sop.runEscalation' }) })
+    );
+    expect([...org.jobs.values()]).toEqual([
+      expect.objectContaining({
+        type: 'sop.runEscalation',
+        idempotencyKey: 'sop-escalation:occ_1:policy_1:step_1',
+        status: 'SUCCEEDED',
+      }),
+    ]);
   });
 });
 
@@ -355,6 +507,7 @@ describe('runRestaurantWorker (daemon loop)', () => {
       maxTicks: 3,
       sleep,
       discoverOrganizations: async () => [],
+      produceDueJobs: async () => 0,
       onTick: (tick) => ticks.push(tick),
     });
 
@@ -375,6 +528,7 @@ describe('runRestaurantWorker (daemon loop)', () => {
       signal: controller.signal,
       sleep,
       discoverOrganizations: async () => [],
+      produceDueJobs: async () => 0,
       onTick: () => controller.abort(),
     });
 
