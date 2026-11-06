@@ -704,9 +704,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-text-strong">{patient.displayName}</p>
-                  <p className="font-mono text-xs text-text-muted">
-                    {patient.phone ?? '—'} · {patient.cnic ?? '—'}
-                  </p>
+                  <p className="font-mono text-xs text-text-muted">{patient.phone ?? '—'}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   {patient.dispensingConsent ? (
@@ -960,6 +958,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               Patient address and a pharmacist PIN are required. Use a prescription, or record an
               emergency supply. Online only.
             </p>
+            <h5 className="font-semibold text-text-strong">1 · Patient</h5>
             <Label className="text-xs text-text-muted" htmlFor="controlled-address">
               Patient address
             </Label>
@@ -970,6 +969,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               value={controlled.patientAddress}
               onChange={(event) => controlled.onChange('patientAddress', event.target.value)}
             />
+            <h5 className="font-semibold text-text-strong">2 · Prescription</h5>
             <label
               className="flex min-h-11 items-center gap-2 text-sm text-text-body"
               htmlFor="controlled-emergency"
@@ -1027,6 +1027,34 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   ))
                 )}
             </select>
+            <label
+              className="flex min-h-11 items-center gap-2 text-sm text-text-body"
+              htmlFor="controlled-rx-serial"
+            >
+              <input
+                id="controlled-rx-serial"
+                type="checkbox"
+                checked={controlled.rxSerialWritten}
+                disabled={disabled}
+                onChange={(event) => controlled.onChange('rxSerialWritten', event.target.checked)}
+              />
+              Register serial written on the prescription
+            </label>
+            <Label className="text-xs text-text-muted" htmlFor="controlled-ref-serial">
+              Earlier register serial
+            </Label>
+            <Input
+              id="controlled-ref-serial"
+              className="h-11"
+              inputMode="numeric"
+              disabled={disabled}
+              value={controlled.refSerial}
+              onChange={(event) => controlled.onChange('refSerial', event.target.value)}
+            />
+            <p className="text-xs text-text-muted">
+              Leave it blank unless this sale repeats an earlier register entry.
+            </p>
+            <h5 className="font-semibold text-text-strong">3 · Approving pharmacist</h5>
             <Label htmlFor="controlled-pharmacist">Approving pharmacist</Label>
             <select
               id="controlled-pharmacist"
@@ -1064,34 +1092,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               value={controlled.pin}
               onChange={(event) => controlled.onChange('pin', event.target.value)}
             />
-            <label
-              className="flex min-h-11 items-center gap-2 text-sm text-text-body"
-              htmlFor="controlled-rx-serial"
-            >
-              <input
-                id="controlled-rx-serial"
-                type="checkbox"
-                checked={controlled.rxSerialWritten}
-                disabled={disabled}
-                onChange={(event) => controlled.onChange('rxSerialWritten', event.target.checked)}
-              />
-              Register serial written on the prescription
-            </label>
-            <Label className="text-xs text-text-muted" htmlFor="controlled-ref-serial">
-              Earlier register serial
-            </Label>
-            <Input
-              id="controlled-ref-serial"
-              className="h-11"
-              inputMode="numeric"
-              disabled={disabled}
-              value={controlled.refSerial}
-              onChange={(event) => controlled.onChange('refSerial', event.target.value)}
-            />
-            <p className="text-xs text-text-muted">
-              Leave it blank unless this sale repeats an earlier register entry. PIN is cleared
-              after each attempt.
-            </p>
+            <p className="text-xs text-text-muted">The PIN is cleared after each attempt.</p>
           </section>
         ) : null}
       </div>

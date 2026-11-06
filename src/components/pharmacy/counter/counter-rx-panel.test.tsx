@@ -188,7 +188,8 @@ describe('CounterRxPanel checks', () => {
     render(<CounterRxPanel {...props({ patient, onCapturePrescription, onClearPatient })} />);
 
     expect(screen.getByText('Sana Tariq')).toBeInTheDocument();
-    expect(screen.getByText('******0147 · *********1234')).toBeInTheDocument();
+    expect(screen.getByText('******0147')).toBeInTheDocument();
+    expect(screen.queryByText(/1234/)).not.toBeInTheDocument();
     expect(screen.getByText('Dispensing consent')).toBeInTheDocument();
     expect(screen.getByText('In date')).toBeInTheDocument();
     expect(screen.getByText(/held at pharmacy/)).toBeInTheDocument();
