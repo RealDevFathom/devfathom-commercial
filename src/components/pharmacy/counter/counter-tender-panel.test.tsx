@@ -26,7 +26,7 @@ function enterCash() {
 }
 
 describe('DEV-618 payment panel', () => {
-  it('shows the core tenders and hides unconfigured wallets', () => {
+  it('shows payment methods even when a wallet is not configured', () => {
     setup();
     expect(screen.getByText('Balance due').parentElement).toHaveTextContent('250.00');
     expect(screen.getByText('PKR')).toBeVisible();
@@ -38,6 +38,9 @@ describe('DEV-618 payment panel', () => {
       'CARD',
       'BANK_TRANSFER',
       'KHATA',
+      'RAAST',
+      'JAZZCASH',
+      'EASYPAISA',
     ]);
   });
 
@@ -89,23 +92,14 @@ describe('DEV-618 payment panel', () => {
 });
 
 describe('#710 Raast / wallet counter controls', () => {
-  it('records a configured wallet without QR or IBAN using its full transaction ID', async () => {
+  it('blocks a wallet with neither destination nor QR and explains how to set it up', () => {
     const { props } = setup({
       manualSettings: { JAZZCASH: { destination: '', allowReferenceSkip: false } },
     });
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'JAZZCASH' } });
-    expect(screen.queryByRole('img')).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
-    fireEvent.change(screen.getByLabelText('Transaction ID'), {
-      target: { value: 'JC-1234567890' },
-    });
-    fireEvent.keyDown(screen.getByLabelText('Transaction ID'), { key: 'Enter' });
-    await waitFor(() =>
-      expect(props.onTender).toHaveBeenCalledWith(
-        { type: 'JAZZCASH', amountMinor: 25000, payerName: 'Ayesha', providerRef: 'JC-1234567890' },
-        { amount: '', cashReceived: '' }
-      )
-    );
+    expect(screen.getByRole('alert')).toHaveTextContent('isn’t set up at this branch');
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(props.onTender).not.toHaveBeenCalled();
   });
   it.each(['RAAST', 'JAZZCASH', 'EASYPAISA'])(
     'shows %s merchant details and requires payer plus reference',
@@ -129,11 +123,19 @@ describe('#710 Raast / wallet counter controls', () => {
       expect(screen.getByText('PK00MERCHANT')).toBeVisible();
       expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
       fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
-      fireEvent.change(screen.getByLabelText('Transaction ID'), {
+      fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
         target: { value: '123' },
       });
       expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
-      fireEvent.change(screen.getByLabelText('Transaction ID'), {
+      fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
+        target: { value: '1234567' },
+      });
+      expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+      fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
+        target: { value: '12ab' },
+      });
+      expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+      fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
         target: { value: '001234' },
       });
       fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));

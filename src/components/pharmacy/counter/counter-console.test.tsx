@@ -478,7 +478,7 @@ describe('PharmacyCounterConsole tender recovery', () => {
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
     fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
-    fireEvent.change(screen.getByLabelText('Transaction ID'), {
+    fireEvent.change(screen.getByLabelText('Transaction ID · last 4 to 6 digits'), {
       target: { value: '001234' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));

@@ -178,12 +178,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const manual = isManualTender(type);
     const manualCard = type === 'CARD';
     const merchant = manual && type !== 'CARD' ? manualSettings?.[type] : undefined;
-    const visibleTenderTypes = TENDER_TYPES.filter(
-      (entry) =>
-        !isManualTender(entry.value) ||
-        entry.value === 'CARD' ||
-        Boolean(manualSettings?.[entry.value])
-    );
+    const merchantReady = Boolean(merchant?.destination.trim() || merchant?.qrImageDataUrl);
+    const walletReferenceValid = referenceSkipped || /^\d{4,6}$/.test(providerRef.trim());
     useEffect(() => {
       if (editable && merchant && !merchant.allowReferenceSkip) setReferenceSkipped(false);
     }, [editable, merchant]);
@@ -233,7 +229,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       (!manual ||
         (!manualSettingsLoading &&
           !manualSettingsError &&
-          (manualCard || Boolean(merchant)) &&
+          (manualCard || (merchantReady && walletReferenceValid)) &&
           capture?.success === true &&
           (!referenceSkipped || merchant?.allowReferenceSkip === true))) &&
       (!isKhata ||
@@ -441,7 +437,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             }}
             className="h-11 w-full rounded-sm border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           >
-            {visibleTenderTypes.map((entry) => (
+            {TENDER_TYPES.map((entry) => (
               <option key={entry.value} value={entry.value}>
                 {entry.label}
               </option>
@@ -484,10 +480,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
             {manualSettingsLoading ? <p role="status">Loading merchant details…</p> : null}
             {manualSettingsError ? <p role="alert">Merchant details could not be loaded.</p> : null}
-            {!manualCard && !manualSettingsLoading && !manualSettingsError && !merchant ? (
+            {!manualCard && !manualSettingsLoading && !manualSettingsError && !merchantReady ? (
               <p role="alert">
-                {selected.label} is not set up for this branch. Ask the owner to enable it in
-                Finance.
+                {selected.label} isn’t set up at this branch. No till number or QR is saved yet. An
+                administrator adds it in Settings › Payments. Take cash or another method until
+                then.
               </p>
             ) : null}
             {onReloadManualSettings ? (
@@ -500,7 +497,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 Reload merchant details
               </Button>
             ) : null}
-            {manualCard || merchant ? (
+            {manualCard || merchantReady ? (
               <>
                 <p className="font-mono text-lg tabular-nums">
                   {amountMinor === null ? 'Enter amount' : `PKR ${formatMinor(amountMinor)}`}
@@ -538,17 +535,21 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   </>
                 ) : null}
                 <Label htmlFor="manual-provider-reference">
-                  {manualCard ? 'Terminal reference or card last 4 digits' : 'Transaction ID'}
+                  {manualCard
+                    ? 'Terminal reference or card last 4 digits'
+                    : 'Transaction ID · last 4 to 6 digits'}
                 </Label>
                 <Input
                   id="manual-provider-reference"
                   className="min-h-11"
-                  inputMode="text"
+                  inputMode={manualCard ? 'text' : 'numeric'}
                   value={providerRef}
                   maxLength={120}
                   disabled={!editable || referenceSkipped}
                   aria-invalid={
-                    !referenceSkipped && providerRef !== '' && providerRef.trim().length < 4
+                    !referenceSkipped &&
+                    providerRef !== '' &&
+                    (manualCard ? providerRef.trim().length < 4 : !walletReferenceValid)
                   }
                   aria-describedby="manual-reference-help"
                   onChange={(event) => setProviderRef(event.target.value)}
@@ -558,7 +559,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     ? 'Reference explicitly skipped under branch policy.'
                     : manualCard
                       ? 'Enter the terminal reference or the card’s last 4 digits.'
-                      : 'Enter the payer’s transaction ID.'}
+                      : 'Enter the last 4 to 6 digits, numbers only.'}
                 </p>
                 {manualCard ? (
                   <>
