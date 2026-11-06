@@ -140,8 +140,11 @@ describe('PlatformAuditPage', () => {
           ],
         },
         select: { id: true },
+        orderBy: { id: 'asc' },
+        take: 201,
       });
     }
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Search')).toHaveAttribute(
       'placeholder',
       'Search actor, action, target, or reason'
@@ -165,6 +168,40 @@ describe('PlatformAuditPage', () => {
     expect(csv).toContain(`'` + '=HYPERLINK(""https://example.invalid"")');
     expect(csv).toContain('audit-002');
     expect(csv).not.toContain('audit-001');
+  });
+
+  it.each([
+    { platform: 201, tenant: 0, truncated: true },
+    { platform: 0, tenant: 201, truncated: true },
+    { platform: 200, tenant: 200, truncated: false },
+  ])('bounds broad actor matches and says so: %j', async ({ platform, tenant, truncated }) => {
+    const ids = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, i) => ({ id: `${prefix}-${String(i).padStart(3, '0')}` }));
+    const findMany = vi.fn().mockResolvedValue([]);
+    mocks.withPlatformDb.mockImplementation((run) =>
+      run({
+        platformAuditLog: { findMany },
+        platformUser: { findMany: vi.fn().mockResolvedValue(ids('platform', platform)) },
+        user: { findMany: vi.fn().mockResolvedValue(ids('tenant', tenant)) },
+      })
+    );
+    render(await PlatformAuditPage({ searchParams: Promise.resolve({ q: '@' }) }));
+    const or = findMany.mock.calls[0][0].where.OR;
+    const inList = (field: string) =>
+      or.find((clause: Record<string, unknown>) => field in clause)[field].in;
+    expect(inList('actorPlatformUserId')).toEqual(
+      ids('platform', Math.min(platform, 200)).map((a) => a.id)
+    );
+    expect(inList('actorTenantUserId')).toEqual(
+      ids('tenant', Math.min(tenant, 200)).map((a) => a.id)
+    );
+    if (truncated) {
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Actor search matched more than 200 accounts, so only the first 200 are included. Refine the term or use the Actor ID filter.'
+      );
+    } else {
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    }
   });
 
   it.each([true, false])(

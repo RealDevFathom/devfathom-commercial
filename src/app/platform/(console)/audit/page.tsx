@@ -4,6 +4,8 @@ import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platf
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
 
+const ACTOR_MATCH_LIMIT = 200;
+
 export default async function PlatformAuditPage({
   searchParams,
 }: {
@@ -52,7 +54,7 @@ export default async function PlatformAuditPage({
   const pageSize = 100;
   const success =
     query.outcome === 'success' ? true : query.outcome === 'failure' ? false : undefined;
-  const { rows, platformActorsById, tenantActorsById } = await withPlatformDb(async (db) => {
+  const audit = await withPlatformDb(async (db) => {
     // Actor IDs are immutable historical references, not foreign keys: accounts
     // may be deleted while their audit records must remain unchanged.
     const actorSearch = {
@@ -61,12 +63,20 @@ export default async function PlatformAuditPage({
         { email: { contains: q, mode: 'insensitive' as const } },
       ],
     };
-    const matchingPlatformActors =
-      q && !invalid
-        ? await db.platformUser.findMany({ where: actorSearch, select: { id: true } })
-        : [];
-    const matchingTenantActors =
-      q && !invalid ? await db.user.findMany({ where: actorSearch, select: { id: true } }) : [];
+    // Bound each lookup so a broad term cannot pull every account into the
+    // audit query's IN lists (Prisma rejects >32,766 bind parameters).
+    const actorLookup = {
+      where: actorSearch,
+      select: { id: true },
+      orderBy: { id: 'asc' as const },
+      take: ACTOR_MATCH_LIMIT + 1,
+    };
+    const platformMatches = q && !invalid ? await db.platformUser.findMany(actorLookup) : [];
+    const tenantMatches = q && !invalid ? await db.user.findMany(actorLookup) : [];
+    const actorMatchesTruncated =
+      platformMatches.length > ACTOR_MATCH_LIMIT || tenantMatches.length > ACTOR_MATCH_LIMIT;
+    const matchingPlatformActors = platformMatches.slice(0, ACTOR_MATCH_LIMIT);
+    const matchingTenantActors = tenantMatches.slice(0, ACTOR_MATCH_LIMIT);
     const where: Prisma.PlatformAuditLogWhereInput = {
       ...(invalid ? { id: { in: [] } } : {}),
       ...(organizationId ? { organizationId } : {}),
@@ -137,8 +147,10 @@ export default async function PlatformAuditPage({
       rows: logs,
       platformActorsById: new Map(platformActors.map((actor) => [actor.id, actor])),
       tenantActorsById: new Map(tenantActors.map((actor) => [actor.id, actor])),
+      actorMatchesTruncated,
     };
   });
+  const { rows, platformActorsById, tenantActorsById, actorMatchesTruncated } = audit;
 
   const logs = rows.slice(0, pageSize);
   const last = logs.at(-1);
@@ -254,6 +266,15 @@ export default async function PlatformAuditPage({
       {invalid ? (
         <p role="alert" className="mt-4 text-sm text-destructive">
           Invalid date range or pagination cursor. Correct the dates or return to the first page.
+        </p>
+      ) : null}
+      {actorMatchesTruncated ? (
+        <p
+          role="status"
+          className="mt-4 rounded-xl border border-warning/40 bg-warning/5 px-4 py-3 text-sm text-text-body"
+        >
+          Actor search matched more than {ACTOR_MATCH_LIMIT} accounts, so only the first{' '}
+          {ACTOR_MATCH_LIMIT} are included. Refine the term or use the Actor ID filter.
         </p>
       ) : null}
       <div className="mt-4 flex flex-wrap items-center gap-4 text-sm">
