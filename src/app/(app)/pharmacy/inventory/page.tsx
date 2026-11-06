@@ -57,6 +57,9 @@ const tone = (value: string): 'neutral' | 'success' | 'warning' | 'danger' =>
       : ['APPROVED', 'RECEIVED', 'CLOSED', 'ACKNOWLEDGED'].includes(value)
         ? 'success'
         : 'neutral';
+// These recall procedures are gated by `regulatory` (pharmacy:safety), not pharmacy:inventory,
+// so a refusal on them must not be explained as missing inventory access.
+const SAFETY_GATED_ACTIONS = new Set(['create-recall', 'ack-recall', 'close-recall']);
 
 async function tenantContext() {
   const actor = await resolveTenantActor();
@@ -276,6 +279,7 @@ export default async function PharmacyInventoryPage({
   async function perform(data: FormData) {
     'use server';
     const branchId = field(data, 'branchId');
+    const action = field(data, 'action');
     let destination: string;
     let actionCtx: Awaited<ReturnType<typeof tenantContext>> = null;
     try {
@@ -283,7 +287,6 @@ export default async function PharmacyInventoryPage({
       if (!actionCtx?.session?.user)
         throw new Error('Your session expired. Sign in and try again.');
       const actionCaller = pharmacyInventoryRouter.createCaller(actionCtx);
-      const action = field(data, 'action');
       if (action === 'create-location')
         await actionCaller.createLocation({
           branchId,
@@ -424,7 +427,9 @@ export default async function PharmacyInventoryPage({
       // only when the actor genuinely lacks `pharmacy:inventory`; other refusals stay generic.
       void error;
       const accessDenied =
-        isPharmacyActionForbidden(error) && !(await hasInventoryAccess(actionCtx));
+        !SAFETY_GATED_ACTIONS.has(action) &&
+        isPharmacyActionForbidden(error) &&
+        !(await hasInventoryAccess(actionCtx));
       destination = url(
         branchId,
         accessDenied

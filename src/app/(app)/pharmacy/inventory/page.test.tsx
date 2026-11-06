@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   writeOff: vi.fn(),
   release: vi.fn(),
   createLocation: vi.fn(),
+  acknowledgeRecall: vi.fn(),
   can: vi.fn(),
   redirect: vi.fn(),
 }));
@@ -107,6 +108,7 @@ beforeEach(() => {
     writeOff: mocks.writeOff,
     releaseQuarantinedPart: mocks.release,
     createLocation: mocks.createLocation,
+    acknowledgeRecall: mocks.acknowledgeRecall,
   });
   mocks.can.mockResolvedValue(true);
   mocks.createLocation.mockResolvedValue({});
@@ -379,5 +381,31 @@ describe('Stock location creation access (issue #976)', () => {
       'The inventory action could not be completed. Review the fields and try again.'
     );
     expect(String(mocks.redirect.mock.calls[0]?.[0])).not.toContain('unique constraint');
+  });
+
+  it('keeps a FORBIDDEN recall refusal generic because recalls need pharmacy:safety', async () => {
+    const { TRPCError } = await import('@trpc/server');
+    ctx.db.pharmacyRecallNotice.findMany.mockResolvedValue([
+      {
+        id: 'recall-1',
+        reference: 'RC-1',
+        reason: 'Contamination',
+        status: 'OPEN',
+        acknowledgements: [],
+      },
+    ]);
+    mocks.can.mockResolvedValue(false);
+    mocks.acknowledgeRecall.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+    await show();
+    fireEvent.submit(screen.getByRole('button', { name: 'Acknowledge branch' }).closest('form')!);
+    await waitFor(() => expect(mocks.redirect).toHaveBeenCalled());
+    expect(mocks.acknowledgeRecall).toHaveBeenCalledExactlyOnceWith({
+      branchId: branch.id,
+      recallNoticeId: 'recall-1',
+    });
+    expect(redirectedNotice()).toEqual({
+      notice: 'The inventory action could not be completed. Review the fields and try again.',
+      kind: 'error',
+    });
   });
 });
