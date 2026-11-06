@@ -203,6 +203,51 @@ describe('CounterSearchResults safety flags', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('shows the server-derived price and equivalent availability for each sale unit', () => {
+    const units: CounterSearchRow['saleableUnits'] = [
+      {
+        kind: 'PACK',
+        levelLabel: 'BOX',
+        canonicalUnitsPerSaleUnit: 100,
+        wholeUnits: 2,
+        unitPriceMinor: 25000,
+        proRataCeilingMinor: 25000,
+      },
+      {
+        kind: 'STRIP',
+        levelLabel: 'STRIP',
+        canonicalUnitsPerSaleUnit: 10,
+        wholeUnits: 24,
+        unitPriceMinor: 2500,
+        proRataCeilingMinor: 2500,
+      },
+      {
+        kind: 'UNIT',
+        levelLabel: 'UNIT',
+        canonicalUnitsPerSaleUnit: 1,
+        wholeUnits: 240,
+        unitPriceMinor: 250,
+        proRataCeilingMinor: 250,
+      },
+    ];
+    render(
+      <CounterSearchResults
+        rows={[{ ...row, saleableUnits: units }]}
+        state="ready"
+        query="para"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    const result = screen.getByRole('button', { name: /Paracetamol/ });
+    expect(result).toHaveTextContent('Estimated prices and equivalent stock:');
+    expect(result).toHaveTextContent('250.00 per pack · 2 available (100 units each)');
+    expect(result).toHaveTextContent('25.00 per strip · 24 available (10 units each)');
+    expect(result).toHaveTextContent('2.50 per unit · 240 available (1 unit each)');
+  });
+
   it('keeps unavailable stock selectable for demand capture without inventing lot metadata', () => {
     const unavailable: CounterSearchRow = {
       ...row,

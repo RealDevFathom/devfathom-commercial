@@ -228,6 +228,18 @@ export function CounterSearchResults({
                 {` · ${row.onHandUnits} units`}
                 {notes.length ? ` · ${notes.join(' · ')}` : ''}
               </span>
+              {row.saleableUnits.length > 0 ? (
+                <span className="col-span-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-body">
+                  <span>Estimated prices and equivalent stock:</span>
+                  {row.saleableUnits.map((unit, index) => (
+                    <span key={`${unit.kind}-${index}`}>
+                      {formatMinor(unit.unitPriceMinor)} per {unit.kind.toLowerCase()} ·{' '}
+                      {unit.wholeUnits} available ({unit.canonicalUnitsPerSaleUnit}{' '}
+                      {unit.canonicalUnitsPerSaleUnit === 1 ? 'unit' : 'units'} each)
+                    </span>
+                  ))}
+                </span>
+              ) : null}
               {safety.length > 0 ? (
                 <span className="col-span-2 flex flex-wrap gap-1">
                   {safety.map((flag) => (
