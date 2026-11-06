@@ -490,5 +490,105 @@
    "verdict": "PASS",
    "details": "SEC-1 is resolved at 857ab4287. verifyOwnerExportPin no longer takes a caller's client. It opens its own withTenantDb transaction for the owner's org and user and locks the credential row FOR UPDATE, so a /api/trpc rollback can no longer discard a wrong-PIN strike on request or download. The new test shows strikes 1-4 persist, the fifth locks, and the correct PIN is then refused, and it fails on the old code. Refusals are unchanged and fail closed. e250f6006 changes only test seed data"
   }
+ },
+ "1066": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At fix commit 6381e5a0b all four spec items are resolved. All selectors use 'Operator reason' and no 'Reason (required)' remains. The pattern check reads validity.patternMismatch with no RegExp, and tests cover the min/max/pattern messages and maxlength=500. I re-ran the 4 affected test files: 53/53 pass. eslint and prettier are clean on the 9 PR files, and the branch merges cleanly into develop. Not run: Playwright e2e (only selectors changed), Semgrep (not installed) and tsc (fixer's report only)"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix commit 6381e5a0b changes only client-side validation, unit tests and e2e selectors. It removes the runtime RegExp built from props, the construct behind the Semgrep ReDoS finding, and uses the browser's own pattern check instead. route.ts is unchanged: the 400 body still carries only the error and fieldErrors with no Zod internals, and PlatformSecurityError still passes through verbatim; route.test.ts asserts both and passes. There are no auth, data-access or secret changes"
+  }
+ },
+ "1064": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 7fc894abd, devices:revoke is in ALL_ACTIONS and default-deny in POLICIES, and the abac count of 48 matches the catalogue. A scoped tsc over the PR files passes, while b31874551 still fails at restaurant-devices.ts:47. On a fresh real DB, the abac, devices and devices-auth suites pass 109/109. Reverting the branch check, the gate or the manager devices:revoke fixture each fails a test. The develop merge is clean. ESLint passes. The restaurant-devices.ts prettier warnings predate the PR. No CI ran ([skip ci])"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "7fc894abd changes only the ABAC catalogue and tests. devices:revoke has empty POLICIES, so no legacy ADMIN fallback grants it, and no runtime code iterates ALL_ACTIONS to grant actions. Only explicit org-role grants, overrides, devices:* or * pass the gate. Revoke still checks devices:revoke at the procedure gate and at the device's branch before any co-auth or REVOKED write. A real-DB deny test now proves the branch check. No new risk"
+  }
+ },
+ "1062": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Fix a9b2e060e only adds adjustedByUserId and adjustedByStaffProfileId to the test fixture type, matching the Prisma model. Full tsc at a9b2e060e no longer shows TS2353; its 4 remaining errors are in untouched files and match the merge-base baseline exactly. restaurant-shifts.test.ts passes 36/36, and the new test fails if the adjustments guard is removed. eslint and prettier are clean, and the branch merges cleanly into develop 616c8eb63"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix a9b2e060e only changes a type in a test file and does not touch runtime code. reviewShiftSwap still requires staff:manage, branch authorization and the workforce module, and it keeps the FOR UPDATE lock. It now rejects approval with CONFLICT when the only attendance is a time adjustment. A mutation run confirmed the regression test catches removal of that guard. The PR adds no new inputs or raw SQL"
+  }
+ },
+ "1051": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At b0d20bc67 both items are fixed. The variant test page now spreads the base fixture, and a targeted tsc gives 0 errors; the pre-fix test reproduces TS2739. prettier and eslint are clean on both files. vitest related passes 24/24. Against the base console the new test fails (1/24), so it still guards the change. The fix touches only the test fixture and one formatting line, and git merge-tree shows the branch merges cleanly into current develop"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix commit b0d20bc67 changes only a test fixture spread and joins one JSX line; no logic changes. Across the PR, the diff is still limited to the menu-import console and its test. Variant names and prices render as escaped React text with no HTML sink. No server, query, org-scope or capability code changed, and menu:import still gates reviewLine and commit. Not blocking: the variant confirmation exists only in the client"
+  }
+ },
+ "964": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At 589ef1cac the new hotel_ tables are listed in the governance test; the dropped hotel_room_housekeeping table makes 11 exact. Create now refuses a missing or inactive room type, an over-capacity party, or a BED party over 1, writing nothing. 469 hotel server and router unit tests and all src/lib/hotel tests pass, except the PHARMACY digest test, which fails the same way at merge-base 8b20396. A typecheck of the changed files and their imports is clean, eslint shows 0 errors, prettier is clean, and develop merges with no conflicts. I did not re-run the DB tests"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "At 589ef1cac the 60-night cap is checked with stayNightCount() arithmetic in the create, availability and quote input checks. stayDates() refuses more than 60 nights before its loop. A 0000-01-01..9999-12-31 request is now rejected as a departureDate validation issue in about 1 ms, not by building about 3.65M dates. The new room-type read is parameterized, scoped to organization and branch, and runs FOR SHARE under the property lock and forced RLS. No new findings"
+  }
+ },
+ "838": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Fix a51baefa4 only changes tests. The 4 tests that failed at 956fd618 now pass (3 member profile saves, plus the allowed invite), and the denied invite also asserts there is no seat lookup. The roles test changes in whitespace only. vitest related: 24 files pass, and 3 DB files are skipped because there is no DB. eslint, prettier and a scoped tsc are clean. Before merging: current develop conflicts on one import block in organization-admin.ts. Resolved, the tests pass"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix a51baefa4 touches only three test files and no production, authorization or query code. The new entitlements and departments mocks live only in test modules. The denied-invite test now also asserts that the seat lookup never runs, which makes it stricter. The roles test change is whitespace only, and the gitleaks-allowlisted mock line is unchanged. The PR's team:setRole checks in team, organizationAdmin and the assistant tools still run before any read or write. No vulnerability"
+  }
+ },
+ "275": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-verified c8f73dc14: the legacy backfill stamps reviewedAt >= lastWorkingDay rows only when a successful TRPC resignations.review audit row exists. Assistant reviews (assistant.resignations.review, SYSTEM) are no longer consumed, so the sweep deactivates them. The DB suite passed 6/6 on real PostgreSQL, and the new case fails against e0138d8ec. Not blocking: the optional HR-02 cutoff (Jun 19-23 router reviews) was skipped, and merging needs develop's review hunk kept"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "c8f73dc14 only adds a static EXISTS subquery to a one-time migration. It is scoped by organizationId, targetType, targetId, action, source and outcome, and needs no user input, so there is no injection surface. When the evidence is missing, the user is deactivated rather than left with access. Audit rows are written only by the server. The migration is not on develop, staging or main, so editing it in place breaks no checksum. I found no new vulnerability"
+  }
+ },
+ "261": {
+  "qa": {
+   "verdict": "FAIL",
+   "details": "1e1ce4e63 resolves F1. Removing its two claimToken lines brings back exactly the two TS2741 errors. With them, tsc is clean on the head and on a trial merge with current develop 1906b5307, which merges with no conflicts. 061b6b1cd matches the automatic merge. 21 related files and 492 tests pass, including DB-backed worker-tick suites, and eslint and prettier are clean. The only blocker is that the PR body still says Closes #554. #554 is an open, unrelated sev2 issue, and merging into develop (the default branch) would auto-close it"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "1e1ce4e63 only adds two claimToken strings to test fixtures. Merge commit 061b6b1cd has the same tree as git's automatic merge, so the PR's net diff against develop is still the same 7 SOP and job-runner files. Re-checked: the cross-org discovery through withPlatformDb is read-only, the producer and handler run inside withTenantDb, all new SQL uses parameterized tagged templates with no Unsafe raw queries, and no secrets or client-facing errors were added"
+  }
+ },
+ "145": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "At dbcc8535e both password toggles drop aria-pressed and show state only through the 'Show password'/'Hide password' name. The test now asserts aria-pressed is absent. A mutation re-adding it failed 4 of 5 tests. password-visibility.test.tsx passes 5/5. The opt-in browser lane was skipped, not passed. eslint and prettier are clean on all 5 files. Note: the PR still conflicts with develop in platform-login-form.tsx (also at fac67d55e). Keep develop's aria-invalid lines and pr-12"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Fix commit dbcc8535e only removes the aria-pressed attribute from two client-side show/hide password buttons, changes three test assertions and reformats one test file. No auth, session, API, tRPC, SQL or tenant-scoping code is touched. The toggles are still type=\"button\" and reveal only on an explicit press. Nothing is stored or logged. The PR introduces no secrets, injection or data-exposure risk"
+  }
+ },
+ "133": {
+  "qa": {
+   "verdict": "FAIL",
+   "details": "16a9147 fixes F1: on a fresh DB with the new actor FK, all 41 tests in the PR's 7 files pass, slug test included. tsc exits 0, and eslint and prettier are clean on the changed files. The edits are test-only formatting and fixture seeding. FAIL: develop's commands.organization-update.db.test.ts (added in #155) never stores its platform actor, so the FK fails it after merge. I reproduced that, and dropping only the FK makes it pass. schema.prisma and jobs.purge.db.test.ts also conflict with develop"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "16a9147 changes only tests. It seeds a fixture platform user, whose passwordHash 'fixture' is not a usable credential, in a disposable test DB, and reformats two test files. It does not change production code, authorization, queries or migrations, and it adds no secrets. At this commit the PR still enforces audit:read server-side, searches actors through parameterized Prisma filters, and applies the platform-actor FK and the tenant-actor insert trigger. I found no new vulnerability"
+  }
  }
 }

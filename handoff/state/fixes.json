@@ -183,25 +183,29 @@
   "sha": "6381e5a0b362798a24b11230d534864ffd75dbc9",
   "initialSha": "ddd19ed235f63c5a445ba5d1b406a5ee42e24cac",
   "what": "align reason selectors, drop dynamic RegExp, cover messages",
-  "initialFailure": "the failures listed in the first review (see QA/Security)"
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
  },
  "1064": {
   "sha": "7fc894abd6f59be1cbedcab95812d8a61daf154d",
   "initialSha": "b31874551cad8f20c2608461b0547cba45f0735f",
   "what": "catalogue devices:revoke and exercise branch revoke checks",
-  "initialFailure": "the failures listed in the first review (see QA/Security)"
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
  },
  "1062": {
   "sha": "a9b2e060ea652fe831667da97764858a4f97cb0e",
   "initialSha": "b07b3a69de00215f17460047dc23f03cd8f6eb57",
   "what": "declare adjustment author fields in shift test fixture",
-  "initialFailure": "the failures listed in the first review (see QA/Security)"
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
  },
  "1051": {
   "sha": "b0d20bc67249e08405dee55660768dab8ea5c628",
   "initialSha": "01e1d3bc7ecd2c2a61b8af5d52ec650610c23ecf",
   "what": "complete variant-review test page fixture and format console",
-  "initialFailure": "the failures listed in the first review (see QA/Security)"
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
  },
  "1004": {
   "sha": "473ee7d33e360d2c2753470969c18c2457bea9aa",
@@ -333,6 +337,62 @@
   "initialSha": "0c9fcd4793ba3105f866157b16001f28c34f772e",
   "what": "857ab4287 keeps owner export PIN strikes durable and exports stored line gross; e250f6006 seeds a family member so the PR's data-export DB suite runs",
   "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "964": {
+  "sha": "589ef1cac83989b5354d209b6abfb6a680ba2c00",
+  "initialSha": "b1d83d204668ea49b7314676a9c101d7050362ea",
+  "what": "enforce room type capacity, bound stay nights before walking them, pin new tables",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "838": {
+  "sha": "a51baefa456ad0d84aea7fceb82c5f200d298185",
+  "initialSha": "956fd6187676c40dc66bd1d1b509ce4e6671c7c5",
+  "what": "mock entitlements and departments in role tests",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "275": {
+  "sha": "c8f73dc148c7783c642ac180e5ac5abb76a20f25",
+  "initialSha": "e0138d8ecf5b1bcdbf803e16d8cca7bc97461254",
+  "what": "require router audit evidence in legacy offboarding backfill",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "261": {
+  "sha": "1e1ce4e63ae73075e08828d3c0ce9d9bfbdf11c8",
+  "initialSha": "43009937284cab08216acdc03e44c6022466184a",
+  "what": "add claimToken to quiet-hours escalation handler fixtures",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "145": {
+  "sha": "dbcc8535e0238ac5c1f544c574dbb84f0d1d7e94",
+  "initialSha": "fac67d55ea2b6188f5f0ee548e3e4eebc6dab797",
+  "what": "drop aria-pressed from password reveal toggles",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "133": {
+  "sha": "16a9147f5f4066b591a647dcd67d18b601ba7171",
+  "initialSha": "82b6d5cbd84ee3e1c6822e1fd4a6d93e906df712",
+  "what": "seed slug test platform actor and format PR tests",
+  "initialFailure": "no machine run (review findings only)",
+  "noInitialRun": true
+ },
+ "875": {
+  "sha": "15321aa94b9d9db1764410c685f9092303c78fe0",
+  "initialSha": "21eefe8f62879457c45ddde9dde7e11507ae265b",
+  "what": "comp reversal tested after a partial tender, on settled and void bills, and through the route's auth; Prettier",
+  "initialFailure": "no machine run (QA finding and Prettier)",
+  "noInitialRun": true
+ },
+ "888": {
+  "sha": "d8fc3f54048af169c283e7062578ad812e1a30d9",
+  "initialSha": "e597375dd806fbf4fca024b83441753c5424214a",
+  "what": "printed invoice discount row covered by a test; Prettier on finance.invoice-status.test.ts",
+  "initialFailure": "no machine run (QA finding and Prettier)",
   "noInitialRun": true
  }
 }
