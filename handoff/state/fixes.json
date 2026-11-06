@@ -263,5 +263,19 @@
   "what": "ab89e8b2b holds pg, @types/pg, @prisma/adapter-pg and @prisma/client at develop's versions; df59d8e68 restores Bun's lockfile blank-line layout",
   "initialFailure": "no machine run (QA finding only)",
   "noInitialRun": true
+ },
+ "1067": {
+  "sha": "8155fc93a21ade0f56bfd9080fd920df3db303e2",
+  "initialSha": "fa755433022b16934b4199a8851af04254057688",
+  "what": "deliberate TRPCError wording kept on Prisma causes; Prettier on the formatter test",
+  "initialFailure": "no machine run (QA finding and Prettier)",
+  "noInitialRun": true
+ },
+ "864": {
+  "sha": "032cd874e3d6d7e84a30bc145631af06e0763369",
+  "initialSha": "18653d3c14c1b6e1d0ffdeb4b2ae13e50a2a3d1d",
+  "what": "actor search lookups on the audit ledger bounded to 200 per type, with a notice",
+  "initialFailure": "no machine run (QA finding only)",
+  "noInitialRun": true
  }
 }

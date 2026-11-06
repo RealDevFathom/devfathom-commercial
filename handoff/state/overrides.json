@@ -350,5 +350,25 @@
    "verdict": "PASS",
    "details": "Checked at ab89e8b2b. The held lock entries keep the merge-base sha512 integrity hashes byte for byte. All 1624 entries come from the default registry with sha512 integrity, with no git, tarball or custom-registry sources. trustedDependencies (unrs-resolver) and overrides are unchanged. None of the held packages has a lifecycle script. bun pm untrusted lists only prisma, @prisma/engines and esbuild, as on develop. df59d8e68 changes blank lines only"
   }
+ },
+ "1067": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "Re-reviewed 8155fc93a. F1 is resolved: errorFormatter now maps a Prisma cause only while the message is still the raw Prisma text, and remaps code and status only for INTERNAL_SERVER_ERROR wrappers, so deliberate CONFLICTs keep their wording and 409. The new P2002 and P2034 fixtures fail on fa75543 and pass here (18/18). Prettier and eslint are clean on all three PR files, and the fix commit only adds tests and reformats one block"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Re-checked 8155fc93a through the real fetch transport. Raw P2025, P2002 and P2003 errors still map to friendly 404 and 409 text. Unmapped Prisma, validation and unknown-request errors return the generic message in test and production. A router that copies e.message with the Prisma cause is sanitized under its own code. Every router that wraps a Prisma cause uses fixed wording, so no leak path is reintroduced. No vulnerability found. Outside this PR: pharmacy-reports commandCentre rethrows error.message without a cause (since 76faf6a14), so it needs a separate issue"
+  }
+ },
+ "864": {
+  "qa": {
+   "verdict": "PASS",
+   "details": "First review FAIL (the new actor search looked up every platform and tenant user matching q with no limit and put all their IDs into the audit query's IN lists), fixed in 032cd874e. Re-review: both actor lookups now order by id and take 201, and each is cut to 200 IDs, so the IN lists hold at most 400 IDs, far below Prisma's 32,766 bind limit. A role=\"status\" notice built from the existing warning and text-body tokens appears only above 200 matches. All 12 page tests pass, and removing the slice, the > check or the take each makes a test fail. No unrelated changes or weakened tests"
+  },
+  "security": {
+   "verdict": "PASS",
+   "details": "Re-checked at 032cd874e. requirePlatformRead('/platform/audit') still runs before withPlatformDb and requires audit:read, which only SUPER_ADMIN and AUDITOR hold, so the cross-tenant user lookup is reachable only by platform-authorized callers. The lookup is still a parameterised Prisma contains on a q of at most 100 characters, selects only IDs and is now capped at 201 rows. The notice is fixed text and shows no names, emails or IDs. No vulnerability found"
+  }
  }
 }
