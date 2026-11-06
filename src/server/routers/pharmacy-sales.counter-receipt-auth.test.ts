@@ -875,17 +875,15 @@ it('DEV-295 authorizes the actual shipped Cashier template after canonical migra
   ).resolves.toEqual([{ id: 'return-1' }]);
   for (const type of ['CASH', 'CARD'] as const) {
     await expect(
-      f
-        .caller()
-        .tender({
-          branchId: 'branch-a',
-          saleId: 'sale-a',
-          deviceId: 'device-a',
-          businessDate: new Date('2026-11-03'),
-          type,
-          amountMinor: 100,
-          idempotencyKey: `template-${type}`,
-        })
+      f.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-11-03'),
+        type,
+        amountMinor: 100,
+        idempotencyKey: `template-${type}`,
+      })
     ).resolves.toEqual({ tenderId: 'tender-1' });
   }
   const denied = fixture(permissions, 'EMPLOYEE', [
