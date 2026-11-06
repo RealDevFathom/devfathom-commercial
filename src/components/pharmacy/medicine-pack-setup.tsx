@@ -7,12 +7,7 @@ import Link from 'next/link';
 
 import { Button, buttonVariants } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
-import {
-  describePackConversion,
-  isEffective,
-  packConversions,
-  splitPackTotal,
-} from '@/lib/pharmacy/pack-conversion';
+import { packConversions, describePackConversion } from '@/lib/pharmacy/pack-conversion';
 import { trpc } from '@/lib/trpc';
 
 const control =
@@ -24,7 +19,6 @@ export function MedicinePackSetup() {
   const [query, setQuery] = useState('');
   const [medicineId, setMedicineId] = useState('');
   const [presentationId, setPresentationId] = useState('');
-  const [parentId, setParentId] = useState('');
   const [level, setLevel] = useState<(typeof packTypes)[number] | ''>('');
   const [units, setUnits] = useState('');
   const [effectiveDate, setEffectiveDate] = useState('');
@@ -40,46 +34,27 @@ export function MedicinePackSetup() {
     { enabled: Boolean(medicineId), retry: false }
   );
   const presentation = medicine.data?.presentations.find((item) => item.id === presentationId);
-  const onCreated = async () => {
-    setMessage('Pack created. Return to Pharmacy setup to continue with opening stock.');
-    setParentId('');
-    setLevel('');
-    setUnits('');
-    await utils.pharmacyMedicine.get.invalidate({ id: medicineId });
-  };
-  const create = trpc.pharmacyMedicine.createPackLevel.useMutation({ onSuccess: onCreated });
-  const nest = trpc.pharmacyMedicine.addInnerPackLevel.useMutation({ onSuccess: onCreated });
-  const error = create.error ?? nest.error ?? medicine.error ?? search.error;
+  const create = trpc.pharmacyMedicine.createPackLevel.useMutation({
+    onSuccess: async () => {
+      setMessage('Pack created. Return to Pharmacy setup to continue with opening stock.');
+      setLevel('');
+      setUnits('');
+      await utils.pharmacyMedicine.get.invalidate({ id: medicineId });
+    },
+  });
+  const error = create.error ?? medicine.error ?? search.error;
   const denied = error?.data?.code === 'FORBIDDEN' || error?.data?.code === 'UNAUTHORIZED';
-  const busy = create.isPending || nest.isPending;
-  const now = new Date();
-  const conversions = presentation ? packConversions(presentation.packLevels, now) : [];
-  // Only the innermost current pack of a chain can take a smaller pack inside it.
-  const outerOptions = presentation
-    ? presentation.packLevels.filter(
-        (item) =>
-          item.effectiveTo === null &&
-          isEffective(item, now) &&
-          !presentation.packLevels.some((child) => child.parentPackLevelId === item.id)
-      )
-    : [];
-  const outer = outerOptions.find((item) => item.id === parentId);
-  const split =
-    outer && level && units
-      ? splitPackTotal(
-          { level: outer.level, totalUnits: outer.unitsPerParent },
-          { level, totalUnits: Number(units) }
-        )
-      : null;
+  const busy = create.isPending;
+  const conversions = presentation ? packConversions(presentation.packLevels) : [];
 
   return (
     <SectionCard title="Packs for receiving" titleLevel={2}>
       <p className="mb-4 text-sm text-text-muted">
         Publishing a medicine creates its default pack from the reviewed pack size. Find the
-        medicine to check that pack, attach the barcode printed on it, or add another
-        pack you receive differently. To record what a pack contains, choose it as the outer pack
-        and enter the units printed on the smaller pack. Opening stock is imported by matching a
-        pack barcode or pack ID.
+        medicine to check that pack, attach the barcode printed on it, or add another pack you
+        receive differently. Use the quantity printed on the pack; each pack here is counted
+        directly in individual units. Opening stock is imported by matching a pack barcode or pack
+        ID.
       </p>
       <form
         className="flex flex-wrap items-end gap-3"
@@ -91,7 +66,6 @@ export function MedicinePackSetup() {
           setPresentationId('');
           setMessage('');
           create.reset();
-          nest.reset();
         }}
       >
         <label className="min-w-0 flex-1 space-y-2 text-sm text-text-body">
@@ -148,28 +122,6 @@ export function MedicinePackSetup() {
             event.preventDefault();
             const quantity = Number(units);
             const effectiveFrom = new Date(`${effectiveDate}T00:00:00Z`);
-            if (outer) {
-              if (!presentation || !level) return;
-              const plan = splitPackTotal(
-                { level: outer.level, totalUnits: outer.unitsPerParent },
-                { level, totalUnits: quantity }
-              );
-              if ('error' in plan || level === 'CARTON') {
-                setValidation(
-                  'error' in plan ? plan.error : 'A carton cannot be placed inside another pack.'
-                );
-                return;
-              }
-              setValidation('');
-              setMessage('');
-              nest.mutate({
-                parentPackLevelId: outer.id,
-                level,
-                totalUnits: quantity,
-                versionGroupId: browserUuid(),
-              });
-              return;
-            }
             if (
               !Number.isSafeInteger(quantity) ||
               quantity <= 0 ||
@@ -203,10 +155,8 @@ export function MedicinePackSetup() {
                 onChange={(event) => {
                   setMedicineId(event.target.value);
                   setPresentationId('');
-                  setParentId('');
                   setMessage('');
                   create.reset();
-                  nest.reset();
                 }}
               >
                 <option value="">Choose a medicine</option>
@@ -231,7 +181,6 @@ export function MedicinePackSetup() {
                 disabled={!medicine.data || medicine.isFetching || Boolean(medicine.error)}
                 onChange={(event) => {
                   setPresentationId(event.target.value);
-                  setParentId('');
                   setMessage('');
                 }}
               >
@@ -242,34 +191,6 @@ export function MedicinePackSetup() {
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="space-y-2 text-sm text-text-body">
-              <span>Outer pack</span>
-              <select
-                className={control}
-                value={parentId}
-                disabled={!presentation}
-                aria-describedby="pack-outer-help"
-                onChange={(event) => {
-                  setParentId(event.target.value);
-                  setValidation('');
-                }}
-              >
-                <option value="">None — this pack is counted on its own</option>
-                {outerOptions.map((item) => {
-                  const conversion = conversions.find((entry) => entry.packLevelId === item.id);
-                  return (
-                    <option key={item.id} value={item.id}>
-                      {item.level} of {conversion?.canonicalUnitsPerPack ?? item.unitsPerParent}{' '}
-                      units
-                    </option>
-                  );
-                })}
-              </select>
-              <span id="pack-outer-help" className="block text-sm text-text-muted">
-                Choose the pack this one sits inside, such as the box that holds these strips. Only
-                the innermost pack of each chain is listed.
-              </span>
             </label>
             <label className="space-y-2 text-sm text-text-body">
               <span>Pack type</span>
@@ -308,30 +229,22 @@ export function MedicinePackSetup() {
                 }}
               />
               <span id="pack-units-help" className="block text-sm text-text-muted">
-                {outer && split && !('error' in split)
-                  ? `1 ${outer.level} will hold ${split.outerUnitsPerParent} × ${level}, each of ${split.innerUnitsPerParent} units (${outer.unitsPerParent} units in total).`
-                  : 'For example, a strip of 10 tablets contains 10 individual units.'}
+                For example, a strip of 10 tablets contains 10 individual units.
               </span>
             </label>
-            {outer ? (
-              <p className="self-end text-sm text-text-muted">
-                The new pack takes the outer pack’s effective date.
-              </p>
-            ) : (
-              <label className="space-y-2 text-sm text-text-body">
-                <span>Effective from</span>
-                <input
-                  className={control}
-                  type="date"
-                  required
-                  value={effectiveDate}
-                  onChange={(event) => setEffectiveDate(event.target.value)}
-                />
-                <span className="block text-sm text-text-muted">
-                  Available from this date at midnight UTC. Future packs cannot be received yet.
-                </span>
-              </label>
-            )}
+            <label className="space-y-2 text-sm text-text-body">
+              <span>Effective from</span>
+              <input
+                className={control}
+                type="date"
+                required
+                value={effectiveDate}
+                onChange={(event) => setEffectiveDate(event.target.value)}
+              />
+              <span className="block text-sm text-text-muted">
+                Available from this date at midnight UTC. Future packs cannot be received yet.
+              </span>
+            </label>
           </fieldset>
           {medicine.data?.presentations.length === 0 ? (
             <p className="text-sm text-text-muted">
@@ -352,7 +265,7 @@ export function MedicinePackSetup() {
               !presentation ||
               !level ||
               !units ||
-              (!outer && !effectiveDate) ||
+              !effectiveDate ||
               medicine.isFetching ||
               Boolean(medicine.error) ||
               denied
@@ -436,7 +349,8 @@ function PackBarcodeEditor({
     <li className="space-y-2 rounded-sm border border-border-subtle p-3">
       <p>{label}</p>
       <p className="text-text-muted">
-        Pack ID: <code className="break-all font-mono text-xs text-text-body select-all">{packLevelId}</code>
+        Pack ID:{' '}
+        <code className="break-all font-mono text-xs text-text-body select-all">{packLevelId}</code>
       </p>
       <p className="text-text-muted">
         {barcodes.length

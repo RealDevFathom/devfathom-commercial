@@ -19,7 +19,7 @@ describe('pharmacy medicine invariants', () => {
 
   it.each([
     ['10 tablets', 'BOX', 10],
-    ['10\'s', 'BOX', 10],
+    ["10's", 'BOX', 10],
     ['Strip of 10', 'STRIP', 10],
     ['Tablet, 10 per strip', 'STRIP', 10],
     ['3 x 10', 'BOX', 30],

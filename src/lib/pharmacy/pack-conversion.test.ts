@@ -2,10 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   describePackConversion,
-  flatPackChain,
   isEffective,
   packConversions,
-  splitPackTotal,
   type PackLevelNode,
 } from './pack-conversion';
 
@@ -145,115 +143,5 @@ describe('describePackConversion', () => {
   it('states a leaf pack without an intermediate step', () => {
     const [strip] = packConversions([level({ id: 'strip' })], AT);
     expect(describePackConversion(strip!, 4)).toBe('4 STRIPs = 40 units');
-  });
-});
-
-describe('splitPackTotal', () => {
-  it('turns printed totals into per-level counts that keep the outer total', () => {
-    expect(
-      splitPackTotal({ level: 'BOX', totalUnits: 100 }, { level: 'STRIP', totalUnits: 10 })
-    ).toEqual({ outerUnitsPerParent: 10, innerUnitsPerParent: 10 });
-    expect(
-      splitPackTotal({ level: 'STRIP', totalUnits: 10 }, { level: 'UNIT', totalUnits: 1 })
-    ).toEqual({ outerUnitsPerParent: 10, innerUnitsPerParent: 1 });
-  });
-
-  it.each([
-    [{ level: 'BOX', totalUnits: 100 }, { level: 'STRIP', totalUnits: 30 }, /whole number/],
-    [{ level: 'BOX', totalUnits: 100 }, { level: 'STRIP', totalUnits: 100 }, /whole number/],
-    [{ level: 'BOX', totalUnits: 100 }, { level: 'STRIP', totalUnits: 0 }, /positive whole/],
-    [{ level: 'BOX', totalUnits: 100 }, { level: 'UNIT', totalUnits: 2 }, /exactly 1/],
-    [{ level: 'STRIP', totalUnits: 100 }, { level: 'BOX', totalUnits: 10 }, /cannot be placed/],
-  ])('refuses %o containing %o', (outer, inner, message) => {
-    expect(splitPackTotal(outer, inner)).toEqual({ error: expect.stringMatching(message) });
-  });
-
-  it('builds a chain whose conversions equal the totals entered', () => {
-    const box = level({ id: 'box', level: 'BOX', unitsPerParent: 100 });
-    const first = splitPackTotal(
-      { level: 'BOX', totalUnits: 100 },
-      { level: 'STRIP', totalUnits: 10 }
-    );
-    if ('error' in first) throw new Error(first.error);
-    const strip = level({
-      id: 'strip',
-      parentPackLevelId: 'box',
-      unitsPerParent: first.innerUnitsPerParent,
-    });
-    const second = splitPackTotal(
-      { level: 'STRIP', totalUnits: 10 },
-      { level: 'UNIT', totalUnits: 1 }
-    );
-    if ('error' in second) throw new Error(second.error);
-    const unit = level({
-      id: 'unit',
-      level: 'UNIT',
-      parentPackLevelId: 'strip',
-      unitsPerParent: 1,
-    });
-    const totals = packConversions(
-      [
-        { ...box, unitsPerParent: first.outerUnitsPerParent },
-        { ...strip, unitsPerParent: second.outerUnitsPerParent },
-        unit,
-      ],
-      AT
-    ).map((entry) => [entry.level, entry.canonicalUnitsPerPack]);
-    expect(totals).toEqual([
-      ['BOX', 100],
-      ['STRIP', 10],
-      ['UNIT', 1],
-    ]);
-  });
-});
-
-describe('flatPackChain', () => {
-  it('orders flat packs whose totals divide evenly from outermost to innermost', () => {
-    const chain = flatPackChain(
-      [
-        level({ id: 'unit', level: 'UNIT', unitsPerParent: 1 }),
-        level({ id: 'box', level: 'BOX', unitsPerParent: 100 }),
-        level({ id: 'strip', level: 'STRIP', unitsPerParent: 10 }),
-      ],
-      AT
-    );
-    expect(chain?.map((item) => item.id)).toEqual(['box', 'strip', 'unit']);
-  });
-
-  it('refuses flat totals that do not divide evenly', () => {
-    expect(
-      flatPackChain(
-        [
-          level({ id: 'box', level: 'BOX', unitsPerParent: 100 }),
-          level({ id: 'strip', level: 'STRIP', unitsPerParent: 30 }),
-        ],
-        AT
-      )
-    ).toBeNull();
-  });
-
-  it('ignores packs that are not effective and declines nested hierarchies', () => {
-    expect(
-      flatPackChain(
-        [
-          level({ id: 'box', level: 'BOX', unitsPerParent: 100 }),
-          level({
-            id: 'old',
-            unitsPerParent: 30,
-            effectiveTo: new Date('2026-02-01T00:00:00.000Z'),
-          }),
-        ],
-        AT
-      )?.map((item) => item.id)
-    ).toEqual(['box']);
-    expect(
-      flatPackChain(
-        [
-          level({ id: 'box', level: 'BOX', unitsPerParent: 10 }),
-          level({ id: 'strip', parentPackLevelId: 'box' }),
-        ],
-        AT
-      )
-    ).toBeNull();
   });
 });

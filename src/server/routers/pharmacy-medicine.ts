@@ -28,7 +28,7 @@ import {
   REFERENCE_BATCH_MAX_ROWS,
   type ConnectorRights,
 } from '@/lib/pharmacy/reference-connectors';
-import { isEffective, splitPackTotal } from '@/lib/pharmacy/pack-conversion';
+import { isEffective } from '@/lib/pharmacy/pack-conversion';
 import { annotateAudit } from '../audit';
 import {
   adminProcedure,
@@ -768,104 +768,6 @@ export const pharmacyMedicineRouter = router({
         });
       return ctx.db.packLevel.create({ data: { ...input, version: 1 } });
     }),
-
-  /**
-   * Places a smaller pack inside the innermost pack of a chain, from the unit
-   * totals printed on each pack. The outer pack keeps its total: its count is
-   * rewritten to the number of inner packs it holds, so this is admin-only,
-   * audited, and refused once the outer conversion is referenced by stock.
-   */
-  addInnerPackLevel: adminProcedure
-    .input(
-      z
-        .object({
-          parentPackLevelId: boundedId,
-          versionGroupId: boundedId,
-          level: z.enum(['BOX', 'STRIP', 'UNIT']),
-          totalUnits: z.number().int().positive(),
-        })
-        .strict()
-    )
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) => {
-        const parent = await tx.packLevel.findFirst({
-          where: { id: input.parentPackLevelId },
-          include: { children: { select: { id: true } }, supersededBy: { select: { id: true } } },
-        });
-        if (!parent) throw new TRPCError({ code: 'NOT_FOUND', message: 'Outer pack not found.' });
-        if (parent.effectiveTo !== null || parent.supersededBy.length > 0)
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'This pack has been revised. Choose its current version.',
-          });
-        if (parent.children.length > 0)
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: `This ${parent.level} already contains a smaller pack. Choose the innermost pack.`,
-          });
-        if (parent.referencedAt !== null)
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: `This ${parent.level} has already been used for stock, so its count is locked. Add the pack without an outer pack instead.`,
-          });
-        const split = splitPackTotal(
-          { level: parent.level, totalUnits: parent.unitsPerParent },
-          { level: input.level, totalUnits: input.totalUnits }
-        );
-        if ('error' in split) throw new TRPCError({ code: 'BAD_REQUEST', message: split.error });
-        // Conditional write: the row lock it takes serializes concurrent
-        // additions, and a changed or newly referenced outer pack is refused.
-        const updated = await tx.packLevel.updateMany({
-          where: {
-            id: parent.id,
-            unitsPerParent: parent.unitsPerParent,
-            referencedAt: null,
-            effectiveTo: null,
-          },
-          data: { unitsPerParent: split.outerUnitsPerParent },
-        });
-        if (
-          updated.count !== 1 ||
-          (await tx.packLevel.count({ where: { parentPackLevelId: parent.id } })) > 0
-        )
-          throw new TRPCError({
-            code: 'CONFLICT',
-            message: 'This pack changed while you were editing. Reload and try again.',
-          });
-        const pack = await tx.packLevel
-          .create({
-            data: {
-              presentationId: parent.presentationId,
-              parentPackLevelId: parent.id,
-              versionGroupId: input.versionGroupId,
-              version: 1,
-              level: input.level,
-              unitsPerParent: split.innerUnitsPerParent,
-              effectiveFrom: parent.effectiveFrom,
-            },
-          })
-          .catch((error: unknown) => {
-            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
-              throw new TRPCError({
-                code: 'CONFLICT',
-                message: 'This pack was already submitted. Reload and check the pack list.',
-              });
-            throw error;
-          });
-        annotateAudit(ctx, {
-          targetType: 'PackLevel',
-          targetId: parent.id,
-          changes: {
-            unitsPerParent: { before: parent.unitsPerParent, after: split.outerUnitsPerParent },
-            innerPack: {
-              before: null,
-              after: { id: pack.id, level: pack.level, unitsPerParent: pack.unitsPerParent },
-            },
-          },
-        });
-        return { outer: { ...parent, unitsPerParent: split.outerUnitsPerParent }, pack };
-      })
-    ),
 
   revisePackLevel: protectedProcedure
     .input(

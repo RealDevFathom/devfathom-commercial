@@ -68,8 +68,7 @@ export function parseDefaultPackSize(
   if (!Number.isSafeInteger(units) || units <= 0 || units > MAX_PACK_UNITS) return null;
   // A chain such as "Blister 10 x 10" multiplies several packs together, so
   // the outer pack is a box of strips rather than a single strip.
-  const nested =
-    (chain?.[0].match(/\d+/g) ?? []).filter((factor) => Number(factor) > 1).length > 1;
+  const nested = (chain?.[0].match(/\d+/g) ?? []).filter((factor) => Number(factor) > 1).length > 1;
   const level =
     units === 1
       ? 'UNIT'

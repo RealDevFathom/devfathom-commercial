@@ -152,33 +152,8 @@ function makeStore(values: Record<string, string>) {
           ...pack,
           presentation: { medicineId: presentationOf(pack.presentationId).medicineId },
           barcodes: barcodes.filter((item) => item.packLevelId === pack.id),
-          children: packLevels.filter((item) => item.parentPackLevelId === pack.id),
-          supersededBy: packLevels.filter((item) => item.supersedesPackLevelId === pack.id),
         };
       }),
-      updateMany: vi.fn(
-        async ({
-          where,
-          data,
-        }: {
-          where: { id: string; unitsPerParent: number; referencedAt: null; effectiveTo: null };
-          data: { unitsPerParent: number };
-        }) => {
-          const matches = packLevels.filter(
-            (item) =>
-              item.id === where.id &&
-              item.unitsPerParent === where.unitsPerParent &&
-              item.referencedAt === null &&
-              item.effectiveTo === null
-          );
-          for (const item of matches) Object.assign(item, data);
-          return { count: matches.length };
-        }
-      ),
-      count: vi.fn(
-        async ({ where }: { where: { parentPackLevelId: string } }) =>
-          packLevels.filter((item) => item.parentPackLevelId === where.parentPackLevelId).length
-      ),
     },
     medicineBarcode: {
       findFirst: vi.fn(async ({ where }: { where: { normalizedCode: string } }) => {
@@ -530,105 +505,6 @@ describe('pack chains built after publication, then imported', () => {
     return preview.lines[0]!;
   }
 
-  it('imports every level of a nested chain built from printed totals', async () => {
-    const { store, box } = await publishedBox();
-    const strip = (
-      await caller(store).addInnerPackLevel({
-        parentPackLevelId: box.id,
-        versionGroupId: 'strip-group',
-        level: 'STRIP',
-        totalUnits: 10,
-      })
-    ).pack;
-    const unit = (
-      await caller(store).addInnerPackLevel({
-        parentPackLevelId: strip.id,
-        versionGroupId: 'unit-group',
-        level: 'UNIT',
-        totalUnits: 1,
-      })
-    ).pack;
-    expect(
-      store.rows.packLevels.map((item) => [item.level, item.unitsPerParent, item.parentPackLevelId])
-    ).toEqual([
-      ['BOX', 10, null],
-      ['STRIP', 10, box.id],
-      ['UNIT', 1, strip.id],
-    ]);
-    expect(guards.annotateAudit).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        targetType: 'PackLevel',
-        targetId: box.id,
-        changes: expect.objectContaining({ unitsPerParent: { before: 100, after: 10 } }),
-      })
-    );
-    await caller(store).setPackBarcode({ packLevelId: strip.id, code: '5012345678900' });
-
-    expect(await unitsFor(store, BARCODE)).toMatchObject({
-      packLevelId: box.id, unitsPerPack: 100, errors: [],
-    });
-    expect(await unitsFor(store, '5012345678900')).toMatchObject({
-      packLevelId: strip.id, unitsPerPack: 10, errors: [],
-    });
-    expect(await unitsFor(store, unit.id)).toMatchObject({
-      packLevelId: unit.id, unitsPerPack: 1, errors: [],
-    });
-  });
-
-  it('refuses an inner pack that does not divide the outer total, leaving the outer pack', async () => {
-    const { store, box } = await publishedBox();
-    await expect(
-      caller(store).addInnerPackLevel({
-        parentPackLevelId: box.id,
-        versionGroupId: 'strip-group',
-        level: 'STRIP',
-        totalUnits: 30,
-      })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: /whole number/ });
-    expect(store.rows.packLevels).toHaveLength(1);
-    expect(box).toMatchObject({ unitsPerParent: 100 });
-  });
-
-  it('refuses a second inner pack, a referenced outer pack, and a foreign pack', async () => {
-    const { store, box } = await publishedBox();
-    await caller(store).addInnerPackLevel({
-      parentPackLevelId: box.id,
-      versionGroupId: 'strip-group',
-      level: 'STRIP',
-      totalUnits: 10,
-    });
-    await expect(
-      caller(store).addInnerPackLevel({
-        parentPackLevelId: box.id,
-        versionGroupId: 'other-group',
-        level: 'STRIP',
-        totalUnits: 5,
-      })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: /innermost/ });
-
-    const referenced = await publishedBox();
-    referenced.box.referencedAt = new Date('2026-10-01');
-    await expect(
-      caller(referenced.store).addInnerPackLevel({
-        parentPackLevelId: referenced.box.id,
-        versionGroupId: 'strip-group',
-        level: 'STRIP',
-        totalUnits: 10,
-      })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: /locked/ });
-    expect(referenced.box).toMatchObject({ unitsPerParent: 100 });
-
-    await expect(
-      caller(store).addInnerPackLevel({
-        parentPackLevelId: 'foreign_pack',
-        versionGroupId: 'strip-group',
-        level: 'STRIP',
-        totalUnits: 10,
-      })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
-  });
-
   it('imports flat packs created side by side when their totals divide evenly', async () => {
     const { store, box } = await publishedBox();
     const flat = async (level: 'STRIP' | 'UNIT', unitsPerParent: number) =>
@@ -645,13 +521,19 @@ describe('pack chains built after publication, then imported', () => {
     await caller(store).setPackBarcode({ packLevelId: strip.id, code: '5012345678900' });
 
     expect(await unitsFor(store, BARCODE)).toMatchObject({
-      packLevelId: box.id, unitsPerPack: 100, errors: [],
+      packLevelId: box.id,
+      unitsPerPack: 100,
+      errors: [],
     });
     expect(await unitsFor(store, '5012345678900')).toMatchObject({
-      packLevelId: strip.id, unitsPerPack: 10, errors: [],
+      packLevelId: strip.id,
+      unitsPerPack: 10,
+      errors: [],
     });
     expect(await unitsFor(store, unit.id)).toMatchObject({
-      packLevelId: unit.id, unitsPerPack: 1, errors: [],
+      packLevelId: unit.id,
+      unitsPerPack: 1,
+      errors: [],
     });
   });
 
@@ -665,10 +547,14 @@ describe('pack chains built after publication, then imported', () => {
       effectiveFrom: new Date('2020-01-01'),
     });
     expect(await unitsFor(store, BARCODE)).toMatchObject({
-      packLevelId: box.id, unitsPerPack: 100, errors: [],
+      packLevelId: box.id,
+      unitsPerPack: 100,
+      errors: [],
     });
     expect(await unitsFor(store, other.id)).toMatchObject({
-      packLevelId: other.id, unitsPerPack: 30, errors: [],
+      packLevelId: other.id,
+      unitsPerPack: 30,
+      errors: [],
     });
   });
 });
