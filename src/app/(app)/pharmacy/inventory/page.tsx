@@ -640,19 +640,13 @@ export default async function PharmacyInventoryPage({
               <label className="text-sm">
                 Storage type
                 <select className={inputClass} name="kind">
-                  {[
-                    'STORE',
-                    'RACK_BIN',
-                    'FRIDGE',
-                    'SAFE',
-                    'QUARANTINE',
-                    'TRANSIT',
-                    'RETURNS',
-                  ].map((kind) => (
-                    <option key={kind} value={kind}>
-                      {label(kind)}
-                    </option>
-                  ))}
+                  {['STORE', 'RACK_BIN', 'FRIDGE', 'SAFE', 'QUARANTINE', 'TRANSIT', 'RETURNS'].map(
+                    (kind) => (
+                      <option key={kind} value={kind}>
+                        {label(kind)}
+                      </option>
+                    )
+                  )}
                 </select>
               </label>
               <label className="flex min-h-11 items-center gap-2 self-end text-sm">

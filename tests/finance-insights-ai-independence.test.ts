@@ -626,9 +626,9 @@ describe('delivered Pharmacy Reports & Insights navigation gates', () => {
     await confirmCompanySettings(unlicensed);
     expect(isAssistantAvailable(useAssistant.getState(), 'org-a')).toBe(true);
     expect(
-      visibleNavigation(unlicensed.entitlements, 'ADMIN', undefined, [
-        'reports:operational',
-      ]).map((item) => item.href)
+      visibleNavigation(unlicensed.entitlements, 'ADMIN', undefined, ['reports:operational']).map(
+        (item) => item.href
+      )
     ).not.toContain('/pharmacy/reports');
     for (const path of paths)
       expect(isPathModuleEnabled(path, unlicensed.entitlements)).toBe(false);

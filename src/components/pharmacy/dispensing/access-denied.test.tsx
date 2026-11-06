@@ -11,7 +11,10 @@ function failedQuery() {
 
 vi.mock('@/lib/trpc', () => ({
   trpc: {
-    useUtils: () => ({ pharmacyDispensing: { reviewQueue: { invalidate: vi.fn() } } }),
+    useUtils: () => ({
+      pharmacyDispensing: { reviewQueue: { invalidate: vi.fn() } },
+      pharmacyPrescriptions: { workspace: { invalidate: vi.fn() } },
+    }),
     pharmacyDispensing: {
       reviewQueue: { useQuery: failedQuery },
       decideReview: { useMutation: () => ({ mutateAsync: vi.fn() }) },
@@ -24,12 +27,23 @@ vi.mock('@/lib/trpc', () => ({
       controlledPharmacists: { useQuery: () => ({ data: [] }) },
       recordCorrection: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },
     },
+    pharmacyPrescriptions: {
+      workspace: { useQuery: failedQuery },
+      capture: { useMutation: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }) },
+      uploadSource: {
+        useMutation: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
+      },
+      captureRefillReminder: {
+        useMutation: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
+      },
+    },
   },
 }));
 
 import { ControlledRegisterConsole } from './controlled-register-console';
 import { isAccessDenied } from './field';
 import { PharmacistQueueConsole } from './pharmacist-queue-console';
+import { PrescriptionsConsole } from './prescriptions-console';
 import { SubstitutionConsole } from './substitution-console';
 
 const FORBIDDEN = {
@@ -53,7 +67,12 @@ describe('#979 a refusal reads as no access, not as a failed load', () => {
   it.each([
     ['pharmacist queue', PharmacistQueueConsole, 'You do not have pharmacist review access'],
     ['substitution', SubstitutionConsole, 'You do not have substitution access'],
-    ['controlled register', ControlledRegisterConsole, 'You do not have controlled-register access'],
+    [
+      'controlled register',
+      ControlledRegisterConsole,
+      'You do not have controlled-register access',
+    ],
+    ['prescriptions', PrescriptionsConsole, 'You do not have prescription access'],
   ] as const)('shows the %s no-access state to a cashier', (_surface, Console, heading) => {
     render(<Console />);
 
@@ -62,6 +81,7 @@ describe('#979 a refusal reads as no access, not as a failed load', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
     expect(screen.queryByText('No branch')).not.toBeInTheDocument();
+    expect(screen.queryByText(/connection is restored/)).not.toBeInTheDocument();
   });
 
   it('keeps the failed-load state for a genuine failure', () => {
@@ -71,6 +91,17 @@ describe('#979 a refusal reads as no access, not as a failed load', () => {
 
     expect(
       screen.getByRole('heading', { name: 'Substitution workspace could not be loaded' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Network down.');
+  });
+
+  it('keeps the prescriptions failed-load state for a genuine failure', () => {
+    h.error = { message: 'Network down.', data: { code: 'INTERNAL_SERVER_ERROR' } };
+
+    render(<PrescriptionsConsole />);
+
+    expect(
+      screen.getByRole('heading', { name: 'Prescriptions could not be loaded' })
     ).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('Network down.');
   });

@@ -12,8 +12,7 @@ const usePathnameMock = vi.hoisted(() => vi.fn(() => '/dashboard'));
 // The pharmacy rail's capability read (#979); unanswered unless a pharmacy case sets it.
 const pharmacyRailQuery = vi.hoisted(() => ({
   data: undefined as
-    | undefined
-    | { userId: string; organizationId: string | null; capabilities: string[] },
+    undefined | { userId: string; organizationId: string | null; capabilities: string[] },
 }));
 // The hospitality rail's one read; unanswered unless a hospitality case sets it.
 const railQuery = vi.hoisted(() => ({

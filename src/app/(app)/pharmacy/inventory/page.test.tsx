@@ -65,12 +65,18 @@ const lot = {
 const lots = vi.fn();
 const nearExpiry = vi.fn();
 let ctx: ReturnType<typeof makeContext>;
+const roleUser = (permissions: { capability: string; effect: 'ALLOW' | 'DENY' }[]) => ({
+  role: 'EMPLOYEE',
+  organizationRole: { permissions },
+  permissionOverrides: [],
+});
 
 function makeContext() {
   return {
     session: { user: { id: 'user', status: 'ACTIVE' } },
     organization: { id: 'org', isDemo: false },
     entitlements: {},
+    requestMeta: { ip: null },
     db: {
       pharmacyBranch: { findMany: vi.fn().mockResolvedValue([branch]) },
       pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([location]) },
@@ -79,7 +85,7 @@ function makeContext() {
       pharmacyInterbranchTransfer: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyRecallNotice: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyStockSignal: { findMany: vi.fn().mockResolvedValue([]) },
-      user: { findMany: vi.fn().mockResolvedValue([]) },
+      user: { findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn() },
       pharmacyTemperatureLog: { findMany: vi.fn().mockResolvedValue([]) },
     },
   };
@@ -94,6 +100,9 @@ async function show() {
 beforeEach(() => {
   vi.clearAllMocks();
   ctx = makeContext();
+  ctx.db.user.findUnique.mockResolvedValue(
+    roleUser([{ capability: 'pharmacy:inventory', effect: 'ALLOW' }])
+  );
   mocks.actor.mockResolvedValue(ctx);
   mocks.context.mockResolvedValue(ctx);
   mocks.module.mockReturnValue(true);
@@ -279,6 +288,28 @@ describe('Inventory pack-action integration', () => {
     ctx.session.user.status = 'INACTIVE';
     await show();
     expect(mocks.form.mock.calls[0][0].unavailableReason).toMatch(/account is no longer active/);
+  });
+
+  it('offers Create location to a role with the inventory permission (#979)', async () => {
+    await show();
+    const form = screen.getByRole('button', { name: 'Create location' }).closest('form')!;
+    expect(form).not.toBeNull();
+    expect(within(form).getByLabelText('Name')).toHaveAttribute('name', 'name');
+    expect(within(form).getByLabelText('Code')).toHaveAttribute('name', 'code');
+    expect(ctx.db.user.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'user' } })
+    );
+  });
+
+  it('hides Create location from a counter-only role (#979)', async () => {
+    ctx.db.user.findUnique.mockResolvedValue(
+      roleUser([{ capability: 'pharmacy:counter', effect: 'ALLOW' }])
+    );
+    await show();
+    expect(screen.queryByRole('button', { name: 'Create location' })).toBeNull();
+    expect(
+      screen.getByText(/Adding a storage location needs the inventory permission/)
+    ).toBeVisible();
   });
 
   it('shows no action or inventory read without the module', async () => {
