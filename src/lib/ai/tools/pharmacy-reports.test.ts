@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { generateText } from 'ai';
 
 vi.mock('server-only', () => ({}));
 
 import { createAssistantHelpers } from '@/lib/ai/context';
 import { PHARMACY_METRIC_CONTRACT } from '@/lib/pharmacy/reports';
-import { buildPharmacyReportTools } from './pharmacy-reports';
+import { buildPharmacyReportTools, financeInsightInput } from './pharmacy-reports';
 
 const branchFindMany = vi.fn();
 const queryRaw = vi.fn();
@@ -75,6 +77,118 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('Ask Fathom pharmacy reports', () => {
+  it('publishes the finance tool as an Anthropic-compatible object schema', () => {
+    const schema = z.toJSONSchema(financeInsightInput) as Record<string, unknown>;
+
+    expect(schema.type).toBe('object');
+    expect(schema).not.toHaveProperty('anyOf');
+    expect(schema).not.toHaveProperty('oneOf');
+    expect(schema.required).toEqual(['report', 'branch']);
+    expect(
+      financeInsightInput.safeParse({
+        report: 'inventory_capital',
+        branch: 'Main Pharmacy',
+        at: '2026-09-05T12:00:00Z',
+      }).success
+    ).toBe(true);
+    expect(
+      financeInsightInput.safeParse({
+        report: 'leakage',
+        branch: 'Main Pharmacy',
+        from: '2026-09-01',
+        to: '2026-09-06',
+      }).success
+    ).toBe(true);
+    expect(
+      financeInsightInput.safeParse({
+        report: 'leakage',
+        branch: 'Main Pharmacy',
+      }).success
+    ).toBe(false);
+  });
+
+  it.each([
+    { report: 'inventory_capital', branch: 'Main Pharmacy' },
+    {
+      report: 'inventory_capital',
+      branch: 'Main Pharmacy',
+      at: '2026-09-05T12:00:00Z',
+      from: '2026-09-01',
+    },
+    { report: 'leakage', branch: 'Main Pharmacy', from: '2026-09-01' },
+    { report: 'leakage', branch: 'Main Pharmacy', to: '2026-09-06' },
+    {
+      report: 'leakage',
+      branch: 'Main Pharmacy',
+      from: '2026-09-01',
+      to: '2026-09-06',
+      at: '2026-09-05T12:00:00Z',
+    },
+    { report: 'leakage', branch: 'Main Pharmacy', from: 'bad', to: '2026-09-06' },
+    { report: 'leakage', branch: ' ', from: '2026-09-01', to: '2026-09-06' },
+    { report: 'other', branch: 'Main Pharmacy', from: '2026-09-01', to: '2026-09-06' },
+    {
+      report: 'leakage',
+      branch: 'Main Pharmacy',
+      from: '2026-09-01',
+      to: '2026-09-06',
+      injected: true,
+    },
+  ])('retains strict report-specific validation: %j', (input) => {
+    expect(financeInsightInput.safeParse(input).success).toBe(false);
+  });
+
+  it('sends an object input_schema through the real provider adapter for an admin chat', async () => {
+    let requests = 0;
+    const model = createAnthropic({
+      apiKey: 'inert-unit-test-key',
+      fetch: async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        const finance = body.tools.find(
+          (entry: { name: string }) => entry.name === 'askPharmacyFinanceInsights'
+        );
+        expect(finance.input_schema).toMatchObject({
+          type: 'object',
+          additionalProperties: false,
+          required: ['report', 'branch'],
+        });
+        for (const rootUnion of ['anyOf', 'oneOf', 'allOf'])
+          expect(finance.input_schema).not.toHaveProperty(rootUnion);
+        requests++;
+        return Response.json({
+          id: 'msg_contract',
+          type: 'message',
+          role: 'assistant',
+          model: body.model,
+          content: [{ type: 'text', text: 'Which branch and period should I use?' }],
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 10, output_tokens: 10 },
+        });
+      },
+    })('claude-sonnet-5-5');
+    const tools = buildPharmacyReportTools(
+      createAssistantHelpers(
+        {
+          organizationId: 'org_1',
+          userId: 'user_1',
+          role: 'ADMIN',
+          enabledModules: ['pharmacy-reports'],
+        },
+        {} as never
+      )
+    );
+    const result = await generateText({
+      model,
+      tools,
+      prompt: 'Explain inventory capital.',
+      maxRetries: 0,
+    });
+    expect(requests).toBe(1);
+    expect(result.text).toContain('Which branch');
+    expect(queryRaw).not.toHaveBeenCalled();
+  });
+
   it.each(['2026-11-02T19:00:00Z', '2026-11-02T23:59:59Z', '2026-11-03T00:00:00Z'])(
     'defaults report dates to today in PKT: %s',
     async (instant) => {
@@ -88,22 +202,20 @@ describe('Ask Fathom pharmacy reports', () => {
     }
   );
 
-  it('unwraps finance requests while preserving authorization, validation and tenant scope', async () => {
-    const input = {
-      request: { report: 'inventory_capital', branch: 'branch_1', at: '2026-09-01T00:00:00Z' },
-    };
+  it('preserves finance authorization, validation and tenant scope', async () => {
+    const input = { report: 'inventory_capital', branch: 'branch_1', at: '2026-09-01T00:00:00Z' };
     const execute = (role = 'ADMIN') =>
       insightTools(role).askPharmacyFinanceInsights.execute! as (
         input: unknown
       ) => Promise<Record<string, unknown>>;
     await expect(execute('EMPLOYEE')(input)).resolves.toMatchObject({ kind: 'refusal' });
     expect(queryRaw).not.toHaveBeenCalled();
-    await expect(
-      execute()({ request: { ...input.request, at: 'invalid' } })
-    ).resolves.toMatchObject({ kind: 'invalid_input' });
-    await expect(
-      execute()({ request: { ...input.request, branch: 'other-org' } })
-    ).resolves.toMatchObject({ kind: 'refusal' });
+    await expect(execute()({ ...input, at: 'invalid' })).resolves.toMatchObject({
+      kind: 'invalid_input',
+    });
+    await expect(execute()({ ...input, branch: 'other-org' })).resolves.toMatchObject({
+      kind: 'refusal',
+    });
     expect(queryRaw).not.toHaveBeenCalled();
     await expect(execute()(input)).resolves.toMatchObject({ kind: 'unknown' });
     expect(branchFindMany).toHaveBeenCalledWith(
