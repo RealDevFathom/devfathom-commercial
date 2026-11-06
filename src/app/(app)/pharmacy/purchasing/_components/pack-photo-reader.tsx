@@ -2,6 +2,7 @@
 
 import { Camera, RotateCcw, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import type { PackLabelProposal } from '@/lib/pharmacy/pack-label-ocr';
 import { checkPackPhotoLot, type PackPhotoLotField } from '@/lib/pharmacy/pack-photo-receiving';
@@ -74,7 +75,8 @@ function base64Of(blob: Blob): Promise<string> {
 /**
  * Downscale and re-encode on the device: smaller uploads on a phone, and the
  * canvas drops EXIF (including location) before anything leaves the bench.
- * Falls back to the original file when the browser cannot decode it here.
+ * Fails closed when the browser cannot re-encode it, so the original file and
+ * its metadata are never uploaded; manual entry stays available.
  */
 async function preparedPhoto(file: File): Promise<{ contentType: PhotoType; dataBase64: string }> {
   if (!isPhotoType(file.type)) throw new Error('Use a JPEG, PNG or WebP photo.');
@@ -95,8 +97,9 @@ async function preparedPhoto(file: File): Promise<{ contentType: PhotoType; data
     if (!blob || blob.size === 0 || blob.size > MAX_PHOTO_BYTES) throw new Error('no blob');
     return { contentType: 'image/jpeg', dataBase64: await base64Of(blob) };
   } catch {
-    if (file.size > MAX_PHOTO_BYTES) throw new Error('Choose a photo no larger than 5 MiB.');
-    return { contentType: file.type, dataBase64: await base64Of(file) };
+    throw new Error(
+      'This photo could not be prepared on this device. Take it again, or enter the batch and expiry by hand.'
+    );
   }
 }
 
@@ -124,6 +127,9 @@ function fieldValue(form: HTMLFormElement | null | undefined, name: string): str
  */
 export function PackPhotoReader(props: PackPhotoReaderProps) {
   const id = useId();
+  // The reader's own controls belong to an inert form outside the receipt, so
+  // Enter cannot draft the receipt and their validation cannot block filing it.
+  const formId = `${id}-reader`;
   const root = useRef<HTMLDivElement>(null);
   const read = trpc.pharmacyPackLabel.read.useMutation();
   // Each read gets a number; a late answer to a closed or replaced read is ignored.
@@ -167,6 +173,8 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
     setPreview(URL.createObjectURL(file));
     try {
       const photo = await preparedPhoto(file);
+      // Closed or replaced while the device was re-encoding: do not spend a read.
+      if (mine !== request.current) return;
       const result = await read.mutateAsync({
         branchId: props.branchId,
         purchaseOrderId: props.purchaseOrderId,
@@ -297,6 +305,21 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
 
   return (
     <div ref={root} className="mt-3 space-y-2">
+      {open
+        ? createPortal(
+            <form
+              hidden
+              id={formId}
+              noValidate
+              onSubmit={(event) => {
+                // React bubbles portal events through the component tree; stop it here.
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+            />,
+            document.body
+          )
+        : null}
       {open ? (
         <div
           className="rounded-[var(--radius-sm)] border border-border-default bg-surface-sunken p-4"
@@ -324,6 +347,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
               Photo of one pack
             </label>
             <input
+              form={formId}
               accept={PHOTO_TYPES.join(',')}
               capture="environment"
               className={cn(CONTROL, 'py-2')}
@@ -386,6 +410,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                       Batch number
                     </label>
                     <input
+                      form={formId}
                       aria-describedby={describe('batch') ?? `${id}-batch-hint`}
                       aria-invalid={Boolean(errors.batch)}
                       autoComplete="off"
@@ -415,6 +440,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                       Printed expiry
                     </label>
                     <input
+                      form={formId}
                       aria-describedby={describe('expiry') ?? `${id}-expiry-hint`}
                       aria-invalid={Boolean(errors.expiry)}
                       className={CONTROL}
@@ -450,6 +476,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                           key={candidate.date}
                         >
                           <input
+                            form={formId}
                             checked={draft.expiryDate === candidate.date}
                             name={`${id}-candidate`}
                             onChange={() =>
@@ -473,6 +500,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                       Expiry precision
                     </label>
                     <select
+                      form={formId}
                       className={CONTROL}
                       id={`${id}-precision`}
                       onChange={(event) =>
@@ -494,6 +522,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                       Packs with this exact batch and expiry
                     </label>
                     <input
+                      form={formId}
                       aria-describedby={describe('packs') ?? `${id}-packs-hint`}
                       aria-invalid={Boolean(errors.packs)}
                       className={CONTROL}
@@ -533,6 +562,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                       Receive into (optional)
                     </label>
                     <select
+                      form={formId}
                       className={CONTROL}
                       id={`${id}-shelf`}
                       onChange={(event) => {
@@ -563,6 +593,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                 <div className="space-y-1">
                   <label className="flex min-h-11 items-start gap-2 text-sm text-text-body">
                     <input
+                      form={formId}
                       aria-describedby={describe('confirm')}
                       aria-invalid={Boolean(errors.confirm)}
                       checked={draft.confirmed}

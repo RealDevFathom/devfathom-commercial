@@ -32,6 +32,8 @@ export type PackLabelOcrRequest = Readonly<{
   content: Buffer;
   mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
   signal?: AbortSignal;
+  /** Spend attribution only; never a tenancy boundary. */
+  organizationId?: string | null;
 }>;
 
 export type PackLabelReadField = Readonly<{ value: string | null; confidence: number }>;
@@ -164,7 +166,7 @@ const USER_INSTRUCTION =
 
 export type VisionPackLabelOcrOptions = {
   /** Seam for tests and for a caller that already resolved a model. */
-  selectModel?: () => AIModelSelection;
+  selectModel?: (organizationId?: string | null) => AIModelSelection;
   /** Bound on provider latency; a receiver must not wait on a slow provider. */
   timeoutMs?: number;
 };
@@ -173,7 +175,9 @@ export function createVisionPackLabelOcrAdapter(
   options: VisionPackLabelOcrOptions = {}
 ): PackLabelOcrAdapter {
   const selectModel =
-    options.selectModel ?? (() => createAIModel(process.env, { feature: 'pharmacy-pack-ocr' }));
+    options.selectModel ??
+    ((organizationId) =>
+      createAIModel(process.env, { feature: 'pharmacy-pack-ocr', organizationId }));
   const timeoutMs = options.timeoutMs ?? 30_000;
 
   return {
@@ -182,7 +186,7 @@ export function createVisionPackLabelOcrAdapter(
     async extract(request) {
       let selection: AIModelSelection;
       try {
-        selection = selectModel();
+        selection = selectModel(request.organizationId ?? null);
       } catch (error) {
         throw new PackLabelOcrError(
           `The pack label reader is not configured: ${
@@ -210,6 +214,8 @@ export function createVisionPackLabelOcrAdapter(
             },
           ],
           temperature: 0,
+          // Two short strings and a flag; a label cannot inflate the bill.
+          maxOutputTokens: 300,
           // Retries belong to the routed chain (one jittered retry, then failover).
           maxRetries: 0,
           abortSignal: signal,

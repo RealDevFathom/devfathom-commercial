@@ -180,6 +180,49 @@ describe('pharmacyPackLabel.read', () => {
     expect(mocks.extract).not.toHaveBeenCalled();
   });
 
+  it('caps reads tenant-wide so many receivers cannot multiply provider spend', async () => {
+    mocks.rateLimit
+      .mockResolvedValueOnce({ ok: true, retryAfter: 0, remaining: 10 })
+      .mockResolvedValueOnce({ ok: false, retryAfter: 30, remaining: 0 });
+    await expect(caller().read(input())).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
+    expect(mocks.rateLimit).toHaveBeenLastCalledWith('pharmacy-pack-label:org:org-a', 60, 60_000);
+    expect(mocks.extract).not.toHaveBeenCalled();
+  });
+
+  it('attributes provider spend to the session tenant', async () => {
+    await caller(context('user-a', 'org-b')).read(input());
+    expect(mocks.extract).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: 'org-b', mimeType: 'image/jpeg' })
+    );
+  });
+
+  it('flattens a transparent label onto white instead of black', async () => {
+    const transparent = await sharp({
+      create: { width: 8, height: 8, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+    })
+      .png()
+      .toBuffer();
+    await caller().read({
+      ...input(),
+      photo: { contentType: 'image/png', dataBase64: transparent.toString('base64') },
+    });
+    const sent = mocks.extract.mock.calls[0]![0] as { content: Buffer };
+    const { channels } = await sharp(sent.content).stats();
+    expect(channels[0]!.mean).toBeGreaterThan(250);
+  });
+
+  it('logs only the reason and adapter when the reader fails', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.extract.mockRejectedValue(new PackLabelOcrError('label text echo', 'PROVIDER_FAILED'));
+    await expect(caller().read(input())).rejects.toMatchObject({ code: 'BAD_GATEWAY' });
+    expect(log).toHaveBeenCalledWith('[pharmacyPackLabel.read] reader failed', {
+      adapter: 'FIXTURE',
+      reason: 'PROVIDER_FAILED',
+    });
+    expect(JSON.stringify(log.mock.calls)).not.toContain('label text echo');
+    log.mockRestore();
+  });
+
   it.each([
     ['not an image', Buffer.from('not an image').toString('base64'), 'image/png'],
     ['a type that does not match its bytes', null, 'image/jpeg'],

@@ -37,6 +37,8 @@ const MAX_PHOTO_BASE64 = 4 * Math.ceil(MAX_PRESCRIPTION_FILE_BYTES / 3);
 const READER_MAX_EDGE = 2000;
 /** Per-user reads per minute. A bench photographs packs one at a time. */
 export const PACK_LABEL_READS_PER_MINUTE = 20;
+/** Tenant-wide ceiling, so many receivers cannot multiply provider spend. */
+export const PACK_LABEL_TENANT_READS_PER_MINUTE = 60;
 
 const NOT_READ = 'The pack photo could not be read. Enter the batch and expiry by hand.';
 
@@ -78,6 +80,8 @@ async function readerImage(bytes: Buffer): Promise<Buffer> {
   try {
     return await sharp(bytes, { limitInputPixels: 25_000_000, failOn: 'warning' })
       .rotate()
+      // JPEG has no alpha: a transparent label would otherwise turn black.
+      .flatten({ background: '#ffffff' })
       .resize({
         width: READER_MAX_EDGE,
         height: READER_MAX_EDGE,
@@ -153,7 +157,14 @@ export const pharmacyPackLabelRouter = router({
         PACK_LABEL_READS_PER_MINUTE,
         60_000
       );
-      if (!limited.ok) {
+      const tenantLimited = limited.ok
+        ? await rateLimit(
+            `pharmacy-pack-label:org:${organizationId}`,
+            PACK_LABEL_TENANT_READS_PER_MINUTE,
+            60_000
+          )
+        : limited;
+      if (!tenantLimited.ok) {
         throw new TRPCError({
           code: 'TOO_MANY_REQUESTS',
           message: 'Too many pack photos in a minute. Wait a moment, or enter the values by hand.',
@@ -168,9 +179,12 @@ export const pharmacyPackLabelRouter = router({
       let proposal: PackLabelProposal;
       try {
         proposal = proposePackLabelFields(
-          await adapter.extract({ content, mimeType: 'image/jpeg' })
+          await adapter.extract({ content, mimeType: 'image/jpeg', organizationId })
         );
       } catch (error) {
+        const reason = error instanceof PackLabelOcrError ? error.reason : 'UNKNOWN';
+        // Reason and adapter only: provider text can echo label content.
+        console.error('[pharmacyPackLabel.read] reader failed', { adapter: adapter.name, reason });
         annotateAudit(ctx, {
           category: 'pharmacy.receiving',
           action: 'pack_label.read_failed',
@@ -182,7 +196,7 @@ export const pharmacyPackLabelRouter = router({
             photoSha256,
             photoBytes: bytes.length,
             adapter: adapter.name,
-            reason: error instanceof PackLabelOcrError ? error.reason : 'UNKNOWN',
+            reason,
           },
         });
         // Provider detail stays server-side; the bench gets an operator sentence.

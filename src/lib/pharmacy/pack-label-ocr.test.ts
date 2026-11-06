@@ -343,8 +343,19 @@ describe('vision adapter', () => {
     });
     expect(mocks.createAIModel).toHaveBeenCalledWith(process.env, {
       feature: 'pharmacy-pack-ocr',
+      organizationId: null,
     });
     expect(mocks.generateObject).not.toHaveBeenCalled();
+  });
+
+  it('attributes spend to the requesting tenant', async () => {
+    await expect(
+      createVisionPackLabelOcrAdapter().extract({ ...request, organizationId: 'org-synthetic' })
+    ).rejects.toMatchObject({ reason: 'ADAPTER_UNAVAILABLE' });
+    expect(mocks.createAIModel).toHaveBeenCalledWith(process.env, {
+      feature: 'pharmacy-pack-ocr',
+      organizationId: 'org-synthetic',
+    });
   });
 
   it('attaches the photo as an image part and normalizes the response', async () => {
@@ -368,7 +379,12 @@ describe('vision adapter', () => {
     expect(proposePackLabelFields(result).batch.value).toBe('SYN-9');
 
     const call = mocks.generateObject.mock.calls[0]![0];
-    expect(call).toMatchObject({ temperature: 0, maxRetries: 0, model: 'fake-model' });
+    expect(call).toMatchObject({
+      temperature: 0,
+      maxRetries: 0,
+      maxOutputTokens: 300,
+      model: 'fake-model',
+    });
     expect(call.abortSignal).toBeInstanceOf(AbortSignal);
     expect(call.system).toMatch(/UNTRUSTED CONTENT/);
     expect(call.system).toMatch(/manufacturing \(MFG\) date is never the expiry/);
