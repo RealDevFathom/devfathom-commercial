@@ -79,6 +79,25 @@ function escPosFacts(
 ): ReceiptPreviewFacts {
   const strings = COUNTER_RECEIPT_STRINGS.en;
   const date = `${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}`;
+  const cashTenders = receipt.tenders.filter((tender) => tender.type === 'CASH');
+  if (
+    cashTenders.some(
+      (tender) =>
+        tender.cashReceivedMinor != null &&
+        (!Number.isSafeInteger(tender.cashReceivedMinor) || tender.cashReceivedMinor < 0)
+    )
+  ) {
+    throw new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
+  }
+  // Older receipts may not record the cash handed over. Do not infer it from
+  // the total tendered, which can also include non-cash payments.
+  const cashReceived =
+    cashTenders.length && cashTenders.every((tender) => tender.cashReceivedMinor != null)
+      ? cashTenders.reduce((sum, tender) => sum + tender.cashReceivedMinor!, 0)
+      : null;
+  if (cashReceived !== null && !Number.isSafeInteger(cashReceived)) {
+    throw new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
+  }
   return {
     businessName: receipt.branchName,
     invoiceNumber: String(receipt.receiptNumber),
@@ -114,6 +133,7 @@ function escPosFacts(
       `${strings.discount}: ${formatMinor(receipt.totals.discountMinor)}`,
       `${strings.net}: ${formatMinor(receipt.totals.netMinor)}`,
       `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor)}`,
+      ...(cashReceived !== null ? [`Cash received: ${formatMinor(cashReceived)}`] : []),
       `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
     ],
     payments: receipt.tenders.length

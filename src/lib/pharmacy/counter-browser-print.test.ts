@@ -140,6 +140,49 @@ describe('isolated Pharmacy browser receipt', () => {
     );
   });
 
+  it('prints recorded cash received before change without including other tenders', () => {
+    const source = {
+      ...receipt,
+      totals: { ...receipt.totals, netMinor: 1000, tenderedMinor: 1100, changeMinor: 100 },
+      tenders: [
+        {
+          tenderId: 'cash-1',
+          type: 'CASH',
+          amountMinor: 500,
+          cashReceivedMinor: 600,
+          changeGivenMinor: 100,
+        },
+        {
+          tenderId: 'cash-2',
+          type: 'CASH',
+          amountMinor: 200,
+          cashReceivedMinor: 200,
+          changeGivenMinor: 0,
+        },
+        { tenderId: 'wallet', type: 'WALLET', amountMinor: 300, changeGivenMinor: 0 },
+      ],
+    };
+    const facts = buildPharmacyReceiptPrintDocument(source, 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity: { ntn: null, strn: null },
+      reprint: false,
+    }).receiptSnapshot!.facts;
+    const cashIndex = facts.totals.indexOf('Cash received: 8.00');
+    expect(cashIndex).toBeGreaterThanOrEqual(0);
+    expect(facts.totals[cashIndex + 1]).toBe('Change: 1.00');
+  });
+
+  it('does not invent cash received for legacy or non-cash receipts', () => {
+    for (const tenders of [receipt.tenders, [{ ...receipt.tenders[0], type: 'CARD' }]]) {
+      const facts = buildPharmacyReceiptPrintDocument({ ...receipt, tenders }, 'en', {
+        layout: DEFAULT_RECEIPT_LAYOUT,
+        taxIdentity: { ntn: null, strn: null },
+        reprint: false,
+      }).receiptSnapshot!.facts;
+      expect(facts.totals.some((line) => line.startsWith('Cash received:'))).toBe(false);
+    }
+  });
+
   it('prints the completion time, cashier and localized receipt/payment labels', () => {
     const source = { ...receipt, cashierName: 'Ayesha Khan' };
     const english = buildCounterBrowserReceipt(source, 'en', 'THERMAL');
