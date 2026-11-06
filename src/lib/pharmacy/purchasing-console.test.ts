@@ -8,6 +8,8 @@ import {
 } from './purchasing-console';
 
 const scope = { organizationId: 'org_a', branchId: 'branch_a' };
+// The receiving router passes its actor along with the branch scope.
+const viewerScope = { ...scope, actorId: 'viewer' };
 const from = new Date('2026-09-01T00:00:00.000Z');
 const to = new Date('2026-09-03T23:59:59.999Z');
 const row = (id: string) => ({
@@ -31,53 +33,90 @@ function database(rows: ReturnType<typeof row>[] = []) {
 }
 
 describe('receipt reversal witness evidence', () => {
-  it.each([true, false])('requires a witness only with a purchase entry: %s', async (registered) => {
+  it.each([true, false])(
+    'requires a witness only with a purchase entry: %s',
+    async (registered) => {
+      const receipts = [
+        {
+          id: 'receipt',
+          status: 'POSTED',
+          qualifiedPersonUserId: 'original-witness',
+          lines: [{ id: 'line', medicine: { controlled: true }, acceptedCanonicalUnits: 0 }],
+        },
+        { id: 'other', status: 'POSTED', lines: [{ id: 'other-line' }] },
+      ];
+      const movements = vi.fn().mockResolvedValue([
+        { id: 'movement', idempotencyKey: 'pharmacy-receipt:line:quarantine' },
+        { id: 'other-movement', idempotencyKey: 'pharmacy-receipt:other-line:accepted' },
+      ]);
+      const purchases = vi
+        .fn()
+        .mockResolvedValue([
+          ...(registered ? [{ stockMovementId: 'movement' }] : []),
+          { stockMovementId: 'other-movement' },
+        ]);
+      const db = {
+        pharmacyGoodsReceipt: { findMany: vi.fn().mockResolvedValue(receipts) },
+        pharmacyStockMovement: { findMany: movements },
+        pharmacyControlledRegisterEntry: { findMany: purchases },
+      } as unknown as ScopedDb;
+      const result = await listGoodsReceipts(db, viewerScope);
+      expect(result.map((receipt) => receipt.reversalRequiresWitness)).toEqual([registered, true]);
+      expect(movements).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org_a',
+          branchId: 'branch_a',
+          idempotencyKey: {
+            in: [
+              'pharmacy-receipt:line:accepted',
+              'pharmacy-receipt:line:quarantine',
+              'pharmacy-receipt:other-line:accepted',
+              'pharmacy-receipt:other-line:quarantine',
+            ],
+          },
+        },
+        select: { id: true, idempotencyKey: true },
+      });
+      expect(purchases).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org_a',
+          branchId: 'branch_a',
+          entryKind: 'PURCHASE',
+          stockMovementId: { in: ['movement', 'other-movement'] },
+        },
+        select: { stockMovementId: true },
+      });
+    }
+  );
+
+  it('requires a witness when another actor posted the purchase movements', async () => {
     const receipts = [
       {
         id: 'receipt',
         status: 'POSTED',
-        qualifiedPersonUserId: 'original-witness',
-        lines: [{ id: 'line', medicine: { controlled: true }, acceptedCanonicalUnits: 0 }],
+        lines: [{ id: 'line', medicine: { controlled: true }, acceptedCanonicalUnits: 5 }],
       },
-      { id: 'other', status: 'POSTED', lines: [{ id: 'other-line' }] },
     ];
-    const movements = vi.fn().mockResolvedValue([
-      { id: 'movement', idempotencyKey: 'pharmacy-receipt:line:quarantine' },
-      { id: 'other-movement', idempotencyKey: 'pharmacy-receipt:other-line:accepted' },
-    ]);
-    const purchases = vi.fn().mockResolvedValue([
-      ...(registered ? [{ stockMovementId: 'movement' }] : []),
-      { stockMovementId: 'other-movement' },
-    ]);
+    const movements = vi.fn(({ where }: { where: Record<string, unknown> }) =>
+      Promise.resolve(
+        [
+          {
+            id: 'movement',
+            actorId: 'original-poster',
+            idempotencyKey: 'pharmacy-receipt:line:accepted',
+          },
+        ].filter((movement) => !('actorId' in where) || where.actorId === movement.actorId)
+      )
+    );
+    const purchases = vi.fn().mockResolvedValue([{ stockMovementId: 'movement' }]);
     const db = {
       pharmacyGoodsReceipt: { findMany: vi.fn().mockResolvedValue(receipts) },
       pharmacyStockMovement: { findMany: movements },
       pharmacyControlledRegisterEntry: { findMany: purchases },
     } as unknown as ScopedDb;
-    const result = await listGoodsReceipts(db, scope);
-    expect(result.map((receipt) => receipt.reversalRequiresWitness)).toEqual([registered, true]);
-    expect(movements).toHaveBeenCalledWith({
-      where: {
-        ...scope,
-        idempotencyKey: {
-          in: [
-            'pharmacy-receipt:line:accepted',
-            'pharmacy-receipt:line:quarantine',
-            'pharmacy-receipt:other-line:accepted',
-            'pharmacy-receipt:other-line:quarantine',
-          ],
-        },
-      },
-      select: { id: true, idempotencyKey: true },
-    });
-    expect(purchases).toHaveBeenCalledWith({
-      where: {
-        ...scope,
-        entryKind: 'PURCHASE',
-        stockMovementId: { in: ['movement', 'other-movement'] },
-      },
-      select: { stockMovementId: true },
-    });
+    const result = await listGoodsReceipts(db, viewerScope);
+    expect(result.map((receipt) => receipt.reversalRequiresWitness)).toEqual([true]);
+    expect(purchases).toHaveBeenCalledOnce();
   });
 });
 

@@ -107,9 +107,8 @@ vi.mock('@/lib/db', () => {
 vi.mock('@/server/routers/_app', async () => {
   const { initTRPC, TRPCError } = await import('@trpc/server');
   const superjson = (await import('superjson')).default;
-  const { authorizeControlledRestoration, ControlledRestorationDenied } = await import(
-    '@/lib/pharmacy/controlled-restoration-authorization'
-  );
+  const { authorizeControlledRestoration, ControlledRestorationDenied } =
+    await import('@/lib/pharmacy/controlled-restoration-authorization');
 
   const t = initTRPC
     .context<{
@@ -270,7 +269,9 @@ describe('durable witness PIN lockout through HTTP', () => {
       expect(harness.credential.failedAttempts).toBe(attempt < 5 ? attempt : 0);
     }
     expect(harness.credential.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
-    expect(harness.outcomes).toEqual(Array.from({ length: 5 }, () => ['COMMIT', 'ROLLBACK']).flat());
+    expect(harness.outcomes).toEqual(
+      Array.from({ length: 5 }, () => ['COMMIT', 'ROLLBACK']).flat()
+    );
     expect(harness.verifyPin).toHaveBeenCalledTimes(5);
     harness.verifyPin.mockResolvedValue(true);
     expect((await mutate(['witnessPin'])).status).toBe(403);

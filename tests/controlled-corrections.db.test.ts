@@ -6,10 +6,7 @@ import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 // The QA gate owner is intentionally NOSUPERUSER/NOBYPASSRLS and owns the
 // migrated disposable gate database, so it can create this suite's isolated schema.
-const url =
-  process.env.TEST_DATABASE_URL ??
-  process.env.CONTROLLED_TEST_DATABASE_URL ??
-  process.env.OWNER_DATABASE_URL;
+const url = process.env.CONTROLLED_TEST_DATABASE_URL ?? process.env.OWNER_DATABASE_URL;
 const schema = `controlled_${randomUUID().replaceAll('-', '')}`;
 const client = new Client({ connectionString: url });
 const migration = readFileSync(

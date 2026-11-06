@@ -497,14 +497,19 @@ export async function listGoodsReceipts(db: ScopedDb, scope: BranchScope) {
     .flatMap((receipt) => goodsReceiptMovementKeys(receipt.lines.map((line) => line.id)));
   const movements = keys.length
     ? await db.pharmacyStockMovement.findMany({
-        where: { ...scope, idempotencyKey: { in: keys } },
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          idempotencyKey: { in: keys },
+        },
         select: { id: true, idempotencyKey: true },
       })
     : [];
   const purchases = movements.length
     ? await db.pharmacyControlledRegisterEntry.findMany({
         where: {
-          ...scope,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
           entryKind: 'PURCHASE',
           stockMovementId: { in: movements.map((movement) => movement.id) },
         },
@@ -513,7 +518,9 @@ export async function listGoodsReceipts(db: ScopedDb, scope: BranchScope) {
     : [];
   const purchaseMovementIds = new Set(purchases.map((entry) => entry.stockMovementId));
   const registeredKeys = new Set(
-    movements.filter((movement) => purchaseMovementIds.has(movement.id)).map((m) => m.idempotencyKey)
+    movements
+      .filter((movement) => purchaseMovementIds.has(movement.id))
+      .map((m) => m.idempotencyKey)
   );
   return receipts.map((receipt) => ({
     ...receipt,
