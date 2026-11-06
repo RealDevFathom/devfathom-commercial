@@ -63,6 +63,7 @@ function makeDb() {
     pharmacyBranch: model(),
     user: model(),
     medicineBarcode: model(),
+    pharmacyStockLocation: model(),
   };
   return Object.assign(db, {
     $queryRaw: vi.fn().mockResolvedValue([{ id: 'po_a' }]),
@@ -117,6 +118,7 @@ beforeEach(() => {
   db = makeDb();
   mocks.can.mockReset().mockResolvedValue(true);
   db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
+  db.pharmacyStockLocation.findFirst.mockResolvedValue({ branchId: 'branch_a' });
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
@@ -739,6 +741,9 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     stockLocationId: 'loc_store',
   };
 
+  /** GS1 AI(21) names one pack: a serialized line is always exactly one pack. */
+  const SERIAL_LINE = { ...RECEIPT_LINE, receivedPacks: 1, bonusPacks: 0 };
+
   const RECEIPT = {
     reference: 'GRN-1',
     branchId: 'branch_a',
@@ -1092,7 +1097,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       ...RECEIPT,
       lines: [
         {
-          ...RECEIPT_LINE,
+          ...SERIAL_LINE,
           gtin: '08961234567894',
           serialNumber: 'a3f09c1e77b2',
           gs1Warnings: ['SERIAL_FORMAT'],
@@ -1120,7 +1125,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     await expect(
       caller().createGoodsReceipt({
         ...RECEIPT,
-        lines: [{ ...RECEIPT_LINE, gtin: '08961234567894', serialNumber: 'A3F09C1E77B2' }],
+        lines: [{ ...SERIAL_LINE, gtin: '08961234567894', serialNumber: 'A3F09C1E77B2' }],
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DUPLICATE_SERIAL' });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
@@ -1131,12 +1136,109 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       caller().createGoodsReceipt({
         ...RECEIPT,
         lines: [
-          { ...RECEIPT_LINE, gtin: '08961234567894', serialNumber: 'A3F09C1E77B2' },
-          { ...RECEIPT_LINE, gtin: '08961234567894', serialNumber: 'a3f09c1e77b2' },
+          { ...SERIAL_LINE, gtin: '08961234567894', serialNumber: 'A3F09C1E77B2' },
+          { ...SERIAL_LINE, gtin: '08961234567894', serialNumber: 'a3f09c1e77b2' },
         ],
       })
     ).rejects.toMatchObject({ message: 'DUPLICATE_SERIAL' });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  // DEV-752: one serial is one pack. A photographed or scanned AI(21) serial
+  // may never be multiplied into a same-lot count.
+  it.each([
+    ['received packs', { receivedPacks: 3, bonusPacks: 0 }],
+    ['a bonus pack', { receivedPacks: 1, bonusPacks: 1 }],
+  ])('refuses a serialized line counted as several packs via %s', async (_, quantity) => {
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [
+          { ...RECEIPT_LINE, ...quantity, gtin: '08961234567894', serialNumber: 'A3F09C1E77B2' },
+        ],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'SERIALIZED_PACK_QUANTITY' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a scanned serial payload counted as several packs', async () => {
+    db.medicineBarcode.findFirst.mockResolvedValue({ presentation: { medicineId: 'medicine_a' } });
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [
+          {
+            ...RECEIPT_LINE,
+            receivedPacks: 6,
+            gs1Payload: ']d201089612345678941727123110ABCD1234|21A3F09C1E77B2',
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ message: 'SERIALIZED_PACK_QUANTITY' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('drafts a mixed-lot delivery as separate lines against one order line', async () => {
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [
+        { ...RECEIPT_LINE, batchNumber: 'SYN-A1', receivedPacks: 6, bonusPacks: 0 },
+        {
+          ...RECEIPT_LINE,
+          batchNumber: 'SYN-A2',
+          printedExpiry: new Date('2028-07-31T00:00:00.000Z'),
+          receivedPacks: 4,
+          bonusPacks: 0,
+        },
+      ],
+    });
+    const created = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create;
+    expect(created).toHaveLength(2);
+    expect(
+      created.map((line: { purchaseOrderLineId: string }) => line.purchaseOrderLineId)
+    ).toEqual(['poline_a', 'poline_a']);
+    expect(
+      created.map((line: { receivedCanonicalUnits: number }) => line.receivedCanonicalUnits)
+    ).toEqual([60, 40]);
+  });
+
+  it('checks the receiving shelf against the session tenant and branch at draft time', async () => {
+    await caller().createGoodsReceipt(RECEIPT);
+    expect(db.pharmacyStockLocation.findFirst).toHaveBeenCalledWith({
+      where: { id: 'loc_store', organizationId: 'org_a' },
+      select: { branchId: true },
+    });
+  });
+
+  it.each([
+    ['another branch', { branchId: 'branch_b' }, 'CROSS_BRANCH_REFERENCE'],
+    ['another tenant', null, 'CROSS_TENANT_REFERENCE'],
+  ])('refuses a receiving shelf of %s', async (_, location, reason) => {
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(location);
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: reason,
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a quarantine shelf of another branch', async () => {
+    db.pharmacyStockLocation.findFirst.mockImplementation(async ({ where }) =>
+      where.id === 'loc_quarantine' ? { branchId: 'branch_b' } : { branchId: 'branch_a' }
+    );
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [
+          {
+            ...RECEIPT_LINE,
+            rejectedCanonicalUnits: 20,
+            rejectionReason: 'Crushed blisters',
+            quarantineLocationId: 'loc_quarantine',
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'CROSS_BRANCH_REFERENCE' });
   });
 
   it('refuses goods-in when the actor only holds the cashier grants', async () => {
@@ -1171,7 +1273,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       receivedAt: new Date('2026-10-21T00:00:00.000Z'),
       lines: [
         {
-          ...RECEIPT_LINE,
+          ...SERIAL_LINE,
           batchNumber: 'CLIENT-BATCH',
           printedExpiry: new Date('2028-01-01T00:00:00.000Z'),
           gtin: '08961234567894',
@@ -1196,7 +1298,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       receivedAt: new Date('2026-10-21T00:00:00.000Z'),
       lines: [
         {
-          ...RECEIPT_LINE,
+          ...SERIAL_LINE,
           batchNumber: 'INV-1',
           printedExpiry: new Date('2028-01-15T00:00:00.000Z'),
           expiryPrecision: 'DAY',
@@ -1218,7 +1320,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     await expect(
       caller().createGoodsReceipt({
         ...RECEIPT,
-        lines: [{ ...RECEIPT_LINE, gtin: '08961234567894', serialNumber: 'A3F09C1E77B2' }],
+        lines: [{ ...SERIAL_LINE, gtin: '08961234567894', serialNumber: 'A3F09C1E77B2' }],
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'GTIN_MEDICINE_MISMATCH' });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
@@ -1242,7 +1344,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
         receivedAt,
         lines: [
           {
-            ...RECEIPT_LINE,
+            ...SERIAL_LINE,
             gs1Payload: ']d201089612345678941725123110EXP-OLD-1|21B1B1B1B1B1B1',
           },
         ],
@@ -1301,7 +1403,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     await expect(
       caller().createGoodsReceipt({
         ...RECEIPT,
-        lines: [{ ...RECEIPT_LINE, gtin: '08961234567894', serialNumber: 'A3F09C1E77B2' }],
+        lines: [{ ...SERIAL_LINE, gtin: '08961234567894', serialNumber: 'A3F09C1E77B2' }],
       })
     ).rejects.toMatchObject({ code: 'CONFLICT', message: 'DUPLICATE_SERIAL' });
   });
@@ -1310,7 +1412,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     await expect(
       caller().createGoodsReceipt({
         ...RECEIPT,
-        lines: [{ ...RECEIPT_LINE, serialNumber: 'A3F09C1E77B2' }],
+        lines: [{ ...SERIAL_LINE, serialNumber: 'A3F09C1E77B2' }],
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();

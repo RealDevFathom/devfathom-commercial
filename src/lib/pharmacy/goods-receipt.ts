@@ -368,8 +368,24 @@ export async function postGoodsReceipt(
       quarantineMovementId: posted.quarantineMovement?.id ?? null,
     });
 
+    // DEV-752: one order line may arrive as several lots on this receipt. The
+    // quantity leg is cumulative across them and judged once, on the last lot,
+    // so lots neither hide an over-receipt nor each report a false shortage.
+    const siblings = line.purchaseOrderLineId
+      ? receipt.lines.filter((other) => other.purchaseOrderLineId === line.purchaseOrderLineId)
+      : [];
+    const earlierOnReceipt = siblings
+      .filter((other) => other.lineNumber < line.lineNumber)
+      .reduce(
+        (total, other) => total + other.receivedCanonicalUnits + other.bonusCanonicalUnits,
+        0
+      );
+    const lastLotOfOrderLine = !siblings.some((other) => other.lineNumber > line.lineNumber);
+    const terms = await orderedTermsFor(db, scope, line.purchaseOrderLineId, receipt.id);
     for (const exception of matchReceiptLine({
-      ordered: await orderedTermsFor(db, scope, line.purchaseOrderLineId, receipt.id),
+      ordered: terms
+        ? { ...terms, previouslyReceivedUnits: terms.previouslyReceivedUnits + earlierOnReceipt }
+        : null,
       received: {
         canonicalUnitsPerPack: line.canonicalUnitsPerPack,
         arrivedCanonicalUnits: line.receivedCanonicalUnits + line.bonusCanonicalUnits,
@@ -377,7 +393,10 @@ export async function postGoodsReceipt(
         rejectionReason: line.rejectionReason,
         invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
       },
-    })) {
+    }).filter(
+      (exception) =>
+        lastLotOfOrderLine || (exception.kind !== 'SHORTAGE' && exception.kind !== 'OVERAGE')
+    )) {
       const created = await db.pharmacyReceivingException.create({
         data: {
           organizationId: scope.organizationId,

@@ -16,7 +16,7 @@ import type { Notice, SupplierPickerOption } from '../_lib/types';
  * records.
  */
 
-const CONTROL =
+export const CONTROL =
   'min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong ' +
   'focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 ' +
   'disabled:cursor-not-allowed disabled:opacity-50 aria-[invalid=true]:border-destructive';

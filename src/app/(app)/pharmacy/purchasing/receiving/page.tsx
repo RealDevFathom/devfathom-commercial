@@ -3,6 +3,7 @@ import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
 import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
+import { PackPhotoReader } from '../_components/pack-photo-reader';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -25,6 +26,13 @@ import type {
   StockLocationOption,
 } from '@/lib/pharmacy/purchasing-console';
 import { packConversionLabel } from '@/lib/pharmacy/pack-conversion-label';
+import { configuredPackLabelOcrAdapterName } from '@/lib/pharmacy/pack-label-ocr';
+import {
+  defaultReceivingLocationId,
+  EXTRA_LOT_SLOTS,
+  findRepeatedLot,
+  lotSlotKey,
+} from '@/lib/pharmacy/pack-photo-receiving';
 import {
   BranchPicker,
   ChooseBranchState,
@@ -178,6 +186,14 @@ export default async function PharmacyReceivingPage({
   }
 
   const locations = workspace.stockLocations.filter((location) => location.branchId === branchId);
+  // DEV-752: the receiving shelf starts on the branch's own default (or its only
+  // receiving location). Nothing here writes a default; it only pre-selects one.
+  const receiveLocations = locations.filter((location) => location.kind !== 'QUARANTINE');
+  const defaultLocationId = defaultReceivingLocationId(
+    scope.branch.defaultStockLocationId,
+    locations
+  );
+  const packPhotoEnabled = configuredPackLabelOcrAdapterName() !== null;
   // PUR-02 receives against an order that has left the building; a draft or
   // unapproved order has nothing to deliver.
   const receivable = orders.filter(
@@ -230,20 +246,33 @@ export default async function PharmacyReceivingPage({
       if (!order)
         throw new PurchasingValidationError('That order no longer exists. Reload the page.');
 
-      const lines = order.lines.flatMap((line) => {
-        // A line with no batch number was not delivered on this consignment.
-        // It stays outstanding rather than being filed as a zero receipt.
-        if (!field(form, `batchNumber:${line.id}`)) return [];
-        return [
-          {
-            ...readCaptureFields(form, line.id),
-            purchaseOrderLineId: line.id,
-            medicineId: line.medicineId,
-            packLevelId: line.packLevelId,
-            canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-          },
-        ];
-      });
+      const lines = order.lines.flatMap((line) =>
+        // DEV-752: one ordered line may arrive as several lots. Each different
+        // batch or expiry is its own receipt line against the same order line.
+        [1, ...EXTRA_LOT_SLOTS].flatMap((slot) => {
+          const key = lotSlotKey(line.id, slot);
+          // A lot with no batch number was not delivered on this consignment.
+          // It stays outstanding rather than being filed as a zero receipt.
+          if (!field(form, `batchNumber:${key}`)) return [];
+          return [
+            {
+              ...readCaptureFields(form, key),
+              purchaseOrderLineId: line.id,
+              medicineId: line.medicineId,
+              packLevelId: line.packLevelId,
+              canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+            },
+          ];
+        })
+      );
+      if (findRepeatedLot(lines)) {
+        throw Object.assign(
+          new PurchasingValidationError(
+            'The same batch and expiry is entered twice on one order line. Enter the total packs once; a separate lot is only for a different batch or expiry.'
+          ),
+          { field: 'batchNumber' }
+        );
+      }
       if (lines.length === 0) {
         throw Object.assign(
           new PurchasingValidationError(
@@ -725,31 +754,90 @@ export default async function PharmacyReceivingPage({
                       scan?.kind === 'gs1' && scan.medicineId
                         ? selectedOrder.lines.find((row) => row.medicineId === scan.medicineId)?.id
                         : undefined;
+                    const outstandingPacks =
+                      line.canonicalUnitsPerPack > 0
+                        ? Math.floor(remaining / line.canonicalUnitsPerPack)
+                        : null;
+                    const reader = (key: string, lotLabel: string) =>
+                      packPhotoEnabled ? (
+                        <PackPhotoReader
+                          branchId={branchId}
+                          defaultLocationId={defaultLocationId ?? null}
+                          fieldKey={key}
+                          locations={receiveLocations.map((location) => ({
+                            id: location.id,
+                            label: `${location.name} (${location.kind}${location.coldChain ? ', cold chain' : ''})`,
+                          }))}
+                          lotLabel={lotLabel}
+                          medicineName={line.medicine.productName}
+                          outstandingPacks={outstandingPacks}
+                          packLevel={line.packLevel.level}
+                          purchaseOrderId={selectedOrder.id}
+                          purchaseOrderLineId={line.id}
+                          siblingFieldKeys={[1, ...EXTRA_LOT_SLOTS]
+                            .map((slot) => lotSlotKey(line.id, slot))
+                            .filter((sibling) => sibling !== key)}
+                          unitsPerPack={line.canonicalUnitsPerPack}
+                        />
+                      ) : null;
+                    const prefill = prefillId === line.id ? gs1Prefill(scan, scanTerm) : undefined;
                     return (
-                      <CaptureFieldset
-                        highlighted={
-                          scan?.kind !== 'unresolved' &&
-                          scan?.kind !== 'manual' &&
-                          scan?.medicineId === line.medicineId
-                        }
-                        prefill={prefillId === line.id ? gs1Prefill(scan, scanTerm) : undefined}
-                        key={line.id}
-                        keyPrefix={line.id}
-                        locations={locations}
-                        notice={notice}
-                        subtitle={`Ordered ${line.orderedPacks} ${line.packLevel.level}${
-                          line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''
-                        } · ${units(orderedUnits)} · already received ${units(already?.receivedUnits ?? 0)} · outstanding ${units(remaining)}`}
-                        suggestedPacks={receivedPacksForScan(
-                          prefillId === line.id && scan?.kind === 'gs1' ? scan.serial : null,
-                          line.canonicalUnitsPerPack > 0
-                            ? Math.floor(remaining / line.canonicalUnitsPerPack)
-                            : 0
-                        )}
-                        suggestedPriceMinor={line.listPricePerPackMinor}
-                        title={line.medicine.productName}
-                        unitsPerPack={line.canonicalUnitsPerPack}
-                      />
+                      <div className="space-y-3" key={line.id}>
+                        <CaptureFieldset
+                          defaultLocationId={defaultLocationId}
+                          photoReader={
+                            // A scanned 2D code is the evidence for lot 1; a photo cannot replace it.
+                            prefill?.payload ? undefined : reader(line.id, 'Lot 1')
+                          }
+                          highlighted={
+                            scan?.kind !== 'unresolved' &&
+                            scan?.kind !== 'manual' &&
+                            scan?.medicineId === line.medicineId
+                          }
+                          prefill={prefill}
+                          keyPrefix={line.id}
+                          locations={locations}
+                          notice={notice}
+                          subtitle={`Ordered ${line.orderedPacks} ${line.packLevel.level}${
+                            line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''
+                          } · ${units(orderedUnits)} · already received ${units(already?.receivedUnits ?? 0)} · outstanding ${units(remaining)}`}
+                          suggestedPacks={receivedPacksForScan(
+                            prefillId === line.id && scan?.kind === 'gs1' ? scan.serial : null,
+                            line.canonicalUnitsPerPack > 0
+                              ? Math.floor(remaining / line.canonicalUnitsPerPack)
+                              : 0
+                          )}
+                          suggestedPriceMinor={line.listPricePerPackMinor}
+                          title={line.medicine.productName}
+                          unitsPerPack={line.canonicalUnitsPerPack}
+                        />
+                        <details className="rounded-[var(--radius-sm)] border border-border-subtle px-4 py-2">
+                          <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-text-body focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2">
+                            Another batch or expiry of {line.medicine.productName} arrived
+                          </summary>
+                          <p className="text-xs text-text-muted">
+                            Each different batch or expiry is its own lot. The same batch and expiry
+                            is one lot: enter its total packs once. Leave a lot&apos;s batch blank
+                            if it did not arrive.
+                          </p>
+                          <div className="mt-3 space-y-3 pb-2">
+                            {EXTRA_LOT_SLOTS.map((slot) => (
+                              <CaptureFieldset
+                                defaultLocationId={defaultLocationId}
+                                key={slot}
+                                keyPrefix={lotSlotKey(line.id, slot)}
+                                locations={locations}
+                                notice={notice}
+                                photoReader={reader(lotSlotKey(line.id, slot), `Lot ${slot}`)}
+                                subtitle={`A separate batch or expiry against the same order line · outstanding ${units(remaining)}`}
+                                suggestedPriceMinor={line.listPricePerPackMinor}
+                                title={`${line.medicine.productName} — lot ${slot}`}
+                                unitsPerPack={line.canonicalUnitsPerPack}
+                              />
+                            ))}
+                          </div>
+                        </details>
+                      </div>
                     );
                   })}
                 </div>
@@ -1052,6 +1140,8 @@ function CaptureFieldset({
   suggestedPriceMinor,
   highlighted,
   prefill,
+  photoReader,
+  defaultLocationId,
 }: {
   keyPrefix: string;
   title: string;
@@ -1063,12 +1153,15 @@ function CaptureFieldset({
   suggestedPriceMinor?: number;
   highlighted?: boolean;
   prefill?: Gs1Prefill;
+  /** DEV-752: the pack-photo shortcut that fills this line's lot fields. */
+  photoReader?: React.ReactNode;
+  defaultLocationId?: string;
 }) {
   const stock = locations.filter((location) => location.kind !== 'QUARANTINE');
   const quarantine = locations.filter((location) => location.kind === 'QUARANTINE');
   return (
     <fieldset
-      className={`rounded-[var(--radius-sm)] border p-4 ${
+      className={`min-w-0 rounded-[var(--radius-sm)] border p-4 ${
         highlighted ? 'border-primary bg-primary/5' : 'border-border-subtle'
       }`}
     >
@@ -1080,6 +1173,7 @@ function CaptureFieldset({
       {unitsPerPack ? (
         <Derived label="Pack conversion" value={packConversionLabel('pack', [], unitsPerPack)} />
       ) : null}
+      {photoReader}
       <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <TextField
           defaultValue={prefill?.batchNumber}
@@ -1200,7 +1294,13 @@ function CaptureFieldset({
           ]}
         />
         <SelectField
+          defaultValue={defaultLocationId}
           emptyHint="This branch has no active stock location. Create one before receiving."
+          hint={
+            defaultLocationId
+              ? "Starts on this branch's receiving location. A change applies to this line only."
+              : undefined
+          }
           label="Receive into"
           name={`stockLocation:${keyPrefix}`}
           notice={notice}
