@@ -130,5 +130,53 @@
   "initialSha": "233f2fb2b449f58d0f813e63fe48e850a800c567",
   "what": "Prettier on api-docs-content.tsx and organization-admin-content.people.test.tsx",
   "initialFailure": "Prettier: 2 changed files unformatted"
+ },
+ "1068": {
+  "sha": "53af03e40443561986d1ec3866c148971af30fcd",
+  "initialSha": "86d85bfeb71bf0ad9404ac4b54d2b3c325c88a5a",
+  "what": "gives the finance-insights test fixture db the $transaction the scoped tenant db provides",
+  "initialFailure": "5 regressed tests in tests/finance-insights-ai-independence.test.ts (ctx.db.$transaction is not a function)"
+ },
+ "1119": {
+  "sha": "26c273f336e76e5852d17a1e6de7121795d3c805",
+  "initialSha": "3d56d6912e2dca34523d41d458eb39372fd1b75c",
+  "what": "test cash-flow classification journal lines",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1118": {
+  "sha": "ba2c5d217e887c034af787d718915d8ef27b64a4",
+  "initialSha": "51f920b0b6a8379319787e39d864998b0a17f74d",
+  "what": "update balance sheet pill UI tests and format changed files",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1117": {
+  "sha": "404c9f9a58b59242ff1ad07316c54b6de963c345",
+  "initialSha": "ae1048245644fd40dcbe13b273ac0e4b8d3042a0",
+  "what": "use BigInt() in P&L coverage test and apply prettier",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1101": {
+  "sha": "776d22334a01496a090f94de2e78d58b7e119ac1",
+  "initialSha": "933fef04a9269381ffccd6ff6e016c5b898e3b9d",
+  "what": "render-test USD tender totals, drop source-grep test",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1005": {
+  "sha": "9d3baf26f63e29aef9d96ff269711ede93829a67",
+  "initialSha": "6b58b00b6c7884502cce554b6ef1e030e36fe372",
+  "what": "unknown-tenant 404 links to sign-in, drop no-op pharmacy notification toggles",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1003": {
+  "sha": "653893104353bd877fa0a33355c9275e524ac401",
+  "initialSha": "bccb1b844f45147bc2734d0fa39920b329db784e",
+  "what": "fix Field label test, drop out-of-scope nav wrap and Physical count hiding",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
+ },
+ "1002": {
+  "sha": "c4cfcbebded391bc6bdfdd165f6f31afe73587ed",
+  "initialSha": "6aea99a22daf8a172f8e7e5543b3d5073948ab34",
+  "what": "return a generic 500 for unexpected report export failures",
+  "initialFailure": "the failures listed in the first review (see QA/Security)"
  }
 }
