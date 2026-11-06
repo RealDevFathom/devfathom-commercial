@@ -1,0 +1,84 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Inventory
+Expiry
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY OPERATIONS · INV-09
+Expiry board
+
+Act on stock before it becomes dead stock: mark it down, send it back, or pull it from sale.
+
+BRANCH-SCOPED
+Board filters
+Branch
+Clifton Chemist · Karachi
+Expiring within
+30 days
+60 days
+90 days
+180 days
+Show
+Back to inventory
+VALUE AT RISK
+PKR 0.00
+Units × landed unit cost
+UNITS AT RISK
+0
+Still saleable
+EXPIRED ON THE SHELF
+0
+Quarantine these first
+POSITIONS WITH A DRAFT
+0
+Mark-down or supplier return
+INV-09 · EXPIRING WITHIN 90 DAYS, PLUS EXPIRED STOCK STILL ON THE SHELF
+Expiry board
+Printable / shareable list
+
+Mark-downs and supplier returns are drafts: neither changes a price nor reserves stock until a person advances them. Quarantine is a real ledger movement that takes the units out of sale.
+
+Nothing saleable expires within 90 days at this branch.

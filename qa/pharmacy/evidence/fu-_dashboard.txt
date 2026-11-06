@@ -1,0 +1,153 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Dashboard
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY WORKSPACE
+Owner command centre
+
+Live operational signals with visible source, freshness and permission boundaries.
+
+Edit dashboard
+SCOPE
+Today at a glance
+BRANCH
+All available
+
+Waiting for a reportable branch.
+
+REPORTS:FINANCIAL
+Today's trade
+
+Sales, margin, cash and refunds
+
+RESTRICTED
+
+reports:financial is required. No protected values are shown.
+
+REPORTS:OPERATIONAL
+Stock actions
+
+Low stock, stockouts and recommended orders
+
+OPENSTOCKSIGNALS
+—
+Not available in this release
+RECOMMENDEDORDERS
+—
+Not available in this release
+REPORTS:OPERATIONAL
+Expiry exposure
+
+Stock value expiring within 30, 60, 90 and 180 days
+
+EXPIRYVALUEMINOR30
+—
+Not available in this release
+EXPIRYVALUEMINOR60
+—
+Not available in this release
+EXPIRYVALUEMINOR90
+—
+Not available in this release
+EXPIRYVALUEMINOR180
+—
+Not available in this release
+REPORTS:OPERATIONAL
+Recalls & quarantine
+
+Open recalls and quarantined units
+
+OPENRECALLS
+—
+Not available in this release
+QUARANTINEUNITS
+—
+Not available in this release
+SAFETYQUEUE
+—
+Not available in this release
+REPORTS:FINANCIAL
+Claims & aging
+
+Supplier claims, AP, AR and khata aging
+
+RESTRICTED
+
+reports:financial is required. No protected values are shown.
+
+REPORTS:OPERATIONAL
+Pharmacist coverage
+
+Qualified-person coverage across selected branches
+
+PHARMACISTCOVERAGE
+—
+Not available in this release
+REPORTS:OPERATIONAL
+Operational exceptions
+
+Receiving, device, fiscal and offline exceptions
+
+OPENRECEIVINGEXCEPTIONS
+—
+Not available in this release
+AGINGFISCALDOCUMENTS
+—
+Not available in this release
+REJECTEDFISCALDOCUMENTS
+—
+Not available in this release
+DEVICEFISCALOFFLINEEXCEPTIONS
+—
+Not available in this release
+REPORTS:OPERATIONAL
+Branch comparison
+
+Compare the currently selected branch scope
+
+BRANCHES IN SCOPE
+0
+Choose a branch above to compare one location with the all-branch view.

@@ -1,0 +1,74 @@
+{
+  "bag": {
+    "branchId": "cmvhhcldp000m1yjs2sc9obnz",
+    "staffId": "cmvhhclfk004o1yjs8ekhf7z5",
+    "publicationId": "cmvhjug6c00ga1yjs31fwgynt",
+    "menuItemId": "cmvhjug3w00g61yjs7gxjuya0",
+    "naanItemId": "cmvhjug5700g81yjs0ftsyw6m",
+    "tableId": "cmvhjugd800gj1yjsyhrvof1u",
+    "stationId": "cmvhjughs00gq1yjsrw6ss058",
+    "orderId": ""
+  },
+  "results": [
+    {
+      "id": "POS-ids",
+      "status": "pass",
+      "notes": "{\"branchId\":\"cmvhhcldp000m1yjs2sc9obnz\",\"staffId\":\"cmvhhclfk004o1yjs8ekhf7z5\",\"publicationId\":\"cmvhjug6c00ga1yjs31fwgynt\",\"menuItemId\":\"cmvhjug3w00g61yjs7gxjuya0\",\"naanItemId\":\"cmvhjug5700g81yjs0ftsyw6m\",\"tableId\":\"cmvhjugd800gj1yjsyhrvof1u\",\"stationId\":\"cmvhjughs00gq1yjsrw6ss058\"}"
+    },
+    {
+      "id": "STF-roles",
+      "status": "pass",
+      "notes": "list 405 {\"error\":{\"json\":{\"message\":\"Unsupported POST-request to query procedure at path \\\"restaurantStaff.listJobRoles\\\"\",\"code\":-32005,\"data\":{\"code\":\"METHOD_NOT_SUPPORTED\",\"httpStatus\":; seed 200 {\"result\":{\"data\":{\"json\":{\"created\":[]}}}}"
+    },
+    {
+      "id": "STF-owner-pin",
+      "status": "pass",
+      "notes": "200 {\"result\":{\"data\":{\"json\":{\"id\":\"cmvhkpf9a0002chjsql7ce0n2\",\"staffProfileId\":\"cmvhhclfk004o1yjs8ekhf7z5\",\"type\":\"PIN\",\"deviceId\":null,\"createdAt\":\"2026-10-21T03:49:26.014Z\"},\"meta\":{\"values\":{\"createdAt\":[\"Date\"]},\"v\":1}}}}"
+    },
+    {
+      "id": "STF-jobs-empty",
+      "status": "pass",
+      "notes": "200 {\"result\":{\"data\":{\"json\":{\"granted\":[],\"revoked\":[\"cmvhhclf000361yjssb1hecpy\"]}}}}"
+    },
+    {
+      "id": "CFG-02-browser",
+      "status": "pass",
+      "notes": "enroll 200 http://qa-karahi-house.localhost:3000/pos <!DOCTYPE html><html lang=\"en\" data-theme=\"light\" class=\"instrumentsansextended_c356259e-module__sXQYdW__variable instrumentsans_623667d8-module__sBMaqq__variable plexmonocyrillicextended_abb9149d-module__zMqH8a__variable plexmonocyrillic_e; page Skip to order pad DevFathom Restaurant POS LOCKED RESTAURANT POS Terminal locked QA Register browser · Clifton SUCCESS Device session established. Unlock to continue. Unlock terminal LOCKED Operator Choose an operator Ayesha Khan — Organization administrator Operator PIN Unlock terminal"
+    },
+    {
+      "id": "SEC-02",
+      "status": "fail",
+      "notes": "401 {\"error\":\"Missing or malformed terminal session token.\"}"
+    },
+    {
+      "id": "POS-unlock",
+      "status": "fail",
+      "notes": "401 {\"error\":\"Missing or malformed terminal session token.\"}"
+    },
+    {
+      "id": "PAY-04-copy",
+      "status": "fail",
+      "notes": "Skip to order pad DevFathom Restaurant POS NOT ENROLLED RESTAURANT POS Checking enrollment Verifying this browser with the server. Verifying browser Please wait while the terminal credential is revalidated."
+    },
+    {
+      "id": "ORD-02",
+      "status": "fail",
+      "notes": "open 401 {\"error\":\"Missing or malformed terminal session token.\"}; add 401 {\"error\":\"Missing or malformed terminal session token.\"}; fire 401 {\"error\":\"Missing or malformed terminal session token.\"}"
+    },
+    {
+      "id": "ORD-03",
+      "status": "fail",
+      "notes": "401 {\"error\":\"Missing or malformed terminal session token.\"}"
+    },
+    {
+      "id": "PAY-01",
+      "status": "fail",
+      "notes": "drawer 401 {\"error\":\"Missing or malformed terminal session token.\"}; bill 401 {\"error\":\"Missing or malformed terminal session token.\"}"
+    },
+    {
+      "id": "PAY-03",
+      "status": "fail",
+      "notes": "401 {\"error\":\"Missing or malformed terminal session token.\"}"
+    }
+  ]
+}

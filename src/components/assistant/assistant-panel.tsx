@@ -125,6 +125,15 @@ function createConversationTransport(canChat: boolean) {
         if (response.status === 401 || response.status === 403) {
           throw new Error('ASSISTANT_PERMISSION_DENIED');
         }
+        if (response.status === 503) {
+          const body = await response
+            .clone()
+            .json()
+            .catch(() => null);
+          if (body?.error === "Ask Fathom isn't set up yet, contact support.") {
+            throw new Error('ASSISTANT_NOT_CONFIGURED');
+          }
+        }
         return response;
       },
     }),
@@ -134,7 +143,9 @@ function createConversationTransport(canChat: boolean) {
 function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEntry> }) {
   const { open, setOpen } = useAssistant();
   const [input, setInput] = useState('');
-  const [requestError, setRequestError] = useState<'permission' | 'provider' | null>(null);
+  const [requestError, setRequestError] = useState<
+    'permission' | 'configuration' | 'provider' | null
+  >(null);
   const [notice, setNotice] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const sending = useRef(false);
@@ -147,8 +158,16 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
     transport: conversation.transport,
     onError: (error) => {
       if (!conversation.isActive()) return;
+      // Log only a fixed event: SDK errors can carry provider or patient payloads.
+      console.error('ASSISTANT_REQUEST_FAILED');
       sending.current = false;
-      setRequestError(error.message === 'ASSISTANT_PERMISSION_DENIED' ? 'permission' : 'provider');
+      setRequestError(
+        error.message === 'ASSISTANT_PERMISSION_DENIED'
+          ? 'permission'
+          : error.message === 'ASSISTANT_NOT_CONFIGURED'
+            ? 'configuration'
+            : 'provider'
+      );
       // The SDK reports provider errors through onError; sendMessage can resolve
       // on failure. Keep the draft, including failures in later tool steps.
       setInput((draft) => draft || submittedInput.current);
@@ -207,7 +226,8 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
       busy ||
       sending.current ||
       !entry.canChat ||
-      requestError === 'permission'
+      requestError === 'permission' ||
+      requestError === 'configuration'
     )
       return;
     sending.current = true;
@@ -287,9 +307,11 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
               <p>
                 {requestError === 'permission'
                   ? 'Permission denied. Your session or workspace access may have changed. Reload to check your access.'
-                  : 'Ask Fathom is currently unavailable. No cached answer was used. Your draft is retained. Review any action results before retrying.'}
+                  : requestError === 'configuration'
+                    ? "Ask Fathom isn't set up yet, contact support."
+                    : 'Ask Fathom is currently unavailable. No cached answer was used. Your draft is retained. Review any action results before retrying.'}
               </p>
-              {requestError !== 'permission' && (
+              {requestError === 'provider' && (
                 <Button
                   type="button"
                   variant="outline"
@@ -354,7 +376,12 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
             ) : (
               <Button
                 type="submit"
-                disabled={!input.trim() || !entry.canChat || requestError === 'permission'}
+                disabled={
+                  !input.trim() ||
+                  !entry.canChat ||
+                  requestError === 'permission' ||
+                  requestError === 'configuration'
+                }
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-all hover:bg-primary-hover active:scale-95 disabled:opacity-40"
                 aria-label="Send"
               >

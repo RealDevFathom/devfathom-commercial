@@ -1,0 +1,86 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Inventory
+Transfers
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY OPERATIONS · INV-07
+Stock transfers
+
+Allocate, approve, dispatch and receive stock between branches, with a printed slip.
+
+Back to inventory
+ORGANIZATION-SCOPED
+Working branch
+Branch
+Clifton Chemist · Karachi
+Open branch
+AWAITING APPROVAL
+0
+Outbound, second person
+READY TO DISPATCH
+0
+Approved outbound
+ARRIVING
+0
+Inbound in transit
+VARIANCE UNITS
+0
+Written off on receipt
+ALLOCATE → APPROVE → DISPATCH
+Send stock
+
+Transfers need a second active branch with a receiving location. Add it in onboarding.
+
+RECEIVE WITH VARIANCE
+Inbound transfers
+
+No transfers are addressed to Clifton Chemist yet.
+
+OUTBOUND
+Outbound transfers
+
+Clifton Chemist has not sent any stock yet. Allocate a transfer above.
