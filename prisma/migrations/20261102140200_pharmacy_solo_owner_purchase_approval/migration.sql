@@ -6,7 +6,7 @@ BEGIN;
 
 -- search_path is pinned and every relation is schema-qualified so a caller's
 -- session search_path cannot redirect the lookups.
-CREATE FUNCTION public.pharmacy_solo_purchase_owner(org text, actor text, branch text)
+CREATE OR REPLACE FUNCTION public.pharmacy_solo_purchase_owner(org text, actor text, branch text)
 RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER
 SET search_path = pg_catalog, pg_temp AS $$
   SELECT COALESCE(current_setting('app.pharmacy_purchase_pin_verified_user_id', true) = actor, false) AND EXISTS (
@@ -37,16 +37,18 @@ $$;
 DO $$
 DECLARE constraint_name text;
 BEGIN
-  SELECT conname INTO STRICT constraint_name FROM pg_constraint
+  SELECT conname INTO constraint_name FROM pg_constraint
     WHERE conrelid='pharmacy_purchase_orders'::regclass AND contype='c'
       AND pg_get_constraintdef(oid) LIKE '%"approvedByUserId" <> "createdByUserId"%';
-  EXECUTE format('ALTER TABLE pharmacy_purchase_orders DROP CONSTRAINT %I', constraint_name);
+  IF constraint_name IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE pharmacy_purchase_orders DROP CONSTRAINT %I', constraint_name);
+  END IF;
 END $$;
-ALTER TABLE pharmacy_goods_receipts DROP CONSTRAINT pharmacy_goods_receipts_bypass_actor_check;
+ALTER TABLE pharmacy_goods_receipts DROP CONSTRAINT IF EXISTS pharmacy_goods_receipts_bypass_actor_check;
 
 -- Validate approval events, not every later stock/status update. A receipt
 -- approved while the owner was solo remains valid if another person joins.
-CREATE FUNCTION public.pharmacy_check_solo_order_approval() RETURNS trigger LANGUAGE plpgsql
+CREATE OR REPLACE FUNCTION public.pharmacy_check_solo_order_approval() RETURNS trigger LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
   IF NEW."approvedByUserId" = NEW."createdByUserId" THEN
@@ -61,10 +63,11 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;
+DROP TRIGGER IF EXISTS pharmacy_purchase_order_approval_actor_check ON pharmacy_purchase_orders;
 CREATE TRIGGER pharmacy_purchase_order_approval_actor_check BEFORE INSERT OR UPDATE ON pharmacy_purchase_orders
   FOR EACH ROW EXECUTE FUNCTION public.pharmacy_check_solo_order_approval();
 
-CREATE FUNCTION public.pharmacy_check_solo_receipt_approval() RETURNS trigger LANGUAGE plpgsql
+CREATE OR REPLACE FUNCTION public.pharmacy_check_solo_receipt_approval() RETURNS trigger LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
   IF NEW."bypassApprovedByUserId" = NEW."receivedByUserId" THEN
@@ -78,6 +81,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;
+DROP TRIGGER IF EXISTS pharmacy_goods_receipts_bypass_actor_check ON pharmacy_goods_receipts;
 CREATE TRIGGER pharmacy_goods_receipts_bypass_actor_check BEFORE INSERT OR UPDATE ON pharmacy_goods_receipts
   FOR EACH ROW EXECUTE FUNCTION public.pharmacy_check_solo_receipt_approval();
 
