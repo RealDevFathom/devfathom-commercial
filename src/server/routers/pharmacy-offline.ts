@@ -35,6 +35,10 @@ import {
   recordOfflineCommand,
   authorizeReplayedCommand,
   settleOfflineCommand,
+  skipOfflineCommandSequences,
+  MAX_OFFLINE_COMMAND_CURSOR,
+  MAX_OFFLINE_COMMAND_SEQUENCE,
+  PharmacyOfflineCommandError,
 } from '@/lib/pharmacy/offline-command-log';
 import {
   authenticatePharmacyCommand,
@@ -115,6 +119,37 @@ export const pharmacyOfflineRouter = router({
       return { deviceId: device.id, status: device.status };
     })
   ),
+  recoverSequence: adminProcedure
+    .input(
+      branchInput.extend({
+        deviceId: id,
+        expectedSequence: z.number().int().positive().max(MAX_OFFLINE_COMMAND_CURSOR),
+        nextSequence: z.number().int().positive().max(MAX_OFFLINE_COMMAND_SEQUENCE),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const scope = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+        };
+        await activeBranch(tx as ScopedDb, scope.organizationId, scope.branchId);
+        try {
+          return await skipOfflineCommandSequences(
+            tx as ScopedDb,
+            scope,
+            input.deviceId,
+            input.expectedSequence,
+            input.nextSequence
+          );
+        } catch (error) {
+          // A stale expected cursor is an operator conflict, not a server fault.
+          if (error instanceof PharmacyOfflineCommandError)
+            throw new TRPCError({ code: 'CONFLICT', message: error.reason });
+          throw error;
+        }
+      })
+    ),
 });
 
 class CounterTransportError extends Error {
@@ -172,7 +207,7 @@ const leasedReceipt = z
   .strict();
 export const counterReplaySchema = z
   .object({
-    sequence: z.number().int().positive(),
+    sequence: z.number().int().positive().max(MAX_OFFLINE_COMMAND_SEQUENCE),
     idempotencyKey: id,
     action: z.enum(['CASH_OTC_SALE', 'CONTROLLED_MEDICINE_SALE', 'MANUAL_OTC_SALE']),
     leasedReceipt,
@@ -210,15 +245,24 @@ export type PharmacyCounterContext = {
   deviceSecret: string;
 };
 
+/** How far a replay got before it failed. Only failures after the command is
+ * authenticated, and outside the recording step itself, are definitive
+ * rejections of that command. */
+export type CounterReplayProgress = { phase: 'authenticate' | 'validate' | 'record' | 'apply' };
+
 /** Called only inside the transport-owned tenant transaction; never catches a
- * business failure here, because a returned response would commit partial work. */
+ * business failure here, because a returned response would commit partial work.
+ * The transport records a definitive rejection in its own transaction instead
+ * (see recordRejectedCounterCommand). */
 export async function replayCounterCommand(
   ctx: PharmacyCounterContext,
   command: CounterReplay,
   signature: string,
-  receiptSignature: string
+  receiptSignature: string,
+  progress: CounterReplayProgress = { phase: 'authenticate' }
 ) {
   const { db, scope, deviceId, deviceSecret } = ctx;
+  progress.phase = 'authenticate';
   // Take the exclusive lock before authentication's shared lock: concurrent
   // retries must not both hold SHARE and then deadlock upgrading to UPDATE.
   await db.$queryRaw(
@@ -229,6 +273,7 @@ export async function replayCounterCommand(
     deviceSecret,
     signature: receiptSignature,
   });
+  progress.phase = 'validate';
   validateLeasedReceiptReplay(scope, deviceId, command.leasedReceipt);
   const originalMs = Date.parse(command.leasedReceipt.originalSaleAt);
   const snapshots = command.snapshots.map((snapshot) => {
@@ -276,6 +321,7 @@ export async function replayCounterCommand(
     safetyLeaseOk: true,
     batchRecalled: false,
   });
+  progress.phase = 'record';
   const recorded = await recordOfflineCommand(db, scope, {
     deviceId,
     sequence: command.sequence,
@@ -293,6 +339,7 @@ export async function replayCounterCommand(
     };
   if (recorded.command.status !== 'PENDING')
     throw new CounterTransportError('command_rejected', 409);
+  progress.phase = 'apply';
   if (command.action === 'MANUAL_OTC_SALE') {
     const rules = command.snapshots.find((snapshot) => snapshot.envelope.kind === 'RULES')?.payload;
     const settings = rules && typeof rules === 'object' && !Array.isArray(rules)
@@ -301,6 +348,9 @@ export async function replayCounterCommand(
     catch { throw new CounterTransportError('invalid_manual_capture', 409); }
     // applyPharmacyTender additionally checks current branch policy under lock.
   }
+  // Recording order alone does not settle older PENDING rows left by a crash
+  // or a pre-cursor deployment. The transport holds the device lock throughout
+  // this check and settlement, so no later command can consume stock first.
   const earlier = await db.pharmacyOfflineCommand.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -397,6 +447,96 @@ export async function replayCounterCommand(
   return { saleId: sale.id, receiptNumber: command.leasedReceipt.receiptNumber, replayed: false };
 }
 
+/** The reason to record when a replay failure definitively rejects the command,
+ * or null when the failure is transient, unauthenticated, or about the command's
+ * place in the sequence (which the device must resolve by retrying). */
+export function definitiveReplayRejection(
+  error: unknown,
+  progress: CounterReplayProgress
+): string | null {
+  if (progress.phase !== 'validate' && progress.phase !== 'apply') return null;
+  if (error instanceof CounterTransportError)
+    return (error.status === 403 || error.status === 409) &&
+      error.code !== 'earlier_command_pending'
+      ? error.code
+      : null;
+  if (error instanceof PharmacyOfflineCommandError)
+    return error.reason === 'ACTION_DENIED' ? error.reason : null;
+  if (error instanceof PharmacySaleError)
+    return error.reason === 'INVALID_COMMAND_SIGNATURE' ? null : error.reason;
+  if (
+    error instanceof Error &&
+    !(error instanceof TRPCError) &&
+    'reason' in error &&
+    typeof error.reason === 'string' &&
+    /^[A-Z_]+$/.test(error.reason)
+  )
+    return error.reason;
+  return null;
+}
+
+/**
+ * Record a definitively rejected replay as REJECTED in its own transaction, so
+ * the command still consumes its sequence and later sales from the counter keep
+ * replaying. The failed replay transaction rolled back all of its work; this one
+ * writes only the command row, its settlement, and the cursor advance. The
+ * command is authenticated again under the device lock, and the cursor claim in
+ * recordOfflineCommand still refuses a gap, a used sequence, or an inactive
+ * device, so this can never skip an unseen command.
+ */
+export async function recordRejectedCounterCommand(
+  ctx: PharmacyCounterContext,
+  command: CounterReplay,
+  signature: string,
+  receiptSignature: string,
+  reason: string
+) {
+  const { db, scope, deviceId, deviceSecret } = ctx;
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_registered_devices WHERE id=${deviceId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+  );
+  await authenticatePharmacyCommand(db, scope, deviceId, command, { deviceSecret, signature });
+  await authenticatePharmacyCommand(db, scope, deviceId, command.leasedReceipt, {
+    deviceSecret,
+    signature: receiptSignature,
+  });
+  const recorded = await recordOfflineCommand(db, scope, {
+    deviceId,
+    sequence: command.sequence,
+    idempotencyKey: command.idempotencyKey,
+    action: command.action,
+    payload: command as Prisma.InputJsonValue,
+    clientOriginAt: new Date(command.leasedReceipt.originalSaleAt),
+    receiptNumber: command.leasedReceipt.receiptNumber,
+  });
+  // A concurrent identical replay may already have settled it; never flip that.
+  if (recorded.command.status !== 'PENDING') return recorded.command;
+  // The counter already printed this leased number for the customer, so it is
+  // used even though the sale is rejected. Advance the lease past it exactly as
+  // settlement would, or the next leased number would be refused as out of
+  // order. The compare-and-set never rewinds or skips a lease.
+  const { leaseId, receiptNumber } = command.leasedReceipt;
+  await db.pharmacyReceiptNumberLease.updateMany({
+    where: {
+      id: leaseId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      deviceId,
+      nextNumber: receiptNumber,
+      blockStart: { lte: receiptNumber },
+      blockEnd: { gte: receiptNumber },
+      issuedAt: { lte: new Date(command.leasedReceipt.originalSaleAt) },
+    },
+    data: { nextNumber: receiptNumber + 1 },
+  });
+  return settleOfflineCommand(
+    db,
+    scope,
+    { commandId: recorded.command.id, outcome: 'REJECTED', reason },
+    new Date()
+  );
+}
+
 const sessionSchema = z
   .object({
     actorId: id,
@@ -457,6 +597,16 @@ export type CounterOperation = 'establish' | 'snapshot' | 'replay' | 'lease' | '
  * token after establishment. Errors are mapped only outside the transaction. */
 export function pharmacyCounterRoute(operation: CounterOperation) {
   return async (request: Request): Promise<Response> => {
+    let rejectable:
+      | {
+          organizationId: string;
+          ctx: Omit<PharmacyCounterContext, 'db'>;
+          command: CounterReplay;
+          signature: string;
+          receiptSignature: string;
+          progress: CounterReplayProgress;
+        }
+      | undefined;
     try {
       if (!(await rateLimit(`pharmacy-counter:${clientIp(request)}`, 120, 60_000)).ok)
         throw new CounterTransportError('rate_limited', 429);
@@ -623,11 +773,20 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         const key = request.headers.get('idempotency-key');
         if (!key || key !== command.idempotencyKey)
           throw new CounterTransportError('invalid_idempotency_key');
+        rejectable = {
+          organizationId: ctx.scope.organizationId,
+          ctx: { scope: ctx.scope, deviceId: ctx.deviceId, deviceSecret: ctx.deviceSecret },
+          command,
+          signature: request.headers.get('x-command-signature') ?? '',
+          receiptSignature: request.headers.get('x-receipt-signature') ?? '',
+          progress: { phase: 'authenticate' },
+        };
         return replayCounterCommand(
           ctx,
           command,
-          request.headers.get('x-command-signature') ?? '',
-          request.headers.get('x-receipt-signature') ?? ''
+          rejectable.signature,
+          rejectable.receiptSignature,
+          rejectable.progress
         );
       });
       return Response.json(result, {
@@ -635,6 +794,24 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         headers: { 'Cache-Control': 'no-store' },
       });
     } catch (error) {
+      const rejectedReason = rejectable && definitiveReplayRejection(error, rejectable.progress);
+      if (rejectable && rejectedReason) {
+        const pending = rejectable;
+        try {
+          await withTenantDb(pending.organizationId, (db) =>
+            recordRejectedCounterCommand(
+              { ...pending.ctx, db },
+              pending.command,
+              pending.signature,
+              pending.receiptSignature,
+              rejectedReason
+            )
+          );
+        } catch {
+          // Keep the original rejection response. The cursor stays on this
+          // sequence, and a retry of the same key repeats this recording.
+        }
+      }
       if (error instanceof CounterTransportError)
         return Response.json({ error: error.code }, { status: error.status });
       if (error instanceof z.ZodError || error instanceof SyntaxError)

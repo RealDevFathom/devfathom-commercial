@@ -47,6 +47,7 @@ export class PharmacyOfflineCommandError extends Error {
       | 'DEVICE_NOT_USABLE'
       | 'IDEMPOTENCY_CONFLICT'
       | 'SEQUENCE_CONFLICT'
+      | 'SEQUENCE_OUT_OF_ORDER'
       | 'NOT_FOUND'
       | 'ALREADY_SETTLED'
       | 'ACTION_DENIED'
@@ -73,6 +74,11 @@ export type RecordOfflineCommandInput = {
   /** The number this counter already PRINTED from its lease, if it printed one. */
   receiptNumber?: number | null;
 };
+
+// PostgreSQL stores both the command sequence and cursor as INTEGER. Reserve
+// the final value for the cursor produced after accepting the last command.
+export const MAX_OFFLINE_COMMAND_SEQUENCE = 2_147_483_646;
+export const MAX_OFFLINE_COMMAND_CURSOR = MAX_OFFLINE_COMMAND_SEQUENCE + 1;
 
 export function commandPayloadHash(payload: unknown): string {
   return createHash('sha256').update(canonicalJson(payload)).digest('hex');
@@ -104,6 +110,87 @@ export async function recordOfflineCommand(
   }
 
   const payloadHash = commandPayloadHash(input.payload);
+
+  // A retry of an already-recorded command is valid even though the durable
+  // cursor has moved past it. Validate that retry before attempting to claim
+  // the next position.
+  const existing = await db.pharmacyOfflineCommand.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      deviceId: input.deviceId,
+      idempotencyKey: input.idempotencyKey,
+    },
+  });
+  if (existing) {
+    if (
+      existing.sequence !== input.sequence ||
+      existing.action !== input.action ||
+      existing.payloadHash !== payloadHash
+    )
+      throw new PharmacyOfflineCommandError('IDEMPOTENCY_CONFLICT');
+    // A backfilled cursor can catch up with history after a gap is filled.
+    // Advance only across this validated command at the current position;
+    // future history must not skip a gap and older retries must not rewind it.
+    // History recorded before the cursor existed may hold the INTEGER maximum,
+    // which must never be incremented.
+    if (existing.sequence < MAX_OFFLINE_COMMAND_CURSOR) {
+      await db.pharmacyRegisteredDevice.updateMany({
+        where: {
+          id: input.deviceId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          status: 'ACTIVE',
+          revokedAt: null,
+          nextOfflineCommandSequence: existing.sequence,
+        },
+        data: { nextOfflineCommandSequence: { increment: 1 } },
+      });
+    }
+    // Finding the key means this invocation did not create the command. That is
+    // a replay even when the first worker crashed before its initial attempt.
+    return { command: existing, replayed: true };
+  }
+
+  if (
+    !Number.isInteger(input.sequence) ||
+    input.sequence < 1 ||
+    input.sequence > MAX_OFFLINE_COMMAND_SEQUENCE
+  )
+    throw new PharmacyOfflineCommandError('SEQUENCE_OUT_OF_ORDER');
+
+  // Claim exactly the device's next position. The compare-and-increment is the
+  // durable FIFO guard; it also serializes callers that use this helper outside
+  // the transport's device-row lock. The surrounding transaction rolls this
+  // advancement back if recording or applying the command fails.
+  const claimed = await db.pharmacyRegisteredDevice.updateMany({
+    where: {
+      id: input.deviceId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'ACTIVE',
+      revokedAt: null,
+      nextOfflineCommandSequence: input.sequence,
+    },
+    data: { nextOfflineCommandSequence: { increment: 1 } },
+  });
+  if (claimed.count !== 1) {
+    const occupied = await db.pharmacyOfflineCommand.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        deviceId: input.deviceId,
+        sequence: input.sequence,
+      },
+    });
+    // A concurrent identical retry can miss the initial read, then wait for
+    // the winner's cursor update to commit. Read its command after losing the
+    // claim so that this retry still receives the original idempotent result.
+    if (occupied?.idempotencyKey === input.idempotencyKey) {
+      if (occupied.action !== input.action || occupied.payloadHash !== payloadHash)
+        throw new PharmacyOfflineCommandError('IDEMPOTENCY_CONFLICT');
+      return { command: occupied, replayed: true };
+    }
+    throw new PharmacyOfflineCommandError(occupied ? 'SEQUENCE_CONFLICT' : 'SEQUENCE_OUT_OF_ORDER');
+  }
 
   // One statement, so two concurrent replays of the same key cannot both pass a
   // read-then-write gap. The read-back afterwards is what turns "did nothing"
@@ -138,12 +225,51 @@ export async function recordOfflineCommand(
     // counter already used this sequence for a different command.
     throw new PharmacyOfflineCommandError('SEQUENCE_CONFLICT');
   }
-  if (stored.action !== input.action || stored.payloadHash !== payloadHash) {
+  if (
+    stored.sequence !== input.sequence ||
+    stored.action !== input.action ||
+    stored.payloadHash !== payloadHash
+  ) {
     throw new PharmacyOfflineCommandError('IDEMPOTENCY_CONFLICT');
   }
 
   const replayed = stored.attempts > 0 || stored.status !== 'PENDING';
   return { command: stored, replayed };
+}
+
+/**
+ * Explicit operator recovery for a command that can never be replayed. The
+ * cursor can only move forward and the compare-and-set prevents racing replay.
+ */
+export async function skipOfflineCommandSequences(
+  db: ScopedDb,
+  scope: OfflineCommandScope,
+  deviceId: string,
+  expectedSequence: number,
+  nextSequence: number
+) {
+  if (
+    !Number.isInteger(expectedSequence) ||
+    !Number.isInteger(nextSequence) ||
+    expectedSequence < 1 ||
+    expectedSequence > MAX_OFFLINE_COMMAND_CURSOR ||
+    nextSequence <= expectedSequence ||
+    nextSequence > MAX_OFFLINE_COMMAND_SEQUENCE
+  )
+    throw new PharmacyOfflineCommandError('SEQUENCE_OUT_OF_ORDER');
+  const advanced = await db.pharmacyRegisteredDevice.updateMany({
+    where: {
+      id: deviceId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'ACTIVE',
+      revokedAt: null,
+      nextOfflineCommandSequence: expectedSequence,
+    },
+    data: { nextOfflineCommandSequence: nextSequence },
+  });
+  if (advanced.count !== 1) throw new PharmacyOfflineCommandError('SEQUENCE_OUT_OF_ORDER');
+  return { nextSequence };
 }
 
 /**
