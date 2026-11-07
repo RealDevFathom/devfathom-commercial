@@ -68,6 +68,8 @@ export type PosAddItemBody = {
   course?: number;
   seatNumber?: number | null;
   modifierOptionIds?: string[];
+  /** Local-only snapshot used to review removed or repriced modifiers before replay. */
+  quotedModifiers?: Array<{ optionId: string; priceDelta: string }>;
   /**
    * The catalog price the operator saw when composing. LOCAL ONLY: it drives the
    * provisional total and the stale-price review, and `buildReplayRequest` strips
@@ -102,6 +104,7 @@ export type PosDraftStatus = 'QUEUED' | 'REPLAYING' | 'NEEDS_REVIEW' | 'QUARANTI
 export type PosDraftReviewReason =
   | 'CATALOG_CONFLICT'
   | 'PRICE_CHANGED'
+  | 'MODIFIER_CHANGED'
   | 'ITEM_UNAVAILABLE'
   | 'CHANNEL_CLOSED'
   | 'COMPOSER_UNVERIFIED'
@@ -403,8 +406,9 @@ function omitUndefined(body: Record<string, unknown>): Record<string, unknown> {
  *
  *  - the server order id from the acknowledged OPEN_ORDER is threaded into the
  *    later commands, which is what makes resume-after-partial-success possible;
- *  - `quotedUnitPrice` is stripped, because it is a local display value and the M4
- *    `addItemBody` schema is strict — the server remains the only pricing authority.
+ *  - quoted base and modifier pricing is stripped, because it is local review data
+ *    and the M4 `addItemBody` schema is strict — the server remains the only pricing
+ *    authority.
  */
 export function buildReplayRequest(
   draft: PosQueuedDraft,
@@ -444,8 +448,8 @@ export function buildReplayRequest(
         path: '/api/restaurant/orders/add-item',
         method: 'POST',
         headers,
-        // Named field by field on purpose: `quotedUnitPrice` is local-only, and the
-        // M4 body is strict, so an accidental passthrough would be a 400 at replay.
+        // Named field by field on purpose: quoted pricing is local-only, and the M4
+        // body is strict, so an accidental passthrough would be a 400 at replay.
         body: omitUndefined({
           orderId,
           menuItemId: line.menuItemId,
@@ -677,6 +681,26 @@ export function reviewAgainstCatalog(
       return {
         reason: 'PRICE_CHANGED',
         message: 'A price on this order changed. Review it before sending.',
+        atCommandId: command.commandId,
+      };
+    }
+    const selectedModifierIds = command.body.modifierOptionIds ?? [];
+    const quotedModifiers = command.body.quotedModifiers;
+    if (
+      selectedModifierIds.length > 0 &&
+      (!quotedModifiers ||
+        quotedModifiers.length !== selectedModifierIds.length ||
+        selectedModifierIds.some((optionId) => {
+          const quoted = quotedModifiers.find((modifier) => modifier.optionId === optionId);
+          const current = item.modifierGroups
+            ?.flatMap((group) => group.options)
+            .find((option) => option.id === optionId);
+          return !quoted || !current || current.priceDelta !== quoted.priceDelta;
+        }))
+    ) {
+      return {
+        reason: 'MODIFIER_CHANGED',
+        message: 'A modifier on this order changed. Review it before sending.',
         atCommandId: command.commandId,
       };
     }
