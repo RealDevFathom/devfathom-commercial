@@ -34,6 +34,7 @@ import {
   listGrowth,
   loadGrowthReview,
   generateGrowth,
+  submitGrowthReview,
 } from '@/app/(app)/restaurant/growth/actions';
 
 const query = vi.fn();
@@ -119,4 +120,65 @@ describe('composed Restaurant growth entry points', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(query).not.toHaveBeenCalled();
   });
+});
+
+describe('Restaurant growth write gate', () => {
+  const generateInput = {
+    branchId: 'branch-a',
+    from: '2026-10-01',
+    to: '2026-10-02',
+    requestId: '11111111-1111-4111-8111-111111111111',
+  };
+  const reviewInput = {
+    branchId: 'branch-a',
+    insightId: 'insight-a',
+    recommendation: 0,
+    expectedHash: 'a'.repeat(64),
+    expectedVersion: 1 as const,
+    expectedRevision: 0,
+    requestId: '22222222-2222-4222-8222-222222222222',
+    decision: 'APPROVE' as const,
+    settings: { priority: 'NORMAL' as const, objective: 'REVIEW_RETENTION' as const },
+  };
+  const writes: Array<[string, () => Promise<unknown>]> = [
+    ['generate', () => generateGrowth(generateInput)],
+    ['review', () => submitGrowthReview(reviewInput)],
+  ];
+
+  it.each(
+    writes.flatMap(([name, run]) =>
+      ['restaurant:configure', 'reports:financial'].map((missing) => [name, missing, run] as const)
+    )
+  )('%s is FORBIDDEN without %s and opens no transaction', async (_name, missing, run) => {
+    session!.user.role = 'EMPLOYEE';
+    mocks.can.mockImplementation(async (_subject, action) => action !== missing);
+    await expect(run()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it.each(writes)('%s denies an unprivileged staff role by default', async (_name, run) => {
+    session!.user.role = 'EMPLOYEE';
+    mocks.can.mockResolvedValue(false);
+    await expect(run()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it.each(writes)(
+    '%s lets a growth manager past the gate into the scoped service',
+    async (_name, run) => {
+      mocks.can.mockResolvedValue(true);
+      const outcome = await run().catch((error: unknown) => error);
+      expect(outcome).not.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.anything(),
+        'restaurant:configure',
+        undefined,
+        expect.anything()
+      );
+      expect(query).toHaveBeenCalledWith(
+        expect.stringContaining('app.current_branch_id'),
+        'branch-a'
+      );
+    }
+  );
 });

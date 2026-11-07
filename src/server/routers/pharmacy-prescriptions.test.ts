@@ -998,3 +998,74 @@ describe('PH-A3 prescription OCR prefill', () => {
     expect(mocks.medicines).not.toHaveBeenCalled();
   });
 });
+
+describe('counter patient and consent capture authorization', () => {
+  const consentInput = {
+    patientId: 'patient-a',
+    purpose: 'MARKETING' as const,
+    channel: 'WHATSAPP' as const,
+    granted: true,
+  };
+  function writableContext() {
+    const ctx = context();
+    const patientCreate = vi.fn(async ({ data }) => ({ id: 'patient-new', ...data }));
+    const consentCreate = vi.fn(async ({ data }) => data);
+    const transaction = vi.fn(async (run: (db: unknown) => unknown) =>
+      run({
+        $queryRaw: vi.fn().mockResolvedValue([{ id: 'patient-a' }]),
+        patientConsent: { findFirst: vi.fn().mockResolvedValue(null), create: consentCreate },
+      })
+    );
+    ctx.db = {
+      pharmacyPatient: { create: patientCreate },
+      $transaction: transaction,
+    } as unknown as typeof ctx.db;
+    return { ctx, patientCreate, consentCreate, transaction };
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.hasModule.mockReturnValue(true);
+  });
+
+  it('refuses an unprivileged role FORBIDDEN on createPatient and writes nothing', async () => {
+    mocks.can.mockResolvedValue(false);
+    const { ctx, patientCreate } = writableContext();
+    await expect(caller(ctx).createPatient({ displayName: 'Synthetic Patient' })).rejects.toMatchObject(
+      { code: 'FORBIDDEN' }
+    );
+    expect(patientCreate).not.toHaveBeenCalled();
+    expect(mocks.can.mock.calls.map(([, action]) => action)).toEqual([
+      'pharmacy:counter',
+      'pharmacy:dispense',
+    ]);
+  });
+
+  it('refuses an unprivileged role FORBIDDEN on recordConsent before any transaction', async () => {
+    mocks.can.mockResolvedValue(false);
+    const { ctx, transaction, consentCreate } = writableContext();
+    await expect(caller(ctx).recordConsent(consentInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(transaction).not.toHaveBeenCalled();
+    expect(consentCreate).not.toHaveBeenCalled();
+  });
+
+  it.each(['pharmacy:counter', 'pharmacy:dispense'])(
+    'lets a role holding %s create a patient and record consent',
+    async (granted) => {
+      mocks.can.mockImplementation(async (_subject, action) => action === granted);
+      const { ctx, patientCreate, consentCreate } = writableContext();
+      await expect(
+        caller(ctx).createPatient({ displayName: 'Synthetic Patient' })
+      ).resolves.toMatchObject({ id: 'patient-new', displayName: 'Synthetic Patient' });
+      expect(patientCreate).toHaveBeenCalledWith({ data: { displayName: 'Synthetic Patient' } });
+      await expect(caller(ctx).recordConsent(consentInput)).resolves.toMatchObject({
+        organizationId: 'org-a',
+        recordedByUserId: 'user-a',
+        granted: true,
+      });
+      expect(consentCreate).toHaveBeenCalledTimes(1);
+    }
+  );
+});

@@ -201,7 +201,11 @@ export const pharmacyPrescriptionsRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) => ctx.db.pharmacyPatient.create({ data: input })),
+    .mutation(async ({ ctx, input }) => {
+      // Registering a patient is counter/dispense work; deny every other role.
+      await requireCounterPatientAccess(ctx);
+      return ctx.db.pharmacyPatient.create({ data: input });
+    }),
 
   recordConsent: protectedProcedure
     .input(
@@ -217,8 +221,11 @@ export const pharmacyPrescriptionsRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.$transaction((db) =>
+    .mutation(async ({ ctx, input }) => {
+      // Consent feeds marketing eligibility, so only counter/dispense roles may
+      // record it; deny before any write.
+      await requireCounterPatientAccess(ctx);
+      return ctx.db.$transaction((db) =>
         writePatientConsent(
           db as typeof ctx.db,
           ctx.entitlements.organizationId,
@@ -227,8 +234,8 @@ export const pharmacyPrescriptionsRouter = router({
           // stays attributable as the capturing staff member, QR included.
           { ...input, staffId: ctx.session.user.id }
         )
-      )
-    ),
+      );
+    }),
 
   uploadSource: fileProcedure.input(prescriptionUploadSchema).mutation(async ({ ctx, input }) => {
     const organizationId = ctx.entitlements.organizationId;

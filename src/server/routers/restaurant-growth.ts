@@ -40,6 +40,21 @@ function actor(ctx: TRPCContext): GrowthActor {
       }),
   };
 }
+/**
+ * Generation spends AI credits and review drafts customer outreach, so both
+ * require the growth write grant (financial reporting plus restaurant
+ * configuration) before any transaction opens. The service re-checks the same
+ * grants, the branch and the vertical inside its transaction.
+ */
+async function requireGrowthWrite(ctx: TRPCContext) {
+  const growth = actor(ctx);
+  if (!(await growth.can('reports:financial')) || !(await growth.can('restaurant:configure'))) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to generate or review growth insights.',
+    });
+  }
+}
 /** Coordinator owns central registration and accepted shared binding. */
 export function createRestaurantGrowthRouter(binding: RestaurantGrowthBinding | null = null) {
   return router({
@@ -49,6 +64,7 @@ export function createRestaurantGrowthRouter(binding: RestaurantGrowthBinding | 
     generate: auditedProtectedProcedure
       .input(growthGenerateInput)
       .mutation(async ({ ctx, input }) => {
+        await requireGrowthWrite(ctx);
         try {
           return await generateRestaurantGrowth(actor(ctx), input);
         } catch (error) {
@@ -72,6 +88,7 @@ export function createRestaurantGrowthRouter(binding: RestaurantGrowthBinding | 
         )
       ),
     review: auditedProtectedProcedure.input(growthReviewInput).mutation(async ({ ctx, input }) => {
+      await requireGrowthWrite(ctx);
       try {
         await reviewRestaurantGrowth(
           actor(ctx),

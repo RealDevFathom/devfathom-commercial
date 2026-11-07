@@ -280,6 +280,33 @@ describe('hotelProperty.inventory authorization', () => {
     });
     expect(mocks.scope).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    ['rooms.setStatus', () => caller().rooms.setStatus(statusInput), () => db.hotelRoom.updateMany],
+    [
+      'beds.setStatus',
+      () => caller().beds.setStatus({ ...statusInput, id: 'bed_1' }),
+      () => db.hotelBed.updateMany,
+    ],
+  ] as const)(
+    '%s denies a role with neither property administration nor housekeeping, and admits an administrator',
+    async (_name, run, write) => {
+      mocks.scope.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+      await expect(run()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.scope.mock.calls.map(([, , capability]) => capability)).toEqual([
+        'hotel:property-admin',
+        'hotel:housekeeping',
+      ]);
+      expect(write()).not.toHaveBeenCalled();
+
+      mocks.scope.mockReset();
+      mocks.scope.mockResolvedValue(property);
+      await expect(run()).resolves.toMatchObject({ status: 'VACANT_CLEAN' });
+      expect(mocks.scope.mock.calls.map(([, , capability]) => capability)).toEqual([
+        'hotel:property-admin',
+      ]);
+      expect(write()).toHaveBeenCalledTimes(1);
+    }
+  );
   it('locks the property, then re-checks access, then writes', async () => {
     await caller().rooms.setStatus(statusInput);
     expect(first(db.$queryRaw)).toBeLessThan(first(mocks.scope));
