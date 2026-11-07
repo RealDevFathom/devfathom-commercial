@@ -248,6 +248,12 @@ model PharmacyBranch {
   sopSiteSettings                          PharmacySopSiteSetting[]
   sopReworkNotes                           PharmacySopReworkNote[]
 
+  customerPortalSettings PharmacyCustomerPortalSetting[]
+  customerOtpChallenges  PharmacyCustomerOtpChallenge[]
+  customerSessions       PharmacyCustomerSession[]
+  customerRequests       PharmacyCustomerRequest[]
+  customerPortalEvents   PharmacyCustomerPortalEvent[]
+
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
   @@index([organizationId, active], map: "pharmacy_branches_org_active_idx")
@@ -1268,6 +1274,9 @@ model PharmacySale {
   customerOrder             PharmacyCustomerOrder?
   visibilityAnchor          PharmacyBranch               @relation("PharmacySaleVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_sales_visibility_fkey")
 
+  customerRequestSources      PharmacyCustomerRequest[] @relation("PharmacyCustomerRequestSourceSale")
+  customerRequestFulfilments  PharmacyCustomerRequest[] @relation("PharmacyCustomerRequestFulfilledSale")
+
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, status, createdAt])
@@ -1299,6 +1308,11 @@ model PharmacyCustomer {
   whatsappOptIn          Boolean?
   whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
   preferredLanguage      String                       @default("en") @db.VarChar(2)
+
+  portalOtpChallenges PharmacyCustomerOtpChallenge[]
+  portalSessions      PharmacyCustomerSession[]
+  portalRequests      PharmacyCustomerRequest[]
+  portalEvents        PharmacyCustomerPortalEvent[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
@@ -3050,6 +3064,8 @@ model User {
 
   hotelPropertyAssignments HotelPropertyAssignment[]
   pharmacyBranchAssignments PharmacyBranchAssignment[]
+
+  pharmacyCustomerPortalSettings PharmacyCustomerPortalSetting[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, email])
@@ -5071,6 +5087,7 @@ model Organization {
   modules                                   OrganizationModule[]
   limits                                    OrganizationLimit[]
   usageCounters                             OrganizationUsageCounter[]
+  pharmacyCustomerPortalEvents              PharmacyCustomerPortalEvent[]
   aiUsages                                  AIUsage[]
   aiAssistantActions                        AIAssistantAction[]
   brand                                     OrganizationBrand?
@@ -15717,6 +15734,104 @@ model RateLimitBucket {
 
   @@index([resetAt])
   @@map("rate_limit_buckets")
+}
+
+// Customer portal models. The ordered SQL migration owns checks, FORCE RLS, and
+// append-only audit events (never db push); relations mirror its tenant FKs.
+model PharmacyCustomerPortalSetting {
+  organizationId  String
+  branchId        String
+  config          Json
+  updatedByUserId String
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_portal_settings_organizationId_branchId_fkey")
+  updatedBy User @relation(fields: [organizationId, updatedByUserId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_portal_sett_organizationId_updatedByUser_fkey")
+
+  @@id([organizationId, branchId])
+  @@map("pharmacy_customer_portal_settings")
+}
+
+model PharmacyCustomerOtpChallenge {
+  id             String    @id
+  organizationId String
+  branchId       String
+  customerId     String
+  phoneHash      String
+  digest         Bytes
+  salt           String
+  expiresAt      DateTime   @db.Timestamptz(3)
+  attempts       Int        @default(0)
+  maxAttempts    Int
+  consumedAt     DateTime?  @db.Timestamptz(3)
+  audit          Json       @default("[]")
+
+  customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_otp_challenges_organizationId_customerId_fkey")
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_otp_challenges_organizationId_branchId_fkey")
+
+  @@index([expiresAt], map: "pharmacy_customer_otp_expiry")
+  @@map("pharmacy_customer_otp_challenges")
+}
+
+model PharmacyCustomerSession {
+  tokenHash      String    @id
+  organizationId String
+  branchId       String
+  customerId     String
+  phoneHash      String
+  expiresAt      DateTime  @db.Timestamptz(3)
+  revokedAt      DateTime? @db.Timestamptz(3)
+
+  customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_sessions_organizationId_customerId_fkey")
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_sessions_organizationId_branchId_fkey")
+
+  @@index([expiresAt], map: "pharmacy_customer_session_expiry")
+  @@map("pharmacy_customer_sessions")
+}
+
+model PharmacyCustomerRequest {
+  id               String   @id
+  organizationId   String
+  branchId         String
+  customerId       String
+  kind             String
+  status           String   @default("AWAITING_PHARMACIST")
+  sourceSaleId     String?
+  sourceFileRef    String?
+  fulfilledSaleId  String?
+  idempotencyKey   String
+  payloadHash      String
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_requests_organizationId_customerId_fkey")
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_requests_organizationId_branchId_fkey")
+  sourceSale PharmacySale? @relation("PharmacyCustomerRequestSourceSale", fields: [organizationId, branchId, sourceSaleId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_requests_organizationId_branchId_sourceS_fkey")
+  fulfilledSale PharmacySale? @relation("PharmacyCustomerRequestFulfilledSale", fields: [organizationId, branchId, fulfilledSaleId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_requests_organizationId_branchId_fulfill_fkey")
+  events PharmacyCustomerPortalEvent[]
+
+  @@unique([organizationId, branchId, customerId, idempotencyKey])
+  @@unique([organizationId, branchId, fulfilledSaleId], map: "pharmacy_customer_requests_fulfilled_sale_key")
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, status, createdAt], map: "pharmacy_customer_requests_queue")
+  @@map("pharmacy_customer_requests")
+}
+
+model PharmacyCustomerPortalEvent {
+  id             String   @id
+  organizationId String
+  branchId       String
+  customerId     String?
+  actorId        String
+  kind           String
+  requestId      String?
+  occurredAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_portal_events_organizationId_fkey")
+  customer PharmacyCustomer? @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_portal_events_organizationId_customerId_fkey")
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_portal_events_organizationId_branchId_fkey")
+  request PharmacyCustomerRequest? @relation(fields: [organizationId, branchId, requestId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_customer_portal_even_organizationId_branchId_requ_fkey")
+
+  @@index([organizationId, branchId, occurredAt], map: "pharmacy_customer_portal_events_scope")
+  @@map("pharmacy_customer_portal_events")
 }
 
 /// Work committed with a tenant mutation and delivered after that transaction.

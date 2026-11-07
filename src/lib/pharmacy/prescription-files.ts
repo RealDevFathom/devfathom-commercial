@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import sharp from 'sharp';
 import { z } from 'zod';
-import { getUpload, putUpload } from '@/lib/storage';
+import { deleteUpload, getUpload, putUpload } from '@/lib/storage';
 
 export const MAX_PRESCRIPTION_FILE_BYTES = 5 * 1024 * 1024;
 const maxBase64Length = 4 * Math.ceil(MAX_PRESCRIPTION_FILE_BYTES / 3);
@@ -93,12 +93,13 @@ export { decode as decodeBoundedImageBase64, validateImage as assertSingleFrameI
 export async function persistPrescriptionFile(
   organizationId: string,
   uploadedByUserId: string,
-  input: PrescriptionUpload
+  input: PrescriptionUpload,
+  fileId: string = randomUUID()
 ): Promise<PrescriptionUploadReceipt> {
   const parsed = prescriptionUploadSchema.parse(input);
   const bytes = decode(parsed.dataBase64);
   await validateImage(bytes, parsed.contentType);
-  const id = randomUUID();
+  const id = z.string().uuid().parse(fileId);
   const stored = {
     ...parsed,
     version: 1,
@@ -122,6 +123,11 @@ export async function persistPrescriptionFile(
   }
   const url = `/api/pharmacy/prescription-files?id=${id}`;
   return { sourceFileRef: url, url, size: bytes.length, contentType: parsed.contentType };
+}
+
+/** Used only for a staged portal upload that was never linked to a request. */
+export async function deletePrescriptionFile(organizationId: string, sourceFileRef: string) {
+  await deleteUpload(namespace(organizationId), `${prescriptionFileId(sourceFileRef)}.json`);
 }
 
 export async function loadPrescriptionFile(organizationId: string, sourceFileRef: string) {

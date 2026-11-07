@@ -2,9 +2,11 @@
 
 import { useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { CalendarClock, Plus, Upload } from 'lucide-react';
+import Link from 'next/link';
 import { trpc } from '@/lib/trpc';
-import type { PrescriptionUpload } from '@/lib/pharmacy/prescription-files';
-import { Button } from '@/components/ui/button';
+import { fileError, imageBase64, isImageType } from '@/lib/pharmacy/prescription-image-input';
+export { fileError, imageBase64, isImageType } from '@/lib/pharmacy/prescription-image-input';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -26,29 +28,6 @@ function EvidenceThumbnail({ url, label }: { url: string; label: string }) {
   );
 }
 
-// Matches the pharmacy upload contract; its runtime module is server-only.
-const maxPrescriptionBytes = 5 * 1024 * 1024;
-const evidenceTypes: Record<PrescriptionUpload['contentType'], readonly string[]> = {
-  'image/jpeg': ['jpg', 'jpeg'],
-  'image/png': ['png'],
-  'image/webp': ['webp'],
-};
-
-export function isImageType(value: string): value is PrescriptionUpload['contentType'] {
-  return value === 'image/png' || value === 'image/jpeg' || value === 'image/webp';
-}
-
-export function fileError(file: File | null) {
-  if (!file || file.size === 0) return 'Choose a non-empty prescription image.';
-  if (file.size > maxPrescriptionBytes) return 'Choose a file no larger than 5 MiB.';
-  if (
-    !isImageType(file.type) ||
-    !evidenceTypes[file.type].includes(file.name.split('.').pop()?.toLowerCase() ?? '')
-  )
-    return 'Use a JPEG, PNG or WebP with a matching file extension.';
-  return null;
-}
-
 export function attachmentUrl(value: unknown): value is string {
   return (
     typeof value === 'string' &&
@@ -58,22 +37,12 @@ export function attachmentUrl(value: unknown): value is string {
   );
 }
 
-export function imageBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('The image could not be read. Select it again.'));
-    reader.onload = () => {
-      if (typeof reader.result !== 'string' || !reader.result.includes(',')) {
-        reject(new Error('The image could not be read. Select it again.'));
-        return;
-      }
-      resolve(reader.result.slice(reader.result.indexOf(',') + 1));
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-export type PrescriptionsConsoleProps = { initialPatientId?: string };
+export type PrescriptionsConsoleProps = {
+  initialPatientId?: string;
+  initialBranchId?: string;
+  initialSourceFileRef?: string;
+  embedded?: boolean;
+};
 
 function subscribeToPatientFragment(onChange: () => void) {
   window.addEventListener('hashchange', onChange);
@@ -84,9 +53,14 @@ function patientFromFragment() {
   return new URLSearchParams(window.location.hash.slice(1)).get('patientId') ?? '';
 }
 
-export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleProps = {}) {
+export function PrescriptionsConsole({
+  initialPatientId,
+  initialBranchId,
+  initialSourceFileRef,
+  embedded,
+}: PrescriptionsConsoleProps = {}) {
   const utils = trpc.useUtils();
-  const [selectedBranchId, setSelectedBranchId] = useState('');
+  const [selectedBranchId, setSelectedBranchId] = useState(initialBranchId ?? '');
   const workspace = trpc.pharmacyPrescriptions.workspace.useQuery(
     selectedBranchId ? { branchId: selectedBranchId } : undefined
   );
@@ -118,6 +92,10 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
   const uploaded = useRef<{ file: File; patientId: string; url: string } | null>(null);
 
   const busy = stage !== null || capture.isPending;
+  const customerSource =
+    patientId === initialPatientId && attachmentUrl(initialSourceFileRef) && !sourceFile
+      ? initialSourceFileRef
+      : null;
   const selectedPatient = workspace.data?.patients.find((item) => item.id === patientId);
   const medicine = useMemo(
     () => workspace.data?.medicines.find((item) => item.id === medicineId),
@@ -173,15 +151,24 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
     const form = event.currentTarget;
     setNotice('');
     setSubmitError('');
-    const validation = fileError(sourceFile);
+    const validation = customerSource ? null : fileError(sourceFile);
     setSourceError(validation);
-    if (validation || !sourceFile || !isImageType(sourceFile.type) || !selectedPatient) return;
+    if (validation || !selectedPatient) return;
     const data = new FormData(form);
     inFlight.current = true;
     let currentStage: 'uploading' | 'capturing' = 'uploading';
     try {
-      let evidence = uploaded.current;
-      if (!evidence || evidence.file !== sourceFile || evidence.patientId !== patientId) {
+      let evidence: { url: string } | null = customerSource
+        ? { url: customerSource }
+        : uploaded.current;
+      if (
+        !customerSource &&
+        (!uploaded.current ||
+          uploaded.current.file !== sourceFile ||
+          uploaded.current.patientId !== patientId)
+      ) {
+        if (!sourceFile || !isImageType(sourceFile.type))
+          throw new Error('Choose a prescription image.');
         setStage('uploading');
         const result = await uploadSource.mutateAsync({
           patientId,
@@ -198,9 +185,10 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
           throw new Error(
             'The upload response could not confirm the attachment. Retry the upload.'
           );
-        evidence = { file: sourceFile, patientId, url: result.url };
-        uploaded.current = evidence;
+        evidence = { url: result.url };
+        uploaded.current = { file: sourceFile, patientId, url: result.url };
       }
+      if (!evidence) throw new Error('Choose a prescription image.');
       currentStage = 'capturing';
       setStage('capturing');
       await capture.mutateAsync({
@@ -222,7 +210,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
           },
         ],
       });
-      setSavedAttachment({ url: evidence.url, name: sourceFile.name });
+      setSavedAttachment({ url: evidence.url, name: sourceFile?.name ?? 'Customer Rx photo' });
       form.reset();
       setMedicineId('');
       setSourceFile(null);
@@ -248,12 +236,22 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
   }
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        eyebrow="Pharmacy · RX-02"
-        heading="Prescriptions"
-        description="Capture the original evidence, authority and every authorized unit before dispensing."
-      />
+    <div className={embedded ? 'space-y-6 [&_button]:min-h-11' : 'space-y-6'}>
+      {!embedded ? (
+        <PageHeader
+          eyebrow="Pharmacy · RX-02"
+          heading="Prescriptions"
+          description="Capture the original evidence, authority and every authorized unit before dispensing."
+          actions={
+            <Link
+              href="/pharmacy/customer-requests"
+              className={buttonVariants({ variant: 'secondary', className: 'min-h-11' })}
+            >
+              Customer requests
+            </Link>
+          }
+        />
+      ) : null}
       {workspace.isLoading ? (
         <WorkspaceState title="Loading prescriptions">
           Retrieving protected patient and prescription records.
@@ -340,7 +338,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                           className="pointer-events-none absolute top-3.5 left-3 size-4 text-text-muted"
                         />
                         <input
-                          required
+                          required={!customerSource}
                           name="source"
                           type="file"
                           accept="image/jpeg,image/png,image/webp"
@@ -356,6 +354,16 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                           className={`${fieldClass} file:mr-3 file:border-0 file:bg-transparent file:font-semibold pl-9 pt-2`}
                         />
                       </span>
+                      {customerSource ? (
+                        <a
+                          className="inline-flex min-h-11 items-center break-all underline"
+                          href={customerSource}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Review attached customer Rx photo
+                        </a>
+                      ) : null}
                     </Field>
                   </div>
                   {sourceError ? (

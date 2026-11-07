@@ -30,6 +30,17 @@ function authenticatedTenantRequest(path: string) {
 }
 
 describe('platform host routing', () => {
+  it('opens the customer entry without opening staff pharmacy routes or similarly named siblings', async () => {
+    expect((await proxy(tenantRequest('/pharmacy/customer'))).status).toBe(200);
+    for (const path of [
+      '/pharmacy/customer-requests',
+      '/pharmacy/customers',
+      '/pharmacy/counter',
+      '/pharmacy/loyalty',
+    ]) {
+      expect((await proxy(tenantRequest(path))).status).toBe(307);
+    }
+  });
   it('sets a unique nonce policy on document requests without unsafe-inline scripts', async () => {
     const first = await proxy(tenantRequest('/login'));
     const second = await proxy(tenantRequest('/login'));
