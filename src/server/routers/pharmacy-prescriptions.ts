@@ -184,7 +184,10 @@ export const pharmacyPrescriptionsRouter = router({
             remainingAuthorizedUnits: Math.max(
               0,
               line.authorizedCanonicalUnits * (prescription.authorizedRepeats + 1) -
-                line.fills.reduce((total, fill) => total + fill.quantityCanonicalUnits, 0)
+                line.fills
+                  // #410: a reversed fill (voided sale) no longer consumes authorisation.
+                  .filter((fill) => fill.reversedAt == null)
+                  .reduce((total, fill) => total + fill.quantityCanonicalUnits, 0)
             ),
           })),
         })),

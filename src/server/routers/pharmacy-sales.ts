@@ -1322,11 +1322,14 @@ export const pharmacySalesRouter = router({
               blocked:
                 'This request was already recorded. Refresh the cart before adding another line.',
             };
+          const activeFills = rx.fills.filter((fill) => fill.reversedAt == null);
+          const nextFillSequence =
+            rx.fills.reduce((maximum, fill) => Math.max(maximum, fill.fillSequence), 0) + 1;
           if (
             !Number.isSafeInteger(units) ||
-            rx.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0) + units >
+            activeFills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0) + units >
               rx.authorizedCanonicalUnits ||
-            rx.fills.length > rx.prescription.authorizedRepeats
+            activeFills.length > rx.prescription.authorizedRepeats
           )
             return { blocked: 'Prescription quantity or repeat allowance is exhausted.' };
           const consent = await db.patientConsent.findFirst({
@@ -1344,7 +1347,8 @@ export const pharmacySalesRouter = router({
             data: {
               organizationId: scope.organizationId,
               prescriptionLineId: rx.id,
-              fillSequence: rx.fills.length + 1,
+              saleLineId: result.line.id,
+              fillSequence: nextFillSequence,
               quantityCanonicalUnits: units,
               dispensedByUserId: pharmacist.id,
               idempotencyKey: `controlled:${result.line.id}`,

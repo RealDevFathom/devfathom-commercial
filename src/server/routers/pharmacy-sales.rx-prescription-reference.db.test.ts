@@ -80,6 +80,7 @@ const lines = {
   retried: '',
   fullCompletion: '',
   concurrent: '',
+  reversal: '',
 };
 
 function act<T>(userId: string, run: (api: SalesCaller, db: ScopedDb) => Promise<T>) {
@@ -393,6 +394,7 @@ beforeAll(async () => {
       'fullCompletion',
       'retried',
       'concurrent',
+      'reversal',
     ] as const) {
       lines[name] = await prescriptionLine(tx, ids.org, {
         ...forAyesha,
@@ -634,6 +636,9 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     expect(state.fill).toMatchObject({
       quantityCanonicalUnits: 10,
       idempotencyKey: `rx-reference:${added.saleLineId}`,
+      // #410: the fill is bound to the sale line that dispensed it.
+      saleLineId: added.saleLineId,
+      reversedAt: null,
     });
   });
 
@@ -675,5 +680,80 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
       quantityCanonicalUnits: 10,
       idempotencyKey: `rx-reference:${winningLineId}`,
     });
+  });
+  it('releases a bound fill only when its sale is voided, and keeps the audit row (#410)', async () => {
+    // A fill bound to an open sale line (the controlled counter path records it at addLine).
+    const added = await addReferencedSale(lines.reversal);
+    const fill = await withTenantDb(
+      ids.org,
+      (tx) =>
+        tx.prescriptionFill.create({
+          data: {
+            organizationId: ids.org,
+            prescriptionLineId: lines.reversal,
+            saleLineId: added.saleLineId,
+            fillSequence: 1,
+            quantityCanonicalUnits: 10,
+            dispensedByUserId: ids.pharmacist,
+            idempotencyKey: `r410-bound:${added.saleLineId}`,
+          },
+        }),
+      { userId: ids.pharmacist }
+    );
+    const forgeReversal = () =>
+      withTenantDb(ids.org, (tx) =>
+        tx.prescriptionFill.update({
+          where: { organizationId_id: { organizationId: ids.org, id: fill.id } },
+          data: { reversedAt: new Date(), reversedByUserId: ids.pharmacist },
+        })
+      );
+    // The sale is still open: a direct reversal is refused by the database.
+    await expect(forgeReversal()).rejects.toThrow(/append-only/);
+
+    await act(ids.pharmacist, (api) =>
+      api.transition({
+        branchId: ids.branch,
+        saleId: added.saleId,
+        action: 'void',
+        reason: 'Patient cancelled before payment',
+      })
+    );
+    const reversed = await withTenantDb(ids.org, (tx) =>
+      tx.prescriptionFill.findFirstOrThrow({ where: { id: fill.id } })
+    );
+    expect(reversed.reversedAt).toBeInstanceOf(Date);
+    expect(reversed.reversedByUserId).toBe(ids.pharmacist);
+
+    // A reversal happens once; un-reversing, re-reversing and deleting stay refused.
+    await expect(forgeReversal()).rejects.toThrow(/append-only/);
+    await expect(
+      withTenantDb(ids.org, (tx) =>
+        tx.prescriptionFill.update({
+          where: { organizationId_id: { organizationId: ids.org, id: fill.id } },
+          data: { reversedAt: null, reversedByUserId: null },
+        })
+      )
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      withTenantDb(ids.org, (tx) =>
+        tx.prescriptionFill.delete({
+          where: { organizationId_id: { organizationId: ids.org, id: fill.id } },
+        })
+      )
+    ).rejects.toThrow(/append-only/);
+
+    // The released quantity is fillable again; the sequence moves on and is never reused.
+    const next = await addReferencedSale(lines.reversal);
+    await recordCompletion(next.saleLineId);
+    const fills = await withTenantDb(ids.org, (tx) =>
+      tx.prescriptionFill.findMany({
+        where: { prescriptionLineId: lines.reversal },
+        orderBy: { fillSequence: 'asc' },
+      })
+    );
+    expect(fills.map((row) => [row.fillSequence, row.saleLineId, row.reversedAt === null])).toEqual([
+      [1, added.saleLineId, false],
+      [2, next.saleLineId, true],
+    ]);
   });
 });
