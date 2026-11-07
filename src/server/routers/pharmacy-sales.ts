@@ -49,6 +49,7 @@ import {
   FamilyKhataError,
   readSaleKhataAccounts,
   readSaleKhataStatement,
+  settleFamilyKhata,
 } from '@/lib/pharmacy/family-khata';
 
 import {
@@ -628,6 +629,32 @@ export const pharmacySalesRouter = router({
           const db = txDb(tx);
           await bindKhataBranch(db, scope);
           return readSaleKhataStatement(db, scope, input.saleId, input.familyAccountId);
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  settleFamilyKhata: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          familyAccountId: z.string().trim().min(1).max(128),
+          amountMinor: z.number().int().positive(),
+          occurredAt: z.date(),
+          drawerSessionId: z.string().trim().min(1).max(128),
+          deviceId: z.string().trim().min(1).max(128),
+          idempotencyKey: z.string().trim().min(1).max(160),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await khataScope(ctx, input.branchId, 'write');
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await bindKhataBranch(db, scope);
+          return settleFamilyKhata(db, scope, input);
         });
       } catch (error) {
         fail(error);

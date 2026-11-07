@@ -235,6 +235,148 @@ suite('family Khata restricted PostgreSQL', () => {
   });
 });
 
+suite('cash Khata collection PostgreSQL atomicity and replay', () => {
+  it('posts concurrent retries once, reconciles the drawer, and replays after day close', async () => {
+    const scope = await fixture(orgA, 'Cash');
+    const { openPharmacyDrawer, closePharmacyDrawer, cutPharmacyDailyClose } =
+      await import('./settlement');
+    const businessDate = new Date('2026-10-29T00:00:00.000Z');
+    const drawer = await inScope(scope, (db) =>
+      openPharmacyDrawer(db, scope, {
+        deviceId: 'cash_counter',
+        businessDate,
+        openingFloatMinor: 1000,
+      })
+    );
+    const input = {
+      familyAccountId: scope.familyAccountId,
+      amountMinor: 250,
+      occurredAt: new Date('2026-10-29T09:00:00.000Z'),
+      drawerSessionId: drawer.id,
+      deviceId: drawer.deviceId,
+      idempotencyKey: `cash_${suffix}`,
+    };
+    const collect = () => inScope(scope, (db) => khata.settleFamilyKhata(db, scope, input));
+    const results = await Promise.all([collect(), collect()]);
+    expect(results[0]).toEqual(results[1]);
+    await inScope(scope, async (db) => {
+      expect(await khata.readKhataBalance(db, scope, scope.familyAccountId)).toBe(350);
+      const payments = await db.pharmacyKhataEvent.findMany({
+        where: { familyAccountId: scope.familyAccountId, kind: 'PAYMENT' },
+      });
+      expect(payments.reduce((sum, row) => sum + row.amountMinor, 0)).toBe(250);
+      expect(
+        await db.pharmacyDrawerMovement.findMany({
+          where: { drawerSessionId: drawer.id, kind: 'PAID_IN' },
+        })
+      ).toEqual([expect.objectContaining({ amountMinor: 250 })]);
+      const [movement] = await db.pharmacyDrawerMovement.findMany({
+        where: { drawerSessionId: drawer.id, kind: 'PAID_IN' },
+      });
+      const entries = await db.financeJournalEntry.findMany({
+        where: { sourceKind: 'PHARMACY_KHATA_COLLECTION', branchId: scope.branchId },
+        include: { lines: true },
+      });
+      expect(entries).toEqual([
+        expect.objectContaining({
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          sourceId: movement.id,
+          idempotencyKey: `finance:PHARMACY_KHATA_COLLECTION:${movement.id}`,
+        }),
+      ]);
+      expect(
+        entries[0].lines
+          .map((line) => [line.accountCode, line.side, line.amountMinor])
+          .sort()
+      ).toEqual([
+        ['ACCOUNTS_RECEIVABLE', 'CREDIT', 250],
+        ['CASH', 'DEBIT', 250],
+      ]);
+      expect(
+        await closePharmacyDrawer(db, scope, {
+          drawerSessionId: drawer.id,
+          countedCashMinor: 1250,
+        })
+      ).toMatchObject({ expectedCashMinor: 1250, varianceMinor: 0 });
+      await cutPharmacyDailyClose(db, scope, { businessDate });
+    });
+    expect(await collect()).toEqual(results[0]);
+    await expect(
+      inScope(scope, (db) => khata.settleFamilyKhata(db, scope, { ...input, amountMinor: 200 }))
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    await expect(
+      inScope(scope, (db) =>
+        khata.settleFamilyKhata(db, scope, { ...input, idempotencyKey: 'new_closed_collection' })
+      )
+    ).rejects.toMatchObject({ reason: 'DRAWER_NOT_OPEN' });
+    await expect(
+      inScope(sibling, (db) => khata.settleFamilyKhata(db, sibling, input))
+    ).rejects.toMatchObject({ reason: 'ACCOUNT_NOT_FOUND' });
+    await expect(
+      inScope(foreign, (db) => khata.settleFamilyKhata(db, foreign, input))
+    ).rejects.toMatchObject({ reason: 'ACCOUNT_NOT_FOUND' });
+    expect(
+      await inScope(scope, (db) => khata.readKhataBalance(db, scope, scope.familyAccountId))
+    ).toBe(350);
+    expect(
+      await inScope(scope, (db) =>
+        db.financeJournalEntry.count({
+          where: { sourceKind: 'PHARMACY_KHATA_COLLECTION', branchId: scope.branchId },
+        })
+      )
+    ).toBe(1);
+  });
+
+  it('rolls back payments, the drawer movement and the key when the transaction fails', async () => {
+    const scope = await fixture(orgA, 'CashRollback');
+    const { openPharmacyDrawer } = await import('./settlement');
+    const drawer = await inScope(scope, (db) =>
+      openPharmacyDrawer(db, scope, {
+        deviceId: 'rollback_counter',
+        businessDate: new Date('2026-10-29T00:00:00.000Z'),
+        openingFloatMinor: 0,
+      })
+    );
+    const input = {
+      familyAccountId: scope.familyAccountId,
+      amountMinor: 250,
+      occurredAt: new Date('2026-10-29T09:00:00.000Z'),
+      drawerSessionId: drawer.id,
+      deviceId: drawer.deviceId,
+      idempotencyKey: `rollback_${suffix}`,
+    };
+    await expect(
+      inScope(scope, async (db) => {
+        await khata.settleFamilyKhata(db, scope, input);
+        // A database failure in the same request must undo every collection row.
+        await db.$executeRawUnsafe('SELECT 1 / 0');
+      })
+    ).rejects.toThrow();
+    await inScope(scope, async (db) => {
+      expect(await khata.readKhataBalance(db, scope, scope.familyAccountId)).toBe(600);
+      expect(await db.pharmacyDrawerMovement.count({ where: { drawerSessionId: drawer.id } })).toBe(
+        0
+      );
+      expect(
+        await db.pharmacyMoneyIdempotencyKey.count({ where: { key: input.idempotencyKey } })
+      ).toBe(0);
+      expect(
+        await db.financeJournalEntry.count({
+          where: { sourceKind: 'PHARMACY_KHATA_COLLECTION', branchId: scope.branchId },
+        })
+      ).toBe(0);
+      await khata.settleFamilyKhata(db, scope, input);
+      expect(await khata.readKhataBalance(db, scope, scope.familyAccountId)).toBe(350);
+      expect(
+        await db.financeJournalEntry.count({
+          where: { sourceKind: 'PHARMACY_KHATA_COLLECTION', branchId: scope.branchId },
+        })
+      ).toBe(1);
+    });
+  });
+});
+
 suite('khata reminder PostgreSQL balance and idempotency', () => {
   it('keeps cross-branch payments scoped and derives overdue dates from outstanding charges', async () => {
     expect(process.env.TZ).toBe('UTC');

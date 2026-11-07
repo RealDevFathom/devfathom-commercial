@@ -49,6 +49,15 @@ describe('classified cash-flow policy', () => {
       BigInt(700),
     ],
     [
+      'Khata cash collection',
+      evidence('PHARMACY_KHATA_COLLECTION', null, [
+        debit('CASH', BigInt(250)),
+        credit('ACCOUNTS_RECEIVABLE', BigInt(250)),
+      ]),
+      'OPERATING',
+      BigInt(250),
+    ],
+    [
       'supplier payment',
       evidence('PHARMACY_BOOKKEEPING_TRANSACTION', 'SUPPLIER_PAYMENT', [
         debit('ACCOUNTS_PAYABLE', BigInt(300)),

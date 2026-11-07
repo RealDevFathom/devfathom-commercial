@@ -53,6 +53,7 @@ export function classifyCashEvidence(entry: CashFlowEvidence): {
     exact('PHARMACY_TENDER', ['SALES_CLEARING']) ||
     exact('PHARMACY_REFUND', ['SALES_CLEARING']) ||
     exact('PHARMACY_DAILY_CLOSE', ['CASH_OVER_SHORT']) ||
+    exact('PHARMACY_KHATA_COLLECTION', ['ACCOUNTS_RECEIVABLE']) ||
     exact('PHARMACY_BOOKKEEPING_TRANSACTION', ['ACCOUNTS_RECEIVABLE'], ['CUSTOMER_RECEIPT']) ||
     exact(
       'PHARMACY_BOOKKEEPING_TRANSACTION',
