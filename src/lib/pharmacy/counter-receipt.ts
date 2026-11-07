@@ -165,33 +165,70 @@ export const COUNTER_RECEIPT_DIRECTION: Readonly<Record<CounterReceiptLocale, 'l
   ur: 'rtl',
 };
 
+function numberLocale(locale: CounterReceiptLocale): string {
+  return locale === 'ur' ? 'ur-PK-u-nu-arabext' : 'en-PK';
+}
+
+/** Locale-aware whole numbers for every customer-visible receipt identifier and quantity. */
+export function formatReceiptInteger(value: number, locale: CounterReceiptLocale = 'en'): string {
+  return new Intl.NumberFormat(numberLocale(locale), {
+    useGrouping: false,
+    maximumFractionDigits: 0,
+  }).format(Number.isSafeInteger(value) ? value : 0);
+}
+
 /**
  * Minor units as a fixed two-decimal string, computed on integers.
  *
  * Never divides by 100 in floating point: `Math.round(x / 100 * 100)` is how a
  * receipt total starts disagreeing with the ledger by a paisa.
  */
-export function formatMinor(amountMinor: number): string {
-  if (!Number.isSafeInteger(amountMinor)) return '0.00';
+export function formatMinor(amountMinor: number, locale: CounterReceiptLocale = 'en'): string {
+  if (!Number.isSafeInteger(amountMinor)) amountMinor = 0;
   const negative = amountMinor < 0;
   const absolute = Math.abs(amountMinor);
   const major = Math.floor(absolute / 100);
   const fraction = absolute % 100;
-  return `${negative ? '-' : ''}${major}.${String(fraction).padStart(2, '0')}`;
+  const localeName = numberLocale(locale);
+  const integerFormatter = new Intl.NumberFormat(localeName, { useGrouping: false });
+  const fractionFormatter = new Intl.NumberFormat(localeName, {
+    useGrouping: false,
+    minimumIntegerDigits: 2,
+  });
+  const decimal =
+    new Intl.NumberFormat(localeName, {
+      minimumFractionDigits: 1,
+    })
+      .formatToParts(0.1)
+      .find((part) => part.type === 'decimal')?.value ?? '.';
+  const minusSign =
+    new Intl.NumberFormat(localeName).formatToParts(-1).find((part) => part.type === 'minusSign')
+      ?.value ?? '-';
+  return `${negative ? minusSign : ''}${integerFormatter.format(major)}${decimal}${fractionFormatter.format(fraction)}`;
 }
 
 /** ISO timestamp reduced to the date a receipt prints. */
-export function formatReceiptDate(value: string | null): string {
+export function formatReceiptDate(
+  value: string | null,
+  locale: CounterReceiptLocale = 'en'
+): string {
   if (!value) return '—';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : date.toISOString().slice(0, 10);
+  if (Number.isNaN(date.getTime())) return '—';
+  if (locale === 'en') return date.toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat(numberLocale(locale), {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: 'UTC',
+  }).format(date);
 }
 
 export function receiptTitle(receipt: CounterReceipt, locale: CounterReceiptLocale): string {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   return receipt.receiptNumber === null
     ? strings.unissued
-    : `${strings.receipt} ${receipt.receiptNumber}`;
+    : `${strings.receipt} ${formatReceiptInteger(receipt.receiptNumber, locale)}`;
 }
 
 /**
@@ -207,9 +244,9 @@ export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceip
   const identity = [line.medicineName, line.strength].filter(Boolean).join(' ');
   const tail = [
     `${strings.batch} ${line.batchNumber}`,
-    `${strings.expiry} ${formatReceiptDate(line.expiresAt)}`,
-    `${line.quantity} ${strings.saleUnit[line.saleUnit]}`,
-    formatMinor(line.lineTotalMinor),
+    `${strings.expiry} ${formatReceiptDate(line.expiresAt, locale)}`,
+    `${formatReceiptInteger(line.quantity, locale)} ${strings.saleUnit[line.saleUnit]}`,
+    formatMinor(line.lineTotalMinor, locale),
   ].join(' · ');
 
   const full = `${identity} (${line.presentation}) · ${tail}`;
@@ -233,11 +270,11 @@ function footerFor(
 ): string {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const parts = [
-    `${strings.gross} ${formatMinor(receipt.totals.grossMinor)}`,
-    `${strings.discount} ${formatMinor(receipt.totals.discountMinor)}`,
-    `${strings.net} ${formatMinor(receipt.totals.netMinor)}`,
-    `${strings.tendered} ${formatMinor(receipt.totals.tenderedMinor)}`,
-    `${strings.change} ${formatMinor(receipt.totals.changeMinor)}`,
+    `${strings.gross} ${formatMinor(receipt.totals.grossMinor, locale)}`,
+    `${strings.discount} ${formatMinor(receipt.totals.discountMinor, locale)}`,
+    `${strings.net} ${formatMinor(receipt.totals.netMinor, locale)}`,
+    `${strings.tendered} ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
+    `${strings.change} ${formatMinor(receipt.totals.changeMinor, locale)}`,
   ];
   if (receipt.receiptNumber === null) parts.push(strings.noReceiptNumber);
   if (reprint) parts.push(strings.reprint);

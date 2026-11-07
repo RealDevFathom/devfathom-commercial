@@ -6,6 +6,7 @@ import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptDate,
+  formatReceiptInteger,
   receiptTitle,
   type CounterReceipt,
   type CounterReceiptLine,
@@ -37,17 +38,18 @@ const labels = {
 export function exactReceiptPriceBreakdown(
   quantity: number,
   grossMinor: number,
-  multiplicationSign = '×'
+  multiplicationSign = '×',
+  locale: CounterReceiptLocale = 'en'
 ): string {
   if (!Number.isSafeInteger(quantity) || quantity <= 0 || !Number.isSafeInteger(grossMinor)) {
     throw new Error('Receipt line pricing is invalid.');
   }
   if (grossMinor % quantity === 0) {
-    return `${quantity} ${multiplicationSign} ${formatMinor(grossMinor / quantity)}`;
+    return `${formatReceiptInteger(quantity, locale)} ${multiplicationSign} ${formatMinor(grossMinor / quantity, locale)}`;
   }
   // State quantity and gross directly when one integer unit price cannot
   // represent the charge. Never invent synthetic lot prices from an average.
-  return `${quantity}${multiplicationSign === 'x' ? ' - ' : ' · '}${formatMinor(grossMinor)}`;
+  return `${formatReceiptInteger(quantity, locale)}${multiplicationSign === 'x' ? ' - ' : ' · '}${formatMinor(grossMinor, locale)}`;
 }
 
 export function counterLinePricing(
@@ -75,7 +77,8 @@ export function counterLinePricing(
           exactReceiptPriceBreakdown(
             row.canonicalUnits / scale,
             row.grossMinor!,
-            multiplicationSign
+            multiplicationSign,
+            locale
           )
         )
         .join(' + ')}`;
@@ -83,13 +86,13 @@ export function counterLinePricing(
     return priced
       .map(
         (row) =>
-          `${labels[locale].units}: ${row.canonicalUnits}${separator}${strings.gross}: ${formatMinor(row.grossMinor!)}`
+          `${labels[locale].units}: ${formatReceiptInteger(row.canonicalUnits, locale)}${separator}${strings.gross}: ${formatMinor(row.grossMinor!, locale)}`
       )
       .join(' + ');
   }
   return gross === line.quantity * line.unitPriceMinor
-    ? `${strings.saleUnit[line.saleUnit]}: ${exactReceiptPriceBreakdown(line.quantity, gross, multiplicationSign)}`
-    : `${strings.quantity}: ${line.quantity} ${strings.saleUnit[line.saleUnit]}${separator}${strings.gross}: ${formatMinor(gross)}`;
+    ? `${strings.saleUnit[line.saleUnit]}: ${exactReceiptPriceBreakdown(line.quantity, gross, multiplicationSign, locale)}`
+    : `${strings.quantity}: ${formatReceiptInteger(line.quantity, locale)} ${strings.saleUnit[line.saleUnit]}${separator}${strings.gross}: ${formatMinor(gross, locale)}`;
 }
 
 /** Missing status on legacy callers is not evidence of issued identity. */
@@ -104,7 +107,7 @@ export function counterLinePresentation(line: CounterReceiptLine, locale: Counte
     allocations: (line.allocations ?? []).map((allocation) => {
       const batch = issued ? allocation.batchNumber : null;
       const expiry = issued ? allocation.expiresAt : null;
-      return `${strings.batch}: ${batch ?? text.unknown} · ${strings.expiry}: ${expiry ? formatReceiptDate(expiry) : text.unknown} · ${text.units}: ${allocation.canonicalUnits}`;
+      return `${strings.batch}: ${batch ?? text.unknown} · ${strings.expiry}: ${expiry ? formatReceiptDate(expiry, locale) : text.unknown} · ${text.units}: ${formatReceiptInteger(allocation.canonicalUnits, locale)}`;
     }),
   };
 }
@@ -130,14 +133,14 @@ export function buildCounterReceiptPreview(
     {
       businessName: receipt.branchName,
       invoiceNumber: receiptTitle(receipt, locale),
-      issuedAt: `${strings.date}: ${receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}`,
+      issuedAt: `${strings.date}: ${formatReceiptDate(receipt.businessDate ?? receipt.completedAt, locale)}`,
       lines: receipt.lines.map((line) => {
         const presentation = counterLinePresentation(line, locale);
         return [
           presentation.identity,
           counterLinePricing(line, locale),
           ...presentation.allocations,
-          `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
+          `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor, locale)}`,
         ].join('\n');
       }),
       // Identity is historical receipt data; the model supplies no tax breakdown.
@@ -148,14 +151,16 @@ export function buildCounterReceiptPreview(
       ],
       totals: [
         receipt.currency,
-        `${strings.gross}: ${formatMinor(receipt.totals.grossMinor)}`,
-        `${strings.discount}: ${formatMinor(receipt.totals.discountMinor)}`,
-        `${strings.net}: ${formatMinor(receipt.totals.netMinor)}`,
-        `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor)}`,
-        `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
+        `${strings.gross}: ${formatMinor(receipt.totals.grossMinor, locale)}`,
+        `${strings.discount}: ${formatMinor(receipt.totals.discountMinor, locale)}`,
+        `${strings.net}: ${formatMinor(receipt.totals.netMinor, locale)}`,
+        `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
+        `${strings.change}: ${formatMinor(receipt.totals.changeMinor, locale)}`,
       ],
       payments: receipt.tenders.length
-        ? receipt.tenders.map((tender) => `${tender.type}: ${formatMinor(tender.amountMinor)}`)
+        ? receipt.tenders.map(
+            (tender) => `${tender.type}: ${formatMinor(tender.amountMinor, locale)}`
+          )
         : [labels[locale].payments],
     }
   );

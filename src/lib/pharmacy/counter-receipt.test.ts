@@ -5,6 +5,8 @@ import {
   COUNTER_RECEIPT_STRINGS,
   counterReceiptTotals,
   formatMinor,
+  formatReceiptDate,
+  formatReceiptInteger,
   PharmacyCounterReceiptError,
   receiptLineLabel,
   receiptTitle,
@@ -69,6 +71,24 @@ describe('formatMinor', () => {
     // 1000 × 0.01 must be exactly 10.00, which is what a float would lose.
     const total = Array.from({ length: 1_000 }, () => 1).reduce((sum, value) => sum + value, 0);
     expect(formatMinor(total)).toBe('10.00');
+  });
+
+  it('uses Urdu digits when formatting an Urdu receipt', () => {
+    expect(formatMinor(0, 'ur')).toBe('۰٫۰۰');
+    expect(formatMinor(1, 'ur')).toBe('۰٫۰۱');
+    expect(formatMinor(99, 'ur')).toBe('۰٫۹۹');
+    expect(formatMinor(100, 'ur')).toBe('۱٫۰۰');
+    expect(formatMinor(123_456, 'ur')).toBe('۱۲۳۴٫۵۶');
+    expect(formatMinor(-250, 'ur')).toBe('-۲٫۵۰');
+  });
+});
+
+describe('receipt locale formatters', () => {
+  it('localizes Urdu identifiers, quantities, and dates without changing English output', () => {
+    expect(formatReceiptInteger(12, 'en')).toBe('12');
+    expect(formatReceiptInteger(12, 'ur')).toBe('۱۲');
+    expect(formatReceiptDate('2026-09-02', 'en')).toBe('2026-09-02');
+    expect(formatReceiptDate('2026-09-02', 'ur')).toBe('۰۲/۰۹/۲۰۲۶');
   });
 });
 
@@ -206,6 +226,7 @@ describe('receiptLineLabel (POS-08 label fields)', () => {
     expect(label).toContain(COUNTER_RECEIPT_STRINGS.ur.batch);
     expect(label).toContain(COUNTER_RECEIPT_STRINGS.ur.expiry);
     expect(label).toContain('B-2201');
+    expect(label).toContain('۵۰٫۰۰');
   });
 });
 
@@ -260,6 +281,19 @@ describe('buildCounterReceiptDocument (printing seam)', () => {
     const document = buildCounterReceiptDocument(receipt(), 'ur');
     expect(document.title).toContain(COUNTER_RECEIPT_STRINGS.ur.receipt);
     expect(document.footer).toContain(COUNTER_RECEIPT_STRINGS.ur.net);
+    expect(document.footer).toContain('۵۰٫۰۰');
+    expect(document.footer).not.toContain('50.00');
+  });
+
+  it('localizes numbers and dates throughout the Urdu browser preview', () => {
+    const preview = buildCounterReceiptPreview(receipt(), 'ur', 58);
+    expect(preview).toContain('رسید ۱۲');
+    expect(preview).toContain('۰۲/۰۹/۲۰۲۶');
+    expect(preview).toContain('پتّا: ۲ × ۲۵٫۰۰');
+    expect(preview).toContain('۲۵٫۰۰');
+    expect(preview).toContain('۵۰٫۰۰');
+    expect(preview).not.toContain('25.00');
+    expect(preview).not.toContain('50.00');
   });
 
   it('refuses an empty receipt rather than printing a blank slip', () => {
