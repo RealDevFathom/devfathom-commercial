@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const actor = vi.hoisted(() => ({ role: 'ADMIN' }));
@@ -141,6 +141,34 @@ describe('pharmacy report catalog filters', () => {
   beforeEach(() => {
     actor.role = 'ADMIN';
     signalStaff.userId = 'cashier_1';
+  });
+
+  it('opens browser print/PDF only when the loaded report action is clicked', async () => {
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {});
+    try {
+      render(
+        await PharmacyReportsPage({
+          searchParams: Promise.resolve({ branch: 'b1', from: '2026-09-01', to: '2026-09-04' }),
+        })
+      );
+      expect(print).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Print / PDF' }));
+      expect(print).toHaveBeenCalledTimes(1);
+      expect(screen.getByLabelText('From')).toHaveValue('2026-09-01');
+      expect(screen.getByLabelText('To')).toHaveValue('2026-09-04');
+    } finally {
+      print.mockRestore();
+    }
+  });
+
+  it('does not offer print/PDF when the date range prevents a report from loading', async () => {
+    render(
+      await PharmacyReportsPage({
+        searchParams: Promise.resolve({ branch: 'b1', from: '2026-09-04', to: '2026-09-01' }),
+      })
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('No report was loaded.');
+    expect(screen.queryByRole('button', { name: 'Print / PDF' })).not.toBeInTheDocument();
   });
 
   it('carries all supported filters and exposes the metric contract', async () => {
