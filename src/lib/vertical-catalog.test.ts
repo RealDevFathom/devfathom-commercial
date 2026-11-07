@@ -296,6 +296,14 @@ describe('role templates and capabilities (§8)', () => {
     expect(grants).toEqual(['general-manager', 'branch-manager']);
   });
 
+  it('grants floor management explicitly only to General Manager and Branch Manager', () => {
+    const grants = RESTAURANT_ROLE_TEMPLATES.filter((role) =>
+      role.capabilities.includes('floor:manage')
+    ).map((role) => role.key);
+
+    expect(grants).toEqual(['general-manager', 'branch-manager']);
+  });
+
   it('roleTemplatesForVertical returns each vertical template catalog', () => {
     expect(roleTemplatesForVertical('RESTAURANT')).toEqual(RESTAURANT_ROLE_TEMPLATES);
     expect(roleTemplatesForVertical('AGENCY')).toEqual(AGENCY_ROLE_TEMPLATES);
@@ -319,6 +327,16 @@ describe('role templates and capabilities (§8)', () => {
 describe('B1/WHA-285 job-role profiles (§8 cont.)', () => {
   it('supplies the ten floor job-role templates', () => {
     expect(RESTAURANT_JOB_ROLE_TEMPLATES).toHaveLength(10);
+  });
+
+  it('grants floor management to the branch-running job roles (manager, owner) only', () => {
+    // The Floor branch guard admits a secondary branch reached only through a
+    // job-role holding when that role's capabilities include `floor:manage`.
+    const grants = RESTAURANT_JOB_ROLE_TEMPLATES.filter((role) =>
+      role.capabilities.includes('floor:manage')
+    ).map((role) => role.key);
+
+    expect(grants).toEqual(['manager', 'owner']);
   });
 
   it('jobRoleTemplatesForVertical is restaurant-only', () => {

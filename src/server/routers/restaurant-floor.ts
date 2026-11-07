@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
-import { assertInOrganization } from '../org-refs';
 import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
+import { assertInOrganization } from '../org-refs';
+import { requireRestaurantBranchScope } from '../restaurant-branch-scope';
+import { resolveStaffCapabilities } from '@/lib/restaurant/job-roles';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { can, subjectFromSession } from '@/lib/abac';
 import {
@@ -86,10 +88,128 @@ function mapDomainError(err: unknown): never {
 const readProcedure = capabilityProcedure('orders:read');
 const manageProcedure = capabilityProcedure('floor:manage');
 
-async function assertActiveBranch(ctx: TRPCContext, branchId: string) {
-  const organizationId = ctx.entitlements.organizationId ?? ctx.session?.user.organizationId;
-  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-  await assertInOrganization(ctx.db.restaurantBranch, organizationId, [branchId], { active: true });
+type FloorCapability = 'orders:read' | 'floor:manage';
+
+/**
+ * Floor branch boundary. In addition to the shared Restaurant scope (primary
+ * branch, explicit branch assignment, or organization-wide `restaurant:configure`),
+ * an ACTIVE linked staff profile holding a job role or direct capability grant at
+ * the branch is in scope when its effective capabilities there (DENYs applied)
+ * include the procedure's capability. This matches the branch picker, which lists
+ * branches from the same job-role/direct-grant links. An explicit DENY of the
+ * capability at the branch is enforced before the shared-scope fallback, so a
+ * primary or assigned branch link never overrides it.
+ */
+async function assertActiveBranch(
+  ctx: TRPCContext,
+  branchId: string,
+  capability: FloorCapability = 'floor:manage'
+) {
+  const user = ctx.session?.user;
+  if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const roleActor = await ctx.db.restaurantStaffProfile.findFirst({
+    where: {
+      userId: user.id,
+      status: 'ACTIVE',
+      OR: [
+        { jobRoles: { some: { branchId } } },
+        { directCapabilityGrants: { some: { branchId } } },
+      ],
+    },
+    select: { id: true },
+  });
+  if (
+    roleActor &&
+    (await resolveStaffCapabilities(ctx.db, roleActor.id, branchId)).has(capability)
+  ) {
+    const organizationId = ctx.entitlements?.organizationId ?? user.organizationId;
+    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    await assertInOrganization(ctx.db.restaurantBranch, organizationId, [branchId], {
+      active: true,
+    });
+    return;
+  }
+  // An explicit per-person DENY at this branch is authoritative: it must not be
+  // bypassed by the primary-branch / branch-assignment / organization-wide
+  // fallback below, which only proves the branch link, not the capability.
+  const explicitDeny = await ctx.db.restaurantStaffCapabilityGrant.findFirst({
+    where: {
+      branchId,
+      capability,
+      effect: 'DENY',
+      staffProfile: { userId: user.id, status: 'ACTIVE' },
+    },
+    select: { id: true },
+  });
+  if (explicitDeny) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You are not authorized for this restaurant branch.',
+    });
+  }
+  await requireRestaurantBranchScope(ctx, branchId);
+}
+
+async function requireResourceBranch(
+  ctx: TRPCContext,
+  resource: 'floor' | 'table' | 'section' | 'station' | 'routingRule',
+  id: string,
+  capability: FloorCapability = 'floor:manage'
+) {
+  let branchId: string | undefined;
+  if (resource === 'floor') {
+    const row = await ctx.db.restaurantFloor.findUnique({
+      where: { id },
+      select: { branchId: true },
+    });
+    branchId = row?.branchId;
+  } else if (resource === 'table') {
+    const row = await ctx.db.restaurantTable.findUnique({
+      where: { id },
+      select: { floor: { select: { branchId: true } } },
+    });
+    branchId = row?.floor.branchId;
+  } else if (resource === 'section') {
+    const row = await ctx.db.restaurantServerSection.findUnique({
+      where: { id },
+      select: { branchId: true },
+    });
+    branchId = row?.branchId;
+  } else if (resource === 'station') {
+    const row = await ctx.db.restaurantKitchenStation.findUnique({
+      where: { id },
+      select: { branchId: true },
+    });
+    branchId = row?.branchId;
+  } else {
+    const row = await ctx.db.restaurantStationRoutingRule.findUnique({
+      where: { id },
+      select: { station: { select: { branchId: true } } },
+    });
+    branchId = row?.station.branchId;
+  }
+  if (!branchId) throw new TRPCError({ code: 'FORBIDDEN' });
+  await assertActiveBranch(ctx, branchId, capability);
+}
+
+/**
+ * Batch form of `requireResourceBranch(ctx, 'table', id)` for set-membership
+ * inputs: one lookup for every table, then one branch check per DISTINCT branch
+ * (normally one), instead of a guard round-trip per table. An id that does not
+ * resolve (unknown or another tenant's, hidden by RLS) is FORBIDDEN, exactly as
+ * the single-resource guard.
+ */
+async function requireTablesBranches(ctx: TRPCContext, tableIds: readonly string[]) {
+  const uniqueIds = [...new Set(tableIds)];
+  if (uniqueIds.length === 0) return;
+  const rows = await ctx.db.restaurantTable.findMany({
+    where: { id: { in: uniqueIds } },
+    select: { id: true, floor: { select: { branchId: true } } },
+  });
+  if (rows.length !== uniqueIds.length) throw new TRPCError({ code: 'FORBIDDEN' });
+  for (const branchId of new Set(rows.map((row) => row.floor.branchId))) {
+    await assertActiveBranch(ctx, branchId);
+  }
 }
 
 export const restaurantFloorRouter = router({
@@ -103,6 +223,7 @@ export const restaurantFloorRouter = router({
   listFloors: readProcedure
     .input(z.object({ branchId: z.string(), includeInactive: z.boolean().optional() }).strict())
     .query(async ({ ctx, input }) => {
+      await assertActiveBranch(ctx, input.branchId, 'orders:read');
       return listFloors(ctx.db, input);
     }),
 
@@ -147,6 +268,7 @@ export const restaurantFloorRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...patch } = input;
       try {
+        await requireResourceBranch(ctx, 'floor', id);
         const floor = await updateFloor(ctx.db, id, patch);
         annotateAudit(ctx, {
           targetType: 'RestaurantFloor',
@@ -164,6 +286,7 @@ export const restaurantFloorRouter = router({
     .input(z.object({ id: z.string() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        await requireResourceBranch(ctx, 'floor', input.id);
         const floor = await deleteFloor(ctx.db, input.id);
         annotateAudit(ctx, {
           targetType: 'RestaurantFloor',
@@ -189,6 +312,7 @@ export const restaurantFloorRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        await requireResourceBranch(ctx, 'floor', input.floorId);
         const table = await createTable(ctx.db, input);
         annotateAudit(ctx, {
           targetType: 'RestaurantTable',
@@ -217,6 +341,7 @@ export const restaurantFloorRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...patch } = input;
       try {
+        await requireResourceBranch(ctx, 'table', id);
         const table = await updateTable(ctx.db, id, patch);
         annotateAudit(ctx, {
           targetType: 'RestaurantTable',
@@ -234,6 +359,7 @@ export const restaurantFloorRouter = router({
     .input(z.object({ id: z.string() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        await requireResourceBranch(ctx, 'table', input.id);
         const table = await deleteTable(ctx.db, input.id);
         annotateAudit(ctx, {
           targetType: 'RestaurantTable',
@@ -259,6 +385,7 @@ export const restaurantFloorRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
+      await assertActiveBranch(ctx, input.branchId, 'orders:read');
       return listSections(ctx.db, {
         branchId: input.branchId,
         businessDate: businessDateToUtcDate(input.businessDate),
@@ -298,6 +425,7 @@ export const restaurantFloorRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...patch } = input;
       try {
+        await requireResourceBranch(ctx, 'section', id);
         const section = await updateSection(ctx.db, id, patch);
         annotateAudit(ctx, {
           targetType: 'RestaurantServerSection',
@@ -315,6 +443,7 @@ export const restaurantFloorRouter = router({
     .input(z.object({ id: z.string() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        await requireResourceBranch(ctx, 'section', input.id);
         const section = await deleteSection(ctx.db, input.id);
         annotateAudit(ctx, {
           targetType: 'RestaurantServerSection',
@@ -332,6 +461,8 @@ export const restaurantFloorRouter = router({
     .input(z.object({ sectionId: z.string(), tableIds: z.array(z.string()).max(500) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        await requireResourceBranch(ctx, 'section', input.sectionId);
+        await requireTablesBranches(ctx, input.tableIds);
         const membership = await setSectionTables(ctx.db, input.sectionId, input.tableIds);
         annotateAudit(ctx, {
           targetType: 'RestaurantServerSection',
@@ -357,6 +488,7 @@ export const restaurantFloorRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        await requireResourceBranch(ctx, 'section', input.sectionId);
         const assignment = await assignServer(ctx.db, {
           sectionId: input.sectionId,
           staffProfileId: input.staffProfileId,
@@ -389,6 +521,7 @@ export const restaurantFloorRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await requireResourceBranch(ctx, 'section', input.sectionId);
       const result = await unassignServer(ctx.db, {
         sectionId: input.sectionId,
         staffProfileId: input.staffProfileId,
@@ -412,6 +545,7 @@ export const restaurantFloorRouter = router({
   listStations: readProcedure
     .input(z.object({ branchId: z.string(), includeInactive: z.boolean().optional() }).strict())
     .query(async ({ ctx, input }) => {
+      await assertActiveBranch(ctx, input.branchId, 'orders:read');
       return listStations(ctx.db, input);
     }),
 
@@ -455,6 +589,7 @@ export const restaurantFloorRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...patch } = input;
       try {
+        await requireResourceBranch(ctx, 'station', id);
         const station = await updateStation(ctx.db, id, patch);
         annotateAudit(ctx, {
           targetType: 'RestaurantKitchenStation',
@@ -472,6 +607,7 @@ export const restaurantFloorRouter = router({
     .input(z.object({ id: z.string() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        await requireResourceBranch(ctx, 'station', input.id);
         const station = await setDefaultStation(ctx.db, input.id);
         annotateAudit(ctx, {
           targetType: 'RestaurantKitchenStation',
@@ -490,6 +626,7 @@ export const restaurantFloorRouter = router({
     .input(z.object({ id: z.string() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        await requireResourceBranch(ctx, 'station', input.id);
         const station = await deleteStation(ctx.db, input.id);
         annotateAudit(ctx, {
           targetType: 'RestaurantKitchenStation',
@@ -517,6 +654,7 @@ export const restaurantFloorRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        await requireResourceBranch(ctx, 'station', input.stationId);
         const rule = await createRoutingRule(ctx.db, input);
         annotateAudit(ctx, {
           targetType: 'RestaurantStationRoutingRule',
@@ -540,6 +678,7 @@ export const restaurantFloorRouter = router({
     .input(z.object({ id: z.string(), priority: z.number().int() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        await requireResourceBranch(ctx, 'routingRule', input.id);
         const rule = await updateRoutingRule(ctx.db, input.id, { priority: input.priority });
         annotateAudit(ctx, {
           targetType: 'RestaurantStationRoutingRule',
@@ -557,6 +696,7 @@ export const restaurantFloorRouter = router({
     .input(z.object({ id: z.string() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        await requireResourceBranch(ctx, 'routingRule', input.id);
         const rule = await deleteRoutingRule(ctx.db, input.id);
         annotateAudit(ctx, {
           targetType: 'RestaurantStationRoutingRule',

@@ -9,8 +9,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  can: vi.fn(async () => true),
+  can: vi.fn<typeof import('@/lib/abac').can>(async () => true),
   annotateAudit: vi.fn(),
+  resolveStaffCapabilities: vi.fn<
+    typeof import('@/lib/restaurant/job-roles').resolveStaffCapabilities
+  >(async () => new Set()),
   // floor lib
   createFloor: vi.fn(),
   updateFloor: vi.fn(),
@@ -55,6 +58,12 @@ vi.mock('@/server/audit', () => ({
 vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
   return { ...actual, can: mocks.can };
+});
+vi.mock('@/lib/restaurant/job-roles', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/restaurant/job-roles')>(
+    '@/lib/restaurant/job-roles'
+  );
+  return { ...actual, resolveStaffCapabilities: mocks.resolveStaffCapabilities };
 });
 vi.mock('@/lib/restaurant/floor', async () => {
   const actual =
@@ -106,15 +115,99 @@ import { restaurantFloorRouter } from './restaurant-floor';
 import { FloorError } from '@/lib/restaurant/floor';
 import { SectionError } from '@/lib/restaurant/sections';
 import { StationError } from '@/lib/restaurant/stations';
+import { RESTAURANT_JOB_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import type { TRPCContext } from '../trpc';
 
-function caller() {
+const tableFindMany = vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+  where.id.in
+    .filter((id) => id !== 'missing_resource')
+    .map((id) => ({
+      id,
+      floor: { branchId: id === 'branch_b_resource' ? 'branch_b' : 'branch_1' },
+    }))
+);
+
+type CapabilityGrantLookup = {
+  where: {
+    branchId: string;
+    capability: string;
+    effect: 'ALLOW' | 'DENY';
+    staffProfile: { userId: string; status: string };
+  };
+};
+
+function caller(
+  primaryBranchId = 'branch_1',
+  roleBranchId: string | null = null,
+  opts: { assignedBranchId?: string; deniedFloorManageBranchIds?: readonly string[] } = {}
+) {
+  const branch = (id: string) =>
+    id === 'missing_resource'
+      ? undefined
+      : { branchId: id === 'branch_b_resource' ? 'branch_b' : 'branch_1' };
+  type ResourceLookup = { where: { id: string } };
   return restaurantFloorRouter.createCaller({
     db: {
       restaurantBranch: {
         findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
           (where?.id?.in ?? []).map((id) => ({ id }))
         ),
+      },
+      restaurantStaffProfile: {
+        findFirst: vi.fn(
+          async ({
+            where,
+          }: {
+            where: {
+              primaryBranchId?: string;
+              OR?: [{ jobRoles: { some: { branchId: string } } }, unknown];
+            };
+          }) => {
+            if (where.OR) {
+              return where.OR[0].jobRoles.some.branchId === roleBranchId ? { id: 'staff_1' } : null;
+            }
+            return where.primaryBranchId === primaryBranchId ? { id: 'staff_1' } : null;
+          }
+        ),
+      },
+      restaurantBranchAssignment: {
+        findFirst: vi.fn(async ({ where }: { where: { branchId: string } }) =>
+          opts.assignedBranchId && where.branchId === opts.assignedBranchId
+            ? { id: 'assignment_1' }
+            : null
+        ),
+      },
+      restaurantStaffCapabilityGrant: {
+        findFirst: vi.fn(async ({ where }: CapabilityGrantLookup) =>
+          where.effect === 'DENY' &&
+          where.capability === 'floor:manage' &&
+          where.staffProfile.userId === 'user_gm' &&
+          (opts.deniedFloorManageBranchIds ?? []).includes(where.branchId)
+            ? { id: 'deny_1' }
+            : null
+        ),
+      },
+      restaurantFloor: {
+        findUnique: vi.fn(async ({ where }: ResourceLookup) => branch(where.id)),
+      },
+      restaurantTable: {
+        findUnique: vi.fn(async ({ where }: ResourceLookup) => {
+          const resourceBranch = branch(where.id);
+          return resourceBranch ? { floor: resourceBranch } : undefined;
+        }),
+        findMany: tableFindMany,
+      },
+      restaurantServerSection: {
+        findUnique: vi.fn(async ({ where }: ResourceLookup) => branch(where.id)),
+      },
+      restaurantKitchenStation: {
+        findUnique: vi.fn(async ({ where }: ResourceLookup) => branch(where.id)),
+      },
+      restaurantStationRoutingRule: {
+        findUnique: vi.fn(async ({ where }: ResourceLookup) => {
+          const resourceBranch = branch(where.id);
+          return resourceBranch ? { station: resourceBranch } : undefined;
+        }),
       },
     },
     entitlements: {
@@ -138,6 +231,7 @@ function caller() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.resolveStaffCapabilities.mockResolvedValue(new Set());
   mocks.createFloor.mockResolvedValue({ id: 'floor_new', name: 'Patio', branchId: 'branch_1' });
   mocks.listFloors.mockResolvedValue([{ id: 'floor_1', tables: [] }]);
   mocks.createTable.mockResolvedValue({
@@ -165,6 +259,237 @@ describe('capability gating', () => {
       caller().createFloor({ branchId: 'branch_1', name: 'Patio' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.createFloor).not.toHaveBeenCalled();
+  });
+
+  it('denies a branch manager reads and ID-addressed mutations outside their branch', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+
+    const outsideBranchReads = [
+      () => caller('branch_1').listFloors({ branchId: 'branch_b' }),
+      () => caller('branch_1').listSections({ branchId: 'branch_b', businessDate: '2026-08-19' }),
+      () => caller('branch_1').listStations({ branchId: 'branch_b' }),
+    ];
+    for (const read of outsideBranchReads) {
+      await expect(read()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    const outsideBranchMutations = [
+      () => caller('branch_1').updateFloor({ id: 'branch_b_resource', name: 'Nope' }),
+      () => caller('branch_1').deleteFloor({ id: 'branch_b_resource' }),
+      () => caller('branch_1').updateTable({ id: 'branch_b_resource', code: 'Nope' }),
+      () => caller('branch_1').updateSection({ id: 'branch_b_resource', name: 'Nope' }),
+      () => caller('branch_1').updateStation({ id: 'branch_b_resource', name: 'Nope' }),
+      () => caller('branch_1').updateRoutingRule({ id: 'branch_b_resource', priority: 1 }),
+    ];
+    for (const mutation of outsideBranchMutations) {
+      await expect(mutation()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(mocks.listFloors).not.toHaveBeenCalled();
+    expect(mocks.listSections).not.toHaveBeenCalled();
+    expect(mocks.listStations).not.toHaveBeenCalled();
+    expect(mocks.updateFloor).not.toHaveBeenCalled();
+    expect(mocks.deleteFloor).not.toHaveBeenCalled();
+    expect(mocks.updateTable).not.toHaveBeenCalled();
+    expect(mocks.updateSection).not.toHaveBeenCalled();
+    expect(mocks.updateStation).not.toHaveBeenCalled();
+    expect(mocks.updateRoutingRule).not.toHaveBeenCalled();
+  });
+
+  it('allows a manager whose seeded `manager` job role is held at a secondary branch', async () => {
+    // Use the real seeded job-role capabilities, not a hand-built set, so this
+    // fails if the catalog's `manager` job role stops carrying floor duty.
+    const managerJobRole = RESTAURANT_JOB_ROLE_TEMPLATES.find((role) => role.key === 'manager')!;
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+    mocks.resolveStaffCapabilities.mockImplementation(
+      async (_db, _staffProfileId, branchId) =>
+        new Set(branchId === 'branch_b' ? managerJobRole.capabilities : [])
+    );
+    mocks.updateFloor.mockResolvedValue({ id: 'branch_b_resource', name: 'Patio' });
+    mocks.updateStation.mockResolvedValue({ id: 'branch_b_resource', name: 'Grill' });
+    const manager = () => caller('branch_1', 'branch_b');
+
+    await manager().listFloors({ branchId: 'branch_b' });
+    await manager().listSections({ branchId: 'branch_b', businessDate: '2026-08-19' });
+    await manager().listStations({ branchId: 'branch_b' });
+    await manager().updateFloor({ id: 'branch_b_resource', name: 'Patio' });
+    await manager().updateStation({ id: 'branch_b_resource', name: 'Grill' });
+
+    expect(mocks.listFloors).toHaveBeenCalled();
+    expect(mocks.listSections).toHaveBeenCalled();
+    expect(mocks.listStations).toHaveBeenCalled();
+    expect(mocks.updateFloor).toHaveBeenCalled();
+    expect(mocks.updateStation).toHaveBeenCalled();
+    expect(mocks.resolveStaffCapabilities).toHaveBeenCalledWith(
+      expect.anything(),
+      'staff_1',
+      'branch_b'
+    );
+  });
+
+  it('denies a secondary-branch job role whose effective capabilities lack the duty', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+    mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['orders:read']));
+    const manager = () => caller('branch_1', 'branch_b');
+
+    await manager().listFloors({ branchId: 'branch_b' });
+    expect(mocks.listFloors).toHaveBeenCalled();
+    await expect(
+      manager().updateFloor({ id: 'branch_b_resource', name: 'Nope' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.updateFloor).not.toHaveBeenCalled();
+  });
+
+  describe('explicit branch DENY of floor:manage', () => {
+    beforeEach(() => {
+      // Branch Manager: holds the org-level floor:manage grant but is not an
+      // organization-wide restaurant administrator.
+      mocks.can.mockImplementation(
+        async (_subject, capability) => capability !== 'restaurant:configure'
+      );
+      mocks.updateFloor.mockResolvedValue({ id: 'floor_1', name: 'Patio' });
+      mocks.updateStation.mockResolvedValue({ id: 'branch_b_resource', name: 'Grill' });
+    });
+
+    it('allows floor:manage at the primary branch without a DENY', async () => {
+      await caller('branch_1').createFloor({ branchId: 'branch_1', name: 'Patio' });
+      await caller('branch_1').updateFloor({ id: 'floor_1', name: 'Patio' });
+      expect(mocks.createFloor).toHaveBeenCalled();
+      expect(mocks.updateFloor).toHaveBeenCalled();
+    });
+
+    it('allows floor:manage at an explicitly assigned branch without a DENY', async () => {
+      const manager = () => caller('branch_1', null, { assignedBranchId: 'branch_b' });
+      await manager().createFloor({ branchId: 'branch_b', name: 'Patio' });
+      await manager().updateStation({ id: 'branch_b_resource', name: 'Grill' });
+      expect(mocks.createFloor).toHaveBeenCalled();
+      expect(mocks.updateStation).toHaveBeenCalled();
+    });
+
+    it('denies floor:manage at the primary branch when explicitly DENIED there', async () => {
+      const manager = () => caller('branch_1', null, { deniedFloorManageBranchIds: ['branch_1'] });
+      const mutations = [
+        () => manager().createFloor({ branchId: 'branch_1', name: 'Patio' }),
+        () => manager().updateFloor({ id: 'floor_1', name: 'Nope' }),
+        () => manager().deleteFloor({ id: 'floor_1' }),
+        () => manager().createTable({ floorId: 'floor_1', code: 'A1', capacity: 4 }),
+        () => manager().deleteTable({ id: 'table_1' }),
+        () => manager().deleteSection({ id: 'section_1' }),
+        () => manager().setSectionTables({ sectionId: 'section_1', tableIds: ['table_1'] }),
+        () => manager().createStation({ branchId: 'branch_1', name: 'Grill' }),
+        () => manager().setDefaultStation({ id: 'station_1' }),
+        () => manager().deleteStation({ id: 'station_1' }),
+        () => manager().createRoutingRule({ stationId: 'station_1' }),
+        () => manager().updateRoutingRule({ id: 'rule_1', priority: 1 }),
+      ];
+      for (const mutation of mutations) {
+        await expect(mutation()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+      expect(mocks.createFloor).not.toHaveBeenCalled();
+      expect(mocks.updateFloor).not.toHaveBeenCalled();
+      expect(mocks.deleteFloor).not.toHaveBeenCalled();
+      expect(mocks.createTable).not.toHaveBeenCalled();
+      expect(mocks.deleteTable).not.toHaveBeenCalled();
+      expect(mocks.deleteSection).not.toHaveBeenCalled();
+      expect(mocks.setSectionTables).not.toHaveBeenCalled();
+      expect(mocks.createStation).not.toHaveBeenCalled();
+      expect(mocks.setDefaultStation).not.toHaveBeenCalled();
+      expect(mocks.deleteStation).not.toHaveBeenCalled();
+      expect(mocks.createRoutingRule).not.toHaveBeenCalled();
+      expect(mocks.updateRoutingRule).not.toHaveBeenCalled();
+    });
+
+    it('denies floor:manage at an assigned branch when explicitly DENIED there', async () => {
+      const manager = () =>
+        caller('branch_1', null, {
+          assignedBranchId: 'branch_b',
+          deniedFloorManageBranchIds: ['branch_b'],
+        });
+      await expect(
+        manager().createFloor({ branchId: 'branch_b', name: 'Patio' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        manager().updateStation({ id: 'branch_b_resource', name: 'Nope' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.createFloor).not.toHaveBeenCalled();
+      expect(mocks.updateStation).not.toHaveBeenCalled();
+
+      // The DENY is branch-scoped: the un-denied primary branch still works.
+      await manager().createFloor({ branchId: 'branch_1', name: 'Patio' });
+      expect(mocks.createFloor).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not let an organization-wide administrator override an explicit DENY', async () => {
+      mocks.can.mockResolvedValue(true);
+      await expect(
+        caller('branch_1', null, { deniedFloorManageBranchIds: ['branch_b'] }).createFloor({
+          branchId: 'branch_b',
+          name: 'Patio',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.createFloor).not.toHaveBeenCalled();
+    });
+
+    it('keeps reads (orders:read) available when only floor:manage is DENIED', async () => {
+      await caller('branch_1', null, { deniedFloorManageBranchIds: ['branch_1'] }).listFloors({
+        branchId: 'branch_1',
+      });
+      expect(mocks.listFloors).toHaveBeenCalled();
+    });
+  });
+
+  it('checks section table membership with one batched lookup and the branch guard', async () => {
+    mocks.setSectionTables.mockResolvedValue([]);
+    const tableIds = Array.from({ length: 500 }, (_, index) => `table_${index}`);
+
+    await caller().setSectionTables({ sectionId: 'section_1', tableIds });
+
+    expect(tableFindMany).toHaveBeenCalledTimes(1);
+    expect(mocks.setSectionTables).toHaveBeenCalledWith(expect.anything(), 'section_1', tableIds);
+  });
+
+  it('rejects section membership with an unknown or out-of-scope table', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+    await expect(
+      caller().setSectionTables({ sectionId: 'section_1', tableIds: ['t1', 'missing_resource'] })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().setSectionTables({ sectionId: 'section_1', tableIds: ['t1', 'branch_b_resource'] })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.setSectionTables).not.toHaveBeenCalled();
+  });
+
+  it('allows an organization-wide restaurant administrator across branches', async () => {
+    mocks.can.mockResolvedValue(true);
+    await caller('branch_1').listFloors({ branchId: 'branch_b' });
+    expect(mocks.listFloors).toHaveBeenCalled();
+  });
+
+  it('does not reveal whether an ID-addressed resource exists', async () => {
+    const missingResourceMutations = [
+      () => caller().updateFloor({ id: 'missing_resource', name: 'Nope' }),
+      () => caller().deleteFloor({ id: 'missing_resource' }),
+      () => caller().updateTable({ id: 'missing_resource', code: 'Nope' }),
+      () => caller().updateSection({ id: 'missing_resource', name: 'Nope' }),
+      () => caller().updateStation({ id: 'missing_resource', name: 'Nope' }),
+      () => caller().updateRoutingRule({ id: 'missing_resource', priority: 1 }),
+    ];
+
+    for (const mutation of missingResourceMutations) {
+      await expect(mutation()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(mocks.updateFloor).not.toHaveBeenCalled();
+    expect(mocks.deleteFloor).not.toHaveBeenCalled();
+    expect(mocks.updateTable).not.toHaveBeenCalled();
+    expect(mocks.updateSection).not.toHaveBeenCalled();
+    expect(mocks.updateStation).not.toHaveBeenCalled();
+    expect(mocks.updateRoutingRule).not.toHaveBeenCalled();
   });
 
   it('gates mutations on floor:manage and reads on orders:read', async () => {

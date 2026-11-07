@@ -622,6 +622,7 @@ export const RESTAURANT_CAPABILITY_NAMESPACES: readonly string[] = [
   'branches',
   'pos',
   'orders',
+  'floor',
   'catering',
   'payments',
   'cash',
@@ -655,6 +656,7 @@ export const RESTAURANT_CAPABILITIES: readonly string[] = [
   'branches:manage',
   'pos:operate',
   'orders:read',
+  'floor:manage',
   'catering:read',
   'catering:manage',
   'orders:void',
@@ -1082,6 +1084,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'branches:manage',
       'pos:operate',
       'orders:read',
+      'floor:manage',
       'catering:read',
       'catering:manage',
       'orders:void',
@@ -1126,6 +1129,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'branches:read',
       'pos:operate',
       'orders:read',
+      'floor:manage',
       'catering:read',
       'catering:manage',
       'orders:void',
@@ -1324,6 +1328,9 @@ const MANAGES_A_BRANCH: readonly string[] = [
   'devices:manage',
   'terminal:operate',
   'sop:manage',
+  // Floor configuration (floors, tables, sections, stations) at the branch the
+  // role is held — the Floor console's branch guard resolves job-role capabilities.
+  'floor:manage',
 ];
 
 export const RESTAURANT_JOB_ROLE_TEMPLATES: readonly JobRoleTemplate[] = [
