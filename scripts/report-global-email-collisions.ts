@@ -35,10 +35,11 @@
  *   DATABASE_URL='postgresql://...' bunx tsx scripts/report-global-email-collisions.ts
  *
  * Flags:
- *   --reveal    print full addresses, organization slugs and account ids
+ *   --unmasked  print full addresses, organization slugs and account ids
  *               (default masks the local part and drops slugs)
+ *   --reveal    alias for --unmasked
  *   --summary   totals and classification only, no per-group detail
- *   --json      emit JSON instead of text (honours --reveal)
+ *   --json      emit JSON instead of text (honours --unmasked)
  *
  * The output is customer data. It is deliberately not written to a file, and it
  * must not be committed, pasted into an issue, or attached to a PR — not even
@@ -48,6 +49,10 @@
 // exports DATABASE_URL for one specific database gets that database, and a
 // developer with a local `.env` does not have to retype it.
 import 'dotenv/config';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import pg from 'pg';
 
 const { Client } = pg;
@@ -93,7 +98,7 @@ type AccountRow = {
   organizationStatus: string | null;
   storedEmail: string;
   status: string;
-  hasPassword: boolean;
+  hasCredential: boolean;
   mfaEnabled: boolean;
   createdOn: string | null;
   orgHasActiveConnection: boolean;
@@ -109,8 +114,8 @@ type Group = {
   statusCounts: Record<string, number>;
   organizationStatusCounts: Record<string, number>;
   storedVariants: string[];
-  withPassword: number;
-  passwordless: number;
+  credentialSet: number;
+  credentialless: number;
   ssoManaged: number;
   scimManaged: number;
   inSsoEnforcedOrg: number;
@@ -119,8 +124,8 @@ type Group = {
   classification: Classification;
 };
 
-function parseArgs(argv: string[]) {
-  const known = new Set(['--reveal', '--summary', '--json']);
+export function parseArgs(argv: string[]) {
+  const known = new Set(['--unmasked', '--reveal', '--summary', '--json']);
   for (const arg of argv) {
     if (!known.has(arg)) {
       console.error(`Unknown flag ${arg}. Supported: ${[...known].join(', ')}`);
@@ -128,7 +133,8 @@ function parseArgs(argv: string[]) {
     }
   }
   return {
-    reveal: argv.includes('--reveal'),
+    // Addresses are masked unless the operator explicitly opts in.
+    reveal: argv.includes('--unmasked') || argv.includes('--reveal'),
     summary: argv.includes('--summary'),
     json: argv.includes('--json'),
   };
@@ -149,7 +155,7 @@ function isSeedAddress(normalized: string, domains: string[]): boolean {
   return domains.some((candidate) => domain === candidate || domain.endsWith(`.${candidate}`));
 }
 
-function maskAddress(normalized: string): string {
+export function maskAddress(normalized: string): string {
   const at = normalized.lastIndexOf('@');
   if (at <= 0) return '***';
   const local = normalized.slice(0, at);
@@ -158,7 +164,7 @@ function maskAddress(normalized: string): string {
   return `${head}${'*'.repeat(Math.max(local.length - 1, 1))}@${domain}`;
 }
 
-function maskId(id: string): string {
+export function maskId(id: string): string {
   return `${id.slice(0, 8)}…`;
 }
 
@@ -231,7 +237,7 @@ const COLLISIONS_SQL = `
            lower(btrim(u."email"))              AS normalized,
            u."email"                            AS stored_email,
            u."status"::text                     AS status,
-           (u."password" IS NOT NULL)           AS has_password,
+           (u."password" IS NOT NULL)           AS has_credential,
            (u."twoFactorEnabledAt" IS NOT NULL) AS mfa_enabled,
            u."createdAt"                        AS created_at
       FROM "users" u
@@ -262,7 +268,7 @@ const COLLISIONS_SQL = `
          o."status"::text                         AS "organizationStatus",
          a.stored_email                           AS "storedEmail",
          a.status                                 AS "status",
-         a.has_password                           AS "hasPassword",
+         a.has_credential                         AS "hasCredential",
          a.mfa_enabled                            AS "mfaEnabled",
          to_char(a.created_at, 'YYYY-MM-DD')      AS "createdOn",
          COALESCE(i.has_active_connection, false) AS "orgHasActiveConnection",
@@ -276,7 +282,7 @@ const COLLISIONS_SQL = `
    ORDER BY a.normalized, o."slug" NULLS LAST, a.created_at, a.account_id
 `;
 
-function buildGroups(rows: AccountRow[], domains: string[]): Group[] {
+export function buildGroups(rows: AccountRow[], domains: string[]): Group[] {
   const byAddress = new Map<string, AccountRow[]>();
   for (const row of rows) {
     const bucket = byAddress.get(row.normalized);
@@ -307,12 +313,12 @@ function buildGroups(rows: AccountRow[], domains: string[]): Group[] {
         accounts.map((account) => account.organizationStatus ?? 'unknown')
       ),
       storedVariants: [...new Set(accounts.map((account) => account.storedEmail))],
-      withPassword: accounts.filter((account) => account.hasPassword).length,
-      passwordless: accounts.filter((account) => !account.hasPassword).length,
+      credentialSet: accounts.filter((account) => account.hasCredential).length,
+      credentialless: accounts.filter((account) => !account.hasCredential).length,
       // SSO-managed: cannot use a password grant AND its organization has a
       // working IdP — a JIT- or SCIM-created account, not a lapsed one.
       ssoManaged: accounts.filter(
-        (account) => !account.hasPassword && account.orgHasActiveConnection
+        (account) => !account.hasCredential && account.orgHasActiveConnection
       ).length,
       scimManaged: accounts.filter((account) => account.scimManaged).length,
       inSsoEnforcedOrg: accounts.filter((account) => account.orgEnforcesSso).length,
@@ -378,8 +384,8 @@ function printText(
       )}, mostOrganizations=${Math.max(...groups.map((group) => group.organizationCount))})`
   );
   console.log(
-    `accountsWithPassword=${sum(groups, (g) => g.withPassword)} ` +
-      `passwordless=${sum(groups, (g) => g.passwordless)} ` +
+    `accountsWithCredential=${sum(groups, (g) => g.credentialSet)} ` +
+      `credentialless=${sum(groups, (g) => g.credentialless)} ` +
       `ssoManaged=${sum(groups, (g) => g.ssoManaged)} ` +
       `scimManaged=${sum(groups, (g) => g.scimManaged)} ` +
       `inSsoEnforcedOrganization=${sum(groups, (g) => g.inSsoEnforcedOrg)} ` +
@@ -395,7 +401,7 @@ function printText(
   console.log(
     options.reveal
       ? 'Per-group detail (revealed — do not paste this anywhere).'
-      : 'Per-group detail (masked — pass --reveal to an operator session that needs the addresses).'
+      : 'Per-group detail (masked — pass --unmasked to an operator session that needs the addresses).'
   );
   console.log('');
 
@@ -414,7 +420,7 @@ function printText(
     console.log(`    accountStatuses: ${renderTally(group.statusCounts)}`);
     console.log(`    organizationStatuses: ${renderTally(group.organizationStatusCounts)}`);
     console.log(
-      `    withPassword=${group.withPassword} passwordless=${group.passwordless} ` +
+      `    credentialSet=${group.credentialSet} credentialless=${group.credentialless} ` +
         `ssoManaged=${group.ssoManaged} scimManaged=${group.scimManaged} ` +
         `inSsoEnforcedOrganization=${group.inSsoEnforcedOrg} mfaEnabled=${group.mfaEnabled}`
     );
@@ -426,7 +432,7 @@ function printText(
       console.log(
         `      - organization=${organization} account=${
           options.reveal ? account.accountId : maskId(account.accountId)
-        } status=${account.status} password=${account.hasPassword ? 'set' : 'none'} ` +
+        } status=${account.status} credential=${account.hasCredential ? 'set' : 'none'} ` +
           `mfa=${account.mfaEnabled ? 'on' : 'off'} scim=${account.scimManaged ? 'yes' : 'no'} ` +
           `orgSso=${account.orgHasActiveConnection ? 'active' : 'none'}` +
           `${account.orgEnforcesSso ? ' orgSsoEnforced' : ''} created=${account.createdOn ?? 'unknown'}`
@@ -459,8 +465,8 @@ function printJson(
       crossOrganizationGroups: groups.filter((group) => group.organizationCount > 1).length,
       groupsExceedingCap: groups.filter((group) => group.exceedsCap).length,
       discoveryCandidateCap: DISCOVERY_CANDIDATE_CAP,
-      accountsWithPassword: sum(groups, (group) => group.withPassword),
-      passwordless: sum(groups, (group) => group.passwordless),
+      accountsWithCredential: sum(groups, (group) => group.credentialSet),
+      credentialless: sum(groups, (group) => group.credentialless),
       ssoManaged: sum(groups, (group) => group.ssoManaged),
       scimManaged: sum(groups, (group) => group.scimManaged),
       inSsoEnforcedOrganization: sum(groups, (group) => group.inSsoEnforcedOrg),
@@ -480,8 +486,8 @@ function printJson(
       accountStatuses: group.statusCounts,
       organizationStatuses: group.organizationStatusCounts,
       storedCasingVariants: group.storedVariants.length,
-      withPassword: group.withPassword,
-      passwordless: group.passwordless,
+      credentialSet: group.credentialSet,
+      credentialless: group.credentialless,
       ssoManaged: group.ssoManaged,
       scimManaged: group.scimManaged,
       inSsoEnforcedOrganization: group.inSsoEnforcedOrg,
@@ -491,7 +497,7 @@ function printJson(
         organizationSlug: options.reveal ? account.organizationSlug : null,
         accountId: options.reveal ? account.accountId : maskId(account.accountId),
         status: account.status,
-        hasPassword: account.hasPassword,
+        hasCredential: account.hasCredential,
         mfaEnabled: account.mfaEnabled,
         scimManaged: account.scimManaged,
         organizationHasActiveSso: account.orgHasActiveConnection,
@@ -541,7 +547,25 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+/**
+ * Run only when executed directly (not when imported by tests). Both sides are
+ * resolved through `realpathSync` so a symlinked or wrapper-rewritten
+ * `argv[1]` still matches instead of silently exiting 0 with no output.
+ */
+function isEntryPoint(): boolean {
+  const invoked = process.argv[1];
+  if (!invoked) return false;
+  const self = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(self) === realpathSync(resolve(invoked));
+  } catch {
+    return self === resolve(invoked);
+  }
+}
+
+if (isEntryPoint()) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
