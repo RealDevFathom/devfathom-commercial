@@ -21,6 +21,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+Element.prototype.scrollIntoView = vi.fn();
+
 const HOUR = 60 * 60 * 1000;
 
 type Meeting = {
@@ -50,6 +52,8 @@ const mocks = vi.hoisted(() => ({
   pages: [] as Array<{ items: unknown[]; nextCursor?: string }>,
   hasNextPage: false,
   fetchNextPage: vi.fn(),
+  createMeeting: vi.fn(),
+  updateMeeting: vi.fn(),
 }));
 
 vi.mock('next-auth/react', () => ({
@@ -81,8 +85,8 @@ vi.mock('@/lib/trpc', () => {
             isFetchingNextPage: false,
           }),
         },
-        create: mutation(),
-        update: mutation(),
+        create: { useMutation: () => ({ mutate: mocks.createMeeting, isPending: false }) },
+        update: { useMutation: () => ({ mutate: mocks.updateMeeting, isPending: false }) },
         delete: mutation(),
       },
       team: { getAll: { useQuery: () => ({ data: [] }) } },
@@ -108,6 +112,7 @@ describe('MeetingsContent pagination', () => {
     mocks.pages = [];
     mocks.hasNextPage = false;
     mocks.fetchNextPage.mockClear();
+    mocks.createMeeting.mockClear();
   });
 
   // The defect issue #44 reports, at the surface that shows it. A tenant whose
@@ -183,5 +188,166 @@ describe('MeetingsContent pagination', () => {
 
     expect(screen.getByText('Past meeting 2')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('meeting time validation', () => {
+  beforeEach(() => {
+    mocks.upcoming = [];
+    mocks.pages = [];
+    mocks.hasNextPage = false;
+    mocks.createMeeting.mockClear();
+    mocks.updateMeeting.mockClear();
+  });
+
+  it.each([
+    ['equal to', '10:00 AM'],
+    ['before', '9:45 AM'],
+  ])('blocks a meeting whose end time is %s its start time', (_case, endTime) => {
+    render(<MeetingsContent />);
+    fireEvent.click(screen.getByRole('button', { name: /schedule meeting/i }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Invalid meeting' } });
+    fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-10-29' } });
+    fireEvent.click(screen.getByLabelText('Start time'));
+    fireEvent.click(screen.getByRole('option', { name: '10:00 AM' }));
+    fireEvent.click(screen.getByLabelText('End time'));
+    fireEvent.click(screen.getByRole('option', { name: endTime }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The end time must be after the start time.'
+    );
+    const schedule = screen.getByRole('button', { name: /^schedule$/i });
+    expect(schedule).toBeDisabled();
+    fireEvent.click(schedule);
+    expect(mocks.createMeeting).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 2])('preserves the end date on a title edit of a %i-day meeting', (days) => {
+    const original = meeting('Overnight meeting', new Date(2026, 9, 29, 23));
+    original.endTime = new Date(2026, 9, 29 + days, 1);
+    mocks.upcoming = [original];
+
+    render(<MeetingsContent />);
+    fireEvent.click(screen.getByTitle('Edit'));
+    fireEvent.change(screen.getByDisplayValue(original.title), {
+      target: { value: 'Updated title' },
+    });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    const save = screen.getByRole('button', { name: /^save$/i });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    expect(mocks.updateMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: original.id,
+        title: 'Updated title',
+        startTime: original.startTime,
+        endTime: original.endTime,
+      })
+    );
+  });
+
+  it('preserves the next-day end when changing an overnight meeting time and date', () => {
+    const original = meeting('Overnight meeting', new Date(2026, 9, 29, 23));
+    original.endTime = new Date(2026, 9, 30, 1);
+    mocks.upcoming = [original];
+
+    render(<MeetingsContent />);
+    fireEvent.click(screen.getByTitle('Edit'));
+    fireEvent.change(screen.getByDisplayValue('2026-10-29'), {
+      target: { value: '2026-10-31' },
+    });
+    fireEvent.click(screen.getByLabelText('End time'));
+    fireEvent.click(screen.getByRole('option', { name: '2:00 AM' }));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(mocks.updateMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startTime: new Date(2026, 9, 31, 23),
+        endTime: new Date(2026, 10, 1, 2),
+      })
+    );
+  });
+
+  it('lets an overnight meeting be shortened to a same-day meeting', () => {
+    const original = meeting('Overnight meeting', new Date(2026, 9, 29, 23));
+    original.endTime = new Date(2026, 9, 30, 1);
+    mocks.upcoming = [original];
+
+    render(<MeetingsContent />);
+    fireEvent.click(screen.getByTitle('Edit'));
+    expect(screen.getByLabelText('End date')).toHaveValue('2026-10-30');
+    fireEvent.click(screen.getByLabelText('Start time'));
+    fireEvent.click(screen.getByRole('option', { name: '9:00 AM' }));
+    fireEvent.click(screen.getByLabelText('End time'));
+    fireEvent.click(screen.getByRole('option', { name: '10:00 AM' }));
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-10-29' } });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(mocks.updateMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startTime: new Date(2026, 9, 29, 9),
+        endTime: new Date(2026, 9, 29, 10),
+      })
+    );
+  });
+
+  it('lets a same-day meeting be extended across multiple days', () => {
+    mocks.upcoming = [meeting('Long meeting', new Date(2026, 9, 29, 10))];
+
+    render(<MeetingsContent />);
+    fireEvent.click(screen.getByTitle('Edit'));
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-10-31' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(mocks.updateMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startTime: new Date(2026, 9, 29, 10),
+        endTime: new Date(2026, 9, 31, 11),
+      })
+    );
+  });
+
+  it.each(['2026-10-28', ''])(
+    'blocks saving an end date before the start or missing (%s)',
+    (endDate) => {
+      mocks.upcoming = [meeting('Same-day meeting', new Date(2026, 9, 29, 10))];
+
+      render(<MeetingsContent />);
+      fireEvent.click(screen.getByTitle('Edit'));
+      fireEvent.change(screen.getByLabelText('End date'), { target: { value: endDate } });
+
+      if (endDate) {
+        expect(screen.getByRole('alert')).toHaveTextContent(
+          'The end time must be after the start time.'
+        );
+        expect(screen.getByLabelText('End date')).toHaveAttribute('aria-invalid', 'true');
+      }
+      const save = screen.getByRole('button', { name: /^save$/i });
+      expect(save).toBeDisabled();
+      fireEvent.click(save);
+      expect(mocks.updateMeeting).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['equal to', '10:00 AM'],
+    ['before', '9:45 AM'],
+  ])('blocks a same-day edit whose end time is %s its start time', (_case, endTime) => {
+    mocks.upcoming = [meeting('Same-day meeting', new Date(2026, 9, 29, 10))];
+
+    render(<MeetingsContent />);
+    fireEvent.click(screen.getByTitle('Edit'));
+    fireEvent.click(screen.getByLabelText('End time'));
+    fireEvent.click(screen.getByRole('option', { name: endTime }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The end time must be after the start time.'
+    );
+    const save = screen.getByRole('button', { name: /^save$/i });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(mocks.updateMeeting).not.toHaveBeenCalled();
   });
 });
