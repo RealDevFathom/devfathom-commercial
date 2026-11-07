@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   comparisonRead: vi.fn(),
   comparisonTx: {},
   transaction: vi.fn(),
+  annotateAudit: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/branch-comparison', () => ({
   readPharmacyBranchComparison: mocks.comparisonRead,
@@ -84,6 +85,7 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/server/audit', () => ({
+  annotateAudit: mocks.annotateAudit,
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
@@ -1270,4 +1272,239 @@ describe('category growth report input boundaries', () => {
       ]);
     }
   );
+});
+
+describe('Reports CSV export (reports:financial, organization scoped, audited)', () => {
+  const range = { from: '2026-10-01', to: '2026-10-07' };
+  const branchesByOrganization: Record<string, { id: string; name: string }[]> = {
+    org_1: [
+      { id: 'branch_1', name: 'Main' },
+      { id: 'branch_2', name: 'Second' },
+    ],
+    org_2: [{ id: 'branch_other', name: 'Other organization branch' }],
+  };
+  const comparison = {
+    estimateMethod: 'Sum of non-null values recorded on explicit POS unmet-demand events.',
+    estimateExclusions: [],
+    rows: [
+      {
+        branchId: 'branch_1',
+        branchName: 'Main',
+        salesMinor: 100_000,
+        marginMinor: 25_000,
+        lostDemandEstimateMinor: 1_200,
+        lostDemandRecordedEvents: 3,
+        expiryAtRiskMinor: 900,
+        khataAgingMinor: 400,
+      },
+      {
+        branchId: 'branch_2',
+        branchName: 'Second',
+        salesMinor: 50_050,
+        marginMinor: -1_000,
+        lostDemandEstimateMinor: null,
+        lostDemandRecordedEvents: 0,
+        expiryAtRiskMinor: 100,
+        khataAgingMinor: 0,
+      },
+    ],
+  };
+
+  function exportContext(organizationId = 'org_1', role = 'ADMIN') {
+    const ctx = context(role) as unknown as {
+      entitlements: { organizationId: string };
+      organization: { id: string; currency?: string };
+      session: { user: { organizationId: string } };
+    };
+    ctx.entitlements.organizationId = organizationId;
+    ctx.organization = { id: organizationId, currency: 'PKR' };
+    ctx.session.user.organizationId = organizationId;
+    return ctx as unknown as TRPCContext;
+  }
+
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockImplementation(
+      async ({ where }: { where: { organizationId: string } }) =>
+        branchesByOrganization[where.organizationId] ?? []
+    );
+    mocks.comparisonRead.mockResolvedValue(comparison);
+    mocks.expiryRead.mockResolvedValue([]);
+  });
+
+  it.each(['period-summary', 'branch-comparison', 'expiry'] as const)(
+    'denies the %s export without reports:financial before any report read',
+    async (report) => {
+      mocks.can.mockImplementation(async (_subject, action) => action !== 'reports:financial');
+      const ctx = exportContext();
+      await expect(
+        pharmacyReportsRouter.createCaller(ctx).exportCsv({ report, ...range })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.anything(),
+        'reports:financial',
+        undefined,
+        expect.objectContaining({ source: 'TRPC' })
+      );
+      expect(mocks.branchFindMany).not.toHaveBeenCalled();
+      expect(mocks.raw).not.toHaveBeenCalled();
+      expect(mocks.comparisonRead).not.toHaveBeenCalled();
+      expect(mocks.expiryRead).not.toHaveBeenCalled();
+      // The denied attempt is still described for the audit entry.
+      expect(mocks.annotateAudit).toHaveBeenCalledWith(
+        ctx,
+        expect.objectContaining({
+          action: 'report_csv_export',
+          metadata: expect.objectContaining({ report }),
+        })
+      );
+    }
+  );
+
+  it.each(['period-summary', 'expiry'] as const)(
+    'denies a %s export for a branch belonging to another organization',
+    async (report) => {
+      const ctx = exportContext('org_2');
+      await expect(
+        pharmacyReportsRouter
+          .createCaller(ctx)
+          .exportCsv({ report, branchId: 'branch_1', ...range })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.branchFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { organizationId: 'org_2', active: true } })
+      );
+      expect(mocks.raw).not.toHaveBeenCalled();
+      expect(mocks.expiryRead).not.toHaveBeenCalled();
+    }
+  );
+
+  it('surfaces a period-summary reader failure as INTERNAL_SERVER_ERROR, not BAD_REQUEST', async () => {
+    const ctx = exportContext();
+    const count = { count: vi.fn().mockResolvedValue(0) };
+    Object.assign(ctx.db, {
+      $queryRaw: vi.fn().mockRejectedValue(new Error('private database host')),
+      pharmacyRecallNotice: count,
+      pharmacySupplierClaim: count,
+      pharmacyReceivingException: count,
+      branchRegulatoryProfile: count,
+    });
+    await expect(
+      pharmacyReportsRouter.createCaller(ctx).exportCsv({ report: 'period-summary', ...range })
+    ).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+  });
+
+  it('keeps the period-summary branch limit a BAD_REQUEST before SQL', async () => {
+    mocks.branchFindMany.mockResolvedValue(
+      Array.from({ length: 101 }, (_, i) => ({ id: `b${i}`, name: `Branch ${i}` }))
+    );
+    await expect(
+      pharmacyReportsRouter
+        .createCaller(exportContext())
+        .exportCsv({ report: 'period-summary', ...range })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Too many pharmacy branches for one report.',
+    });
+    expect(mocks.raw).not.toHaveBeenCalled();
+  });
+
+  it('reads the branch comparison only for the caller organization branches', async () => {
+    const ctx = exportContext('org_2');
+    await pharmacyReportsRouter
+      .createCaller(ctx)
+      .exportCsv({ report: 'branch-comparison', ...range });
+    expect(mocks.comparisonRead).toHaveBeenCalledWith(mocks.comparisonTx, {
+      branches: branchesByOrganization.org_2,
+      ...range,
+    });
+  });
+
+  it('denies owner-only exports to non-owners even with reports:financial', async () => {
+    for (const report of ['branch-comparison', 'expiry'] as const) {
+      await expect(
+        pharmacyReportsRouter
+          .createCaller(exportContext('org_1', 'EMPLOYEE'))
+          .exportCsv({ report, ...range })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(mocks.comparisonRead).not.toHaveBeenCalled();
+    expect(mocks.expiryRead).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid or oversized periods before data access', async () => {
+    for (const bad of [
+      { from: '2026-02-30', to: '2026-03-01' },
+      { from: '2026-10-07', to: '2026-10-01' },
+      { from: '2026-01-01', to: '2026-04-01' },
+    ]) {
+      await expect(
+        pharmacyReportsRouter
+          .createCaller(exportContext())
+          .exportCsv({ report: 'branch-comparison', ...bad })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+
+  it('exports the branch comparison with readable columns, currency, range and totals', async () => {
+    const ctx = exportContext();
+    const file = await pharmacyReportsRouter
+      .createCaller(ctx)
+      .exportCsv({ report: 'branch-comparison', ...range });
+
+    expect(file.filename).toBe('pharmacy-branch-comparison-2026-10-01-to-2026-10-07.csv');
+    expect(file.contentType).toBe('text/csv; charset=utf-8');
+    const lines = file.content.replace(/^\uFEFF/, '').split('\r\n');
+    expect(lines).toContain(
+      'Currency,PKR (current organization setting; historical transaction currency is not verified)'
+    );
+    expect(lines).toContain('Date range,2026-10-01 to 2026-10-07 (inclusive business dates)');
+    expect(lines).toContain(
+      'Branch,Sales (PKR),Margin (PKR),Lost demand estimate (PKR),Lost demand events,Expiry at risk (PKR),Khata overdue (PKR)'
+    );
+    expect(lines).toContain('Main,1000.00,250.00,12.00,3,9.00,4.00');
+    expect(lines).toContain('Second,500.50,-10.00,,0,1.00,0.00');
+    expect(lines).toContain('Total,1500.50,240.00,12.00,3,10.00,4.00');
+    expect(mocks.annotateAudit).toHaveBeenLastCalledWith(ctx, {
+      metadata: { branchIds: ['branch_1', 'branch_2'], rowCount: 2 },
+    });
+  });
+
+  it('rejects a branch filter on the all-branch comparison', async () => {
+    await expect(
+      pharmacyReportsRouter
+        .createCaller(exportContext())
+        .exportCsv({ report: 'branch-comparison', branchId: 'branch_1', ...range })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.comparisonRead).not.toHaveBeenCalled();
+  });
+
+  it('exports expiry advice for the selected in-scope branch only', async () => {
+    mocks.expiryRead.mockResolvedValue([
+      {
+        lotId: 'lot_1',
+        branchId: 'branch_2',
+        medicineName: '=HYPERLINK("http://x")',
+        batchNumber: 'B-1',
+        supplierName: 'Supplier, Ltd',
+        stockLocationId: 'loc_1',
+        classification: 'AT_RISK',
+        coldChain: true,
+        onHandUnits: 12,
+        valueAtRiskMinor: 4_500,
+        expiresAt: new Date('2026-12-01T00:00:00Z'),
+      },
+    ]);
+    const file = await pharmacyReportsRouter
+      .createCaller(exportContext())
+      .exportCsv({ report: 'expiry', branchId: 'branch_2', ...range });
+    expect(mocks.expiryRead).toHaveBeenCalledWith(expect.anything(), ['branch_2']);
+    const lines = file.content.replace(/^\uFEFF/, '').split('\r\n');
+    expect(lines).toContain('Branch scope,Second');
+    expect(lines).toContain(
+      `"'=HYPERLINK(""http://x"")",B-1,Second,"Supplier, Ltd",AT RISK,Yes,2026-12-01,12,45.00`
+    );
+    expect(lines).toContain('Total,,,,,,,12,45.00');
+  });
 });

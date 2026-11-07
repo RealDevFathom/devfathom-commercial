@@ -3,8 +3,10 @@ import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { branchComparisonTotals } from '@/lib/pharmacy/report-csv';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
+import { ReportExportLink } from '../report-export-link';
 
 export const metadata: Metadata = { title: 'Branch comparison · Pharmacy reports' };
 
@@ -32,6 +34,8 @@ export default async function BranchComparisonPage({
   }
   const money = (value: number | null) =>
     value == null ? '—' : formatMinor(value).replace(/\B(?=(\d{3})+\.)/g, ',');
+  // Shared with the CSV export so the file's totals row matches this table.
+  const totals = comparison ? branchComparisonTotals(comparison.rows) : null;
 
   return (
     <main className="min-w-0 space-y-6">
@@ -47,7 +51,20 @@ export default async function BranchComparisonPage({
           </p>
         </SectionCard>
       ) : (
-        <SectionCard title="Branch performance" titleLevel={2}>
+        <SectionCard
+          title="Branch performance"
+          titleLevel={2}
+          // A loaded comparison already proves owner access and reports:financial; the export
+          // route re-checks both.
+          actions={
+            <ReportExportLink
+              report="branch-comparison"
+              table="branch comparison"
+              from={from}
+              to={to}
+            />
+          }
+        >
           <p className="mb-4 text-sm text-text-muted">
             {from} to {to}, inclusive. Money uses minor-unit values shown to two decimal places; the
             organization currency is not asserted. Expiry at risk is available stock expiring in 30
@@ -85,6 +102,23 @@ export default async function BranchComparisonPage({
                   </tr>
                 ))}
               </tbody>
+              {totals && comparison.rows.length ? (
+                <tfoot className="border-t border-border-default font-medium text-text-strong">
+                  <tr>
+                    <th className="p-3 text-left" scope="row">
+                      Total
+                    </th>
+                    <td className="p-3 text-right">{money(totals.salesMinor)}</td>
+                    <td className="p-3 text-right">{money(totals.marginMinor)}</td>
+                    <td className="p-3 text-right">
+                      {money(totals.lostDemandEstimateMinor)} ({totals.lostDemandRecordedEvents}{' '}
+                      events)
+                    </td>
+                    <td className="p-3 text-right">{money(totals.expiryAtRiskMinor)}</td>
+                    <td className="p-3 text-right">{money(totals.khataAgingMinor)}</td>
+                  </tr>
+                </tfoot>
+              ) : null}
             </table>
           </div>
           {!comparison.rows.length ? (
