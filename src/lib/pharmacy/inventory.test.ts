@@ -23,6 +23,7 @@ import {
   blockReasonFor,
   planAllocation,
   planBreakPack,
+  planRemovalArrangement,
   unitsForArrangement,
   PharmacyInventoryError,
 } from './inventory';
@@ -167,6 +168,54 @@ describe('break-pack planning (INV-04)', () => {
     expect(() =>
       planBreakPack({ sealedPacks: 1, looseUnits: 0, unitsPerPack: 10, requiredLooseUnits: 25 })
     ).toThrow(PharmacyInventoryError);
+  });
+});
+
+describe('removal arrangement planning (INV-04)', () => {
+  it('preserves the real physical arrangement for every removable quantity', () => {
+    for (let unitsPerPack = 1; unitsPerPack <= 12; unitsPerPack += 1) {
+      for (let sealedPacks = 0; sealedPacks <= 5; sealedPacks += 1) {
+        for (let looseUnits = 0; looseUnits <= unitsPerPack * 2; looseUnits += 1) {
+          const total = unitsForArrangement(sealedPacks, looseUnits, unitsPerPack);
+          for (let quantityUnits = 0; quantityUnits <= total; quantityUnits += 1) {
+            const plan = planRemovalArrangement({
+              sealedPacks,
+              looseUnits,
+              unitsPerPack,
+              quantityUnits,
+            });
+            const sealedAfterBreak = sealedPacks + plan.breakPack.sealedPackDelta;
+            const looseAfterBreak = looseUnits + plan.breakPack.looseUnitDelta;
+            const remainder = quantityUnits % unitsPerPack;
+
+            expect(plan.breakPack.packsToBreak).toBe(
+              Math.ceil(Math.max(0, remainder - looseUnits) / unitsPerPack)
+            );
+            expect(plan.sealedPacks * unitsPerPack + plan.looseUnits).toBe(quantityUnits);
+            expect(plan.sealedPacks).toBeLessThanOrEqual(sealedAfterBreak);
+            expect(plan.looseUnits).toBeLessThanOrEqual(looseAfterBreak);
+            expect(
+              unitsForArrangement(
+                sealedAfterBreak - plan.sealedPacks,
+                looseAfterBreak - plan.looseUnits,
+                unitsPerPack
+              )
+            ).toBe(total - quantityUnits);
+          }
+        }
+      }
+    }
+  });
+
+  it('rejects a removal larger than the physical balance', () => {
+    expect(() =>
+      planRemovalArrangement({
+        sealedPacks: 1,
+        looseUnits: 2,
+        unitsPerPack: 10,
+        quantityUnits: 13,
+      })
+    ).toThrowError(expect.objectContaining({ reason: 'INSUFFICIENT_STOCK' }));
   });
 });
 

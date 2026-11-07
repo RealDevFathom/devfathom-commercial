@@ -218,6 +218,45 @@ export function planBreakPack(input: {
   };
 }
 
+/**
+ * Plans the physical units removed from a shelf, breaking only the packs needed
+ * to make the requested quantity possible. Loose units are preferred whenever
+ * doing so still leaves a whole-pack multiple for the sealed part.
+ */
+export function planRemovalArrangement(input: {
+  sealedPacks: number;
+  looseUnits: number;
+  unitsPerPack: number;
+  quantityUnits: number;
+}): {
+  breakPack: ReturnType<typeof planBreakPack>;
+  sealedPacks: number;
+  looseUnits: number;
+} {
+  const { sealedPacks, looseUnits, unitsPerPack, quantityUnits } = input;
+  assertUnitCount(quantityUnits);
+  if (quantityUnits > unitsForArrangement(sealedPacks, looseUnits, unitsPerPack)) {
+    throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+  }
+
+  const remainder = quantityUnits % unitsPerPack;
+  const breakPack = planBreakPack({
+    sealedPacks,
+    looseUnits,
+    unitsPerPack,
+    requiredLooseUnits: remainder,
+  });
+  const looseAfterBreak = looseUnits + breakPack.looseUnitDelta;
+  const maxLoose = Math.min(looseAfterBreak, quantityUnits);
+  const removedLoose = remainder + Math.floor((maxLoose - remainder) / unitsPerPack) * unitsPerPack;
+
+  return {
+    breakPack,
+    sealedPacks: (quantityUnits - removedLoose) / unitsPerPack,
+    looseUnits: removedLoose,
+  };
+}
+
 // ── INV-03: hard blocks ──────────────────────────────────────────────────────
 
 /**

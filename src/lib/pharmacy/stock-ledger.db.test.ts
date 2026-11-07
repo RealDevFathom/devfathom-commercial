@@ -1052,6 +1052,34 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       )
     );
     expect(received.status).toBe('EXCEPTION');
+    const receiptBalances = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findMany({
+        where: {
+          OR: [
+            { inventoryLotId: setup.lotId, disposition: 'IN_TRANSIT' },
+            { branchId: destinationBranch, disposition: 'AVAILABLE' },
+          ],
+        },
+      })
+    );
+    expect(receiptBalances).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          inventoryLotId: setup.lotId,
+          disposition: 'IN_TRANSIT',
+          onHandUnits: 10,
+          sealedPacks: 1,
+          looseUnits: 0,
+        }),
+        expect.objectContaining({
+          branchId: destinationBranch,
+          disposition: 'AVAILABLE',
+          onHandUnits: 20,
+          sealedPacks: 2,
+          looseUnits: 0,
+        }),
+      ])
+    );
     await expect(
       inOrg(ORG_A, (db) =>
         deps.operations.receiveTransferLine(
@@ -1068,14 +1096,705 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     ).rejects.toMatchObject({ reason: 'CROSS_BRANCH_REFERENCE' });
   });
 
-  it('serializes competing dispatches so the same units cannot leave twice', async () => {
-    const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-race');
-    const ids = await inOrg(ORG_A, async (db) => {
-      await ensureBranch(db, ORG_A, `branch_race_destination_${suffix}`);
+  it.each([
+    { label: 'sealed', quantityUnits: 1, breakPackFirst: false },
+    { label: 'loose', quantityUnits: 10, breakPackFirst: true },
+  ])(
+    'dispatches $quantityUnits units from the real $label source arrangement',
+    async ({ label, quantityUnits, breakPackFirst }) => {
+      const fixture = await scenario(ORG_A, BRANCH_A, `transfer-${label}-arrangement`);
+      const destinationBranch = `${BRANCH_A}_${label}_destination`;
+      const dispatchKey = tag(`${label}-dispatch`);
+      const result = await inOrg(ORG_A, async (db) => {
+        await ensureBranch(db, ORG_A, destinationBranch);
+        const destination = await db.pharmacyStockLocation.create({
+          data: {
+            organizationId: ORG_A,
+            branchId: destinationBranch,
+            code: `DEST-${tag(label)}`,
+            name: `${label} destination`,
+            kind: 'STORE',
+          },
+        });
+        const { lot } = await stockLot(db, fixture, {
+          expiresAt: LATER,
+          units: 10,
+          label: `transfer-${label}-arrangement`,
+        });
+        if (breakPackFirst) {
+          await deps.ledger.breakPack(db, scopeOf(fixture), {
+            inventoryLotId: lot.id,
+            stockLocationId: fixture.locationId,
+            requiredLooseUnits: 10,
+            idempotencyKey: tag(`${label}-break`),
+            at: NOW,
+          });
+        }
+        const transfer = await deps.operations.allocateTransfer(db, scopeOf(fixture), {
+          toBranchId: destinationBranch,
+          lines: [
+            {
+              sourceLotId: lot.id,
+              sourceStockLocationId: fixture.locationId,
+              destinationStockLocationId: destination.id,
+              quantityUnits,
+            },
+          ],
+        });
+        await deps.operations.approveTransfer(
+          db,
+          { ...scopeOf(fixture), actorId: `${label}_approver` },
+          transfer.id
+        );
+        await deps.operations.dispatchTransfer(db, scopeOf(fixture), transfer.id, dispatchKey);
+        return {
+          balances: await db.pharmacyStockBalance.findMany({ where: { inventoryLotId: lot.id } }),
+          dispatchMovements: await db.pharmacyStockMovement.findMany({
+            where: { inventoryLotId: lot.id, idempotencyKey: { startsWith: dispatchKey } },
+            orderBy: { idempotencyKey: 'asc' },
+          }),
+        };
+      });
+
+      expect(result.balances.find((row) => row.disposition === 'IN_TRANSIT')).toMatchObject({
+        onHandUnits: quantityUnits,
+        sealedPacks: 0,
+        looseUnits: quantityUnits,
+      });
+      expect(result.balances.find((row) => row.disposition === 'AVAILABLE')).toMatchObject({
+        onHandUnits: 10 - quantityUnits,
+        sealedPacks: 0,
+        looseUnits: 10 - quantityUnits,
+      });
+      expect(result.dispatchMovements.map((movement) => movement.kind)).toEqual(
+        label === 'sealed'
+          ? ['BREAK_PACK', 'TRANSFER_OUT', 'TRANSFER_IN']
+          : ['TRANSFER_OUT', 'TRANSFER_IN']
+      );
+      expect(result.dispatchMovements.slice(-2)).toEqual([
+        expect.objectContaining({
+          kind: 'TRANSFER_OUT',
+          sealedPackDelta: 0,
+          looseUnitDelta: -quantityUnits,
+        }),
+        expect.objectContaining({
+          kind: 'TRANSFER_IN',
+          sealedPackDelta: 0,
+          looseUnitDelta: quantityUnits,
+        }),
+      ]);
+      const receipt = await inOrg(ORG_A, async (db) => {
+        const transfer = await db.pharmacyInterbranchTransfer.findFirstOrThrow({
+          where: { toBranchId: destinationBranch },
+          include: { lines: true },
+        });
+        const received = await deps.operations.receiveTransferLine(
+          db,
+          { ...scopeOf(fixture), branchId: destinationBranch },
+          {
+            transferId: transfer.id,
+            lineId: transfer.lines[0]!.id,
+            receivedUnits: quantityUnits,
+            idempotencyKeyPrefix: tag(`${label}-receipt`),
+          }
+        );
+        return {
+          status: received.status,
+          balances: await db.pharmacyStockBalance.findMany({
+            where: { branchId: destinationBranch },
+          }),
+        };
+      });
+      expect(receipt.status).toBe('RECEIVED');
+      expect(receipt.balances).toEqual([
+        expect.objectContaining({
+          disposition: 'AVAILABLE',
+          onHandUnits: quantityUnits,
+          sealedPacks: 0,
+          looseUnits: quantityUnits,
+        }),
+      ]);
+    }
+  );
+
+  it.each([
+    {
+      label: 'loose',
+      stock: 20,
+      breakUnits: 10,
+      quantity: 10,
+      receipts: [
+        [3, 0, 3],
+        [7, 0, 7],
+      ],
+    },
+    {
+      label: 'legacy loose',
+      stock: 20,
+      breakUnits: 10,
+      quantity: 10,
+      receipts: [
+        [3, 0, 3],
+        [7, 0, 7],
+      ],
+    },
+    {
+      label: 'sealed',
+      stock: 30,
+      breakUnits: 0,
+      quantity: 30,
+      receipts: [
+        [3, 0, 3],
+        [17, 1, 7],
+        [10, 1, 0],
+      ],
+    },
+    {
+      label: 'mixed',
+      stock: 30,
+      breakUnits: 10,
+      quantity: 20,
+      receipts: [
+        [3, 0, 3],
+        [7, 0, 7],
+        [10, 1, 0],
+      ],
+    },
+    {
+      label: 'mixed full',
+      stock: 30,
+      breakUnits: 10,
+      quantity: 20,
+      receipts: [[20, 1, 10]],
+    },
+  ])('preserves $label packaging through partial and closing receipts', async (testCase) => {
+    const fixture = await scenario(ORG_A, BRANCH_A, `partial-${testCase.label}`);
+    const setup = await inOrg(ORG_A, async (db) => {
+      const destinationBranchId = tag('partial-destination');
+      await ensureBranch(db, ORG_A, destinationBranchId);
       const destination = await db.pharmacyStockLocation.create({
         data: {
           organizationId: ORG_A,
-          branchId: `branch_race_destination_${suffix}`,
+          branchId: destinationBranchId,
+          code: tag('partial-destination'),
+          name: 'Partial receipt destination',
+          kind: 'STORE',
+        },
+      });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: testCase.stock,
+        label: testCase.label,
+      });
+      if (testCase.breakUnits) {
+        await deps.ledger.breakPack(db, scopeOf(fixture), {
+          inventoryLotId: lot.id,
+          stockLocationId: fixture.locationId,
+          requiredLooseUnits: testCase.breakUnits,
+          idempotencyKey: tag('partial-break'),
+          at: NOW,
+        });
+      }
+      const transfer = await deps.operations.allocateTransfer(db, scopeOf(fixture), {
+        toBranchId: destinationBranchId,
+        lines: [
+          {
+            sourceLotId: lot.id,
+            sourceStockLocationId: fixture.locationId,
+            destinationStockLocationId: destination.id,
+            quantityUnits: testCase.quantity,
+          },
+        ],
+      });
+      await deps.operations.approveTransfer(
+        db,
+        { ...scopeOf(fixture), actorId: 'partial_approver' },
+        transfer.id
+      );
+      if (testCase.label === 'legacy loose') {
+        // Reproduce dispatch evidence written before line attribution existed.
+        await db.pharmacyStockMovement.createMany({
+          data: [
+            { kind: 'TRANSFER_OUT' as const, disposition: 'AVAILABLE' as const, sign: -1 },
+            { kind: 'TRANSFER_IN' as const, disposition: 'IN_TRANSIT' as const, sign: 1 },
+          ].map(({ kind, disposition, sign }) => ({
+            ...scopeOf(fixture),
+            inventoryLotId: lot.id,
+            stockLocationId: fixture.locationId,
+            kind,
+            disposition,
+            quantityUnits: sign * 10,
+            sealedPackDelta: 0,
+            looseUnitDelta: sign * 10,
+            idempotencyKey: tag('legacy-dispatch'),
+          })),
+        });
+        await db.pharmacyInterbranchTransfer.update({
+          where: { id: transfer.id },
+          data: { status: 'DISPATCHED', dispatchedById: ACTOR, dispatchedAt: NOW },
+        });
+      } else {
+        await deps.operations.dispatchTransfer(
+          db,
+          scopeOf(fixture),
+          transfer.id,
+          tag('partial-dispatch')
+        );
+      }
+      return { transfer, lot, destinationBranchId };
+    });
+    if (testCase.label === 'sealed') {
+      const rollbackKey = tag('receipt-rollback');
+      await expect(
+        inOrg(ORG_A, async (db) => {
+          await deps.operations.receiveTransferLine(
+            db,
+            { ...scopeOf(fixture), branchId: setup.destinationBranchId },
+            {
+              transferId: setup.transfer.id,
+              lineId: setup.transfer.lines[0]!.id,
+              receivedUnits: 3,
+              idempotencyKeyPrefix: rollbackKey,
+            }
+          );
+          throw new Error('Roll back receipt after pack breaking');
+        })
+      ).rejects.toThrow('Roll back receipt after pack breaking');
+      const rolledBack = await inOrg(ORG_A, async (db) => ({
+        movements: await db.pharmacyStockMovement.count({
+          where: { idempotencyKey: { startsWith: rollbackKey } },
+        }),
+        line: await db.pharmacyInterbranchTransferLine.findUniqueOrThrow({
+          where: { id: setup.transfer.lines[0]!.id },
+        }),
+        transit: await db.pharmacyStockBalance.findMany({
+          where: { inventoryLotId: setup.lot.id, disposition: 'IN_TRANSIT' },
+        }),
+      }));
+      expect(rolledBack.movements).toBe(0);
+      expect(rolledBack.line.receivedUnits).toBe(0);
+      expect(rolledBack.transit).toEqual([
+        expect.objectContaining({ onHandUnits: 30, sealedPacks: 3, looseUnits: 0 }),
+      ]);
+    }
+    for (const [index, [units, sealedPacks, looseUnits]] of testCase.receipts.entries()) {
+      const receiptKey = tag('partial-receipt');
+      const result = await inOrg(ORG_A, async (db) => {
+        const received = await deps.operations.receiveTransferLine(
+          db,
+          { ...scopeOf(fixture), branchId: setup.destinationBranchId },
+          {
+            transferId: setup.transfer.id,
+            lineId: setup.transfer.lines[0]!.id,
+            receivedUnits: units!,
+            idempotencyKeyPrefix: receiptKey,
+          }
+        );
+        return {
+          received,
+          movements: await db.pharmacyStockMovement.findMany({
+            where: { idempotencyKey: { startsWith: receiptKey } },
+          }),
+        };
+      });
+      expect(result.received.status).toBe(
+        index === testCase.receipts.length - 1 ? 'RECEIVED' : 'EXCEPTION'
+      );
+      expect(result.movements.find((row) => row.disposition === 'AVAILABLE')).toMatchObject({
+        kind: 'TRANSFER_IN',
+        quantityUnits: units,
+        sealedPackDelta: sealedPacks,
+        looseUnitDelta: looseUnits,
+      });
+      expect(result.movements.find((row) => row.kind === 'BREAK_PACK')).toEqual(
+        testCase.label === 'sealed' && index === 0
+          ? expect.objectContaining({
+              disposition: 'IN_TRANSIT',
+              quantityUnits: 0,
+              sealedPackDelta: -1,
+              looseUnitDelta: 10,
+            })
+          : undefined
+      );
+    }
+    const transit = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findMany({
+        where: { inventoryLotId: setup.lot.id, disposition: 'IN_TRANSIT' },
+      })
+    );
+    expect(transit).toEqual([
+      expect.objectContaining({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 }),
+    ]);
+  });
+
+  it.each([
+    { sealedFirst: false, legacySealed: false },
+    { sealedFirst: true, legacySealed: false },
+    { sealedFirst: false, legacySealed: true },
+    { sealedFirst: true, legacySealed: true },
+  ])(
+    'keeps shared transit shipments separate (sealed first: $sealedFirst, legacy: $legacySealed)',
+    async ({ sealedFirst, legacySealed }) => {
+      const fixture = await scenario(ORG_A, BRANCH_A, 'shared-transit');
+      const setup = await inOrg(ORG_A, async (db) => {
+        const destinationBranchId = tag('shared-destination');
+        await ensureBranch(db, ORG_A, destinationBranchId);
+        const destination = await db.pharmacyStockLocation.create({
+          data: {
+            organizationId: ORG_A,
+            branchId: destinationBranchId,
+            code: tag('shared-destination'),
+            name: 'Shared transit destination',
+            kind: 'STORE',
+          },
+        });
+        const { lot } = await stockLot(db, fixture, {
+          expiresAt: LATER,
+          units: 20,
+          label: 'shared',
+        });
+        await deps.ledger.breakPack(db, scopeOf(fixture), {
+          inventoryLotId: lot.id,
+          stockLocationId: fixture.locationId,
+          requiredLooseUnits: 10,
+          idempotencyKey: tag('shared-break'),
+          at: NOW,
+        });
+        const transfers = [];
+        for (let i = 0; i < 2; i++) {
+          const transfer = await deps.operations.allocateTransfer(db, scopeOf(fixture), {
+            toBranchId: destinationBranchId,
+            lines: [
+              {
+                sourceLotId: lot.id,
+                sourceStockLocationId: fixture.locationId,
+                destinationStockLocationId: destination.id,
+                quantityUnits: 10,
+              },
+            ],
+          });
+          await deps.operations.approveTransfer(
+            db,
+            { ...scopeOf(fixture), actorId: 'shared_approver' },
+            transfer.id
+          );
+          if (legacySealed && i === 1) {
+            // Legacy dispatches have no line attribution and must leave the
+            // newer shipment's loose units available for its own receiver.
+            await db.pharmacyStockMovement.createMany({
+              data: [
+                { kind: 'TRANSFER_OUT' as const, disposition: 'AVAILABLE' as const, sign: -1 },
+                { kind: 'TRANSFER_IN' as const, disposition: 'IN_TRANSIT' as const, sign: 1 },
+              ].map(({ kind, disposition, sign }) => ({
+                ...scopeOf(fixture),
+                inventoryLotId: lot.id,
+                stockLocationId: fixture.locationId,
+                kind,
+                disposition,
+                quantityUnits: sign * 10,
+                sealedPackDelta: sign,
+                looseUnitDelta: 0,
+                idempotencyKey: tag('shared-legacy-dispatch'),
+              })),
+            });
+            await db.pharmacyInterbranchTransfer.update({
+              where: { id: transfer.id },
+              data: { status: 'DISPATCHED', dispatchedById: ACTOR, dispatchedAt: NOW },
+            });
+          } else {
+            await deps.operations.dispatchTransfer(
+              db,
+              scopeOf(fixture),
+              transfer.id,
+              tag('shared-dispatch')
+            );
+          }
+          transfers.push(transfer);
+        }
+        return { transfers, lot, destinationBranchId };
+      });
+      for (const index of sealedFirst ? [1, 0] : [0, 1]) {
+        const transfer = setup.transfers[index]!;
+        const receive = async (units: number) => {
+          const key = tag('shared-receipt');
+          return inOrg(ORG_A, async (db) => {
+            await deps.operations.receiveTransferLine(
+              db,
+              { ...scopeOf(fixture), branchId: setup.destinationBranchId },
+              {
+                transferId: transfer.id,
+                lineId: transfer.lines[0]!.id,
+                receivedUnits: units,
+                idempotencyKeyPrefix: key,
+              }
+            );
+            return db.pharmacyStockMovement.findFirstOrThrow({
+              where: { idempotencyKey: `${key}:received` },
+            });
+          });
+        };
+        if (sealedFirst && index === 1) {
+          const results = await Promise.allSettled([receive(10), receive(10)]);
+          expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+          expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+            reason: { reason: 'CROSS_BRANCH_REFERENCE' },
+          });
+          expect(results.find((result) => result.status === 'fulfilled')).toMatchObject({
+            value: { sealedPackDelta: 1, looseUnitDelta: 0 },
+          });
+          continue;
+        }
+        for (const units of index === 0 && sealedFirst ? [3, 7] : [10]) {
+          const movement = await receive(units);
+          expect(movement).toMatchObject({
+            sealedPackDelta: index === 0 ? 0 : 1,
+            looseUnitDelta: index === 0 ? units : 0,
+          });
+        }
+      }
+      const transit = await inOrg(ORG_A, (db) =>
+        db.pharmacyStockBalance.findMany({
+          where: { inventoryLotId: setup.lot.id, disposition: 'IN_TRANSIT' },
+        })
+      );
+      expect(transit).toEqual([
+        expect.objectContaining({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 }),
+      ]);
+    }
+  );
+
+  describe('closing receipts attribute transit packaging to their own shipment', () => {
+    const WITNESS = 'user_transfer_witness';
+
+    /** The witness lookup reads the platform user table; stand it in for this suite. */
+    function withWitness(db: ScopedDb): ScopedDb {
+      return new Proxy(db, {
+        get(target, prop) {
+          if (prop === 'user') return { findFirst: async () => ({ id: WITNESS }) };
+          const value = Reflect.get(target, prop, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }
+
+    /**
+     * Two 10-unit shipments of one lot share a transit bucket. The source holds
+     * one sealed pack and ten loose units, so the first dispatch ships the loose
+     * units and the second ships the sealed pack (or is written as a legacy,
+     * unattributed sealed dispatch).
+     */
+    async function sharedShipments(label: string, legacySealed: boolean) {
+      const fixture = await scenario(ORG_A, BRANCH_A, label);
+      const setup = await inOrg(ORG_A, async (db) => {
+        const destinationBranchId = tag(`${label}-destination`);
+        await ensureBranch(db, ORG_A, destinationBranchId);
+        const destination = await db.pharmacyStockLocation.create({
+          data: {
+            organizationId: ORG_A,
+            branchId: destinationBranchId,
+            code: tag(`${label}-destination`),
+            name: `${label} destination`,
+            kind: 'STORE',
+          },
+        });
+        const { lot } = await stockLot(db, fixture, { expiresAt: LATER, units: 20, label });
+        await deps.ledger.breakPack(db, scopeOf(fixture), {
+          inventoryLotId: lot.id,
+          stockLocationId: fixture.locationId,
+          requiredLooseUnits: 10,
+          idempotencyKey: tag(`${label}-break`),
+          at: NOW,
+        });
+        const transfers = [];
+        for (let i = 0; i < 2; i++) {
+          const transfer = await deps.operations.allocateTransfer(db, scopeOf(fixture), {
+            toBranchId: destinationBranchId,
+            lines: [
+              {
+                sourceLotId: lot.id,
+                sourceStockLocationId: fixture.locationId,
+                destinationStockLocationId: destination.id,
+                quantityUnits: 10,
+              },
+            ],
+          });
+          await deps.operations.approveTransfer(
+            db,
+            { ...scopeOf(fixture), actorId: `${label}_approver` },
+            transfer.id
+          );
+          if (legacySealed && i === 1) {
+            await db.pharmacyStockMovement.createMany({
+              data: [
+                { kind: 'TRANSFER_OUT' as const, disposition: 'AVAILABLE' as const, sign: -1 },
+                { kind: 'TRANSFER_IN' as const, disposition: 'IN_TRANSIT' as const, sign: 1 },
+              ].map(({ kind, disposition, sign }) => ({
+                ...scopeOf(fixture),
+                inventoryLotId: lot.id,
+                stockLocationId: fixture.locationId,
+                kind,
+                disposition,
+                quantityUnits: sign * 10,
+                sealedPackDelta: sign,
+                looseUnitDelta: 0,
+                idempotencyKey: tag(`${label}-legacy-dispatch`),
+              })),
+            });
+            await db.pharmacyInterbranchTransfer.update({
+              where: { id: transfer.id },
+              data: { status: 'DISPATCHED', dispatchedById: ACTOR, dispatchedAt: NOW },
+            });
+          } else {
+            await deps.operations.dispatchTransfer(
+              db,
+              scopeOf(fixture),
+              transfer.id,
+              tag(`${label}-dispatch`)
+            );
+          }
+          transfers.push(transfer);
+        }
+        return { transfers, lot, destinationBranchId };
+      });
+      const destinationScope = { ...scopeOf(fixture), branchId: setup.destinationBranchId };
+      const closingReceipt = (index: number, receivedUnits: number) =>
+        inOrg(ORG_A, (db) =>
+          deps.operations.receiveTransferWithVariance(withWitness(db), destinationScope, {
+            transferId: setup.transfers[index]!.id,
+            lines: [{ lineId: setup.transfers[index]!.lines[0]!.id, receivedUnits }],
+            variance:
+              receivedUnits < 10
+                ? { reason: 'Damaged in transit', witnessId: WITNESS, evidenceRef: 'photo-1' }
+                : undefined,
+            idempotencyKeyPrefix: tag(`${label}-closing`),
+          })
+        );
+      const lineReceipt = (index: number, receivedUnits: number) => {
+        const key = tag(`${label}-line-receipt`);
+        return inOrg(ORG_A, async (db) => {
+          await deps.operations.receiveTransferLine(db, destinationScope, {
+            transferId: setup.transfers[index]!.id,
+            lineId: setup.transfers[index]!.lines[0]!.id,
+            receivedUnits,
+            idempotencyKeyPrefix: key,
+          });
+          return db.pharmacyStockMovement.findFirstOrThrow({
+            where: { idempotencyKey: `${key}:received` },
+          });
+        });
+      };
+      const transit = () =>
+        inOrg(ORG_A, (db) =>
+          db.pharmacyStockBalance.findMany({
+            where: { inventoryLotId: setup.lot.id, disposition: 'IN_TRANSIT' },
+          })
+        );
+      return { setup, closingReceipt, lineReceipt, transit };
+    }
+
+    it('receives a loose shipment in full through the closing receipt', async () => {
+      const { closingReceipt, lineReceipt, transit } = await sharedShipments(
+        'closing-loose',
+        false
+      );
+      const result = await closingReceipt(0, 10);
+      expect(result.transfer.status).toBe('RECEIVED');
+      expect(result.variances).toEqual([]);
+      expect(await lineReceipt(1, 10)).toMatchObject({ sealedPackDelta: 1, looseUnitDelta: 0 });
+      expect(await transit()).toEqual([
+        expect.objectContaining({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 }),
+      ]);
+    });
+
+    it.each([0, 3])(
+      'writes off only the sealed shipment packaging after receiving %i units',
+      async (receivedUnits) => {
+        const { closingReceipt, lineReceipt, transit } = await sharedShipments(
+          `variance-sealed-${receivedUnits}`,
+          false
+        );
+        const result = await closingReceipt(1, receivedUnits);
+        expect(result.variances).toEqual([
+          expect.objectContaining({
+            units: 10 - receivedUnits,
+            movement: expect.objectContaining({
+              kind: 'WRITE_OFF',
+              quantityUnits: receivedUnits - 10,
+              sealedPackDelta: receivedUnits === 0 ? -1 : 0,
+              looseUnitDelta: receivedUnits === 0 ? 0 : receivedUnits - 10,
+            }),
+          }),
+        ]);
+        // The loose shipment still owns its ten loose units.
+        expect(await lineReceipt(0, 10)).toMatchObject({ sealedPackDelta: 0, looseUnitDelta: 10 });
+        expect(await transit()).toEqual([
+          expect.objectContaining({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 }),
+        ]);
+      }
+    );
+
+    it('breaks only its own pack for a partial receipt with a loose variance', async () => {
+      const { setup, closingReceipt, lineReceipt, transit } = await sharedShipments(
+        'variance-sealed-break',
+        false
+      );
+      // Seven of the sealed shipment's ten units arrive and three are lost. Its
+      // own pack is broken; neither leg takes the loose shipment's units.
+      const result = await closingReceipt(1, 7);
+      expect(result.variances[0]?.movement).toMatchObject({
+        quantityUnits: -3,
+        sealedPackDelta: 0,
+        looseUnitDelta: -3,
+      });
+      const breaks = await inOrg(ORG_A, (db) =>
+        db.pharmacyStockMovement.findMany({
+          where: {
+            inventoryLotId: setup.lot.id,
+            disposition: 'IN_TRANSIT',
+            kind: 'BREAK_PACK',
+          },
+        })
+      );
+      expect(breaks).toEqual([
+        expect.objectContaining({
+          reason: `Interbranch transfer line ${setup.transfers[1]!.lines[0]!.id}`,
+          sealedPackDelta: -1,
+          looseUnitDelta: 10,
+        }),
+      ]);
+      expect(await lineReceipt(0, 10)).toMatchObject({ sealedPackDelta: 0, looseUnitDelta: 10 });
+      expect(await transit()).toEqual([
+        expect.objectContaining({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 }),
+      ]);
+    });
+
+    it('releases written-off packaging so a legacy shipment can still be received', async () => {
+      const { closingReceipt, lineReceipt, transit } = await sharedShipments(
+        'variance-legacy',
+        true
+      );
+      const result = await closingReceipt(0, 0);
+      expect(result.variances[0]?.movement).toMatchObject({
+        quantityUnits: -10,
+        sealedPackDelta: 0,
+        looseUnitDelta: -10,
+      });
+      expect(await lineReceipt(1, 10)).toMatchObject({ sealedPackDelta: 1, looseUnitDelta: 0 });
+      expect(await transit()).toEqual([
+        expect.objectContaining({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 }),
+      ]);
+    });
+  });
+
+  it('serializes competing dispatches so the same units cannot leave twice', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-race');
+    const ids = await inOrg(ORG_A, async (db) => {
+      const destinationBranchId = `branch_race_destination_${suffix}`;
+      await ensureBranch(db, ORG_A, destinationBranchId);
+      const destination = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: destinationBranchId,
           code: `RACE-${tag('destination')}`,
           name: 'Race destination',
           kind: 'STORE',
@@ -1121,6 +1840,68 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     );
     expect(balances.reduce((sum, row) => sum + row.onHandUnits, 0)).toBe(40);
     expect(balances.find((row) => row.disposition === 'AVAILABLE')?.onHandUnits).toBe(10);
+  });
+
+  it('serializes concurrent replays of the same transfer', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-replay-race');
+    const ids = await inOrg(ORG_A, async (db) => {
+      const destinationBranchId = `branch_replay_destination_${suffix}`;
+      await ensureBranch(db, ORG_A, destinationBranchId);
+      const destination = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: destinationBranchId,
+          code: `REPLAY-${tag('destination')}`,
+          name: 'Replay destination',
+          kind: 'STORE',
+        },
+      });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'transfer-replay-race',
+      });
+      const transfer = await deps.operations.allocateTransfer(db, scopeOf(fixture), {
+        toBranchId: destination.branchId,
+        lines: [
+          {
+            sourceLotId: lot.id,
+            sourceStockLocationId: fixture.locationId,
+            destinationStockLocationId: destination.id,
+            quantityUnits: 10,
+          },
+        ],
+      });
+      await deps.operations.approveTransfer(
+        db,
+        { ...scopeOf(fixture), actorId: 'replay_approver' },
+        transfer.id
+      );
+      return { lotId: lot.id, transferId: transfer.id };
+    });
+    const results = await Promise.allSettled(
+      ['replay-a', 'replay-b'].map((label) =>
+        inOrg(ORG_A, (db) =>
+          deps.operations.dispatchTransfer(db, scopeOf(fixture), ids.transferId, tag(label))
+        )
+      )
+    );
+    expect(results.filter((one) => one.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((one) => one.status === 'rejected')).toEqual([
+      expect.objectContaining({
+        reason: expect.objectContaining({ reason: 'INVALID_STATE' }),
+      }),
+    ]);
+    const state = await inOrg(ORG_A, async (db) => ({
+      balances: await db.pharmacyStockBalance.findMany({ where: { inventoryLotId: ids.lotId } }),
+      movements: await db.pharmacyStockMovement.findMany({
+        where: { inventoryLotId: ids.lotId, kind: { in: ['TRANSFER_OUT', 'TRANSFER_IN'] } },
+      }),
+    }));
+    expect(state.movements).toHaveLength(2);
+    expect(state.balances.reduce((sum, row) => sum + row.onHandUnits, 0)).toBe(40);
+    expect(state.balances.find((row) => row.disposition === 'AVAILABLE')?.onHandUnits).toBe(30);
+    expect(state.balances.find((row) => row.disposition === 'IN_TRANSIT')?.onHandUnits).toBe(10);
   });
 
   it('globally recalls a batch, traces branch holdings, acknowledges, and reconciles closure', async () => {
