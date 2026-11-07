@@ -162,3 +162,21 @@ export function tenantHostUrl(slug: string, path = '/login'): string | null {
     LOCAL_HOSTS.has(baseDomain) || baseDomain.endsWith('.localhost') ? 'http' : 'https';
   return `${protocol}://${slug}.${baseDomain}${path}`;
 }
+
+/**
+ * The shared sign-in on the base domain's apex: the way back from a workspace
+ * address that resolves to no organization. A non-default vertical is carried
+ * as `?vertical=` so the shared sign-in keeps the branding the visitor just saw
+ * (presentation only; see loginVertical).
+ *
+ * Returns null when no base domain is configured, like tenantHostUrl.
+ */
+export function sharedSignInUrl(vertical?: string): string | null {
+  const baseDomain = configuredBaseDomain();
+  if (!baseDomain) return null;
+  const protocol =
+    LOCAL_HOSTS.has(baseDomain) || baseDomain.endsWith('.localhost') ? 'http' : 'https';
+  const query =
+    vertical && vertical !== 'default' ? `?vertical=${encodeURIComponent(vertical)}` : '';
+  return `${protocol}://${baseDomain}/login${query}`;
+}

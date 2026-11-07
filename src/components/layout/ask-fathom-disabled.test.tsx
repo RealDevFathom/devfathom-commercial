@@ -63,6 +63,7 @@ vi.mock('@/components/motion/page-transition', () => ({
 vi.mock('./sidebar', () => ({
   Sidebar: () => null,
   TopNavigation: () => <nav>Reports and Insights</nav>,
+  useVisibleNavigation: () => ({ filteredNav: [], bestMatch: '', indexByHref: new Map() }),
 }));
 vi.mock('@/components/restaurant/administrator-staff-profile-callout', () => ({
   AdministratorStaffProfileCallout: () => null,
@@ -77,6 +78,7 @@ vi.mock('@/lib/trpc', () => {
       search: { global: empty },
       team: {
         getNotifications: empty,
+        getById: { useQuery: () => ({ data: undefined, isLoading: false }) },
         getAll: empty,
         markNotificationRead: mutation,
         markAllNotificationsRead: mutation,

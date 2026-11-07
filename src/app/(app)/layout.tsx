@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
-import { redirect } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
+import { currentUnknownTenantHost } from '@/lib/tenancy/unknown-tenant-host';
 import { signInRedirectPath, workspaceRedirectForPasswordChange } from '@/lib/auth/session-state';
 import { AppShell } from '@/components/layout/app-shell';
 import { TenantSessionBoundary } from '@/components/tenant-session-boundary';
@@ -14,6 +15,7 @@ import { assertWorkspaceIdentity } from '@/lib/tenant-brand';
 import { DemoToolbar } from '@/lib/demo/toolbar';
 
 export async function generateMetadata(): Promise<Metadata> {
+  if ((await currentUnknownTenantHost()).unknown) notFound();
   const actor = await resolveTenantActor();
   return actor?.organization.isDemo
     ? { robots: { index: false, follow: false, nocache: true } }
@@ -21,6 +23,9 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
+  // A mistyped workspace subdomain resolves no organization: answer with the
+  // branded 404 before any session or tenant work runs, instead of a 500.
+  if ((await currentUnknownTenantHost()).unknown) notFound();
   // SEC-03 / AUTH-02: a single server-side auth guard for every /(app) page. The
   // edge proxy only checks cookie PRESENCE, so a stale/forged session cookie would
   // otherwise slip through and render a broken shell; verifying the session here

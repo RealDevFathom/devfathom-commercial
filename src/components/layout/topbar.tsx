@@ -36,7 +36,10 @@ import { formatDistanceToNow } from 'date-fns';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { FathomMark } from '@/components/brand/logo';
 import type { TenantBrand } from '@/lib/tenant-brand';
-import { routeLabels, TopbarBreadcrumbs } from './topbar-breadcrumbs';
+import { TopbarBreadcrumbs } from './topbar-breadcrumbs';
+import { useVisibleNavigation } from './sidebar';
+import { useAccountRole } from '@/components/use-account-role';
+import type { OrganizationVertical } from '@/lib/vertical-catalog';
 // Badge unused after notification refactor
 import {
   DropdownMenu,
@@ -79,6 +82,8 @@ export function Topbar({
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const router = useRouter();
   const { data: session } = useSession();
+  const { vertical } = useEntitlements();
+  const accountRole = useAccountRole();
   const { theme, setTheme } = useTheme();
   const openAssistant = useAssistant((s) => s.setOpen);
   const assistantAvailable = useAssistant((state) =>
@@ -201,7 +206,7 @@ export function Topbar({
             {session?.user?.name ?? 'Workspace'}
           </span>
           <span className="block max-w-36 truncate text-[11px] text-muted-foreground">
-            {session?.user?.title ?? 'Team member'}
+            {headerRoleLine(vertical, accountRole.role, session?.user?.title)}
           </span>
         </div>
 
@@ -312,19 +317,13 @@ export function Topbar({
           commandProps={{ shouldFilter: false }}
         >
           <CommandInput
-            placeholder="Search projects, tasks, clients, notes, team…"
+            placeholder={commandPlaceholder(vertical)}
             value={searchInput}
             onValueChange={setSearchInput}
           />
           <CommandList>
             {debouncedSearch.length === 0 ? (
-              <CommandGroup heading="Navigation">
-                {Object.entries(routeLabels).map(([href, label]) => (
-                  <CommandItem key={href} onSelect={() => goTo(href)}>
-                    {label}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
+              <PaletteNavigation onSelect={goTo} />
             ) : searchQuery.isLoading ? (
               <div className="flex items-center justify-center py-10 text-xs text-muted-foreground">
                 <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> Searching…
@@ -341,10 +340,15 @@ export function Topbar({
                     r.team.length === 0);
                 if (empty)
                   return (
-                    <CommandEmpty>No results for &ldquo;{debouncedSearch}&rdquo;.</CommandEmpty>
+                    <>
+                      {/* cmdk hides the empty state when a matching screen renders. */}
+                      <PaletteNavigation onSelect={goTo} query={debouncedSearch} />
+                      <CommandEmpty>No results for &ldquo;{debouncedSearch}&rdquo;.</CommandEmpty>
+                    </>
                   );
                 return (
                   <>
+                    <PaletteNavigation onSelect={goTo} query={debouncedSearch} />
                     {r!.projects.length > 0 && (
                       <CommandGroup heading="Projects">
                         {r!.projects.map((p) => (
@@ -446,6 +450,54 @@ export function Topbar({
         </CommandDialog>
       )}
     </>
+  );
+}
+
+/** Command palette prompt in the tenant's own vocabulary. */
+export function commandPlaceholder(vertical: OrganizationVertical | null | undefined): string {
+  if (vertical === 'PHARMACY') return 'Search pharmacy screens, team…';
+  return 'Search projects, tasks, clients, notes, team…';
+}
+
+/**
+ * The header's second line. Pharmacy shows the member's actual role (the
+ * same label as Settings → Account); other verticals keep the job title.
+ */
+export function headerRoleLine(
+  vertical: OrganizationVertical | null | undefined,
+  role: string,
+  title: string | null | undefined
+): string {
+  if (vertical === 'PHARMACY') return role || 'Team member';
+  return title ?? 'Team member';
+}
+
+/**
+ * Palette shortcuts come from the same filtered navigation as the rail and
+ * top bar, so another vertical's screens or a disabled module never appear.
+ */
+export function PaletteNavigation({
+  onSelect,
+  query = '',
+}: {
+  onSelect: (href: string) => void;
+  /** When set, only screens whose label contains it are listed. */
+  query?: string;
+}) {
+  const { filteredNav } = useVisibleNavigation();
+  const needle = query.trim().toLowerCase();
+  const items = needle
+    ? filteredNav.filter((item) => item.label.toLowerCase().includes(needle))
+    : filteredNav;
+  if (items.length === 0) return null;
+  return (
+    <CommandGroup heading={needle ? 'Screens' : 'Navigation'}>
+      {items.map((item) => (
+        <CommandItem key={item.href} value={item.href} onSelect={() => onSelect(item.href)}>
+          {item.label}
+        </CommandItem>
+      ))}
+    </CommandGroup>
   );
 }
 

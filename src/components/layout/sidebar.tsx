@@ -594,7 +594,12 @@ export function visibleNavigation(
     .sort((left, right) => GROUP_ORDER.indexOf(left.group) - GROUP_ORDER.indexOf(right.group));
 }
 
-function useVisibleNavigation() {
+/**
+ * The navigation entries the signed-in member may open: vertical, module,
+ * role and capability filtered. The rail, the top bar and the command palette
+ * all read this one source so they can never list different screens.
+ */
+export function useVisibleNavigation() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const entitlements = useEntitlements();
