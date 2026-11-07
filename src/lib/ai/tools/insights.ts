@@ -313,7 +313,8 @@ export function buildInsightsTools(h: AssistantHelpers): ToolSet {
             where: {
               assignees: { some: { userId } },
               column: { name: 'Done' },
-              updatedAt: { gte: weekAgo },
+              // #410: entered Done this week (completedAt), mirroring team-stats.
+              completedAt: { gte: weekAgo },
             },
           }),
         ]);
@@ -353,7 +354,7 @@ export function buildInsightsTools(h: AssistantHelpers): ToolSet {
         h.db.task.findMany({
           where: {
             column: { name: 'Done' },
-            updatedAt: { gte: weekAgo },
+            completedAt: { gte: weekAgo },
             assignees: { some: {} },
           },
           select: { assignees: { select: { userId: true } } },
@@ -492,7 +493,8 @@ export function buildInsightsTools(h: AssistantHelpers): ToolSet {
             where: {
               ...(isAdmin ? {} : { assignees: { some: { userId } } }),
               column: { name: 'Done' },
-              updatedAt: { gte: new Date(now.getTime() - 7 * DAY_MS) },
+              // #410: entered Done this week, mirroring the dashboard.
+              completedAt: { gte: new Date(now.getTime() - 7 * DAY_MS) },
             },
           }),
           // AI-03: mirror DASH-02 — admins see the company-wide pending-leave count,

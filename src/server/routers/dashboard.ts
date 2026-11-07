@@ -124,7 +124,8 @@ export const dashboardRouter = router({
         where: {
           ...(isAdmin ? {} : { assignees: { some: { userId } } }),
           column: { name: 'Done' },
-          updatedAt: {
+          // #410: entered Done this week — an edit to an old Done task moves updatedAt.
+          completedAt: {
             gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
           },
         },

@@ -3390,6 +3390,10 @@ model Task {
   createdById    String
   // IMP-PROJ-06: optional parent for subtasks (self-relation).
   parentId       String?
+  // #410: when the task entered the Done column; NULL outside Done (or when the
+  // time is unknown). Maintained by the database trigger tasks_maintain_completed_at
+  // on every insert and column change, whatever the write path — never updatedAt.
+  completedAt    DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -3410,6 +3414,7 @@ model Task {
 
   @@index([columnId, order])
   @@index([createdById])
+  @@index([completedAt])
   @@index([parentId])
   @@index([organizationId])
   @@map("tasks")
