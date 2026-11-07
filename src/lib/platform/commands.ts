@@ -43,7 +43,10 @@ import {
   assertStoredBranchMayOperate,
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
-import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
+import {
+  PAKISTAN_PROVINCES,
+  placeholderRuleSetIdentity,
+} from '@/lib/pharmacy/regulatory-profile-form';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
@@ -1668,31 +1671,49 @@ async function runCommand(
 
       const label = 'PLACEHOLDER – not a real licence';
       const effectiveFrom = new Date();
-      const ruleSet = await db.jurisdictionRuleSet.upsert({
-        where: { id: 'pk_pb_placeholder_v1' },
-        update: {},
-        create: {
-          id: 'pk_pb_placeholder_v1',
-          code: 'PK-PB-PLACEHOLDER',
-          version: 1,
-          effectiveFrom: new Date('1970-01-01T00:00:00.000Z'),
-          isPlaceholder: true,
-          licenceCategories: { values: ['*'], provisional: false, label },
-          permittedSchedules: { values: ['*'], provisional: false, label },
-          prescriptionOnlyClasses: { values: ['*'], provisional: false, label },
-          prescriptionRetentionDays: { values: {}, provisional: false, label },
-          controlledRegisterFlags: { values: { recordEverySale: true }, provisional: false, label },
-          pharmacistCoverageRule: {
-            values: { dispenseGrantRequired: true },
-            provisional: false,
-            label,
-          },
-          recordRetentionByClass: { values: {}, provisional: false, label },
-        },
-      });
       const branches = await db.pharmacyBranch.findMany({
         where: { organizationId: input.organizationId, active: true },
       });
+      // #977 — one placeholder rule set per branch province, so a Sindh branch
+      // is never filed under a Punjab rule set. With no branch the original
+      // Punjab placeholder is still ensured, exactly as before.
+      const identities = new Map<string, ReturnType<typeof placeholderRuleSetIdentity>>();
+      for (const identity of branches.length
+        ? branches.map((branch) => placeholderRuleSetIdentity(branch.provinceCode))
+        : [placeholderRuleSetIdentity(null)]) {
+        if (!identities.has(identity.id)) identities.set(identity.id, identity);
+      }
+      const ruleSetIds: string[] = [];
+      for (const identity of identities.values()) {
+        const ruleSet = await db.jurisdictionRuleSet.upsert({
+          where: { id: identity.id },
+          update: {},
+          create: {
+            id: identity.id,
+            code: identity.code,
+            version: 1,
+            effectiveFrom: new Date('1970-01-01T00:00:00.000Z'),
+            isPlaceholder: true,
+            licenceCategories: { values: ['*'], provisional: false, label },
+            permittedSchedules: { values: ['*'], provisional: false, label },
+            prescriptionOnlyClasses: { values: ['*'], provisional: false, label },
+            prescriptionRetentionDays: { values: {}, provisional: false, label },
+            controlledRegisterFlags: {
+              values: { recordEverySale: true },
+              provisional: false,
+              label,
+            },
+            pharmacistCoverageRule: {
+              values: { dispenseGrantRequired: true },
+              provisional: false,
+              label,
+            },
+            recordRetentionByClass: { values: {}, provisional: false, label },
+          },
+        });
+        ruleSetIds.push(ruleSet.id);
+      }
+      const ruleSetId = ruleSetIds[0]!;
       let created = 0;
       for (const branch of branches) {
         const existing = await db.branchRegulatoryProfile.findFirst({
@@ -1726,7 +1747,7 @@ async function runCommand(
             version: (latest?.version ?? 0) + 1,
             effectiveFrom: branchEffectiveFrom,
             provinceCode: branch.provinceCode,
-            jurisdictionRuleSetId: ruleSet.id,
+            jurisdictionRuleSetId: placeholderRuleSetIdentity(branch.provinceCode).id,
             premises: { label },
             licenceCategory: '*',
             licenceNumber: label,
@@ -1755,7 +1776,7 @@ async function runCommand(
             toStatus: organization.status,
             reason: input.reason,
             actorId: actor.id,
-            metadata: { placeholder: true, operation: 'APPLIED', ruleSetId: ruleSet.id },
+            metadata: { placeholder: true, operation: 'APPLIED', ruleSetId, ruleSetIds },
           },
         });
       }
@@ -1764,7 +1785,7 @@ async function runCommand(
         targetId: input.organizationId,
         organizationId: input.organizationId,
         data: { applied: true },
-        audit: { placeholder: true, ruleSetId: ruleSet.id, reason: input.reason },
+        audit: { placeholder: true, ruleSetId, ruleSetIds, reason: input.reason },
       };
     }
     case 'organization.pharmacy.placeholder.lock': {
