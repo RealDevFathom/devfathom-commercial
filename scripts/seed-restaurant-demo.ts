@@ -410,6 +410,8 @@ type StaffSeed = {
   /** Staff who take tables; orders are attributed round-robin across these. */
   server: boolean;
   manager: boolean;
+  /** Kitchen staff authenticate KDS devices with the kitchen role. */
+  kitchen: boolean;
 };
 
 /** Demo workspace password shared by every seeded login. Local demo only. */
@@ -427,6 +429,7 @@ const STAFF: readonly StaffSeed[] = [
     pin: '205060',
     server: false,
     manager: true,
+    kitchen: false,
   },
   {
     key: 'bilal',
@@ -436,6 +439,7 @@ const STAFF: readonly StaffSeed[] = [
     pin: '310131',
     server: false,
     manager: false,
+    kitchen: false,
   },
   {
     key: 'hina',
@@ -445,6 +449,7 @@ const STAFF: readonly StaffSeed[] = [
     pin: '445566',
     server: true,
     manager: false,
+    kitchen: false,
   },
   {
     key: 'usman',
@@ -454,6 +459,7 @@ const STAFF: readonly StaffSeed[] = [
     pin: '778899',
     server: true,
     manager: false,
+    kitchen: false,
   },
   {
     key: 'kashif',
@@ -463,6 +469,7 @@ const STAFF: readonly StaffSeed[] = [
     pin: '909090',
     server: false,
     manager: false,
+    kitchen: true,
   },
 ];
 
@@ -1356,7 +1363,7 @@ async function seedPeople(tx: Tx): Promise<void> {
 
   for (const member of STAFF) {
     const organizationRoleId =
-      member.key === 'kashif'
+      member.kitchen
         ? kitchenRole.id
         : member.manager
           ? BASE.managerRoleId

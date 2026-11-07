@@ -158,7 +158,8 @@ describe('Restaurant E2E seed restoration guards', () => {
     expect(people).toMatch(
       /organizationId_key:\s*\{ organizationId: BASE\.organizationId, key: 'kitchen' \}/
     );
-    expect(people).toMatch(/member\.key === 'kashif'\s*\? kitchenRole\.id/);
+    expect(demoSeed).toMatch(/title: 'Head Chef',[\s\S]*?kitchen: true/);
+    expect(people).toMatch(/member\.kitchen\s*\? kitchenRole\.id/);
     expect(people.match(/organizationRoleId,/g)).toHaveLength(2);
     expect(verticalCatalog).toMatch(
       /key: 'kitchen',[\s\S]*?capabilities: \[[^\]]*'kitchen:operate'[^\]]*\]/
