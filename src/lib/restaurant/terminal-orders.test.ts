@@ -282,6 +282,31 @@ describe('canonicalJson', () => {
 });
 
 describe('resolveTerminalEffectiveMenu — POS modifier contract', () => {
+  it('looks up channel-specific and all-channel publications for implicit resolution', async () => {
+    const findPublication = vi.fn().mockResolvedValue(null);
+    const db = {
+      restaurantBranchMenuPublication: { findFirst: findPublication },
+    } as unknown as ScopedDb;
+
+    await expect(
+      resolveTerminalEffectiveMenu(db, {
+        branchId: 'branch-1',
+        channel: 'TAKEAWAY',
+        at: new Date('2026-09-01T12:00:00.000Z'),
+      })
+    ).resolves.toBeNull();
+
+    expect(findPublication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          branchId: 'branch-1',
+          status: 'PUBLISHED',
+          OR: [{ channels: { has: 'TAKEAWAY' } }, { channels: { isEmpty: true } }],
+        },
+      })
+    );
+  });
+
   it('projects linked modifier groups and ordered options into the terminal payload', async () => {
     const findPublication = vi.fn().mockResolvedValue({
       id: 'pub-1',
