@@ -4,25 +4,27 @@ This is the starting point for all DevFathom documentation. Find the row that de
 
 ## Start here
 
-| You are…                                     | Start with                                  | Then read                                                                                        |
-| -------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| A pharmacy owner or manager                  | [Product overview](product/overview.md)     | [Pharmacy guide](product/pharmacy-guide.md)                                                      |
-| A pharmacist or counter staff member         | [Pharmacy guide](product/pharmacy-guide.md) | [Glossary](product/glossary.md)                                                                  |
-| In sales, or running a pilot with a customer | [Product overview](product/overview.md)     | [Pharmacy guide](product/pharmacy-guide.md)                                                      |
-| New to the words we use                      | [Glossary](product/glossary.md)             |                                                                                                  |
-| An engineer or coding agent                  | Coming soon: developer onboarding guide     | For now, use [LOCAL_SETUP.md](LOCAL_SETUP.md) and [technical-overview.md](technical-overview.md) |
+| You are…                                     | Start with                                      | Then read                                                                                        |
+| -------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| A pharmacy owner or manager                  | [Product overview](product/overview.md)         | [Pharmacy guide](product/pharmacy-guide.md)                                                      |
+| A pharmacist or counter staff member         | [Pharmacy guide](product/pharmacy-guide.md)     | [Glossary](product/glossary.md)                                                                  |
+| A restaurant owner, manager or cashier       | [Restaurant guide](product/restaurant-guide.md) | [Restaurant glossary](product/restaurant-glossary.md)                                            |
+| In sales, or running a pilot with a customer | [Product overview](product/overview.md)         | [Pharmacy guide](product/pharmacy-guide.md)                                                      |
+| New to the words we use                      | [Glossary](product/glossary.md)                 |                                                                                                  |
+| An engineer or coding agent                  | Coming soon: developer onboarding guide         | For now, use [LOCAL_SETUP.md](LOCAL_SETUP.md) and [technical-overview.md](technical-overview.md) |
 
 ## What is in this folder today
 
 - **[product/overview.md](product/overview.md)**: what DevFathom is and what it does, in plain words.
 - **[product/pharmacy-guide.md](product/pharmacy-guide.md)**: a feature-by-feature guide for pharmacy owners and counter staff, including who is allowed to do what.
 - **[product/glossary.md](product/glossary.md)**: short meanings of the words you will see in the app and in these guides.
+- **[product/restaurant-guide.md](product/restaurant-guide.md)**: a plain-language guide for restaurant owners, managers and cashiers (draft).
+- **[product/restaurant-glossary.md](product/restaurant-glossary.md)**: restaurant words in plain language (draft).
 
 ## Coming next
 
 These guides are planned but not written yet:
 
-- **Restaurant guide**: for restaurant owners, managers and cashiers. Older restaurant notes already live in `product/` and will be brought together into this guide.
 - **Agency guide**: for agency owners and staff.
 - **Developer guides**: setup, how the system is built, roles and permissions, testing, and how to contribute.
 - **Deploy, operations and security guides**: for the technical team and security reviewers.

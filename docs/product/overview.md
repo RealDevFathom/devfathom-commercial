@@ -10,7 +10,8 @@ DevFathom separates each business's information and uses tenant and branch acces
 limit what staff can reach. These controls still need correct setup and ongoing security testing.
 
 DevFathom includes products for **pharmacies**, **restaurants** and **agencies**. This overview
-focuses on pharmacy; restaurant and agency customer guides have not been written yet.
+focuses on pharmacy. For restaurants, see the [restaurant guide](restaurant-guide.md); the agency
+guide has not been written yet.
 
 > TODO(confirm): When DevFathom will be generally available to customers, and whether it is currently offered only as a pilot.
 
