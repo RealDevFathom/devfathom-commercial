@@ -27,7 +27,7 @@ Static checks: `bun run typecheck` (`tsc --noEmit`; give it memory with `NODE_OP
 >
 > **Before every merge**, the deterministic checks run on the AWS worker **on the exact final commit**: lint, typecheck, unit tests, build, Prisma generate and the Docker check. **Nothing merges until they all pass.** Run the same checks locally before you open a PR and paste the results into the PR body. develop currently fails its own unit tests at `1906b530`; Codex will fix it.
 >
-> `main`'s protection is unchanged: it requires two `verify / …` checks (`verify / Lint, typecheck and formatting`, `verify / Tests, RLS, build and end-to-end`), which can't run while Actions is off. `develop` is unprotected, by Saad's decision (10 Nov 2026).
+> `main`'s protection is unchanged: it requires two `verify / …` checks (`verify / Lint, typecheck and formatting`, `verify / Tests, RLS, build and end-to-end`), but no workflow on `main` produces them (the names come from an old workflow that is no longer there), so a PR into `main` can never pass them and can only be merged by an admin, because admins are exempt from `main`'s protection. Nobody should change this unless Saad decides. `develop` is unprotected, by Saad's decision (10 Nov 2026).
 
 | Workflow | Trigger | What it does |
 |---|---|---|
