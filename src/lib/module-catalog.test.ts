@@ -15,6 +15,7 @@ import {
   moduleForPath,
   moduleForProcedure,
   sopDepthDenialMessage,
+  supportsRestaurantPrintSettings,
   verticalForModuleKey,
   type EntitlementSnapshot,
   type SopDepthCapability,
@@ -25,6 +26,19 @@ import {
   packageByKey,
   RESTAURANT_PACKAGES,
 } from './vertical-catalog';
+
+describe('restaurant print settings vertical boundary', () => {
+  it.each([
+    ['RESTAURANT', true],
+    ['PHARMACY', false],
+    ['HOSPITALITY', false],
+    ['AGENCY', false],
+    [undefined, false],
+    [null, false],
+  ] as const)('allows vertical %s: %s', (vertical, allowed) => {
+    expect(supportsRestaurantPrintSettings(vertical)).toBe(allowed);
+  });
+});
 
 describe('module catalog routing', () => {
   it('uses the invitation entitlement for Team while retaining HR on details and stats', () => {

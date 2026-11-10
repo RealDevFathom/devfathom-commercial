@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { verticalForModuleKey } from '@/lib/module-catalog';
 import { inviteCopyForVertical } from './invite-copy';
 
+const restaurantVertical = verticalForModuleKey('restaurant-core')!;
 const flatten = (value: unknown): string => JSON.stringify(value);
 
 describe('inviteCopyForVertical', () => {
@@ -14,7 +16,7 @@ describe('inviteCopyForVertical', () => {
   });
 
   it('keeps restaurant copy for restaurant tenants', () => {
-    const copy = inviteCopyForVertical('RESTAURANT');
+    const copy = inviteCopyForVertical(restaurantVertical);
     expect(copy.staffRoleLabel).toBe('Restaurant staff role');
     expect(copy.staffRoleHelp).toBe('Choose the workspace role that controls restaurant access.');
     expect(copy.titlePlaceholder).toBe('Shift Manager');
@@ -50,7 +52,7 @@ describe('inviteCopyForVertical', () => {
     }
   );
 
-  it.each(['PHARMACY', 'RESTAURANT', 'HOSPITALITY', 'AGENCY'] as const)(
+  it.each(['PHARMACY', restaurantVertical, 'HOSPITALITY', 'AGENCY'] as const)(
     'drops the US placeholder phone for %s',
     (vertical) => {
       expect(flatten(inviteCopyForVertical(vertical))).not.toMatch(/555-01|\+1 \(/);

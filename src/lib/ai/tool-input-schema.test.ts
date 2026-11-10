@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { buildAssistantTools } from './tools';
-import { MODULE_CATALOG } from '@/lib/module-catalog';
+import { MODULE_CATALOG, verticalForModuleKey } from '@/lib/module-catalog';
 
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: () => ({}) }));
 
 describe('provider tool schema contract', () => {
-  it.each(['AGENCY', 'PHARMACY', 'RESTAURANT'] as const)(
+  it.each(['AGENCY', 'PHARMACY', verticalForModuleKey('restaurant-core')!] as const)(
     'serializes every exposed %s tool with an object root',
     (vertical) => {
       for (const role of ['ADMIN', 'HR', 'EMPLOYEE']) {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { verticalForModuleKey } from '@/lib/module-catalog';
 
 const mocks = vi.hoisted(() => ({
   resolveTenantActor: vi.fn(),
@@ -24,7 +25,7 @@ beforeEach(() => {
 
 describe('ReceiptDesignerPage', () => {
   it('renders the designer for restaurant organizations', async () => {
-    mocks.resolveTenantActor.mockResolvedValue(actor('RESTAURANT'));
+    mocks.resolveTenantActor.mockResolvedValue(actor(verticalForModuleKey('restaurant-core')!));
     const page = await ReceiptDesignerPage();
     expect(page.type).toBe(ReceiptDesigner);
     expect(mocks.notFound).not.toHaveBeenCalled();
@@ -35,11 +36,13 @@ describe('ReceiptDesignerPage', () => {
     async (vertical) => {
       mocks.resolveTenantActor.mockResolvedValue(actor(vertical));
       await expect(ReceiptDesignerPage()).rejects.toThrow('NEXT_NOT_FOUND');
+      expect(mocks.notFound).toHaveBeenCalledOnce();
     }
   );
 
   it('returns not found without a tenant actor', async () => {
     mocks.resolveTenantActor.mockResolvedValue(null);
     await expect(ReceiptDesignerPage()).rejects.toThrow('NEXT_NOT_FOUND');
+    expect(mocks.notFound).toHaveBeenCalledOnce();
   });
 });

@@ -52,6 +52,7 @@ vi.mock('@/lib/restaurant/camera-credentials', () => ({ sealCameraCredential: mo
 
 import type { TRPCContext } from '../trpc';
 import { pharmacyCamerasRouter } from './pharmacy-cameras';
+import { verticalForModuleKey } from '@/lib/module-catalog';
 
 type Where = Record<string, unknown>;
 const BRANCHES = [
@@ -382,7 +383,9 @@ describe('configured gateway registration', () => {
         code: 'FORBIDDEN',
       }
     );
-    await expect(caller({ vertical: 'RESTAURANT' }).enrollGateway(input)).rejects.toMatchObject({
+    await expect(
+      caller({ vertical: verticalForModuleKey('restaurant-core')! }).enrollGateway(input)
+    ).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
   });
@@ -678,7 +681,9 @@ describe('live view grants', () => {
       caller({ support: { id: 'support' } }).issueLiveViewGrant({ cameraId: 'cam_1' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(
-      caller({ vertical: 'RESTAURANT' }).issueLiveViewGrant({ cameraId: 'cam_1' })
+      caller({ vertical: verticalForModuleKey('restaurant-core')! }).issueLiveViewGrant({
+        cameraId: 'cam_1',
+      })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     mocks.runtime.mode = 'simulated';
     await expect(caller().issueLiveViewGrant({ cameraId: 'cam_1' })).rejects.toMatchObject({
@@ -730,7 +735,9 @@ describe('configured camera settings', () => {
     await expect(caller({ support: { id: 'support' } }).configure(input)).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
-    await expect(caller({ vertical: 'RESTAURANT' }).configure(input)).rejects.toMatchObject({
+    await expect(
+      caller({ vertical: verticalForModuleKey('restaurant-core')! }).configure(input)
+    ).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
     expect(db.camera.update).not.toHaveBeenCalled();
@@ -751,7 +758,10 @@ describe('configured-mode evidence grants', () => {
   });
 
   it('refuse support sessions and non-pharmacy organizations', async () => {
-    for (const over of [{ support: { id: 'support' } }, { vertical: 'RESTAURANT' }]) {
+    for (const over of [
+      { support: { id: 'support' } },
+      { vertical: verticalForModuleKey('restaurant-core')! },
+    ]) {
       await expect(caller(over).issueViewerGrant({ cameraId: 'cam_1' })).rejects.toMatchObject({
         code: 'FORBIDDEN',
       });

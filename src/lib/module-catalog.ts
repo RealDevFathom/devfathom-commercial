@@ -111,6 +111,18 @@ export function moduleDefinitionForKey(key: string): ModuleDefinition | undefine
 }
 
 /**
+ * Receipt layouts and KOT/KDS/receipt routing belong only to the vertical that
+ * owns Restaurant Core. A module grant cannot admit another vertical, and a
+ * missing tenant vertical must fail closed. Role and procedure checks remain
+ * separate requirements at their existing enforcement points.
+ */
+export function supportsRestaurantPrintSettings(
+  vertical: EntitlementView['vertical'] | null
+): boolean {
+  return vertical != null && vertical === verticalForModuleKey('restaurant-core');
+}
+
+/**
  * Is a module key granted to an organization holding `enabledModules`?
  *
  * BASELINE modules (dashboard, admin, notifications) are always on for every

@@ -30,12 +30,34 @@ export const HOSPITALITY: OrganizationVertical = 'HOSPITALITY';
 // §2 / §2.1 — Vertical definitions
 // ---------------------------------------------------------------------------
 
+export type BaseRole = 'EMPLOYEE' | 'HR' | 'ADMIN';
+
+export interface InviteCopy {
+  staffRoleLabel: string;
+  staffRoleHelp: string;
+  noRoleOption: string;
+  namePlaceholder: string;
+  emailPlaceholder: string;
+  titlePlaceholder: string;
+  phonePlaceholder: string;
+  baseRoleLabels: Record<BaseRole, string>;
+}
+
+const PHONE_PLACEHOLDER = '+92 300 1234567';
+const WORKSPACE_BASE_ROLES: Record<BaseRole, string> = {
+  EMPLOYEE: 'Employee',
+  HR: 'HR',
+  ADMIN: 'Admin',
+};
+
 export type VerticalDefinition = {
   vertical: OrganizationVertical;
   /** UI label shown for the "Organization type" decision (§2). */
   label: string;
   description: string;
   firstRunChecklist: readonly FirstRunChecklistDefinition[];
+  /** Display copy only; role values and authorization are unchanged. */
+  inviteCopy: InviteCopy;
 };
 
 export type FirstRunEvidenceKey =
@@ -205,18 +227,49 @@ export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
     label: 'Agency',
     description: 'Projects, clients, agency finance, HR, and collaboration.',
     firstRunChecklist: [],
+    inviteCopy: {
+      staffRoleLabel: 'Workspace role',
+      staffRoleHelp: 'Choose the workspace role that controls access.',
+      noRoleOption: 'No workspace role',
+      namePlaceholder: 'Ali Raza',
+      emailPlaceholder: 'ali@company.pk',
+      titlePlaceholder: 'Project Manager',
+      phonePlaceholder: PHONE_PLACEHOLDER,
+      baseRoleLabels: WORKSPACE_BASE_ROLES,
+    },
   },
   RESTAURANT: {
     vertical: 'RESTAURANT',
     label: 'Restaurant',
     description: 'Branches, POS, menu, inventory, SOP, loyalty, and insights.',
     firstRunChecklist: RESTAURANT_FIRST_RUN_CHECKLIST,
+    inviteCopy: {
+      staffRoleLabel: 'Restaurant staff role',
+      staffRoleHelp: 'Choose the workspace role that controls restaurant access.',
+      noRoleOption: 'No staff role',
+      namePlaceholder: 'Ali Raza',
+      emailPlaceholder: 'ali@restaurant.pk',
+      titlePlaceholder: 'Shift Manager',
+      phonePlaceholder: PHONE_PLACEHOLDER,
+      baseRoleLabels: WORKSPACE_BASE_ROLES,
+    },
   },
   PHARMACY: {
     vertical: 'PHARMACY',
     label: 'Pharmacy',
     description: 'Counters, dispensing, inventory, procurement, safety, and reporting.',
     firstRunChecklist: PHARMACY_FIRST_RUN_CHECKLIST,
+    inviteCopy: {
+      staffRoleLabel: 'Pharmacy staff role',
+      staffRoleHelp:
+        'Choose the pharmacy role that controls dispensing, catalogue and counter access.',
+      noRoleOption: 'No pharmacy role',
+      namePlaceholder: 'Ali Raza',
+      emailPlaceholder: 'ali@pharmacy.pk',
+      titlePlaceholder: 'Pharmacist',
+      phonePlaceholder: PHONE_PLACEHOLDER,
+      baseRoleLabels: { EMPLOYEE: 'Staff', HR: 'Manager', ADMIN: 'Admin' },
+    },
   },
   // H1-01 — the hospitality vertical's own first-run walk is the property
   // onboarding checklist (`src/lib/hotel/onboarding-checklist.ts`), which is
@@ -229,8 +282,33 @@ export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
     label: 'Hospitality',
     description: 'Properties, reservations, front desk, folio, night audit, and reporting.',
     firstRunChecklist: [],
+    inviteCopy: {
+      staffRoleLabel: 'Hotel staff role',
+      staffRoleHelp: 'Choose the hotel role that controls front desk and housekeeping access.',
+      noRoleOption: 'No hotel role',
+      namePlaceholder: 'Ali Raza',
+      emailPlaceholder: 'ali@hotel.pk',
+      titlePlaceholder: 'Front Desk Agent',
+      phonePlaceholder: PHONE_PLACEHOLDER,
+      baseRoleLabels: WORKSPACE_BASE_ROLES,
+    },
   },
 };
+
+/**
+ * Team invite and member-edit copy comes from the exhaustive vertical registry.
+ * Anonymous invite acceptance keeps the neutral workspace fallback.
+ */
+export function inviteCopyForVertical(
+  vertical: OrganizationVertical | null | undefined
+): InviteCopy {
+  const v = vertical ?? AGENCY;
+  if (!Object.prototype.hasOwnProperty.call(VERTICALS, v)) {
+    throw new Error(`Unhandled vertical: ${String(v)}`);
+  }
+  const copy = VERTICALS[v].inviteCopy;
+  return { ...copy, baseRoleLabels: { ...copy.baseRoleLabels } };
+}
 
 export const ALL_VERTICALS: readonly OrganizationVertical[] = [
   'AGENCY',

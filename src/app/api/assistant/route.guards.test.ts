@@ -42,6 +42,7 @@ import { clearRateLimit } from '@/lib/rate-limit';
 import { assistantRateKeys } from '@/lib/ai/assistant-request';
 import { DOSING_REJECTED_TEXT, GROUNDING_REJECTED_TEXT } from '@/lib/ai/grounding';
 import { TOOL_CALL_LIMIT_MESSAGE } from '@/lib/ai/tool-call-limit';
+import { verticalForModuleKey } from '@/lib/module-catalog';
 import { POST } from './route';
 
 const usage = {
@@ -189,7 +190,10 @@ describe('assistant turn guards', () => {
   });
 
   it('replaces dosing instructions in any vertical', async () => {
-    mocks.entitlements.mockResolvedValue({ vertical: 'RESTAURANT', enabledModules: ['chat'] });
+    mocks.entitlements.mockResolvedValue({
+      vertical: verticalForModuleKey('restaurant-core')!,
+      enabledModules: ['chat'],
+    });
     scriptModel([textStep('Give one tablet twice a day after meals.')]);
     const { text, body } = await streamedText(await POST(request('How should my child take it?')));
     expect(text).toBe(DOSING_REJECTED_TEXT);

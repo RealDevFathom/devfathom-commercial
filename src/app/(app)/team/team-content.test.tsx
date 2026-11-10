@@ -1,9 +1,11 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { verticalForModuleKey, type EntitlementView } from '@/lib/module-catalog';
 
 const state = vi.hoisted(() => ({
   role: 'ADMIN',
-  vertical: 'RESTAURANT' as 'RESTAURANT' | 'PHARMACY',
+  // The catalog-derived tenant is installed in beforeEach, after imports resolve.
+  vertical: undefined as EntitlementView['vertical'],
   modules: ['admin'] as string[],
   directory: vi.fn(() => ({ data: [], isLoading: false })),
   departments: {
@@ -42,7 +44,7 @@ import { AddMemberModal, TeamContent } from './team-content';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  state.vertical = 'RESTAURANT';
+  state.vertical = verticalForModuleKey('restaurant-core')!;
   state.departments.data = [
     { key: 'COUNTER', name: 'Counter', active: true },
     { key: 'OLD', name: 'Old department', active: false },

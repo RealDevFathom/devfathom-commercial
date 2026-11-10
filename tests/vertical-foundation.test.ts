@@ -683,29 +683,6 @@ describe('§9 contract item 6 — restaurant activation preflight matrix', () =>
 // ---------------------------------------------------------------------------
 describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit', () => {
   const APPROVED_EXACT_FILES = new Set([
-    // Existing restaurant-only receipt layout and printer settings boundaries;
-    // the focused fixtures prove other verticals cannot enter or render them.
-    'src/app/(app)/settings/receipts/page.tsx',
-    'src/app/(app)/settings/receipts/page.test.tsx',
-    'src/app/(app)/settings/settings-content.tsx',
-    'src/app/(app)/settings/settings-entitlements.test.tsx',
-    'src/app/(app)/settings/settings-print-routing-vertical.test.tsx',
-    // Centralized invite display copy and its consumers' fixtures. These labels
-    // do not resolve capabilities or change the submitted base-role values.
-    'src/lib/team/invite-copy.ts',
-    'src/lib/team/invite-copy.test.ts',
-    'src/app/(app)/team/team-content.test.tsx',
-    // Existing cross-vertical safety, tool schema and notification fixtures.
-    'src/app/api/assistant/route.guards.test.ts',
-    'src/lib/ai/tool-input-schema.test.ts',
-    'src/lib/pharmacy/accounts/fiscal-exceptions.reader.test.ts',
-    'src/server/routers/team.notifications.test.ts',
-    // Pharmacy camera fixtures explicitly reject restaurant tenants.
-    'src/app/api/pharmacy/cameras/[cameraId]/stream/route.test.ts',
-    'src/server/routers/pharmacy-cameras.live.test.ts',
-    // The retention concurrency fixture inserts its own restaurant organization;
-    // it adds no production vertical branch.
-    'src/lib/restaurant/menu-import-concurrency.db.test.ts',
     // b01f8aec: prior catalogs stay intact in additive Hotel integration fixtures.
     'src/lib/hotel/foundation.test.ts',
     // 5c7be21b: Hotel maintenance denies the wrong vertical.

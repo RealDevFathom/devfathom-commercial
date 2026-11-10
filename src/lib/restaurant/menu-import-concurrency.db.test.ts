@@ -11,6 +11,7 @@ import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { verticalForModuleKey } from '@/lib/module-catalog';
 import { purgeStaleMenuImports, type MenuImportRuntime } from './menu-import';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -35,8 +36,8 @@ describeIfDatabase('menu import retention concurrency', () => {
     await commitConnection.query(
       `INSERT INTO organizations
          (id, slug, "legalName", "displayName", vertical, "updatedAt")
-       VALUES ($1, $1, $1, $1, 'RESTAURANT', now())`,
-      [organizationId]
+       VALUES ($1, $1, $1, $1, $2, now())`,
+      [organizationId, verticalForModuleKey('restaurant-core')!]
     );
     await commitConnection.query(
       `INSERT INTO restaurant_menu_imports

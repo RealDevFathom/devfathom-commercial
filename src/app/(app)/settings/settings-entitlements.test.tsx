@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { EntitlementView } from '@/lib/module-catalog';
+import { verticalForModuleKey, type EntitlementView } from '@/lib/module-catalog';
 
 type MutationOptions = {
   onError?: (error: { message: string; data?: { code?: string } }) => void;
@@ -287,7 +287,7 @@ describe('Receipt designer link', () => {
   it('links to the receipt designer for restaurant organizations', () => {
     renderSection(<ReceiptDesignerLink />, {
       ...entitlementView(true, true),
-      vertical: 'RESTAURANT',
+      vertical: verticalForModuleKey('restaurant-core')!,
     });
     expect(screen.getByRole('link', { name })).toHaveAttribute('href', '/settings/receipts');
   });

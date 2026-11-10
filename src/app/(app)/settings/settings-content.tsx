@@ -48,7 +48,7 @@ import { trpc } from '@/lib/trpc';
 import { PrintRoutingSection } from '@/components/restaurant/print-routing-section';
 export { PrintRoutingSection };
 import { useEntitlements } from '@/components/entitlements-provider';
-import type { EntitlementView } from '@/lib/module-catalog';
+import { supportsRestaurantPrintSettings, type EntitlementView } from '@/lib/module-catalog';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
@@ -99,7 +99,7 @@ function disabledModuleMessage(module: EntitlementModule, key: 'api' | 'webhooks
 /** Print routing configures restaurant KOT/KDS/receipt printers; other verticals never see it. */
 export function RestaurantPrintRoutingSection() {
   const { vertical } = useEntitlements();
-  return vertical === 'RESTAURANT' ? <PrintRoutingSection /> : null;
+  return supportsRestaurantPrintSettings(vertical) ? <PrintRoutingSection /> : null;
 }
 
 export function SettingsContent() {
@@ -186,7 +186,7 @@ export function SettingsContent() {
 
 // The receipt designer edits restaurant branch layouts; fail closed for every other vertical.
 export function ReceiptDesignerLink() {
-  if (useEntitlements().vertical !== 'RESTAURANT') return null;
+  if (!supportsRestaurantPrintSettings(useEntitlements().vertical)) return null;
   return (
     <Link
       href="/settings/receipts"

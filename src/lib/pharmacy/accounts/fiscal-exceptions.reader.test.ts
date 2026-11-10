@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as abac from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { verticalForModuleKey } from '@/lib/module-catalog';
 import { readFiscalExceptions, type FiscalExceptionContext } from './fiscal-exceptions.reader';
 
 const filters = { branchId: 'branch-1', from: '2026-07-01', to: '2026-10-01' };
@@ -61,7 +62,9 @@ describe('fiscal exception reader access and query isolation', () => {
     if (variant === 'foreign-session') user.organizationId = 'foreign';
     if (variant === 'foreign-entitlements') ctx.entitlements.organizationId = 'foreign';
     if (variant === 'inactive-org') ctx.organization!.status = 'SUSPENDED';
-    if (variant === 'wrong-vertical') ctx.organization!.vertical = 'RESTAURANT';
+    if (variant === 'wrong-vertical') {
+      ctx.organization!.vertical = verticalForModuleKey('restaurant-core')!;
+    }
     if (variant === 'unlicensed') ctx.entitlements.enabledModules = [];
     await expect(readFiscalExceptions(ctx, filters)).rejects.toMatchObject({
       code: variant === 'missing-session' ? 'UNAUTHORIZED' : 'FORBIDDEN',

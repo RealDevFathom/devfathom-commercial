@@ -41,6 +41,7 @@ vi.mock('@/lib/auth/session-state', () => ({ responseForPasswordChange: () => nu
 vi.mock('@/lib/cameras/camera-gateway-runtime', () => ({ cameraGatewayRuntime: mocks.runtime }));
 
 import { CameraTransportError } from '@/lib/cameras/mediamtx';
+import { verticalForModuleKey } from '@/lib/module-catalog';
 import { GET } from './route';
 
 type Where = Record<string, unknown>;
@@ -243,7 +244,10 @@ describe('denials before any upstream read', () => {
     ['a support session', () => (mocks.actor = actor({ support: { id: 'support_1' } })), 403],
     [
       'a restaurant tenant',
-      () => (mocks.actor = actor({ organization: { vertical: 'RESTAURANT' } })),
+      () =>
+        (mocks.actor = actor({
+          organization: { vertical: verticalForModuleKey('restaurant-core')! },
+        })),
       403,
     ],
     [
