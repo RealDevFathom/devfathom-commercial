@@ -175,12 +175,20 @@ function fixture() {
               serviceChargePolicyVersion: null,
               deliveryFulfillment: null,
               items: [
-                { id: 'item', status: 'SENT', unitPrice: D('4000'), quantity: 1, modifiers: [] },
+                {
+                  id: 'item',
+                  status: 'SENT',
+                  remakeOfItemId: null,
+                  unitPrice: D('4000'),
+                  quantity: 1,
+                  modifiers: [],
+                },
               ],
             }
           : null
       ),
       update: vi.fn(async () => undefined),
+      count: vi.fn(async () => 0),
     },
     restaurantOrderTable: { updateMany: vi.fn(async () => ({ count: 1 })) },
     restaurantBill: {

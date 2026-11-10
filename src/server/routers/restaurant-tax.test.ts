@@ -214,15 +214,20 @@ describe('restaurant tax activation router', () => {
       replaceOpenProfile: true,
     });
 
+    // The successor's calendar date starts at midnight in the Karachi branch.
     expect(db.restaurantTaxRuleVersion.updateMany).toHaveBeenCalledWith({
       where: { profileVersionId: 'profile_open', effectiveTo: null },
-      data: { effectiveTo: new Date(base.effectiveFrom) },
+      data: { effectiveTo: new Date('2026-06-30T19:00:00.000Z') },
     });
     expect(db.restaurantTaxProfileVersion.update).toHaveBeenCalledWith({
       where: { id: 'profile_open' },
-      data: { effectiveTo: new Date(base.effectiveFrom) },
+      data: { effectiveTo: new Date('2026-06-30T19:00:00.000Z') },
     });
-    expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalled();
+    expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ effectiveFrom: new Date('2026-06-30T19:00:00.000Z') }),
+      })
+    );
   });
 
   it.each([undefined, false])(

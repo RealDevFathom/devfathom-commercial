@@ -196,12 +196,18 @@ describe('margin explanation (finance-reports.ts explainGrossMargin)', () => {
 });
 
 describe('metric contract (reports.ts PHARMACY_METRIC_CONTRACT)', () => {
-  it('publishes 23 metrics; sales and margin are on different date bases', () => {
-    expect(PHARMACY_METRIC_CONTRACT).toHaveLength(23);
+  it('publishes 24 metrics; sales and margin are on different date bases', () => {
+    expect(PHARMACY_METRIC_CONTRACT).toHaveLength(24);
     const byKey = Object.fromEntries(PHARMACY_METRIC_CONTRACT.map((m) => [m.key, m]));
     expect(byKey.salesMinor?.scope).toBe('selected branches and business dates');
     expect(byKey.marginMinor?.scope).toBe('selected branches and UTC posting dates');
     expect(byKey.refundsMinor?.source).toBe('pharmacy_refunds');
+    expect(byKey.lostDemandEvents).toMatchObject({
+      source: 'pharmacy_unfulfilled_demand_events',
+      scope: 'selected branches and event creation dates',
+      permission: 'reports:operational',
+      drillThrough: '/pharmacy/reports?section=demand',
+    });
   });
 
   it('marks exactly three metrics as having no source', () => {
@@ -255,6 +261,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
       },
     ],
     [{ open: 3, recommended: 1 }],
+    [{ value: 7 }], // Recorded lost demand precedes expiry, safety and fiscal reads.
     [{ d30: 100, d60: 250, d90: 250, d180: 900, quarantine: 4 }],
     [{ value: 2 }],
     [{ aging: 1, rejected: 2 }],
@@ -279,6 +286,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
       refundsMinor: 700,
       cashVarianceMinor: -50,
       openStockSignals: 3,
+      lostDemandEvents: 7,
       recommendedOrders: 1,
       expiryValueMinor30: 100,
       expiryValueMinor60: 250,
@@ -313,10 +321,10 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     expect(where.effectiveFrom.lte.toISOString()).toBe('2026-03-10T12:00:00.000Z');
   });
 
-  it('issues branch-context Khata reads in addition to five aggregate reads', async () => {
+  it('issues branch-context Khata reads in addition to six aggregate reads', async () => {
     const { db, calls } = makeDb(populated, populatedCounts);
     await readPharmacyOwnerCommandCentre(db, filters);
-    expect(calls).toHaveLength(9);
+    expect(calls).toHaveLength(10);
     const money = calls[0];
     expect(money?.sql).toContain('s."businessDate">=');
     expect(money?.sql).toContain('entry."occurredAt" >=');
@@ -324,13 +332,23 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
       '2026-03-01T00:00:00.000Z',
       '2026-03-02T00:00:00.000Z',
     ]);
+    const lostDemand = calls[2];
+    expect(lostDemand?.sql).toContain('FROM "pharmacy_unfulfilled_demand_events"');
+    expect(lostDemand?.sql).toContain('"organizationId"=current_setting(');
+    expect(lostDemand?.sql).toContain('"branchId" IN (?)');
+    expect(lostDemand?.sql).toContain('"createdAt">=? AND "createdAt"<?');
+    expect(lostDemand?.values).toEqual([
+      BRANCH,
+      new Date('2026-03-01T00:00:00.000Z'),
+      new Date('2026-03-02T00:00:00.000Z'),
+    ]);
     // Expiry and fiscal aging use the database clock, not the JS clock used for freshness.
-    expect(calls[2]?.sql).toContain('CURRENT_TIMESTAMP');
-    expect(calls[4]?.sql).toContain('CURRENT_TIMESTAMP');
-    expect(calls[5]?.sql).toContain("current_setting('app.current_branch_id'");
-    expect(calls[6]?.sql).toContain("set_config('app.current_branch_id'");
-    expect(calls[7]?.sql).toContain('FROM "pharmacy_khata_events" charge');
-    expect(calls[8]?.sql).toContain("set_config('app.current_branch_id'");
+    expect(calls[3]?.sql).toContain('CURRENT_TIMESTAMP');
+    expect(calls[5]?.sql).toContain('CURRENT_TIMESTAMP');
+    expect(calls[6]?.sql).toContain("current_setting('app.current_branch_id'");
+    expect(calls[7]?.sql).toContain("set_config('app.current_branch_id'");
+    expect(calls[8]?.sql).toContain('FROM "pharmacy_khata_events" charge');
+    expect(calls[9]?.sql).toContain("set_config('app.current_branch_id'");
   });
 
   it('salesMinor is gross of returns: no return-line or refund term in the sales expression', async () => {

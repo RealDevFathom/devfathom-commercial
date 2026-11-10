@@ -1638,6 +1638,9 @@ describe('manual quarantine resolution authorization', () => {
   it.each(['release', 'write-off'])(
     'refuses regulatory stock through inventory-only %s before posting movements',
     async (operation) => {
+      // Reach the regulatory-stock guard with a valid independent witness;
+      // missing/ineligible witnesses are refused by writeOff before stock reads.
+      db.user.findFirst.mockResolvedValue({ id: 'witness' });
       db.pharmacyRecallQuarantineAction.findMany.mockResolvedValue([
         { quantityUnits: 20, heldMovementId: 'recall-held-1' },
       ]);
@@ -1659,6 +1662,19 @@ describe('manual quarantine resolution authorization', () => {
         code: 'BAD_REQUEST',
         message: 'INSUFFICIENT_STOCK',
       });
+      if (operation === 'write-off') {
+        expect(db.user.findFirst).toHaveBeenCalledWith({
+          where: {
+            id: 'witness',
+            organizationId: 'org_a',
+            status: 'ACTIVE',
+            pharmacyBranchAssignments: {
+              some: { organizationId: 'org_a', branchId: 'branch_a', active: true },
+            },
+          },
+          select: { id: true },
+        });
+      }
       expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
       expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
     }

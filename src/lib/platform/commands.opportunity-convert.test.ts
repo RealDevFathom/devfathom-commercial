@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   jobCreate: vi.fn(),
   lifecycleCreate: vi.fn(),
   opportunityFindUnique: vi.fn(),
+  opportunityUpdateMany: vi.fn(),
   opportunityUpdate: vi.fn(),
   stageEventCreate: vi.fn(),
   accountUpdate: vi.fn(),
@@ -42,6 +43,7 @@ const platformDb = {
   organizationLifecycleEvent: { create: mocks.lifecycleCreate },
   platformOpportunity: {
     findUnique: mocks.opportunityFindUnique,
+    updateMany: mocks.opportunityUpdateMany,
     update: mocks.opportunityUpdate,
   },
   platformOpportunityStageEvent: { create: mocks.stageEventCreate },
@@ -78,6 +80,8 @@ describe('opportunity conversion', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.lockOpportunity.mockResolvedValue([]);
+    mocks.opportunityFindUnique.mockResolvedValue(null);
+    mocks.opportunityUpdateMany.mockReset();
     mocks.auditCreate.mockResolvedValue({ id: 'failure_audit_1' });
   });
 
@@ -110,19 +114,20 @@ describe('opportunity conversion', () => {
   });
 
   it.each(conversionActions)(
-    '%s locks and rejects a nonexistent opportunity before provisioning anything',
+    '%s rejects a nonexistent opportunity before locking or provisioning anything',
     async (action) => {
       const error = await executePlatformCommand(actor, action, payload, request).catch(
         (caught: unknown) => caught
       );
 
       expect(error).toBeInstanceOf(PlatformSecurityError);
-      expect(error).toMatchObject({ status: 400, message: 'Opportunity not found.' });
-      const [query, opportunityId] = mocks.lockOpportunity.mock.calls[0];
-      expect(Array.from(query).join('$1')).toMatch(
-        /SELECT id, "convertedOrganizationId"\s+FROM platform_opportunities\s+WHERE id = \$1\s+FOR UPDATE/
-      );
-      expect(opportunityId).toBe(payload.opportunityId);
+      expect(error).toMatchObject({ status: 409, message: 'Opportunity is not eligible for conversion.' });
+      expect(mocks.opportunityFindUnique).toHaveBeenCalledWith({
+        where: { id: payload.opportunityId },
+        select: { id: true, accountId: true, stage: true, convertedOrganizationId: true },
+      });
+      expect(mocks.opportunityUpdateMany).not.toHaveBeenCalled();
+      expect(mocks.lockOpportunity).not.toHaveBeenCalled();
       expect(mocks.packageFindUnique).not.toHaveBeenCalled();
       expect(mocks.organizationCreate).not.toHaveBeenCalled();
       expect(mocks.roleCreate).not.toHaveBeenCalled();
@@ -134,7 +139,6 @@ describe('opportunity conversion', () => {
       expect(mocks.deploymentCreate).not.toHaveBeenCalled();
       expect(mocks.jobCreate).not.toHaveBeenCalled();
       expect(mocks.lifecycleCreate).not.toHaveBeenCalled();
-      expect(mocks.opportunityFindUnique).not.toHaveBeenCalled();
       expect(mocks.opportunityUpdate).not.toHaveBeenCalled();
       expect(mocks.stageEventCreate).not.toHaveBeenCalled();
       expect(mocks.accountUpdate).not.toHaveBeenCalled();
@@ -151,22 +155,53 @@ describe('opportunity conversion', () => {
   it.each(conversionActions)(
     '%s rejects a sequential retry after the opportunity was converted',
     async (action) => {
-      mocks.lockOpportunity.mockResolvedValue([
-        { id: payload.opportunityId, convertedOrganizationId: 'organization_existing' },
-      ]);
+      mocks.opportunityFindUnique.mockResolvedValue({
+        id: payload.opportunityId,
+        accountId: 'account_1',
+        stage: 'WON',
+        convertedOrganizationId: 'organization_existing',
+      });
 
       await expect(executePlatformCommand(actor, action, payload, request)).rejects.toMatchObject({
         status: 409,
-        message: 'Opportunity has already been converted.',
+        message: 'Opportunity is not eligible for conversion.',
       });
 
       expect(mocks.packageFindUnique).not.toHaveBeenCalled();
       expect(mocks.organizationCreate).not.toHaveBeenCalled();
-      expect(mocks.opportunityFindUnique).not.toHaveBeenCalled();
+      expect(mocks.opportunityFindUnique).toHaveBeenCalledOnce();
+      expect(mocks.opportunityUpdateMany).not.toHaveBeenCalled();
+      expect(mocks.lockOpportunity).not.toHaveBeenCalled();
       expect(mocks.opportunityUpdate).not.toHaveBeenCalled();
       expect(mocks.jobCreate).not.toHaveBeenCalled();
     }
   );
+
+  it.each(conversionActions)('%s still checks the locked opportunity before provisioning', async (action) => {
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: payload.opportunityId,
+      accountId: 'account_1',
+      stage: 'PROPOSAL',
+      convertedOrganizationId: null,
+    });
+    mocks.opportunityUpdateMany.mockResolvedValue({ count: 1 });
+    for (const [rows, error] of [
+      [[], { status: 400, message: 'Opportunity not found.' }],
+      [[{ id: payload.opportunityId, convertedOrganizationId: 'organization_existing' }],
+        { status: 409, message: 'Opportunity has already been converted.' }],
+    ] as const) {
+      mocks.lockOpportunity
+        .mockResolvedValueOnce([{ organizationId: null }])
+        .mockResolvedValueOnce(rows);
+      await expect(executePlatformCommand(actor, action, payload, request)).rejects.toMatchObject(error);
+      expect(mocks.packageFindUnique).not.toHaveBeenCalled();
+      expect(mocks.organizationCreate).not.toHaveBeenCalled();
+      expect(mocks.jobCreate).not.toHaveBeenCalled();
+      expect(mocks.opportunityUpdate).not.toHaveBeenCalled();
+      expect(mocks.stageEventCreate).not.toHaveBeenCalled();
+      expect(mocks.accountUpdate).not.toHaveBeenCalled();
+    }
+  });
 
   it.each(
     conversionActions.flatMap((first) =>
@@ -175,15 +210,22 @@ describe('opportunity conversion', () => {
   )(
     'serializes concurrent %s and %s conversions and provisions exactly one tenant and job',
     async (firstAction, secondAction) => {
-      let convertedOrganizationId: string | null = null;
-      let lockAttempt = 0;
-      mocks.lockOpportunity.mockImplementation(async () => {
-        lockAttempt += 1;
-        if (lockAttempt > 1) {
-          await vi.waitUntil(() => convertedOrganizationId !== null);
+      let finishConversion!: () => void;
+      const linked = new Promise<void>((resolve) => { finishConversion = resolve; });
+      let claimAttempt = 0;
+      mocks.opportunityUpdateMany.mockImplementation(async () => {
+        claimAttempt += 1;
+        if (claimAttempt > 1) {
+          // PostgreSQL rechecks the conditional claim after the winner releases
+          // its row lock. Both callers initially read the same unlinked deal.
+          await linked;
+          return { count: 0 };
         }
-        return [{ id: payload.opportunityId, convertedOrganizationId }];
+        return { count: 1 };
       });
+      mocks.lockOpportunity
+        .mockResolvedValueOnce([{ organizationId: null }])
+        .mockResolvedValueOnce([{ id: payload.opportunityId, convertedOrganizationId: null }]);
       mocks.packageFindUnique.mockResolvedValue({
         id: payload.packageId,
         active: true,
@@ -203,18 +245,15 @@ describe('opportunity conversion', () => {
         id: payload.opportunityId,
         accountId: 'account_1',
         stage: 'PROPOSAL',
+        convertedOrganizationId: null,
       });
       mocks.opportunityUpdate.mockImplementation(async ({ data }) => {
-        convertedOrganizationId = data.convertedOrganizationId;
-        // Keep the winning transaction open until the competing request has
-        // attempted its row lock, as PostgreSQL does until commit.
-        await vi.waitUntil(() => lockAttempt >= 2);
+        finishConversion();
         return { id: payload.opportunityId, ...data };
       });
       mocks.auditCreate.mockResolvedValue({ id: 'audit_1' });
 
       const first = executePlatformCommand(actor, firstAction, payload, request);
-      await vi.waitFor(() => expect(mocks.organizationCreate).toHaveBeenCalledTimes(1));
       const second = executePlatformCommand(
         actor,
         secondAction,
@@ -225,16 +264,36 @@ describe('opportunity conversion', () => {
       const results = await Promise.allSettled([first, second]);
       expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
       expect(results.find((result) => result.status === 'rejected')).toMatchObject({
-        reason: { status: 409, message: 'Opportunity has already been converted.' },
+        reason: { status: 409, message: 'Opportunity is not eligible for conversion.' },
       });
+      expect(mocks.opportunityUpdateMany).toHaveBeenCalledTimes(2);
+      expect(mocks.opportunityUpdateMany).toHaveBeenNthCalledWith(1, {
+        where: { id: payload.opportunityId, stage: 'PROPOSAL', convertedOrganizationId: null },
+        data: { stage: 'WON', wonAt: expect.any(Date) },
+      });
+      expect(mocks.opportunityUpdateMany).toHaveBeenNthCalledWith(2, {
+        where: { id: payload.opportunityId, stage: 'PROPOSAL', convertedOrganizationId: null },
+        data: { stage: 'WON', wonAt: expect.any(Date) },
+      });
+      expect(mocks.lockOpportunity).toHaveBeenCalledTimes(2);
+      const [accountQuery] = mocks.lockOpportunity.mock.calls[0];
+      expect(accountQuery.sql).toMatch(/FROM "platform_accounts"\s+WHERE "id" = \?\s+FOR UPDATE/);
+      expect(accountQuery.values).toEqual(['account_1']);
+      const [query, opportunityId] = mocks.lockOpportunity.mock.calls[1];
+      expect(Array.from(query).join('$1')).toMatch(
+        /SELECT id, "convertedOrganizationId"\s+FROM platform_opportunities\s+WHERE id = \$1\s+FOR UPDATE/
+      );
+      expect(opportunityId).toBe(payload.opportunityId);
+      expect(mocks.lockOpportunity).toHaveBeenCalledBefore(mocks.organizationCreate);
+      expect(mocks.lockOpportunity.mock.invocationCallOrder[1]).toBeLessThan(
+        mocks.organizationCreate.mock.invocationCallOrder[0]
+      );
       expect(mocks.organizationCreate).toHaveBeenCalledTimes(1);
       expect(mocks.jobCreate).toHaveBeenCalledTimes(1);
       expect(mocks.opportunityUpdate).toHaveBeenCalledTimes(1);
       expect(mocks.opportunityUpdate).toHaveBeenCalledWith({
         where: { id: payload.opportunityId },
         data: {
-          stage: 'WON',
-          wonAt: expect.any(Date),
           convertedOrganizationId: 'organization_1',
         },
       });
@@ -242,6 +301,13 @@ describe('opportunity conversion', () => {
       expect(mocks.accountUpdate).toHaveBeenCalledWith({
         where: { id: 'account_1' },
         data: { organizationId: 'organization_1', status: 'CUSTOMER' },
+      });
+      expect(mocks.stageEventCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          opportunityId: payload.opportunityId,
+          fromStage: 'PROPOSAL',
+          toStage: 'WON',
+        }),
       });
     }
   );

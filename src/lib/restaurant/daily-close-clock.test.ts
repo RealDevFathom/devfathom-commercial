@@ -47,6 +47,7 @@ function closeDb() {
       create: vi.fn().mockResolvedValue({ id: 'close-1' }),
     },
     restaurantBill: { findMany: vi.fn().mockResolvedValue([]) },
+    restaurantOrder: { count: vi.fn().mockResolvedValue(0) },
     restaurantTender: { findMany: vi.fn().mockResolvedValue([]) },
     restaurantRefund: { findMany: vi.fn().mockResolvedValue([]) },
     restaurantDrawerSession: { findMany: vi.fn().mockResolvedValue([]) },

@@ -257,6 +257,9 @@ describe('crm.opportunity.convert eligibility', () => {
       id: 'opp_1', accountId: 'account_1', stage, convertedOrganizationId: null,
     });
     mocks.opportunityUpdateMany.mockResolvedValue({ count: 1 });
+    mocks.accountForUpdate
+      .mockResolvedValueOnce([{ organizationId: null }])
+      .mockResolvedValueOnce([{ id: 'opp_1', convertedOrganizationId: null }]);
 
     await executePlatformCommand(
       actor,
@@ -269,8 +272,19 @@ describe('crm.opportunity.convert eligibility', () => {
       where: { id: 'opp_1', stage, convertedOrganizationId: null },
       data: { stage: 'WON', wonAt: expect.any(Date) },
     });
-    expect(mocks.accountForUpdate).toHaveBeenCalledOnce();
+    expect(mocks.accountForUpdate).toHaveBeenCalledTimes(2);
+    const [accountQuery] = mocks.accountForUpdate.mock.calls[0];
+    expect(accountQuery.sql).toMatch(/FROM "platform_accounts"\s+WHERE "id" = \?\s+FOR UPDATE/);
+    expect(accountQuery.values).toEqual(['account_1']);
+    const [opportunityQuery, opportunityId] = mocks.accountForUpdate.mock.calls[1];
+    expect(Array.from(opportunityQuery).join('$1')).toMatch(
+      /SELECT id, "convertedOrganizationId"\s+FROM platform_opportunities\s+WHERE id = \$1\s+FOR UPDATE/
+    );
+    expect(opportunityId).toBe('opp_1');
     expect(mocks.accountForUpdate).toHaveBeenCalledBefore(platformDb.organization.create);
+    expect(mocks.accountForUpdate.mock.invocationCallOrder[1]).toBeLessThan(
+      platformDb.organization.create.mock.invocationCallOrder[0]
+    );
     expect(created.opportunityUpdate).toContainEqual({ convertedOrganizationId: 'org_new' });
     expect(created.opportunityStageEvent).toContainEqual(
       expect.objectContaining({

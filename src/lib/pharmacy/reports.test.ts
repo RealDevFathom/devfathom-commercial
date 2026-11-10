@@ -8,7 +8,7 @@ import {
 
 describe('PH-RPT metric contract', () => {
   it('defines a source, scope, permission, and drill-through for every asserted metric', () => {
-    expect(PHARMACY_METRIC_CONTRACT).toHaveLength(23);
+    expect(PHARMACY_METRIC_CONTRACT).toHaveLength(24);
     for (const metric of PHARMACY_METRIC_CONTRACT) {
       expect(metric.key).toBeTruthy();
       expect(metric.definition).toBeTruthy();

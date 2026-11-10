@@ -174,7 +174,9 @@ it('shows explicit unavailable model status without inventing recommendations', 
     reviews: [],
   });
   render(await Page({ searchParams: Promise.resolve({}) }));
-  expect(screen.getByText(/AI insight unavailable \(CONFIGURATION\)/)).toBeInTheDocument();
+  expect(screen.getByText('Suggestions unavailable', { exact: true })).toBeInTheDocument();
+  expect(screen.getByText("AI suggestions aren't set up yet. Contact support.")).toBeInTheDocument();
+  expect(screen.queryByText(/CONFIGURATION/)).not.toBeInTheDocument();
   expect(screen.getByText('e1: 25')).toBeInTheDocument();
   expect(screen.getByText(/Coverage: partial; cohort: 12/)).toHaveTextContent(
     'anonymous receipts excluded'

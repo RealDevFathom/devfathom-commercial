@@ -146,7 +146,7 @@ describe('restaurant tax configuration UI', () => {
     expect(mocks.activate).toHaveBeenLastCalledWith({
       branchId: 'branch_1',
       profileId: 'PK-ICT-RESTAURANT',
-      effectiveFrom: '2026-07-01T00:00:00.000Z',
+      effectiveFrom: '2026-07-01',
       approvalReference: 'Memo 42',
       accountantConfirmation: true,
       eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],

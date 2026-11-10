@@ -70,7 +70,19 @@ function setup(role = 'ADMIN') {
       })),
     },
     pharmacyBranch: { findFirst: vi.fn(async () => ({ id: 'branch-a' })) },
-    user: { findFirst: vi.fn(async () => ({ id: 'owner-a' })) },
+    user: {
+      findFirst: vi.fn(async () => ({ id: 'owner-a' })),
+      // Growth snapshots require both report capabilities through the real ABAC engine.
+      findUnique: vi.fn(async () => ({
+        organizationRole: {
+          permissions: [
+            { capability: 'reports:operational', effect: 'ALLOW' as const },
+            { capability: 'reports:financial', effect: 'ALLOW' as const },
+          ],
+        },
+        permissionOverrides: [] as Array<{ capability: string; effect: 'ALLOW' | 'DENY' }>,
+      })),
+    },
     pharmacySale: {
       findMany: vi.fn(async () => [
         {
@@ -248,6 +260,26 @@ describe('reachable pharmacy basket workflow', () => {
     await expect(caller.generateBaskets(generate)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacySale.findMany).not.toHaveBeenCalled();
   });
+
+  it.each(['reports:operational', 'reports:financial'] as const)(
+    'refuses an owner with a current %s DENY before reading or saving evidence',
+    async (capability) => {
+      const { caller, db } = setup();
+      const permissions = await db.user.findUnique();
+      db.user.findUnique.mockResolvedValue({
+        ...permissions,
+        permissionOverrides: [{ capability, effect: 'DENY' }],
+      });
+
+      await expect(caller.generateBaskets(generate)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Financial report permission is required.',
+      });
+      expect(db.pharmacySale.findMany).not.toHaveBeenCalled();
+      expect(db.$executeRaw).not.toHaveBeenCalled();
+      expect(db.pharmacyCampaign.create).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(['actor', 'branch', 'lifecycle'])(
     'rejects current %s revocation before reading evidence',
