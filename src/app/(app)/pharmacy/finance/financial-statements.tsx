@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { SectionCard } from '@/components/ui/section-card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { financeAccountLabel } from '@/lib/finance/account-labels';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 
 const money = (value: string | number) => {
@@ -92,7 +93,7 @@ export async function FinancialStatements({
             key={`${a.currency}-${a.accountCode}`}
             className="flex flex-wrap justify-between gap-3 border-b border-border-subtle py-2"
           >
-            <span>{a.accountCode.replaceAll('_', ' ')}</span>
+            <span title={a.accountCode}>{financeAccountLabel(a.accountCode)}</span>
             <span className="font-mono">
               {a.currency}{' '}
               {money(
@@ -128,8 +129,8 @@ export async function FinancialStatements({
           <tbody>
             {result.accounts.map((a) => (
               <tr key={`${a.currency}-${a.accountCode}`} className="border-t border-border-subtle">
-                <td className="p-3">
-                  {a.accountCode} / {a.currency}
+                <td className="p-3" title={a.accountCode}>
+                  {financeAccountLabel(a.accountCode)} / {a.currency}
                 </td>
                 {[a.openingMinor, a.debitMinor, a.creditMinor, a.closingMinor].map((v, i) => (
                   <td key={i} className="p-3 text-right font-mono">

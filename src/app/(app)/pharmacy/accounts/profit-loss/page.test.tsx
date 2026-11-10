@@ -197,6 +197,8 @@ it('preserves the existing finance workspace report and its error states', async
   );
   expect(loaded).toContain('NET PROFIT');
   expect(loaded).toContain('20.00');
+  expect(loaded).toContain('Cost of goods sold / PKR');
+  expect(loaded).toContain('title="COST_OF_GOODS_SOLD"');
   const empty = renderToStaticMarkup(
     await FinancialStatements({
       caller: { financialStatements: async () => ({ ...result, profitAndLoss: [] }) } as never,

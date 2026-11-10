@@ -13,6 +13,7 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
+import { financeAccountLabel } from '@/lib/finance/account-labels';
 
 export const metadata: Metadata = { title: 'Trial-balance control · Pharmacy accounts' };
 
@@ -235,8 +236,8 @@ function Results({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
                     key={`${row.accountCode.length}:${row.accountCode}${row.currency}`}
                     className="border-t border-border-subtle"
                   >
-                    <th scope="row" className="p-3 text-left font-medium">
-                      {row.accountCode}
+                    <th scope="row" className="p-3 text-left font-medium" title={row.accountCode}>
+                      {financeAccountLabel(row.accountCode)}
                     </th>
                     <td className="p-3 text-right">{row.currency}</td>
                     {[row.opening, row.debit, row.credit, row.closing, row.rowDifference].map(

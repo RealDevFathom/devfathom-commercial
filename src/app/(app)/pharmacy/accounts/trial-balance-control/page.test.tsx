@@ -107,7 +107,8 @@ describe('TrialBalanceControlPage', () => {
       page: 1,
     });
     expect(mocks.financialStatements).toHaveBeenCalledTimes(1);
-    expect(output).toContain('UNKNOWN_RAW_CODE');
+    expect(output).toContain('Unknown raw code');
+    expect(output).toContain('title="UNKNOWN_RAW_CODE"');
     expect(output).toContain('9007199254740993.01');
     expect(output).toContain('Retrieved 2026-02-02T03:04:05.000Z');
     expect(output).not.toContain('journal must not be consumed');
