@@ -7,6 +7,7 @@ import {
   evaluateBranchRegulatoryStatus,
   isLegacyPlaceholderProfile,
   regulatoryProfileBindingDenial,
+  type BranchOperationAction,
   type BranchRegulatoryState,
 } from './regulatory';
 
@@ -223,7 +224,7 @@ describe('assertStoredBranchMayOperate', () => {
   });
 });
 
-describe('grandfathered pk_pb_placeholder_v1 profiles', () => {
+describe('legacy pk_pb_placeholder_v1 profiles', () => {
   const legacyPlaceholder = (overrides: Record<string, unknown> = {}) => ({
     ...validState(),
     isPlaceholder: true,
@@ -236,16 +237,47 @@ describe('grandfathered pk_pb_placeholder_v1 profiles', () => {
   });
   const dbFor = (profile: unknown) =>
     ({ branchRegulatoryProfile: { findFirst: vi.fn(async () => profile) } }) as never;
-  const activate = { name: 'ACTIVATE', at };
+  const activate: BranchOperationAction = { name: 'ACTIVATE', at };
 
-  it('keeps a pre-binding placeholder ready to activate', async () => {
+  it.each([
+    ['original premises', { addressLine: '12 Mall Road', city: 'Lahore' }],
+    ['changed address', { addressLine: '99 Other Road', city: 'Lahore' }],
+    ['changed city', { addressLine: '12 Mall Road', city: 'Rawalpindi' }],
+  ])('requires a bound successor at the %s', async (_case, site) => {
+    const legacy = legacyPlaceholder({ branch: { ...legacyPlaceholder().branch, ...site } });
+    expect(isLegacyPlaceholderProfile(legacy)).toBe(true);
+    for (const action of [activate, { name: 'DISPENSE', at, schedule: 'RX' }]) {
+      await expect(
+        assertStoredBranchMayOperate(dbFor(legacy), 'org-a', 'branch-a', action)
+      ).rejects.toThrowError(new BranchOperationDeniedError('PROFILE_PREMISES_MISMATCH'));
+      expect(recordAudit).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          organizationId: 'org-a',
+          targetId: 'branch-a',
+          errorCode: 'PROFILE_PREMISES_MISMATCH',
+          outcome: 'FAILURE',
+          metadata: { operation: action.name, schedule: action.schedule ?? null },
+        })
+      );
+    }
+    expect(
+      evaluateBranchRegulatoryStatus(legacy, true, at, { profile: legacy, site: legacy.branch })
+    ).toMatchObject({ effective: true, inForce: false });
+
+    const successor = { ...legacy, premises: { ...site, label: legacy.premises.label } };
+    expect(isLegacyPlaceholderProfile(successor)).toBe(false);
     await expect(
-      assertStoredBranchMayOperate(dbFor(legacyPlaceholder()), 'org-a', 'branch-a', activate)
+      assertStoredBranchMayOperate(dbFor(successor), 'org-a', 'branch-a', activate)
     ).resolves.toBeUndefined();
-    expect(isLegacyPlaceholderProfile(legacyPlaceholder())).toBe(true);
+    expect(
+      evaluateBranchRegulatoryStatus(successor, true, at, {
+        profile: successor,
+        site: successor.branch,
+      })
+    ).toMatchObject({ effective: true, inForce: true });
   });
 
-  it('still refuses a grandfathered placeholder off-branch or off-province', async () => {
+  it('still refuses a legacy placeholder off-branch or off-province', async () => {
     await expect(
       assertStoredBranchMayOperate(
         dbFor(legacyPlaceholder({ branch: { ...legacyPlaceholder().branch, active: false } })),
@@ -268,7 +300,7 @@ describe('grandfathered pk_pb_placeholder_v1 profiles', () => {
     ['a tenant-recorded profile', { isPlaceholder: false }],
     ['another rule set', { jurisdictionRuleSetId: 'pk_pb_v2' }],
     ['a placeholder that already records an address', { premises: { addressLine: '9 Elsewhere' } }],
-  ])('does not grandfather %s with incomplete premises', async (_case, overrides) => {
+  ])('refuses %s with incomplete premises', async (_case, overrides) => {
     const profile = legacyPlaceholder(overrides);
     expect(isLegacyPlaceholderProfile(profile)).toBe(false);
     await expect(

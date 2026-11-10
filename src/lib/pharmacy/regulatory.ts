@@ -85,14 +85,11 @@ function premisesFields(premises: unknown): { addressLine?: unknown; city?: unkn
 }
 
 /**
- * Grandfathered placeholder (#660). Placeholder profiles issued on the
+ * Legacy placeholder (#660). Placeholder profiles issued on the
  * `pk_pb_placeholder_v1` rule set before premises binding existed recorded only
- * `{ label }` as their premises. Those rows are append-only, so they keep the
- * ready-to-activate status they were authorized with until the placeholder is
- * re-applied, which closes them and appends an effective-dated, audited
- * successor bound to the branch address. Only the premises check is waived; the
- * province — copied from the branch when the placeholder was issued — still
- * has to match, and an inactive branch is still refused.
+ * `{ label }` as their premises. These append-only rows cannot authorize branch
+ * operations. Re-applying the placeholder closes them and appends an
+ * effective-dated, audited successor bound to the branch address and city.
  */
 export function isLegacyPlaceholderProfile(profile: RegulatoryProfileBindingFields): boolean {
   if (profile.isPlaceholder !== true || profile.jurisdictionRuleSetId !== PLACEHOLDER_RULE_SET_ID) {
@@ -118,7 +115,6 @@ export function regulatoryProfileBindingDenial(
   ) {
     return 'PROFILE_PREMISES_MISMATCH';
   }
-  if (isLegacyPlaceholderProfile(profile)) return null;
   const premises = premisesFields(profile.premises);
   const address = normalizeRegulatoryPremises(premises.addressLine);
   const city = normalizeRegulatoryPremises(premises.city);

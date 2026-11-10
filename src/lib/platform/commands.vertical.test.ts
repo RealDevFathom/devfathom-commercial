@@ -20,7 +20,10 @@ import {
   RESTAURANT_ROLE_TEMPLATES,
   roleTemplatesForVertical,
 } from '@/lib/vertical-catalog';
-import { PHARMACY_ONBOARDING_STEPS } from '@/lib/pharmacy/onboarding';
+import {
+  evaluatePharmacyReadiness,
+  PHARMACY_ONBOARDING_STEPS,
+} from '@/lib/pharmacy/onboarding';
 
 const mocks = vi.hoisted(() => ({
   pkgFindUnique: vi.fn(),
@@ -1309,6 +1312,55 @@ describe('pharmacy activation preflight', () => {
       })
     ).rejects.toThrow(/OPENING_STOCK_READINESS/);
     expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['original premises', { addressLine: '12 Mall Road', city: 'Lahore' }],
+    ['relocated premises', { addressLine: '99 Other Road', city: 'Rawalpindi' }],
+  ])('requires a bound successor to a legacy placeholder at the %s', async (_case, site) => {
+    const legacy = {
+      ...VALID_PROFILE,
+      isPlaceholder: true,
+      jurisdictionRuleSetId: 'pk_pb_placeholder_v1',
+      provinceCode: 'PB',
+      premises: { label: 'PLACEHOLDER – not a real licence' },
+      branch: { ...site, active: true, provinceCode: 'PB' },
+    };
+    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+    mocks.orgUpdate.mockResolvedValue({ id: 'org_p', status: 'ACTIVE' });
+    mocks.regulatoryProfileFindFirst.mockResolvedValue(legacy);
+    allGatesClaimedPassed();
+    allReadinessEvidence();
+
+    const readiness = await evaluatePharmacyReadiness(platformDb as never, 'org_p');
+    expect(readiness.ready).toBe(false);
+    expect(readiness.blocking).toEqual(['PREMISES_AND_LICENCES']);
+    expect(readiness.gates.find(({ gate }) => gate === 'PREMISES_AND_LICENCES')).toMatchObject({
+      claimedStatus: 'PASSED',
+      status: 'FAILED',
+      downgradeReason: 'EVIDENCE_ABSENT',
+    });
+    const transition = {
+      id: 'org_p',
+      status: 'ACTIVE',
+      reason: 'Activate only with premises-bound regulatory evidence',
+    };
+    await expect(run('organization.transition', transition)).rejects.toThrow(
+      /PROFILE_PREMISES_MISMATCH/
+    );
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+
+    // The append-only upgrade supplies the current branch address and city.
+    mocks.regulatoryProfileFindFirst.mockResolvedValue({
+      ...legacy,
+      premises: { ...site, label: legacy.premises.label },
+    });
+    await expect(evaluatePharmacyReadiness(platformDb as never, 'org_p')).resolves.toMatchObject({
+      ready: true,
+      blocking: [],
+    });
+    await expect(run('organization.transition', transition)).resolves.toBeDefined();
+    expect(mocks.orgUpdate).toHaveBeenCalledOnce();
   });
 
   it('activates once the profile is valid and every P0 gate genuinely passes', async () => {

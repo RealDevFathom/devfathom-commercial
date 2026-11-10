@@ -515,8 +515,7 @@ export const pharmacyOnboardingRouter = router({
             ...version,
             provinceName: provinceName(version.provinceCode),
             ...status,
-            // #660 — a grandfathered placeholder still counts toward activation,
-            // but the pharmacy is reminded to record its real premises.
+            // Legacy placeholders cannot be in force until a bound successor exists.
             premisesCompletionDue: status.inForce && isLegacyPlaceholderProfile(version),
           };
         }),

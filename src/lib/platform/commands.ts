@@ -1714,7 +1714,7 @@ async function runCommand(
             effectiveTo: null,
           },
         });
-        // #660 — a placeholder issued before premises binding is grandfathered
+        // #660 — a placeholder issued before premises binding is refused
         // by the guard; re-applying upgrades it to an effective-dated successor
         // bound to the branch address, recorded in the lifecycle event and the
         // platform audit row. A current-shape placeholder is left as it is.
