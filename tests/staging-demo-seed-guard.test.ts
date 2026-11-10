@@ -84,6 +84,33 @@ describe('fixed staging RDS endpoint form', () => {
 });
 
 describe('resolvePharmacyE2eDatabaseUrl staging path', () => {
+  it('allows grants-only seeding without the unused admin email', () => {
+    expect(
+      resolvePharmacyE2eDatabaseUrl({
+        ...seedEnv,
+        PHARMACY_E2E_GRANTS_ONLY: '1',
+        PHARMACY_E2E_ADMIN_EMAIL: undefined,
+      })
+    ).toBe(new URL(URL_OK).href);
+  });
+
+  it('still requires the admin password for grants-only seeding', () => {
+    expect(() =>
+      resolvePharmacyE2eDatabaseUrl({
+        ...seedEnv,
+        PHARMACY_E2E_GRANTS_ONLY: '1',
+        PHARMACY_E2E_ADMIN_EMAIL: undefined,
+        PHARMACY_E2E_ADMIN_PASSWORD: undefined,
+      })
+    ).toThrow(/PHARMACY_E2E_ADMIN_PASSWORD/);
+  });
+
+  it('still requires the admin email for full staging seeds', () => {
+    expect(() =>
+      resolvePharmacyE2eDatabaseUrl({ ...seedEnv, PHARMACY_E2E_ADMIN_EMAIL: undefined })
+    ).toThrow(/PHARMACY_E2E_ADMIN_EMAIL/);
+  });
+
   it('runs the staging guard instead of returning the URL verbatim', () => {
     expect(resolvePharmacyE2eDatabaseUrl(seedEnv)).toBe(new URL(URL_OK).href);
     expect(() => resolvePharmacyE2eDatabaseUrl({ ...seedEnv, DEPLOY_ENV: 'production' })).toThrow(
