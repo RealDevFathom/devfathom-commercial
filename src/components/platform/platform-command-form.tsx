@@ -39,6 +39,8 @@ export type CommandField = {
   help?: string;
   checkboxText?: string;
   minLength?: number;
+  maxLength?: number;
+  pattern?: string;
   min?: number;
   max?: number;
   step?: number;
@@ -216,10 +218,11 @@ export function PlatformCommandForm({
     if (!requiresReason) return configuredFields;
     const reason: CommandField = {
       name: 'reason',
-      label: 'Reason (required)',
+      label: 'Operator reason',
       type: 'textarea',
       required: true,
       minLength: 10,
+      maxLength: 500,
       help: 'Explain why this change is needed (at least 10 characters).',
     };
     return configuredFields.some((field) => field.name === 'reason')
@@ -262,22 +265,42 @@ export function PlatformCommandForm({
     setFieldErrors({});
     setRevealed('');
     const clientFieldErrors: Record<string, string> = {};
+    const formData = new FormData(form);
     for (const field of fields) {
-      if (field.minLength) {
-        const value = String(new FormData(form).get(field.name) ?? '').trim();
-        if (value.length < field.minLength) {
-          clientFieldErrors[field.name] = `Enter at least ${field.minLength} characters.`;
-        }
+      if (field.disabled || field.type === 'hidden') continue;
+      const raw = String(formData.get(field.name) ?? '');
+      // Empty optional controls are omitted by payloadFromForm. Length limits
+      // must not turn "leave unchanged" passwords or profile fields into errors.
+      if (!raw && !field.required) continue;
+      const value =
+        field.type === 'password' && ['password', 'adminPassword'].includes(field.name)
+          ? raw
+          : raw.trim();
+      if (field.minLength && value.length < field.minLength) {
+        clientFieldErrors[field.name] =
+          `${field.label} must be at least ${field.minLength} characters.`;
+      }
+      if (field.maxLength && value.length > field.maxLength) {
+        clientFieldErrors[field.name] =
+          `${field.label} must be at most ${field.maxLength} characters.`;
+      }
+      const control = form.elements.namedItem(field.name);
+      if (
+        field.pattern &&
+        control instanceof HTMLInputElement &&
+        control.validity.patternMismatch
+      ) {
+        clientFieldErrors[field.name] = `${field.label} has an invalid format.`;
       }
       if (field.format !== 'time24') continue;
-      const value = String(new FormData(form).get(field.name) ?? '');
       if (value && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) {
         clientFieldErrors[field.name] = 'Use 24-hour time, e.g. 09:30';
       }
     }
     if (Object.keys(clientFieldErrors).length) {
       setFieldErrors(clientFieldErrors);
-      setError(`${Object.keys(clientFieldErrors).length} field needs attention`);
+      const count = Object.keys(clientFieldErrors).length;
+      setError(`${count} ${count === 1 ? 'field needs' : 'fields need'} attention`);
       const firstInvalid = Object.keys(clientFieldErrors)[0]!;
       const invalidControl =
         (form.querySelector(`[data-field-name="${firstInvalid}"]`) as HTMLElement | null) ??
@@ -297,7 +320,6 @@ export function PlatformCommandForm({
       const body = (await response.json()) as {
         error?: string;
         data?: { id?: string; [key: string]: unknown };
-        details?: Array<{ message?: string; path?: Array<PropertyKey> }>;
         fieldErrors?: Record<string, string>;
       };
       if (!response.ok) {
@@ -321,7 +343,7 @@ export function PlatformCommandForm({
             (form.elements.namedItem(firstInvalid) as HTMLElement | null);
           invalidControl?.focus();
         } else {
-          setError(body.error ?? body.details?.[0]?.message ?? 'The command failed.');
+          setError(body.error ?? 'The command failed.');
         }
         return;
       }
@@ -370,8 +392,8 @@ export function PlatformCommandForm({
           }
           const wide = field.type === 'textarea' || field.type === 'json';
           const fieldError = fieldErrors[field.name];
-          const errorId = `${field.name}-error`;
           const fieldId = `${fieldIdPrefix}-${field.name}`;
+          const errorId = `${fieldId}-error`;
           return (
             <div key={field.name} className={cn('block', wide && 'sm:col-span-2')}>
               <label
@@ -386,6 +408,7 @@ export function PlatformCommandForm({
                   name={field.name}
                   required={field.required}
                   minLength={field.minLength}
+                  maxLength={field.maxLength}
                   disabled={field.disabled}
                   defaultValue={
                     field.defaultValue !== null && typeof field.defaultValue === 'object'
@@ -471,8 +494,8 @@ export function PlatformCommandForm({
                   }
                   step={field.step}
                   inputMode={field.format === 'time24' ? 'numeric' : undefined}
-                  maxLength={field.format === 'time24' ? 5 : undefined}
-                  pattern={field.format === 'time24' ? '[0-2][0-9]:[0-5][0-9]' : undefined}
+                  maxLength={field.format === 'time24' ? 5 : field.maxLength}
+                  pattern={field.format === 'time24' ? '[0-2][0-9]:[0-5][0-9]' : field.pattern}
                   aria-invalid={Boolean(fieldError)}
                   aria-describedby={fieldError ? errorId : undefined}
                   onInput={

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { NextResponse } from 'next/server';
 import { requirePlatformSession } from '@/lib/platform/auth';
 import { executePlatformCommand } from '@/lib/platform/commands';
+import { formatValidationError } from '@/lib/validation-error';
 import {
   ActivationPreflightError,
   assertPlatformMutationOrigin,
@@ -13,19 +14,6 @@ const envelope = z.object({
   payload: z.unknown(),
 });
 
-function validationEnvelope(error: z.ZodError) {
-  const details = error.issues.map((issue) => ({
-    ...issue,
-    path: issue.path,
-    message: issue.message || 'This field is invalid.',
-  }));
-  const fieldErrors = Object.fromEntries(
-    details.map((issue) => [issue.path.join('.') || '_root', issue.message])
-  );
-
-  return { error: 'The command payload is invalid.', details, fieldErrors };
-}
-
 export async function POST(request: Request) {
   try {
     assertPlatformMutationOrigin(request);
@@ -35,7 +23,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ data });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json(validationEnvelope(error), { status: 400 });
+      const validation = formatValidationError(error);
+      const fieldErrors = Object.fromEntries(
+        error.issues.map((issue) => [
+          issue.path.join('.') || '_root',
+          issue.message || 'This field is invalid.',
+        ])
+      );
+      return NextResponse.json(
+        { error: validation?.message ?? 'Check the highlighted fields.', fieldErrors },
+        { status: 400 }
+      );
     }
     // WHA-1180 — a failed activation preflight also reports which gates are
     // unmet and where to satisfy each one. The message is unchanged, so a

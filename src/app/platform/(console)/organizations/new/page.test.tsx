@@ -27,6 +27,24 @@ function renderPage(searchParams: { opportunityId?: string; vertical?: string })
   return NewOrganizationPage({ searchParams: Promise.resolve(searchParams) });
 }
 
+function fillPharmacyOnboarding() {
+  for (const [label, value] of [
+    ['Display name', 'Clifton Chemist'],
+    ['Legal name', 'Clifton Chemist Ltd'],
+    ['Workspace slug', 'clifton-chemist'],
+    ['First branch name', 'Clifton Chemist'],
+    ['First branch address', '12 Clifton Road'],
+    ['First branch city', 'Karachi'],
+    ['Primary contact', 'Pharmacy owner'],
+    ['Primary contact email', 'owner@clifton.test'],
+    ['Tenant administrator', 'Pharmacy administrator'],
+    ['Administrator email', 'admin@clifton.test'],
+    ['Temporary administrator password', 'temporary-password-123'],
+  ] as const) {
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.requirePlatformRead.mockResolvedValue({ role: 'SUPER_ADMIN' });
@@ -86,6 +104,62 @@ describe('NewOrganizationPage type-first choice', () => {
 });
 
 describe('NewOrganizationPage package step', () => {
+  it.each([
+    ['qa', 'Workspace slug must be at least 3 characters.'],
+    ['a'.repeat(64), 'Workspace slug must be at most 63 characters.'],
+    ['clifton_chemist', 'Workspace slug has an invalid format.'],
+    ['-clifton', 'Workspace slug has an invalid format.'],
+    ['clifton--chemist', 'Workspace slug has an invalid format.'],
+  ])('rejects invalid pharmacy workspace slug %s before submitting', async (value, message) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      render(await renderPage({ vertical: 'PHARMACY' }));
+      fillPharmacyOnboarding();
+      const slug = screen.getByLabelText('Workspace slug');
+      expect(slug).toHaveAttribute('minlength', '3');
+      expect(slug).toHaveAttribute('maxlength', '63');
+      expect(slug).toHaveAttribute('pattern', '\\s*[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*\\s*');
+
+      fireEvent.change(slug, { target: { value } });
+      fireEvent.submit(slug.closest('form')!);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(slug).toHaveFocus();
+      expect(slug).toHaveAttribute('aria-invalid', 'true');
+      expect(slug).toHaveAccessibleDescription(message);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(['Clifton-Chemist', ' Clifton-Chemist '])(
+    'accepts pharmacy workspace slug %s for server normalization',
+    async (value) => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: {} }) });
+      vi.stubGlobal('fetch', fetchMock);
+      try {
+        render(await renderPage({ vertical: 'PHARMACY' }));
+        fillPharmacyOnboarding();
+        const slug = screen.getByLabelText('Workspace slug');
+        fireEvent.change(slug, { target: { value } });
+
+        // Native submission must permit the same input as the submit handler.
+        expect(slug).toBeValid();
+        fireEvent.submit(slug.closest('form')!);
+
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+        expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toMatchObject({
+          action: 'organization.create',
+          payload: { slug: value },
+        });
+        expect(slug).toHaveAttribute('aria-invalid', 'false');
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  );
+
   it('resets an overridden seat limit to the selected package default', async () => {
     render(await renderPage({ vertical: 'RESTAURANT' }));
     const seats = screen.getByLabelText('Seat limit');
@@ -311,6 +385,7 @@ it('submits the selected package default and a super admin override within its c
   vi.stubGlobal('fetch', fetchMock);
   try {
     const { container } = render(await renderPage({ vertical: 'PHARMACY' }));
+    fillPharmacyOnboarding();
     fireEvent.change(screen.getByLabelText('Commercial package'), {
       target: { value: 'professional' },
     });

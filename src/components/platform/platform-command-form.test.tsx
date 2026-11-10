@@ -77,6 +77,116 @@ describe('PlatformCommandForm', () => {
     expect(input).toHaveAttribute('placeholder', 'HH:MM');
   });
 
+  it('flags a value that does not match the field pattern inline', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <PlatformCommandForm
+        action="organization.update"
+        fields={[{ name: 'code', label: 'Region code', pattern: '[A-Z]{3}' }]}
+      />
+    );
+
+    const input = screen.getByLabelText('Region code');
+    expect(input).toHaveAttribute('pattern', '[A-Z]{3}');
+    fireEvent.change(input, { target: { value: 'abc' } });
+    fireEvent.submit(input.closest('form')!);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(input).toHaveFocus();
+    expect(screen.getByTestId('platform-field-error-code')).toHaveTextContent(
+      'Region code has an invalid format.'
+    );
+  });
+
+  it('allows blank optional constrained fields and omits them from the payload', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: {} }) });
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <PlatformCommandForm
+        action="operator.upsert"
+        fields={[
+          { name: 'locale', label: 'Locale', minLength: 2, maxLength: 20 },
+          {
+            name: 'password',
+            label: 'Password',
+            type: 'password',
+            minLength: 12,
+            maxLength: 256,
+          },
+          { name: 'code', label: 'Code', minLength: 3, disabled: true },
+        ]}
+      />
+    );
+
+    fireEvent.submit(screen.getByLabelText('Password').closest('form')!);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body).payload).toEqual({});
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('counts password whitespace as the server does', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: {} }) });
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <PlatformCommandForm
+        action="operator.upsert"
+        fields={[
+          {
+            name: 'password',
+            label: 'Password',
+            type: 'password',
+            minLength: 12,
+            maxLength: 256,
+          },
+        ]}
+      />
+    );
+    const input = screen.getByLabelText('Password');
+    fireEvent.change(input, { target: { value: 'short' } });
+    fireEvent.submit(input.closest('form')!);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(input).toHaveAccessibleDescription('Password must be at least 12 characters.');
+
+    fireEvent.change(input, { target: { value: ' padded-pass ' } });
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body).payload.password).toBe(' padded-pass ');
+  });
+
+  it('associates each reason error with its own form', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <>
+        <PlatformCommandForm
+          action="organization.permission"
+          fields={[{ name: 'reason', label: 'Override reason', required: true, minLength: 5 }]}
+        />
+        <PlatformCommandForm
+          action="commercial.contract.status"
+          fields={[{ name: 'reason', label: 'Contract reason', required: true, minLength: 5 }]}
+        />
+      </>
+    );
+    const overrideReason = screen.getByLabelText('Override reason');
+    const contractReason = screen.getByLabelText('Contract reason');
+    fireEvent.submit(overrideReason.closest('form')!);
+    fireEvent.submit(contractReason.closest('form')!);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(overrideReason).toHaveAccessibleDescription(
+      'Override reason must be at least 5 characters.'
+    );
+    expect(contractReason).toHaveAccessibleDescription(
+      'Contract reason must be at least 5 characters.'
+    );
+    expect(overrideReason.getAttribute('aria-describedby')).not.toBe(
+      contractReason.getAttribute('aria-describedby')
+    );
+  });
+
   it('searches grouped timezones and preserves the selected IANA value', async () => {
     vi.stubGlobal(
       'ResizeObserver',

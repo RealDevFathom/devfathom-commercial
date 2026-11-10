@@ -84,9 +84,19 @@ export default async function PlatformSettingsPage() {
                       action="setting.upsert"
                       submitLabel="Update setting"
                       fields={[
-                        { name: 'key', label: 'Key', required: true, defaultValue: setting.key },
+                        {
+                          name: 'key',
+                          minLength: 2,
+                          maxLength: 120,
+                          pattern: '[a-z0-9._\\-]+',
+                          label: 'Key',
+                          required: true,
+                          defaultValue: setting.key,
+                        },
                         {
                           name: 'category',
+                          minLength: 2,
+                          maxLength: 80,
                           label: 'Category',
                           required: true,
                           defaultValue: setting.category,
@@ -102,6 +112,7 @@ export default async function PlatformSettingsPage() {
                         },
                         {
                           name: 'description',
+                          maxLength: 5000,
                           label: 'Description',
                           type: 'textarea',
                           defaultValue: setting.description,
@@ -140,11 +151,20 @@ export default async function PlatformSettingsPage() {
                 fields={[
                   {
                     name: 'key',
+                    minLength: 2,
+                    maxLength: 120,
+                    pattern: '[a-z0-9._\\-]+',
                     label: 'Key',
                     required: true,
                     placeholder: 'onboarding.default_grace_days',
                   },
-                  { name: 'category', label: 'Category', required: true },
+                  {
+                    name: 'category',
+                    minLength: 2,
+                    maxLength: 80,
+                    label: 'Category',
+                    required: true,
+                  },
                   {
                     name: 'value',
                     label: 'JSON value',
@@ -152,7 +172,12 @@ export default async function PlatformSettingsPage() {
                     required: true,
                     defaultValue: {},
                   },
-                  { name: 'description', label: 'Description', type: 'textarea' },
+                  {
+                    name: 'description',
+                    maxLength: 5000,
+                    label: 'Description',
+                    type: 'textarea',
+                  },
                   { name: 'sensitive', label: 'Sensitive', type: 'checkbox' },
                 ]}
               />

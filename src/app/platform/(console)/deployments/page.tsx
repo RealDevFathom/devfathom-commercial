@@ -81,6 +81,10 @@ export default async function DeploymentsPage({
               {
                 name: 'environment',
                 label: 'Environment',
+                minLength: 2,
+                maxLength: 80,
+                // Trimmed on the server; uppercase is not normalized here.
+                pattern: '\\s*[a-z0-9][a-z0-9_\\-]*\\s*',
                 required: true,
                 defaultValue: 'production',
                 help: 'Automatic provisioning is available for production only.',
@@ -93,9 +97,16 @@ export default async function DeploymentsPage({
                 defaultValue: 'SHARED',
                 options: ['SHARED', 'DEDICATED'].map((value) => ({ label: value, value })),
               },
-              { name: 'provider', label: 'Provider', required: true, defaultValue: 'VERCEL' },
-              { name: 'region', label: 'Region' },
-              { name: 'databaseRef', label: 'Database reference' },
+              {
+                name: 'provider',
+                minLength: 2,
+                maxLength: 80,
+                label: 'Provider',
+                required: true,
+                defaultValue: 'VERCEL',
+              },
+              { name: 'region', maxLength: 5000, label: 'Region' },
+              { name: 'databaseRef', maxLength: 5000, label: 'Database reference' },
               {
                 name: 'queueProvision',
                 label: 'Queue provisioning',
@@ -155,21 +166,50 @@ export default async function DeploymentsPage({
                       'DECOMMISSIONED',
                     ].map((value) => ({ label: value, value })),
                   },
-                  { name: 'provider', label: 'Provider', defaultValue: deployment.provider },
-                  { name: 'projectId', label: 'Project ID', defaultValue: deployment.projectId },
-                  { name: 'region', label: 'Region', defaultValue: deployment.region },
-                  { name: 'url', label: 'URL', type: 'url', defaultValue: deployment.url },
+                  {
+                    name: 'provider',
+                    minLength: 2,
+                    maxLength: 80,
+                    label: 'Provider',
+                    defaultValue: deployment.provider,
+                  },
+                  {
+                    name: 'projectId',
+                    maxLength: 5000,
+                    label: 'Project ID',
+                    defaultValue: deployment.projectId,
+                  },
+                  {
+                    name: 'region',
+                    maxLength: 5000,
+                    label: 'Region',
+                    defaultValue: deployment.region,
+                  },
+                  {
+                    name: 'url',
+                    maxLength: 2000,
+                    label: 'URL',
+                    type: 'url',
+                    defaultValue: deployment.url,
+                  },
                   {
                     name: 'databaseRef',
+                    maxLength: 5000,
                     label: 'Database reference',
                     defaultValue: deployment.databaseRef,
                   },
                   {
                     name: 'edgeConfigRef',
+                    maxLength: 5000,
                     label: 'Edge config reference',
                     defaultValue: deployment.edgeConfigRef,
                   },
-                  { name: 'version', label: 'Version', defaultValue: deployment.version },
+                  {
+                    name: 'version',
+                    maxLength: 5000,
+                    label: 'Version',
+                    defaultValue: deployment.version,
+                  },
                 ]}
               />
             </div>

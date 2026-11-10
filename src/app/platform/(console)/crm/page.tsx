@@ -401,13 +401,19 @@ export default async function CrmPage() {
                   action="crm.account.create"
                   submitLabel="Create account"
                   fields={[
-                    { name: 'name', label: 'Account name', required: true },
-                    { name: 'legalName', label: 'Legal name' },
-                    { name: 'website', label: 'Website', type: 'url' },
-                    { name: 'industry', label: 'Industry' },
-                    { name: 'country', label: 'Country' },
-                    { name: 'source', label: 'Source' },
-                    { name: 'notes', label: 'Notes', type: 'textarea' },
+                    {
+                      name: 'name',
+                      minLength: 1,
+                      maxLength: 500,
+                      label: 'Account name',
+                      required: true,
+                    },
+                    { name: 'legalName', maxLength: 5000, label: 'Legal name' },
+                    { name: 'website', maxLength: 2000, label: 'Website', type: 'url' },
+                    { name: 'industry', maxLength: 5000, label: 'Industry' },
+                    { name: 'country', maxLength: 5000, label: 'Country' },
+                    { name: 'source', maxLength: 5000, label: 'Source' },
+                    { name: 'notes', maxLength: 5000, label: 'Notes', type: 'textarea' },
                   ]}
                 />
               ),
@@ -426,12 +432,18 @@ export default async function CrmPage() {
                       type: 'select',
                       options: accountOptions,
                     },
-                    { name: 'name', label: 'Lead name', required: true },
-                    { name: 'email', label: 'Email', type: 'email' },
-                    { name: 'phone', label: 'Phone' },
-                    { name: 'companyName', label: 'Company' },
-                    { name: 'source', label: 'Source' },
-                    { name: 'notes', label: 'Notes', type: 'textarea' },
+                    {
+                      name: 'name',
+                      minLength: 1,
+                      maxLength: 500,
+                      label: 'Lead name',
+                      required: true,
+                    },
+                    { name: 'email', maxLength: 254, label: 'Email', type: 'email' },
+                    { name: 'phone', maxLength: 5000, label: 'Phone' },
+                    { name: 'companyName', maxLength: 5000, label: 'Company' },
+                    { name: 'source', maxLength: 5000, label: 'Source' },
+                    { name: 'notes', maxLength: 5000, label: 'Notes', type: 'textarea' },
                   ]}
                 />
               ),
@@ -451,7 +463,13 @@ export default async function CrmPage() {
                       required: true,
                       options: accountOptions,
                     },
-                    { name: 'name', label: 'Opportunity', required: true },
+                    {
+                      name: 'name',
+                      minLength: 1,
+                      maxLength: 500,
+                      label: 'Opportunity',
+                      required: true,
+                    },
                     {
                       name: 'stage',
                       label: 'Stage',
@@ -467,7 +485,13 @@ export default async function CrmPage() {
                       min: 0,
                       step: 0.01,
                     },
-                    { name: 'currency', label: 'Currency', defaultValue: 'USD' },
+                    {
+                      name: 'currency',
+                      minLength: 3,
+                      maxLength: 3,
+                      label: 'Currency',
+                      defaultValue: 'USD',
+                    },
                     {
                       name: 'probability',
                       label: 'Probability',
@@ -477,7 +501,7 @@ export default async function CrmPage() {
                       max: 100,
                     },
                     { name: 'expectedCloseAt', label: 'Expected close', type: 'date' },
-                    { name: 'notes', label: 'Notes', type: 'textarea' },
+                    { name: 'notes', maxLength: 5000, label: 'Notes', type: 'textarea' },
                   ]}
                 />
               ),
@@ -497,9 +521,27 @@ export default async function CrmPage() {
                       required: true,
                       options: opportunityOptions,
                     },
-                    { name: 'number', label: 'Proposal number', required: true },
-                    { name: 'title', label: 'Title', required: true },
-                    { name: 'currency', label: 'Currency', defaultValue: 'USD' },
+                    {
+                      name: 'number',
+                      minLength: 3,
+                      maxLength: 100,
+                      label: 'Proposal number',
+                      required: true,
+                    },
+                    {
+                      name: 'title',
+                      minLength: 1,
+                      maxLength: 500,
+                      label: 'Title',
+                      required: true,
+                    },
+                    {
+                      name: 'currency',
+                      minLength: 3,
+                      maxLength: 3,
+                      label: 'Currency',
+                      defaultValue: 'USD',
+                    },
                     {
                       name: 'total',
                       label: 'Total',

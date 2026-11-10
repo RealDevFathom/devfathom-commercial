@@ -728,6 +728,124 @@ describe('vertical readiness parity', () => {
   });
 });
 
+describe('pharmacy domain validation', () => {
+  it.each(['Hub.Customer.com', ' Hub.Customer.com '])(
+    'accepts hostname %s for server normalization',
+    async (value) => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: {} }) });
+      vi.stubGlobal('fetch', fetchMock);
+      mocks.pharmacyReadiness.mockResolvedValue({ ready: false, gates: [] });
+      try {
+        await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
+        const form = screen.getByRole('button', { name: 'Add domain' }).closest('form')!;
+        const host = within(form).getByLabelText('Hostname');
+        fireEvent.change(host, { target: { value } });
+
+        expect(host).toBeValid();
+        fireEvent.submit(form);
+
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+        expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toMatchObject({
+          action: 'organization.domain',
+          payload: { host: value },
+        });
+        expect(host).toHaveAttribute('aria-invalid', 'false');
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  );
+
+  it.each(['Hub_Customer.com', '-Hub.Customer.com', 'Hub..com', 'Hub.123', `${'a'.repeat(64)}.com`])(
+    'rejects malformed pharmacy hostname %s before submitting',
+    async (value) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      mocks.pharmacyReadiness.mockResolvedValue({ ready: false, gates: [] });
+      try {
+        await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
+        const form = screen.getByRole('button', { name: 'Add domain' }).closest('form')!;
+        const host = within(form).getByLabelText('Hostname');
+        fireEvent.change(host, { target: { value } });
+
+        expect(host).toBeInvalid();
+        fireEvent.submit(form);
+
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(host).toHaveFocus();
+        expect(host).toHaveAccessibleDescription('Hostname has an invalid format.');
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  );
+});
+
+describe('permission override validation', () => {
+  it('enforces the server reason limits on the pharmacy override form only', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: {} }) });
+    vi.stubGlobal('fetch', fetchMock);
+    mocks.pharmacyReadiness.mockResolvedValue({ ready: false, gates: [] });
+    try {
+      await renderDetail({
+        org: organization({
+          vertical: 'PHARMACY',
+          users: [
+            {
+              id: 'user_1',
+              name: 'Pharmacist',
+              email: 'pharmacist@example.test',
+              role: 'ADMIN',
+              status: 'ACTIVE',
+              title: 'Pharmacist',
+              department: null,
+              organizationRoleId: null,
+            },
+          ],
+        }),
+      });
+      const form = screen.getByRole('button', { name: 'Set override' }).closest('form')!;
+      const reason = within(form).getByLabelText('Reason');
+      const lifecycleForm = screen
+        .getByRole('button', { name: 'Apply lifecycle change' })
+        .closest('form')!;
+      const lifecycleReason = within(lifecycleForm).getByLabelText('Operator reason');
+      expect(reason).toHaveAttribute('minlength', '5');
+      expect(reason).toHaveAttribute('maxlength', '500');
+      fireEvent.change(within(form).getByLabelText('Capability'), {
+        target: { value: 'pharmacy.inventory:read' },
+      });
+
+      for (const [value, message] of [
+        ['QA', 'Reason must be at least 5 characters.'],
+        ['     ', 'Reason must be at least 5 characters.'],
+        ['x'.repeat(501), 'Reason must be at most 500 characters.'],
+      ]) {
+        fireEvent.change(reason, { target: { value } });
+        fireEvent.submit(form);
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(reason).toHaveFocus();
+        expect(reason).toHaveAccessibleDescription(message);
+        expect(within(lifecycleForm).queryByRole('alert')).toBeNull();
+        expect(lifecycleReason).toHaveAttribute('aria-invalid', 'false');
+      }
+
+      for (const value of ['x'.repeat(5), 'x'.repeat(500)]) {
+        fireEvent.change(reason, { target: { value } });
+        fireEvent.submit(form);
+        await waitFor(() => expect(within(form).getByRole('button')).not.toBeDisabled());
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toMatchObject({
+        action: 'organization.permission',
+        payload: { reason: 'xxxxx' },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('destructive lifecycle reason', () => {
   it('requires an operator-entered purge reason and preserves confirmation', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: {} }) });
@@ -736,7 +854,7 @@ describe('destructive lifecycle reason', () => {
     try {
       await renderDetail({ org: organization({ status: 'TERMINATED' }) });
       const form = screen.getByRole('button', { name: 'Schedule purge' }).closest('form')!;
-      const reason = within(form).getByRole('textbox', { name: 'Reason (required)' });
+      const reason = within(form).getByRole('textbox', { name: 'Operator reason' });
       expect(reason).toHaveValue('');
       fireEvent.submit(form);
       expect(fetchMock).not.toHaveBeenCalled();

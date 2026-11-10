@@ -61,9 +61,17 @@ export default async function OperatorsPage() {
                     submitLabel="Update operator"
                     fields={[
                       { name: 'id', label: 'Operator', type: 'hidden', defaultValue: operator.id },
-                      { name: 'name', label: 'Name', required: true, defaultValue: operator.name },
+                      {
+                        name: 'name',
+                        minLength: 1,
+                        maxLength: 500,
+                        label: 'Name',
+                        required: true,
+                        defaultValue: operator.name,
+                      },
                       {
                         name: 'email',
+                        maxLength: 254,
                         label: 'Email',
                         type: 'email',
                         required: true,
@@ -82,6 +90,8 @@ export default async function OperatorsPage() {
                       },
                       {
                         name: 'password',
+                        minLength: 12,
+                        maxLength: 256,
                         label: 'New password',
                         type: 'password',
                         help: 'Leave blank to keep the current credential.',
@@ -132,10 +142,18 @@ export default async function OperatorsPage() {
                 action="operator.upsert"
                 submitLabel="Create operator"
                 fields={[
-                  { name: 'name', label: 'Name', required: true },
-                  { name: 'email', label: 'Email', type: 'email', required: true },
+                  { name: 'name', minLength: 1, maxLength: 500, label: 'Name', required: true },
+                  {
+                    name: 'email',
+                    maxLength: 254,
+                    label: 'Email',
+                    type: 'email',
+                    required: true,
+                  },
                   {
                     name: 'password',
+                    minLength: 12,
+                    maxLength: 256,
                     label: 'Temporary password',
                     type: 'password',
                     required: true,

@@ -218,6 +218,8 @@ export default async function CommercialPage() {
                             },
                             {
                               name: 'reason',
+                              minLength: 5,
+                              maxLength: 500,
                               label: 'Reason',
                               type: 'textarea',
                               required: true,
@@ -296,6 +298,8 @@ export default async function CommercialPage() {
                             },
                             {
                               name: 'reason',
+                              minLength: 5,
+                              maxLength: 500,
                               label: 'Reason',
                               type: 'textarea',
                               required: true,
@@ -414,8 +418,20 @@ export default async function CommercialPage() {
                         value: item.id,
                       })),
                     },
-                    { name: 'number', label: 'Contract number', required: true },
-                    { name: 'title', label: 'Title', required: true },
+                    {
+                      name: 'number',
+                      minLength: 3,
+                      maxLength: 100,
+                      label: 'Contract number',
+                      required: true,
+                    },
+                    {
+                      name: 'title',
+                      minLength: 1,
+                      maxLength: 500,
+                      label: 'Title',
+                      required: true,
+                    },
                     {
                       name: 'status',
                       label: 'Status',
@@ -431,7 +447,14 @@ export default async function CommercialPage() {
                         'RENEWAL_DUE',
                       ].map((value) => ({ label: value, value })),
                     },
-                    { name: 'currency', label: 'Currency', defaultValue: 'USD', required: true },
+                    {
+                      name: 'currency',
+                      minLength: 3,
+                      maxLength: 3,
+                      label: 'Currency',
+                      defaultValue: 'USD',
+                      required: true,
+                    },
                     {
                       name: 'value',
                       label: 'Contract value',
@@ -469,7 +492,7 @@ export default async function CommercialPage() {
                       defaultValue: data.modules.map((item) => item.id),
                       help: 'Remove IDs that are not included in this contract.',
                     },
-                    { name: 'notes', label: 'Notes', type: 'textarea' },
+                    { name: 'notes', maxLength: 5000, label: 'Notes', type: 'textarea' },
                   ]}
                 />
               ),
@@ -495,8 +518,21 @@ export default async function CommercialPage() {
                       type: 'select',
                       options: contractOptions,
                     },
-                    { name: 'number', label: 'Invoice number', required: true },
-                    { name: 'currency', label: 'Currency', defaultValue: 'USD', required: true },
+                    {
+                      name: 'number',
+                      minLength: 3,
+                      maxLength: 100,
+                      label: 'Invoice number',
+                      required: true,
+                    },
+                    {
+                      name: 'currency',
+                      minLength: 3,
+                      maxLength: 3,
+                      label: 'Currency',
+                      defaultValue: 'USD',
+                      required: true,
+                    },
                     {
                       name: 'subtotal',
                       label: 'Subtotal',
@@ -524,7 +560,7 @@ export default async function CommercialPage() {
                         { description: 'Platform subscription', quantity: 1, unitPrice: 0 },
                       ],
                     },
-                    { name: 'notes', label: 'Notes', type: 'textarea' },
+                    { name: 'notes', maxLength: 5000, label: 'Notes', type: 'textarea' },
                   ]}
                 />
               ),
@@ -552,11 +588,26 @@ export default async function CommercialPage() {
                       step: 0.01,
                       required: true,
                     },
-                    { name: 'currency', label: 'Currency', defaultValue: 'USD', required: true },
-                    { name: 'method', label: 'Payment method', required: true },
-                    { name: 'externalRef', label: 'External reference' },
+                    {
+                      name: 'currency',
+                      minLength: 3,
+                      maxLength: 3,
+                      label: 'Currency',
+                      defaultValue: 'USD',
+                      required: true,
+                    },
+                    {
+                      name: 'method',
+                      minLength: 1,
+                      maxLength: 500,
+                      label: 'Payment method',
+                      required: true,
+                    },
+                    { name: 'externalRef', maxLength: 5000, label: 'External reference' },
                     {
                       name: 'idempotencyKey',
+                      minLength: 8,
+                      maxLength: 200,
                       label: 'Idempotency key',
                       required: true,
                       placeholder: 'bank-ref-or-unique-key',
@@ -572,7 +623,7 @@ export default async function CommercialPage() {
                         value,
                       })),
                     },
-                    { name: 'failureReason', label: 'Failure reason' },
+                    { name: 'failureReason', maxLength: 5000, label: 'Failure reason' },
                   ]}
                 />
               ),
@@ -608,7 +659,7 @@ export default async function CommercialPage() {
                       step: 0.01,
                     },
                     { name: 'proposedSeats', label: 'Proposed seats', type: 'number', min: 1 },
-                    { name: 'notes', label: 'Notes', type: 'textarea' },
+                    { name: 'notes', maxLength: 5000, label: 'Notes', type: 'textarea' },
                   ]}
                 />
               ),

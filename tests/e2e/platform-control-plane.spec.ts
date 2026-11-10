@@ -406,7 +406,7 @@ test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
   await page.getByLabel('Move to').selectOption('ACTIVE');
   await page
     .locator('#lifecycle')
-    .getByLabel('Reason (required)')
+    .getByLabel('Operator reason')
     .fill('E2E activation denied before setup');
   await page.getByRole('button', { name: 'Apply lifecycle change' }).click();
   await expect(page.getByText('Activation preflight failed:', { exact: false })).toBeVisible();
@@ -433,7 +433,7 @@ test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
   await page.getByLabel('Move to').selectOption('ACTIVE');
   await page
     .locator('#lifecycle')
-    .getByLabel('Reason (required)')
+    .getByLabel('Operator reason')
     .fill('E2E activation after Restaurant setup');
   await page.getByRole('button', { name: 'Apply lifecycle change' }).click();
   await expect(page.getByText('ACTIVE', { exact: true }).first()).toBeVisible();

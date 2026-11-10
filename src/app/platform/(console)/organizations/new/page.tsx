@@ -226,10 +226,26 @@ export default async function NewOrganizationPage({
                 type: 'hidden',
                 defaultValue: vertical,
               },
-              { name: 'displayName', label: 'Display name', required: true },
-              { name: 'legalName', label: 'Legal name', required: true },
+              {
+                name: 'displayName',
+                minLength: 1,
+                maxLength: 500,
+                label: 'Display name',
+                required: true,
+              },
+              {
+                name: 'legalName',
+                minLength: 1,
+                maxLength: 500,
+                label: 'Legal name',
+                required: true,
+              },
               {
                 name: 'slug',
+                minLength: 3,
+                maxLength: 63,
+                // The server trims and lowercases before validating.
+                pattern: '\\s*[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*\\s*',
                 label: 'Workspace slug',
                 required: true,
                 placeholder: 'northwind-agency',
@@ -281,6 +297,8 @@ export default async function NewOrganizationPage({
               },
               {
                 name: 'currency',
+                minLength: 3,
+                maxLength: 3,
                 label: 'Currency',
                 required: true,
                 // A pharmacy launches in the Pakistan market (its province list is
@@ -308,6 +326,8 @@ export default async function NewOrganizationPage({
                 ? [
                     {
                       name: 'firstBranchName',
+                      minLength: 2,
+                      maxLength: 120,
                       label: 'First branch name',
                       required: true,
                       placeholder: 'Downtown',
@@ -315,6 +335,8 @@ export default async function NewOrganizationPage({
                     },
                     {
                       name: 'firstBranchAddress',
+                      minLength: 1,
+                      maxLength: 300,
                       label: 'First branch address',
                       required: true,
                       placeholder: 'Street, city, region',
@@ -337,6 +359,8 @@ export default async function NewOrganizationPage({
                 ? [
                     {
                       name: 'firstBranchName',
+                      minLength: 2,
+                      maxLength: 120,
                       label: 'First branch name',
                       required: true,
                       placeholder: 'Clifton Chemist',
@@ -344,11 +368,19 @@ export default async function NewOrganizationPage({
                     },
                     {
                       name: 'firstBranchAddress',
+                      minLength: 1,
+                      maxLength: 300,
                       label: 'First branch address',
                       required: true,
                       placeholder: 'Street and building',
                     },
-                    { name: 'firstBranchCity', label: 'First branch city', required: true },
+                    {
+                      name: 'firstBranchCity',
+                      minLength: 1,
+                      maxLength: 120,
+                      label: 'First branch city',
+                      required: true,
+                    },
                     {
                       name: 'firstBranchProvinceCode',
                       label: 'First branch province',
@@ -371,6 +403,8 @@ export default async function NewOrganizationPage({
                 ? [
                     {
                       name: 'firstBranchName',
+                      minLength: 2,
+                      maxLength: 120,
                       label: 'First property name',
                       required: true,
                       placeholder: 'Serena Gulberg',
@@ -378,14 +412,29 @@ export default async function NewOrganizationPage({
                     },
                     {
                       name: 'firstBranchAddress',
+                      minLength: 1,
+                      maxLength: 300,
                       label: 'First property address',
                       required: true,
                       placeholder: 'Street and building',
                     },
-                    { name: 'firstBranchCity', label: 'First property city', required: true },
+                    {
+                      name: 'firstBranchCity',
+                      minLength: 1,
+                      maxLength: 120,
+                      label: 'First property city',
+                      required: true,
+                    },
                   ]
                 : []),
-              { name: 'locale', label: 'Locale', required: true, defaultValue: 'en' },
+              {
+                name: 'locale',
+                minLength: 2,
+                maxLength: 20,
+                label: 'Locale',
+                required: true,
+                defaultValue: 'en',
+              },
               {
                 name: 'gracePeriodDays',
                 label: 'Grace period (days)',
@@ -394,24 +443,50 @@ export default async function NewOrganizationPage({
                 min: 0,
                 max: 365,
               },
-              { name: 'dataResidency', label: 'Data residency', placeholder: 'EU, US, PK…' },
-              { name: 'primaryContactName', label: 'Primary contact', required: true },
+              {
+                name: 'dataResidency',
+                maxLength: 5000,
+                label: 'Data residency',
+                placeholder: 'EU, US, PK…',
+              },
+              {
+                name: 'primaryContactName',
+                minLength: 1,
+                maxLength: 500,
+                label: 'Primary contact',
+                required: true,
+              },
               {
                 name: 'primaryContactEmail',
+                maxLength: 254,
                 label: 'Primary contact email',
                 type: 'email',
                 required: true,
               },
-              { name: 'adminName', label: 'Tenant administrator', required: true },
-              { name: 'adminEmail', label: 'Administrator email', type: 'email', required: true },
+              {
+                name: 'adminName',
+                minLength: 1,
+                maxLength: 500,
+                label: 'Tenant administrator',
+                required: true,
+              },
+              {
+                name: 'adminEmail',
+                maxLength: 254,
+                label: 'Administrator email',
+                type: 'email',
+                required: true,
+              },
               {
                 name: 'adminPassword',
+                minLength: 12,
+                maxLength: 256,
                 label: 'Temporary administrator password',
                 type: 'password',
                 required: true,
                 help: 'At least 12 characters. Share through an approved secure channel.',
               },
-              { name: 'notes', label: 'Operator notes', type: 'textarea' },
+              { name: 'notes', maxLength: 5000, label: 'Operator notes', type: 'textarea' },
             ]}
           />
         </div>
