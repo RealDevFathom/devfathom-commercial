@@ -1,6 +1,8 @@
 # DevFathom — Infrastructure and access handover
 
 > **Repo copy, sanitized 10 Nov 2026 (PKT).** Before this file was committed, identifiers were removed or replaced with placeholders: the AWS account ID, EC2 instance, volume and Elastic IP IDs, the public IP address, the load balancer DNS name, IAM user and role names, Secrets Manager secret names, snapshot names, contact email addresses, personal account names, and hints about where credentials are stored. Everything else, including every **TO CONFIRM** item, is unchanged. The CTO holds the unredacted working copy.
+>
+> **Also updated 10 Nov 2026 (PKT), at Saad's direction:** the missing branch protection on `develop` is recorded as Saad's decision, not an open gap (`main` stays TO CONFIRM), and a note was added that Saad ordered Azure removed from all code (DEV-755 / #1437).
 
 **Audience:** investors doing technical due diligence, and a new CTO taking over.  
 **Written:** 2026-11-10 (Asia/Karachi).  
@@ -11,7 +13,7 @@
 
 ## Plain-language summary
 
-DevFathom runs on **one AWS account**. Customer-facing production (the SuperAdmin console and Abbasi Pharmacie) lives in **Singapore** (`ap-southeast-1`) on containers behind a load balancer, with a small encrypted Postgres database. Day-to-day engineering work and demo sites run on a **separate small server in Virginia** (`us-east-1`) with Caddy for HTTPS. DNS for `devfathom.com` is in **Cloudflare**. Source code is in the private GitHub org **RealDevFathom**. Tickets are in **Linear** (team `DEV`). Passwords and API keys are **not** stored in this document — they live in AWS Secrets Manager (app secrets) and in a human password manager (operator logins). **Azure is out of scope** for Ask Fathom and new deploys.
+DevFathom runs on **one AWS account**. Customer-facing production (the SuperAdmin console and Abbasi Pharmacie) lives in **Singapore** (`ap-southeast-1`) on containers behind a load balancer, with a small encrypted Postgres database. Day-to-day engineering work and demo sites run on a **separate small server in Virginia** (`us-east-1`) with Caddy for HTTPS. DNS for `devfathom.com` is in **Cloudflare**. Source code is in the private GitHub org **RealDevFathom**. Tickets are in **Linear** (team `DEV`). Passwords and API keys are **not** stored in this document — they live in AWS Secrets Manager (app secrets) and in a human password manager (operator logins). **Azure is out of scope** for Ask Fathom and new deploys. **Saad ordered Azure removed from all code on 10 Nov 2026.** The removal is planned for the next Codex batch and tracked as Linear [DEV-755](https://linear.app/devfathom/issue/DEV-755/remove-azure-from-the-codebase-entirely) and GitHub [#1437](https://github.com/RealDevFathom/devfathom-commercial/issues/1437).
 
 Live since **2026-10-23 (Asia/Karachi):** `admin.devfathom.com` and `abbasi-pharmacie.devfathom.com`.
 
@@ -100,7 +102,7 @@ Leftover: `me-central-1` stack `devfathom-staging-dns` still present; older empt
 |---|---|---|---|---|
 | **AWS** | All product infra | Saad authorizes `aws login` / IAM; automation uses an ops IAM user and an EC2 helper IAM user | Long-lived IAM access keys exist for the automation users (location held by the CTO, not listed here); prefer SSO/`aws login` for humans | Remove/rotate both automation users' access keys on CTO change; review IAM roles `devfathom-*`; transfer root/account ownership **TO CONFIRM** (billing contact, MFA devices) |
 | **Cloudflare** | DNS for `devfathom.com` (and tenant CNAMEs/A records); optional proxy | **TO CONFIRM** (Saad) | An API token may exist for automation (scope **TO CONFIRM**); human login in password manager | Transfer Cloudflare account ownership; rotate API tokens; document zone settings (SSL Full/strict if proxied) |
-| **GitHub org `RealDevFathom`** | Canonical private repo `devfathom-commercial` (default branch `develop`) | **TO CONFIRM** org owners; Saad's personal GitHub account also used historically for device auth | Org SSO / personal PATs / `gh` auth on ops machines — **never commit tokens** | Transfer org ownership; revoke stale PATs; **OPEN SECURITY GAP:** `develop` has no branch protection, rulesets or required checks (verified 2026-11-10 05:20 PKT); `main` TO CONFIRM |
+| **GitHub org `RealDevFathom`** | Canonical private repo `devfathom-commercial` (default branch `develop`) | **TO CONFIRM** org owners; Saad's personal GitHub account also used historically for device auth | Org SSO / personal PATs / `gh` auth on ops machines — **never commit tokens** | Transfer org ownership; revoke stale PATs; `develop` has no branch protection, rulesets or required checks (verified 2026-11-10 05:20 PKT). **This is Saad's decision (10 Nov 2026), not an open gap:** `develop` stays without branch protection, and merges are held until every gate passes on the final commit. `main` TO CONFIRM |
 | **Linear** | Issue tracking — workspace team **DevFathom** (`DEV`) | Connected to this bot's Linear connector | Linear OAuth for bots; human login in password manager | Transfer workspace admin; rotate bot OAuth |
 | **Anthropic (Claude)** | Ask Fathom provider (budget cap $190/mo across pharmacies) | **TO CONFIRM** | Staging Secrets Manager entry for the Anthropic key; production wiring still `AiProvider=disabled` | Rotate key in provider console + Secrets Manager; update spend alerts |
 | **OpenAI** | Ask Fathom fallback (budget cap $190/mo) | **TO CONFIRM** | Staging Secrets Manager entry for the OpenAI key | Same as above |
@@ -109,7 +111,7 @@ Leftover: `me-central-1` stack `devfathom-staging-dns` still present; older empt
 | **Email (Resend / Brevo / SMTP / SES)** | App email | Production currently **capture** mode (no live send). SES in-region exists but **ProductionAccessEnabled=false** (sandbox). Resend/Brevo keys referenced in `.env.example` | Secrets / env — **do not paste values here** | Decide production sender; move off capture; rotate provider keys |
 | **Payment processors (cards / JazzCash / Easypaisa)** | **TO CONFIRM** — pharmacy POS today is oriented around counter cash / Khata; no live card-processor wiring verified in this pass | n/a | n/a | Confirm whether any merchant accounts exist outside the app |
 | **Sentry / other APM** | **TO CONFIRM** if any | | | |
-| **Azure** | Legacy / forbidden for Ask Fathom and new deploys | Must not be used | Historical migration buckets exist in S3 (`azure-migration-*`) — treat as archive | Do not grant new Azure access for this product |
+| **Azure** | Legacy / forbidden for Ask Fathom and new deploys | Must not be used | Historical migration buckets exist in S3 (`azure-migration-*`) — treat as archive | Do not grant new Azure access for this product. **Saad ordered Azure removed from all code on 10 Nov 2026.** The removal is planned for the next Codex batch and tracked as Linear [DEV-755](https://linear.app/devfathom/issue/DEV-755/remove-azure-from-the-codebase-entirely) and GitHub [#1437](https://github.com/RealDevFathom/devfathom-commercial/issues/1437). |
 
 ---
 
@@ -168,7 +170,7 @@ Same pattern as production, plus staging-only entries for: the seed password, a 
 See also the consolidated list in the running-costs and security docs. Infrastructure-specific:
 
 1. Cloudflare account login owner and whether DNS is proxied vs DNS-only per hostname.  
-2. GitHub org owner list and branch-protection settings.  
+2. GitHub org owner list and branch-protection settings (`develop` unprotected by Saad's decision of 10 Nov 2026; `main` TO CONFIRM).  
 3. Password manager product and vault location.  
 4. AWS root email, billing alerts, and credit expiry.  
 5. Whether production image has been promoted past Abbasi launch digest `b4599a59…`.  

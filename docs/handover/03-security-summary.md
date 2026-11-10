@@ -1,6 +1,8 @@
 # DevFathom — Security summary
 
 > **Repo copy, sanitized 10 Nov 2026 (PKT).** Before this file was committed, identifiers were removed or replaced with placeholders: the AWS account ID, EC2 instance, volume and Elastic IP IDs, the public IP address, the load balancer DNS name, IAM user and role names, Secrets Manager secret names, snapshot names, contact email addresses, personal account names, and hints about where credentials are stored. Everything else, including every **TO CONFIRM** item, is unchanged. The CTO holds the unredacted working copy.
+>
+> **Also updated 10 Nov 2026 (PKT), at Saad's direction:** the missing branch protection on `develop` is recorded as Saad's decision, not an open gap (`main` stays TO CONFIRM), and a note was added that Saad ordered Azure removed from all code (DEV-755 / #1437).
 
 **Audience:** investors and a new CTO.  
 **Written:** 2026-11-10 (Asia/Karachi).  
@@ -63,7 +65,7 @@ Other capabilities in active use include `pharmacy:counter`, `pharmacy:close`, `
 | Narcotics / controlled flag → pharmacist review | **Decided** (product intent) | **Not built** as of Doc Lead 2026-11-02 check — **TO CONFIRM** |
 | Margins visible to Owner, Admin, Finance; Manager own branch | **Decided** | |
 | WhatsApp: promote pharmacy / non-drug only; no drug names in campaigns; server enforce | **Decided** | Partial code paths exist; full Ask Fathom OTC/drug-name guards are a PR series |
-| Ask Fathom never uses Azure | **Decided** | Azure provider code may still exist; must stay disabled |
+| Ask Fathom never uses Azure | **Decided** | Azure provider code may still exist; must stay disabled. **Saad ordered Azure removed from all code on 10 Nov 2026.** The removal is planned for the next Codex batch and tracked as Linear [DEV-755](https://linear.app/devfathom/issue/DEV-755/remove-azure-from-the-codebase-entirely) and GitHub [#1437](https://github.com/RealDevFathom/devfathom-commercial/issues/1437). |
 | Ask Fathom paid add-on; SuperAdmin sets per-pharmacy credits + WhatsApp limits; server enforce | **Decided** | Production `AiProvider=disabled` today |
 | AI budgets: Claude $190 / OpenAI $190 / Bedrock $300 / month shared | **Decided** (caps) | |
 
@@ -171,7 +173,7 @@ Other capabilities in active use include `pharmacy:counter`, `pharmacy:close`, `
 8. **QA/agent EC2 fleets** in eu-north-1 with large instance types — attack surface and cost; ensure SSM/IAM scoped.  
 9. **Day-close counted cash wiped on full remount** — QA filed **DEV-754** (Sev2); product bug, integrity of cash reconciliation.  
 10. **Email still capture mode in production** — reduces email-based reset risk but also means operational mail paths differ from staging plans.
-11. **No branch protection on `develop`** (RealDevFathom/devfathom-commercial): `protected:false`, no rulesets, no required checks (verified 2026-11-10 05:20 PKT). Anyone with write access can push or merge without review or CI. `main` status TO CONFIRM.
+11. **No branch protection on `develop`: Saad's decision (10 Nov 2026), not an open gap.** On RealDevFathom/devfathom-commercial, `develop` shows `protected:false`, with no rulesets and no required checks (verified 2026-11-10 05:20 PKT), so anyone with write access can push or merge without review or CI. Saad confirmed on 2026-11-10 (05:51 PKT) that `develop` stays without branch protection, and merges are held until every gate passes on the final commit. `main` status TO CONFIRM.
 
 ---
 

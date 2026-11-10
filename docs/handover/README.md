@@ -6,7 +6,9 @@
 |---|---|
 | [Infrastructure and access](01-infrastructure-and-access.md) | Environments map, AWS regions and stacks, other services and who owns them, the secrets inventory (categories only), IAM principals by purpose, and the access checklist for a new CTO |
 | [Running costs](02-running-costs.md) | Verified AWS spend (Aug–Nov 2026), non-AWS costs, and an **ESTIMATE** per-pharmacy cost model |
-| [Security summary](03-security-summary.md) | Tenant isolation, roles and separation of duties, MFA, encryption and backups, network hardening, AI and WhatsApp controls, reviews done, open security issues (including **no branch protection on `develop`**), and the Punjab/DRAP compliance position |
+| [Security summary](03-security-summary.md) | Tenant isolation, roles and separation of duties, MFA, encryption and backups, network hardening, AI and WhatsApp controls, reviews done, open security issues, Saad's decision (10 Nov 2026) to keep `develop` without branch protection (`main` TO CONFIRM), and the Punjab/DRAP compliance position |
+
+Azure: **Saad ordered Azure removed from all code on 10 Nov 2026.** The removal is planned for the next Codex batch and tracked as Linear [DEV-755](https://linear.app/devfathom/issue/DEV-755/remove-azure-from-the-codebase-entirely) and GitHub [#1437](https://github.com/RealDevFathom/devfathom-commercial/issues/1437).
 
 Developer-facing material is in the [developer handbook](../dev/README.md).
 
