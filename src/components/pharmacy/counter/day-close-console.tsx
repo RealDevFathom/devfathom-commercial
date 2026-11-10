@@ -219,7 +219,7 @@ function DayCloseForm({
           {tenderTotals.map((row) => (
             <p key={row.type} className="text-sm text-text-body">
               <span className="font-medium">{row.type}</span> · Received {formatMinor(row.amountMinor)}
-              {' '}· Refunds {formatMinor(row.refundMinor)} · Net {formatMinor(row.netMinor)} PKR
+              {' '}· Refunds {formatMinor(row.refundMinor)} · Net {formatMinor(row.netMinor)} {currency}
             </p>
           ))}
         </div>

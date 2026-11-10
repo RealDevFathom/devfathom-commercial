@@ -55,6 +55,9 @@ vi.mock('@/lib/trpc', () => ({
               timezone: mocks.zone,
               close: mocks.close,
               totals: { cashExpectedMinor: 12500, sourceHash: 'hash' },
+              tenderTotals: [
+                { type: 'CASH', amountMinor: 13000, refundMinor: 500, netMinor: 12500 },
+              ],
               drawers: [
                 {
                   id: 'd',
@@ -103,6 +106,9 @@ describe('day-close console', () => {
     expect(screen.getByText('Variance · USD')).toBeInTheDocument();
     expect(screen.getByText('Expected: USD 125.00')).toBeInTheDocument();
     expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toBeInTheDocument();
+    expect(
+      screen.getByText('· Received 130.00 · Refunds 5.00 · Net 125.00 USD')
+    ).toBeInTheDocument();
     expect(screen.queryByText(/PKR/)).not.toBeInTheDocument();
   });
 
@@ -119,6 +125,7 @@ describe('day-close console', () => {
       cashCountedMinor: 10000,
       cashVarianceMinor: 0,
       isFinal: true,
+      tenderTotals: [{ type: 'CASH', amountMinor: 13000, refundMinor: 500, netMinor: 12500 }],
     };
     mocks.close = recorded;
     render(<PharmacyDayCloseConsole />);
@@ -127,6 +134,9 @@ describe('day-close console', () => {
     expect(screen.getByText('Expected cash · USD')).toBeInTheDocument();
     expect(screen.getByText('Counted cash · USD')).toBeInTheDocument();
     expect(screen.getByText('Variance · USD')).toBeInTheDocument();
+    expect(
+      screen.getByText('· Received 130.00 · Refunds 5.00 · Net 125.00 USD')
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Print Z-report' }));
     expect(mocks.printZReport).toHaveBeenCalledWith(
       expect.objectContaining({ ...recorded, currency: 'USD' }),
