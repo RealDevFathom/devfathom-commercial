@@ -117,7 +117,7 @@ export function moduleDefinitionForKey(key: string): ModuleDefinition | undefine
  * separate requirements at their existing enforcement points.
  */
 export function supportsRestaurantPrintSettings(
-  vertical: EntitlementView['vertical'] | null
+  vertical: string | null | undefined
 ): boolean {
   return vertical != null && vertical === verticalForModuleKey('restaurant-core');
 }
