@@ -83,3 +83,23 @@ describe('owner importer wizard', () => {
     expect(screen.queryByLabelText('CSV or XLSX file')).toBeNull();
   });
 });
+
+it('shows a cost-basis warning and still requires explicit review before a valid import',async()=>{
+  const preview=await mocks.preview.mutateAsync();
+  preview.lines[0].warnings=['Cost per tablet/unit is greater than or equal to MRP per tablet/unit. Check the unit basis.'];
+  mocks.preview.mutateAsync.mockResolvedValue(preview);
+  render(<OwnerImportWizard/>);await uploadAndPreview();
+  expect(screen.getByText('Review cost warnings')).toBeVisible();expect(screen.getByText('Review cost basis')).toBeVisible();
+  expect(screen.getByText(/Cost per tablet\/unit is greater/)).toBeVisible();
+  const commit=screen.getByRole('button',{name:'Commit opening stock'});expect(commit).toBeDisabled();
+  fireEvent.click(screen.getByRole('checkbox'));expect(commit).toBeEnabled();
+  expect(mocks.commit.mutateAsync).not.toHaveBeenCalled();
+});
+it('shows rejected rows outside the valid-unit valuation and leaves commit disabled',async()=>{
+  const preview=await mocks.preview.mutateAsync();preview.canCommit=false;
+  preview.lines.push({...preview.lines[0],rowNumber:3,sourceRef:'INVALID',errors:['Invalid pack'],countedUnits:20});
+  mocks.preview.mutateAsync.mockResolvedValue(preview);
+  render(<OwnerImportWizard/>);await uploadAndPreview();
+  expect(screen.getByText(/1 of 2 valid rows · 10 counted base units · PKR 12.50 opening valuation/)).toBeVisible();
+  expect(screen.getByText(/Rejected rows are excluded/)).toBeVisible();expect(screen.getByRole('button',{name:'Commit opening stock'})).toBeDisabled();
+});

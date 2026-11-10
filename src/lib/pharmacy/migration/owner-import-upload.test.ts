@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Workbook } from 'exceljs';
 vi.mock('server-only', () => ({}));
 import { excelShowsDay, parseOwnerUpload } from './owner-import-upload';
-import { IMPORT_MAX_BYTES, IMPORT_MAX_ROWS, suggestImportMapping } from './owner-import-input';
+import { IMPORT_MAX_BYTES, IMPORT_MAX_ROWS, OPENING_TEMPLATE, suggestImportMapping } from './owner-import-input';
 
 describe('owner CSV/XLSX upload boundary', () => {
   it('preserves leading zeroes and quoted commas, quotes and line breaks', async () => {
@@ -53,6 +53,14 @@ describe('owner CSV/XLSX upload boundary', () => {
   });
   it('suggests separate expected and counted columns without reusing a column', () => {
     expect(suggestImportMapping(['Code', 'Barcode', 'QTY', 'Physical count', 'Batch'])).toEqual({ sourceRef: 0, pack: 1, batch: 4, expected: 2, counted: 3 });
+  });
+  it('names and maps the template cost as a per-tablet/unit value', async () => {
+    const { headers } = await parseOwnerUpload('template.csv', Buffer.from(`${OPENING_TEMPLATE}SRC,pack,B1,2099-06,25,1,10,10,\n`));
+    expect(headers).toContain('Cost per tablet/unit');
+    expect(headers).toContain('Printed MRP per pack');
+    expect(suggestImportMapping(headers).mrp).toBe(headers.indexOf('Printed MRP per pack'));
+    expect(suggestImportMapping(['MRP', 'Cost'])).toMatchObject({mrp:0,cost:1});
+    expect(suggestImportMapping(headers).cost).toBe(headers.indexOf('Cost per tablet/unit'));
   });
   it.each([
     ['yyyy-mm', false], ['mmm-yy', false], ['mm/yyyy', false], ['"Exp "yyyy-mm', false],

@@ -39,14 +39,14 @@ export const ownerImportInput = ownerUploadInput.extend({
 }).strict();
 export type OwnerImportInput = z.infer<typeof ownerImportInput>;
 
-export const OPENING_TEMPLATE = 'Source reference,Pack barcode or pack ID,Manufacturing batch,Expiry,MRP,Cost,Exported base units,Physically counted base units,Variance explanation\n';
+export const OPENING_TEMPLATE = 'Source reference,Pack barcode or pack ID,Manufacturing batch,Expiry,Printed MRP per pack,Cost per tablet/unit,Exported base units,Physically counted base units,Variance explanation\n';
 
 export function suggestImportMapping(headers: readonly string[]): ImportMapping {
   const synonyms: Record<ImportField, string[]> = {
     sourceRef: ['sourcereference', 'sourceref', 'id', 'code'],
     pack: ['packbarcodeorpackid', 'barcode', 'packid', 'packlevelid'],
     batch: ['manufacturingbatch', 'batch', 'batchnumber', 'batchno'],
-    expiry: ['expiry', 'expirydate'], mrp: ['mrp', 'printedmrp'], cost: ['cost', 'unitcost'],
+    expiry: ['expiry', 'expirydate'], mrp: ['mrp', 'printedmrp', 'printedmrpperpack'], cost: ['cost', 'unitcost', 'costpertabletunit', 'costperbaseunit', 'costpertabletunitpkr', 'costperbaseunitpkr'],
     expected: ['exportedbaseunits', 'expected', 'exported', 'qty'],
     counted: ['physicallycountedbaseunits', 'counted', 'physicalcount'],
     varianceNote: ['varianceexplanation', 'variancenote'],
