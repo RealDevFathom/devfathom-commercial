@@ -168,8 +168,10 @@ def collect_workers(region, instance_id):
 
 def update_machine_history(state, workers, now, interval):
     m = state.setdefault("machine", {"hours": 0.0, "costUsd": 0.0, "since": now, "perInstance": {}})
+    daily = m.setdefault("daily", {})  # "YYYY-MM-DD" (PKT) -> [hours, costUsd]
     last = state.get("lastSampleAt")
     elapsed = min(max(0.0, now - last), 2.5 * interval) if last else 0.0
+    day = datetime.fromtimestamp(now + 5 * 3600, timezone.utc).strftime("%Y-%m-%d")
     for w in workers or []:
         if w.get("state") != "running":
             continue
@@ -178,11 +180,17 @@ def update_machine_history(state, workers, now, interval):
         per = m["perInstance"].setdefault(w["instanceId"], {"hours": 0.0, "costUsd": 0.0})
         per["hours"] += hrs
         m["hours"] += hrs
+        d = daily.setdefault(day, [0.0, 0.0])
+        d[0] += hrs
         if price:
             per["costUsd"] += hrs * price
             m["costUsd"] += hrs * price
+            d[1] += hrs * price
+    for k in sorted(daily)[:-60]:  # keep 60 days
+        daily.pop(k, None)
     state["lastSampleAt"] = now
     return {"hours": round(m["hours"], 2), "costUsd": round(m["costUsd"], 2), "since": m["since"],
+            "daily": [{"day": k, "hours": round(v[0], 2), "costUsd": round(v[1], 2)} for k, v in sorted(daily.items())[-30:]],
             "perInstance": {k: {"hours": round(v["hours"], 2), "costUsd": round(v["costUsd"], 2)}
                             for k, v in m["perInstance"].items()}}
 

@@ -20,32 +20,20 @@
  ],
  "kpis": [
   [
-   "Tasks",
-   "10"
-  ],
-  [
-   "Codex now",
-   "3/50"
-  ],
-  [
-   "Passed",
-   "3"
-  ],
-  [
-   "Failed",
-   "2"
-  ],
-  [
-   "Merged",
-   "2"
-  ],
-  [
-   "Done",
-   "2"
+   "Codex jobs",
+   "7"
   ],
   [
    "Spend",
-   "268.71"
+   "$269"
+  ],
+  [
+   "Gate pass rate",
+   "84%"
+  ],
+  [
+   "P95 gate step time",
+   "21m"
   ]
  ],
  "lanes": true,
@@ -101,6 +89,22 @@
    "2"
   ]
  ],
+ "progress": [
+  "Codex fix produced5/10",
+  "Gates passed on final SHA3/10",
+  "Merged into develop2/10",
+  "Linear and GitHub closed2/10"
+ ],
+ "pulse": [
+  "50%",
+  "Required gates on final SHA2 failing",
+  "Differential vs baseline1 with new failures",
+  "Security gateNot run",
+  "QA / browserFailing",
+  "Tests and guards2 flagged",
+  "Egress kill-switchUnknown"
+ ],
+ "runs": 11,
  "taskDialog": [
   "DEV-13 Failed: Unit, Differential",
   "FAILED on Complete unit, Differential vs baseline. Final SHA a1b2c3d4e5."

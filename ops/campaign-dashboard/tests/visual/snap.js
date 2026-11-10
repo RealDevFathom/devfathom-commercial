@@ -23,7 +23,9 @@ const { chromium } = require('playwright');
     page.on('pageerror', (e) => result.errors.push(`pageerror: ${e.message}`));
     page.on('requestfailed', (r) => result.errors.push(`requestfailed: ${r.url()}`));
     await page.goto(base);
-    await page.waitForSelector('#matrix, .kpi');
+    // transient toasts are positioned against the viewport and land differently in full-page captures
+    await page.evaluate(() => document.getElementById('toasts').style.setProperty('display', 'none', 'important'));
+    await page.waitForSelector('.kpi-card .kpi-val');
     await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(400);
     return { ctx, page };
@@ -39,7 +41,10 @@ const { chromium } = require('playwright');
   await page.click('.batch >> nth=0');
   await page.waitForTimeout(200);
   result.dom = await page.evaluate(() => ({
-    kpis: [...document.querySelectorAll('.kpi')].map((k) => [k.querySelector('.k-label').textContent.trim(), k.querySelector('.k-value').textContent.trim()]),
+    kpis: [...document.querySelectorAll('.kpi-card')].map((k) => [k.querySelector('.kpi-top span').textContent.trim(), k.querySelector('.kpi-val b').textContent.trim()]),
+    pulse: [document.querySelector('.pulse-center .val').textContent, ...[...document.querySelectorAll('#pulse .policy')].map((p) => p.textContent)],
+    progress: [...document.querySelectorAll('#progress .check')].map((c) => c.textContent),
+    runs: document.querySelectorAll('#runs tbody tr').length,
     pipeline: [...document.querySelectorAll('.stage')].map((s) => [s.querySelector('.stage-name').textContent, s.querySelector('.stage-count').firstChild.textContent]),
     filters: [...document.querySelectorAll('#f-status button')].map((b) => b.textContent),
     matrix: [...document.querySelectorAll('#matrix tbody tr')].map((tr) => [tr.cells[0].textContent, tr.cells[2].textContent]),

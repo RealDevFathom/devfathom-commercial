@@ -12,27 +12,25 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <div class="backdrop" aria-hidden="true"></div>
+  <div class="backdrop" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
 
   <header class="topbar">
     <a class="brand" href="#sec-overview" aria-label="Campaign Ops home">
-      <span class="brand-mark" aria-hidden="true"></span>
-      <span class="brand-name">Campaign Ops</span>
-      <span class="brand-sep" aria-hidden="true">/</span>
-      <span class="brand-sub">DevFathom</span>
+      <svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-sun"/></svg>Campaign Ops<span class="sub">DevFathom</span>
     </a>
-    <nav class="tabs" aria-label="Sections">
-      <a href="#sec-overview">Overview</a>
-      <a href="#sec-attention">Attention</a>
-      <a href="#sec-live">Live</a>
-      <a href="#sec-batches">Batches</a>
-      <a href="#sec-history">History</a>
-      <a href="#sec-machine">Machine</a>
+    <nav class="navpill" aria-label="Sections">
+      <a href="#sec-overview" title="Control room"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-squares"/></svg><span>Control room</span></a>
+      <a href="#sec-attention" title="Needs attention"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-shield"/></svg><span>Attention</span></a>
+      <a href="#sec-live" title="Live"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-pulse"/></svg><span>Live</span></a>
+      <a href="#sec-batches" title="Batches"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-stack"/></svg><span>Batches</span></a>
+      <a href="#sec-history" title="History"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-history"/></svg><span>History</span></a>
+      <a href="#sec-machine" title="Machine"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-cpu"/></svg><span>Machine</span></a>
     </nav>
     <div class="top-right">
       <span id="freshness" class="live-pill">Connecting</span>
       <div class="clock" title="Pakistan Standard Time (UTC+5)"><span id="clock">--:--:--</span><small id="clock-date">PKT</small></div>
-      <button id="ai-open" class="btn btn-ai hidden" type="button" aria-controls="ai-drawer" aria-expanded="false">
+      <button id="theme" class="round" type="button" aria-label="Switch theme"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-moon"/></svg></button>
+      <button id="ai-open" class="btn btn-cta hidden" type="button" aria-controls="ai-drawer" aria-expanded="false">
         <svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-sparkle"/></svg><span>Ask Claude</span><kbd>K</kbd>
       </button>
     </div>
@@ -56,17 +54,28 @@
 
   <main>
     <section id="sec-overview" class="section" aria-labelledby="h-overview">
-      <div class="page-head">
+      <div class="hero">
         <div>
-          <h1 id="h-overview">Campaign overview</h1>
-          <p id="overview-meta" class="lede"></p>
+          <h1 id="h-overview">Campaign control room</h1>
+          <p id="overview-meta" class="lede">Monitoring Codex runs, machine gates, merges and cost.</p>
         </div>
-        <div id="usage-chip" class="usage-chip"></div>
+        <div class="hero-actions">
+          <a class="btn" href="#sec-live"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-pulse"/></svg>Live runs</a>
+          <a class="btn" href="#sec-attention"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-shield"/></svg><span id="attn-label">Needs attention</span></a>
+          <a class="btn" href="#sec-batches"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-stack"/></svg>Batches</a>
+          <button id="ai-open-2" class="btn btn-cta hidden" type="button"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-sparkle"/></svg>Ask Claude</button>
+        </div>
       </div>
-      <div id="kpis" class="kpi-strip"></div>
-      <div class="card pipeline-card">
-        <div class="card-head"><h2>Pipeline</h2><span class="hint">Where every task is right now. Select a stage for its tasks.</span></div>
-        <div id="pipeline" class="pipeline"></div>
+      <div class="room">
+        <div class="card progress-card rise"><div class="card-head"><h3>Campaign progress</h3><span id="progress-meta" class="meta"></span></div><div id="progress"></div></div>
+        <div class="card pipeline-card rise"><div class="card-head"><h3>Pipeline</h3><span class="hint">Where every task is now</span></div><div id="pipeline" class="pipeline"></div><div id="today" class="today"></div></div>
+        <div class="card pulse-card rise"><div class="card-head"><h3>Gate pulse</h3><span id="pulse-meta" class="meta"></span></div><div id="pulse"></div></div>
+        <div id="kpi-1" class="card kpi-card rise"></div>
+        <div id="kpi-2" class="card kpi-card rise"></div>
+        <div id="kpi-3" class="card kpi-card rise"></div>
+        <div id="kpi-4" class="card kpi-card rise"></div>
+        <div class="card spend-card rise"><div id="spend"></div></div>
+        <div class="card runs-card rise"><div class="card-head"><h3><span class="live-dot-t"></span>Live runs stream</h3><span id="runs-meta" class="chip-n">Last 50</span></div><div id="runs"></div></div>
       </div>
     </section>
 

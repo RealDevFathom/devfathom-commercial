@@ -27,7 +27,7 @@
   const FILTERS = [['', 'All'], ['running', 'Running'], ['failed', 'Failed'], ['blocked', 'Blocked'], ['passed', 'Passed'], ['merged', 'Merged'], ['queued', 'Queued']];
   const SERIES = { pass: 'var(--s-pass)', merge: 'var(--s-merge)', codex: 'var(--s-codex)', fail: 'var(--s-fail)' };
   const SERIES_LABEL = { pass: 'Gate passes', merge: 'Merges and closures', codex: 'Codex runs', fail: 'Gate failures' };
-  const MODEL_COLORS = ['#3987e5', '#199e70', '#d95926', '#c98500', '#d55181', '#9085e9'];
+  const MODEL_COLORS = ['var(--s-codex)', 'var(--s-pass)', 'var(--s-merge)', 'var(--warn)', 'var(--merged)', 'var(--dim)'];
   const METRICS = {
     cpuPct: { label: 'CPU', unit: '%', max: 100, icon: 'cpu' },
     load1: { label: 'Load (1 min)', unit: '', max: null, icon: 'gauge' },
@@ -55,6 +55,7 @@
         else if (k === 'style') for (const [sk, sv] of Object.entries(v)) el.style.setProperty(sk, sv);
         else if (k === 'text') el.textContent = v;
         else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+        else if ((k === 'fill' || k === 'stroke' || k === 'stop-color') && typeof v === 'string' && v.startsWith('var(')) el.style.setProperty(k, v);
         else el.setAttribute(k, v === true ? '' : String(v));
       }
     }
@@ -238,7 +239,7 @@
   }
 
   function areaChart(rows, opts) {
-    const { width = 560, height = 150, max = null, thr = null, color = '#3987e5', unit = '', label = '' } = opts || {};
+    const { width = 560, height = 150, max = null, thr = null, color = 'var(--blue)', unit = '', label = '' } = opts || {};
     const pts = rows.filter(([t, v]) => isNum(t) && isNum(v));
     const L = 34; const R = 8; const T = 8; const B = 20;
     const svg = h('svg', { class: 'area', width, height, viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': `${label} chart` });
@@ -290,7 +291,7 @@
     const svg = h('svg', { width, height: H, viewBox: `0 0 ${width} ${H}`, role: 'img', 'aria-label': 'per day' });
     values.forEach((v, i) => {
       const bh = v ? Math.max(3, (v / max) * (H - 4)) : 2;
-      svg.append(h('rect', { x: i * w + 1, y: H - bh, width: Math.max(1, w - 2), height: bh, rx: 2, fill: v ? color : 'rgba(255,255,255,.06)', ...tipAttrs(() => [h('div', { class: 'tt-h' }, dayLabel(labels[i])), h('b', null, `${v}`)]) }));
+      svg.append(h('rect', { x: i * w + 1, y: H - bh, width: Math.max(1, w - 2), height: bh, rx: 2, fill: v ? color : 'var(--track)', ...tipAttrs(() => [h('div', { class: 'tt-h' }, dayLabel(labels[i])), h('b', null, `${v}`)]) }));
     });
     return svg;
   }
@@ -299,7 +300,7 @@
     const total = entries.reduce((a, e) => a + e.value, 0);
     const r = size / 2 - 6;
     const svg = h('svg', { class: 'donut', viewBox: `0 0 ${size} ${size}`, role: 'img', 'aria-label': 'model split' },
-      h('circle', { cx: size / 2, cy: size / 2, r, stroke: 'rgba(255,255,255,.06)' }));
+      h('circle', { cx: size / 2, cy: size / 2, r, stroke: 'var(--track)' }));
     let off = 0;
     for (const e of entries) {
       const len = total ? (100 * e.value) / total : 0;
@@ -344,7 +345,7 @@
   // ------------------------------------------------------------------ render
   function render() {
     const safe = (fn) => { try { fn(); } catch (err) { console.error(fn.name, err); } };
-    [renderFreshness, renderFilters, renderBanner, renderOverview, renderKpis, renderPipeline, renderInsights, renderLanes, renderCodex, renderGatesNow,
+    [renderFreshness, renderFilters, renderBanner, renderOverview, renderProgress, renderPulse, renderKpiCards, renderSpend, renderRuns, renderPipeline, renderToday, renderInsights, renderLanes, renderCodex, renderGatesNow,
       renderNext, renderBatches, renderBatchDetail, renderActivity, renderMerges, renderEvents, renderWorker, renderAIStatus].forEach(safe);
     if (ui.modal.length && $('dlg').open) safe(renderModal);
   }
@@ -395,39 +396,246 @@
 
   function renderOverview() {
     const o = S.overview;
-    $('overview-meta').textContent = `${o.batches} batches, ${fmtNum(o.tasks)} tasks, ${fmtNum(o.codexJobsTotal)} Codex jobs run. ${S.sources.worker.receivedAt ? `Worker data ${ago(S.sources.worker.receivedAt)}.` : 'Waiting for worker data.'}`;
-    const u = (S.worker.usage || {});
-    const pctV = u.weeklyPct;
-    const chip = mount('usage-chip', h('div', null, h('div', { class: 'meta' }, 'Weekly usage'), h('div', { class: 'u-num' }, isNum(pctV) ? `${Math.round(pctV)}%` : 'Unknown')),
-      h('div', null, h('div', { class: 'u-bar' }, h('i', { style: { width: `${isNum(pctV) ? pct(pctV, 100) : 0}%` } }), h('b', { style: { left: `${S.limits.usageStop}%` } })),
-        h('div', { class: 'meta', style: { 'margin-top': '6px' } }, u.stopActive ? 'Usage stop marker ACTIVE' : `Stop line ${S.limits.usageStop}%`)));
-    chip.onclick = () => openModal('usage', {});
+    $('overview-meta').textContent = `Monitoring Codex runs, machine gates, merges and cost. ${o.batches} batches, ${fmtNum(o.tasks)} tasks, ${fmtNum(o.codexJobsTotal)} Codex jobs run.`;
   }
 
-  function renderKpis() {
+  // ------------------------------------------------------------------ control room (OpsPulse-style top grid)
+  const pctTxt = (v) => (isNum(v) ? `${v >= 10 || v === 0 ? Math.round(v) : v.toFixed(1)}%` : '-');
+  function trendChip(cur, prev, goodWhenUp, neutral) {
+    if (!isNum(cur) || !isNum(prev) || prev === 0) return null;
+    const d = ((cur - prev) / Math.abs(prev)) * 100;
+    if (Math.abs(d) < 0.5) return h('span', { class: 'trend flat' }, '0%');
+    const up = d > 0;
+    const good = neutral ? null : (up === goodWhenUp);
+    return h('span', { class: `trend ${good === false ? 'down' : good === null ? 'flat' : ''}`, title: 'Change vs the previous period' }, icon(up ? 'trend-up' : 'trend-down'), `${Math.abs(d).toFixed(Math.abs(d) < 10 ? 1 : 0)}%`);
+  }
+  function quantile(arr, q) { if (!arr.length) return null; const a = [...arr].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(q * (a.length - 1)))]; }
+  function fmtShortDur(sec) { if (!isNum(sec)) return '-'; if (sec < 90) return `${Math.round(sec)}s`; if (sec < 5400) return `${Math.round(sec / 60)}m`; return `${(sec / 3600).toFixed(1)}h`; }
+
+  // thin vertical micro-bars (OpsPulse KPI language); bars: [{v, c, t}] (value, colour, tooltip); hi: index labelled
+  function microBars(bars, width, opts = {}) {
+    const H = opts.height || 62; const n = Math.max(1, bars.length);
+    const svg = h('svg', { class: 'mbars', width, height: H + 16, viewBox: `0 -16 ${width} ${H + 16}`, role: 'img', 'aria-label': opts.label || 'trend' });
+    const step = width / n; const bw = Math.max(2, Math.min(opts.barWidth || 3, step * 0.55));
+    const max = Math.max(1e-9, ...bars.map((b) => b.v || 0));
+    bars.forEach((b, i) => {
+      const x = i * step + (step - bw) / 2;
+      const bh = b.v ? Math.max(3, (b.v / max) * H) : H * 0.42;
+      if (b.dots) {
+        // dotted column (latency style): a transparent hit area for the tooltip plus a stack of dots
+        svg.append(h('rect', { x: i * step, y: 0, width: step, height: H, fill: 'transparent', ...(b.t ? tipAttrs(() => b.t) : {}) }));
+        for (let k = 0; k < b.dots; k += 1) svg.append(h('circle', { cx: x + bw / 2, cy: H - 3 - k * 5, r: 1.7, fill: b.c, 'pointer-events': 'none' }));
+        return;
+      }
+      const attrs = { x, y: H - bh, width: bw, height: bh, rx: bw / 2, fill: b.v ? (b.c || 'var(--green)') : 'var(--tick)' };
+      if (b.t) Object.assign(attrs, tipAttrs(() => b.t));
+      svg.append(h('rect', attrs));
+    });
+    if (isNum(opts.hi) && bars[opts.hi]) {
+      const b = bars[opts.hi];
+      const x = opts.hi * step + step / 2;
+      const bh = b.v ? Math.max(3, (b.v / max) * H) : H * 0.42;
+      svg.append(h('text', { class: 'lbl', x: Math.min(width - 14, Math.max(14, x)), y: H - bh - 6 }, opts.hiLabel || ''));
+    }
+    return svg;
+  }
+
+  function kpiCard(id, opts) {
+    const el = $(id);
+    const w = Math.max(160, el.clientWidth - 40);
+    el.onclick = opts.onclick || null;
+    mount(el,
+      h('div', { class: 'kpi-top' }, h('span', null, opts.title), h('span', { class: 'dots', 'aria-hidden': 'true' }, icon('dots'))),
+      h('div', { class: 'kpi-val' }, h('b', null, opts.prefix || '', isNum(opts.value) ? countUp(`kc-${id}`, opts.value, opts.decimals || 0) : (opts.value ?? '-')), opts.unit ? h('small', null, opts.unit) : null, opts.trend),
+      h('div', { class: 'kpi-sub' }, opts.sub),
+      microBars(opts.bars || [], w, { hi: opts.hi, hiLabel: opts.hiLabel, label: opts.title, barWidth: opts.barWidth }));
+  }
+
+  function renderProgress() {
     const list = scoped({ ignoreStatus: true });
-    const n = (k) => list.filter((x) => x.st.key === k).length;
     const total = list.length;
+    const fixed = list.filter((x) => x.t.fixed || ['passed', 'merged', 'done'].includes(x.st.key)).length;
     const passed = list.filter((x) => ['passed', 'merged', 'done'].includes(x.st.key)).length;
     const merged = list.filter((x) => x.t.merged).length;
-    const done = n('done');
-    const failed = n('failed');
+    const done = list.filter((x) => x.st.key === 'done').length;
+    const p = total ? Math.round((100 * done) / total) : 0;
+    $('progress-meta').textContent = `${total} tasks`;
+    const row = (label, n, go) => h('button', { type: 'button', class: `check ${total && n === total ? 'done' : ''}`, onclick: go },
+      icon(total && n === total ? 'check-circle' : 'circle'), label, h('span', { class: 'n' }, `${n}/${total}`));
+    mount('progress', h('div', { class: 'meta' }, 'Tasks through the full pipeline: gated on the final SHA, merged and closed.'),
+      h('div', { class: 'pc-bar' }, h('div', { class: 'track' }, h('i', { style: { width: `${p}%` } })), h('b', null, `${p}%`)),
+      h('div', { class: 'well' },
+        row('Codex fix produced', fixed, () => openModal('list', { stage: 'all', title: 'All tasks' })),
+        row('Gates passed on final SHA', passed, () => openModal('list', { status: 'passed', title: 'Passed on final SHA' })),
+        row('Merged into develop', merged, () => openModal('list', { status: 'merged', title: 'Merged into develop' })),
+        row('Linear and GitHub closed', done, () => openModal('list', { status: 'done', title: 'Done' }))),
+      h('div', { class: 'mini-stats two' }, [['running', 'Running', 'circle-notch'], ['failed', 'Failed', 'x-circle'], ['blocked', 'Blocked', 'prohibit'], ['queued', 'Queued', 'circle-dashed']].map(([k, label, ic]) => {
+        const v = list.filter((x) => x.st.key === k || (k === 'queued' && x.st.key === 'pending')).length;
+        return h('button', { type: 'button', class: `mini ${k === 'failed' && v ? 'bad' : ''}`, onclick: () => { ui.filter.status = k; render(); $('sec-batches').scrollIntoView({ behavior: 'smooth' }); } },
+          h('span', null, icon(ic), label), h('b', null, countUp(`pm-${k}`, v)));
+      })));
+  }
+
+  function renderPulse() {
+    const list = scoped({ ignoreStatus: true });
+    const passed = list.filter((x) => ['passed', 'merged', 'done'].includes(x.st.key)).length;
+    const failed = list.filter((x) => x.st.key === 'failed').length;
+    const blocked = list.filter((x) => x.st.key === 'blocked').length;
+    const denom = passed + failed + blocked;
+    const rate = denom ? (100 * passed) / denom : null;
+    $('pulse-meta').textContent = `${denom} judged`;
+    // segmented arc: passed, failed, blocked (gaps between segments, round caps)
+    const segs = [[passed, 'var(--green)'], [failed, 'var(--crit)'], [blocked, 'var(--orange)']].filter((x) => x[0] > 0);
+    const arc = 'M 22 112 A 88 88 0 0 1 198 112';
+    const svg = h('svg', { viewBox: '0 0 220 124', role: 'img', 'aria-label': `Gate pass rate ${pctTxt(rate)}` },
+      h('path', { d: arc, fill: 'none', stroke: 'var(--track)', 'stroke-width': 20, 'stroke-linecap': 'round', pathLength: 100 }));
+    const gap = segs.length > 1 ? 6 : 0;
+    let off = 0;
+    for (const [v, c] of segs) {
+      const len = Math.max(0, (100 * v) / Math.max(1, denom) - gap);
+      svg.append(h('path', { d: arc, fill: 'none', stroke: c, 'stroke-width': 20, 'stroke-linecap': 'round', pathLength: 100, 'stroke-dasharray': `${len} 200`, 'stroke-dashoffset': -off },
+        h('title', null, `${v} tasks`)));
+      off += len + gap;
+    }
+    const tasksWith = (pred) => list.filter((x) => pred(x.t.gates || {}));
+    const gateState = (k) => { const s = list.map((x) => ((x.t.gates || {})[k] || {}).status); return s.includes('FAIL') ? 'fail' : s.includes('PASS') ? 'pass' : 'none'; };
+    const diffFail = tasksWith((g) => (g.differential || {}).status === 'FAIL').length;
+    const ks = S.worker.killSwitch || {};
+    const guardFlags = allInsights().filter((x) => /^rule:(guards|tests-drop):/.test(x.key) && (!ui.filter.batch || x.batch === ui.filter.batch)).length;
+    const pol = (label, cls, text, go) => h('button', { type: 'button', class: 'policy', onclick: go }, h('span', null, label), h('span', { class: `badge ${cls}` }, text));
+    const sec = gateState('security'); const qa = gateState('qa_browser');
+    mount('pulse',
+      h('div', { class: 'pulse-gauge' }, svg, h('div', { class: 'pulse-center' }, h('div', { class: 'lbl' }, 'Gate pass rate'), h('div', { class: 'val' }, pctTxt(rate)))),
+      h('div', { class: 'well' },
+        pol('Required gates on final SHA', failed ? 'bad' : passed ? '' : 'idle', failed ? `${failed} failing` : `${passed} passing`, () => openModal('list', { status: failed ? 'failed' : 'passed', title: failed ? 'Failed' : 'Passed on final SHA' })),
+        pol('Differential vs baseline', diffFail ? 'bad' : '', diffFail ? `${diffFail} with new failures` : 'Clean', () => openModal('list', { status: 'failed', title: 'Failed' })),
+        pol('Security gate', sec === 'fail' ? 'bad' : sec === 'pass' ? '' : 'idle', sec === 'fail' ? 'Failing' : sec === 'pass' ? 'Passing' : 'Not run', () => openModal('list', { status: 'failed', title: 'Failed' })),
+        pol('QA / browser', qa === 'fail' ? 'bad' : qa === 'pass' ? '' : 'idle', qa === 'fail' ? 'Failing' : qa === 'pass' ? 'Passing' : 'Not run', () => openModal('list', { status: 'failed', title: 'Failed' })),
+        pol('Tests and guards', guardFlags ? 'warn' : '', guardFlags ? `${guardFlags} flagged` : 'Untouched', () => $('sec-attention').scrollIntoView({ behavior: 'smooth' })),
+        pol('Egress kill-switch', ks.pass === true ? '' : ks.pass === false ? 'bad' : 'idle', ks.pass === true ? 'Active' : ks.pass === false ? 'FAIL' : 'Unknown', () => openModal('killswitch', {}))));
+  }
+
+  function renderKpiCards() {
+    const now = nowSec();
+    const ev = S.events || [];
+    const inScope = (e) => !ui.filter.batch || !e.batch || e.batch === ui.filter.batch;
+    // 1. Codex jobs: starts per hour, last 24 h
+    const starts = ev.filter((e) => inScope(e) && e.kind === 'codex' && /started/i.test(e.text));
+    const fails = ev.filter((e) => inScope(e) && e.kind === 'codex' && e.level === 'bad');
+    const hours = [];
+    for (let i = 23; i >= 0; i -= 1) {
+      const t0 = now - (i + 1) * 3600; const t1 = now - i * 3600;
+      const v = starts.filter((e) => e.ts >= t0 && e.ts < t1).length;
+      const f = fails.filter((e) => e.ts >= t0 && e.ts < t1).length;
+      hours.push({ v, c: f ? 'var(--crit)' : 'var(--green)', t: [h('div', { class: 'tt-h' }, `${fmtHM(t0)} to ${fmtHM(t1)}`), h('div', null, `${v} Codex starts${f ? `, ${f} failed` : ''}`)] });
+    }
+    const last24 = starts.filter((e) => e.ts >= now - 86400).length;
+    const prev24 = starts.filter((e) => e.ts < now - 86400 && e.ts >= now - 172800).length;
+    const hiC = hours.reduce((m, b, i) => (b.v > hours[m].v ? i : m), 0);
     const c = S.codex || {};
-    const active = c.activeCount ?? (c.active || []).length;
-    const cap = c.cap || 50;
+    kpiCard('kpi-1', { title: 'Codex jobs', value: S.overview.codexJobsTotal, trend: trendChip(last24, prev24, true, true),
+      sub: `${c.activeCount ?? 0} running of ${c.cap || 50} slots. ${last24} started in 24 h`, bars: hours, hi: hours[hiC].v ? hiC : null, hiLabel: `${hours[hiC].v}/h`, onclick: () => $('sec-live').scrollIntoView({ behavior: 'smooth' }) });
+    // 2. Spend: daily cost
+    const daily = ((S.box.machine || {}).daily || []).slice(-30);
+    const costBars = daily.map((d) => ({ v: d.costUsd, c: 'var(--green)', t: [h('div', { class: 'tt-h' }, dayLabel(d.day)), h('div', null, `$${fmtNum(d.costUsd, 2)}, ${fmtNum(d.hours, 1)} machine hours`)] }));
+    const wk = daily.slice(-7).reduce((a, d) => a + d.costUsd, 0); const pwk = daily.slice(-14, -7).reduce((a, d) => a + d.costUsd, 0);
+    kpiCard('kpi-2', { title: 'Spend', prefix: '$', value: S.overview.machineCostUsd, decimals: 0, trend: daily.length >= 14 ? trendChip(wk, pwk, false, true) : null,
+      sub: daily.length ? `$${fmtNum(wk, 0)} in the last 7 days` : 'Daily cost appears after the ops-box collector update', bars: costBars, hi: costBars.length ? costBars.length - 1 : null,
+      hiLabel: daily.length ? `$${fmtNum(daily[daily.length - 1].costUsd, 0)}` : '', onclick: () => openModal('workers', {}) });
+    // 3. Gate pass rate: step results per day, 14 days (green passes, red failures)
+    const steps = ev.filter((e) => inScope(e) && e.kind === 'step' && (e.level === 'ok' || e.level === 'bad'));
+    const rateOf = (a, b) => { const xs = steps.filter((e) => e.ts >= a && e.ts < b); const p = xs.filter((e) => e.level === 'ok').length; return xs.length ? { r: (100 * p) / xs.length, p, f: xs.length - p } : null; };
+    const r7 = rateOf(now - 7 * 86400, now + 1); const rp = rateOf(now - 14 * 86400, now - 7 * 86400);
+    const dayBarsArr = [];
+    for (let i = 13; i >= 0; i -= 1) {
+      const t0 = now - (i + 1) * 86400; const t1 = now - i * 86400; const r = rateOf(t0, t1);
+      dayBarsArr.push({ v: r ? r.r : 0, c: r && r.f ? 'var(--crit)' : 'var(--green)', t: [h('div', { class: 'tt-h' }, dayLabel(dayKey(t1 - 1))), h('div', null, r ? `${pctTxt(r.r)} passed (${r.p} passed, ${r.f} failed)` : 'No gate results')] });
+    }
+    kpiCard('kpi-3', { title: 'Gate pass rate', value: r7 ? pctTxt(r7.r) : '-', trend: r7 && rp ? trendChip(r7.r, rp.r, true) : null,
+      sub: r7 ? `${r7.p} passed, ${r7.f} failed step results in 7 days` : 'No gate results in 7 days', bars: dayBarsArr, hi: dayBarsArr.length - 1, hiLabel: r7 ? pctTxt(dayBarsArr[dayBarsArr.length - 1].v) : '',
+      onclick: () => openModal('list', { status: 'failed', title: 'Failed' }) });
+    // 4. P95 gate time: step durations, dotted columns coloured by result
+    const durs = [];
+    for (const { b, t } of allTasks()) {
+      if (ui.filter.batch && b.id !== ui.filter.batch) continue;
+      for (const r of t.runs || []) for (const s of r.steps || []) if (isNum(s.start) && isNum(s.end)) durs.push({ d: s.end - s.start, end: s.end, st: s.status, name: s.name, issue: t.issue });
+    }
+    durs.sort((a, b2) => a.end - b2.end);
+    const d24 = durs.filter((x) => x.end >= now - 86400).map((x) => x.d); const dPrev = durs.filter((x) => x.end < now - 86400 && x.end >= now - 172800).map((x) => x.d);
+    const all = durs.map((x) => x.d);
+    const p95 = quantile(d24.length ? d24 : all, 0.95); const p95p = quantile(dPrev, 0.95);
+    const recent = durs.slice(-40);
+    const maxD = Math.max(1, ...recent.map((x) => x.d));
+    const latBars = recent.map((x) => ({ v: 0, dots: Math.max(1, Math.round((x.d / maxD) * 11)), c: x.st === 'FAIL' ? 'var(--crit)' : x.d >= (p95 || Infinity) ? 'var(--warn)' : 'var(--green)',
+      t: [h('div', { class: 'tt-h' }, `${x.issue} ${x.name}`), h('div', null, `${fmtDur(x.d)}, ${x.st.toLowerCase()}`)] }));
+    kpiCard('kpi-4', { title: 'P95 gate step time', value: fmtShortDur(p95), trend: isNum(p95) && isNum(p95p) ? trendChip(p95, p95p, false) : null,
+      sub: `${durs.length} timed gate steps. Median ${fmtShortDur(quantile(all, 0.5))}`, bars: latBars, barWidth: 3.2 });
+  }
+
+  function renderSpend() {
     const o = S.overview;
-    const kpi = (key, label, ic, value, sub, opts = {}) => h('button', { type: 'button', class: `kpi ${opts.cls || ''}`, onclick: opts.onclick },
-      h('div', { class: 'k-label' }, icon(ic), label),
-      h('div', { class: 'k-value' }, isNum(value) ? countUp(key, value, opts.decimals || 0) : value, opts.small ? h('small', null, opts.small) : null),
-      h('div', { class: 'k-sub' }, sub), opts.spark || null);
-    mount('kpis',
-      kpi('k-total', 'Tasks', 'stack', total, `${S.batches.length} batches`, { onclick: () => openModal('list', { stage: 'all', title: 'All tasks' }) }),
-      kpi('k-run', 'Codex now', 'robot', active, `of ${cap} slots`, { small: `/${cap}`, cls: active ? 'k-live' : '', onclick: () => $('sec-live').scrollIntoView({ behavior: 'smooth' }), spark: sparkline(perDay(14, (e) => e.kind === 'codex' && /started/i.test(e.text)), '#3987e5') }),
-      kpi('k-pass', 'Passed', 'check-circle', passed, total ? `${Math.round(pct(passed, total))}% on final SHA` : 'on final SHA', { onclick: () => openModal('list', { status: 'passed', title: 'Passed on final SHA' }), spark: sparkline(perDay(14, (e) => classifyEvent(e) === 'pass'), '#199e70') }),
-      kpi('k-fail', 'Failed', 'x-circle', failed, failed ? 'Needs a look' : 'Nothing failing', { cls: failed ? 'k-bad' : '', onclick: () => { ui.filter.status = 'failed'; render(); $('sec-batches').scrollIntoView({ behavior: 'smooth' }); }, spark: sparkline(perDay(14, (e) => classifyEvent(e) === 'fail'), '#d03b3b') }),
-      kpi('k-merged', 'Merged', 'merge', merged, `${o.mergedLast30d} PRs in 30 days`, { onclick: () => openModal('list', { status: 'merged', title: 'Merged into develop' }), spark: sparkline(perDay(14, (e) => e.kind === 'merge'), '#a371f7') }),
-      kpi('k-done', 'Done', 'check', done, total ? `${Math.round(pct(done, total))}% of tasks` : 'Gated, merged, closed', { onclick: () => openModal('list', { status: 'done', title: 'Done' }) }),
-      kpi('k-spend', 'Spend', 'dollar', isNum(o.machineCostUsd) ? o.machineCostUsd : 'n/a', isNum(o.machineHours) ? `${fmtNum(o.machineHours, 1)} machine hours` : 'No cost data yet', { decimals: 2, onclick: () => openModal('workers', {}) }));
+    const daily = ((S.box.machine || {}).daily || []);
+    const last7 = daily.slice(-7);
+    const avg = last7.length ? last7.reduce((a, d) => a + d.costUsd, 0) / last7.length : null;
+    const proj = isNum(avg) ? avg * 30 : null;
+    const wk = last7.reduce((a, d) => a + d.costUsd, 0); const pwk = daily.slice(-14, -7).reduce((a, d) => a + d.costUsd, 0);
+    const c = S.codex || {};
+    const cap = c.cap || 50; const running = Math.min(cap, c.activeCount ?? (c.active || []).length);
+    const queued = scoped({ ignoreStatus: true }).filter((x) => ['queued', 'pending'].includes(x.st.key)).length;
+    const free = Math.max(0, cap - running);
+    const u = S.worker.usage || {};
+    const up = u.weeklyPct;
+    const uCls = u.stopActive || (isNum(up) && up >= S.limits.usageStop) ? 'bad' : isNum(up) && up >= 80 ? '' : 'ok';
+    const part = (cls, n, pctLabel, count, grow) => h('div', { class: `seg-part ${cls}`, style: { 'flex-grow': String(Math.max(grow, 0.0001)), 'flex-basis': '0' } },
+      h('span', { class: 'pctl' }, pctLabel), Array.from({ length: Math.max(1, count) }, () => h('i')));
+    mount('spend',
+      h('div', { class: 'card-head' }, h('h3', null, '30-day spend forecast'), h('span', { class: 'meta' }, `Spot cap $${S.limits.spotCap.toFixed(2)}/h`)),
+      h('div', { class: 'spend-top' },
+        h('div', null, h('div', { class: 'big-money' }, isNum(proj) ? ['$', countUp('proj', proj, 0)] : (isNum(o.machineCostUsd) ? ['$', countUp('spend', o.machineCostUsd, 0)] : '-')),
+          h('div', { class: 'kpi-val' }, daily.length >= 14 ? trendChip(wk, pwk, false, true) : null,
+            h('span', { class: 'meta' }, isNum(proj) ? `Projected spend for the next 30 days at the last 7-day rate. $${fmtNum(o.machineCostUsd, 0)} spent so far` : `$${fmtNum(o.machineCostUsd, 2)} spent so far. Projection needs daily cost data`)))),
+      h('div', { class: 'capbar', role: 'img', 'aria-label': `Codex slots: ${free} free, ${running} running, ${queued} queued` },
+        part('ticks', free, `${Math.round((100 * free) / cap)}%`, Math.min(free, 40), free),
+        running ? part('solid', running, `${Math.round((100 * running) / cap)}%`, 1, running) : null,
+        queued ? part('blocks', queued, `${queued} queued`, Math.min(queued, 8), Math.max(queued, cap * 0.12)) : null),
+      h('div', { class: 'cap-legend' }, h('span', null, h('i', { style: { background: 'var(--blue)' } }), `Free Codex slots ${free}`),
+        h('span', null, h('i', { style: { background: 'var(--orange)' } }), `Running ${running}`), h('span', null, h('i', { style: { background: 'var(--green)' } }), `Queued ${queued}`)),
+      h('div', { class: `confidence ${uCls}`, ...activate(() => openModal('usage', {})) }, icon(uCls === 'ok' ? 'check-circle' : 'warning'),
+        h('span', null, `Weekly usage${u.stopActive ? ', stop marker ACTIVE' : `, stop line ${S.limits.usageStop}%`}`), h('b', null, isNum(up) ? `${Math.round(up)}%` : 'Unknown')));
+  }
+
+  function renderRuns() {
+    const now = nowSec();
+    const rows = [];
+    for (const { b, t } of allTasks()) {
+      if (ui.filter.batch && b.id !== ui.filter.batch) continue;
+      if (ui.filter.q && !`${t.issue} ${t.title || ''}`.toLowerCase().includes(ui.filter.q)) continue;
+      for (const r of t.runs || []) {
+        const start = r.codexStart ?? r.start;
+        if (!isNum(start)) continue;
+        const live = r.norm === 'RUNNING' || (/RUNNING|VERIFYING/i.test(r.status || '') && !r.stale);
+        const end = r.end ?? (live ? now : r.last);
+        const ok = r.kind === 'codex' ? r.codexExitCode === 0 : r.norm === 'PASS' || (r.steps || []).length && (r.steps || []).every((s) => s.status === 'PASS');
+        const failSteps = (r.steps || []).filter((s) => s.status === 'FAIL');
+        const diffPass = ((t.gates || {}).differential || {}).status === 'PASS';
+        const baselineOnly = failSteps.length > 0 && diffPass && failSteps.every((s) => s.gate === 'complete_unit');
+        const failedRun = !baselineOnly && (r.norm === 'FAIL' || (r.kind === 'codex' && isNum(r.codexExitCode) && r.codexExitCode !== 0) || failSteps.length > 0);
+        const st = live ? ['run', 'Live'] : failedRun ? ['bad', `Failed${failSteps.length ? `: ${failSteps.map((x) => gateName(x.gate)).join(', ')}` : ''}`]
+          : baselineOnly ? ['warn', 'Baseline fails'] : r.norm === 'BLOCKED' ? ['warn', 'Blocked'] : ok ? ['', 'Passed'] : ['idle', 'Ended'];
+        rows.push({ b, t, r, start, last: Math.max(r.last || 0, end || 0), dur: isNum(end) ? end - start : null, st, live });
+      }
+    }
+    rows.sort((a, c) => (c.live - a.live) || (c.last - a.last));
+    const shown = rows.slice(0, 50);
+    $('runs-meta').textContent = `Last ${Math.min(50, rows.length)}`;
+    mount('runs', shown.length ? h('div', { class: 'runs-wrap' }, h('table', { class: 'runs-table' },
+      h('thead', null, h('tr', null, ['Name', 'Run', 'Time', 'Duration', 'Status'].map((x) => h('th', null, x)))),
+      h('tbody', null, shown.map((x) => h('tr', { ...activate(() => openModal('task', { batch: x.b.id, issue: x.t.issue })) },
+        h('td', { class: 'nm', title: x.t.title || '' }, h('b', null, x.t.issue), x.t.title ? h('span', null, ` ${x.t.title}`) : null),
+        h('td', { class: 'meta' }, `${x.r.kind} ${x.r.run}`),
+        h('td', null, ago(x.start)),
+        h('td', null, x.live ? since(x.start) : fmtShortDur(x.dur)),
+        h('td', null, h('span', { class: `badge ${x.st[0]}` }, x.st[1]))))))) : h('div', { class: 'empty' }, 'No runs yet'));
   }
 
   function renderPipeline() {
@@ -444,11 +652,11 @@
       const blocked = xs.filter((x) => x.st.key === 'blocked').length;
       const queued = xs.filter((x) => ['queued', 'pending'].includes(x.st.key)).length;
       const beyond = list.filter((x) => order.indexOf(stageOf(x.t, x.st)) > i).length;
-      const parts = [[running, '#3987e5'], [failed, '#d03b3b'], [blocked, '#fab219'], [xs.length - running - failed - blocked, 'rgba(255,255,255,.28)']].filter((p) => p[0] > 0);
+      const parts = [[running, 'var(--run)'], [failed, 'var(--crit)'], [blocked, 'var(--warn)'], [xs.length - running - failed - blocked, 'var(--pend)']].filter((p) => p[0] > 0);
       return h('button', { type: 'button', class: `stage ${running ? 'live' : ''} ${failed ? 'has-fail' : ''}`, onclick: () => openModal('list', { pipeline: k, title: `${name}: tasks at this stage` }) },
         i < STAGES.length - 1 ? h('span', { class: `wire ${running ? 'flow' : ''}`, 'aria-hidden': 'true' }) : null,
         h('div', { class: 'stage-top' }, h('span', { class: 'node' }, icon(ic)), h('div', null, h('div', { class: 'stage-name' }, name), h('div', { class: 'stage-sub' }, sub))),
-        h('div', { class: 'stage-count' }, countUp(`p-${k}`, xs.length), h('small', null, k === 'done' ? 'tasks' : `here, ${beyond} further`)),
+        h('div', { class: 'stage-count', title: k === 'done' ? `${xs.length} tasks done` : `${xs.length} tasks at this stage, ${beyond} further along` }, countUp(`p-${k}`, xs.length), h('small', null, xs.length === 1 ? 'task' : 'tasks')),
         h('div', { class: 'stage-bar' }, parts.map(([v, c]) => h('i', { style: { 'flex-grow': String(v), background: c } }))),
         h('div', { class: 'stage-chips' },
           running ? h('span', { class: 'pill s-running' }, icon('circle-notch'), `${running} running`) : null,
@@ -456,6 +664,19 @@
           blocked ? h('span', { class: 'pill s-blocked' }, icon('prohibit'), `${blocked} blocked`) : null,
           queued ? h('span', { class: 'pill s-queued' }, icon('circle-dashed'), `${queued} queued`) : null));
     }));
+  }
+
+  function renderToday() {
+    const today = dayKey(nowSec());
+    const ev = (S.events || []).filter((e) => dayKey(e.ts) === today && (!ui.filter.batch || !e.batch || e.batch === ui.filter.batch));
+    const n = (f) => ev.filter(f).length;
+    const tile = (ic, label, v, cls) => h('div', { class: `mini ${cls || ''}` }, h('span', null, icon(ic), label), h('b', null, countUp(`today-${label}`, v)));
+    mount('today', h('div', { class: 'mini-head' }, `Today, ${dayLabel(today)}`),
+      h('div', { class: 'mini-stats' },
+        tile('robot', 'Codex finished', n((e) => e.kind === 'codex' && /finished/i.test(e.text))),
+        tile('check-circle', 'Gate passes', n((e) => classifyEvent(e) === 'pass')),
+        tile('x-circle', 'Gate failures', n((e) => classifyEvent(e) === 'fail'), n((e) => classifyEvent(e) === 'fail') ? 'bad' : ''),
+        tile('merge', 'Merges', n((e) => e.kind === 'merge'))));
   }
 
   // ------------------------------------------------------------------ insights and toasts
@@ -482,6 +703,7 @@
     const st = S.ai || {};
     const warnings = list.filter((x) => x.kind === 'warning');
     const sugg = list.filter((x) => x.kind === 'suggestion');
+    $('attn-label').textContent = warnings.length ? `Needs attention (${warnings.length})` : 'Needs attention';
     $('insights-meta').textContent = `${warnings.length} warnings, ${sugg.length} suggestions${ai && ai.generatedAt ? `. Claude analysed ${ago(ai.generatedAt)}` : st.enabled ? '. Claude analysis pending' : ''}`;
     $('ai-refresh').classList.toggle('hidden', !st.enabled);
     mount('insights',
@@ -526,7 +748,7 @@
     const x = (t) => L + ((t - (now - past)) / past) * (nowX - L);
     const laneY = (i) => TOP + i * ROW;
     const svg = h('svg', { class: 'lanes-svg', width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Activity in the past 12 hours, running now and queued next' },
-      h('defs', null, h('pattern', { id: 'future-hatch', width: 6, height: 6, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' }, h('line', { x1: 0, y1: 0, x2: 0, y2: 6, stroke: 'rgba(255,255,255,.05)', 'stroke-width': 2 }))));
+      h('defs', null, h('pattern', { id: 'future-hatch', width: 6, height: 6, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' }, h('line', { class: 'ln-hatch', x1: 0, y1: 0, x2: 0, y2: 6 }))));
     lanes.forEach((name, i) => {
       svg.append(h('rect', { class: 'ln-row', x: L, y: laneY(i) + 4, width: W - L - R, height: ROW - 8, rx: 8 }),
         h('text', { class: 'ln-label', x: 0, y: laneY(i) + ROW / 2 + 4 }, name));
@@ -543,12 +765,12 @@
 
     const inScope = (bid) => !ui.filter.batch || !bid || bid === ui.filter.batch;
     const laneOf = (e) => (e.kind === 'codex' ? 0 : (e.kind === 'merge' || e.kind === 'issue') ? 2 : ['step', 'gates', 'review', 'baseline', 'state'].includes(e.kind) ? 1 : -1);
-    const colorOf = (e) => (e.level === 'bad' ? '#d03b3b' : e.kind === 'merge' ? '#a371f7' : e.kind === 'issue' ? '#199e70' : e.kind === 'codex' ? '#3987e5' : e.level === 'ok' ? '#0ca30c' : '#8b8b95');
+    const colorOf = (e) => (e.level === 'bad' ? 'var(--crit)' : e.kind === 'merge' ? 'var(--merged)' : e.kind === 'issue' ? 'var(--s-pass)' : e.kind === 'codex' ? 'var(--run)' : e.level === 'ok' ? 'var(--good)' : 'var(--dim)');
     const evs = (S.events || []).filter((e) => e.ts >= now - past && e.ts <= now && laneOf(e) >= 0 && inScope(e.batch)).slice(0, 500);
     evs.forEach((e, idx) => {
       const li = laneOf(e);
       const jitter = ((idx * 7) % 5) - 2;
-      svg.append(h('circle', { class: 'mk', cx: x(e.ts), cy: laneY(li) + ROW / 2 + jitter * 3, r: e.kind === 'merge' ? 5 : 3.5, fill: colorOf(e), stroke: 'rgba(8,8,10,.9)', 'stroke-width': 1.5,
+      svg.append(h('circle', { class: 'mk', cx: x(e.ts), cy: laneY(li) + ROW / 2 + jitter * 3, r: e.kind === 'merge' ? 5 : 3.5, class: 'mk mk-ring', fill: colorOf(e),
         onclick: () => openEvent(e), ...tipAttrs(() => [h('div', { class: 'tt-h' }, `${fmtHM(e.ts)} PKT`), h('div', null, e.issue ? h('b', null, `${e.issue} `) : null, e.text), e.batch ? h('div', { class: 'meta' }, batchName(e.batch)) : null]) }));
     });
     const spans = [
@@ -581,7 +803,7 @@
       svg.append(h('text', { class: 'ghost-txt', x: W - R - 6, y: cy + 4, 'text-anchor': 'end' }, xs.length ? `${xs.length} ${word}` : 'none'));
     });
     mount(host, svg);
-    mount('lane-legend', [['#3987e5', 'Codex'], ['#0ca30c', 'Gate passed'], ['#d03b3b', 'Failed'], ['#a371f7', 'Merged'], ['#199e70', 'Issue closed']].map(([c, l]) => h('span', null, h('i', { style: { background: c } }), l)));
+    mount('lane-legend', [['var(--run)', 'Codex'], ['var(--good)', 'Gate passed'], ['var(--crit)', 'Failed'], ['var(--merged)', 'Merged'], ['var(--s-pass)', 'Issue closed']].map(([c, l]) => h('span', null, h('i', { style: { background: c } }), l)));
     $('live-meta').textContent = `${spans.length} running, ${queued.length} queued`;
   }
 
@@ -652,8 +874,8 @@
   }
 
   // ------------------------------------------------------------------ batches
-  const SEGS = [['done', '#0ca30c', 'Done'], ['merged', '#a371f7', 'Merged'], ['passed', '#199e70', 'Passed'], ['running', '#3987e5', 'Running'], ['gates', '#8b8b95', 'Awaiting gates'],
-    ['failed', '#d03b3b', 'Failed'], ['blocked', '#fab219', 'Blocked'], ['queued', 'rgba(255,255,255,.16)', 'Queued'], ['pending', 'rgba(255,255,255,.09)', 'Pending']];
+  const SEGS = [['done', 'var(--good)', 'Done'], ['merged', 'var(--merged)', 'Merged'], ['passed', 'var(--s-pass)', 'Passed'], ['running', 'var(--run)', 'Running'], ['gates', 'var(--dim)', 'Awaiting gates'],
+    ['failed', 'var(--crit)', 'Failed'], ['blocked', 'var(--warn)', 'Blocked'], ['queued', 'var(--pend)', 'Queued'], ['pending', 'var(--track)', 'Pending']];
   function batchRow(b) {
     const ts = b.tasks.map((t) => statusOf(t).key);
     const n = ts.length;
@@ -795,11 +1017,11 @@
     $('merges-meta').textContent = `${merged.length} in 30 days${S.github.developSha ? `. develop at ${S.github.developSha.slice(0, 7)}` : ''}`;
     $('issues-meta').textContent = `${closed.length} with DEV references in 30 days`;
     const wM = widthOf($('merges'), 520); const wI = widthOf($('issues'), 520);
-    mount('merges', miniBars(count(merged, 'mergedAt'), keys, '#a371f7', wM),
+    mount('merges', miniBars(count(merged, 'mergedAt'), keys, 'var(--merged)', wM),
       merged.length ? h('div', { class: 'scroll' }, merged.map((p) => h('button', { class: 'item', type: 'button', onclick: () => openModal('merge', { number: p.number }) },
         icon('merge'), h('span', null, h('div', { class: 'i-title' }, `#${p.number} `, h('span', { class: 't2' }, p.title)), h('div', { class: 'i-sub' }, `${fmtDT(p.mergedAt)} PKT. `, sha(p.sha), (p.issues || []).length ? `. ${p.issues.join(', ')}` : '')),
         h('span', { class: 'i-side' }, ago(p.mergedAt))))) : h('div', { class: 'empty' }, 'No merges reported'));
-    mount('issues', miniBars(count(closed, 'closedAt'), keys, '#199e70', wI),
+    mount('issues', miniBars(count(closed, 'closedAt'), keys, 'var(--s-pass)', wI),
       closed.length ? h('div', { class: 'scroll' }, closed.map((i) => h('button', { class: 'item', type: 'button', onclick: () => openModal('ghissue', { number: i.number }) },
         icon('check-circle'), h('span', null, h('div', { class: 'i-title' }, `#${i.number} `, h('span', { class: 't2' }, i.title)), h('div', { class: 'i-sub' }, `${fmtDT(i.closedAt)} PKT. ${(i.issues || []).join(', ')}`)),
         h('span', { class: 'i-side' }, ago(i.closedAt))))) : h('div', { class: 'empty' }, 'No closed issues reported'));
@@ -880,9 +1102,9 @@
     };
     const svc = S.worker.services;
     mount(host, h('div', { class: 'machine-grid' },
-      metric('cpuPct', isNum(sys.cpuPct) ? Math.round(sys.cpuPct) : '-', '%', `${cores} cores. PSI ${psiTxt}`, '#3987e5', { max: 100 }),
-      metric('load1', isNum(load[0]) ? load[0].toFixed(2) : '-', '', isNum(load[1]) ? `5 min ${load[1].toFixed(2)}, 15 min ${load[2].toFixed(2)}. Alert above ${(0.9 * cores).toFixed(1)}` : '', '#199e70', { thr: 0.9 * cores }),
-      metric('memPct', isNum(mem.pct) ? Math.round(mem.pct) : '-', '%', `${fmtGiB(mem.usedBytes)} of ${fmtGiB(mem.totalBytes)} used`, '#d95926', { max: 100 }),
+      metric('cpuPct', isNum(sys.cpuPct) ? Math.round(sys.cpuPct) : '-', '%', `${cores} cores. PSI ${psiTxt}`, 'var(--blue)', { max: 100 }),
+      metric('load1', isNum(load[0]) ? load[0].toFixed(2) : '-', '', isNum(load[1]) ? `5 min ${load[1].toFixed(2)}, 15 min ${load[2].toFixed(2)}. Alert above ${(0.9 * cores).toFixed(1)}` : '', 'var(--green)', { thr: 0.9 * cores }),
+      metric('memPct', isNum(mem.pct) ? Math.round(mem.pct) : '-', '%', `${fmtGiB(mem.usedBytes)} of ${fmtGiB(mem.totalBytes)} used`, 'var(--orange)', { max: 100 }),
       h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h3', null, icon('disk'), 'Disks')), diskRow('/workspace'), diskRow('/scratch')),
       h('div', { class: 'card', ...activate(() => openModal('workers', {})) }, h('div', { class: 'card-head' }, h('h3', null, icon('cloud'), 'Instance'), w.state ? pill({ key: w.state === 'running' ? 'passed' : 'blocked', label: `${w.state}${w.lifecycle ? `, ${w.lifecycle}` : ''}` }) : null),
         h('dl', { class: 'kv' }, kv('Instance', w.instanceId || '-'), kv('Type', w.instanceType || '-'), kv('Zone', w.az || '-'), kv('Uptime', isNum(sys.uptimeSec) ? fmtDur(sys.uptimeSec) : '-')),
@@ -1096,8 +1318,8 @@
     const st = vals.length ? { min: Math.min(...vals), max: Math.max(...vals), avg: vals.reduce((a, v) => a + v, 0) / vals.length } : null;
     return [h('dl', { class: 'kv' }, kv('Latest', vals.length ? `${vals[vals.length - 1].toFixed(1)}${m.unit}` : '-'), kv('Min, avg, max (1 h)', st ? `${st.min.toFixed(1)}, ${st.avg.toFixed(1)}, ${st.max.toFixed(1)}${m.unit}` : '-'),
       kv('Alert line', isNum(thr) ? `${thr.toFixed(1)}${m.unit}` : 'None')),
-    sec('Last hour', areaChart(recent, { width: w, height: 220, max: m.max, thr, color: '#3987e5', unit: m.unit, label: m.label })),
-    sec('Last 7 days, hourly average', areaChart(hourly, { width: w, height: 220, max: m.max, thr, color: '#199e70', unit: m.unit, label: m.label })),
+    sec('Last hour', areaChart(recent, { width: w, height: 220, max: m.max, thr, color: 'var(--blue)', unit: m.unit, label: m.label })),
+    sec('Last 7 days, hourly average', areaChart(hourly, { width: w, height: 220, max: m.max, thr, color: 'var(--green)', unit: m.unit, label: m.label })),
     evidence({ system: S.worker.system })];
   }
   function modalService(k) {
@@ -1281,6 +1503,7 @@
   function renderAIStatus() {
     const st = S.ai || {};
     $('ai-open').classList.toggle('hidden', !st.enabled);
+    $('ai-open-2').classList.toggle('hidden', !st.enabled);
     $('ai-status').textContent = st.enabled ? `${st.model}. Analysis ${st.analysisConfig || st.model}. ${st.budgetExhausted ? 'Daily budget reached' : `${st.budgetUsedPct ?? 0}% of daily budget used`}` : 'AI not configured';
   }
   async function refreshAnalysis() {
@@ -1317,7 +1540,21 @@
     $('q').addEventListener('blur', () => setTimeout(() => $('q-results').classList.add('hidden'), 120));
     $('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') { const first = $('q-results').querySelector('.q-item'); if (first) first.dispatchEvent(new MouseEvent('mousedown')); } if (e.key === 'Escape') { $('q').value = ''; ui.filter.q = ''; render(); $('q').blur(); } });
     $('f-batch').addEventListener('change', () => { ui.filter.batch = $('f-batch').value; render(); });
-    $('usage-chip').addEventListener('click', () => S && openModal('usage', {}));
+    const applyTheme = (t) => {
+      document.documentElement.dataset.theme = t;
+      $('theme').querySelector('use').setAttribute('href', `/static/icons.svg#i-${t === 'dark' ? 'sun-dim' : 'moon'}`);
+      $('theme').setAttribute('aria-label', t === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+    };
+    let theme = 'light';
+    try { theme = localStorage.getItem('ops-theme') || 'light'; } catch (e) { /* storage unavailable */ }
+    applyTheme(theme);
+    $('theme').addEventListener('click', () => {
+      theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+      applyTheme(theme);
+      try { localStorage.setItem('ops-theme', theme); } catch (e) { /* ignore */ }
+      if (S) render();
+    });
+    $('ai-open-2').addEventListener('click', () => toggleChat(true));
     $('bd-close').addEventListener('click', () => selectBatch(ui.batch));
     $('dlg-close').addEventListener('click', () => $('dlg').close());
     $('dlg-back').addEventListener('click', () => { ui.modal.pop(); renderModal(); });
@@ -1348,7 +1585,7 @@
       if ((e.key === 'k' || e.key === 'K') && S && S.ai && S.ai.enabled) { e.preventDefault(); toggleChat(); }
     });
     if ('IntersectionObserver' in window) {
-      const links = [...document.querySelectorAll('.tabs a')];
+      const links = [...document.querySelectorAll('.navpill a')];
       const io = new IntersectionObserver((entries) => {
         for (const en of entries) if (en.isIntersecting) links.forEach((a) => a.classList.toggle('on', a.getAttribute('href') === `#${en.target.id}`));
       }, { rootMargin: '-35% 0px -60% 0px' });

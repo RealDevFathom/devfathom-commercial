@@ -278,9 +278,19 @@ The task needs outbound HTTPS to `api.anthropic.com` (NAT gateway or an egress r
   `server/static/fonts/` under the SIL OFL (licence alongside) and served by the dashboard itself. There is no
   CDN, and no element (including SVG chart text) falls back to a system monospace font.
 * Icons: a vendored Phosphor sprite (`server/static/icons.svg`, MIT).
-* Dark, neutral theme. Colour is reserved for state: green passed/done, red failed (always names the gate),
-  amber blocked, blue running, violet merged. Every status carries an icon and a label, never colour alone.
-  The activity chart palette was checked with a colour-vision-deficiency validator against the dark surface.
+* Layout follows the OpsPulse "control room" reference (Orbix Studio). It is light and frosted by default: glass panels over a soft
+  colour field, a pill icon nav and one yellow call to action. The sun/moon button switches to a dark theme, and the choice is
+  remembered per browser. The top grid holds:
+  * campaign progress;
+  * the pipeline flow, with today's activity;
+  * the **gate pulse**: the gate pass rate on final SHAs, plus required gates, differential, security, QA, tests and guards, and egress;
+  * four micro-bar KPI cards: Codex jobs, spend, gate pass rate, and P95 gate step time;
+  * a 30-day spend forecast with Codex slot capacity and weekly usage;
+  * a live runs stream.
+* Colour is reserved for state in both themes: green passed/done, red failed (always naming the gate), amber blocked or
+  baseline-only failures, blue running, violet merged. Every status carries an icon and a label, never colour alone.
+  The chart palettes were checked with a colour-vision-deficiency validator against both surfaces.
+* Daily spend for the cost card comes from the ops-box collector (`machine.daily`); redeploy it to populate the chart.
 * Motion: counters, flowing pipeline wires, live pulses and toasts. All of it is disabled under
   `prefers-reduced-motion`, and glass panels fall back to solid under `prefers-reduced-transparency`.
 * Keyboard: `/` focuses search, `K` opens Claude, `Esc` closes panels.
