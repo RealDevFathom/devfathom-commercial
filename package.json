@@ -119,7 +119,7 @@
     "superjson": "^2.2.6",
     "tailwind-merge": "^3.5.0",
     "tw-animate-css": "^1.4.0",
-    "zod": "^4.3.6",
+    "zod": "4.6.6",
     "zustand": "^5.0.12"
   },
   "devDependencies": {
@@ -152,28 +152,33 @@
       ".": "4.0.62",
       "undici": "6.29.1"
     },
+    "@azure/msal-node": "7.1.0",
     "@dotenvx/dotenvx": {
       "undici": "7.30.1"
     },
-    "@hono/node-server": "1.19.13",
+    "@hono/node-server": "2.1.3",
     "@modelcontextprotocol/sdk": "1.32.1",
     "@vercel/blob": {
       "undici": "6.29.1"
     },
     "@xmldom/xmldom": "0.8.15",
+    "body-parser": "2.4.0",
     "brace-expansion": "2.1.7",
     "browserslist": "4.29.4",
+    "deepmerge-ts": "8.0.0",
     "exceljs": {
       "uuid": "11.1.1"
     },
-    "fast-uri": "3.1.8",
-    "hono": "4.12.27",
+    "fast-uri": "3.1.9",
+    "gaxios@7.1.3": "7.1.5",
+    "hono": "4.13.11",
     "http-cache-semantics": "4.3.0",
     "ip-address": "10.7.4",
     "js-yaml": "4.3.2",
     "jsdom": {
       "undici": "8.12.3"
     },
+    "minimatch@>=7.0.0 <11.0.1": "11.0.1",
     "nanoid": "3.3.18",
     "postcss": "8.5.23",
     "prisma": {
@@ -181,10 +186,13 @@
     },
     "prosemirror-view": "1.42.6",
     "proxy-addr": "2.0.8",
+    "qs": "6.16.0",
     "shadcn": {
       "undici": "7.30.1"
     },
     "sharp": "0.35.5",
-    "source-map-js": "1.2.2"
+    "source-map-js": "1.2.2",
+    "systeminformation": "5.33.16",
+    "zod": "4.6.6"
   }
 }
