@@ -325,6 +325,25 @@ describe('daily Pharmacy work pack source composition', () => {
     expect(JSON.stringify(pack)).not.toContain('password');
   });
 
+  it('explains an expiry reader failure without reporting empty stock or losing other evidence', async () => {
+    mocks.expiry.mockRejectedValue(new Error('private_person database password'));
+    mocks.anomalies.mockResolvedValue([anomaly()]);
+    const pack = await readPharmacyDailyWorkPack(db, input, at);
+    expect(pack.sources.find((source) => source.kind === 'expiry')).toMatchObject({
+      status: 'unavailable',
+      coverage: 'partial',
+      returnedRows: null,
+      missingInputs: expect.arrayContaining([
+        'Expiry advice could not load. Refresh daily work pack to retry. No stock or supplier-return data was changed. Expiry risk has not been assessed.',
+      ]),
+    });
+    expect(pack.completeness.status).toBe('partial');
+    expect(allEvidence(pack).some((item) => item.reference.id === 'signal_1')).toBe(true);
+    expect(allEvidence(pack).some((item) => item.reference.kind === 'lot')).toBe(false);
+    expect(JSON.stringify(pack)).not.toContain('password');
+    expect(mocks.createDraft).not.toHaveBeenCalled();
+  });
+
   it.each(['branch', 'tenant'])(
     'rejects cross-%s source results and removes partly projected rows',
     async (kind) => {

@@ -221,10 +221,26 @@ export async function DailyWorkPack({
               </span>
               <StatusPill
                 status={source.status}
+                label={
+                  source.kind === 'expiry'
+                    ? source.status === 'unavailable'
+                      ? 'Could not load'
+                      : source.returnedRows === 0
+                        ? 'No eligible stock'
+                        : 'Advice ready'
+                    : undefined
+                }
                 tone={source.status === 'unavailable' ? 'danger' : 'neutral'}
               />
               <StatusPill status={`${source.coverage} coverage`} tone="warning" />
             </div>
+            {source.kind === 'expiry' && source.status === 'available' && source.returnedRows === 0 ? (
+              <p role="status" className="text-text-muted">
+                No available, unexpired stock was found for expiry advice in this branch. This
+                does not assess expired or quarantined stock. Refresh daily work pack after stock
+                is received or updated.
+              </p>
+            ) : null}
             <p className="text-text-muted">{source.timeBasis}</p>
             <p className="text-text-muted">
               Returned rows: {source.returnedRows ?? 'Unavailable'}. Row limit:{' '}
@@ -251,7 +267,11 @@ export async function DailyWorkPack({
                   .map((item) => item.reason),
               ])
             ).map((reason) => (
-              <p key={reason} className="text-text-muted">
+              <p
+                key={reason}
+                role={source.kind === 'expiry' && source.status === 'unavailable' ? 'alert' : undefined}
+                className="text-text-muted"
+              >
                 {reason}
               </p>
             ))}

@@ -544,6 +544,14 @@ export const pharmacyReportsRouter = router({
       };
     }),
   branches: reports.query(({ ctx }) => scope(ctx)),
+  suppliers: reports.query(async ({ ctx }) => {
+    const { organizationId } = await scope(ctx);
+    return ctx.db.pharmacySupplier.findMany({
+      where: { organizationId },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+  }),
   replenishment: reports.input(pharmacyReplenishmentReportInput).query(async ({ ctx, input }) => {
     // Existing capability middleware denies before report reads; scope enforces licensing.
     const available = await scope(ctx);

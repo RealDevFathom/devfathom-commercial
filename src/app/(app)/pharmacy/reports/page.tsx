@@ -127,12 +127,19 @@ export default async function PharmacyReportsPage({
   const invalidRange = !validDate(from) || !validDate(to) || from > to;
   const branch = value(query.branch);
   const supplier = value(query.supplier);
+  let suppliers: Awaited<ReturnType<typeof caller.suppliers>> | null = null;
+  try {
+    suppliers = await caller.suppliers();
+  } catch {
+    // Keep the selected filter when supplier names cannot be loaded.
+  }
   const ingredient = value(query.ingredient);
   const batch = value(query.batch);
   let result: Awaited<ReturnType<typeof caller.commandCentre>> | null = null;
   let digest: Awaited<ReturnType<typeof caller.digestOverview>> | null = null;
   let anomalies: Awaited<ReturnType<typeof caller.anomalySignals>> | null = null;
   let expiryAdvice: Awaited<ReturnType<typeof caller.expiryAdvice>> | null = null;
+  let expiryAdviceError = false;
   let authenticationFlags: Awaited<ReturnType<typeof caller.packAuthenticationFlags>> | null = null;
   let reportError = false;
   let marketing: Awaited<ReturnType<typeof caller.marketing>> | null = null;
@@ -172,6 +179,11 @@ export default async function PharmacyReportsPage({
     if (digestResult.status === 'fulfilled') digest = digestResult.value;
     if (anomalyResult.status === 'fulfilled') anomalies = anomalyResult.value;
     if (expiryResult.status === 'fulfilled') expiryAdvice = expiryResult.value;
+    else
+      expiryAdviceError = !(
+        expiryResult.reason instanceof TRPCError &&
+        ['FORBIDDEN', 'UNAUTHORIZED'].includes(expiryResult.reason.code)
+      );
     if (authenticationResult.status === 'fulfilled')
       authenticationFlags = authenticationResult.value;
   }
@@ -370,10 +382,33 @@ export default async function PharmacyReportsPage({
               ))}
             </select>
           </label>
-          <label className="text-sm text-text-body">
-            Supplier ID
-            <Input className="mt-1 min-h-11" defaultValue={supplier} name="supplier" />
-          </label>
+          <div className="text-sm text-text-body">
+            <label htmlFor="report-supplier" className="block">
+              Supplier
+            </label>
+            <select
+              id="report-supplier"
+              className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              defaultValue={supplier ?? ''}
+              name="supplier"
+              aria-describedby={suppliers === null ? 'supplier-load-error' : undefined}
+            >
+              <option value="">All suppliers</option>
+              {supplier && !suppliers?.some((item) => item.id === supplier) ? (
+                <option value={supplier}>Selected supplier unavailable</option>
+              ) : null}
+              {suppliers?.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            {suppliers === null ? (
+              <span id="supplier-load-error" className="block text-sm text-text-muted">
+                Supplier names could not load. Apply filters again to retry.
+              </span>
+            ) : null}
+          </div>
           <label className="text-sm text-text-body">
             Ingredient ID
             <Input className="mt-1 min-h-11" defaultValue={ingredient} name="ingredient" />
@@ -596,6 +631,17 @@ export default async function PharmacyReportsPage({
                   No future-expiry lots with available stock match this scope.
                 </p>
               )}
+            </SectionCard>
+          ) : expiryAdviceError ? (
+            <SectionCard
+              eyebrow="Could not load"
+              title="Expiry and supplier-return advisor"
+              titleLevel={2}
+            >
+              <p className="text-sm text-text-muted" role="alert">
+                Expiry advice could not load. Apply the filters again to retry. No stock or
+                supplier-return data was changed.
+              </p>
             </SectionCard>
           ) : (
             <SectionCard

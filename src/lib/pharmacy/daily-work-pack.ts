@@ -292,7 +292,11 @@ export async function readPharmacyDailyWorkPack(
         source.status = 'unavailable';
         source.coverage = 'partial';
         source.returnedRows = null;
-        source.missingInputs.push('Source unavailable; review the existing report before acting.');
+        source.missingInputs.push(
+          kind === 'expiry'
+            ? 'Expiry advice could not load. Refresh daily work pack to retry. No stock or supplier-return data was changed. Expiry risk has not been assessed.'
+            : 'Source unavailable; review the existing report before acting.'
+        );
       }
       task(group).missingInputs.push(...source.missingInputs);
       result.missingInputs.push(

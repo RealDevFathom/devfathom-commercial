@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 
 const mocks = vi.hoisted(() => ({
   repeatRead: vi.fn().mockResolvedValue({ horizons: [] }),
   can: vi.fn<typeof import('@/lib/abac').can>(async () => false),
   branchFindMany: vi.fn(),
+  supplierFindMany: vi.fn(),
   settingUpsert: vi.fn(),
   userFindUnique: vi.fn(),
   branchFindFirst: vi.fn(),
@@ -108,6 +109,7 @@ function context(role = 'ADMIN', audit: TRPCContext['audit'] = { detail: {} }) {
       update: mocks.credentialUpdate,
     },
     pharmacyBranch: { findMany: mocks.branchFindMany, findFirst: mocks.branchFindFirst },
+    pharmacySupplier: { findMany: mocks.supplierFindMany },
     pharmacyPharmacovigilanceReport: {
       findFirst: mocks.reportFindFirst,
       findMany: mocks.reportFindMany,
@@ -282,6 +284,41 @@ describe('pharmacy administrator report bootstrap (#434)', () => {
     expect(mocks.can.mock.calls.filter((call) => call[1] === 'reports:operational')).toHaveLength(
       3
     );
+  });
+});
+
+describe('Reports supplier filter names', () => {
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.supplierFindMany.mockResolvedValue([{ id: 'sup1', name: 'Acme Distribution' }]);
+  });
+  afterEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+  });
+
+  it('reads only names and filter IDs from the authenticated tenant in name order', async () => {
+    await expect(caller().suppliers()).resolves.toEqual([
+      { id: 'sup1', name: 'Acme Distribution' },
+    ]);
+    expect(mocks.supplierFindMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1' },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+  });
+
+  it('denies supplier lookup before reading names without Reports permission', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().suppliers()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.supplierFindMany).not.toHaveBeenCalled();
+  });
+
+  it('denies supplier lookup before reading names when Reports is not licensed', async () => {
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(caller().suppliers()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.supplierFindMany).not.toHaveBeenCalled();
   });
 });
 

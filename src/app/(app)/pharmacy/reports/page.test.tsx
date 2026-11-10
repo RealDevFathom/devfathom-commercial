@@ -6,6 +6,8 @@ const actor = vi.hoisted(() => ({ role: 'ADMIN' }));
 const signalStaff = vi.hoisted(() => ({ userId: 'cashier_1' as string | undefined }));
 const reportModules = vi.hoisted(() => ({ enabled: ['pharmacy-reports'] }));
 const reportBranches = vi.fn(async () => ({ branches: [{ id: 'b1', name: 'Main' }] }));
+const expiryError = vi.hoisted(() => ({ value: null as Error | null }));
+const suppliers = vi.hoisted(() => vi.fn());
 
 const commandCentre = vi.fn(async () => ({
   freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
@@ -55,6 +57,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
   pharmacyReportsRouter: {
     createCaller: () => ({
       branches: reportBranches,
+      suppliers,
       commandCentre,
       anomalySignals: async () => [
         {
@@ -77,32 +80,35 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
           estimateConfidence: null,
         },
       ],
-      expiryAdvice: async () => [
-        {
-          lotId: 'lot-1',
-          branchId: 'b1',
-          medicineName: 'High-value medicine',
-          batchNumber: 'B-1',
-          supplierId: 'supplier-1',
-          supplierName: 'Supplier',
-          stockLocationId: 'location-1',
-          onHandUnits: 90,
-          unitCostMinor: 500,
-          expiresAt: new Date('2026-10-05T00:00:00Z'),
-          soldUnits: 10,
-          historyDays: 30,
-          returnWindowDays: 45,
-          coldChain: false,
-          classification: 'RETURNABLE',
-          observedUnitsPerDay: 0.33,
-          projectedClearAt: new Date('2027-06-01T00:00:00Z'),
-          returnWindowStartsAt: new Date('2026-08-21T00:00:00Z'),
-          valueAtRiskMinor: 40_000,
-          projectedUnsoldUnits: 80,
-          proposalAllowed: true,
-          explanation: 'Observed 10 units over 30 days; projected clear after expiry.',
-        },
-      ],
+      expiryAdvice: async () => {
+        if (expiryError.value) throw expiryError.value;
+        return [
+          {
+            lotId: 'lot-1',
+            branchId: 'b1',
+            medicineName: 'High-value medicine',
+            batchNumber: 'B-1',
+            supplierId: 'supplier-1',
+            supplierName: 'Supplier',
+            stockLocationId: 'location-1',
+            onHandUnits: 90,
+            unitCostMinor: 500,
+            expiresAt: new Date('2026-10-05T00:00:00Z'),
+            soldUnits: 10,
+            historyDays: 30,
+            returnWindowDays: 45,
+            coldChain: false,
+            classification: 'RETURNABLE',
+            observedUnitsPerDay: 0.33,
+            projectedClearAt: new Date('2027-06-01T00:00:00Z'),
+            returnWindowStartsAt: new Date('2026-08-21T00:00:00Z'),
+            valueAtRiskMinor: 40_000,
+            projectedUnsoldUnits: 80,
+            proposalAllowed: true,
+            explanation: 'Observed 10 units over 30 days; projected clear after expiry.',
+          },
+        ];
+      },
       proposeExpiryReturn: async () => ({}),
       refreshAnomalies: async () => ({ evaluated: 1, signals: [] }),
       acknowledgeAnomaly: async () => ({}),
@@ -151,6 +157,8 @@ describe('pharmacy report catalog filters', () => {
     reportModules.enabled = ['pharmacy-reports'];
     reportBranches.mockClear();
     commandCentre.mockClear();
+    expiryError.value = null;
+    suppliers.mockResolvedValue([{ id: 'sup1', name: 'Acme Distribution' }]);
   });
 
   it('names the missing reports capability and who can grant it', async () => {
@@ -223,7 +231,14 @@ describe('pharmacy report catalog filters', () => {
         }),
       })
     );
-    expect(screen.getByLabelText('Supplier ID')).toHaveValue('sup1');
+    expect(screen.getByLabelText('Supplier')).toHaveValue('sup1');
+    expect(screen.getByLabelText('Branch')).toHaveValue('b1');
+    expect(screen.getByRole('option', { name: 'Main' })).toHaveProperty('selected', true);
+    expect(screen.getByRole('option', { name: 'Acme Distribution' })).toHaveProperty(
+      'selected',
+      true
+    );
+    expect(screen.getByRole('option', { name: 'All suppliers' })).toHaveValue('');
     expect(screen.getByLabelText('Ingredient ID')).toHaveValue('ing1');
     expect(screen.getByLabelText('Batch ID')).toHaveValue('lot1');
     expect(commandCentre).toHaveBeenCalledWith(
@@ -263,6 +278,65 @@ describe('pharmacy report catalog filters', () => {
       screen.queryByRole('link', { name: 'Open related audit trail' })
     ).not.toBeInTheDocument();
   });
+
+  it('preserves supplier filtering without exposing raw IDs when names cannot load', async () => {
+    suppliers.mockRejectedValue(new Error('private database detail'));
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ supplier: 'sup1' }) }));
+    const filter = screen.getByLabelText('Supplier');
+    expect(filter).toHaveAccessibleName('Supplier');
+    expect(filter).toHaveAccessibleDescription(
+      'Supplier names could not load. Apply filters again to retry.'
+    );
+    expect(filter).toHaveValue('sup1');
+    expect(within(filter).getByRole('option', { name: 'Selected supplier unavailable' })).toHaveProperty('selected', true);
+    expect(screen.getByText('Supplier names could not load. Apply filters again to retry.')).toBeVisible();
+    expect(screen.queryByText('sup1')).not.toBeInTheDocument();
+    expect(screen.queryByText('private database detail')).not.toBeInTheDocument();
+  });
+
+  it('keeps the supplier filter named and described when lookup fails without a selection', async () => {
+    suppliers.mockRejectedValue(new Error('private database detail'));
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+    const filter = screen.getByRole('combobox', { name: /^Supplier$/ });
+    expect(filter).toHaveValue('');
+    expect(filter).toHaveAccessibleDescription(
+      'Supplier names could not load. Apply filters again to retry.'
+    );
+    expect(within(filter).getByRole('option', { name: 'All suppliers' })).toHaveProperty(
+      'selected',
+      true
+    );
+    expect(
+      within(filter).queryByRole('option', { name: 'Selected supplier unavailable' })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('private database detail')).not.toBeInTheDocument();
+  });
+
+  it('explains expiry loading failures without presenting them as permission restrictions', async () => {
+    expiryError.value = new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'private detail' });
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Expiry advice could not load. Apply the filters again to retry. No stock or supplier-return data was changed.'
+    );
+    expect(screen.queryByText(/Financial report and owner permissions/)).not.toBeInTheDocument();
+    expect(screen.queryByText('private detail')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create draft proposal' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply filters' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Selected period at a glance' })).toBeVisible();
+  });
+
+  it.each(['FORBIDDEN', 'UNAUTHORIZED'] as const)(
+    'keeps %s expiry access restrictions separate from loading failures',
+    async (code) => {
+      expiryError.value = new TRPCError({ code });
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+      expect(screen.getByText(/Financial report and owner permissions/)).toBeVisible();
+      expect(screen.queryByText(/Expiry advice could not load/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'Create draft proposal' })
+      ).not.toBeInTheDocument();
+    }
+  );
 
   it('links signals without staff attribution to the supported audit search filter', async () => {
     signalStaff.userId = undefined;

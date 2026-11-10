@@ -71,11 +71,13 @@ export function MarketingSummary({
               </div>
             ))}
           </dl>
-          <p>
-            Sandbox only: {report.sandbox.captures} captures, {report.sandbox.delivered} delivered,{' '}
-            {report.sandbox.failed} failed, {report.sandbox.unknown} unknown. These counts do not
-            prove live delivery.
-          </p>
+          {process.env.NODE_ENV !== 'production' ? (
+            <p>
+              Sandbox only: {report.sandbox.captures} captures, {report.sandbox.delivered} delivered,{' '}
+              {report.sandbox.failed} failed, {report.sandbox.unknown} unknown. These counts do not
+              prove live delivery.
+            </p>
+          ) : null}
           <p>
             Excluded unverified links: {report.attribution.excludedUnverifiedLinks}. Competing
             receipt links excluded: {report.attribution.excludedCompetingLinks}. Message cost
