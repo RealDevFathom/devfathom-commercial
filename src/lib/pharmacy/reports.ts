@@ -1,7 +1,6 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { grossMarginQuery } from './finance-reports';
 
 export const MAX_PHARMACY_REPORT_DAYS = 90;
@@ -281,7 +280,7 @@ type MoneyCounts = {
   cashVarianceMinor: number;
 };
 
-async function readKhataAgingMinor(db: ScopedDb, branchIds: readonly string[]): Promise<number> {
+async function readKhataAgingMinor(db: Prisma.TransactionClient, branchIds: readonly string[]): Promise<number> {
   const context = await db.$queryRaw<Array<{ branchId: string | null }>>(
     Prisma.sql`SELECT NULLIF(current_setting('app.current_branch_id', true), '') AS "branchId"`
   );
@@ -311,7 +310,7 @@ async function readKhataAgingMinor(db: ScopedDb, branchIds: readonly string[]): 
   return value;
 }
 
-export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: PharmacyReportFilters) {
+export async function readPharmacyOwnerCommandCentre(db: Prisma.TransactionClient, filters: PharmacyReportFilters) {
   const parsed = validatePharmacyReportFilters(filters);
   const at = new Date();
   const branches = Prisma.join(filters.branchIds);

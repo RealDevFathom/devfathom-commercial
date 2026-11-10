@@ -699,7 +699,10 @@ export const pharmacyReportsRouter = router({
         message: 'One or more branches are outside your report scope.',
       });
     try {
-      const result = await readPharmacyOwnerCommandCentre(ctx.db, { ...input, branchIds });
+      // Khata's branch context is transaction-local; keep it and all report reads together.
+      const result = await ctx.db.$transaction((tx) =>
+        readPharmacyOwnerCommandCentre(tx, { ...input, branchIds })
+      );
       const financial = await can(
         subjectFromSession(ctx.session!.user),
         'reports:financial',
