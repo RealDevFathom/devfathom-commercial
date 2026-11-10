@@ -113,6 +113,8 @@ def rule_insights(state, now=None):
                 g.get("batch"), g.get("issue"))
 
     for b in batches:
+        if b.get("superseded"):  # replaced by a newer run: history only, nothing to warn about
+            continue
         bid = b.get("id")
         tasks = b.get("tasks") or []
         # --- ledger not updating while the batch claims active work

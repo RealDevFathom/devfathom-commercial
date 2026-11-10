@@ -24,7 +24,7 @@ class DiscoveryTests(unittest.TestCase):
         return next(t for t in self.batches[batch]["tasks"] if t["issue"] == issue)
 
     def test_all_job_roots_are_batches(self):
-        self.assertEqual(set(self.batches), {J, "pharmacy-review-50", "pharmacy-counter-v2-20261110-0900"})
+        self.assertEqual(set(self.batches), {J, "pharmacy-review-50", "pharmacy-counter-v2-20261110-0900", "claude-1110", "wave0-old-20261109"})
         self.assertEqual(self.batches["pharmacy-counter-v2-20261110-0900"]["label"], "Pharmacy counter v2 · 2026-11-10 09:00")
 
     def test_runs_and_attempts(self):
@@ -88,9 +88,9 @@ class DiscoveryTests(unittest.TestCase):
     def test_collect_payload_is_sanitized_and_complete(self):
         sdir = tempfile.mkdtemp()
         try:
-            payload = wc.collect(FIXTURES, sdir, live_window=0, disks=())
+            payload = wc.collect(FIXTURES, sdir, live_window=0, disks=(), superseded=["wave0-old-20261109"])
             self.assertEqual(payload["codex"]["cap"], 50)
-            self.assertEqual(payload["codex"]["activeCount"], 3)
+            self.assertEqual(payload["codex"]["activeCount"], 4)  # 3 Codex + 1 Claude wave job; the superseded batch adds none
             self.assertIn("system", payload)
             self.assertNotIn("/workspace/jobs/", json.dumps(payload))
             self.assertTrue(os.path.exists(os.path.join(sdir, "state.json")))
@@ -131,3 +131,42 @@ class BoxWhitelistTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OperatorLayoutTests(unittest.TestCase):
+    """Claude-operated waves (wave<N>/summary.json + DEV-*/result.json), OPERATOR.md and superseded batches."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.batches = {b["id"]: b for b in wc.collect_batches(FIXTURES, live_window=0, superseded=["wave0-old-20261109"])}
+
+    def test_wave_runs_and_results(self):
+        b = self.batches["claude-1110"]
+        self.assertEqual([r["name"] for r in b["runs"]], ["wave1"])
+        self.assertEqual(b["runs"][0]["kind"], "wave")
+        tasks = {t["issue"]: t for t in b["tasks"]}
+        self.assertEqual(tasks["DEV-30"]["phase"], "running")
+        self.assertEqual(tasks["DEV-30"]["currentStep"], "typecheck")
+        self.assertTrue(tasks["DEV-31"]["gated"])           # every required gate passed on the final SHA from result.json
+        self.assertEqual(tasks["DEV-31"]["model"], None)     # wave runs are not Codex runs; the model lives in the summary
+        self.assertEqual(b["active"], 1)
+
+    def test_newest_wave_is_the_current_run(self):
+        b = self.batches["claude-1110"]
+        self.assertEqual(b["currentRun"], "wave1")
+        self.assertEqual(b["currentCodexJobs"], 2)
+        self.assertTrue(all(e.get("current") for e in b["events"] if e.get("run") == "wave1"))
+
+    def test_operator_md(self):
+        op = self.batches["claude-1110"]["operator"]
+        self.assertEqual(op["name"], "Claude (Saad's cloud session)")
+
+    def test_superseded_batch_is_not_active(self):
+        b = self.batches["wave0-old-20261109"]
+        self.assertTrue(b["superseded"])
+        self.assertEqual(b["active"], 0)
+        self.assertNotEqual(b["tasks"][0]["phase"], "running")
+        self.assertFalse(any(j["running"] for j in b["codexJobs"]))
+
+    def test_claude_units_watched(self):
+        self.assertIn("claude-*", wc.SERVICE_PATTERNS)

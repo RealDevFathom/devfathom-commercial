@@ -76,7 +76,19 @@ class TruthTests(unittest.TestCase):
         # pharmacy-review-50 (DEV-20) is archived, so live KPIs only count the current batch.
         self.assertEqual(o["merged"], 1)   # DEV-15 only; PR #985 does not count; DEV-20 is archived
         self.assertEqual(o["done"], 1)
-        self.assertEqual(o["gated"], 2)    # passed on final SHA: DEV-12, DEV-15 (DEV-20 is in the archive)
+        self.assertEqual(o["gated"], 3)    # passed on final SHA: DEV-12, DEV-15, DEV-31 (DEV-20 is in the archive)
+
+
+class SupersededTests(unittest.TestCase):
+    def test_superseded_tasks_are_neither_queued_nor_running(self):
+        t = task(fixture_state(), "wave0-old-20261109", "DEV-40")
+        self.assertEqual(t["verdict"], {"key": "superseded", "label": "Superseded"})
+        self.assertFalse(t["running"])
+
+    def test_superseded_batch_is_history(self):
+        b = next(b for b in fixture_state()["batches"] if b["id"] == "wave0-old-20261109")
+        self.assertTrue(b["historical"])
+        self.assertEqual(b["active"], 0)
 
 
 if __name__ == "__main__":

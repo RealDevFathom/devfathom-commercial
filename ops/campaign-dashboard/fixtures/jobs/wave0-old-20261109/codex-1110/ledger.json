@@ -1,0 +1,14 @@
+{
+  "atPKT": "2026-11-10T11:00:00+05:00",
+  "activeCodexOrVerify": 1,
+  "maxConcurrent": 50,
+  "jobs": [
+    {
+      "issue": "DEV-40",
+      "status": "CODEX_RUNNING",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high",
+      "steps": {}
+    }
+  ]
+}

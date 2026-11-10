@@ -2,26 +2,26 @@
  "activityBars": true,
  "filters": [
   "All10",
-  "Running3",
-  "Failed2",
+  "Running4",
+  "Failed1",
+  "Rejected0",
+  "Pending QA0",
   "Blocked1",
-  "Passed1",
-  "Merged2",
+  "Passed2",
+  "Merged1",
   "Queued1"
  ],
  "insights": [
   "DEV-13: 55 fewer passing tests than baseline",
-  "Pharmacy review 50: 1 tasks not moving for >24 h",
-  "DEV-13 changes test runner config",
   "DEV-13: complete_unit failed in 2 runs",
   "DEV-10 typecheck running 93 min",
   "Unblock 1 tasks in Pharmacy campaign repair \u00b7 2026-11-08 13:06",
-  "1 queued tasks with Codex at 3/50"
+  "1 queued tasks with Codex at 4/50"
  ],
  "kpis": [
   [
-   "Codex jobs",
-   "7"
+   "Agent jobs",
+   "2"
   ],
   [
    "Spend",
@@ -29,7 +29,7 @@
   ],
   [
    "Gate pass rate",
-   "84%"
+   "100%"
   ],
   [
    "P95 gate step time",
@@ -39,46 +39,30 @@
  "lanes": true,
  "matrix": [
   [
-   "DEV-10",
+   "DEV-30",
    "Running Typecheck"
   ],
   [
-   "DEV-11",
-   "Running"
-  ],
-  [
-   "DEV-12",
+   "DEV-31",
    "Passed on final SHA"
-  ],
-  [
-   "DEV-13",
-   "Failed: Unit, Differential"
-  ],
-  [
-   "DEV-14",
-   "Blocked: Typecheck"
-  ],
-  [
-   "DEV-15",
-   "Done"
   ]
  ],
  "pipeline": [
   [
-   "Codex",
+   "Fix",
    "3"
   ],
   [
    "Gates",
-   "3"
+   "4"
   ],
   [
    "QA & security",
-   "1"
+   "0"
   ],
   [
    "Merge",
-   "1"
+   "2"
   ],
   [
    "Close",
@@ -86,22 +70,22 @@
   ],
   [
    "Done",
-   "2"
+   "1"
   ]
  ],
  "progress": [
-  "Codex fix produced5/10",
+  "Real fixes (passed on final SHA)3/10",
   "Gates passed on final SHA3/10",
-  "Merged into develop2/10",
-  "Linear and GitHub closed2/10"
+  "Merged into develop1/10",
+  "Linear and GitHub closed1/10"
  ],
  "pulse": [
-  "50%",
-  "Required gates on final SHA2 failing",
+  "60%",
+  "Required gates on final SHA1 failing",
   "Differential vs baseline1 with new failures",
   "Security gateNot run",
-  "QA / browserFailing",
-  "Tests and guards2 flagged",
+  "QA / browserPassing",
+  "Tests and guards1 flagged",
   "Egress kill-switchUnknown"
  ],
  "runs": 11,

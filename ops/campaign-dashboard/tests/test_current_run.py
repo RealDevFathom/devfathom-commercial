@@ -397,3 +397,33 @@ class ClassifyAndPauseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OperatorSupersededRunTests(unittest.TestCase):
+    """OPS_SUPERSEDED=rebase-1906-1110: the operator retired the run, so the live overlay must not use it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        jobs = str(make_tree(cls.tmp.name))
+        cls.payload = wc.collect(jobs, state_dir=None, live_window=0, host_metrics=False, now=time.time(),
+                                 superseded=["rebase-1906-1110"])
+        cls.state = app.build_state({"worker": {"receivedAt": time.time(), "payload": cls.payload}}, now=time.time())
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_run_is_superseded_not_current(self):
+        b = next(b for b in self.state["batches"] if b["id"] == BATCH)
+        runs = {r["name"]: r for r in b["runs"]}
+        r = runs["rebase-1906-1110"]
+        self.assertTrue(r["superseded"])
+        self.assertFalse(r.get("current"))
+        self.assertEqual(r.get("active"), 0)
+        self.assertNotEqual(b.get("currentRun"), "rebase-1906-1110")
+        self.assertNotEqual(self.state["overview"].get("currentRun"), "rebase-1906-1110")
+
+    def test_events_from_the_run_are_not_current(self):
+        evs = [e for e in self.payload["events"] if e.get("run") == "rebase-1906-1110"]
+        self.assertTrue(all(e.get("superseded") and not e.get("current") for e in evs))

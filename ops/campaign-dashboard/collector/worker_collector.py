@@ -40,10 +40,11 @@ KILLSWITCH_EVERY = 300
 MAX_JSON_BYTES = 8 * 1024 * 1024
 MAX_FILES_LIST = 60
 MAX_EVENTS = 1500
-RUN_RE = re.compile(r"^(codex|gates|baseline|rebase|retarget|devfix)-", re.I)
+RUN_RE = re.compile(r"^(?:(codex|gates|baseline|rebase|retarget|devfix)-|wave\d+$)", re.I)
+LEDGER_FILES = ("summary.json",)  # Claude operator waves; in addition to any *ledger*.json
 ISSUE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,6}$")
 REQUIRED_GATES = ("prisma", "typecheck", "lint", "complete_unit", "host_build", "docker")
-SERVICE_PATTERNS = _live.SERVICE_PATTERNS
+SERVICE_PATTERNS = tuple(dict.fromkeys(tuple(_live.SERVICE_PATTERNS) + ("claude-*",)))
 KILLSWITCH_ARGV = (
     "ip", "netns", "exec", "codex-home", "tailscale",
     "--socket=/run/codex-tailscaled.sock", "status", "--json",
@@ -416,8 +417,9 @@ def build_task(issue, runs, baseline_failed):
 
     last = runs[-1] if runs else {}
     latest_codex = next((r for r in reversed(runs) if r["kind"] == "codex"), None)
-    running = any(is_running_job(r.get("status")) for r in runs[-2:]) or any(
-        g.get("status") == "RUNNING" for g in gates.values())
+    live_runs = [r for r in runs[-2:] if not r.get("stale")]  # stale or superseded ledgers are not live
+    running = any(is_running_job(r.get("status")) for r in live_runs) or (bool(live_runs) and any(
+        g.get("status") == "RUNNING" for g in gates.values()))
     if running:
         phase = "running"
     elif gated:
@@ -498,6 +500,8 @@ def summarize_file(path, root):
 
 def scan_issue_dir(path, root):
     main = read_json(os.path.join(path, "checkpoint.json"), root)
+    if main is None:  # Claude operator waves write result.json
+        main = read_json(os.path.join(path, "result.json"), root)
     subs = {}
     for f in listdir(path):
         if f.endswith("-checkpoint.json"):
@@ -505,12 +509,34 @@ def scan_issue_dir(path, root):
     return main, subs
 
 
-def collect_batch(root, name, now, live_window):
+OPERATOR_RE = re.compile(r"^\s*(?:[-*]\s*)?\**operator\**\s*[:=-]\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+
+
+def read_operator(path):
+    """Who runs this batch, from OPERATOR.md: an 'Operator: X' line, else the first heading or line."""
+    text = read_text(path, 20000)
+    if not text.strip():
+        return None
+    m = OPERATOR_RE.search(text)
+    if m:
+        name = m.group(1)
+    else:
+        first = next((ln for ln in text.splitlines() if ln.strip()), "")
+        name = first.lstrip("#").strip()
+    name = re.sub(r"[*_`]", "", name).strip()[:120]
+    return {"name": name, "file": "OPERATOR.md", "mtime": mtime(path), "excerpt": text[:1500]}
+
+
+def collect_batch(root, name, now, live_window, superseded=False, superseded_runs=frozenset()):
     broot = os.path.join(root, name)
+    superseded = superseded or os.path.exists(os.path.join(broot, "SUPERSEDED"))
+    if superseded:
+        live_window = -1  # nothing in a superseded batch counts as live
     batch = {
         "id": name, "name": name, "label": batch_label(name),
         "runs": [], "attemptDirs": 0, "attemptJobs": 0, "ledgers": [], "files": [], "policies": [],
         "baseline": None, "baselineJobs": 0, "codexJobs": [], "events": [],
+        "superseded": superseded, "operator": read_operator(os.path.join(broot, "OPERATOR.md")),
     }
     per_issue = {}
     baseline_failed = None
@@ -544,10 +570,11 @@ def collect_batch(root, name, now, live_window):
             continue
         if not RUN_RE.match(entry):
             continue
-        kind = entry.split("-", 1)[0].lower()
+        kind = "wave" if entry.lower().startswith("wave") else entry.split("-", 1)[0].lower()
         # Current-run overlay: rebase-1906-1110/status.json + reclassify.
         status_path = os.path.join(p, "status.json")
-        if (os.path.isfile(status_path) and _cr.CURRENT_STATUS_DIR_RE.search(entry)
+        run_sup = superseded or entry in superseded_runs  # operator-declared: never current, never live
+        if (os.path.isfile(status_path) and _cr.CURRENT_STATUS_DIR_RE.search(entry) and not run_sup
                 and (current_run_name is None or "1906-1110" in entry)):
             current_run_name = entry
             current_sources = _cr.load_current_sources(
@@ -561,7 +588,7 @@ def collect_batch(root, name, now, live_window):
         ledger_jobs = {}
         for f in listdir(p):
             fp = os.path.join(p, f)
-            if "ledger" in f and f.endswith(".json") and os.path.isfile(fp):
+            if ("ledger" in f or f in LEDGER_FILES) and f.endswith(".json") and os.path.isfile(fp):
                 data = read_json(fp, root)
                 if not isinstance(data, dict):
                     continue
@@ -570,16 +597,21 @@ def collect_batch(root, name, now, live_window):
                 info = summarize_file(fp, root)
                 info["run"] = entry
                 batch["ledgers"].append(info)
-                live = live_window <= 0 or (lm is not None and now - lm <= live_window)
+                live = not run_sup and (live_window == 0 or (live_window > 0 and lm is not None and now - lm <= live_window))
                 if isinstance(data.get("maxConcurrent"), int):
                     run["cap"] = data["maxConcurrent"]
                 if isinstance(data.get("activeCodexOrVerify"), int) and live:
                     run["active"] = data["activeCodexOrVerify"]
                 run["start"] = mints(run["start"], at)
                 run["last"] = maxts(run["last"], at, lm)
-                for job in data.get("jobs") or []:
+                jobs = data.get("jobs") or data.get("tasks") or data.get("results") or []
+                if isinstance(jobs, dict):  # {"DEV-1": {...}} form
+                    jobs = [dict(v, issue=k) for k, v in jobs.items() if isinstance(v, dict) and ISSUE_RE.match(str(k))]
+                for job in jobs:
                     if isinstance(job, dict) and isinstance(job.get("issue"), str):
                         ledger_jobs[job["issue"]] = job
+                if isinstance(data.get("active"), int) and live and not run["active"]:
+                    run["active"] = data["active"]
                 ledgers_live.append(live)
                 run["live"] = live
         terminal = read_json(os.path.join(p, "terminal.json"), root)
@@ -633,7 +665,7 @@ def collect_batch(root, name, now, live_window):
             if main is None and issue in terminal_map:
                 main = terminal_map[issue]
             rec = run_record(entry, kind, main, ledger_jobs.get(issue), subs)
-            if not run.get("live", True) and is_running_job(rec.get("status")):
+            if (run_sup or not run.get("live", True)) and is_running_job(rec.get("status")):
                 rec["norm"] = "PENDING"
                 rec["stale"] = True
             run["counts"][rec["norm"]] = run["counts"].get(rec["norm"], 0) + 1
@@ -644,17 +676,19 @@ def collect_batch(root, name, now, live_window):
                 continue
             run["tasks"] += 1
             per_issue.setdefault(issue, []).append(rec)
-            if kind == "codex":
+            if kind in ("codex", "wave"):
                 batch["codexJobs"].append({
                     "key": f"{name}/{entry}/{issue}",
                     "issue": issue, "run": entry, "status": rec.get("status"),
                     "model": rec.get("model"), "effort": rec.get("effort"),
                     "start": rec.get("codexStart") or rec.get("start"),
-                    "running": run.get("live", True) and is_running_job(rec.get("status")),
+                    "running": not run_sup and run.get("live", True) and is_running_job(rec.get("status")),
                     "step": next((s["name"] for s in rec["steps"] if s["status"] == "RUNNING"), None),
                 })
-        if run.get("live") is False:
+        if run.get("live") is False or run_sup:
             run["active"] = 0
+        if run_sup:
+            run["live"] = False
         elif run["active"] == 0:
             run["active"] = sum(1 for j in batch["codexJobs"] if j["run"] == entry and j["running"])
         st_src = (current_sources or {}).get("status") or {}
@@ -684,15 +718,20 @@ def collect_batch(root, name, now, live_window):
     return batch
 
 
-def collect_batches(root, now=None, live_window=1800):
-    """Discover every job root under `root` as a batch, with tasks and runs."""
+def collect_batches(root, now=None, live_window=1800, superseded=()):
+    """Discover every job root under `root` as a batch, with tasks and runs.
+
+    `superseded` names batches (job roots) or runs (directories inside a batch, e.g. rebase-1906-1110) that an
+    operator declared replaced by a newer run."""
     now = now or time.time()
+    superseded = set(superseded or ())
     batches = []
     for name in listdir(root):
         p = os.path.join(root, name)
         if not os.path.isdir(p) or name.startswith("."):
             continue
-        batches.append(collect_batch(root, name, now, live_window))
+        batches.append(collect_batch(root, name, now, live_window, superseded=name in superseded,
+                                     superseded_runs=frozenset(superseded)))
     # baseline fallback: the most recent baseline anywhere
     latest_baseline = None
     for b in batches:
@@ -778,6 +817,16 @@ def collect_batches(root, now=None, live_window=1800):
                     r["counts"] = dict(live)
                     r["countsSource"] = "live-status"
                     r["tasks"] = (b.get("counts") or {}).get("total") or r.get("tasks")
+        # Operator-declared supersession (OPS_SUPERSEDED names, or a SUPERSEDED marker in the batch) is applied after
+        # the current-run overlay so it wins: history only, nothing current or active.
+        if b.get("superseded"):
+            b["archived"] = True
+        for r in b.get("runs") or []:
+            if b.get("superseded") or r.get("name") in superseded:
+                r["superseded"] = True
+                r["current"] = False
+                r["supersededReason"] = ("Batch marked superseded by the operator" if b.get("superseded")
+                                         else "Run marked superseded by the operator")
         times = [name_start_ts(b["name"])] + [r.get("start") for r in b["runs"]] + [t.get("start") for t in tasks]
         b["start"] = mints(*times)
         b["last"] = maxts(*([r.get("last") for r in b["runs"]] + [t.get("last") for t in tasks] +
@@ -786,7 +835,25 @@ def collect_batches(root, now=None, live_window=1800):
         b["active"] = sum(r.get("active") or 0 for r in b["runs"] if not r.get("superseded"))
         caps = [r["cap"] for r in b["runs"] if r.get("cap") and not r.get("superseded")]
         b["cap"] = max(caps) if caps else None
+        # Claude-operated batches: when there is no rebase-1906 overlay, the newest non-superseded wave<N> run is
+        # the current run (its jobs and events are live).
+        if not current_run_name and not b.get("archived"):
+            waves = [r for r in b.get("runs") or [] if r.get("kind") == "wave" and not r.get("superseded")]
+            if waves:
+                cur = max(waves, key=lambda r: r.get("last") or 0)
+                cur["current"] = True
+                b["currentRun"] = cur["name"]
+                b["currentSource"] = f"{cur['name']}/summary.json"
+                b["currentCodexJobs"] = sum(1 for j in b.get("codexJobs") or [] if j["run"] == cur["name"])
+                b["dataAsOf"] = b.get("dataAsOf") or cur.get("last")
         b["events"] = derive_events(b)
+        for e in b["events"]:
+            if b.get("superseded") or e.get("run") in superseded:
+                e["current"] = False
+                e["superseded"] = True
+            elif b.get("currentRun") and e.get("run") == b.get("currentRun") and not current_run_name:
+                e["current"] = True
+                e["superseded"] = False
     batches.sort(key=lambda b: b.get("last") or 0, reverse=True)
     return batches
 
@@ -1071,13 +1138,13 @@ def load_high_5m(hist, cores, now):
 
 # --------------------------------------------------------------------------- main collect
 
-def collect(root, state_dir=None, live_window=1800, disks=("/workspace", "/scratch"), now=None, host_metrics=True):
+def collect(root, state_dir=None, live_window=1800, disks=("/workspace", "/scratch"), now=None, host_metrics=True, superseded=()):
     now = now or time.time()
     sdir = safe_state_dir(state_dir) if state_dir else None
     state = load_state(sdir, "state.json") if sdir else {}
     hist = load_state(sdir, "history.json") if sdir else {}
 
-    batches = collect_batches(root, now, live_window)
+    batches = collect_batches(root, now, live_window, superseded=superseded)
     payload = {"schema": SCHEMA, "collector": "worker", "collectedAt": now, "batches": batches}
 
     # all-time counters
@@ -1265,13 +1332,17 @@ def main(argv=None):
     ap.add_argument("--loop", type=int, default=0, help="collect every N seconds (alternative to the timer)")
     ap.add_argument("--print", action="store_true", help="print the payload (implies --no-push)")
     ap.add_argument("--no-push", action="store_true")
+    ap.add_argument("--superseded", default=None,
+                    help="comma-separated batch ids to treat as superseded (default: $OPS_SUPERSEDED)")
     ap.add_argument("--live-window", type=int, default=1800,
                     help="ledgers older than this many seconds are not counted as active (0 = always live)")
     args = ap.parse_args(argv)
     load_env_file(args.env_file)
     while True:
         try:
-            payload = collect(args.root, args.state_dir, args.live_window)
+            sup = args.superseded if args.superseded is not None else os.environ.get("OPS_SUPERSEDED", "")
+            payload = collect(args.root, args.state_dir, args.live_window,
+                              superseded=[x.strip() for x in sup.split(",") if x.strip()])
             if args.print:
                 print(json.dumps(payload, indent=2))
             elif not args.no_push:

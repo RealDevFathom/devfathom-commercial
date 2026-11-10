@@ -25,6 +25,7 @@
     blocked: { icon: 'prohibit', label: 'Blocked' }, running: { icon: 'circle-notch', label: 'Running' },
     pending_qa: { icon: 'hourglass', label: 'Pending QA / Security' },
     gates: { icon: 'hourglass', label: 'Awaiting gates' }, queued: { icon: 'circle-dashed', label: 'Queued' }, pending: { icon: 'circle-dashed', label: 'Pending' },
+    superseded: { icon: 'history', label: 'Superseded' },
   };
   const FILTERS = [['', 'All'], ['running', 'Running'], ['failed', 'Failed'], ['rejected', 'Rejected'], ['pending_qa', 'Pending QA'], ['blocked', 'Blocked'], ['passed', 'Passed'], ['merged', 'Merged'], ['queued', 'Queued']];
   const SERIES = { pass: 'var(--s-pass)', merge: 'var(--s-merge)', codex: 'var(--s-codex)', fail: 'var(--s-fail)' };
@@ -473,10 +474,11 @@
 
   function renderOverview() {
     const o = S.overview;
+    const ops = [...new Set(S.batches.filter((b) => !b.historical && b.operator).map((b) => b.operator.name))];
     const asOf = dataAsOfTs();
     const run = o.currentRun ? ` Current run ${o.currentRun}.` : '';
     const dev = (S.develop && S.develop.short) ? ` Develop ${S.develop.short}.` : '';
-    $('overview-meta').textContent = `Monitoring Codex runs, machine gates, merges and cost. Data as of ${fmtClock(asOf)} PKT.${run}${dev} ${o.batches} batches, ${fmtNum(o.tasks)} tasks, ${fmtNum(o.codexJobsTotal)} current-run Codex jobs.`;
+    $('overview-meta').textContent = `${ops.length ? `Operator: ${ops.join(', ')}. ` : ''}Monitoring Codex and Claude runs, machine gates, merges and cost. Data as of ${fmtClock(asOf)} PKT.${run}${dev} ${o.batches} batches, ${fmtNum(o.tasks)} tasks, ${fmtNum(o.codexJobsTotal)} current-run Codex jobs.`;
   }
 
   // ------------------------------------------------------------------ control room (OpsPulse-style top grid)
@@ -607,13 +609,13 @@
       const t0 = now - (i + 1) * 3600; const t1 = now - i * 3600;
       const v = starts.filter((e) => e.ts >= t0 && e.ts < t1).length;
       const f = fails.filter((e) => e.ts >= t0 && e.ts < t1).length;
-      hours.push({ v, c: f ? 'var(--crit)' : 'var(--green)', t: [h('div', { class: 'tt-h' }, `${fmtHM(t0)} to ${fmtHM(t1)}`), h('div', null, `${v} Codex starts${f ? `, ${f} failed` : ''}`)] });
+      hours.push({ v, c: f ? 'var(--crit)' : 'var(--green)', t: [h('div', { class: 'tt-h' }, `${fmtHM(t0)} to ${fmtHM(t1)}`), h('div', null, `${v} Codex job starts${f ? `, ${f} failed` : ''}`)] });
     }
     const last24 = starts.filter((e) => e.ts >= now - 86400).length;
     const prev24 = starts.filter((e) => e.ts < now - 86400 && e.ts >= now - 172800).length;
     const hiC = hours.reduce((m, b, i) => (b.v > hours[m].v ? i : m), 0);
     const c = S.codex || {};
-    kpiCard('kpi-1', { title: 'Codex jobs', value: S.overview.codexJobsTotal, trend: trendChip(last24, prev24, true, true),
+    kpiCard('kpi-1', { title: 'Agent jobs', value: S.overview.codexJobsTotal, trend: trendChip(last24, prev24, true, true),
       sub: `${c.activeCount ?? 0} running of ${c.cap || 50} slots. ${last24} started in 24 h`, bars: hours, hi: hours[hiC].v ? hiC : null, hiLabel: `${hours[hiC].v}/h`, onclick: () => $('sec-live').scrollIntoView({ behavior: 'smooth' }) });
     // 2. Spend: daily cost
     const daily = ((S.box.machine || {}).daily || []).slice(-30);
@@ -721,10 +723,10 @@
 
   function renderPipeline() {
     const list = scoped({ ignoreStatus: true });
-    const STAGES = [['codex', 'Codex', 'robot', 'Coding the fix'], ['gates', 'Gates', 'flask', 'Required gates, final SHA'], ['qa', 'QA & security', 'shield', 'Browser and security'],
+    const STAGES = [['codex', 'Fix', 'robot', 'Codex or Claude coding'], ['gates', 'Gates', 'flask', 'Required gates, final SHA'], ['qa', 'QA & security', 'shield', 'Browser and security'],
       ['merge', 'Merge', 'merge', 'Into develop'], ['close', 'Close', 'kanban', 'Linear and GitHub'], ['done', 'Done', 'check-circle', 'All checks complete']];
     const at = Object.fromEntries(STAGES.map(([k]) => [k, []]));
-    for (const x of list) at[stageOf(x.t, x.st)].push(x);
+    for (const x of list) if (x.st.key !== 'superseded') at[stageOf(x.t, x.st)].push(x);
     const order = STAGES.map(([k]) => k);
     mount('pipeline', STAGES.map(([k, name, ic, sub], i) => {
       const xs = at[k];
@@ -825,7 +827,7 @@
     const now = nowSec();
     const past = 12 * 3600;
     const L = 108; const R = 10; const TOP = 26; const ROW = 40;
-    const lanes = ['Codex', 'Gates', 'Merge & close'];
+    const lanes = ['Agents', 'Gates', 'Merge & close'];
     const H = TOP + lanes.length * ROW + 6;
     const nowX = L + (W - L - R) * 0.8;
     const x = (t) => L + ((t - (now - past)) / past) * (nowX - L);
@@ -958,19 +960,21 @@
 
   // ------------------------------------------------------------------ batches
   const SEGS = [['done', 'var(--good)', 'Done'], ['merged', 'var(--merged)', 'Merged'], ['passed', 'var(--s-pass)', 'Passed'], ['running', 'var(--run)', 'Running'], ['gates', 'var(--dim)', 'Awaiting gates'],
-    ['failed', 'var(--crit)', 'Failed'], ['blocked', 'var(--warn)', 'Blocked'], ['queued', 'var(--pend)', 'Queued'], ['pending', 'var(--track)', 'Pending']];
+    ['failed', 'var(--crit)', 'Failed'], ['blocked', 'var(--warn)', 'Blocked'], ['queued', 'var(--pend)', 'Queued'], ['pending', 'var(--track)', 'Pending'], ['superseded', 'var(--track)', 'Superseded']];
   function batchRow(b) {
     const ts = b.tasks.map((t) => statusOf(t).key);
     const n = ts.length;
     const cnt = Object.fromEntries(SEGS.map(([k]) => [k, ts.filter((s) => s === k).length]));
     const segs = SEGS.filter(([k]) => cnt[k]);
     return h('div', { class: `batch ${ui.batch === b.id ? 'selected' : ''}`, 'aria-pressed': ui.batch === b.id ? 'true' : 'false', ...activate(() => selectBatch(b.id)) },
-      h('div', null, h('div', { class: 'b-name' }, b.label || b.id), h('div', { class: 'b-sub' }, `${n} tasks. Started ${fmtDT(b.start)}. Last activity ${ago(b.last)}.`), h('div', { class: 'b-id' }, b.id)),
+      h('div', null, h('div', { class: 'b-name' }, b.label || b.id), h('div', { class: 'b-sub' }, `${n} tasks. Started ${fmtDT(b.start)}. Last activity ${ago(b.last)}.`), h('div', { class: 'b-id' }, b.id),
+        b.operator || b.superseded ? h('div', { class: 'chips b-chips' }, b.operator ? h('span', { class: 'tag', title: 'From OPERATOR.md' }, icon('robot'), `Operator: ${b.operator.name}`) : null,
+          b.superseded ? h('span', { class: 'pill s-pending', title: 'Replaced by a newer run. Kept as history; nothing in it counts as active.' }, icon('history'), 'Superseded') : null) : null),
       h('div', null, h('div', { class: 'stackbar', role: 'img', 'aria-label': segs.map(([k, , l]) => `${cnt[k]} ${l}`).join(', ') },
         segs.map(([k, c, l]) => h('i', { style: { 'flex-grow': String(cnt[k]), background: c }, ...tipAttrs(() => [h('b', null, `${cnt[k]} ${l}`)]) }))),
       h('div', { class: 'b-legend' }, segs.map(([k, c, l]) => h('span', null, h('i', { style: { background: c } }), `${cnt[k]} ${l}`)))),
       h('div', { class: 'b-right' },
-        b.active ? h('span', { class: 'pill s-running' }, icon('circle-notch'), `${b.active} active`) : h('span', { class: 'pill s-pending' }, icon('circle-dashed'), 'Idle'),
+        b.superseded ? h('span', { class: 'pill s-superseded', title: 'Replaced by a newer run. Kept as history; nothing in it counts as active.' }, icon('history'), 'Superseded') : b.active ? h('span', { class: 'pill s-running' }, icon('circle-notch'), `${b.active} active`) : h('span', { class: 'pill s-pending' }, icon('circle-dashed'), 'Idle'),
         h('div', { class: 'chips' },
           (b.runs || []).filter((r) => r.current && !r.superseded).slice(0, 3).map((r) => h('button', { type: 'button', class: 'tag current-run', title: `Current run · ${r.tasks || 0} tasks`, onclick: (e) => { e.stopPropagation(); openModal('run', { batch: b.id, run: r.name }); } }, r.name, r.countsSource === 'live-status' ? h('span', { class: 'meta' }, ' live') : null)),
           (b.runs || []).some((r) => r.superseded) ? h('span', { class: 'tag superseded-run', title: 'Superseded runs are in Archive' }, `Archive ${(b.runs || []).filter((r) => r.superseded).length}`) : null,
@@ -1040,6 +1044,8 @@
               : `Baseline ${base.baseSHA || ''}: ${base.numFailedTests ?? 0} failing tests (pass count not recorded)`)
           : `Current baseline ${base.baseSHA || ''}: ${base.incompleteReason || 'incomplete'}`) : h('span', { class: 'tag' }, 'No baseline in this batch'),
       b.previousBaseline ? h('span', { class: 'tag' }, `Previous ${b.previousBaseline.baseSHA || ''}: ${b.previousBaseline.numPassedTests ?? '?'} pass / ${b.previousBaseline.numFailedTests ?? '?'} fail`) : null,
+      b.operator ? h('button', { type: 'button', class: 'tag', onclick: () => openModal('file', { batch: b.id, file: { file: 'OPERATOR.md', mtime: b.operator.mtime, operator: b.operator.name, excerpt: b.operator.excerpt } }) }, icon('robot'), `OPERATOR.md: ${b.operator.name}`) : null,
+      b.superseded ? h('span', { class: 'pill s-pending' }, icon('history'), 'Superseded') : null,
       (b.policies || []).map((p) => h('span', { class: 'tag', title: 'Merge gate policy present' }, icon('shield'), p)),
       [...(b.ledgers || []), ...(b.files || [])].map((l) => h('button', { type: 'button', class: 'tag', onclick: () => openModal('file', { batch: b.id, file: l }) }, icon('list'), `${l.run ? `${l.run}/` : ''}${l.file}`)),
       (b.runs || []).filter((r) => r.current && !r.superseded).map((r) => {

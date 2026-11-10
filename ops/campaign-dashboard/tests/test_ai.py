@@ -55,7 +55,7 @@ class FakeAnthropic(BaseHTTPRequestHandler):
 
 
 def fixture_state():
-    payload = wc.collect(os.path.join(ROOT, "fixtures", "jobs"), None, live_window=0, host_metrics=False)
+    payload = wc.collect(os.path.join(ROOT, "fixtures", "jobs"), None, live_window=0, host_metrics=False, superseded=["wave0-old-20261109"])
     with open(os.path.join(ROOT, "fixtures", "box.json")) as fh:
         box = json.load(fh)
     snap = {"worker": {"receivedAt": 1.0, "payload": payload}, "box": {"receivedAt": 1.0, "payload": box}}

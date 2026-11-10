@@ -363,6 +363,11 @@ def build_state(snapshot, now=None, ai=None):
             t["done"] = False
             t["done"] = verdict(t)["key"] in ("passed", "merged") and bool(merge) and issues_closed
             t["verdict"] = verdict(t)
+            if b.get("superseded") and t["verdict"]["key"] not in ("done", "merged", "passed", "failed", "blocked"):
+                # replaced by a newer run: not queued, not running, not awaiting anything
+                t["verdict"] = {"key": "superseded", "label": "Superseded"}
+                t["phase"] = "superseded"
+                t["running"] = False
             t["nextGate"], t["nextGateStatus"] = (None, None) if t["done"] else next_gate(gates)
             if t["verdict"]["key"] in ("done", "merged", "failed", "pending_qa", "rejected", "running", "queued"):
                 t["phase"] = t["verdict"]["key"]
@@ -375,7 +380,7 @@ def build_state(snapshot, now=None, ai=None):
         counts.update(counts_from_verdicts(tasks))
         b["counts"] = counts
         last = _num(b.get("last")) or 0
-        b["historical"] = bool(b["archived"]) or (
+        b["historical"] = bool(b["archived"]) or bool(b.get("superseded")) or (
             not b.get("active") and not counts["running"] and now - last > 86400)
         if b.get("baseline") or b.get("baselines"):
             policy_tip = (worker.get("develop") or {}).get("sha") or b.get("developTarget")

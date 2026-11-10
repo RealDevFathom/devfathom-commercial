@@ -380,7 +380,7 @@ svg.mbars { display: block; width: 100%; overflow: visible; margin-top: auto; pa
 .pill.s-running { background: var(--run-bg); color: var(--run-ink); box-shadow: 0 0 0 1px var(--run-bd) inset, 0 0 16px -4px var(--run-bd); }
 .pill.s-running .ic { animation: spin 1.2s linear infinite; }
 .pill.s-gates { background: var(--well); color: var(--text-2); }
-.pill.s-queued, .pill.s-pending { background: transparent; color: var(--muted); box-shadow: 0 0 0 1px var(--line-2) inset; }
+.pill.s-queued, .pill.s-pending, .pill.s-superseded { background: transparent; color: var(--muted); box-shadow: 0 0 0 1px var(--line-2) inset; }
 button.pill { cursor: pointer; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .tag { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 999px; font-size: 12px; color: var(--text-2); background: var(--well);
@@ -703,3 +703,4 @@ button.mini { cursor: pointer; } button.mini:hover { background: var(--glass-str
 .tag.superseded-run { opacity: .65; }
 .banner-item.campaign-pause { display: flex; gap: 10px; align-items: flex-start; border-radius: 10px; padding: 10px 14px; }
 .banner-item.campaign-pause .badge { margin-right: 4px; }
+.b-chips { margin-top: 8px; }

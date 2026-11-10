@@ -324,6 +324,18 @@ UPDATE_SNAPSHOTS=1 python3 -m unittest tests.test_visual
   whitelist, so there is no directory listing. Logs record method, path and status only, never headers
   or bodies.
 
+## Operators, Claude waves and superseded batches
+
+* **Operator:** a batch's `OPERATOR.md` names who runs it. The dashboard reads its `Operator: <name>` line,
+  or else its first heading, and shows it on the batch and in the control-room heading. The file itself opens as evidence.
+* **Claude-operated waves:** `<batch>/wave<N>/` directories are runs. `summary.json` is read like a ledger
+  (`jobs`, `tasks` or `results`, as a list or keyed by issue, plus `active` and `maxConcurrent`), and each `DEV-*/result.json`
+  is read like a checkpoint (`status`, `steps`, `sourceSHA` and so on). Wave jobs appear under Agent jobs alongside Codex.
+* **Superseded batches:** set `OPS_SUPERSEDED=rebase-1906-1110` (comma-separated) in `/etc/ops-collector.env`, or drop
+  an empty `SUPERSEDED` file into the batch. The batch stays as history, but nothing in it counts as active, running or queued.
+  Its unfinished tasks show as **Superseded**, and the warning rules skip it.
+* **Services:** `claude-*` systemd units (for example `claude-wave1.service`) are watched with the others.
+
 ## Data model and gate vocabulary
 
 * **Batch** = job root. **Run** = `codex-*` / `gates-*` / `baseline-*` directory. `*-attempt*` directories

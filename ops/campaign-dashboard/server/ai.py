@@ -51,7 +51,8 @@ optionally QA/browser and security) on its final SHA, be merged into `develop`, 
 closed. A task is "done" only when all of that holds. Each task carries a `verdict` (status): trust it. PASSED means every \
 required gate passed on the exact final SHA; FAILED names the failing gate; MERGED means this task's own final SHA was \
 merged into develop during the campaign (a PR that merely mentions the issue does not count, see mergeMismatch). Batches are job roots on the worker; runs inside them are \
-codex-*, gates-* and baseline-* directories.
+codex-*, gates-*, baseline-* and wave<N> directories (wave runs are Claude-operated). A batch marked superseded was \
+replaced by a newer run: it is history only and nothing in it is active.
 
 You are strictly read-only. You can look at data through the provided tools and nothing else. You cannot start, \
 stop, retry, merge, deploy, close issues or change anything, and you must not claim or offer to. When something \
@@ -213,7 +214,8 @@ class ReadOnlyTools:
             "serverTime": self.s.get("serverTime")}
 
     def t_list_batches(self):
-        return [{k: b.get(k) for k in ("id", "label", "counts", "active", "cap", "start", "last", "historical", "attemptDirs")}
+        return [{k: b.get(k) for k in ("id", "label", "counts", "active", "cap", "start", "last", "historical", "superseded", "attemptDirs")}
+                | {"operator": (b.get("operator") or {}).get("name")}
                 | {"runs": [r.get("name") for r in b.get("runs") or []]} for b in self.s.get("batches") or []]
 
     def t_get_batch(self, batch_id):
@@ -325,7 +327,8 @@ def digest(state):
         if b.get("archived"):
             continue
         tasks = sorted(b.get("tasks") or [], key=lambda t: (t.get("done") is True, -(t.get("last") or 0)))
-        batches.append({k: b.get(k) for k in ("id", "label", "counts", "active", "cap", "start", "last", "historical", "currentRun")}
+        batches.append({k: b.get(k) for k in ("id", "label", "counts", "active", "cap", "start", "last", "historical", "currentRun", "superseded")}
+                       | {"operator": (b.get("operator") or {}).get("name")}
                        | {"baseline": {k: (b.get("baseline") or {}).get(k) for k in (
                               "run", "baseSHA", "numPassedTests", "numFailedTests", "complete", "incomplete",
                               "incompleteReason", "current", "matchesDevelop")},

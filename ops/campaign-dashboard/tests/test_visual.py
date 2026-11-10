@@ -116,7 +116,7 @@ class VisualTests(unittest.TestCase):
         for dirpath, dirnames, filenames in os.walk(jobs):
             for n in dirnames + filenames:
                 os.utime(os.path.join(dirpath, n), (FIXED - 900, FIXED - 900))
-        worker = wc.collect(jobs, None, live_window=0, host_metrics=False, now=FIXED)
+        worker = wc.collect(jobs, None, live_window=0, host_metrics=False, now=FIXED, superseded=["wave0-old-20261109"])
         with open(os.path.join(ROOT, "fixtures", "box.json")) as fh:
             box = json.load(fh)
         srv.store.put("worker", worker, now=FIXED - 20)

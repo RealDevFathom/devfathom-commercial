@@ -1,0 +1,27 @@
+{
+  "atPKT": "2026-11-10T13:10:00+05:00",
+  "wave": 1,
+  "maxConcurrent": 4,
+  "active": 1,
+  "jobs": [
+    {
+      "issue": "DEV-30",
+      "status": "RUNNING",
+      "model": "claude-opus-5-5",
+      "reasoningEffort": "high",
+      "sourceSHA": "1906b53aa1b2c3d4e5f60718293a4b5c6d7e8f90"
+    },
+    {
+      "issue": "DEV-31",
+      "status": "PASS",
+      "model": "claude-opus-5-5",
+      "reasoningEffort": "high",
+      "sourceSHA": "1906b53aa1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "newSourceSHA": "31aa31bb31cc31dd31ee31ff3100aa11bb22cc33",
+      "codexExitCode": 0,
+      "changedFiles": [
+        "src/server/pharmacy/stock.ts"
+      ]
+    }
+  ]
+}
