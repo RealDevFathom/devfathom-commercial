@@ -674,6 +674,23 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
             const publishAssertionIds = candidate.provenance
               .filter((item) => item.status === 'ACCEPTED' || item.status === 'CORRECTED')
               .map((item) => item.id);
+            const referenceState = candidate.saleable
+              ? {
+                  detail: 'Reviewed and saleable',
+                  label: 'Saleable',
+                  tone: 'success' as const,
+                }
+              : reviewAssertionIds.length
+                ? {
+                    detail: 'Non-saleable until reviewed and completed',
+                    label: 'In review',
+                    tone: 'warning' as const,
+                  }
+                : {
+                    detail: 'Reviewed and awaiting publication',
+                    label: 'Reviewed',
+                    tone: 'info' as const,
+                  };
             const isReviewing = reviewing.has(candidate.id);
             const isPublishing = publishing.has(candidate.id);
             const reviewNoteId = `reference-review-note-${candidate.id}`;
@@ -684,10 +701,10 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                   <div>
                     <h3 className="font-semibold text-text-strong">{candidate.productName}</h3>
                     <p className="mt-1 text-xs text-text-muted">
-                      Non-saleable until reviewed and completed · {candidate.id}
+                      {referenceState.detail} · {candidate.id}
                     </p>
                   </div>
-                  <StatusPill status="In review" tone="warning" />
+                  <StatusPill status={referenceState.label} tone={referenceState.tone} />
                 </div>
                 <dl className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                   {candidate.provenance.map((assertion) => {

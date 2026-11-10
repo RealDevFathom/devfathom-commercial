@@ -210,6 +210,67 @@ it('says why review and publish controls are unavailable', () => {
   expect(within(fresh!).getByRole('button', { name: 'accept' })).toBeEnabled();
 });
 
+it.each([
+  {
+    name: 'unreviewed non-saleable medicine',
+    saleable: false,
+    statuses: ['UNREVIEWED'],
+    detail: 'Non-saleable until reviewed and completed',
+    label: 'In review',
+    tone: 'warning',
+  },
+  {
+    name: 'reviewed medicine awaiting publication',
+    saleable: false,
+    statuses: ['ACCEPTED'],
+    detail: 'Reviewed and awaiting publication',
+    label: 'Reviewed',
+    tone: 'info',
+  },
+  {
+    name: 'corrected medicine awaiting publication',
+    saleable: false,
+    statuses: ['CORRECTED'],
+    detail: 'Reviewed and awaiting publication',
+    label: 'Reviewed',
+    tone: 'info',
+  },
+  {
+    name: 'partially reviewed non-saleable medicine',
+    saleable: false,
+    statuses: ['ACCEPTED', 'UNREVIEWED'],
+    detail: 'Non-saleable until reviewed and completed',
+    label: 'In review',
+    tone: 'warning',
+  },
+  {
+    name: 'saleable medicine',
+    saleable: true,
+    statuses: ['ACCEPTED'],
+    detail: 'Reviewed and saleable',
+    label: 'Saleable',
+    tone: 'success',
+  },
+  {
+    name: 'saleable medicine with a new unreviewed assertion',
+    saleable: true,
+    statuses: ['ACCEPTED', 'UNREVIEWED'],
+    detail: 'Reviewed and saleable',
+    label: 'Saleable',
+    tone: 'success',
+  },
+])('derives the reference status for a $name', ({ saleable, statuses, detail, label, tone }) => {
+  mocks.candidates.data = [{ ...candidate('medicine-1', statuses), saleable }];
+
+  render(<MedicineReferenceWorkbench health={[]} />);
+
+  expect(screen.getByText(`${detail} · medicine-1`)).toBeVisible();
+  expect(screen.getByText(label).closest('[data-slot="status-pill"]')).toHaveAttribute(
+    'data-tone',
+    tone
+  );
+});
+
 function referenceCsv(count: number) {
   const lines = ['productName,strength,dosageForm,pack'];
   for (let index = 0; index < count; index += 1) lines.push(`Medicine ${index},500 mg,Tablet,10`);
