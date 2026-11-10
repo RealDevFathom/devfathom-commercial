@@ -31,6 +31,8 @@ export function parseSimpleMedicineStrength(input: string): { value: number; uni
 
 const PACK_MEASURE =
   /\d+(?:[.,]\d+)?\s*(?:ml|mls|l|ltr|litre|liter|mg|mcg|µg|μg|g|gm|gms|kg|iu|%)(?![\p{L}])/giu;
+const PACK_COUNT_WORDS =
+  /(?:(?:unit|tablet|capsule|caplet|ampoule|ampule|vial|bottle|tube|sachet|strip|blister|carton|pack|packet)s?|box(?:es)?|of|per)\b/g;
 const MAX_PACK_UNITS = 2_147_483_647;
 
 /**
@@ -47,6 +49,10 @@ export function parseDefaultPackSize(
   if (!text) return null;
   const rest = text.replace(PACK_MEASURE, ' ');
   const measured = rest !== text;
+  // Unknown wording may describe a measurement, not a stock count (for
+  // example "100 grams tube"). Only known count/container labels may remain.
+  const countText = rest.replace(PACK_COUNT_WORDS, '').replace(/['’]s\b/g, '');
+  if (/[^\d\sx×*,]/u.test(countText)) return null;
   if (/\d[.,]\d/.test(rest)) return null;
   // A count of strips, boxes, etc. leaves their individual contents unknown,
   // even in a multiplication such as "2 x 10 strips".

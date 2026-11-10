@@ -389,6 +389,10 @@ describe('publish, then import opening stock by barcode', () => {
     '2 x 10 packets',
     '1 x 10 strip',
     '1 x 10 x 10 carton',
+    '100 grams tube',
+    '100 millilitres bottle',
+    '2 x 100 grams tubes',
+    '10 x 5 millilitres ampoules',
   ])('blocks publication when %j has no safe unit count', async (pack) => {
     const store = makeStore({ ...reviewed, pack });
     await expect(
