@@ -33,7 +33,13 @@ STATIC_FILES = {
     "index.html": "text/html; charset=utf-8",
     "app.css": "text/css; charset=utf-8",
     "app.js": "text/javascript; charset=utf-8",
+    "icons.svg": "image/svg+xml",
+    "fonts/Geist-Variable.woff2": "font/woff2",
+    "fonts/GeistMono-Variable.woff2": "font/woff2",
+    "fonts/Geist-OFL.txt": "text/plain; charset=utf-8",
+    "fonts/Phosphor-MIT.txt": "text/plain; charset=utf-8",
 }
+LONG_CACHE = {"fonts/Geist-Variable.woff2", "fonts/GeistMono-Variable.woff2"}
 SOURCES = ("worker", "box")
 MAX_BODY = 8 * 1024 * 1024
 MAX_CHAT_BODY = 64 * 1024
@@ -433,7 +439,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store" if api else "no-cache")
+        if "Cache-Control" not in (extra or {}):
+            self.send_header("Cache-Control", "no-store" if api else "no-cache")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -498,7 +505,8 @@ class Handler(BaseHTTPRequestHandler):
                 body = fh.read()
         except OSError:
             return self.send(404, "not found")
-        return self.send(200, body, STATIC_FILES[name])
+        extra = {"Cache-Control": "private, max-age=604800, immutable"} if name in LONG_CACHE else None
+        return self.send(200, body, STATIC_FILES[name], extra=extra)
 
     def same_origin_json(self, limit):
         """CSRF guard for browser POSTs: custom header (forces a CORS preflight) + Origin check."""

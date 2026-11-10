@@ -7,152 +7,159 @@
   <meta name="color-scheme" content="dark">
   <title>Campaign Ops</title>
   <link rel="icon" href="data:,">
+  <link rel="preload" href="/static/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/GeistMono-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div class="backdrop" aria-hidden="true"></div>
 
-  <header class="top">
-    <div class="brand">
-      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
-        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8aa8ff"/><stop offset="1" stop-color="#c08cff"/></linearGradient></defs>
-        <path d="M16 2 30 16 16 30 2 16Z" fill="url(#lg)"/><path d="M16 9 23 16 16 23 9 16Z" fill="#0a0d16"/><circle cx="16" cy="16" r="2.6" fill="url(#lg)"/>
-      </svg>
-      <div class="brand-text">
-        <h1>Campaign Ops</h1>
-        <div class="sub">DevFathom · Codex &amp; machine-gate campaign</div>
-      </div>
-    </div>
+  <header class="topbar">
+    <a class="brand" href="#sec-overview" aria-label="Campaign Ops home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Campaign Ops</span>
+      <span class="brand-sep" aria-hidden="true">/</span>
+      <span class="brand-sub">DevFathom</span>
+    </a>
     <nav class="tabs" aria-label="Sections">
-      <a href="#sec-overview">Overview</a><a href="#sec-insights">Insights</a><a href="#sec-now">Now</a><a href="#sec-next">Next</a><a href="#sec-batches">Batches</a><a href="#sec-history">History</a><a href="#sec-machine">Machine</a>
+      <a href="#sec-overview">Overview</a>
+      <a href="#sec-attention">Attention</a>
+      <a href="#sec-live">Live</a>
+      <a href="#sec-batches">Batches</a>
+      <a href="#sec-history">History</a>
+      <a href="#sec-machine">Machine</a>
     </nav>
     <div class="top-right">
+      <span id="freshness" class="live-pill">Connecting</span>
       <div class="clock" title="Pakistan Standard Time (UTC+5)"><span id="clock">--:--:--</span><small id="clock-date">PKT</small></div>
-      <span id="freshness" class="pill pill-muted">loading…</span>
+      <button id="ai-open" class="btn btn-ai hidden" type="button" aria-controls="ai-drawer" aria-expanded="false">
+        <svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-sparkle"/></svg><span>Ask Claude</span><kbd>K</kbd>
+      </button>
     </div>
   </header>
 
-  <div id="alerts" class="alerts" role="status" aria-live="polite"></div>
+  <div class="filterbar" role="search">
+    <div class="filterbar-inner">
+      <label class="search">
+        <svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-search"/></svg>
+        <input id="q" type="search" placeholder="Search issues, titles, SHAs" autocomplete="off" aria-label="Search issues, titles and SHAs" aria-controls="q-results">
+        <kbd>/</kbd>
+        <div id="q-results" class="q-results hidden" role="listbox"></div>
+      </label>
+      <select id="f-batch" aria-label="Batch"><option value="">All batches</option></select>
+      <div id="f-status" class="seg" role="radiogroup" aria-label="Status filter"></div>
+      <span id="filter-meta" class="filter-meta"></span>
+    </div>
+  </div>
+
+  <div id="banner" class="banner" role="status" aria-live="polite"></div>
 
   <main>
-    <!-- OVERVIEW -->
     <section id="sec-overview" class="section" aria-labelledby="h-overview">
-      <div class="section-head"><div><span class="eyebrow">All time</span><h2 id="h-overview">Campaign overview</h2></div><span id="overview-meta" class="muted small"></span></div>
-      <div class="strip" data-area="overview"></div>
-      <div class="hero">
-        <div class="panel hero-funnel"><div class="panel-head"><h3>Pipeline funnel</h3><span class="muted small">click a stage for its tasks</span></div><div id="funnel"></div></div>
-        <div id="overview" class="cards"></div>
+      <div class="page-head">
+        <div>
+          <h1 id="h-overview">Campaign overview</h1>
+          <p id="overview-meta" class="lede"></p>
+        </div>
+        <div id="usage-chip" class="usage-chip"></div>
+      </div>
+      <div id="kpis" class="kpi-strip"></div>
+      <div class="card pipeline-card">
+        <div class="card-head"><h2>Pipeline</h2><span class="hint">Where every task is right now. Select a stage for its tasks.</span></div>
+        <div id="pipeline" class="pipeline"></div>
       </div>
     </section>
 
-    <!-- INSIGHTS -->
-    <section id="sec-insights" class="section" aria-labelledby="h-insights">
-      <div class="section-head"><div><span class="eyebrow">Automatic</span><h2 id="h-insights">Warnings &amp; suggestions</h2></div>
-        <div class="dialog-actions"><span id="insights-meta" class="muted small"></span><button id="ai-refresh" class="btn ghost hidden" type="button">Re-analyse</button></div></div>
-      <div class="panel"><div id="insights"></div></div>
+    <section id="sec-attention" class="section" aria-labelledby="h-attention">
+      <div class="section-head">
+        <h2 id="h-attention" class="h-section">Needs attention</h2>
+        <div class="head-actions"><span id="insights-meta" class="meta"></span><button id="ai-refresh" class="btn btn-ghost hidden" type="button"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-refresh"/></svg>Re-analyse</button></div>
+      </div>
+      <div id="insights"></div>
     </section>
 
-    <!-- NOW -->
-    <section id="sec-now" class="section" aria-labelledby="h-now">
-      <div class="section-head"><div><span class="eyebrow live-dot">Happening now</span><h2 id="h-now">Live activity</h2></div><span id="now-meta" class="muted small"></span></div>
-      <div class="strip" data-area="now"></div>
-      <div class="grid-now">
-        <div class="panel"><div class="panel-head"><h3>Codex jobs</h3><span id="codex-meta" class="muted small"></span></div><div id="codex"></div></div>
-        <div class="panel"><div class="panel-head"><h3>Machine runs &amp; gates</h3><span id="gates-meta" class="muted small"></span></div><div id="gates-now"></div></div>
-        <div class="panel"><div class="panel-head"><h3>Worker vitals</h3><span id="vitals-meta" class="muted small"></span></div><div id="vitals"></div></div>
+    <section id="sec-live" class="section" aria-labelledby="h-live">
+      <div class="section-head"><h2 id="h-live" class="h-section">Live</h2><span id="live-meta" class="meta"></span></div>
+      <div class="card">
+        <div class="card-head"><h3>Past 12 hours, now and next</h3><div id="lane-legend" class="legend"></div></div>
+        <div id="lanes" class="lanes"></div>
+      </div>
+      <div class="grid-live">
+        <div class="card"><div class="card-head"><h3><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-robot"/></svg>Codex</h3><span id="codex-meta" class="meta"></span></div><div id="codex"></div></div>
+        <div class="card"><div class="card-head"><h3><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-flask"/></svg>Running gates</h3><span id="gates-meta" class="meta"></span></div><div id="gates-now"></div></div>
+        <div class="card"><div class="card-head"><h3><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-queue"/></svg>Up next</h3><span id="next-meta" class="meta"></span></div><div id="next"></div></div>
       </div>
     </section>
 
-    <!-- NEXT -->
-    <section id="sec-next" class="section" aria-labelledby="h-next">
-      <div class="section-head"><div><span class="eyebrow">About to happen</span><h2 id="h-next">Up next</h2></div><span id="next-meta" class="muted small"></span></div>
-      <div class="strip" data-area="next"></div>
-      <div class="grid3">
-        <div class="panel"><div class="panel-head"><h3>Queued tasks</h3><span id="queue-meta" class="muted small"></span></div><div id="queue"></div></div>
-        <div class="panel"><div class="panel-head"><h3>Upcoming gates</h3><span class="muted small">next step per task</span></div><div id="upcoming"></div></div>
-        <div class="panel"><div class="panel-head"><h3>Next batch</h3></div><div id="next-batch"></div></div>
-      </div>
-    </section>
-
-    <!-- BATCHES -->
     <section id="sec-batches" class="section" aria-labelledby="h-batches">
-      <div class="section-head"><div><span class="eyebrow">Discovered automatically</span><h2 id="h-batches">Batches</h2></div><span id="batches-meta" class="muted small"></span></div>
-      <div class="strip" data-area="batches"></div>
-      <div class="panel"><div id="batches"></div></div>
-      <div class="panel hidden" id="batch-detail" aria-labelledby="bd-title">
-        <div class="panel-head">
-          <div><h3 id="bd-title" class="h-big">Batch</h3><div id="bd-sub" class="muted small"></div></div>
-          <button id="bd-close" class="btn ghost" type="button">Close</button>
+      <div class="section-head"><h2 id="h-batches" class="h-section">Batches</h2><span id="batches-meta" class="meta"></span></div>
+      <div id="batches" class="batch-list"></div>
+      <div id="batch-detail" class="card hidden" aria-labelledby="bd-title">
+        <div class="card-head">
+          <div><h3 id="bd-title" class="h-detail">Batch</h3><div id="bd-sub" class="meta"></div></div>
+          <button id="bd-close" class="btn btn-ghost" type="button"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-x"/></svg>Close</button>
         </div>
-        <div id="bd-summary" class="bd-summary"></div>
-        <div class="filters">
-          <input id="f-search" type="search" placeholder="Search issue, title, SHA…" autocomplete="off" aria-label="Search tasks">
-          <select id="f-status" aria-label="Filter by status">
-            <option value="">All statuses</option>
-            <option value="running">Running</option>
-            <option value="pending">Queued / pending</option>
-            <option value="fixed">Fixed</option>
-            <option value="gated">Gated</option>
-            <option value="merged">Merged</option>
-            <option value="done">Done</option>
-            <option value="failed">Failed</option>
-            <option value="blocked">Blocked</option>
-          </select>
-          <select id="f-gate" aria-label="Filter by failing gate"><option value="">Any gate</option></select>
-          <span id="bd-count" class="muted small"></span>
-        </div>
-        <div class="legend" id="bd-legend"></div>
+        <div id="bd-ins" class="stack-sm"></div>
+        <div id="bd-summary" class="chips"></div>
         <div class="table-wrap"><table id="matrix" class="matrix"></table></div>
       </div>
     </section>
 
-    <!-- HISTORY -->
     <section id="sec-history" class="section" aria-labelledby="h-history">
-      <div class="section-head"><div><span class="eyebrow">What has happened</span><h2 id="h-history">History</h2></div><span id="history-meta" class="muted small"></span></div>
-      <div class="strip" data-area="history"></div>
-      <div class="panel"><div class="panel-head"><h3>Activity · last 14 days</h3><span class="muted small">click a day to filter the timeline</span></div><div id="activity"></div></div>
-      <div class="grid2">
-        <div class="panel"><div class="panel-head"><h3>Merges into develop</h3><span id="merges-meta" class="muted small"></span></div><div id="merges"></div></div>
-        <div class="panel"><div class="panel-head"><h3>Issues closed</h3><span id="issues-meta" class="muted small"></span></div><div id="issues"></div></div>
+      <div class="section-head"><h2 id="h-history" class="h-section">History</h2><span id="history-meta" class="meta"></span></div>
+      <div class="card">
+        <div class="card-head"><h3>Activity, last 14 days</h3><span class="hint">Select a day to filter the timeline</span></div>
+        <div id="activity"></div>
       </div>
-      <div class="panel"><div class="panel-head"><h3>Timeline</h3><span id="events-meta" class="muted small"></span></div><div id="events"></div></div>
+      <div class="grid-2">
+        <div class="card"><div class="card-head"><h3><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-merge"/></svg>Merges into develop</h3><span id="merges-meta" class="meta"></span></div><div id="merges"></div></div>
+        <div class="card"><div class="card-head"><h3><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-check-circle"/></svg>Issues closed</h3><span id="issues-meta" class="meta"></span></div><div id="issues"></div></div>
+      </div>
+      <div class="card"><div class="card-head"><h3><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-history"/></svg>Timeline</h3><span id="events-meta" class="meta"></span></div><div id="events"></div></div>
     </section>
 
-    <!-- MACHINE -->
     <section id="sec-machine" class="section" aria-labelledby="h-machine">
-      <div class="section-head"><div><span class="eyebrow">Infrastructure</span><h2 id="h-machine">Worker machine</h2></div><span id="worker-meta" class="muted small"></span></div>
-      <div class="strip" data-area="machine"></div>
-      <div class="panel"><div id="worker"></div></div>
+      <div class="section-head"><h2 id="h-machine" class="h-section">Machine</h2><span id="worker-meta" class="meta"></span></div>
+      <div id="worker"></div>
     </section>
   </main>
 
+  <footer>Read-only. Private. All times PKT (Asia/Karachi, UTC+5). Refreshes every 30 s.</footer>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
   <dialog id="dlg" aria-labelledby="dlg-title">
     <div class="dialog-head">
-      <div><div id="dlg-kicker" class="eyebrow"></div><h2 id="dlg-title">Detail</h2><div id="dlg-sub" class="muted small"></div></div>
-      <div class="dialog-actions"><button id="dlg-back" class="btn ghost hidden" type="button">← Back</button><button id="dlg-close" class="btn ghost" type="button" aria-label="Close">✕</button></div>
+      <div class="dialog-titles"><div id="dlg-kicker" class="kicker"></div><h2 id="dlg-title">Detail</h2><div id="dlg-sub" class="meta"></div></div>
+      <div class="head-actions">
+        <button id="dlg-back" class="btn btn-ghost hidden" type="button"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-arrow-left"/></svg>Back</button>
+        <button id="dlg-close" class="btn btn-icon" type="button" aria-label="Close"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-x"/></svg></button>
+      </div>
     </div>
     <div id="dlg-body"></div>
   </dialog>
 
-  <button id="ai-fab" class="ai-fab hidden" type="button" aria-controls="ai-drawer" aria-expanded="false">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.2 6.3L20.5 10l-6.3 2.2L12 18.5l-2.2-6.3L3.5 10l6.3-1.7z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>
-    <span>Ask Claude</span>
-  </button>
   <aside id="ai-drawer" class="ai-drawer" aria-label="Claude assistant" aria-hidden="true">
     <div class="ai-head">
-      <div><div class="eyebrow">Read-only assistant</div><h2>Ask Claude</h2><div id="ai-status" class="muted small"></div></div>
-      <div class="dialog-actions"><button id="ai-clear" class="btn ghost" type="button" title="New conversation">New</button><button id="ai-close" class="btn ghost" type="button" aria-label="Close assistant">✕</button></div>
+      <div class="ai-title">
+        <span class="ai-orb" aria-hidden="true"><svg class="ic"><use href="/static/icons.svg#i-sparkle"/></svg></span>
+        <div><h2>Ask Claude</h2><div id="ai-status" class="meta"></div></div>
+      </div>
+      <div class="head-actions">
+        <button id="ai-clear" class="btn btn-ghost" type="button">New chat</button>
+        <button id="ai-close" class="btn btn-icon" type="button" aria-label="Close assistant"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-x"/></svg></button>
+      </div>
     </div>
     <div id="ai-log" class="ai-log" aria-live="polite"></div>
     <div id="ai-suggest" class="ai-suggest"></div>
     <form id="ai-form" class="ai-form" autocomplete="off">
-      <textarea id="ai-input" rows="2" maxlength="4000" placeholder="Ask about batches, tasks, gates, merges, the worker…" aria-label="Message"></textarea>
-      <button id="ai-send" class="btn primary" type="submit">Send</button>
+      <textarea id="ai-input" rows="1" maxlength="4000" placeholder="Ask about tasks, gates, merges, the worker" aria-label="Message"></textarea>
+      <button id="ai-send" class="btn btn-send" type="submit" aria-label="Send"><svg class="ic" aria-hidden="true"><use href="/static/icons.svg#i-paper-plane"/></svg></button>
     </form>
-    <div class="ai-foot muted small">Answers come from the dashboard's data via read-only tools. Claude cannot change anything.</div>
+    <div class="ai-foot">Read-only. Claude answers from the dashboard's data and cannot change anything.</div>
   </aside>
 
-  <footer>Read-only monitoring · private · worker &amp; ops-box collectors · all times PKT (Asia/Karachi, UTC+5) · auto-refresh 30 s</footer>
   <script src="/static/app.js" defer></script>
 </body>
 </html>
