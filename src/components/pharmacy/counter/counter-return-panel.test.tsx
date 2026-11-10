@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ReturnForm } from './counter-return-panel';
+import { parseReceiptNumber, ReturnForm } from './counter-return-panel';
 const mocks = vi.hoisted(() => ({
   returnLine: vi.fn(),
   refund: vi.fn(),
@@ -43,7 +43,14 @@ beforeEach(() => {
   mocks.lookup = {
     isSuccess: true,
     data: [
-      { id: 'sale', receiptNumber: 12, businessDate: new Date('2026-09-29'), receiptDeviceId: 'd' },
+      {
+        id: 'sale',
+        branchId: 'b',
+        visibilityAnchor: { name: 'Main branch' },
+        receiptNumber: 12,
+        businessDate: new Date('2026-09-29'),
+        receiptDeviceId: 'd',
+      },
     ],
   };
   mocks.history = {
@@ -86,7 +93,80 @@ describe('counter returns', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Looking up receipt');
     mocks.lookup = { isSuccess: true, data: [] };
     view.rerender(<ReturnForm {...props} />);
-    expect(screen.getByText('No settled receipt found in this branch.')).toBeVisible();
+    expect(screen.getByText('Receipt not found')).toBeVisible();
+    expect(screen.queryByText(/outside your scope/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry lookup' })).not.toBeInTheDocument();
+  });
+  it('accepts the printed receipt format and shows a format hint', () => {
+    mocks.lookup = {};
+    mocks.history = {};
+    render(<ReturnForm {...props} />);
+    const field = screen.getByLabelText('Receipt number');
+    expect(field).toHaveAttribute('type', 'text');
+    expect(field).toHaveAccessibleDescription(/for example 1042 or QA-1042/);
+    fireEvent.change(field, { target: { value: 'QA-0000' } });
+    expect(field).toHaveValue('QA-0000');
+    expect(screen.getByRole('button', { name: 'Find receipt' })).toBeEnabled();
+    fireEvent.submit(screen.getByRole('button', { name: 'Find receipt' }).closest('form')!);
+    expect(screen.getByText('Receipt not found')).toBeVisible();
+  });
+  it('reads the receipt sequence from printed references', () => {
+    expect(parseReceiptNumber('1042')).toBe(1042);
+    expect(parseReceiptNumber(' QA-1042 ')).toBe(1042);
+    expect(parseReceiptNumber('Receipt 99999')).toBe(99999);
+    expect(parseReceiptNumber('receipt:7')).toBe(7);
+    expect(parseReceiptNumber('QA-0000')).toBeNull();
+    expect(parseReceiptNumber('QA-')).toBeNull();
+    expect(parseReceiptNumber('12;DROP')).toBeNull();
+  });
+  it('identifies another assigned branch without booking its return at this counter', () => {
+    mocks.lookup = {
+      isSuccess: true,
+      data: [
+        {
+          id: 'sale-b2',
+          branchId: 'b2',
+          visibilityAnchor: { name: 'Second branch' },
+          receiptNumber: 12,
+          businessDate: new Date('2026-09-29'),
+          receiptDeviceId: 'd2',
+        },
+      ],
+    };
+    mocks.history = {};
+    render(<ReturnForm {...props} />);
+    const match = screen.getByRole('button', { name: /Receipt 12.*Second branch/ });
+    expect(match).toBeVisible();
+    expect(match).toBeDisabled();
+    expect(match).toHaveTextContent('Switch to this branch to record a return.');
+    expect(screen.queryByRole('button', { name: 'Record return' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Confirm refund' })).not.toBeInTheDocument();
+    expect(mocks.returnLine).not.toHaveBeenCalled();
+    expect(mocks.refund).not.toHaveBeenCalled();
+  });
+  it('books the return and the refund to the active branch', async () => {
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
+    fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+      target: { value: 'seal unknown' },
+    });
+    fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+    await waitFor(() =>
+      expect(mocks.returnLine).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'b' }))
+    );
+  });
+  it('sends the cash refund to the active branch drawer', async () => {
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await waitFor(() =>
+      expect(mocks.refund).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'b' }))
+    );
   });
   it('explains lookup permission errors and offers retry', () => {
     mocks.lookup = {
@@ -99,6 +179,21 @@ describe('counter returns', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('You do not have access');
     fireEvent.click(screen.getByRole('button', { name: 'Retry lookup' }));
     expect(mocks.refetch).toHaveBeenCalledOnce();
+  });
+  it('does not retain a previous lookup error for an unparseable receipt', () => {
+    mocks.lookup = {
+      isError: true,
+      error: new Error('Connection failed'),
+      refetch: mocks.refetch,
+    };
+    mocks.history = {};
+    render(<ReturnForm {...props} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Connection failed');
+    fireEvent.change(screen.getByLabelText('Receipt number'), { target: { value: 'QA-0000' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Find receipt' }).closest('form')!);
+    expect(screen.getByText('Receipt not found')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry lookup' })).not.toBeInTheDocument();
   });
   it('disables mutations offline and for stale history', () => {
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
@@ -170,6 +265,23 @@ describe('counter returns', () => {
       expect(mocks.refund.mock.calls[1][0]).toEqual(first);
     }
   );
+  it('fails closed when saved recovery belongs to another branch', async () => {
+    mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
+    const view = render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await screen.findByRole('button', { name: 'Retry saved refund' });
+    const key = 'pharmacy-return:o:a:b';
+    const saved = JSON.parse(localStorage.getItem(key)!);
+    saved.input.branchId = 'b2';
+    localStorage.setItem(key, JSON.stringify(saved));
+    view.unmount();
+    render(<ReturnForm {...props} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('recovery is unavailable');
+    expect(screen.queryByRole('button', { name: 'Retry saved refund' })).not.toBeInTheDocument();
+  });
   it('fails closed when saved recovery is corrupt', () => {
     localStorage.setItem('pharmacy-return:o:a:b', 'broken');
     render(<ReturnForm {...props} />);

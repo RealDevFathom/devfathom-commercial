@@ -400,12 +400,15 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
   }
 }
 
-async function requireCounterReceiptAccess(
+type CounterReceiptGrant = { scope: LedgerScope; assigned: Set<string>; orgAdmin: boolean };
+
+/** Session, capability and active-branch checks shared by every counter receipt path. */
+async function counterReceiptGrant(
   ctx: TRPCContext,
   branch: string,
   requireCanonicalCounter = false,
   authorizeMember?: (rules: { capability: string; effect: string }[]) => boolean
-): Promise<LedgerScope> {
+): Promise<CounterReceiptGrant> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
   if (!user.organizationId || user.organizationId !== scope.organizationId) {
@@ -480,23 +483,41 @@ async function requireCounterReceiptAccess(
     select: { branchId: true },
   });
   const assigned = new Set(rows.map((row) => row.branchId));
-  if (assigned.has(branch)) return scope;
-
   // Session role only. An organization-role key is not an administrator grant.
   // An assigned admin still reaches every other active branch of this organization.
   const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
+  return { scope, assigned, orgAdmin };
+}
+
+function annotateOrgAdminReceiptAccess(ctx: TRPCContext, branch: string, assigned: Set<string>) {
+  annotateAudit(ctx, {
+    targetType: 'PharmacyBranch',
+    targetId: branch,
+    metadata: {
+      branchId: branch,
+      reason:
+        assigned.size === 0
+          ? 'org-admin-receipt-access-without-branch-assignment'
+          : 'org-admin-receipt-access',
+    },
+  });
+}
+
+async function requireCounterReceiptAccess(
+  ctx: TRPCContext,
+  branch: string,
+  requireCanonicalCounter = false,
+  authorizeMember?: (rules: { capability: string; effect: string }[]) => boolean
+): Promise<LedgerScope> {
+  const { scope, assigned, orgAdmin } = await counterReceiptGrant(
+    ctx,
+    branch,
+    requireCanonicalCounter,
+    authorizeMember
+  );
+  if (assigned.has(branch)) return scope;
   if (orgAdmin) {
-    annotateAudit(ctx, {
-      targetType: 'PharmacyBranch',
-      targetId: branch,
-      metadata: {
-        branchId: branch,
-        reason:
-          assigned.size === 0
-            ? 'org-admin-receipt-access-without-branch-assignment'
-            : 'org-admin-receipt-access',
-      },
-    });
+    annotateOrgAdminReceiptAccess(ctx, branch, assigned);
     return scope;
   }
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
@@ -1452,19 +1473,49 @@ export const pharmacySalesRouter = router({
   lookupReceiptByNumber: auditedProtectedProcedure
     .input(z.object({ branchId, receiptNumber: z.number().int().positive() }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
-      // Receipt sequences are per device/date: never pick an arbitrary matching sale.
-      return ctx.db.pharmacySale.findMany({
+      const { scope, assigned, orgAdmin } = await counterReceiptGrant(ctx, input.branchId);
+      // Cashiers search only active, assigned branches. An unassigned active
+      // branch has the same response as a missing receipt. Keep the audited
+      // session-admin exception for the requested active branch.
+      if (!assigned.has(scope.branchId)) {
+        if (!orgAdmin) return [];
+        annotateOrgAdminReceiptAccess(ctx, scope.branchId, assigned);
+      }
+      // Receipt sequences are per device/date. Fetch the active branch first so
+      // its matches remain first even when another branch has newer receipts.
+      const select = {
+        id: true,
+        branchId: true,
+        visibilityAnchor: { select: { name: true } },
+        receiptNumber: true,
+        receiptDeviceId: true,
+        businessDate: true,
+      } as const;
+      const active = await ctx.db.pharmacySale.findMany({
         where: {
           organizationId: scope.organizationId,
           branchId: scope.branchId,
           receiptNumber: input.receiptNumber,
           status: 'COMPLETED',
         },
-        select: { id: true, receiptNumber: true, receiptDeviceId: true, businessDate: true },
-        orderBy: { completedAt: 'desc' },
+        select,
+        orderBy: [{ completedAt: 'desc' }, { id: 'asc' }],
         take: 50,
       });
+      const otherBranches = [...assigned].filter((id) => id !== scope.branchId);
+      if (!otherBranches.length || active.length === 50) return active;
+      const others = await ctx.db.pharmacySale.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: { in: otherBranches },
+          receiptNumber: input.receiptNumber,
+          status: 'COMPLETED',
+        },
+        select,
+        orderBy: [{ completedAt: 'desc' }, { id: 'asc' }],
+        take: 50 - active.length,
+      });
+      return [...active, ...others];
     }),
   returnHistory: protectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())

@@ -40,6 +40,7 @@ const ids = {
   closedBranch: `br_rcpt_closed_${suffix}`,
   saleA: `sale_rcpt_a_${suffix}`,
   saleB: `sale_rcpt_b_${suffix}`,
+  saleBOnly: `sale_rcpt_b_only_${suffix}`,
 };
 
 type SalesCaller = {
@@ -205,7 +206,17 @@ beforeAll(async () => {
           receiptNumber: 7,
           receiptDeviceId: 'device-b',
           businessDate: new Date('2026-10-01T00:00:00.000Z'),
-          completedAt: new Date('2026-10-01T08:00:00.000Z'),
+          completedAt: new Date('2026-10-01T09:00:00.000Z'),
+        },
+        {
+          id: ids.saleBOnly,
+          branchId: ids.branchB,
+          status: 'COMPLETED',
+          createdByUserId: ids.dispenser,
+          receiptNumber: 9,
+          receiptDeviceId: 'device-b',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          completedAt: new Date('2026-10-01T10:00:00.000Z'),
         },
       ],
     });
@@ -284,9 +295,18 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
         code: 'FORBIDDEN',
         message: 'Branch is outside your scope.',
       });
+      // An unassigned active branch reads as "not found" without exposing its receipts.
       await expect(
         api.lookupReceiptByNumber({ branchId: ids.branchB, receiptNumber: 7 })
-      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      ).resolves.toEqual([]);
+      const unassignedReceipt = await api.lookupReceiptByNumber({
+        branchId: ids.branchA, receiptNumber: 9,
+      });
+      const missingReceipt = await api.lookupReceiptByNumber({
+        branchId: ids.branchA, receiptNumber: 99999,
+      });
+      expect(unassignedReceipt).toEqual([]);
+      expect(unassignedReceipt).toEqual(missingReceipt);
       await expect(
         api.counterReceiptPrintJob({
           branchId: ids.branchB,
@@ -350,7 +370,10 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     await act(ids.orgA, { id: ids.admin, role: 'ADMIN', organizationId: ids.orgA }, async (api) => {
       await expect(
         api.lookupReceiptByNumber({ branchId: ids.branchB, receiptNumber: 7 })
-      ).resolves.toEqual([expect.objectContaining({ id: ids.saleB })]);
+      ).resolves.toEqual([
+        expect.objectContaining({ id: ids.saleB }),
+        expect.objectContaining({ id: ids.saleA }),
+      ]);
     });
 
     await act(
@@ -432,7 +455,19 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
       async (api) => {
         await expect(
           api.lookupReceiptByNumber({ branchId: ids.branchA, receiptNumber: 7 })
-        ).resolves.toEqual([expect.objectContaining({ id: ids.saleA })]);
+        ).resolves.toEqual([
+          expect.objectContaining({ id: ids.saleA, branchId: ids.branchA }),
+          expect.objectContaining({ id: ids.saleB, branchId: ids.branchB }),
+        ]);
+        await expect(
+          api.lookupReceiptByNumber({ branchId: ids.branchB, receiptNumber: 7 })
+        ).resolves.toEqual([
+          expect.objectContaining({ id: ids.saleB, branchId: ids.branchB }),
+          expect.objectContaining({ id: ids.saleA, branchId: ids.branchA }),
+        ]);
+        await expect(
+          api.lookupReceiptByNumber({ branchId: ids.branchA, receiptNumber: 9 })
+        ).resolves.toEqual([expect.objectContaining({ id: ids.saleBOnly })]);
         await expect(
           api.counterCart({ branchId: ids.branchB, saleId: ids.saleB })
         ).resolves.toMatchObject({ saleId: ids.saleB, lines: [] });
