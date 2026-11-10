@@ -594,3 +594,4 @@ svg.gantt { width: 100%; height: auto; display: block; border-radius: var(--r-md
 .ins-col, .ins, .item > span, .tl-item .x { min-width: 0; }
 .ai-drawer:not(.open) { visibility: hidden; transition: transform .45s var(--ease), visibility 0s linear .45s; }
 .ins > div { min-width: 0; }
+@media (max-width: 640px) { .filterbar { position: static; } html { scroll-padding-top: 64px; } .section { scroll-margin-top: 64px; } }

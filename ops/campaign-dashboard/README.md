@@ -272,6 +272,31 @@ aws secretsmanager create-secret --region eu-north-1 --name campaign-dashboard/A
 
 The task needs outbound HTTPS to `api.anthropic.com` (NAT gateway or an egress rule from the private subnets).
 
+## Visual system
+
+* Typography: **Geist** for the UI and **Geist Mono** only for SHAs. Both are bundled as variable WOFF2 in
+  `server/static/fonts/` under the SIL OFL (licence alongside) and served by the dashboard itself. There is no
+  CDN, and no element (including SVG chart text) falls back to a system monospace font.
+* Icons: a vendored Phosphor sprite (`server/static/icons.svg`, MIT).
+* Dark, neutral theme. Colour is reserved for state: green passed/done, red failed (always names the gate),
+  amber blocked, blue running, violet merged. Every status carries an icon and a label, never colour alone.
+  The activity chart palette was checked with a colour-vision-deficiency validator against the dark surface.
+* Motion: counters, flowing pipeline wires, live pulses and toasts. All of it is disabled under
+  `prefers-reduced-motion`, and glass panels fall back to solid under `prefers-reduced-transparency`.
+* Keyboard: `/` focuses search, `K` opens Claude, `Esc` closes panels.
+* This ops tool intentionally uses Geist instead of the product's Instrument Sans / IBM Plex Mono
+  (`docs/design-system/DEVFATHOM-STUDIO.md`), at the owner's request. It is a separate internal surface.
+
+### Visual regression tests
+
+`tests/test_visual.py` drives Chromium (Playwright) against the fixtures with a frozen clock. It checks fonts,
+console errors and mobile overflow, a structural snapshot, and screenshot baselines in `tests/visual/baseline/`.
+It skips when node or Playwright are unavailable. After an intended visual change, refresh the baselines:
+
+```bash
+UPDATE_SNAPSHOTS=1 python3 -m unittest tests.test_visual
+```
+
 ## Security model
 
 * `GET /healthz` returns only `ok`. Everything else needs auth: HTTP Basic (`DASH_USER` / `DASH_PASSWORD`,
