@@ -144,6 +144,40 @@ describe('owner opening import dry run', () => {
     expect(preview.canCommit).toBe(false);
     expect(preview.lines[0]!.unitsPerPack).toBeNull();
   });
+  it.each([
+    { label: 'expired', effectiveFrom: new Date('2020-01-01'), effectiveTo: new Date('2021-01-01') },
+    { label: 'future', effectiveFrom: new Date('2099-01-01'), effectiveTo: null },
+  ])('matches a current flat pack when its child is $label', async ({ effectiveFrom, effectiveTo }) => {
+    const packs = await db.packLevel.findMany();
+    const levels = packs[0]!.presentation.packLevels;
+    levels.push({ ...levels[0]!, id: 'inactive-child', parentPackLevelId: 'pack', unitsPerParent: 2, effectiveFrom, effectiveTo });
+
+    const preview = await previewOwnerImport(scoped(), scope, input());
+
+    expect(preview.canCommit).toBe(true);
+    expect(preview.lines[0]).toMatchObject({ packLevelId: 'pack', unitsPerPack: 10, errors: [] });
+  });
+  it.each([
+    { packId: 'pack', unitsPerPack: 30 },
+    { packId: 'strip', unitsPerPack: 10 },
+  ])('matches current nested pack $packId using only effective descendants', async ({ packId, unitsPerPack }) => {
+    const packs = await db.packLevel.findMany();
+    const pack = packs[0]!;
+    const levels = pack.presentation.packLevels;
+    levels[0]!.level = 'BOX';
+    levels[0]!.unitsPerParent = 3;
+    levels.push({ ...levels[0]!, id: 'strip', level: 'STRIP', parentPackLevelId: 'pack', unitsPerParent: 10 });
+    levels.push({ ...levels[1]!, id: 'expired-strip', effectiveTo: new Date('2021-01-01') });
+    levels.push({ ...levels[1]!, id: 'future-strip', effectiveFrom: new Date('2099-01-01') });
+    levels.push({ ...levels[1]!, id: 'expired-unit', level: 'UNIT', parentPackLevelId: 'strip', unitsPerParent: 2, effectiveTo: new Date('2021-01-01') });
+    levels.push({ ...levels[1]!, id: 'future-unit', level: 'UNIT', parentPackLevelId: 'strip', unitsPerParent: 2, effectiveFrom: new Date('2099-01-01') });
+    pack.id = packId;
+
+    const preview = await previewOwnerImport(scoped(), scope, input(`SRC-1,${packId},B1,2099-06,25.00,1.25,12,10,Two damaged units excluded`));
+
+    expect(preview.canCommit).toBe(true);
+    expect(preview.lines[0]).toMatchObject({ packLevelId: packId, unitsPerPack, errors: [] });
+  });
   it('binds previews to mapping and destination and refuses a stale review before writes', async () => {
     const preview = await previewOwnerImport(scoped(), scope, input());
     await expect(commitOwnerImport(scoped(), scope, { ...input(), stockLocationId: 'another-location', previewHash: preview.previewHash })).rejects.toThrow('changed');

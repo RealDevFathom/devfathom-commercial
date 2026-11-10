@@ -38,7 +38,6 @@ function conversion(levels: PackLevelNode[], packId: string, at: Date): number |
     if (!Number.isSafeInteger(units) || units > INT_MAX) return null;
     const children = active.filter((child) => child.parentPackLevelId === cursor!.id);
     if (children.length > 1) return null;
-    if (children.length === 0 && levels.some((child) => child.parentPackLevelId === cursor!.id)) return null;
     cursor = children[0];
   }
   return units;
