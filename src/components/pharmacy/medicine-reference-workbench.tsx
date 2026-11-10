@@ -2,7 +2,7 @@
 
 import { browserUuid } from '@/lib/browser-uuid';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -202,6 +202,29 @@ function referenceProposalValues(payload: unknown): Record<string, string> {
   );
 }
 
+/** Tracks in-flight commands by row so one row's request never disables or relabels another. */
+function usePendingKeys() {
+  const inFlight = useRef(new Set<string>());
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
+  async function run(key: string, task: () => Promise<unknown>) {
+    if (inFlight.current.has(key)) return;
+    inFlight.current.add(key);
+    setPending(new Set(inFlight.current));
+    try {
+      await task();
+    } catch {
+      // The mutation's onError handler already announces the failure.
+    } finally {
+      inFlight.current.delete(key);
+      setPending(new Set(inFlight.current));
+    }
+  }
+  return { has: (key: string) => pending.has(key), run };
+}
+
+const CATALOGUE_REVIEW_DENIED =
+  'Confirming connector proposals needs the pharmacy:catalogue-review permission granted to your role by name. Wildcard grants such as * or pharmacy:* do not include it.';
+
 export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth[] }) {
   const [parsed, setParsed] = useState<ParsedFile | null>(null);
   const [mapping, setMapping] = useState<ManualMappingTemplate>({});
@@ -209,6 +232,10 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const [preview, setPreview] = useState<NormalizedMedicineReferenceRow[]>([]);
   const [upload, setUpload] = useState<ChunkedUpload | null>(null);
   const [uploadingPart, setUploadingPart] = useState<number | null>(null);
+  const confirming = usePendingKeys();
+  const reviewing = usePendingKeys();
+  const publishing = usePendingKeys();
+  const utils = trpc.useUtils();
   const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(undefined, {
     retry: false,
   });
@@ -218,7 +245,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const decideProposal = trpc.pharmacyMedicine.decideReferenceConnectorProposal.useMutation({
     onSuccess: async () => {
       toast.success('Reference proposal confirmed. Review its assertions before publication.');
-      await Promise.all([proposals.refetch(), candidates.refetch()]);
+      await refreshQueues();
     },
     onError: (error) => toast.error(error.message),
   });
@@ -226,17 +253,26 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const review = trpc.pharmacyMedicine.recordReviewDecision.useMutation({
     onSuccess: async () => {
       toast.success('Review decision recorded.');
-      await candidates.refetch();
+      await utils.pharmacyMedicine.referenceCandidates.invalidate();
     },
     onError: (error) => toast.error(error.message),
   });
   const publish = trpc.pharmacyMedicine.publishAssertions.useMutation({
     onSuccess: async () => {
       toast.success('Assertions published in a reversible batch.');
-      await candidates.refetch();
+      await utils.pharmacyMedicine.referenceCandidates.invalidate();
     },
     onError: (error) => toast.error(error.message),
   });
+
+  // Invalidate rather than refetch so every cached view of both queues (including one that
+  // previously failed or has not loaded yet) reloads after an import or a decision.
+  async function refreshQueues() {
+    await Promise.all([
+      utils.pharmacyMedicine.referenceConnectorProposals.invalidate(),
+      utils.pharmacyMedicine.referenceCandidates.invalidate(),
+    ]);
+  }
 
   async function chooseFile(file: File | undefined) {
     if (!file) return;
@@ -311,7 +347,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
       toast.error(message);
     } finally {
       setUploadingPart(null);
-      await Promise.all([proposals.refetch(), candidates.refetch()]);
+      await refreshQueues();
     }
   }
 
@@ -548,7 +584,11 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
         ) : null}
         {proposals.error ? (
           <div role="alert" className="space-y-3 text-sm text-destructive">
-            <p>{proposals.error.message}</p>
+            <p>
+              {proposals.error.data?.code === 'FORBIDDEN'
+                ? CATALOGUE_REVIEW_DENIED
+                : proposals.error.message}
+            </p>
             <Button variant="outline" onClick={() => void proposals.refetch()}>
               Retry proposals
             </Button>
@@ -567,6 +607,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
             const values = referenceProposalValues(proposal.payload);
             const name =
               values.productName ?? proposal.targetMedicine?.productName ?? 'Reference update';
+            const isConfirming = confirming.has(proposal.id);
             return (
               <article
                 key={proposal.id}
@@ -588,12 +629,14 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                 </dl>
                 <Button
                   className="min-h-11"
-                  disabled={decideProposal.isPending}
+                  disabled={isConfirming}
                   onClick={() =>
-                    decideProposal.mutate({ proposalId: proposal.id, decision: 'CONFIRM' })
+                    void confirming.run(proposal.id, () =>
+                      decideProposal.mutateAsync({ proposalId: proposal.id, decision: 'CONFIRM' })
+                    )
                   }
                 >
-                  {decideProposal.isPending ? 'Confirming…' : 'Confirm reference proposal'}
+                  {isConfirming ? 'Confirming…' : 'Confirm reference proposal'}
                 </Button>
               </article>
             );
@@ -631,6 +674,10 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
             const publishAssertionIds = candidate.provenance
               .filter((item) => item.status === 'ACCEPTED' || item.status === 'CORRECTED')
               .map((item) => item.id);
+            const isReviewing = reviewing.has(candidate.id);
+            const isPublishing = publishing.has(candidate.id);
+            const reviewNoteId = `reference-review-note-${candidate.id}`;
+            const publishNoteId = `reference-publish-note-${candidate.id}`;
             return (
               <article key={candidate.id} className="rounded-md border border-border-subtle p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -670,14 +717,17 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                       key={action}
                       size="sm"
                       variant={action === 'REJECT' ? 'destructive' : 'outline'}
-                      disabled={!reviewAssertionIds.length || review.isPending}
+                      disabled={!reviewAssertionIds.length || isReviewing}
+                      aria-describedby={reviewAssertionIds.length ? undefined : reviewNoteId}
                       onClick={() =>
-                        review.mutate({
-                          duplicateKey: `reference:${candidate.id}`,
-                          action,
-                          medicineIds: [candidate.id],
-                          payload: { assertionIds: reviewAssertionIds },
-                        })
+                        void reviewing.run(candidate.id, () =>
+                          review.mutateAsync({
+                            duplicateKey: `reference:${candidate.id}`,
+                            action,
+                            medicineIds: [candidate.id],
+                            payload: { assertionIds: reviewAssertionIds },
+                          })
+                        )
                       }
                     >
                       {action.toLowerCase()}
@@ -686,12 +736,32 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                   <Button
                     className="sm:ml-auto"
                     size="sm"
-                    disabled={!publishAssertionIds.length || publish.isPending}
-                    onClick={() => publish.mutate({ assertionIds: publishAssertionIds })}
+                    disabled={!publishAssertionIds.length || isPublishing}
+                    aria-describedby={publishAssertionIds.length ? undefined : publishNoteId}
+                    onClick={() =>
+                      void publishing.run(candidate.id, () =>
+                        publish.mutateAsync({ assertionIds: publishAssertionIds })
+                      )
+                    }
                   >
-                    Publish assertions
+                    {isPublishing ? 'Publishing…' : 'Publish assertions'}
                   </Button>
                 </div>
+                {!reviewAssertionIds.length || !publishAssertionIds.length ? (
+                  <div className="mt-2 space-y-1 text-xs text-text-muted">
+                    {!reviewAssertionIds.length ? (
+                      <p id={reviewNoteId}>
+                        Accept, reject, and defer apply to unreviewed assertions. Every assertion on
+                        this candidate already has a review decision.
+                      </p>
+                    ) : null}
+                    {!publishAssertionIds.length ? (
+                      <p id={publishNoteId}>
+                        Publish becomes available after at least one assertion is accepted.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </article>
             );
           })}

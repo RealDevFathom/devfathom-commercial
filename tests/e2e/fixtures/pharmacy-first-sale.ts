@@ -363,8 +363,21 @@ export async function freshPharmacyFirstSale(
     expect((await ownerUpdated).status()).toBe(200);
 
     await page.goto(new URL('/login', tenantOrigin).href);
-    await fill(page, { email: ownerEmail, password: ownerPassword });
-    await click(page.getByRole('button', { name: 'Sign in', exact: true }));
+    const signInOwner = async (password: string) => {
+      await fill(page, { email: ownerEmail, password });
+      // Discovery and credential verification precede navigation.
+      const authenticated = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          url.origin === tenantOrigin &&
+          url.pathname === '/api/auth/callback/login-intent' &&
+          response.request().method() === 'POST'
+        );
+      });
+      await click(page.getByRole('button', { name: 'Sign in', exact: true }));
+      expect((await authenticated).status()).toBe(200);
+    };
+    await signInOwner(ownerPassword);
     await expect(page).toHaveURL(/\/change-password(?:\?|$)/);
     const rotatedOwnerPassword = `FirstSale1!${randomUUID()}`;
     await page.getByLabel('Current password', { exact: true }).fill(ownerPassword);
@@ -372,8 +385,10 @@ export async function freshPharmacyFirstSale(
     await page.getByLabel('Confirm new password', { exact: true }).fill(rotatedOwnerPassword);
     await click(page.getByRole('button', { name: 'Change password', exact: true }));
     await expect(page).toHaveURL(/\/login(?:\?|$)/);
-    await fill(page, { email: ownerEmail, password: rotatedOwnerPassword });
-    await click(page.getByRole('button', { name: 'Sign in', exact: true }));
+    // Password rotation may return to the runtime's canonical host. Resume
+    // workspace discovery on this journey's explicit shared origin.
+    await page.goto(new URL('/login', tenantOrigin).href);
+    await signInOwner(rotatedOwnerPassword);
     await expect(page).not.toHaveURL(/\/login/);
     await setup(page);
     await expect(row(page, 'Commercial package').getByText('Done', { exact: true })).toBeVisible();
@@ -692,7 +707,9 @@ export async function freshPharmacyFirstSale(
 
     await follow(page, 'Readiness and parallel run', 'Open pharmacy counter');
     await click(page.getByRole('button', { name: 'Open drawer', exact: true }));
-    await page.getByLabel('Scan or search', { exact: true }).fill(barcode);
+    // Barcode Enter already adds a pack. Stage by name before the explicit
+    // sale-unit selection and F6 add below.
+    await page.getByLabel('Scan or search', { exact: true }).fill(medicineName);
     await page.getByLabel('Scan or search', { exact: true }).press('Enter');
     await click(
       page
