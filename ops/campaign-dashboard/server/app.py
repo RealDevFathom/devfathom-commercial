@@ -28,7 +28,8 @@ from ai import AIError, AIService  # noqa: E402
 from insights import rule_insights  # noqa: E402
 from truth import (  # noqa: E402
     annotate_baseline, annotate_services, counts_from_verdicts, inky_usage_from_box,
-    is_archived_batch, is_current_event, pick_current_baseline, verdict_from_current_status,
+    is_archived_batch, is_current_event, pick_current_baseline, previous_complete_baseline,
+    stub_baseline_for_tip, verdict_from_current_status, develop_merge_event,
 )
 from s3util import S3Backup  # noqa: E402
 
@@ -375,16 +376,36 @@ def build_state(snapshot, now=None, ai=None):
         last = _num(b.get("last")) or 0
         b["historical"] = bool(b["archived"]) or (
             not b.get("active") and not counts["running"] and now - last > 86400)
-        if b.get("baseline"):
+        if b.get("baseline") or b.get("baselines"):
+            policy_tip = (worker.get("develop") or {}).get("sha") or b.get("developTarget")
+            tip = policy_tip or github.get("developSha")
             preferred = pick_current_baseline(b.get("baselines") or [b["baseline"]],
-                                              ((github.get("developSha") or "")[:8] or None))
-            # Fall back to the batch's own list / current object when develop SHA is unknown in tests.
-            b["baselines"] = [annotate_baseline(x, preferred=x is preferred or (
-                preferred and x.get("run") and x.get("run") == preferred.get("run")))
-                for x in (b.get("baselines") or [b["baseline"]])]
-            current = next((x for x in b["baselines"] if x.get("current")), b["baselines"][0] if b["baselines"] else None)
-            if current:
-                b["baseline"] = current
+                                              (tip[:8] if tip else None),
+                                              strict=bool(policy_tip))
+            prev = previous_complete_baseline(b.get("baselines") or [b["baseline"]], tip)
+            items = list(b.get("baselines") or ([b["baseline"]] if b.get("baseline") else []))
+            if preferred is None and tip:
+                stub = stub_baseline_for_tip(tip, previous=prev)
+                b["baselines"] = [annotate_baseline(x, preferred=False, develop_prefix=tip) for x in items]
+                for x in b["baselines"]:
+                    x["current"] = False
+                    x["historical"] = True
+                b["baselines"].insert(0, annotate_baseline(stub, preferred=True, develop_prefix=tip))
+                b["baseline"] = b["baselines"][0]
+                b["previousBaseline"] = annotate_baseline(prev, preferred=False, develop_prefix=tip) if prev else None
+            else:
+                b["baselines"] = [annotate_baseline(x, preferred=x is preferred or (
+                    preferred and x.get("run") and x.get("run") == preferred.get("run")),
+                    develop_prefix=tip)
+                    for x in items]
+                current = next((x for x in b["baselines"] if x.get("current")), b["baselines"][0] if b["baselines"] else None)
+                if current:
+                    b["baseline"] = current
+                if prev and (not current or not (
+                    (current.get("run") and current.get("run") == prev.get("run")) or
+                    (current.get("baseSHA") and current.get("baseSHA") == (prev.get("baseSHA") or prev.get("sha")))
+                )):
+                    b["previousBaseline"] = annotate_baseline(prev, preferred=False, develop_prefix=tip)
         if not b["archived"]:
             for t in tasks:
                 issue = t["issue"]
@@ -450,6 +471,19 @@ def build_state(snapshot, now=None, ai=None):
             events.append({"ts": it["closedAt"], "kind": "issue", "level": "ok", "ghIssue": it.get("number"),
                            "issue": ", ".join(it.get("issues") or []) or None,
                            "text": f"GitHub issue #{it.get('number')} closed"})
+    develop = worker.get("develop") if isinstance(worker.get("develop"), dict) else None
+    ev = develop_merge_event(develop) if develop else None
+    if ev and ev.get("ts"):
+        events = [e for e in events if not (e.get("kind") == "merge" and e.get("run") == "develop")]
+        events.append(ev)
+        merged_list = list(github.get("merged") or [])
+        if ev["ts"] not in {p.get("mergedAt") for p in merged_list}:
+            merged_list.insert(0, {
+                "number": None, "title": ev["text"], "mergedAt": ev["ts"],
+                "sha": ev.get("sha"), "headSha": ev.get("sha"), "issues": [],
+                "method": (develop or {}).get("method"), "kind": "fast-forward",
+            })
+            github = dict(github, merged=merged_list)
     events = [e for e in events if isinstance(e, dict) and _num(e.get("ts"))]
     events.sort(key=lambda e: e["ts"], reverse=True)
 
@@ -494,12 +528,21 @@ def build_state(snapshot, now=None, ai=None):
         "overview": overview,
         "worker": {k: worker.get(k) for k in ("system", "history", "services", "codexProcs", "killSwitch",
                                               "usage", "allTime", "collectedAt", "dataAsOf", "current",
-                                              "gateProcs", "rebase", "devfix", "lanes", "stopFiles")},
+                                              "gateProcs", "rebase", "devfix", "lanes", "stopFiles", "develop")},
         "box": {k: box.get(k) for k in ("workers", "machine", "region", "collectedAt", "usage")},
         "usage": usage,
         "codex": codex,
         "batches": batches,
-        "github": {"developSha": github.get("developSha"), "developAt": github.get("developAt"),
+        "develop": develop or {
+            "sha": github.get("developSha"),
+            "short": (github.get("developSha") or "")[:8] or None,
+            "mergedAt": github.get("developAt"),
+        },
+        "github": {"developSha": (develop or {}).get("sha") or github.get("developSha"),
+                   "developAt": (develop or {}).get("mergedAt") or github.get("developAt"),
+                   "developMovedAt": (develop or {}).get("mergedAt"),
+                   "previousTip": (develop or {}).get("previousTip"),
+                   "deployGate": (develop or {}).get("deployGate"),
                    "merged": (github.get("merged") or [])[:100],
                    "closedIssues": (github.get("closedIssues") or [])[:100]},
         "linear": {"available": linear_ok, "reason": linear.get("reason")},

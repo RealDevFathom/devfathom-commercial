@@ -276,6 +276,7 @@ footer { max-width: 1480px; margin: 0 auto; padding: 0 28px 40px; color: var(--d
 @media (max-width: 640px) { .hero h1 { font-size: 32px; } .hero { padding-top: 18px; } }
 .room { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; margin-top: 4px; }
 .room > .progress-card { grid-column: span 3; }
+.room > .develop-card { grid-column: span 12; }
 .room > .pipeline-card { grid-column: span 6; }
 .room > .pulse-card { grid-column: span 3; }
 .room > .kpi-card { grid-column: span 3; }
@@ -690,3 +691,8 @@ button.mini { cursor: pointer; } button.mini:hover { background: var(--glass-str
 .mini b { font-size: 22px; font-weight: 500; letter-spacing: -0.03em; }
 .mini.bad b, .mini.bad > span .ic { color: var(--crit-ink); }
 @media (max-width: 560px) { .mini-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.develop-lane { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-start; padding: 4px 4px 8px; }
+.develop-lane .dev-sha { font-variant-numeric: tabular-nums; font-family: var(--mono, ui-monospace, monospace); font-weight: 600; }
+.develop-lane .dev-gate { margin-left: auto; }
+.develop-lane .badge.pending, .develop-lane .badge.warn { background: var(--warn-bg); color: var(--warn-ink); }

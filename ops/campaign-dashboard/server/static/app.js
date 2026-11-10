@@ -352,7 +352,7 @@
   // ------------------------------------------------------------------ render
   function render() {
     const safe = (fn) => { try { fn(); } catch (err) { console.error(fn.name, err); } };
-    [renderFreshness, renderFilters, renderBanner, renderOverview, renderProgress, renderPulse, renderKpiCards, renderSpend, renderRuns, renderPipeline, renderToday, renderInsights, renderLanes, renderCodex, renderGatesNow,
+    [renderFreshness, renderFilters, renderBanner, renderOverview, renderDevelop, renderProgress, renderPulse, renderKpiCards, renderSpend, renderRuns, renderPipeline, renderToday, renderInsights, renderLanes, renderCodex, renderGatesNow,
       renderNext, renderBatches, renderBatchDetail, renderActivity, renderMerges, renderEvents, renderWorker, renderAIStatus].forEach(safe);
     if (ui.modal.length && $('dlg').open) safe(renderModal);
   }
@@ -420,11 +420,40 @@
     mount('banner', items);
   }
 
+
+  function renderDevelop() {
+    const el = $('develop-lane');
+    if (!el) return;
+    const d = S.develop || {};
+    const gh = S.github || {};
+    const sha = d.sha || gh.developSha;
+    const short = d.short || (sha ? sha.slice(0, 8) : null);
+    const prev = d.previousShort || (d.previousTip ? String(d.previousTip).slice(0, 8) : null);
+    const at = d.mergedAt || gh.developMovedAt || gh.developAt;
+    const gate = d.deployGate || gh.deployGate || {};
+    const gateSt = String(gate.status || '').toUpperCase();
+    const pending = !gateSt || gateSt === 'PENDING';
+    if ($('develop-meta')) $('develop-meta').textContent = short ? `${short}${at ? ` · ${fmtClock(at)} PKT` : ''}` : 'No develop tip yet';
+    mount(el,
+      h('div', { class: 'develop-lane' },
+        h('div', null,
+          h('div', { class: 'dev-sha' }, short || 'unknown'),
+          h('div', { class: 'meta' }, at
+            ? `develop moved to ${short} at ${fmtClock(at)} PKT${d.method ? ` (${d.method}${prev ? ` from ${prev}` : ''})` : (prev ? ` from ${prev}` : '')}`
+            : (short ? `develop tip ${short}` : 'Develop tip not reported yet'))),
+        h('div', { class: 'dev-gate' },
+          h('span', { class: `badge ${pending ? 'pending warn' : (gateSt === 'PASS' || gateSt === 'CLEAR' ? '' : 'bad')}`,
+            title: gate.note || gate.check || '' },
+            `Azure deploy gate: ${pending ? 'pending' : gateSt.toLowerCase()}`),
+          gate.note ? h('div', { class: 'meta' }, gate.note) : null)));
+  }
+
   function renderOverview() {
     const o = S.overview;
     const asOf = dataAsOfTs();
     const run = o.currentRun ? ` Current run ${o.currentRun}.` : '';
-    $('overview-meta').textContent = `Monitoring Codex runs, machine gates, merges and cost. Data as of ${fmtClock(asOf)} PKT.${run} ${o.batches} batches, ${fmtNum(o.tasks)} tasks, ${fmtNum(o.codexJobsTotal)} current-run Codex jobs.`;
+    const dev = (S.develop && S.develop.short) ? ` Develop ${S.develop.short}.` : '';
+    $('overview-meta').textContent = `Monitoring Codex runs, machine gates, merges and cost. Data as of ${fmtClock(asOf)} PKT.${run}${dev} ${o.batches} batches, ${fmtNum(o.tasks)} tasks, ${fmtNum(o.codexJobsTotal)} current-run Codex jobs.`;
   }
 
   // ------------------------------------------------------------------ control room (OpsPulse-style top grid)
@@ -978,7 +1007,13 @@
     mount('bd-ins', allInsights().filter((x) => x.batch === b.id && !x.issue).map((x) => insightCard(x, true)));
     const base = b.baseline;
     mount('bd-summary',
-      base ? h('button', { type: 'button', class: 'tag', onclick: () => openModal('run', { batch: b.id, run: base.run }) }, icon('flask'), `Baseline ${base.baseSHA || ''}: ${base.numFailedTests ?? '?'} failing tests in ${base.failedFileCount ?? '?'} files`) : h('span', { class: 'tag' }, 'No baseline in this batch'),
+      base ? h('button', { type: 'button', class: 'tag', onclick: () => openModal('run', { batch: b.id, run: base.run }) }, icon('flask'),
+        base.complete
+          ? (base.numPassedTests != null
+              ? `Baseline ${base.baseSHA || ''}: ${base.numPassedTests} pass / ${base.numFailedTests ?? '?'} fail`
+              : `Baseline ${base.baseSHA || ''}: ${base.numFailedTests ?? 0} failing tests (pass count not recorded)`)
+          : `Current baseline ${base.baseSHA || ''}: ${base.incompleteReason || 'incomplete'}`) : h('span', { class: 'tag' }, 'No baseline in this batch'),
+      b.previousBaseline ? h('span', { class: 'tag' }, `Previous ${b.previousBaseline.baseSHA || ''}: ${b.previousBaseline.numPassedTests ?? '?'} pass / ${b.previousBaseline.numFailedTests ?? '?'} fail`) : null,
       (b.policies || []).map((p) => h('span', { class: 'tag', title: 'Merge gate policy present' }, icon('shield'), p)),
       [...(b.ledgers || []), ...(b.files || [])].map((l) => h('button', { type: 'button', class: 'tag', onclick: () => openModal('file', { batch: b.id, file: l }) }, icon('list'), `${l.run ? `${l.run}/` : ''}${l.file}`)));
     const cols = gateColumns(b.tasks);
@@ -1047,12 +1082,14 @@
     const closed = S.github.closedIssues || [];
     const keys = []; for (let i = 29; i >= 0; i -= 1) keys.push(dayKey(nowSec() - i * 86400));
     const count = (arr, f) => keys.map((k) => arr.filter((x) => isNum(x[f]) && dayKey(x[f]) === k).length);
-    $('merges-meta').textContent = `${merged.length} in 30 days${S.github.developSha ? `. develop at ${S.github.developSha.slice(0, 7)}` : ''}`;
+    const devAt = S.github.developMovedAt || S.github.developAt;
+    $('merges-meta').textContent = `${merged.length} in 30 days${S.github.developSha ? `. develop at ${S.github.developSha.slice(0, 8)}` : ''}${devAt ? ` · moved ${fmtClock(devAt)} PKT` : ''}`;
     $('issues-meta').textContent = `${closed.length} with DEV references in 30 days`;
     const wM = widthOf($('merges'), 520); const wI = widthOf($('issues'), 520);
+    const mergeLabel = (p) => p.number ? `#${p.number} ` : (p.kind === 'fast-forward' ? 'fast-forward ' : '');
     mount('merges', miniBars(count(merged, 'mergedAt'), keys, 'var(--merged)', wM),
-      merged.length ? h('div', { class: 'scroll' }, merged.map((p) => h('button', { class: 'item', type: 'button', onclick: () => openModal('merge', { number: p.number }) },
-        icon('merge'), h('span', null, h('div', { class: 'i-title' }, `#${p.number} `, h('span', { class: 't2' }, p.title)), h('div', { class: 'i-sub' }, `${fmtDT(p.mergedAt)} PKT. `, sha(p.sha), (p.issues || []).length ? `. ${p.issues.join(', ')}` : '')),
+      merged.length ? h('div', { class: 'scroll' }, merged.map((p) => h('button', { class: 'item', type: 'button', onclick: p.number ? () => openModal('merge', { number: p.number }) : null },
+        icon('merge'), h('span', null, h('div', { class: 'i-title' }, mergeLabel(p), h('span', { class: 't2' }, p.title)), h('div', { class: 'i-sub' }, `${fmtDT(p.mergedAt)} PKT. `, sha(p.sha), (p.issues || []).length ? `. ${p.issues.join(', ')}` : '')),
         h('span', { class: 'i-side' }, ago(p.mergedAt))))) : h('div', { class: 'empty' }, 'No merges reported'));
     mount('issues', miniBars(count(closed, 'closedAt'), keys, 'var(--s-pass)', wI),
       closed.length ? h('div', { class: 'scroll' }, closed.map((i) => h('button', { class: 'item', type: 'button', onclick: () => openModal('ghissue', { number: i.number }) },

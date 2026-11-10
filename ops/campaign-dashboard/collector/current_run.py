@@ -7,10 +7,11 @@ from __future__ import annotations
 import os
 import re
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # Current develop tip the 70 were retargeted onto (10 Nov 2026 campaign repair).
-CURRENT_DEVELOP_PREFIX = "1906b530"
+CURRENT_DEVELOP_PREFIX = "fa2004e2"
+PREVIOUS_DEVELOP_PREFIX = "1906b530"
 INVALID_BASE_PREFIX = "0c6245c"
 ARCHIVED_BATCH_IDS = {"pharmacy-review-50"}
 ARCHIVED_LABELS = {"pharmacy review 50"}
@@ -46,7 +47,15 @@ def is_complete_baseline(b):
     if not isinstance(b, dict):
         return False
     sha = b.get("baseSHA") or b.get("sha")
-    return bool(sha) and b.get("numPassedTests") is not None
+    if not sha:
+        return False
+    if b.get("numPassedTests") is not None:
+        return True
+    # rebase-1906 status.baseline on fa2004e2 records unitFailedCount and complete=true
+    # without a pass count (from empty-after-fa2004e2).
+    if b.get("complete") and (b.get("unitFailedCount") is not None or b.get("numFailedTests") is not None):
+        return True
+    return False
 
 
 def baseline_incomplete_reason(b):
@@ -55,7 +64,8 @@ def baseline_incomplete_reason(b):
     missing = []
     if not (b or {}).get("baseSHA") and not (b or {}).get("sha"):
         missing.append("no base SHA")
-    if (b or {}).get("numPassedTests") is None and (b or {}).get("numFailedTests") is None:
+    if ((b or {}).get("numPassedTests") is None and (b or {}).get("numFailedTests") is None
+            and (b or {}).get("unitFailedCount") is None):
         missing.append("no test counts")
     return ", ".join(missing) or "incomplete"
 
@@ -72,6 +82,7 @@ def annotate_baseline(b, preferred=False, develop_prefix=CURRENT_DEVELOP_PREFIX)
     if out["incomplete"]:
         out["incompleteReason"] = baseline_incomplete_reason(out)
     out["current"] = bool(preferred)
+    out["historical"] = not bool(preferred)
     out["matchesDevelop"] = sha_matches(sha, develop_prefix)
     if out.get("run") and "hotel-dynamic" in str(out.get("run")):
         out.setdefault("incompleteReason", out.get("incompleteReason") or "canonical bootstrap, not a full QA baseline")
@@ -80,8 +91,13 @@ def annotate_baseline(b, preferred=False, develop_prefix=CURRENT_DEVELOP_PREFIX)
     return out
 
 
-def pick_current_baseline(baselines, develop_prefix=CURRENT_DEVELOP_PREFIX):
-    """Prefer a complete baseline on the current develop SHA; else the newest complete one."""
+def pick_current_baseline(baselines, develop_prefix=None, strict=False):
+    """Prefer a complete baseline on the current develop SHA; else the newest complete one.
+
+    When strict=True (caller has MERGE_POLICY or rebase status.target showing the tip
+    has moved), return None if no complete baseline matches so the caller can stub
+    the new tip instead of quietly keeping 1906b530 as current.
+    """
     items = [b for b in (baselines or []) if isinstance(b, dict)]
     complete = [b for b in items if is_complete_baseline(b)]
 
@@ -90,12 +106,44 @@ def pick_current_baseline(baselines, develop_prefix=CURRENT_DEVELOP_PREFIX):
 
     on_develop = [b for b in complete if sha_matches(b.get("baseSHA") or b.get("sha"), develop_prefix)]
     if on_develop:
-        chosen = max(on_develop, key=recency)
-    elif complete:
-        chosen = max(complete, key=recency)
-    else:
-        chosen = max(items, key=recency) if items else None
-    return chosen
+        return max(on_develop, key=recency)
+    if strict and develop_prefix and complete and not on_develop:
+        return None
+    if complete:
+        return max(complete, key=recency)
+    return max(items, key=recency) if items else None
+
+
+def previous_complete_baseline(baselines, current_sha=None):
+    items = [b for b in (baselines or []) if isinstance(b, dict) and is_complete_baseline(b)]
+    if current_sha:
+        items = [b for b in items if not sha_matches(b.get("baseSHA") or b.get("sha"), current_sha)]
+    if not items:
+        return None
+    return max(items, key=lambda b: (b.get("end") or b.get("start") or 0, 1 if str(b.get("run") or "").startswith("baseline-1110") else 0))
+
+
+def stub_baseline_for_tip(develop_sha, previous=None, run="develop-tip"):
+    """Current develop tip when no complete recorded baseline exists on that SHA."""
+    prev_sha = (previous or {}).get("baseSHA") or (previous or {}).get("sha") if previous else None
+    reason = "no recorded test counts on the current develop tip yet"
+    if prev_sha:
+        reason += (f"; previous complete baseline {short(prev_sha, 8)} "
+                   f"({(previous or {}).get('numPassedTests')} pass / {(previous or {}).get('numFailedTests')} fail) is historical")
+    return {
+        "run": run,
+        "baseSHA": short(develop_sha, 8),
+        "sha": develop_sha,
+        "status": "PENDING_BASELINE_ON_NEW_TIP",
+        "complete": False,
+        "incomplete": True,
+        "incompleteReason": reason,
+        "current": True,
+        "matchesDevelop": True,
+        "numPassedTests": None,
+        "numFailedTests": None,
+        "previousSHA": short(prev_sha, 8) if prev_sha else None,
+    }
 
 
 def classify_run(name, *, has_current_rebase=False, invalid_base=None):
@@ -416,6 +464,12 @@ def compact_guards(state):
             "instanceId", "instanceType", "az", "region", "spotPrice", "state", "lifecycle",
             "name", "spotRequestState")})
     usage = (state or {}).get("usage") or {}
+    baseline = None
+    for b in ((state or {}).get("batches") or []):
+        if isinstance(b, dict) and b.get("baseline") and not b.get("archived"):
+            baseline = {k: (b.get("baseline") or {}).get(k) for k in (
+                "run", "baseSHA", "complete", "incompleteReason", "numPassedTests", "numFailedTests", "current")}
+            break
     return {
         "sources": (state or {}).get("sources"),
         "system": {k: sysm.get(k) for k in ("cores", "cpuPct", "load", "mem", "psi", "uptimeSec", "loadHigh5m")}
@@ -430,6 +484,9 @@ def compact_guards(state):
         "overview": {k: ((state or {}).get("overview") or {}).get(k) for k in (
             "tasks", "fixed", "failed", "gated", "merged", "done", "pendingQa", "rejected", "running", "queued",
             "usagePct", "machineHours", "machineCostUsd", "codexActive", "codexCap")},
+        "develop": (state or {}).get("develop"),
+        "current": (w.get("current") or (state or {}).get("current")),
+        "baseline": baseline,
     }
 
 
@@ -445,7 +502,7 @@ def counts_from_verdicts(tasks):
     c = Counter()
     c["total"] = len(tasks or [])
     for t in tasks or []:
-        k = verdict_key(t)
+        k = verdict_key(t) or ((t or {}).get("liveVerdict") or {}).get("key")
         if k in PASSED_VERDICTS:
             c["fixed"] += 1
             c["gated"] += 1
@@ -538,6 +595,20 @@ def verdict_from_current_status(status, reclass=None, running=False):
         return {"key": "running", "label": label, "status": st or None}
     if "REJECTED" in st:
         return {"key": "rejected", "label": "Rejected: assertion guard", "status": st}
+    if st in ("QUEUED_RESUME", "GATES_INTERRUPTED_NEED_RERUN"):
+        return {"key": "queued", "label": "Queued to resume" if st == "QUEUED_RESUME" else "Queued: gates interrupted", "status": st}
+    if st == "NEEDS_MIGRATION_FIX":
+        return {"key": "failed", "label": "Failed: needs migration fix", "gates": ["prisma"], "status": st}
+    if st == "NEEDS_PRODUCT_FIX":
+        return {"key": "failed", "label": "Failed: needs product fix", "gates": ["differential"], "status": st}
+    if st == "GATES_FAILED_CODEX_NO_CHANGE":
+        return {"key": "failed", "label": "Failed: gates, no code change", "gates": ["differential"], "status": st}
+    if st in ("BLOCKED_BY_DEVELOP_BASELINE_TYPECHECK", "BLOCKED_BY_DEVELOP_BASELINE"):
+        return {"key": "blocked", "label": "Blocked by develop baseline", "gates": ["typecheck"], "status": st}
+    if "HARNESS_BLOCKER" in st or st.startswith("HARNESS_BLOCK"):
+        return {"key": "blocked", "label": "Blocked: harness", "status": st}
+    if "BLOCKED" in st:
+        return {"key": "blocked", "label": st.replace("_", " ").title(), "status": st}
     # Prefer the live status when it has moved on from the reclassify snapshot.
     if st in PENDING_QA_STATUSES or (
         rec_verdict == RECLASS_BASELINE_ONLY and (not st or st == rec.get("newStatus"))
@@ -722,6 +793,8 @@ def load_current_sources(run_dir, read_json, mtime, isfile, join):
                     if isinstance(c, dict):
                         as_of = max(filter(None, [as_of, parse_pkt(c.get("codexEndPKT") or c.get("codexStartPKT"))]), default=as_of)
         as_of = max(filter(None, [as_of, parse_pkt((reclass or {}).get("atPKT") if isinstance(reclass, dict) else None)]), default=as_of)
+        bl = status.get("baseline") if isinstance(status.get("baseline"), dict) else {}
+        as_of = max(filter(None, [as_of, parse_pkt(bl.get("loadedPKT")), parse_pkt(status.get("retargetFa2004e2PKT"))]), default=as_of)
     return {
         "status": status if isinstance(status, dict) else None,
         "reclassify": reclass if isinstance(reclass, dict) else None,
@@ -729,6 +802,36 @@ def load_current_sources(run_dir, read_json, mtime, isfile, join):
         "dataAsOf": as_of,
         "statusMtime": mtime(status_path) if isfile(status_path) else None,
         "reclassifyAt": parse_pkt((reclass or {}).get("atPKT")) if isinstance(reclass, dict) else None,
+    }
+
+
+
+def baseline_from_status(status, run_name=None):
+    """Normalize rebase status.baseline (including the fa2004e2 empty-after tip)."""
+    raw = (status or {}).get("baseline") if isinstance(status, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    sha = raw.get("sha") or raw.get("baseSHA")
+    if not sha:
+        return None
+    failed = raw.get("numFailedTests")
+    if failed is None:
+        failed = raw.get("unitFailedCount")
+    loaded = parse_pkt(raw.get("loadedPKT") or raw.get("endedPKT") or raw.get("endPKT"))
+    return {
+        "run": run_name or "develop-tip",
+        "baseSHA": short(sha, 8),
+        "sha": sha,
+        "from": raw.get("from"),
+        "complete": bool(raw.get("complete")) or raw.get("numPassedTests") is not None,
+        "numPassedTests": raw.get("numPassedTests"),
+        "numFailedTests": failed,
+        "unitFailedCount": raw.get("unitFailedCount") if raw.get("unitFailedCount") is not None else failed,
+        "unitFailures": list(raw.get("unitFailures") or [])[:40],
+        "loadedAt": loaded,
+        "end": loaded,
+        "start": loaded,
+        "status": raw.get("status") or ("COMPLETE" if raw.get("complete") else "PENDING"),
     }
 
 
@@ -817,6 +920,35 @@ def apply_current_overlay(batch, run_name, sources, load_issue_attempts=None):
     batch["reclassifySource"] = f"{run_name}/reclassify-baseline1110.json"
     batch["dataAsOf"] = sources.get("dataAsOf") or sources.get("statusMtime")
     batch["currentCodexJobs"] = current_codex
+    tip_base = baseline_from_status(status, run_name)
+    if tip_base:
+        existing_bases = list(batch.get("baselines") or ([] if not batch.get("baseline") else [batch["baseline"]]))
+        merged = False
+        out = []
+        for b in existing_bases:
+            if not isinstance(b, dict):
+                continue
+            if sha_matches(b.get("baseSHA") or b.get("sha"), tip_base.get("sha")):
+                rich = dict(b)
+                for k, v in tip_base.items():
+                    if k in ("numPassedTests", "numFailedTests", "unitFailedCount") and v is None and rich.get(k) is not None:
+                        continue
+                    if k == "run" and str(rich.get("run") or "").startswith("baseline-") and not str(v or "").startswith("baseline-"):
+                        continue
+                    if k == "complete":
+                        rich[k] = bool(rich.get(k) or v or rich.get("numPassedTests") is not None)
+                        continue
+                    if v not in (None, [], ""):
+                        rich[k] = v
+                out.append(rich)
+                merged = True
+            else:
+                out.append(b)
+        if not merged:
+            out.insert(0, tip_base)
+        batch["baselines"] = out
+        # Leave batch["baseline"] to pick_current_baseline so a complete same-SHA
+        # record (baseline-1110) is not replaced by a status.json pointer.
     if isinstance(reclass.get("summary"), dict):
         batch["reclassifySummary"] = {
             k: reclass["summary"].get(k) for k in ("verdicts", "statusAfter", "counts", "n")
@@ -852,4 +984,87 @@ def is_current_event(ev):
     if ev.get("current") is False:
         return False
     return True
+
+
+def _first(src, *keys):
+    for key in keys:
+        cur = src
+        ok = True
+        for part in str(key).split("."):
+            if isinstance(cur, dict) and part in cur:
+                cur = cur[part]
+            else:
+                ok = False
+                break
+        if ok and cur not in (None, "", {}, []):
+            return cur
+    return None
+
+
+def compact_develop_lane(policy, status=None, target=None):
+    """Fast-forward merge of fa2004e2 (or later) plus the outstanding Azure deploy gate."""
+    policy = policy if isinstance(policy, dict) else {}
+    status = status if isinstance(status, dict) else {}
+    src = dict(status)
+    src.update({k: policy[k] for k in policy})
+    merge_sha = _first(src, "developMergeSHA", "approvedForMerge", "finalGreenSHA", "sha") or target
+    if not merge_sha:
+        return None
+    prev = _first(src, "developPreviousTip", "previousTip", "previousDevelopTip", "fromTip", "previousSHA")
+    merged_raw = _first(src, "developMergePKT", "developMergedAt", "mergedAtPKT", "mergedAt", "mergedPKT")
+    method = _first(src, "developMergeMethod", "method", "mergeMethod") or "fast-forward"
+    gate = _first(src, "deployGate", "qaPolicy.deployGate", "azureDeployGate") or {}
+    if not isinstance(gate, dict):
+        gate = {"status": gate}
+    auto = src.get("autoDeployCheck") if isinstance(src.get("autoDeployCheck"), dict) else {}
+    return {
+        "sha": merge_sha,
+        "short": short(merge_sha, 8),
+        "previousTip": prev,
+        "previousShort": short(prev, 8),
+        "mergedAt": parse_pkt(merged_raw),
+        "mergedAtPkt": merged_raw if isinstance(merged_raw, str) else None,
+        "method": method,
+        "merged": bool(src.get("mergedIntoDevelop") or merge_sha),
+        "reason": src.get("reason"),
+        "deployGate": {
+            "name": "Azure deploy gate",
+            "status": str(gate.get("status") or "PENDING").upper(),
+            "check": gate.get("check") or "Azure OpenAI token fetch and Azure Blob evidence",
+            "note": gate.get("note") or gate.get("summary"),
+            "required": bool(gate.get("requiredBeforeAnyDeploy", True)),
+        },
+        "autoDeployCheck": {
+            "result": auto.get("result"),
+            "checkedAt": auto.get("checkedPKT"),
+            "summary": auto.get("summary"),
+        } if auto else None,
+    }
+
+
+def pkt_clock(ts):
+    if not ts:
+        return None
+    pkt = timezone(timedelta(hours=5))
+    return datetime.fromtimestamp(float(ts), tz=pkt).strftime("%H:%M:%S")
+
+
+def develop_merge_event(lane, batch_id=None):
+    if not lane or not lane.get("mergedAt"):
+        return None
+    sha = lane.get("short") or short(lane.get("sha"), 8)
+    prev = lane.get("previousShort") or "previous tip"
+    clock = pkt_clock(lane["mergedAt"])
+    when = f" at {clock} PKT" if clock else ""
+    return {
+        "ts": lane["mergedAt"],
+        "batch": batch_id,
+        "kind": "merge",
+        "level": "ok",
+        "run": "develop",
+        "current": True,
+        "superseded": False,
+        "sha": lane.get("sha"),
+        "text": f"develop moved to {sha}{when} ({lane.get('method') or 'fast-forward'} from {prev})",
+    }
 

@@ -729,16 +729,36 @@ def collect_batches(root, now=None, live_window=1800):
 
             _cr.apply_current_overlay(b, current_run_name, current_sources, _load_attempts)
             tasks = b["tasks"]
-        # Prefer a complete baseline-1110 even if overlay didn't run.
+        # Current develop tip from rebase status.target (fa2004e2 after the 08:37 PKT fast-forward).
+        tip = None
+        if current_sources and isinstance((current_sources.get("status") or {}).get("target"), str):
+            tip = current_sources["status"]["target"]
+            b["developTarget"] = tip
         if b.get("baselines"):
-            chosen = _cr.pick_current_baseline(b["baselines"])
-            b["baselines"] = [_cr.annotate_baseline(x, preferred=x is chosen or (
-                chosen and x.get("run") == chosen.get("run"))) for x in b["baselines"]]
-            current_b = next((x for x in b["baselines"] if x.get("current")), None)
-            if current_b:
-                b["baseline"] = current_b
+            chosen = _cr.pick_current_baseline(b["baselines"], tip, strict=bool(tip))
+            prev = _cr.previous_complete_baseline(b["baselines"], tip)
+            if chosen is None and tip:
+                stub = _cr.stub_baseline_for_tip(tip, previous=prev)
+                b["baselines"] = [_cr.annotate_baseline(x, preferred=False, develop_prefix=tip)
+                                  for x in b["baselines"]]
+                for x in b["baselines"]:
+                    x["current"] = False
+                    x["historical"] = True
+                b["baselines"].insert(0, _cr.annotate_baseline(stub, preferred=True, develop_prefix=tip))
+                b["baseline"] = b["baselines"][0]
+                b["previousBaseline"] = _cr.annotate_baseline(prev, preferred=False, develop_prefix=tip) if prev else None
+            else:
+                b["baselines"] = [_cr.annotate_baseline(x, preferred=x is chosen or (
+                    chosen and x.get("run") == chosen.get("run")), develop_prefix=tip)
+                    for x in b["baselines"]]
+                current_b = next((x for x in b["baselines"] if x.get("current")), None)
+                if current_b:
+                    b["baseline"] = current_b
+                if prev and (not current_b or not _cr.sha_matches(current_b.get("baseSHA") or current_b.get("sha"),
+                                                              prev.get("baseSHA") or prev.get("sha"))):
+                    b["previousBaseline"] = _cr.annotate_baseline(prev, preferred=False, develop_prefix=tip)
         elif b.get("baseline"):
-            b["baseline"] = _cr.annotate_baseline(b["baseline"], preferred=True)
+            b["baseline"] = _cr.annotate_baseline(b["baseline"], preferred=True, develop_prefix=tip)
         b["archived"] = _cr.is_archived_batch(b)
         b["counts"] = _cr.counts_from_verdicts(tasks)
         times = [name_start_ts(b["name"])] + [r.get("start") for r in b["runs"]] + [t.get("start") for t in tasks]
@@ -1144,6 +1164,37 @@ def collect(root, state_dir=None, live_window=1800, disks=("/workspace", "/scrat
     payload["rebase"] = lanes.get("rebase")
     payload["devfix"] = lanes.get("devfix")
     payload["lanes"] = lanes.get("all")
+    # Develop lane: MERGE_POLICY.json from the devfix/merge run plus rebase status.target.
+    develop = None
+    try:
+        for name in listdir(root):
+            for sub in ("devfix-1110", "devfix-1110c", "merge-1110"):
+                policy_path = os.path.join(root, name, sub, "MERGE_POLICY.json")
+                status_path = os.path.join(root, name, sub, "status.json")
+                policy = read_json(policy_path, root) if os.path.isfile(policy_path) else None
+                st = read_json(status_path, root) if os.path.isfile(status_path) else None
+                if policy or (isinstance(st, dict) and st.get("developMergeSHA")):
+                    target = next((b.get("developTarget") for b in current_batches if b.get("developTarget")), None)
+                    develop = _cr.compact_develop_lane(policy, st if isinstance(st, dict) else None, target)
+                    if develop:
+                        ev = _cr.develop_merge_event(develop, name)
+                        if ev:
+                            payload["events"] = [ev] + [e for e in payload.get("events") or []
+                                                       if not (e.get("kind") == "merge" and e.get("run") == "develop")]
+                        break
+            if develop:
+                break
+    except Exception as exc:
+        log(f"develop lane failed: {type(exc).__name__}")
+    if not develop:
+        tip = next((b.get("developTarget") for b in current_batches if b.get("developTarget")), None)
+        if tip:
+            develop = _cr.compact_develop_lane({}, None, tip)
+    payload["develop"] = develop
+    if develop and payload.get("current"):
+        payload["current"]["developSha"] = develop.get("sha")
+        payload["current"]["developMergedAt"] = develop.get("mergedAt")
+        payload["current"]["deployGate"] = develop.get("deployGate")
     if sdir:
         save_state(sdir, "state.json", state)
         save_state(sdir, "history.json", hist)

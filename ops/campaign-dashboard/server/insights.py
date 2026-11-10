@@ -127,6 +127,14 @@ def rule_insights(state, now=None):
         idle, ready, unclosed, blocked = [], [], [], []
         base = b.get("baseline") or {}
         base_passed = _num(base.get("numPassedTests"))
+        base_label = "the baseline"
+        if base_passed is None:
+            prev = b.get("previousBaseline") or {}
+            if _num(prev.get("numPassedTests")) is not None:
+                base = prev
+                base_passed = _num(prev.get("numPassedTests"))
+                sha = prev.get("baseSHA") or prev.get("run") or "previous tip"
+                base_label = f"previous baseline {sha}"
         for t in tasks:
             issue = t.get("issue")
             runs = t.get("runs") or []
@@ -169,7 +177,7 @@ def rule_insights(state, now=None):
             unit = (t.get("gates") or {}).get("complete_unit") or {}
             if base_passed and _num(unit.get("passed")) is not None and unit["passed"] < base_passed - TEST_DROP_TOLERANCE:
                 add("warning", "crit", "batches", f"tests-drop:{bid}:{issue}", f"{issue}: {base_passed - unit['passed']} fewer passing tests than baseline",
-                    f"complete_unit passed {unit['passed']} tests vs {base_passed} on the baseline. Tests may have been deleted or skipped.",
+                    f"complete_unit passed {unit['passed']} tests vs {base_passed} on {base_label}. Tests may have been deleted or skipped.",
                     [_ev(f"{issue} task", link_task(bid, issue)), _ev("baseline", link_run(bid, base.get("run") or "baseline"))], bid, issue)
             # --- Codex doing machine checks itself
             for r in runs:

@@ -270,5 +270,71 @@ class HostBuildRuleTests(unittest.TestCase):
         self.assertNotIn(f"rule:common-fail:{BATCH}:host_build", ids)
 
 
+
+
+class Fa2004DevelopBaselineTests(unittest.TestCase):
+    def test_fa2004e2_status_baseline_is_complete(self):
+        raw = {"baseline": {"sha": "fa2004e2362f7bfade1b50168fcfef23c08f6987",
+                            "from": "empty-after-fa2004e2", "complete": True,
+                            "unitFailures": [], "unitFailedCount": 0,
+                            "loadedPKT": "2026-11-10T09:06:14.544501+05:00"}}
+        tip = cr.baseline_from_status(raw, "rebase-1906-1110")
+        self.assertEqual(tip["baseSHA"], "fa2004e2")
+        self.assertTrue(cr.is_complete_baseline(tip))
+        self.assertEqual(tip["numFailedTests"], 0)
+        chosen = cr.pick_current_baseline([
+            {"run": "baseline-1110", "baseSHA": "1906b530", "complete": True,
+             "numPassedTests": 16281, "numFailedTests": 33, "end": 100},
+            tip,
+        ], "fa2004e2", strict=True)
+        self.assertEqual(chosen["baseSHA"], "fa2004e2")
+
+    def test_fa2004e2_is_current_baseline_even_when_incomplete(self):
+        baselines = [
+            {"run": "baseline-1110", "baseSHA": "1906b530", "complete": True, "ended": 100,
+             "numPassedTests": 16281, "numFailedTests": 33},
+        ]
+        self.assertIsNone(cr.pick_current_baseline(baselines, "fa2004e2362f", strict=True))
+        prev = cr.previous_complete_baseline(baselines, "fa2004e2")
+        self.assertEqual(prev["run"], "baseline-1110")
+        stub = cr.stub_baseline_for_tip("fa2004e2362f7bfade1b50168fcfef23c08f6987", previous=prev)
+        self.assertEqual(stub["baseSHA"], "fa2004e2")
+        self.assertFalse(stub["complete"])
+        marked = cr.annotate_baseline(stub, preferred=True, develop_prefix="fa2004e2")
+        self.assertTrue(marked["current"])
+        old = cr.annotate_baseline(baselines[0], preferred=False, develop_prefix="fa2004e2")
+        self.assertFalse(old["current"])
+        self.assertTrue(old["historical"])
+
+    def test_develop_lane_and_merge_event(self):
+        policy = {
+            "developMergeSHA": "fa2004e2362f7bfade1b50168fcfef23c08f6987",
+            "developMergePKT": "2026-11-10T08:37:19+05:00",
+            "developMergeMethod": "fast-forward",
+            "previousTip": "1906b53076286b2e1438eb821969c0d50e5575c6",
+            "qaPolicy": {"deployGate": {"status": "PENDING", "check": "Azure OpenAI + Blob"}},
+        }
+        lane = cr.compact_develop_lane(policy, None, "fa2004e2")
+        self.assertEqual(lane["short"], "fa2004e2")
+        self.assertEqual(lane["deployGate"]["status"], "PENDING")
+        ev = cr.develop_merge_event(lane)
+        self.assertEqual(ev["kind"], "merge")
+        self.assertEqual(ev["run"], "develop")
+        self.assertTrue(ev["current"])
+        self.assertIn("08:37:19", ev["text"] or ev.get("detail") or ev["text"])
+        # epoch should be 08:37:19 PKT = 03:37:19 UTC = 1762747039? just check it is a number
+        self.assertTrue(isinstance(ev["ts"], (int, float)) and ev["ts"] > 0)
+
+    def test_queued_resume_and_needs_product_fix_verdicts(self):
+        self.assertEqual(cr.verdict_from_current_status("QUEUED_RESUME")["key"], "queued")
+        self.assertEqual(cr.verdict_from_current_status("CODEX_CONFLICT_RUNNING")["key"], "running")
+        self.assertEqual(cr.verdict_from_current_status("NEEDS_PRODUCT_FIX")["key"], "failed")
+        self.assertEqual(cr.verdict_from_current_status("NEEDS_MIGRATION_FIX")["key"], "failed")
+        self.assertEqual(cr.verdict_from_current_status("GATES_FAILED_CODEX_NO_CHANGE")["key"], "failed")
+        self.assertEqual(cr.verdict_from_current_status("BLOCKED_BY_DEVELOP_BASELINE_TYPECHECK")["key"], "blocked")
+        self.assertEqual(cr.verdict_from_current_status("HARNESS_BLOCKER")["key"], "blocked")
+        self.assertEqual(cr.verdict_from_current_status("GATES_RUNNING")["key"], "running")
+
+
 if __name__ == "__main__":
     unittest.main()
