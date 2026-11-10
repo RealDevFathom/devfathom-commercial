@@ -2,7 +2,7 @@
 
 > **Repo copy, sanitized 10 Nov 2026 (PKT).** Before this file was committed, identifiers were removed or replaced with placeholders: the AWS account ID, EC2 instance, volume and Elastic IP IDs, the public IP address, the load balancer DNS name, IAM user and role names, Secrets Manager secret names, snapshot names, contact email addresses and personal account names. **A second pass after the CTO's review (10 Nov 2026)** also removed CloudFormation stack names, database and server names, the production image digest, secret name prefixes, every note on where credentials are kept, and an operational MFA note. The CTO holds the unredacted working copy.
 >
-> **Facts corrected 10 Nov 2026 (PKT), after the CTO's review against develop `1906b530`:** `main` branch protection (confirmed, with its two required checks), Saad's decision (10 Nov 2026) to protect both branches and turn the checks back on, the state of the deploy workflows, the Bedrock region and profiles, and the Azure code that still exists.
+> **Facts corrected 10 Nov 2026 (PKT), after the CTO's review against develop `1906b530`:** `main` branch protection (confirmed, unchanged), GitHub Actions and branch protection on `develop` (both off by Saad's decision of 10 Nov 2026), the state of each workflow, the Bedrock region and profiles, and the Azure code that still exists.
 
 **Audience:** investors doing technical due diligence, and a new CTO taking over.  
 **Written:** 2026-11-10 (Asia/Karachi).  
@@ -17,7 +17,7 @@ DevFathom runs on **one AWS account**. Customer-facing production (the SuperAdmi
 
 **Azure is not used for Ask Fathom or new deploys, but Azure code still exists in the repo** (an Azure AI provider, an Azure storage adapter, three Azure packages, and the staging and production deploy workflows, which point only at Azure). **Saad ordered Azure removed from all code on 10 Nov 2026.** The removal is planned for the next Codex batch and tracked as Linear [DEV-755](https://linear.app/devfathom/issue/DEV-755/remove-azure-from-the-codebase-entirely) and GitHub [#1437](https://github.com/RealDevFathom/devfathom-commercial/issues/1437).
 
-**GitHub Actions is still turned off for the repo (checked 10 Nov 2026, 06:00 PKT).** On 10 Nov 2026 Saad decided to protect both `main` and `develop` and turn the checks back on; the CTO is turning Actions on now. Deploys are done by hand.
+**GitHub Actions is off, by Saad's decision (10 Nov 2026).** Instead, before every merge the deterministic checks run on the AWS worker on the exact final commit, and nothing merges until they all pass. Deploys are done by hand.
 
 Live since **2026-10-23 (Asia/Karachi):** `admin.devfathom.com` and `abbasi-pharmacie.devfathom.com`.
 
@@ -98,14 +98,15 @@ Leftover: a staging DNS stack is still present in `me-central-1`; an older, empt
 
 | Item | State |
 |---|---|
-| GitHub Actions | **Still turned off for the repo** (checked 06:00 PKT). Turning it on is **in progress** (CTO), per Saad's decision of 10 Nov 2026 |
-| Deploy workflows | The three deploy workflows (`deploy-develop.yml`, `deploy-staging.yml`, `promote-production.yml`) are to stay **disabled before Actions is turned on**. Each one shows as disabled today (checked 06:00 PKT) |
-| `deploy-develop.yml` | **Merged into develop but disabled.** Built to deploy develop over OIDC + S3 + SSM after the QA gate passes |
+| GitHub Actions | **Off, by Saad's decision (10 Nov 2026).** All six registered workflows are disabled (`qa`, `image-build`, `deploy-develop`, `deploy-staging`, `promote-production`, and `Pharmacy application tests`) |
+| How code is checked before merge | Before every merge, the deterministic checks run on the AWS worker **on the exact final commit**: lint, typecheck, unit tests, build, Prisma generate and the Docker check. **Nothing merges until they all pass.** develop currently fails its own unit tests at `1906b530`; Codex will fix it |
+| `qa.yml` ("QA gate") | develop's own check workflow, with the **WHA-1125 automated gate** and **WHA-1132 browser gate** jobs. Disabled. It still contains Azure image names, which DEV-755 will remove |
+| `deploy-develop.yml` | **Merged into develop but disabled.** It is set to start after QA gate passes (OIDC + S3 + SSM deploy to the develop server), so it **must stay disabled** |
 | `deploy-staging.yml` | Disabled. Manual-dispatch only, and it **points only at Azure** (retired Azure staging). Not usable for the AWS staging stack |
 | `promote-production.yml` | Disabled. Manual-dispatch only, and it **points only at Azure**. Not usable for AWS production |
 | Real AWS deploys | Done by hand (CodeBuild image + ECS update for Singapore; SSM for develop), only with Saad's go-ahead for production |
-| `main` | **Protected**, with two required status checks: `verify / Lint, typecheck and formatting` and `verify / Tests, RLS, build and end-to-end`. These checks can only run once Actions is on |
-| `develop` | **To be protected, per Saad's decision (10 Nov 2026), in two steps. Not applied yet** (checked 06:00 PKT). **Step one (planned for today):** no force pushes, no branch deletion, changes only through pull requests, plus the lint check as a required check if it passes. **Step two:** the `Tests, RLS, build and end-to-end` check becomes required once Codex fixes develop's failing unit tests (develop fails its own unit tests at `1906b530`). Until then, merges are held until every gate passes on the final commit |
+| `main` | **Protection unchanged.** It requires two `verify / …` status checks (`verify / Lint, typecheck and formatting` and `verify / Tests, RLS, build and end-to-end`), which can't run while Actions is off |
+| `develop` | **Unprotected, by Saad's decision (10 Nov 2026).** The pre-merge checks above are what hold the line |
 
 ---
 
@@ -115,7 +116,7 @@ Leftover: a staging DNS stack is still present in `me-central-1`; an older, empt
 |---|---|---|---|
 | **AWS** | All product infra | Saad authorizes `aws login` / IAM access. Two automation IAM users have long-lived access keys | Remove/rotate both automation users' access keys on CTO change; review the product IAM roles; prefer SSO/`aws login` for humans; transfer root/account ownership **TO CONFIRM** (billing contact, MFA devices) |
 | **Cloudflare** | DNS for `devfathom.com` (and tenant CNAMEs/A records); optional proxy | **TO CONFIRM** (Saad) | Transfer Cloudflare account ownership; rotate any API tokens (scope **TO CONFIRM**); document zone settings (SSL Full/strict if proxied) |
-| **GitHub org `RealDevFathom`** | Canonical private repo `devfathom-commercial` (default branch `develop`) | **TO CONFIRM** org owners | Transfer org ownership; revoke stale personal access tokens; **never commit tokens**. Actions is still off and being turned on (CTO, per Saad's decision of 10 Nov 2026); `main` is protected with two required checks; `develop` protection is planned in two steps. See §2.5 |
+| **GitHub org `RealDevFathom`** | Canonical private repo `devfathom-commercial` (default branch `develop`) | **TO CONFIRM** org owners | Transfer org ownership; revoke stale personal access tokens; **never commit tokens**. Actions is off and `develop` is unprotected, both by Saad's decision (10 Nov 2026); `main`'s protection is unchanged (two required `verify / …` checks). See §2.5 |
 | **Linear** | Issue tracking — workspace team **DevFathom** (`DEV`) | Connected to this bot's Linear connector | Transfer workspace admin; rotate bot OAuth |
 | **Anthropic (Claude)** | Ask Fathom first provider (budget cap $190/mo across pharmacies) | **TO CONFIRM** | Rotate the key in the provider console and in AWS; update spend alerts. Production wiring is still `AiProvider=disabled` |
 | **OpenAI** | Ask Fathom second provider (budget cap $190/mo) | **TO CONFIRM** | Same as above |
@@ -169,7 +170,7 @@ None of these may ever go into git, chat or plan files.
 ## 6. How a new CTO should take access (checklist)
 
 1. Become AWS account owner / billing contact; enrol root MFA; create a personal admin IAM Identity Center (or IAM) user; **disable** inherited automation keys after cutover.
-2. Join GitHub org `RealDevFathom` as owner; confirm `gh` auth from your machine only; revoke old personal access tokens. Check that GitHub Actions and `main`'s required checks are running (see §2.5).
+2. Join GitHub org `RealDevFathom` as owner; confirm `gh` auth from your machine only; revoke old personal access tokens. Read §2.5 for how checks run before merge.
 3. Take Cloudflare account ownership; rotate zone API tokens.
 4. Take Linear workspace admin; invite yourself; remove departed bots if needed.
 5. Get operator logins handed over by Saad; rotate SuperAdmin passwords; **re-enrol MFA for every SuperAdmin**; store recovery codes offline.
@@ -184,7 +185,7 @@ See also the consolidated list in the running-costs and security docs. Infrastru
 
 1. Cloudflare account login owner and whether DNS is proxied vs DNS-only per hostname.  
 2. GitHub org owner list.  
-3. GitHub Actions turned back on, with the three deploy workflows disabled first; `develop` protection step one applied; step two once develop's unit tests pass.  
+3. develop fails its own unit tests at `1906b530`; Codex will fix it.  
 4. AWS root email, billing alerts, and credit expiry.  
 5. Whether production has been promoted past the Abbasi launch image.  
 6. Develop host: Postgres local vs remote; disk encryption should be turned on for new volumes.  

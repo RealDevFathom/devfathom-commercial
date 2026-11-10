@@ -17,7 +17,7 @@ DevFathom is a multi-tenant pharmacy POS. Each pharmacy’s data is meant to sta
 
 Production sits in AWS Singapore: private RDS (encrypted, SSL required, not public), public ALB terminating TLS, Fargate tasks that only accept traffic from the load balancer. App secrets are kept outside the code (this document never prints values or says where they are kept).
 
-**Open security work you should know about:** any signed-in user, including a cashier, can edit the medicine catalogue today, including MRP and barcodes (**Sev2**, fix #995 has merge conflicts). Marketing approval is owner-only, so managers are locked out, and closing a drawer needs only the counter permission (fix #996 pending). Input-tax bill flags are wrong on PKR 0 claims (DEV-735, **Sev2**, no PR yet). GitHub Actions is still off, so no CI checks run on GitHub (turning it on is in progress). Azure code and Azure-only deploy workflows still exist (DEV-755). Develop EC2 root volume is **unencrypted**. Several pharmacy policy items (manager PIN refunds, narcotics flag, per-org WhatsApp tokens, Ask Fathom provider chain on production) are **decided but not fully built / not enabled on prod**. Codex (+ Claude second opinion) security reviews gate merges; they are static reviews, not a penetration test.
+**Open security work you should know about:** any signed-in user, including a cashier, can edit the medicine catalogue today, including MRP and barcodes (**Sev2**, fix #995 has merge conflicts). Marketing approval is owner-only, so managers are locked out, and closing a drawer needs only the counter permission (fix #996 pending). Input-tax bill flags are wrong on PKR 0 claims (DEV-735, **Sev2**, no PR yet). GitHub Actions is off by Saad's decision; checks run on the AWS worker before every merge instead. Azure code and Azure-only deploy workflows still exist (DEV-755). Develop EC2 root volume is **unencrypted**. Several pharmacy policy items (manager PIN refunds, narcotics flag, per-org WhatsApp tokens, Ask Fathom provider chain on production) are **decided but not fully built / not enabled on prod**. Codex (+ Claude second opinion) security reviews gate merges; they are static reviews, not a penetration test.
 
 **Compliance:** product targets **Punjab** pharmacy practice first. DRAP-related promotion rules were cleared with Saad (no drug names in campaigns). Formal DRAP licensing of the *software* as a medical device / national rollout paperwork is **not claimed here → TO CONFIRM with counsel**.
 
@@ -159,7 +159,7 @@ Other capabilities in active use include `pharmacy:counter`, `pharmacy:close`, `
 | CTO + Security approval before merge; Saad for production | **Process** |
 | Launch blockers tracked (#518 Rx bypass, #355 recall reactivation, #631 rule-set confirm, #633 batch re-check, etc.) | Addressed or mitigated with SOPs for Abbasi-1 — residual risk depends on what reached the production image; **TO CONFIRM** post-launch patch level |
 | Formal external penetration test / SOC2 | **Not claimed** — **TO CONFIRM** if any third-party assessment exists |
-| CI checks on GitHub | **GitHub Actions is still off** (checked 10 Nov 2026, 06:00 PKT), so no workflow checks run on PRs or pushes. Saad decided on 10 Nov 2026 to turn the checks back on; the CTO is doing it, with the three deploy workflows disabled first. Until then, checks run on a separate QA machine |
+| CI checks | **GitHub Actions is off, by Saad's decision (10 Nov 2026)**; all six workflows are disabled. Before every merge, the deterministic checks (lint, typecheck, unit tests, build, Prisma generate, Docker check) run on the AWS worker on the exact final commit, and nothing merges until they all pass. develop currently fails its own unit tests at `1906b530`; Codex will fix it |
 | Merge discipline | **#1240** was marked ready for review 52 seconds before it was merged (3 Nov 2026, 06:50 PKT), with no review and no checks |
 | Dependency / container scanning in CI | Present in culture (QA machine “scans”); exact tools/pass rates **TO CONFIRM** |
 
@@ -170,9 +170,9 @@ Other capabilities in active use include `pharmacy:counter`, `pharmacy:close`, `
 1. **Medicine catalogue editable by any signed-in user** — including a cashier, including MRP and barcodes. **Sev2.** Fix **#995** has merge conflicts.  
 2. **Marketing approval and drawer close don't match Saad's "manager or owner" rule** — campaign approval is owner-only (managers locked out); closing a drawer needs only the counter permission. Fix **#996** has merge conflicts and no QA or Security verdict on its latest commit.  
 3. **DEV-735: input-tax bills with a PKR 0 claim are wrongly flagged** as missing NTN/STRN. **Sev2**, still live, no PR yet.  
-4. **GitHub Actions is still off**, so no CI checks run on GitHub. Turning it on is in progress (CTO), per Saad's decision of 10 Nov 2026.  
-5. **Deploy workflows are Azure-only.** The staging and production deploy workflows point only at Azure, so there is no automated AWS deploy; deploys are done by hand. All three deploy workflows are to stay disabled.  
-6. **Azure code still exists** — Azure AI provider, Azure storage adapter, three packages, and the deploy workflows. Removal tracked in **DEV-755 / #1437**.  
+4. **GitHub Actions is off, by Saad's decision (10 Nov 2026).** Pre-merge checks run on the AWS worker instead; develop currently fails its own unit tests at `1906b530` (Codex will fix it).  
+5. **Deploy workflows are Azure-only.** The staging and production deploy workflows point only at Azure, so there is no automated AWS deploy; deploys are done by hand. All workflows are disabled; `deploy-develop.yml` must stay disabled because it starts after QA gate.  
+6. **Azure code still exists** — Azure AI provider, Azure storage adapter, three packages, the deploy workflows, and Azure image names in `qa.yml`. Removal tracked in **DEV-755 / #1437**.  
 7. **#1240 was merged with no review and no checks** — marked ready 52 seconds before merge.  
 8. **Pharmacist review sign-off** — a database trigger blocks the requester from deciding their own review, but the server code doesn't check it, and a review can be decided twice. **Sev3.**  
 9. **AI spend report** (`platformAIUsage.currentMonth`) — signed-out callers get no data, but see an error page instead of a proper "not allowed" response. **Sev3.**  
@@ -185,7 +185,7 @@ Other capabilities in active use include `pharmacy:counter`, `pharmacy:close`, `
 16. **QA/agent EC2 fleets** in eu-north-1 with large instance types — attack surface and cost; ensure SSM/IAM scoped.  
 17. **Day-close counted cash wiped on full remount** — QA filed **DEV-754** (Sev2); product bug, integrity of cash reconciliation.  
 18. **Email still capture mode in production** — reduces email-based reset risk but also means operational mail paths differ from staging plans.  
-19. **Branch protection.** `main` is **protected** with two required checks: `verify / Lint, typecheck and formatting` and `verify / Tests, RLS, build and end-to-end`. `develop` is **not protected yet** (checked 10 Nov 2026, 06:00 PKT). Saad decided on 10 Nov 2026 to protect it in two steps: first (planned for today) no force pushes, no deletion, changes only through pull requests, plus the lint check if it passes; then the tests/RLS/build/end-to-end check once Codex fixes develop's failing unit tests (develop fails its own unit tests at `1906b530`).
+19. **Branch protection.** `develop` is **unprotected, by Saad's decision (10 Nov 2026)**. `main`'s protection is unchanged: it requires two `verify / …` checks (`verify / Lint, typecheck and formatting`, `verify / Tests, RLS, build and end-to-end`), which can't run while Actions is off. Nothing merges until the AWS worker checks pass on the exact final commit.
 
 ---
 
@@ -228,4 +228,4 @@ Other capabilities in active use include `pharmacy:counter`, `pharmacy:close`, `
 8. Proof that every app secret and operator login was rotated at handover.  
 9. Status of DEV-754 fix on a fresh head.  
 10. Meta WhatsApp production app review status and token storage model actually deployed.  
-11. GitHub Actions turned back on, and `develop` protection steps one and two applied.
+11. develop's unit tests passing again at a new tip (Codex fix).
