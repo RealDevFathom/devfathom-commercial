@@ -55,6 +55,67 @@ describe('CounterSearchResults safety flags', () => {
     expect(screen.getByText('پیراسٹامول')).toHaveAttribute('dir', 'auto');
   });
 
+  it('shows the brand with the generic name without changing selection or price', () => {
+    const brandedRow: CounterSearchRow = { ...row, brandName: ' Panadol ' };
+    const onSelect = vi.fn();
+    const { rerender } = render(
+      <CounterSearchResults
+        rows={[brandedRow]}
+        state="ready"
+        query="panadol"
+        activeMedicineId={brandedRow.medicineId}
+        onSelect={onSelect}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Panadol')).toBeVisible();
+    expect(screen.getByText('Paracetamol')).toHaveClass('block');
+    expect(screen.getByText('Paracetamol')).toHaveAttribute('dir', 'auto');
+    expect(screen.getByText('500 mg')).toBeVisible();
+    const result = screen.getByRole('button', { name: /Panadol.*Paracetamol/ });
+    expect(result).toHaveTextContent('250.00');
+    expect(result).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(result);
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(brandedRow);
+
+    rerender(
+      <CounterSearchResults
+        rows={[brandedRow]}
+        state="ready"
+        query="panadol"
+        activeMedicineId={brandedRow.medicineId}
+        disabled
+        onSelect={onSelect}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    const disabledResult = screen.getByRole('button', { name: /Panadol.*Paracetamol/ });
+    expect(disabledResult).toBeDisabled();
+    fireEvent.click(disabledResult);
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(brandedRow);
+  });
+
+  it.each([null, '', '   '])('falls back to the product name for brand %j', (brandName) => {
+    render(
+      <CounterSearchResults
+        rows={[{ ...row, brandName }]}
+        state="ready"
+        query="para"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+
+    expect(screen.getAllByText('Paracetamol')).toHaveLength(1);
+    expect(screen.getByText('Paracetamol')).toBeVisible();
+    expect(screen.getByText('Paracetamol')).not.toHaveClass('block');
+  });
+
   it.each(['ltr', 'rtl'])('isolates the strength from an Urdu name in a %s workspace', (dir) => {
     render(
       <div dir={dir}>
@@ -224,6 +285,23 @@ describe('CounterSearchResults safety flags', () => {
     expect(medicine).toBeDisabled();
     fireEvent.click(medicine);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it.each([null, undefined])('uses the search error fallback for %j', (error) => {
+    render(
+      <CounterSearchResults
+        rows={[]}
+        state="error"
+        query="para"
+        activeMedicineId={null}
+        error={error}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Search failed.');
   });
 
   it('retains retry and unfulfilled-demand actions for search errors and empty results', () => {
