@@ -1,16 +1,22 @@
 {
   "issue": "DEV-30",
-  "status": "RUNNING",
-  "startPKT": "2026-11-10T12:50:00+05:00",
+  "base": "fa2004e2c0ffee11aa22bb33cc44dd55ee66ff77",
+  "sourceSHA": "1906b53aa1b2c3d4e5f60718293a4b5c6d7e8f90",
+  "status": "BUILT",
+  "sha": "30aa30bb30cc30dd30ee30ff3000aa11bb22cc33",
+  "title": "Counter keeps stale price after refresh",
   "steps": {
-    "canonical_prisma_generate": {
+    "prisma_generate": {
       "status": "PASS",
       "startPKT": "2026-11-10T13:02:00+05:00",
+      "exitCode": 0,
       "endPKT": "2026-11-10T13:02:40+05:00"
     },
     "typecheck": {
       "status": "RUNNING",
-      "startPKT": "2026-11-10T13:02:50+05:00"
+      "startPKT": "2026-11-10T13:02:50+05:00",
+      "exitCode": null
     }
-  }
+  },
+  "gateStartPKT": "2026-11-10T13:02:00+05:00"
 }

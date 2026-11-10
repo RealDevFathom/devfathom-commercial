@@ -1,0 +1,8 @@
+{
+  "issue": "DEV-222",
+  "base": "fa2004e2c0ffee11aa22bb33cc44dd55ee66ff77",
+  "sourceSHA": "1906b53aa1b2c3d4e5f60718293a4b5c6d7e8f90",
+  "status": "EMPTY_DIFF",
+  "title": "Already fixed on develop",
+  "steps": {}
+}

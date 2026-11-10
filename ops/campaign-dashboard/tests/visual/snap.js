@@ -64,6 +64,9 @@ const { chromium } = require('playwright');
 
   const m = await open(390, 844);
   result.mobileScrollWidth = await m.page.evaluate(() => document.documentElement.scrollWidth);
+  if (result.mobileScrollWidth > 390) result.mobileOverflowers = await m.page.evaluate(() => [...document.querySelectorAll('body *')]
+    .filter(e => { const r = e.getBoundingClientRect(); return r.right > 392 && r.left < 380 && !e.closest('aside,dialog,[aria-hidden=true]'); })
+    .slice(-8).map(e => `${e.tagName}.${e.className} ${Math.round(e.getBoundingClientRect().right)} ${(e.textContent || '').slice(0, 60)}`));
   await m.page.screenshot({ path: path.join(out, 'mobile.png') });
   result.shots.push('mobile.png');
   await m.ctx.close();

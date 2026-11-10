@@ -328,9 +328,16 @@ UPDATE_SNAPSHOTS=1 python3 -m unittest tests.test_visual
 
 * **Operator:** a batch's `OPERATOR.md` names who runs it. The dashboard reads its `Operator: <name>` line,
   or else its first heading, and shows it on the batch and in the control-room heading. The file itself opens as evidence.
-* **Claude-operated waves:** `<batch>/wave<N>/` directories are runs. `summary.json` is read like a ledger
-  (`jobs`, `tasks` or `results`, as a list or keyed by issue, plus `active` and `maxConcurrent`), and each `DEV-*/result.json`
-  is read like a checkpoint (`status`, `steps`, `sourceSHA` and so on). Wave jobs appear under Agent jobs alongside Codex.
+* **Claude-operated waves:** `<batch>/wave<N>/` directories are runs; the newest one is the current run when no
+  rebase overlay exists. `summary.json` (`{updatedPKT, rows: {"DEV-n": {status, sha, failedSteps, ...}}}`) is read like
+  a ledger and each `DEV-*/result.json` like a checkpoint. `sha` is the candidate commit the gates ran on, so it is the
+  task's SHA. A `DONE` marker or a stale `runner.log` ends liveness. Wave statuses map as follows:
+  `BUILT` is queued or gating, `GATES_GREEN` passes the gates the wave ran, `GATES_GREEN_FEWER_TESTS` is **Failed: Test count**,
+  `GATES_FAIL` is failed and names the step, `BUILD_ERROR` is failed, and `EMPTY_DIFF` and `INFRA` are blocked.
+  Waves do not run the Docker contract, so a green wave task shows **Awaiting: Docker**, never Passed.
+* **Canceled tasks:** `OPS_CANCELED=DEV-339,DEV-341` shows those tasks as Canceled and keeps them out of the counts.
+* **Stop files bind their controller:** when `OPERATOR.md` names someone other than Inky, `*_STOP` pause files
+  (for example `RETARGET1906_STOP`) are shown as an info note for Inky's lane, not as a campaign-paused alarm.
 * **Superseded batches:** set `OPS_SUPERSEDED=rebase-1906-1110` (comma-separated) in `/etc/ops-collector.env`, or drop
   an empty `SUPERSEDED` file into the batch. The batch stays as history, but nothing in it counts as active, running or queued.
   Its unfinished tasks show as **Superseded**, and the warning rules skip it.

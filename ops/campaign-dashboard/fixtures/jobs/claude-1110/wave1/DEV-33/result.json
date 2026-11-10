@@ -1,0 +1,52 @@
+{
+  "issue": "DEV-33",
+  "base": "fa2004e2c0ffee11aa22bb33cc44dd55ee66ff77",
+  "sourceSHA": "1906b53aa1b2c3d4e5f60718293a4b5c6d7e8f90",
+  "status": "GATES_FAIL",
+  "sha": "33aa33bb33cc33dd33ee33ff3300aa11bb22cc33",
+  "title": "Returns refund rounding",
+  "steps": {
+    "prisma_generate": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T10:00:00+05:00",
+      "exitCode": 0,
+      "endPKT": "2026-11-10T10:00:40+05:00"
+    },
+    "typecheck": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T10:00:50+05:00",
+      "exitCode": 0,
+      "endPKT": "2026-11-10T10:05:00+05:00"
+    },
+    "lint": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T10:05:10+05:00",
+      "exitCode": 0,
+      "endPKT": "2026-11-10T10:08:00+05:00"
+    },
+    "host_build": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T10:08:10+05:00",
+      "exitCode": 0,
+      "endPKT": "2026-11-10T10:16:00+05:00"
+    },
+    "complete_unit": {
+      "status": "FAIL",
+      "startPKT": "2026-11-10T10:16:10+05:00",
+      "exitCode": 1,
+      "endPKT": "2026-11-10T10:38:00+05:00",
+      "numPassedTests": 16328,
+      "numFailedTests": 3,
+      "numPendingTests": 2082,
+      "failedFiles": [
+        "src/server/pharmacy/stock.test.ts"
+      ]
+    }
+  },
+  "gateStartPKT": "2026-11-10T10:00:00+05:00",
+  "gateEndPKT": "2026-11-10T10:38:00+05:00",
+  "failedSteps": [
+    "complete_unit"
+  ],
+  "failedTestCount": 3
+}

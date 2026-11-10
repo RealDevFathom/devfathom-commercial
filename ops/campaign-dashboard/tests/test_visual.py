@@ -153,7 +153,7 @@ class VisualTests(unittest.TestCase):
             self.assertIn(fam.strip('"'), ("Geist", "Geist Mono"))
 
     def test_mobile_has_no_horizontal_overflow(self):
-        self.assertLessEqual(self.result["mobileScrollWidth"], 390)
+        self.assertLessEqual(self.result["mobileScrollWidth"], 390, self.result.get("mobileOverflowers"))
 
     def test_structure_snapshot(self):
         path = os.path.join(BASE, "dom.json")

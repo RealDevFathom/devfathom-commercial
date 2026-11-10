@@ -13,11 +13,13 @@
   const GATE_LABEL = {
     prisma: 'Prisma', typecheck: 'Types', lint: 'Lint', complete_unit: 'Unit', host_build: 'Build', docker: 'Docker',
     differential: 'Diff', qa_browser: 'QA', security: 'Sec', final_sha: 'Final SHA', merged: 'Merged', linear: 'Linear', gh: 'GitHub',
+    test_count: 'Tests',
   };
   const GATE_LONG = {
     prisma: 'Prisma generate', typecheck: 'Typecheck', lint: 'Lint', complete_unit: 'Complete unit', host_build: 'Host build',
     docker: 'Docker build contract', differential: 'Differential vs baseline', qa_browser: 'QA / browser', security: 'Security',
     final_sha: 'Gates on final SHA', merged: 'Merged into develop', linear: 'Linear closed', gh: 'GitHub issue closed',
+    test_count: 'Test count vs baseline',
   };
   const STATUS_META = {
     done: { icon: 'check-circle', label: 'Done' }, merged: { icon: 'merge', label: 'Merged' }, passed: { icon: 'check-circle', label: 'Passed' },
@@ -25,7 +27,7 @@
     blocked: { icon: 'prohibit', label: 'Blocked' }, running: { icon: 'circle-notch', label: 'Running' },
     pending_qa: { icon: 'hourglass', label: 'Pending QA / Security' },
     gates: { icon: 'hourglass', label: 'Awaiting gates' }, queued: { icon: 'circle-dashed', label: 'Queued' }, pending: { icon: 'circle-dashed', label: 'Pending' },
-    superseded: { icon: 'history', label: 'Superseded' },
+    superseded: { icon: 'history', label: 'Superseded' }, canceled: { icon: 'x', label: 'Canceled' },
   };
   const FILTERS = [['', 'All'], ['running', 'Running'], ['failed', 'Failed'], ['rejected', 'Rejected'], ['pending_qa', 'Pending QA'], ['blocked', 'Blocked'], ['passed', 'Passed'], ['merged', 'Merged'], ['queued', 'Queued']];
   const SERIES = { pass: 'var(--s-pass)', merge: 'var(--s-merge)', codex: 'var(--s-codex)', fail: 'var(--s-fail)' };
@@ -373,7 +375,11 @@
     const campEl = $('campaign-state');
     if (campEl) {
       const camp = (S && S.campaign) || {};
-      if (camp.paused) {
+      if (camp.paused && camp.appliesToOperator === false) {
+        campEl.classList.remove('hidden', 'paused');
+        campEl.textContent = 'Inky lane paused · run live';
+        campEl.title = camp.note || '';
+      } else if (camp.paused) {
         campEl.classList.remove('hidden');
         campEl.classList.add('paused');
         campEl.textContent = `${camp.key || 'campaign-paused'}: Codex dispatch paused`;
@@ -419,7 +425,10 @@
     const asOf = dataAsOfTs();
     const items = [];
     const camp = S.campaign || {};
-    if (camp.paused) {
+    if (camp.paused && camp.appliesToOperator === false) {
+      items.push(h('div', { class: 'banner-item info' }, icon('info'),
+        h('span', null, camp.note || 'A stop file binds another controller; the live run is not paused.')));
+    } else if (camp.paused) {
       items.push(h('div', { class: 'banner-item campaign-pause', role: 'alert' },
         icon('octagon'),
         h('span', null,
@@ -726,7 +735,7 @@
     const STAGES = [['codex', 'Fix', 'robot', 'Codex or Claude coding'], ['gates', 'Gates', 'flask', 'Required gates, final SHA'], ['qa', 'QA & security', 'shield', 'Browser and security'],
       ['merge', 'Merge', 'merge', 'Into develop'], ['close', 'Close', 'kanban', 'Linear and GitHub'], ['done', 'Done', 'check-circle', 'All checks complete']];
     const at = Object.fromEntries(STAGES.map(([k]) => [k, []]));
-    for (const x of list) if (x.st.key !== 'superseded') at[stageOf(x.t, x.st)].push(x);
+    for (const x of list) if (x.st.key !== 'superseded' && x.st.key !== 'canceled') at[stageOf(x.t, x.st)].push(x);
     const order = STAGES.map(([k]) => k);
     mount('pipeline', STAGES.map(([k, name, ic, sub], i) => {
       const xs = at[k];
@@ -960,7 +969,7 @@
 
   // ------------------------------------------------------------------ batches
   const SEGS = [['done', 'var(--good)', 'Done'], ['merged', 'var(--merged)', 'Merged'], ['passed', 'var(--s-pass)', 'Passed'], ['running', 'var(--run)', 'Running'], ['gates', 'var(--dim)', 'Awaiting gates'],
-    ['failed', 'var(--crit)', 'Failed'], ['blocked', 'var(--warn)', 'Blocked'], ['queued', 'var(--pend)', 'Queued'], ['pending', 'var(--track)', 'Pending'], ['superseded', 'var(--track)', 'Superseded']];
+    ['failed', 'var(--crit)', 'Failed'], ['blocked', 'var(--warn)', 'Blocked'], ['queued', 'var(--pend)', 'Queued'], ['pending', 'var(--track)', 'Pending'], ['superseded', 'var(--track)', 'Superseded'], ['canceled', 'var(--track)', 'Canceled']];
   function batchRow(b) {
     const ts = b.tasks.map((t) => statusOf(t).key);
     const n = ts.length;

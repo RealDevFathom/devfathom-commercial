@@ -90,7 +90,7 @@ class DiscoveryTests(unittest.TestCase):
         try:
             payload = wc.collect(FIXTURES, sdir, live_window=0, disks=(), superseded=["wave0-old-20261109"])
             self.assertEqual(payload["codex"]["cap"], 50)
-            self.assertEqual(payload["codex"]["activeCount"], 4)  # 3 Codex + 1 Claude wave job; the superseded batch adds none
+            self.assertEqual(payload["codex"]["activeCount"], 4)  # 3 Codex + 1 Claude wave job (DEV-30); the superseded batch adds none
             self.assertIn("system", payload)
             self.assertNotIn("/workspace/jobs/", json.dumps(payload))
             self.assertTrue(os.path.exists(os.path.join(sdir, "state.json")))
@@ -138,7 +138,8 @@ class OperatorLayoutTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.batches = {b["id"]: b for b in wc.collect_batches(FIXTURES, live_window=0, superseded=["wave0-old-20261109"])}
+        cls.batches = {b["id"]: b for b in wc.collect_batches(FIXTURES, live_window=0, superseded=["wave0-old-20261109"],
+                                                              canceled=["DEV-339", "DEV-341"])}
 
     def test_wave_runs_and_results(self):
         b = self.batches["claude-1110"]
@@ -147,14 +148,40 @@ class OperatorLayoutTests(unittest.TestCase):
         tasks = {t["issue"]: t for t in b["tasks"]}
         self.assertEqual(tasks["DEV-30"]["phase"], "running")
         self.assertEqual(tasks["DEV-30"]["currentStep"], "typecheck")
-        self.assertTrue(tasks["DEV-31"]["gated"])           # every required gate passed on the final SHA from result.json
-        self.assertEqual(tasks["DEV-31"]["model"], None)     # wave runs are not Codex runs; the model lives in the summary
+        self.assertEqual(tasks["DEV-30"]["title"], "Counter keeps stale price after refresh")
+        # GATES_GREEN, but the wave does not run the Docker contract: never "gated" until it does.
+        self.assertFalse(tasks["DEV-31"]["gated"])
+        self.assertNotIn("docker", tasks["DEV-31"]["gates"])
+        self.assertEqual(tasks["DEV-31"]["gates"]["complete_unit"]["status"], "PASS")
+        self.assertEqual(tasks["DEV-31"]["model"], None)     # wave runs are not Codex runs
         self.assertEqual(b["active"], 1)
+
+    def test_wave_statuses(self):
+        tasks = {t["issue"]: t for t in self.batches["claude-1110"]["tasks"]}
+        self.assertEqual(tasks["DEV-32"]["phase"], "failed")               # GATES_GREEN_FEWER_TESTS
+        self.assertEqual(tasks["DEV-32"]["gates"]["test_count"]["status"], "FAIL")
+        self.assertEqual(tasks["DEV-33"]["phase"], "failed")               # GATES_FAIL
+        self.assertEqual(tasks["DEV-33"]["gates"]["complete_unit"]["status"], "FAIL")
+        self.assertEqual(tasks["DEV-222"]["phase"], "blocked")             # EMPTY_DIFF
+        self.assertEqual(tasks["DEV-339"]["phase"], "canceled")            # OPS_CANCELED
+        self.assertTrue(tasks["DEV-339"]["canceled"])
+
+    def test_wave_done_marker_stops_live(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            shutil.copytree(os.path.join(FIXTURES, "claude-1110"), os.path.join(tmp, "claude-1110"))
+            open(os.path.join(tmp, "claude-1110", "wave1", "DONE"), "w").close()
+            b = wc.collect_batches(tmp, live_window=0)[0]
+            self.assertEqual(b["active"], 0)
+            t = next(t for t in b["tasks"] if t["issue"] == "DEV-30")
+            self.assertNotEqual(t["phase"], "running")
+        finally:
+            shutil.rmtree(tmp)
 
     def test_newest_wave_is_the_current_run(self):
         b = self.batches["claude-1110"]
         self.assertEqual(b["currentRun"], "wave1")
-        self.assertEqual(b["currentCodexJobs"], 2)
+        self.assertEqual(b["currentCodexJobs"], 6)  # one agent job per wave row
         self.assertTrue(all(e.get("current") for e in b["events"] if e.get("run") == "wave1"))
 
     def test_operator_md(self):

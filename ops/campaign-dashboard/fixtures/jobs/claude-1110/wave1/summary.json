@@ -1,27 +1,55 @@
 {
-  "atPKT": "2026-11-10T13:10:00+05:00",
-  "wave": 1,
-  "maxConcurrent": 4,
-  "active": 1,
-  "jobs": [
-    {
-      "issue": "DEV-30",
-      "status": "RUNNING",
-      "model": "claude-opus-5-5",
-      "reasoningEffort": "high",
-      "sourceSHA": "1906b53aa1b2c3d4e5f60718293a4b5c6d7e8f90"
+  "updatedPKT": "2026-11-10T13:05:00+05:00",
+  "rows": {
+    "DEV-30": {
+      "status": "BUILT",
+      "sha": "30aa30bb30cc30dd30ee30ff3000aa11bb22cc33",
+      "failedSteps": [],
+      "passed": 0,
+      "failed": 0,
+      "failedTestCount": 0
     },
-    {
-      "issue": "DEV-31",
-      "status": "PASS",
-      "model": "claude-opus-5-5",
-      "reasoningEffort": "high",
-      "sourceSHA": "1906b53aa1b2c3d4e5f60718293a4b5c6d7e8f90",
-      "newSourceSHA": "31aa31bb31cc31dd31ee31ff3100aa11bb22cc33",
-      "codexExitCode": 0,
-      "changedFiles": [
-        "src/server/pharmacy/stock.ts"
-      ]
+    "DEV-31": {
+      "status": "GATES_GREEN",
+      "sha": "31aa31bb31cc31dd31ee31ff3100aa11bb22cc33",
+      "failedSteps": [],
+      "passed": 5,
+      "failed": 0,
+      "failedTestCount": 0
+    },
+    "DEV-32": {
+      "status": "GATES_GREEN_FEWER_TESTS",
+      "sha": "32aa32bb32cc32dd32ee32ff3200aa11bb22cc33",
+      "failedSteps": [],
+      "passed": 5,
+      "failed": 0,
+      "failedTestCount": 0
+    },
+    "DEV-33": {
+      "status": "GATES_FAIL",
+      "sha": "33aa33bb33cc33dd33ee33ff3300aa11bb22cc33",
+      "failedSteps": [
+        "complete_unit"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "failedTestCount": 3
+    },
+    "DEV-222": {
+      "status": "EMPTY_DIFF",
+      "sha": null,
+      "failedSteps": [],
+      "passed": 0,
+      "failed": 0,
+      "failedTestCount": 0
+    },
+    "DEV-339": {
+      "status": "GATES_GREEN",
+      "sha": "39aa39bb39cc39dd39ee39ff3900aa11bb22cc33",
+      "failedSteps": [],
+      "passed": 5,
+      "failed": 0,
+      "failedTestCount": 0
     }
-  ]
+  }
 }

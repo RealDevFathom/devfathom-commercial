@@ -88,8 +88,8 @@ def parse_ts(value):
 
 
 _ST_WORDS = (
-    ("BLOCKED", ("BLOCK", "PRECONDITION", "HARNESS")),
-    ("FAIL", ("FAIL", "ERROR", "TIMEOUT", "TIMEDOUT", "ABORT", "CRASH", "BROKEN", "INCOMPLETE", "RED")),
+    ("BLOCKED", ("BLOCK", "PRECONDITION", "HARNESS", "INFRA", "EMPTY")),
+    ("FAIL", ("FAIL", "ERROR", "TIMEOUT", "TIMEDOUT", "ABORT", "CRASH", "BROKEN", "INCOMPLETE", "RED", "FEWER")),
     ("RUNNING", ("RUNNING", "PROGRESS", "STARTED", "VERIFYING", "ACTIVE", "BUSY")),
     ("PASS", ("PASS", "SUCCESS", "SUCCEEDED", "OK", "DONE", "COMPLETE", "COMPLETED", "GREEN", "FIXED", "MERGED")),
     ("SKIP", ("SKIP", "SKIPPED")),
@@ -270,6 +270,55 @@ def parse_steps(raw):
     return steps
 
 
+def wave_fields(rec, data, job):
+    """Claude operator wave layout (result.json + summary.json rows).
+
+    result.json: {issue, title, base, sourceSHA, sha, status, steps{...}, gateStartPKT, gateEndPKT, failedSteps,
+    failedTestIds, failedTestCount, static{...}, harnessError}. `sha` is the candidate commit the gates ran on, so it
+    is the run's SHA; the original `sourceSHA` is kept as `originalSHA`.
+    Statuses: BUILT (queued or gating), EMPTY_DIFF, BUILD_ERROR, GATES_GREEN, GATES_GREEN_FEWER_TESTS, GATES_FAIL, INFRA.
+    """
+    cand = data.get("sha") or job.get("sha")
+    if cand:
+        rec["originalSHA"] = rec.get("sourceSHA")
+        rec["sourceSHA"] = cand
+    if data.get("base"):
+        rec["baseSHA"] = data["base"]
+    rec["start"] = parse_ts(data.get("gateStartPKT")) or rec.get("start")
+    rec["end"] = parse_ts(data.get("gateEndPKT")) or rec.get("end")
+    if data.get("title"):
+        rec["title"] = str(data["title"])[:200]
+    if data.get("harnessError"):
+        rec["error"] = str(data["harnessError"])[:500]
+    failed_steps = data.get("failedSteps") or job.get("failedSteps") or []
+    if isinstance(failed_steps, list):
+        rec["failedSteps"] = [str(x) for x in failed_steps][:20]
+    v = data.get("failedTestCount", job.get("failedTestCount"))
+    if isinstance(v, int):
+        rec["failedTestCount"] = v
+    if isinstance(data.get("failedTestIds"), list):
+        rec["failedTestIds"] = [str(x) for x in data["failedTestIds"]][:60]
+    static = data.get("static")
+    if isinstance(static, dict):
+        rec["static"] = {k: static.get(k) for k in ("files", "shortstat", "testOnly", "editedExistingTests", "removedExpectLines",
+                                                    "migrations", "schemaChanged", "abacFiles") if k in static}
+        files = static.get("files")
+        if isinstance(files, list):
+            rec["changedFiles"] = len(files)
+            rec["changedPaths"] = [norm_file(f) for f in files if isinstance(f, str)][:100]
+        elif isinstance(files, int):
+            rec["changedFiles"] = files
+    if isinstance(data.get("keptAtDevelop"), list):
+        rec["keptAtDevelop"] = [str(x) for x in data["keptAtDevelop"]][:20]
+    status = str(rec.get("status") or "").upper()
+    if status == "GATES_GREEN_FEWER_TESTS":
+        # Green, but fewer tests ran than on the baseline: a failed check, never shown as passed.
+        rec["steps"].append({"name": "test_count", "gate": "test_count", "status": "FAIL", "raw": status,
+                             "start": rec.get("end"), "end": rec.get("end")})
+    if status == "BUILT":
+        rec["norm"] = "RUNNING" if any(s.get("status") == "RUNNING" for s in rec["steps"]) else "PENDING"
+
+
 def run_record(run_name, kind, data, ledger_job=None, sub_files=None):
     """Build a run record for one task from a checkpoint (and/or ledger job)."""
     data = data if isinstance(data, dict) else {}
@@ -304,6 +353,8 @@ def run_record(run_name, kind, data, ledger_job=None, sub_files=None):
         rec["changedPaths"] = [norm_file(c) for c in changed if isinstance(c, str)][:100]
     if data.get("error"):
         rec["error"] = str(data["error"])[:500]
+    if kind == "wave":
+        wave_fields(rec, data, job)
     for fname, sub in sorted((sub_files or {}).items()):
         if not isinstance(sub, dict):
             continue
@@ -450,7 +501,11 @@ def build_task(issue, runs, baseline_failed):
         "sourceSHA": short((runs[0] if runs else {}).get("sourceSHA")),
         "finalSHA": final_short,
         "changedFiles": (latest_codex or {}).get("changedFiles"),
-        "changedPaths": (latest_codex or {}).get("changedPaths") or [],
+        "changedPaths": (latest_codex or {}).get("changedPaths") or next(
+            (r.get("changedPaths") for r in reversed(runs) if r.get("changedPaths")), []),
+        "title": next((r.get("title") for r in reversed(runs) if r.get("title")), None),
+        "static": next((r.get("static") for r in reversed(runs) if r.get("static")), None),
+        "failedTestCount": next((r.get("failedTestCount") for r in reversed(runs) if isinstance(r.get("failedTestCount"), int)), None),
         "fixed": fixed,
         "gated": gated,
         "running": running,
@@ -465,7 +520,8 @@ def build_task(issue, runs, baseline_failed):
 def compact_run(r):
     out = {k: r.get(k) for k in ("run", "kind", "status", "norm", "start", "last", "end", "codexStart",
                                  "codexEnd", "model", "effort", "failedGate", "codexExitCode", "error",
-                                 "changedFiles", "changedPaths", "stale") if r.get(k) is not None}
+                                 "changedFiles", "changedPaths", "stale", "originalSHA", "baseSHA",
+                                 "failedSteps", "failedTestCount", "failedTestIds", "static", "keptAtDevelop") if r.get(k) is not None}
     out["sourceSHA"] = short(r.get("sourceSHA"))
     out["newSourceSHA"] = short(r.get("newSourceSHA"))
     out["steps"] = [{k: v for k, v in s.items() if k != "failedFiles"} for s in r["steps"]]
@@ -592,19 +648,21 @@ def collect_batch(root, name, now, live_window, superseded=False, superseded_run
                 data = read_json(fp, root)
                 if not isinstance(data, dict):
                     continue
-                at = parse_ts(data.get("atPKT"))
-                lm = mtime(fp)
+                at = parse_ts(data.get("atPKT") or data.get("updatedPKT"))
+                lm = maxts(mtime(fp), mtime(os.path.join(p, "runner.log")))  # wave drivers log continuously
                 info = summarize_file(fp, root)
                 info["run"] = entry
                 batch["ledgers"].append(info)
-                live = not run_sup and (live_window == 0 or (live_window > 0 and lm is not None and now - lm <= live_window))
+                done_marker = os.path.isfile(os.path.join(p, "DONE"))  # a finished wave writes DONE
+                live = not run_sup and not done_marker and (
+                    live_window == 0 or (live_window > 0 and lm is not None and now - lm <= live_window))
                 if isinstance(data.get("maxConcurrent"), int):
                     run["cap"] = data["maxConcurrent"]
                 if isinstance(data.get("activeCodexOrVerify"), int) and live:
                     run["active"] = data["activeCodexOrVerify"]
                 run["start"] = mints(run["start"], at)
                 run["last"] = maxts(run["last"], at, lm)
-                jobs = data.get("jobs") or data.get("tasks") or data.get("results") or []
+                jobs = data.get("jobs") or data.get("tasks") or data.get("results") or data.get("rows") or []
                 if isinstance(jobs, dict):  # {"DEV-1": {...}} form
                     jobs = [dict(v, issue=k) for k, v in jobs.items() if isinstance(v, dict) and ISSUE_RE.match(str(k))]
                 for job in jobs:
@@ -665,7 +723,8 @@ def collect_batch(root, name, now, live_window, superseded=False, superseded_run
             if main is None and issue in terminal_map:
                 main = terminal_map[issue]
             rec = run_record(entry, kind, main, ledger_jobs.get(issue), subs)
-            if (run_sup or not run.get("live", True)) and is_running_job(rec.get("status")):
+            if (run_sup or not run.get("live", True)) and (
+                    is_running_job(rec.get("status")) or any(st.get("status") == "RUNNING" for st in rec["steps"])):
                 rec["norm"] = "PENDING"
                 rec["stale"] = True
             run["counts"][rec["norm"]] = run["counts"].get(rec["norm"], 0) + 1
@@ -682,7 +741,7 @@ def collect_batch(root, name, now, live_window, superseded=False, superseded_run
                     "issue": issue, "run": entry, "status": rec.get("status"),
                     "model": rec.get("model"), "effort": rec.get("effort"),
                     "start": rec.get("codexStart") or rec.get("start"),
-                    "running": not run_sup and run.get("live", True) and is_running_job(rec.get("status")),
+                    "running": not run_sup and run.get("live", True) and (is_running_job(rec.get("status")) or rec.get("norm") == "RUNNING"),
                     "step": next((s["name"] for s in rec["steps"] if s["status"] == "RUNNING"), None),
                 })
         if run.get("live") is False or run_sup:
@@ -718,13 +777,14 @@ def collect_batch(root, name, now, live_window, superseded=False, superseded_run
     return batch
 
 
-def collect_batches(root, now=None, live_window=1800, superseded=()):
+def collect_batches(root, now=None, live_window=1800, superseded=(), canceled=()):
     """Discover every job root under `root` as a batch, with tasks and runs.
 
     `superseded` names batches (job roots) or runs (directories inside a batch, e.g. rebase-1906-1110) that an
     operator declared replaced by a newer run."""
     now = now or time.time()
     superseded = set(superseded or ())
+    canceled_set = set(canceled or ())
     batches = []
     for name in listdir(root):
         p = os.path.join(root, name)
@@ -760,6 +820,11 @@ def collect_batches(root, now=None, live_window=1800, superseded=()):
 
         tasks = [build_task(issue, _runs_for(issue, runs), base)
                  for issue, runs in sorted(b.pop("_perIssue").items())]
+        for t in tasks:
+            if t["issue"] in canceled_set:  # canceled by the owner: shown for the record, results ignored
+                t["canceled"] = True
+                t["running"] = False
+                t["phase"] = "canceled"
         b.pop("_baselineFailed")
         b["tasks"] = tasks
         if current_sources and current_sources.get("status"):
@@ -1138,13 +1203,14 @@ def load_high_5m(hist, cores, now):
 
 # --------------------------------------------------------------------------- main collect
 
-def collect(root, state_dir=None, live_window=1800, disks=("/workspace", "/scratch"), now=None, host_metrics=True, superseded=()):
+def collect(root, state_dir=None, live_window=1800, disks=("/workspace", "/scratch"), now=None, host_metrics=True, superseded=(),
+            canceled=()):
     now = now or time.time()
     sdir = safe_state_dir(state_dir) if state_dir else None
     state = load_state(sdir, "state.json") if sdir else {}
     hist = load_state(sdir, "history.json") if sdir else {}
 
-    batches = collect_batches(root, now, live_window, superseded=superseded)
+    batches = collect_batches(root, now, live_window, superseded=superseded, canceled=canceled)
     payload = {"schema": SCHEMA, "collector": "worker", "collectedAt": now, "batches": batches}
 
     # all-time counters
@@ -1214,6 +1280,12 @@ def collect(root, state_dir=None, live_window=1800, disks=("/workspace", "/scrat
     current_batches = [b for b in batches if not b.get("archived")]
     data_as_of = max(filter(None, [b.get("dataAsOf") for b in current_batches] + [now]), default=now)
     payload["dataAsOf"] = max(filter(None, [b.get("dataAsOf") for b in current_batches]), default=now)
+    # Who operates the live run (from OPERATOR.md in a current batch). Stop files written by another
+    # controller (e.g. Inky's *_STOP) do not bind this operator; the server scopes alarms accordingly.
+    op_batch = next((b for b in current_batches if b.get("operator")), None)
+    payload["operator"] = ({"name": op_batch["operator"]["name"], "batch": op_batch["id"], "run": op_batch.get("currentRun"),
+                            "file": f"{op_batch['id']}/OPERATOR.md", "mtime": op_batch["operator"].get("mtime"),
+                            "excerpt": op_batch["operator"].get("excerpt")} if op_batch else None)
     payload["current"] = {
         "run": next((b.get("currentRun") for b in current_batches if b.get("currentRun")), None),
         "statusFile": next((b.get("currentSource") for b in current_batches if b.get("currentSource")), None),
@@ -1237,17 +1309,18 @@ def collect(root, state_dir=None, live_window=1800, disks=("/workspace", "/scrat
         payload["gateProcs"] = collect_gate_procs()
         payload["codex"] = _live.merge_live_codex(payload.get("codex"), payload["codexProcs"])
         payload["killSwitch"] = collect_killswitch(state, now)
-        def _read_stop(path, limit=256):
-            try:
-                with open(path, "r", errors="replace") as fh:
-                    return fh.read(limit)
-            except OSError:
-                return ""
-        payload["stopFiles"] = _cr.collect_stop_files(root, listdir, os.path.isfile, mtime, _read_stop)
-        payload["campaign"] = _cr.campaign_pause_from_stops(
-            payload["stopFiles"],
-            (payload.get("current") or {}).get("baseline") or payload.get("current", {}).get("baseline"),
-        )
+    # Stop files are plain markers under the jobs root (read-only), collected with or without host metrics.
+    def _read_stop(path, limit=256):
+        try:
+            with open(path, "r", errors="replace") as fh:
+                return fh.read(limit)
+        except OSError:
+            return ""
+    payload["stopFiles"] = _cr.collect_stop_files(root, listdir, os.path.isfile, mtime, _read_stop)
+    payload["campaign"] = _cr.campaign_pause_from_stops(
+        payload["stopFiles"],
+        (payload.get("current") or {}).get("baseline") or payload.get("current", {}).get("baseline"),
+    )
     lanes = _live.collect_lane_status(root)
     payload["rebase"] = lanes.get("rebase")
     payload["devfix"] = lanes.get("devfix")
@@ -1341,8 +1414,10 @@ def main(argv=None):
     while True:
         try:
             sup = args.superseded if args.superseded is not None else os.environ.get("OPS_SUPERSEDED", "")
+            can = os.environ.get("OPS_CANCELED", "")
             payload = collect(args.root, args.state_dir, args.live_window,
-                              superseded=[x.strip() for x in sup.split(",") if x.strip()])
+                              superseded=[x.strip() for x in sup.split(",") if x.strip()],
+                              canceled=[x.strip() for x in can.split(",") if x.strip()])
             if args.print:
                 print(json.dumps(payload, indent=2))
             elif not args.no_push:

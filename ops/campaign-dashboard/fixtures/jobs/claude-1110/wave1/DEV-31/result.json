@@ -1,39 +1,57 @@
 {
   "issue": "DEV-31",
-  "status": "PASS",
-  "sourceSHA": "31aa31bb31cc31dd31ee31ff3100aa11bb22cc33",
-  "startPKT": "2026-11-10T12:00:00+05:00",
-  "endPKT": "2026-11-10T12:44:00+05:00",
+  "base": "fa2004e2c0ffee11aa22bb33cc44dd55ee66ff77",
+  "sourceSHA": "1906b53aa1b2c3d4e5f60718293a4b5c6d7e8f90",
+  "status": "GATES_GREEN",
+  "sha": "31aa31bb31cc31dd31ee31ff3100aa11bb22cc33",
+  "title": "Stock adjustment ignores batch expiry",
   "steps": {
-    "canonical_prisma_generate": {
+    "prisma_generate": {
       "status": "PASS",
-      "startPKT": "2026-11-10T12:10:00+05:00",
-      "endPKT": "2026-11-10T12:13:00+05:00"
+      "startPKT": "2026-11-10T12:00:00+05:00",
+      "exitCode": 0,
+      "endPKT": "2026-11-10T12:00:40+05:00"
     },
     "typecheck": {
       "status": "PASS",
-      "startPKT": "2026-11-10T12:15:00+05:00",
-      "endPKT": "2026-11-10T12:18:00+05:00"
+      "startPKT": "2026-11-10T12:00:50+05:00",
+      "exitCode": 0,
+      "endPKT": "2026-11-10T12:05:00+05:00"
     },
     "lint": {
       "status": "PASS",
-      "startPKT": "2026-11-10T12:20:00+05:00",
-      "endPKT": "2026-11-10T12:23:00+05:00"
-    },
-    "complete_unit": {
-      "status": "PASS",
-      "startPKT": "2026-11-10T12:25:00+05:00",
-      "endPKT": "2026-11-10T12:28:00+05:00"
+      "startPKT": "2026-11-10T12:05:10+05:00",
+      "exitCode": 0,
+      "endPKT": "2026-11-10T12:08:00+05:00"
     },
     "host_build": {
       "status": "PASS",
-      "startPKT": "2026-11-10T12:30:00+05:00",
-      "endPKT": "2026-11-10T12:33:00+05:00"
+      "startPKT": "2026-11-10T12:08:10+05:00",
+      "exitCode": 0,
+      "endPKT": "2026-11-10T12:16:00+05:00"
     },
-    "docker_build_contract": {
+    "complete_unit": {
       "status": "PASS",
-      "startPKT": "2026-11-10T12:35:00+05:00",
-      "endPKT": "2026-11-10T12:38:00+05:00"
+      "startPKT": "2026-11-10T12:16:10+05:00",
+      "exitCode": 0,
+      "endPKT": "2026-11-10T12:38:00+05:00",
+      "numPassedTests": 16328,
+      "numFailedTests": 0,
+      "numPendingTests": 2082,
+      "failedFiles": []
     }
+  },
+  "gateStartPKT": "2026-11-10T12:00:00+05:00",
+  "gateEndPKT": "2026-11-10T12:38:00+05:00",
+  "static": {
+    "files": [
+      "src/server/pharmacy/stock.ts"
+    ],
+    "testOnly": false,
+    "editedExistingTests": [],
+    "removedExpectLines": 0,
+    "migrations": [],
+    "schemaChanged": false,
+    "abacFiles": []
   }
 }

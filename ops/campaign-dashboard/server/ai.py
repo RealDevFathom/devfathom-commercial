@@ -79,6 +79,11 @@ repeated gate failures and their likely shared causes, tasks not moving, tests o
 pressure, spot price or weekly usage nearing limits, stale data, and anything else unusual. Weekly usage in the digest is Inky (Grok Bot) usage, not Codex/worker/Claude — do not recommend throttling those because of it. If the guards object is present, do not claim usage, the kill switch or resource metrics are missing. Add useful suggestions \
 (what a human should look at or do next) — advice only, the dashboard is read-only.
 
+Operator context: the digest names the live operator and quotes its OPERATOR.md. Behaviour the operator documents as \
+expected (for example stop files that bind only another controller, a superseded run that no longer changes, zero Codex \
+jobs during a Claude-operated wave, or gate processes it owns) is not a warning. A campaign object with \
+appliesToOperator=false describes another controller's pause, not this run's.
+
 Rules for the output:
 - Do not repeat a rule finding verbatim; add new insight, connect findings, or raise severity with a reason.
 - severity: "crit" (act now), "warn" (look today), "info" (good to know).
@@ -352,6 +357,7 @@ def digest(state):
         "worker": {"system": w.get("system"), "services": w.get("services"), "killSwitch": w.get("killSwitch"),
                    "usage": state.get("usage") or w.get("usage"), "codexProcs": w.get("codexProcs"),
                    "stopFiles": w.get("stopFiles")},
+        "operator": state.get("operator"), "campaign": state.get("campaign"),
         "box": state.get("box"), "github": {"merged": ((state.get("github") or {}).get("merged") or [])[:25],
                                              "closedIssues": ((state.get("github") or {}).get("closedIssues") or [])[:25]},
         "recentEvents": (state.get("events") or [])[:80], "batches": batches,

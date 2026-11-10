@@ -76,7 +76,42 @@ class TruthTests(unittest.TestCase):
         # pharmacy-review-50 (DEV-20) is archived, so live KPIs only count the current batch.
         self.assertEqual(o["merged"], 1)   # DEV-15 only; PR #985 does not count; DEV-20 is archived
         self.assertEqual(o["done"], 1)
-        self.assertEqual(o["gated"], 3)    # passed on final SHA: DEV-12, DEV-15, DEV-31 (DEV-20 is in the archive)
+        self.assertEqual(o["gated"], 2)    # passed on final SHA: DEV-12, DEV-15 (DEV-20 archived; DEV-31 awaits Docker)
+
+
+class WaveTruthTests(unittest.TestCase):
+    """Claude wave1 rows under the same truth rules."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.s = fixture_state()
+
+    def test_green_without_docker_is_not_passed(self):
+        v = task(self.s, "claude-1110", "DEV-31")["verdict"]
+        self.assertEqual(v["key"], "gates")
+        self.assertEqual(v["label"], "Awaiting: Docker")
+
+    def test_fewer_tests_is_failed_and_named(self):
+        v = task(self.s, "claude-1110", "DEV-32")["verdict"]
+        self.assertEqual(v["key"], "failed")
+        self.assertIn("Test count", v["label"])
+
+    def test_gates_fail_names_unit(self):
+        v = task(self.s, "claude-1110", "DEV-33")["verdict"]
+        self.assertEqual(v["key"], "failed")
+        self.assertIn("complete_unit", v["gates"])
+
+    def test_empty_diff_is_blocked(self):
+        v = task(self.s, "claude-1110", "DEV-222")["verdict"]
+        self.assertEqual(v["key"], "blocked")
+        self.assertIn("Empty diff", v["label"])
+
+    def test_operator_and_scoped_pause(self):
+        self.assertEqual(self.s["operator"]["name"], "Claude (Saad's cloud session)")
+        camp = self.s.get("campaign") or {}
+        if camp.get("paused"):
+            self.assertIs(camp.get("appliesToOperator"), False)
+        self.assertFalse(any(a["severity"] == "crit" and "Campaign paused" in a["text"] for a in self.s["alerts"]))
 
 
 class SupersededTests(unittest.TestCase):

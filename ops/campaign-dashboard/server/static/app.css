@@ -380,7 +380,7 @@ svg.mbars { display: block; width: 100%; overflow: visible; margin-top: auto; pa
 .pill.s-running { background: var(--run-bg); color: var(--run-ink); box-shadow: 0 0 0 1px var(--run-bd) inset, 0 0 16px -4px var(--run-bd); }
 .pill.s-running .ic { animation: spin 1.2s linear infinite; }
 .pill.s-gates { background: var(--well); color: var(--text-2); }
-.pill.s-queued, .pill.s-pending, .pill.s-superseded { background: transparent; color: var(--muted); box-shadow: 0 0 0 1px var(--line-2) inset; }
+.pill.s-queued, .pill.s-pending, .pill.s-superseded, .pill.s-canceled { background: transparent; color: var(--muted); box-shadow: 0 0 0 1px var(--line-2) inset; }
 button.pill { cursor: pointer; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .tag { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 999px; font-size: 12px; color: var(--text-2); background: var(--well);
@@ -697,10 +697,13 @@ button.mini { cursor: pointer; } button.mini:hover { background: var(--glass-str
 .develop-lane .dev-gate { margin-left: auto; }
 .develop-lane .badge.pending, .develop-lane .badge.warn { background: var(--warn-bg); color: var(--warn-ink); }
 
-.campaign-state { margin-left: 12px; font-weight: 600; letter-spacing: .01em; }
+.campaign-state { margin-left: 12px; white-space: nowrap; font-weight: 600; letter-spacing: .01em; }
 .campaign-state.paused, .banner-item.campaign-pause { background: var(--crit-bg, #3b1010); color: var(--crit-ink, #ffd6d6); padding: 4px 10px; border-radius: 999px; }
 .tag.current-run { font-weight: 600; }
 .tag.superseded-run { opacity: .65; }
 .banner-item.campaign-pause { display: flex; gap: 10px; align-items: flex-start; border-radius: 10px; padding: 10px 14px; }
 .banner-item.campaign-pause .badge { margin-right: 4px; }
 .b-chips { margin-top: 8px; }
+.banner-item.info { background: var(--run-bg); box-shadow: 0 0 0 1px var(--run-bd) inset; color: var(--run-ink); cursor: default; }
+/* Operator-scoped stop-file pill: the banner explains it on narrow screens. */
+@media (max-width: 640px) { .campaign-state:not(.paused) { display: none; } .campaign-state.paused { margin-left: 0; font-size: 11px; } }

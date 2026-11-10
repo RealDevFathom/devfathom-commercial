@@ -176,6 +176,28 @@ def rule_insights(state, now=None):
                     "The fix touches " + ", ".join(p for p, _ in other_hits[:4]) + (" …" if len(other_hits) > 4 else "") +
                     ". Review that lint rules or guards were not weakened to make gates pass.",
                     [_ev(f"{issue} task", link_task(bid, issue))], bid, issue)
+            # --- the wave driver's own static diff analysis (result.json "static")
+            st = t.get("static") if isinstance(t.get("static"), dict) else None
+            if st and not t.get("canceled"):
+                edited = st.get("editedExistingTests") or []
+                removed = st.get("removedExpectLines") or 0
+                abac = st.get("abacFiles") or []
+                if edited or (isinstance(removed, int) and removed > 0) or abac:
+                    bits = []
+                    if edited:
+                        bits.append(f"edits {len(edited)} existing test file(s)")
+                    if isinstance(removed, int) and removed > 0:
+                        bits.append(f"removes {removed} expect line(s)")
+                    if abac:
+                        bits.append(f"touches {len(abac)} ABAC/auth file(s)")
+                    add("warning", "crit" if removed or abac else "warn", "batches", f"static:{bid}:{issue}",
+                        f"{issue}: possible weakened tests or guards",
+                        f"The candidate {', '.join(bits)}. Review that tests and access checks were not weakened to pass gates.",
+                        [_ev(f"{issue} task", link_task(bid, issue))], bid, issue)
+                if st.get("migrations") or st.get("schemaChanged"):
+                    add("suggestion", "info", "batches", f"schema:{bid}:{issue}", f"{issue} changes the database schema",
+                        "The candidate adds migrations or changes the Prisma schema; review before merging.",
+                        [_ev(f"{issue} task", link_task(bid, issue))], bid, issue)
             unit = (t.get("gates") or {}).get("complete_unit") or {}
             if base_passed and _num(unit.get("passed")) is not None and unit["passed"] < base_passed - TEST_DROP_TOLERANCE:
                 add("warning", "crit", "batches", f"tests-drop:{bid}:{issue}", f"{issue}: {base_passed - unit['passed']} fewer passing tests than baseline",
@@ -267,7 +289,9 @@ def rule_insights(state, now=None):
     # --- capacity
     queue = (state.get("next") or {}).get("queue") or []
     active, cap = codex.get("activeCount") or 0, codex.get("cap") or 50
-    if queue and active < cap * 0.5 and not usage.get("stopActive"):
+    op = (state.get("operator") or {}).get("name") or ""
+    codex_operated = not op or "inky" in op.lower()  # a Claude-operated wave dispatches no Codex by design
+    if codex_operated and queue and active < cap * 0.5 and not usage.get("stopActive"):
         add("suggestion", "info", "next", "capacity", f"{len(queue)} queued tasks with Codex at {active}/{cap}",
             "There is spare Codex capacity while tasks wait in the queue.", [_ev(q["issue"], link_task(q["batch"], q["issue"])) for q in queue[:5]])
 

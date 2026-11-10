@@ -64,7 +64,27 @@ MAX_EVENTS = 1500
 
 META_GATES = {"merged", "linear", "gh", "final_sha", "differential"}
 GATE_NAMES = {"prisma": "Prisma", "typecheck": "Typecheck", "lint": "Lint", "complete_unit": "Unit", "host_build": "Build",
-              "docker": "Docker", "differential": "Differential", "qa_browser": "QA", "security": "Security"}
+              "docker": "Docker", "differential": "Differential", "qa_browser": "QA", "security": "Security",
+              "test_count": "Test count"}
+# Claude operator wave statuses that are not expressed through gate steps
+WAVE_STATUS = {"EMPTY_DIFF": ("blocked", "Empty diff"), "INFRA": ("blocked", "Infra error"),
+               "BUILD_ERROR": ("failed", "Failed: candidate build")}
+
+
+def scope_campaign(camp, operator):
+    """Stop files (e.g. RETARGET1906_STOP / PAUSE_CODEX) bind the controller that wrote them. When the live run is
+    operated by someone else (OPERATOR.md), the pause is reported for that controller, not as a campaign alarm."""
+    if not camp or not operator or not operator.get("name"):
+        return camp
+    name = str(operator["name"])
+    if "inky" in name.lower():
+        return camp
+    camp = dict(camp)
+    camp["appliesToOperator"] = False
+    camp["operator"] = name
+    camp["note"] = (f"{camp.get('stopFile') or 'Stop file'} binds Inky's controller only. "
+                    f"The live run is operated by {name} and is not paused by it.")
+    return camp
 
 
 def verdict(t):
@@ -103,9 +123,14 @@ def verdict(t):
     on_final = (g.get("final_sha") or {}).get("status") == "PASS"
     passed = bool(t.get("gated")) and on_final and not fails and not blocked
     name = lambda ks: ", ".join(GATE_NAMES.get(k, k) for k in ks)  # noqa: E731
+    if t.get("canceled"):
+        return {"key": "canceled", "label": "Canceled"}
     if t.get("running"):
         step = t.get("currentStep")
         return {"key": "running", "label": f"Running {GATE_NAMES.get(step, step)}" if step else "Running"}
+    ws = WAVE_STATUS.get(str(t.get("status") or "").upper())
+    if ws and not fails:
+        return {"key": ws[0], "label": ws[1], "gates": ["build"] if ws[0] == "failed" else []}
     if fails:
         return {"key": "failed", "label": f"Failed: {name(fails)}", "gates": fails}
     if blocked or t.get("phase") == "blocked":
@@ -116,6 +141,10 @@ def verdict(t):
         return {"key": "merged", "label": "Merged"}
     if passed:
         return {"key": "passed", "label": "Passed on final SHA"}
+    missing = [k for k in REQUIRED_GATES if (g.get(k) or {}).get("status") != "PASS" and not (k == "complete_unit" and diff_pass)]
+    if missing and len(missing) < len(REQUIRED_GATES) and not t.get("phase") == "failed":
+        # Some required gates passed, none failed, others never ran (e.g. a wave without the Docker contract).
+        return {"key": "gates", "label": f"Awaiting: {name(missing)}", "gates": missing}
     if t.get("phase") == "failed":
         fg = t.get("failedGate")
         return {"key": "failed", "label": f"Failed: {GATE_NAMES.get(fg, fg)}" if fg else "Failed: Codex", "gates": [fg] if fg else ["codex"]}
@@ -352,7 +381,7 @@ def build_state(snapshot, now=None, ai=None):
             gates["gh"] = {"status": "PASS" if gh else "PENDING", **({"number": gh["number"]} if gh else {})}
             issues_closed = bool(gh) and (linear_closed if linear_ok else True)
             t["gates"] = gates
-            t["title"] = titles.get(issue)
+            t["title"] = titles.get(issue) or t.get("title")
             t["merge"] = merge
             t["mergeMismatch"] = mismatch
             t["ghIssue"] = gh
@@ -545,10 +574,11 @@ def build_state(snapshot, now=None, ai=None):
             "short": (github.get("developSha") or "")[:8] or None,
             "mergedAt": github.get("developAt"),
         },
-        "campaign": worker.get("campaign") or campaign_pause_from_stops(
+        "campaign": scope_campaign(worker.get("campaign") or campaign_pause_from_stops(
             worker.get("stopFiles"),
             ((worker.get("current") or {}).get("baseline")),
-        ),
+        ), worker.get("operator")),
+        "operator": {k: (worker.get("operator") or {}).get(k) for k in ("name", "batch", "run", "file", "mtime", "excerpt")} if worker.get("operator") else None,
         "github": {"developSha": (develop or {}).get("sha") or github.get("developSha"),
                    "developAt": (develop or {}).get("mergedAt") or github.get("developAt"),
                    "developMovedAt": (develop or {}).get("mergedAt"),
@@ -609,9 +639,9 @@ def compute_alerts(worker, box, sources):
         price = _num(w.get("spotPrice"))
         if price is not None and price > SPOT_CAP and w.get("state") == "running":
             add("warn", f"spot-{w.get('instanceId')}", f"spot price ${price:.3f}/h above ${SPOT_CAP:.2f} cap")
-    camp = worker.get("campaign") or campaign_pause_from_stops(
-        worker.get("stopFiles"), (worker.get("current") or {}).get("baseline"))
-    if camp and camp.get("paused"):
+    camp = scope_campaign(worker.get("campaign") or campaign_pause_from_stops(
+        worker.get("stopFiles"), (worker.get("current") or {}).get("baseline")), worker.get("operator"))
+    if camp and camp.get("paused") and camp.get("appliesToOperator") is not False:
         reason = camp.get("reason") or "No new Codex dispatch"
         key = camp.get("key") or "campaign-paused"
         add("crit", key,
