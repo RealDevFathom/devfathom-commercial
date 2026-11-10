@@ -40,7 +40,12 @@ import {
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
-import { evaluateBranchRegulatoryStatus } from '@/lib/pharmacy/regulatory';
+import {
+  evaluateBranchRegulatoryStatus,
+  isLegacyPlaceholderProfile,
+  normalizeRegulatoryPremises,
+  normalizeRegulatoryProvince,
+} from '@/lib/pharmacy/regulatory';
 import {
   FBR_TIER1_CHECK_ACTION,
   FBR_TIER1_CHECK_TARGET_TYPE,
@@ -471,6 +476,7 @@ export const pharmacyOnboardingRouter = router({
               premises: true,
               createdAt: true,
               isPlaceholder: true,
+              jurisdictionRuleSetId: true,
               jurisdictionRuleSet: {
                 select: {
                   licenceCategories: true,
@@ -501,12 +507,17 @@ export const pharmacyOnboardingRouter = router({
               ruleSet: jurisdictionRuleSet,
             },
             effective,
-            now
+            now,
+            // Listed branches are all active (see the query above).
+            selected ? { profile: version, site: { ...selected, active: true } } : undefined
           );
           return {
             ...version,
             provinceName: provinceName(version.provinceCode),
             ...status,
+            // #660 — a grandfathered placeholder still counts toward activation,
+            // but the pharmacy is reminded to record its real premises.
+            premisesCompletionDue: status.inForce && isLegacyPlaceholderProfile(version),
           };
         }),
       };
@@ -529,10 +540,25 @@ export const pharmacyOnboardingRouter = router({
 
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { organizationId, id: input.branchId, active: true },
-        select: { id: true },
+        select: { id: true, provinceCode: true, addressLine: true, city: true },
       });
       if (!branch) {
         throw badRequest('branchId', 'Choose one of this workspace’s active branches.');
+      }
+
+      const normalizeProvince = normalizeRegulatoryProvince;
+      const normalizePremises = normalizeRegulatoryPremises;
+      if (normalizeProvince(input.provinceCode) !== normalizeProvince(branch.provinceCode)) {
+        throw badRequest('provinceCode', 'The regulatory province must match the selected branch.');
+      }
+      if (normalizePremises(input.premisesAddressLine) !== normalizePremises(branch.addressLine)) {
+        throw badRequest(
+          'premisesAddressLine',
+          'The premises address must match the selected branch address.'
+        );
+      }
+      if (normalizePremises(input.premisesCity) !== normalizePremises(branch.city)) {
+        throw badRequest('premisesCity', 'The premises city must match the selected branch city.');
       }
 
       const activePlaceholder = await ctx.db.branchRegulatoryProfile.findFirst({

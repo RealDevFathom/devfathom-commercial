@@ -228,14 +228,53 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
   });
 
   it('refuses a province with no published rules, on the province field', async () => {
+    // Keep the profile bound to its branch so this reaches the published-rules
+    // check rather than failing the earlier province/premises checks.
+    await owner.query(`UPDATE pharmacy_branches SET "provinceCode" = 'ZZ' WHERE id = $1`, [
+      secondBranchId,
+    ]);
+    try {
+      await withTenantDb(organizationId, async (db) => {
+        await expect(
+          // A province no rule set can name, so this stays true whatever else the
+          // shared jurisdiction table holds.
+          caller(db).saveRegulatoryProfile({
+            ...profile,
+            branchId: secondBranchId,
+            premisesAddressLine: '9 Link Road',
+            provinceCode: 'PK-ZZ',
+          })
+        ).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: expect.stringContaining('No jurisdiction rules are published'),
+        });
+      });
+    } finally {
+      await owner.query(`UPDATE pharmacy_branches SET "provinceCode" = 'PB' WHERE id = $1`, [
+        secondBranchId,
+      ]);
+    }
+  });
+
+  it('binds the regulatory province and premises to the selected branch', async () => {
     await withTenantDb(organizationId, async (db) => {
       await expect(
-        // A province no rule set can name, so this stays true whatever else the
-        // shared jurisdiction table holds.
-        caller(db).saveRegulatoryProfile({ ...profile, provinceCode: 'PK-ZZ' })
+        caller(db).saveRegulatoryProfile({ ...profile, provinceCode: 'PK-SD' })
       ).rejects.toMatchObject({
         code: 'BAD_REQUEST',
-        message: expect.stringContaining('No jurisdiction rules are published'),
+        message: 'The regulatory province must match the selected branch.',
+      });
+      await expect(
+        caller(db).saveRegulatoryProfile({ ...profile, premisesAddressLine: '99 Other Road' })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'The premises address must match the selected branch address.',
+      });
+      await expect(
+        caller(db).saveRegulatoryProfile({ ...profile, premisesCity: 'Rawalpindi' })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'The premises city must match the selected branch city.',
       });
     });
   });
@@ -269,6 +308,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       const saved = await caller(db).saveRegulatoryProfile({
         ...profile,
         branchId: secondBranchId,
+        premisesAddressLine: '9 Link Road',
         licenceValidTo: expiryDate,
       });
       expect(saved.version).toBe(1);
@@ -301,6 +341,8 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
         inForce: false,
         provinceName: 'Punjab',
         licenceNumber: 'LIC-4471',
+        // Only a grandfathered placeholder in force asks for completion.
+        premisesCompletionDue: false,
       });
       expect(listed.versions[0]?.effectiveTo).toBeNull();
     });

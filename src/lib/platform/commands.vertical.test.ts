@@ -1170,6 +1170,14 @@ function pharmacyOrg() {
  */
 const VALID_PROFILE = {
   branchId: 'branch-p',
+  provinceCode: 'PK-SD',
+  premises: { addressLine: '1 Test Road', city: 'Karachi' },
+  branch: {
+    active: true,
+    provinceCode: 'PK-SD',
+    addressLine: '1 Test Road',
+    city: 'Karachi',
+  },
   licenceCategory: 'PHARMACY',
   licenceValidFrom: new Date('2026-01-01'),
   licenceValidTo: new Date('2027-01-01'),

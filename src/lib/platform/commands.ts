@@ -41,6 +41,7 @@ import {
 import { moduleDefinitionForKey, verticalForModuleKey } from '@/lib/module-catalog';
 import {
   assertStoredBranchMayOperate,
+  isLegacyPlaceholderProfile,
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
 import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
@@ -473,6 +474,7 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
     const profile = await db.branchRegulatoryProfile.findFirst({
       where: {
         organizationId,
+        branch: { active: true },
         effectiveFrom: { lte: now },
         OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
       },
@@ -1694,6 +1696,7 @@ async function runCommand(
         where: { organizationId: input.organizationId, active: true },
       });
       let created = 0;
+      const upgradedProfileIds: string[] = [];
       for (const branch of branches) {
         const existing = await db.branchRegulatoryProfile.findFirst({
           where: {
@@ -1703,8 +1706,14 @@ async function runCommand(
             effectiveTo: null,
           },
         });
-        if (existing) continue;
-        created += 1;
+        // #660 — a placeholder issued before premises binding is grandfathered
+        // by the guard; re-applying upgrades it to an effective-dated successor
+        // bound to the branch address, recorded in the lifecycle event and the
+        // platform audit row. A current-shape placeholder is left as it is.
+        const upgrading = Boolean(existing && isLegacyPlaceholderProfile(existing));
+        if (existing && !upgrading) continue;
+        if (upgrading && existing) upgradedProfileIds.push(existing.id);
+        else created += 1;
         const latest = await db.branchRegulatoryProfile.findFirst({
           where: { organizationId: input.organizationId, branchId: branch.id },
           orderBy: { version: 'desc' },
@@ -1727,7 +1736,7 @@ async function runCommand(
             effectiveFrom: branchEffectiveFrom,
             provinceCode: branch.provinceCode,
             jurisdictionRuleSetId: ruleSet.id,
-            premises: { label },
+            premises: { addressLine: branch.addressLine, city: branch.city, label },
             licenceCategory: '*',
             licenceNumber: label,
             licenceIssuingAuthority: label,
@@ -1759,12 +1768,37 @@ async function runCommand(
           },
         });
       }
+      if (upgradedProfileIds.length > 0) {
+        await db.organizationLifecycleEvent.create({
+          data: {
+            organizationId: input.organizationId,
+            action: 'CREATED',
+            fromStatus: organization.status,
+            toStatus: organization.status,
+            reason: input.reason,
+            actorId: actor.id,
+            metadata: {
+              placeholder: true,
+              operation: 'PREMISES_BINDING_UPGRADE',
+              ruleSetId: ruleSet.id,
+              supersededProfileIds: upgradedProfileIds,
+            },
+          },
+        });
+      }
       return {
         targetType: 'Organization',
         targetId: input.organizationId,
         organizationId: input.organizationId,
         data: { applied: true },
-        audit: { placeholder: true, ruleSetId: ruleSet.id, reason: input.reason },
+        audit: {
+          placeholder: true,
+          ruleSetId: ruleSet.id,
+          reason: input.reason,
+          ...(upgradedProfileIds.length > 0
+            ? { premisesBindingUpgrade: { supersededProfileIds: upgradedProfileIds } }
+            : {}),
+        },
       };
     }
     case 'organization.pharmacy.placeholder.lock': {

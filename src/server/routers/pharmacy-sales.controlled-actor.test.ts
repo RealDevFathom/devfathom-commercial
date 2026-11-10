@@ -58,6 +58,14 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
     branchRegulatoryProfile: {
       findFirst: async () => ({
         branchId: 'branch-1',
+        provinceCode: 'PK-PB',
+        premises: { addressLine: '12 Mall Road', city: 'Lahore' },
+        branch: {
+          active: true,
+          provinceCode: 'PB',
+          addressLine: '12 Mall Road',
+          city: 'Lahore',
+        },
         licenceCategory: 'PHARMACY',
         licenceValidFrom: new Date('2020-01-01T00:00:00.000Z'),
         licenceValidTo: new Date('2100-01-01T00:00:00.000Z'),

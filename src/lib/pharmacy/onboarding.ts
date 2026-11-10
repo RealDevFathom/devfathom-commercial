@@ -273,6 +273,7 @@ export async function evaluatePharmacyReadiness(
     db.branchRegulatoryProfile.findFirst({
       where: {
         organizationId,
+        branch: { active: true },
         effectiveFrom: { lte: at },
         OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
       },
