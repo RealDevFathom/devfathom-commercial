@@ -47,6 +47,7 @@ export class PharmacyOfflineCommandError extends Error {
       | 'DEVICE_NOT_USABLE'
       | 'IDEMPOTENCY_CONFLICT'
       | 'SEQUENCE_CONFLICT'
+      | 'SEQUENCE_OUT_OF_ORDER'
       | 'NOT_FOUND'
       | 'ALREADY_SETTLED'
       | 'ACTION_DENIED'
@@ -108,23 +109,31 @@ export async function recordOfflineCommand(
   // One statement, so two concurrent replays of the same key cannot both pass a
   // read-then-write gap. The read-back afterwards is what turns "did nothing"
   // into either a legitimate replay or a conflict.
-  await db.pharmacyOfflineCommand.createMany({
-    data: [
-      {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        deviceId: input.deviceId,
-        sequence: input.sequence,
-        idempotencyKey: input.idempotencyKey,
-        action: input.action,
-        payload: input.payload,
-        payloadHash,
-        clientOriginAt: input.clientOriginAt,
-        receiptNumber: input.receiptNumber ?? null,
-      },
-    ],
-    skipDuplicates: true,
-  });
+  try {
+    await db.pharmacyOfflineCommand.createMany({
+      data: [
+        {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          deviceId: input.deviceId,
+          sequence: input.sequence,
+          idempotencyKey: input.idempotencyKey,
+          action: input.action,
+          payload: input.payload,
+          payloadHash,
+          clientOriginAt: input.clientOriginAt,
+          receiptNumber: input.receiptNumber ?? null,
+        },
+      ],
+      skipDuplicates: true,
+    });
+  } catch (error) {
+    // The database owns the cursor and row lock. Prisma wraps a trigger's
+    // P0001 differently across adapters, so match only our private sentinel.
+    if (error instanceof Error && error.message.includes('PHARMACY_OFFLINE_SEQUENCE_OUT_OF_ORDER'))
+      throw new PharmacyOfflineCommandError('SEQUENCE_OUT_OF_ORDER');
+    throw error;
+  }
 
   const stored = await db.pharmacyOfflineCommand.findFirst({
     where: {

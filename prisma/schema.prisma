@@ -13895,6 +13895,8 @@ model PharmacyRegisteredDevice {
   status            PharmacyDeviceStatus @default(ACTIVE)
   revokedAt         DateTime?
   lastSeenAt        DateTime?
+  /// Durable FIFO cursor, including the exhausted Int sequence sentinel (2147483648).
+  nextOfflineCommandSequence BigInt               @default(1)
   enrolledByActorId String
   createdAt         DateTime             @default(now())
   updatedAt         DateTime             @updatedAt
