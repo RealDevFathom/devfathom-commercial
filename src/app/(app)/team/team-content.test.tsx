@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verticalForModuleKey, type EntitlementView } from '@/lib/module-catalog';
 
@@ -7,6 +7,27 @@ const state = vi.hoisted(() => ({
   // The catalog-derived tenant is installed in beforeEach, after imports resolve.
   vertical: undefined as EntitlementView['vertical'],
   modules: ['admin'] as string[],
+  activeSeats: 1,
+  overview: {
+    data: {
+      organization: {
+        users: [] as Array<{
+          id: string;
+          name: string;
+          role: 'ADMIN' | 'HR' | 'EMPLOYEE';
+          status: string;
+          title: string;
+          organizationRoleId: string | null;
+        }>,
+        roles: [] as Array<{ id: string; name: string }>,
+      },
+    },
+    isLoading: false,
+    isError: false,
+  },
+  overviewQuery: vi.fn(),
+  invalidateOverview: vi.fn(),
+  invalidateDirectory: vi.fn(),
   directory: vi.fn(() => ({ data: [], isLoading: false })),
   departments: {
     data: [] as Array<{ key: string; name: string; active: boolean }>,
@@ -25,12 +46,20 @@ vi.mock('next-auth/react', () => ({
   useSession: () => ({ data: { user: { role: state.role } } }),
 }));
 vi.mock('@/components/entitlements-provider', () => ({
-  useEntitlements: () => ({ enabledModules: state.modules, vertical: state.vertical }),
+  useEntitlements: () => ({
+    enabledModules: state.modules,
+    vertical: state.vertical,
+    activeSeats: state.activeSeats,
+  }),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
-    useUtils: () => ({ team: { getAll: { invalidate: vi.fn() } } }),
+    useUtils: () => ({
+      team: { getAll: { invalidate: state.invalidateDirectory } },
+      organizationAdmin: { overview: { invalidate: state.invalidateOverview } },
+    }),
     organizationAdmin: {
+      overview: { useQuery: state.overviewQuery },
       departments: { useQuery: () => state.departments },
       roles: { useQuery: () => state.roles },
     },
@@ -44,6 +73,24 @@ import { AddMemberModal, TeamContent } from './team-content';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.role = 'ADMIN';
+  state.modules = ['admin'];
+  state.activeSeats = 1;
+  state.overview.data.organization = {
+    users: [
+      {
+        id: 'owner',
+        name: 'Pharmacy owner',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        title: 'Owner',
+        organizationRoleId: null,
+      },
+    ],
+    roles: [],
+  };
+  state.overview.isLoading = state.overview.isError = false;
+  state.overviewQuery.mockReturnValue(state.overview);
   state.vertical = verticalForModuleKey('restaurant-core')!;
   state.departments.data = [
     { key: 'COUNTER', name: 'Counter', active: true },
@@ -143,6 +190,27 @@ describe('tenant department invitation', () => {
     expect(screen.getByLabelText('Department')).toHaveValue('COUNTER');
     expect(screen.getByPlaceholderText('Ali Raza')).toHaveValue('Second operator');
   });
+
+  it('refreshes member queries and notifies the host only after a successful invitation', () => {
+    const onInvited = vi.fn();
+    render(<AddMemberModal onClose={vi.fn()} onInvited={onInvited} />);
+    fill();
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+
+    const callbacks = state.invite.mutate.mock.calls[0][1];
+    act(() => callbacks.onError({ message: 'Forbidden' }));
+    expect(onInvited).not.toHaveBeenCalled();
+    expect(state.invalidateDirectory).not.toHaveBeenCalled();
+    expect(state.invalidateOverview).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+    act(() => state.invite.mutate.mock.calls[1][1].onSuccess({ inviteUrl: '/invite/token' }));
+    expect(onInvited).toHaveBeenCalledOnce();
+    expect(state.invalidateDirectory).toHaveBeenCalledOnce();
+    expect(state.invalidateOverview).toHaveBeenCalledOnce();
+    expect(screen.getByText('Invitation sent to second@e2e.invalid')).toBeVisible();
+  });
 });
 
 describe('vertical-aware invitation copy', () => {
@@ -182,16 +250,229 @@ describe('vertical-aware invitation copy', () => {
 });
 
 describe('baseline workspace invitations', () => {
-  it('shows Add Member without HR and opens the invitation form without fetching HR data', () => {
+  it('shows an explicit invitation without HR and opens the form without fetching HR data', () => {
     render(<TeamContent />);
-    fireEvent.click(screen.getByRole('button', { name: 'Add Member' }));
+    expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Invite a colleague' }));
     expect(screen.getByText('Add Team Member')).toBeVisible();
     expect(state.directory).toHaveBeenCalledWith(undefined, { enabled: false });
+  });
+  it('keeps Add Member available with HR and Administration', () => {
+    state.modules = ['admin', 'hr'];
+    render(<TeamContent />);
+    expect(screen.queryByRole('button', { name: 'Invite a colleague' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Member' }));
+    expect(screen.getByText('Add Team Member')).toBeVisible();
+    expect(state.directory).toHaveBeenCalledWith(undefined, { enabled: true });
   });
   it('keeps invitations unavailable to employees', () => {
     state.role = 'EMPLOYEE';
     render(<TeamContent />);
     expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Invite a colleague' })).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Workspace members' })).toBeNull();
+    expect(state.overviewQuery).toHaveBeenCalledWith(undefined, {
+      enabled: false,
+      retry: false,
+    });
     state.role = 'ADMIN';
+  });
+});
+
+describe('pharmacy team without HR', () => {
+  beforeEach(() => {
+    state.vertical = 'PHARMACY';
+  });
+
+  it('preserves pharmacy invitation guidance without offering the HR module', () => {
+    render(<TeamContent />);
+    expect(screen.getByRole('heading', { name: 'Pharmacy staff' })).toBeVisible();
+    expect(
+      screen.getByText(
+        /Pharmacy staff are invited here and receive an email to set their own password/
+      )
+    ).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Organization' })).toHaveAttribute(
+      'href',
+      '/organization'
+    );
+    expect(screen.queryByText(/add the HR module to your plan/)).toBeNull();
+    expect(screen.queryByPlaceholderText('Search by name or role...')).toBeNull();
+  });
+
+  it('lists occupied seats with base and pharmacy roles instead of an empty HR directory', () => {
+    state.activeSeats = 3;
+    state.overview.data.organization.roles = [{ id: 'pharmacist', name: 'Pharmacist' }];
+    state.overview.data.organization.users.push(
+      {
+        id: 'pharmacist',
+        name: 'Ayesha',
+        role: 'EMPLOYEE',
+        status: 'ON_LEAVE',
+        title: 'Dispensing pharmacist',
+        organizationRoleId: 'pharmacist',
+      },
+      {
+        id: 'invite',
+        name: 'Bilal',
+        role: 'HR',
+        status: 'INVITED',
+        title: 'Counter manager',
+        organizationRoleId: null,
+      },
+      {
+        id: 'inactive',
+        name: 'Former colleague',
+        role: 'EMPLOYEE',
+        status: 'INACTIVE',
+        title: 'Cashier',
+        organizationRoleId: null,
+      }
+    );
+
+    render(<TeamContent />);
+
+    expect(screen.getByText('Pharmacy')).toBeVisible();
+    expect(screen.queryByText('FIRM')).toBeNull();
+    expect(screen.getByText('3 team members in this workspace.')).toBeVisible();
+    const members = within(screen.getByRole('list', { name: 'Workspace members' }));
+    expect(members.getAllByRole('listitem')).toHaveLength(3);
+    expect(members.getByText('Pharmacy owner')).toBeVisible();
+    expect(members.getByText('Admin')).toBeVisible();
+    expect(members.getByText('Ayesha')).toBeVisible();
+    expect(members.getByText('Staff · Pharmacist')).toBeVisible();
+    expect(members.getByText('On leave')).toBeVisible();
+    expect(members.getByText('Bilal')).toBeVisible();
+    expect(members.getByText('Manager')).toBeVisible();
+    expect(members.getByText('Invited')).toBeVisible();
+    expect(members.queryByText('Former colleague')).toBeNull();
+    expect(state.overviewQuery).toHaveBeenCalledWith(undefined, { enabled: true, retry: false });
+    expect(state.directory).toHaveBeenCalledWith(undefined, { enabled: false });
+  });
+
+  it('shows member loading and failure states without claiming there are no members', () => {
+    state.overview.isLoading = true;
+    const view = render(<TeamContent />);
+    expect(screen.getByLabelText('Loading members')).toBeVisible();
+    expect(screen.getByText('1 team member in this workspace.')).toBeVisible();
+
+    state.overview.isLoading = false;
+    state.overview.isError = true;
+    view.rerender(<TeamContent />);
+    expect(screen.getByRole('alert')).toHaveTextContent('The member list could not be loaded.');
+    expect(screen.queryByText('No team members found')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Invite a colleague' })).toBeEnabled();
+  });
+
+  it('uses the seat snapshot until member data loads, then honors an empty member list', () => {
+    state.overviewQuery.mockReturnValue({
+      ...state.overview,
+      data: undefined,
+      isLoading: true,
+    });
+    const view = render(<TeamContent />);
+    expect(screen.getByText('1 team member in this workspace.')).toBeVisible();
+    expect(screen.getByLabelText('Loading members')).toBeVisible();
+
+    state.overview.data.organization.users = [];
+    state.overviewQuery.mockReturnValue(state.overview);
+    view.rerender(<TeamContent />);
+
+    expect(state.activeSeats).toBe(1);
+    expect(screen.getByText('0 team members in this workspace.')).toBeVisible();
+    expect(screen.queryByRole('list', { name: 'Workspace members' })).toBeNull();
+  });
+
+  it('keeps member management unavailable without the Administration module', () => {
+    state.modules = [];
+    render(<TeamContent />);
+    expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Invite a colleague' })).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Workspace members' })).toBeNull();
+    expect(state.overviewQuery).toHaveBeenCalledWith(undefined, { enabled: false, retry: false });
+  });
+
+  it('does not offer member management when only HR is enabled', () => {
+    state.modules = ['hr'];
+    render(<TeamContent />);
+    expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Invite a colleague' })).toBeNull();
+    expect(screen.queryByText('Add Team Member')).toBeNull();
+  });
+
+  it.each(['module', 'role'])('hides an open invitation when %s access is removed', (access) => {
+    const view = render(<TeamContent />);
+    fireEvent.click(screen.getByRole('button', { name: 'Invite a colleague' }));
+    expect(screen.getByText('Add Team Member')).toBeVisible();
+
+    if (access === 'module') state.modules = [];
+    else state.role = 'HR';
+    view.rerender(<TeamContent />);
+
+    expect(screen.queryByText('Add Team Member')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Send Invite' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Invite a colleague' })).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Workspace members' })).toBeNull();
+    expect(state.overviewQuery).toHaveBeenLastCalledWith(undefined, { enabled: false, retry: false });
+    expect(state.invite.mutate).not.toHaveBeenCalled();
+  });
+
+  it('opens the explicit invite action and refreshes workspace members after a successful invite', () => {
+    const view = render(<TeamContent />);
+    expect(screen.getByText('1 team member in this workspace.')).toBeVisible();
+    expect(
+      within(screen.getByRole('list', { name: 'Workspace members' })).getAllByRole('listitem')
+    ).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Invite a colleague' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Invite a colleague' }));
+    fireEvent.change(screen.getByPlaceholderText('Ali Raza'), { target: { value: 'Ayesha' } });
+    fireEvent.change(screen.getByPlaceholderText('ali@pharmacy.pk'), {
+      target: { value: 'ayesha@e2e.invalid' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Pharmacist'), {
+      target: { value: 'Dispensing pharmacist' },
+    });
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+    expect(state.invite.mutate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ email: 'ayesha@e2e.invalid', department: 'COUNTER' }),
+      expect.any(Object)
+    );
+    act(() => state.invite.mutate.mock.calls[0][1].onSuccess({ inviteUrl: '/invite/token' }));
+    expect(state.invalidateDirectory).toHaveBeenCalledOnce();
+    expect(state.invalidateOverview).toHaveBeenCalledOnce();
+    expect(screen.getByText('Invitation sent to ayesha@e2e.invalid')).toBeVisible();
+    expect(state.directory).toHaveBeenCalledWith(undefined, { enabled: false });
+
+    // The invalidated overview returns the invitation, while the server layout's
+    // entitlement snapshot remains unchanged for this client session.
+    state.overview.data = {
+      organization: {
+        ...state.overview.data.organization,
+        users: [
+          ...state.overview.data.organization.users,
+          {
+            id: 'ayesha',
+            name: 'Ayesha',
+            role: 'EMPLOYEE',
+            status: 'INVITED',
+            title: 'Dispensing pharmacist',
+            organizationRoleId: null,
+          },
+        ],
+      },
+    };
+    view.rerender(<TeamContent />);
+
+    expect(state.activeSeats).toBe(1);
+    expect(screen.queryByText('1 team member in this workspace.')).toBeNull();
+    expect(screen.getByText('2 team members in this workspace.')).toBeVisible();
+    const members = within(screen.getByRole('list', { name: 'Workspace members' }));
+    expect(members.getAllByRole('listitem')).toHaveLength(2);
+    expect(members.getByText('Pharmacy owner')).toBeVisible();
+    expect(members.getByText('Ayesha')).toBeVisible();
+    expect(members.getByText('Invited')).toBeVisible();
   });
 });
