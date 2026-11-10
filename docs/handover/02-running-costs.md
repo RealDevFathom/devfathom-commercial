@@ -1,6 +1,6 @@
 # DevFathom — Running costs
 
-> **Repo copy, checked 10 Nov 2026 (PKT).** This file was scanned for secrets, account IDs, IP addresses and login details before committing, and nothing needed removing. The content is unchanged from the CTO's draft, including every **TO CONFIRM** item.
+> **Repo copy, checked 10 Nov 2026 (PKT).** This file was scanned for secrets, account IDs, IP addresses and login details before committing. After the CTO's review (10 Nov 2026), server names and internal file paths were also removed. Otherwise the content is unchanged from the CTO's draft, including every **TO CONFIRM** item.
 
 **Audience:** investors and a new CTO.  
 **Written:** 2026-11-10 (Asia/Karachi).  
@@ -38,7 +38,7 @@ On top of AWS, Saad set **monthly AI provider budgets** (caps, not invoices): Cl
 | `us-east-1` | 41.22 | Develop pharmacy EC2 **plus** plansmithy RDS **plus** other EC2 — **mixed** |
 | `eu-north-1` | 31.39 | Agent/QA compute (not customer traffic) |
 | `us-east-2` | 21.94 | Agent/QA Spot |
-| `ap-east-1` | 3.39 | `wireguard-hk` nano — ownership **TO CONFIRM** |
+| `ap-east-1` | 3.39 | A small VPN instance — ownership **TO CONFIRM** |
 | global | 0.50 | Route 53 etc. |
 
 ### 1.3 October 2026 — product region detail (`ap-southeast-1`)
@@ -81,9 +81,9 @@ This box is for **engineering/demos**, not Abbasi production traffic.
 
 ### 1.6 Earlier internal plan numbers (for context, not CE)
 
-`/workspace/plan/aws-min-cost-plan.md` (2026-10-31) estimated DevFathom Singapore serving Abbasi at roughly **USD 45–50/month run-rate** mid-build, with a full dual ALB+RDS month closer to **~USD 100**, and proposed a future single-EC2 architecture around **~USD 20–25**. Those were planning estimates; prefer §1.1–1.4 for diligence.
+The internal min-cost plan (2026-10-31) estimated DevFathom Singapore serving Abbasi at roughly **USD 45–50/month run-rate** mid-build, with a full dual ALB+RDS month closer to **~USD 100**, and proposed a future single-EC2 architecture around **~USD 20–25**. Those were planning estimates; prefer §1.1–1.4 for diligence.
 
-Production SuperAdmin Option A plan estimated **~USD 62–68/month** for a dedicated prod stack alone (`prod-superadmin-plan.md`) — consistent with “two stacks cost more than one.”
+Production SuperAdmin Option A plan estimated **~USD 62–68/month** for a dedicated prod stack alone — consistent with “two stacks cost more than one.”
 
 ---
 
@@ -100,7 +100,7 @@ Production SuperAdmin Option A plan estimated **~USD 62–68/month** for a dedic
 | Linear | Issue tracker | Plan cost **TO CONFIRM** |
 | Email (Resend/Brevo/SES) | Prod still `capture` | Near USD 0 until live send; SES sandbox |
 | Codex / ChatGPT Pro / Claude seats | Builder tooling | Billed to Saad's seats — **not** customer COGS; amount **TO CONFIRM** |
-| Azure | Forbidden for Ask Fathom / new work | Should be **USD 0** going forward |
+| Azure | Forbidden for Ask Fathom / new work | Should be **USD 0** going forward. Azure code removal tracked in DEV-755 / #1437 |
 
 ---
 
@@ -127,7 +127,7 @@ With **one** pharmacy, almost all of that lands on Abbasi. With **N** pharmacies
 
 ### 3.2 Ask Fathom model fees per pharmacy (**ESTIMATE** from Ask Fathom plan)
 
-From `/workspace/plan/ask-fathom-plan.md` (model-fee only, not measured in production):
+From the Ask Fathom plan (model-fee only, not measured in production):
 
 | Usage profile | Turns / month | ESTIMATE USD |
 |---|---:|---:|
@@ -162,7 +162,7 @@ This is **not** a pricing recommendation; it is a cost floor for diligence.
 2. Stop or schedule QA Spot fleets when idle (Nov MTD shows why).  
 3. Confirm AWS credit expiry so net-zero months are not mistaken for zero burn.  
 4. Turn on AWS Budgets for: `ap-southeast-1` product, Bedrock, and account-wide anomaly detection.  
-5. Decide keep-or-retire develop `t4g.medium` vs future min-cost single-box plan (`aws-min-cost-plan.md`) — Saad decision still open in that plan.
+5. Decide keep-or-retire develop `t4g.medium` vs future min-cost single-box plan (internal min-cost plan) — Saad decision still open in that plan.
 
 ---
 
