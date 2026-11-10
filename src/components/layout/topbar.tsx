@@ -188,13 +188,7 @@ export function Topbar({
 
         <div className="hidden h-8 w-px bg-border-subtle md:block" />
 
-        <Link
-          href="/projects"
-          className="studio-icon-button hidden md:flex"
-          aria-label="Open projects"
-        >
-          <Plus className="h-4 w-4" />
-        </Link>
+        <ProjectsShortcut />
 
         <div className="hidden min-w-0 md:block">
           <span className="block text-xs font-medium text-foreground">
@@ -446,6 +440,17 @@ export function Topbar({
         </CommandDialog>
       )}
     </>
+  );
+}
+
+/** Projects are an agency workspace module that no pharmacy package licenses. */
+export function ProjectsShortcut() {
+  const { vertical } = useEntitlements();
+  if (vertical === 'PHARMACY') return null;
+  return (
+    <Link href="/projects" className="studio-icon-button hidden md:flex" aria-label="Open projects">
+      <Plus className="h-4 w-4" />
+    </Link>
   );
 }
 
