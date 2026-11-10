@@ -29,6 +29,7 @@ Everything is Python 3 standard library plus vanilla JS. There are no external C
 |---|---|
 | `server/app.py` | HTTP server: auth, ingest, state merge, alerts |
 | `server/ai.py` | Claude layer: read-only tools, chat loop, cached analysis, budgets |
+| `server/insights.py` | Deterministic warning / suggestion rules |
 | `server/sanitize.py` | Sanitiser (byte-identical copy of `collector/sanitize.py`) |
 | `server/static/` | `index.html`, `app.css`, `app.js` (UI: inline SVG charts, CSP `'self'` only) |
 | `server/Dockerfile` | `python:3.12-slim`, non-root uid 10001, port 8080, linux/amd64 |
@@ -216,6 +217,30 @@ opens the matching drill-down.
   `AI_CHAT_EFFORT` / `AI_ANALYSIS_EFFORT` [medium], and `AI_MODEL` [claude-opus-5-5].
 * **CSRF.** `POST /api/ai/*` needs Basic auth, a same-origin `Origin` (when sent) and the custom
   `X-Requested-With: ops-dash` header.
+
+### Automatic warnings and suggestions
+
+Two sources, merged and shown at the top of the screen they concern (Overview, Now, Next, Batches,
+History, Machine). They also appear in the **Warnings & suggestions** section and inside the matching
+task and batch drill-downs. Each item has a severity (`crit` / `warn` / `info`), a reason and evidence
+links.
+
+* **Rules** (`server/insights.py`): deterministic and free, evaluated on every `/api/state`:
+  * stalled Codex jobs (> 3 h), gate steps running > 90 min, and ledgers not updated for 15 min while active
+  * the same gate failing in ≥ 2 runs of a task, and gates failing across ≥ 3 tasks
+  * tasks idle > 24 h
+  * **weakened tests or guards**: changed test files, test/lint/TS configs, CI workflows, or auth,
+    capability or middleware guards; or fewer passing unit tests than the baseline
+  * Codex running machine checks while it is still coding
+  * RAM, PSI, disk or `/workspace` reserve pressure before the hard alerts fire
+  * spot price within 20 % of the cap, and weekly usage ≥ 85 %
+  * suggestions: blocked tasks, gated-but-unmerged tasks, merged tasks whose issues are still open, idle Codex capacity
+* **Claude analysis** (`server/ai.py`): a structured JSON (`json_schema`) review of a compact state digest
+  plus the rule findings. It runs in the background only when the digest changed and at most every
+  `AI_ANALYSIS_MIN_INTERVAL` seconds [900]. It is refreshed at least every `AI_ANALYSIS_MAX_AGE` seconds
+  [21600], cached in memory and in `DATA_DIR/ai_analysis.json`, and capped by the daily token budget.
+  The **Re-analyse** button (`POST /api/ai/refresh`) is limited to once per `AI_REFRESH_COOLDOWN`
+  seconds [300]. Evidence links that are not dashboard routes or repository GitHub links are dropped.
 
 Create the secret once and add its ARN to the task definition (already templated):
 

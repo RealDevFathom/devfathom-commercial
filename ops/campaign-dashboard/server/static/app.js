@@ -289,7 +289,7 @@
   function render() {
     const safe = (fn) => { try { fn(); } catch (err) { console.error(fn.name, err); } };
     [renderFreshness, renderAlerts, renderFunnel, renderOverview, renderCodex, renderGatesNow, renderVitals, renderQueue,
-      renderUpcoming, renderNextBatch, renderBatches, renderBatchDetail, renderActivity, renderMerges, renderEvents, renderWorker, renderAIStatus].forEach(safe);
+      renderUpcoming, renderNextBatch, renderBatches, renderBatchDetail, renderActivity, renderMerges, renderEvents, renderWorker, renderAIStatus, renderInsights].forEach(safe);
     if (ui.modal.length && $('dlg').open) safe(renderModal);
   }
 
@@ -572,6 +572,9 @@
     if (!b) { panel.classList.add('hidden'); return; }
     panel.classList.remove('hidden');
     $('bd-title').textContent = b.label || b.id;
+    const relB = allInsights().filter((x) => x.batch === b.id && !x.issue);
+    if (!$('bd-ins')) $('bd-summary').before(h('div', { id: 'bd-ins', class: 'strip' }));
+    mount('bd-ins', relB.map((x) => insightRow(x, true)));
     $('bd-sub').textContent = `${b.id} · started ${fmtDT(b.start)} PKT · last activity ${ago(b.last)}`;
     const c = b.counts;
     const base = b.baseline;
@@ -812,7 +815,7 @@
     if (!top) return;
     const R = {
       task: modalTask, merge: modalMerge, ghissue: modalGhIssue, run: modalRun, metric: modalMetric, list: modalList,
-      service: modalService, alert: modalAlert, killswitch: modalKillswitch, usage: modalUsage, workers: modalWorkers, file: modalFile, event: modalEvent,
+      service: modalService, alert: modalAlert, insight: modalInsight, killswitch: modalKillswitch, usage: modalUsage, workers: modalWorkers, file: modalFile, event: modalEvent,
     }[top.kind];
     mount('dlg-body', R ? R(top.key) : evidence(top));
   }
@@ -878,7 +881,9 @@
     const linear = t.linearClosed === null ? 'n/a (Linear not configured)' : t.linear ? `${t.linear.state}${t.linearClosed ? ' ✓' : ''}` : 'unknown';
     const runs = [...(t.runs || [])].sort((a, c) => (a.start || a.last || 0) - (c.start || c.last || 0));
     const others = allTasks().filter(({ b: ob, t: ot }) => ot.issue === t.issue && ob.id !== b.id);
+    const rel = relatedInsights(b.id, t.issue);
     return [
+      rel.length ? h('div', { class: 'ins-list' }, rel.map((x) => insightRow(x, true))) : null,
       h('dl', { class: 'kv' },
         kv('Batch', h('a', { href: '#', ...activate((e) => { e.preventDefault(); selectBatch(b.id, true); }) }, b.label || b.id)),
         kv('Source SHA', h('span', { class: 'mono' }, t.sourceSHA || '—')),
@@ -1197,6 +1202,73 @@
     $('ai-status').textContent = st.enabled ? `${st.model} · ${st.budgetExhausted ? 'daily budget reached' : `${st.budgetUsedPct ?? 0}% of daily budget used`}` : 'AI not configured';
   }
 
+
+  // ------------------------------------------------------------------ insights (rule-based + AI)
+  const SEV_ORDER = { crit: 0, warn: 1, info: 2 };
+  function allInsights() {
+    const ins = S.insights || {};
+    const ai = ins.ai || {};
+    const list = [...(ins.rules || []), ...(ai.warnings || []).map((x) => ({ ...x, kind: 'warning' })), ...(ai.suggestions || []).map((x) => ({ ...x, kind: 'suggestion' }))];
+    list.forEach((x, i) => { x.key = x.id || `ai:${x.kind}:${i}:${x.title}`; });
+    return list.sort((a, b) => (SEV_ORDER[a.severity] ?? 3) - (SEV_ORDER[b.severity] ?? 3) || (a.kind === 'warning' ? -1 : 1));
+  }
+  const SPARK = () => h('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, h('path', { d: 'M12 2l2.2 6.3L20.5 10l-6.3 2.2L12 18.5l-2.2-6.3L3.5 10l6.3-1.7z' }));
+
+  function insightRow(x, compact) {
+    const ev = (x.evidence || []).map((e) => { const href = safeHref(e.link); return href ? h('a', { href, onclick: (ev2) => ev2.stopPropagation() }, e.label) : null; });
+    return h('div', { class: `ins sev-${x.severity}`, role: 'button', tabindex: 0, ...activate(() => openModal('insight', { key: x.key })) },
+      h('span', { class: 'sev' }, x.severity === 'crit' ? 'crit' : x.severity),
+      h('span', { class: 'i-main' }, h('div', { class: 'i-title' }, x.title), h('div', { class: 'i-reason' }, x.reason), ev.length ? h('div', { class: 'i-ev' }, compact ? ev.slice(0, 3) : ev) : null),
+      h('span', { class: `src ${x.source === 'ai' ? 'ai' : 'rules'}` }, x.source === 'ai' ? '✦ CLAUDE' : 'RULE', h('div', { class: 'small dim' }, x.kind)));
+  }
+
+  function renderInsights() {
+    const list = allInsights();
+    const ai = (S.insights || {}).ai;
+    const st = S.ai || {};
+    for (const strip of document.querySelectorAll('.strip[data-area]')) {
+      const area = strip.dataset.area;
+      const items = list.filter((x) => x.area === area && x.kind === 'warning' && x.severity !== 'info');
+      strip.replaceChildren(...items.slice(0, 3).map((x) => insightRow(x, true)),
+        ...(items.length > 3 ? [h('button', { class: 'btn ghost ins-more', type: 'button', onclick: () => $('sec-insights').scrollIntoView({ behavior: 'smooth' }) }, `+${items.length - 3} more warnings`)] : []));
+    }
+    const warnings = list.filter((x) => x.kind === 'warning');
+    const sugg = list.filter((x) => x.kind === 'suggestion');
+    $('insights-meta').textContent = `${warnings.length} warnings · ${sugg.length} suggestions${ai && ai.generatedAt ? ` · Claude analysis ${ago(ai.generatedAt)}` : st.enabled ? ' · Claude analysis pending' : ''}`;
+    $('ai-refresh').classList.toggle('hidden', !st.enabled);
+    mount('insights',
+      ai && ai.summary ? h('div', { class: 'ai-summary' }, SPARK(), h('div', null, h('div', { class: 'small eyebrow' }, `Claude · ${ai.model || ''} · ${fmtDT(ai.generatedAt)} PKT`), markdown(ai.summary))) : null,
+      h('div', { class: 'ins-cols' },
+        h('div', null, h('h3', null, `Warnings (${warnings.length})`), warnings.length ? h('div', { class: 'ins-list' }, warnings.map((x) => insightRow(x))) : h('div', { class: 'empty' }, 'Nothing is going the wrong way')),
+        h('div', null, h('h3', null, `Suggestions (${sugg.length})`), sugg.length ? h('div', { class: 'ins-list' }, sugg.map((x) => insightRow(x))) : h('div', { class: 'empty' }, 'No suggestions right now'))));
+  }
+
+  function relatedInsights(batch, issue) {
+    return allInsights().filter((x) => (issue && x.issue === issue) || (!issue && batch && x.batch === batch)
+      || (x.evidence || []).some((e) => issue && e.link && decodeURIComponent(e.link).endsWith(`/${issue}`)));
+  }
+
+  function modalInsight(k) {
+    const x = allInsights().find((i) => i.key === k.key);
+    if (!x) { setHead('Insight', 'No longer active', ''); return h('div', { class: 'empty' }, 'This finding is no longer present in the latest data.'); }
+    setHead(`${x.source === 'ai' ? 'Claude' : 'Rule'} ${x.kind} · ${x.severity}`, x.title, `${x.area}${x.batch ? ` · ${batchName(x.batch)}` : ''}${x.issue ? ` · ${x.issue}` : ''}`);
+    return [h('div', { class: `ins sev-${x.severity}` }, h('span', { class: 'sev' }, x.severity), h('span', { class: 'i-main' }, markdown(x.reason)), h('span', { class: `src ${x.source === 'ai' ? 'ai' : 'rules'}` }, x.source === 'ai' ? '✦ CLAUDE' : 'RULE')),
+      h('div', null, h('h3', { class: 'section-title' }, 'Evidence'), h('div', { class: 'chips' }, (x.evidence || []).map((e) => { const href = safeHref(e.link); return href ? h('a', { class: 'chip click', href }, h('i'), e.label) : null; }))),
+      x.source === 'ai' ? h('div', { class: 'small muted' }, 'Generated by Claude from the dashboard data. It is advice only — the dashboard cannot take actions.') : h('div', { class: 'small muted' }, 'Deterministic rule evaluated on every refresh.'),
+      evidence(x)];
+  }
+
+  async function refreshAnalysis() {
+    const btn = $('ai-refresh');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/ai/refresh', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ops-dash' }, body: '{}' });
+      const data = await res.json().catch(() => ({}));
+      btn.textContent = res.ok ? 'Analysing…' : (data.error || 'Try later');
+      setTimeout(() => { btn.textContent = 'Re-analyse'; btn.disabled = false; load(); }, res.ok ? 45000 : 5000);
+    } catch (e) { btn.textContent = 'Re-analyse'; btn.disabled = false; }
+  }
+
   // ------------------------------------------------------------------ wiring
   function init() {
     $('bd-close').addEventListener('click', () => selectBatch(ui.batch));
@@ -1215,6 +1287,7 @@
     });
     window.addEventListener('hashchange', () => { if (ROUTE_RE.test(location.hash)) route(location.hash); });
     $('ai-fab').addEventListener('click', () => toggleChat());
+    $('ai-refresh').addEventListener('click', refreshAnalysis);
     $('ai-close').addEventListener('click', () => toggleChat(false));
     $('ai-clear').addEventListener('click', () => { chat.history = []; saveChat(); renderChat(false); });
     $('ai-form').addEventListener('submit', (e) => { e.preventDefault(); sendChat($('ai-input').value); });

@@ -53,7 +53,8 @@
       "reasoningEffort": "medium",
       "failedGate": "complete_unit",
       "changedFiles": [
-        "src/server/pharmacy/returns.ts"
+        "src/server/pharmacy/returns.ts",
+        "vitest.config.ts"
       ],
       "codexExitCode": 1,
       "steps": {

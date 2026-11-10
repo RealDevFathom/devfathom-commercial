@@ -24,7 +24,7 @@
       </div>
     </div>
     <nav class="tabs" aria-label="Sections">
-      <a href="#sec-overview">Overview</a><a href="#sec-now">Now</a><a href="#sec-next">Next</a><a href="#sec-batches">Batches</a><a href="#sec-history">History</a><a href="#sec-machine">Machine</a>
+      <a href="#sec-overview">Overview</a><a href="#sec-insights">Insights</a><a href="#sec-now">Now</a><a href="#sec-next">Next</a><a href="#sec-batches">Batches</a><a href="#sec-history">History</a><a href="#sec-machine">Machine</a>
     </nav>
     <div class="top-right">
       <div class="clock" title="Pakistan Standard Time (UTC+5)"><span id="clock">--:--:--</span><small id="clock-date">PKT</small></div>
@@ -38,15 +38,24 @@
     <!-- OVERVIEW -->
     <section id="sec-overview" class="section" aria-labelledby="h-overview">
       <div class="section-head"><div><span class="eyebrow">All time</span><h2 id="h-overview">Campaign overview</h2></div><span id="overview-meta" class="muted small"></span></div>
+      <div class="strip" data-area="overview"></div>
       <div class="hero">
         <div class="panel hero-funnel"><div class="panel-head"><h3>Pipeline funnel</h3><span class="muted small">click a stage for its tasks</span></div><div id="funnel"></div></div>
         <div id="overview" class="cards"></div>
       </div>
     </section>
 
+    <!-- INSIGHTS -->
+    <section id="sec-insights" class="section" aria-labelledby="h-insights">
+      <div class="section-head"><div><span class="eyebrow">Automatic</span><h2 id="h-insights">Warnings &amp; suggestions</h2></div>
+        <div class="dialog-actions"><span id="insights-meta" class="muted small"></span><button id="ai-refresh" class="btn ghost hidden" type="button">Re-analyse</button></div></div>
+      <div class="panel"><div id="insights"></div></div>
+    </section>
+
     <!-- NOW -->
     <section id="sec-now" class="section" aria-labelledby="h-now">
       <div class="section-head"><div><span class="eyebrow live-dot">Happening now</span><h2 id="h-now">Live activity</h2></div><span id="now-meta" class="muted small"></span></div>
+      <div class="strip" data-area="now"></div>
       <div class="grid-now">
         <div class="panel"><div class="panel-head"><h3>Codex jobs</h3><span id="codex-meta" class="muted small"></span></div><div id="codex"></div></div>
         <div class="panel"><div class="panel-head"><h3>Machine runs &amp; gates</h3><span id="gates-meta" class="muted small"></span></div><div id="gates-now"></div></div>
@@ -57,6 +66,7 @@
     <!-- NEXT -->
     <section id="sec-next" class="section" aria-labelledby="h-next">
       <div class="section-head"><div><span class="eyebrow">About to happen</span><h2 id="h-next">Up next</h2></div><span id="next-meta" class="muted small"></span></div>
+      <div class="strip" data-area="next"></div>
       <div class="grid3">
         <div class="panel"><div class="panel-head"><h3>Queued tasks</h3><span id="queue-meta" class="muted small"></span></div><div id="queue"></div></div>
         <div class="panel"><div class="panel-head"><h3>Upcoming gates</h3><span class="muted small">next step per task</span></div><div id="upcoming"></div></div>
@@ -67,6 +77,7 @@
     <!-- BATCHES -->
     <section id="sec-batches" class="section" aria-labelledby="h-batches">
       <div class="section-head"><div><span class="eyebrow">Discovered automatically</span><h2 id="h-batches">Batches</h2></div><span id="batches-meta" class="muted small"></span></div>
+      <div class="strip" data-area="batches"></div>
       <div class="panel"><div id="batches"></div></div>
       <div class="panel hidden" id="batch-detail" aria-labelledby="bd-title">
         <div class="panel-head">
@@ -98,6 +109,7 @@
     <!-- HISTORY -->
     <section id="sec-history" class="section" aria-labelledby="h-history">
       <div class="section-head"><div><span class="eyebrow">What has happened</span><h2 id="h-history">History</h2></div><span id="history-meta" class="muted small"></span></div>
+      <div class="strip" data-area="history"></div>
       <div class="panel"><div class="panel-head"><h3>Activity · last 14 days</h3><span class="muted small">click a day to filter the timeline</span></div><div id="activity"></div></div>
       <div class="grid2">
         <div class="panel"><div class="panel-head"><h3>Merges into develop</h3><span id="merges-meta" class="muted small"></span></div><div id="merges"></div></div>
@@ -109,6 +121,7 @@
     <!-- MACHINE -->
     <section id="sec-machine" class="section" aria-labelledby="h-machine">
       <div class="section-head"><div><span class="eyebrow">Infrastructure</span><h2 id="h-machine">Worker machine</h2></div><span id="worker-meta" class="muted small"></span></div>
+      <div class="strip" data-area="machine"></div>
       <div class="panel"><div id="worker"></div></div>
     </section>
   </main>

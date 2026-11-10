@@ -1,0 +1,40 @@
+{
+  "issue": "DEV-13",
+  "sourceSHA": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+  "status": "TERMINAL_EXACT_SOURCE_GATES_FAILED",
+  "fullQA": false,
+  "steps": {
+    "canonical_prisma_generate": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T11:20:00+05:00",
+      "endPKT": "2026-11-10T11:20:40+05:00",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T11:20:50+05:00",
+      "endPKT": "2026-11-10T11:25:00+05:00",
+      "exitCode": 0
+    },
+    "lint": {
+      "status": "PASS",
+      "startPKT": "2026-11-10T11:25:10+05:00",
+      "endPKT": "2026-11-10T11:27:00+05:00",
+      "exitCode": 0
+    },
+    "complete_unit": {
+      "status": "FAIL",
+      "startPKT": "2026-11-10T11:27:10+05:00",
+      "endPKT": "2026-11-10T11:48:00+05:00",
+      "exitCode": 1,
+      "numPassedTests": 4120,
+      "numFailedTests": 7,
+      "failedFiles": [
+        "src/server/pharmacy/returns.test.ts",
+        "src/lib/money.test.ts"
+      ]
+    }
+  },
+  "startPKT": "2026-11-10T11:20:00+05:00",
+  "endPKT": "2026-11-10T11:48:00+05:00"
+}

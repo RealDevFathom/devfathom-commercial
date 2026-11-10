@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sanitize import sanitize  # noqa: E402
 from ai import AIError, AIService  # noqa: E402
+from insights import rule_insights  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(HERE, "static")
@@ -314,7 +315,7 @@ def build_state(snapshot, now=None, ai=None):
                     {"batch": b["id"], "issue": t["issue"], "status": t.get("nextGateStatus"), "phase": t.get("phase")})
     gates_now.sort(key=lambda g: g.get("start") or 0)
 
-    return {
+    state = {
         "serverTime": now,
         "now": {"gates": gates_now},
         "next": {"queue": queue, "upcoming": upcoming, "pipeline": list(PIPELINE)},
@@ -336,6 +337,17 @@ def build_state(snapshot, now=None, ai=None):
         "limits": {"spotCap": SPOT_CAP, "usageStop": USAGE_STOP, "diskAlert": DISK_ALERT,
                    "reserveBytes": RESERVE_BYTES, "staleAfter": STALE_AFTER},
     }
+    try:
+        rules = rule_insights(state, now)
+    except Exception as exc:  # a bad payload must never break the dashboard
+        log(f"rule insights failed: {type(exc).__name__}")
+        rules = []
+    analysis = (ai.analysis if ai else None) or {}
+    state["insights"] = {
+        "rules": rules,
+        "ai": {k: analysis.get(k) for k in ("generatedAt", "model", "summary", "warnings", "suggestions")} if analysis else None,
+    }
+    return state
 
 
 def compute_alerts(worker, box, sources):
@@ -540,6 +552,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, ai.chat([m for m in history if isinstance(m, dict)]))
             except AIError as exc:
                 return self.send_json(503, {"error": str(exc)})
+        if path == "/api/ai/refresh":
+            if ai.request_refresh():
+                return self.send_json(202, {"ok": True, "message": "analysis started"})
+            return self.send_json(429, {"error": f"analysis was refreshed recently; try again in a few minutes"})
         return self.send(404, "not found", api=True)
 
     def do_POST(self):
@@ -605,6 +621,7 @@ def main():
         log("WARNING: INGEST_TOKEN not set - ingest is disabled (fail closed)")
     port = int(os.environ.get("PORT", "8080"))
     srv = make_server(os.environ.get("BIND", "0.0.0.0"), port, cfg, os.environ.get("DATA_DIR", "/tmp/dash"))
+    srv.ai.start_background()
     log(f"listening on :{port} · AI {'enabled (' + srv.ai.model + ')' if srv.ai.enabled else 'disabled (no ANTHROPIC_API_KEY)'}")
     try:
         srv.serve_forever()
