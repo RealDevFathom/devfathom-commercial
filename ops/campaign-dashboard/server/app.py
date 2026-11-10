@@ -55,6 +55,77 @@ PIPELINE = REQUIRED_GATES + ("final_sha", "merged", "gh", "linear")
 MAX_EVENTS = 1500
 
 
+META_GATES = {"merged", "linear", "gh", "final_sha", "differential"}
+GATE_NAMES = {"prisma": "Prisma", "typecheck": "Typecheck", "lint": "Lint", "complete_unit": "Unit", "host_build": "Build",
+              "docker": "Docker", "differential": "Differential", "qa_browser": "QA", "security": "Security"}
+
+
+def verdict(t):
+    """The single truthful status for a task (mirrored in the UI and given to Claude).
+
+    PASSED/MERGED/DONE only when every required gate passed on the exact final SHA and nothing failed.
+    Any failed gate (complete_unit counts unless the differential vs baseline passes) is FAILED and named.
+    """
+    g = t.get("gates") or {}
+    diff_pass = (g.get("differential") or {}).get("status") == "PASS"
+    fails = [k for k, v in g.items() if k not in META_GATES and isinstance(v, dict) and v.get("status") == "FAIL"
+             and not (k == "complete_unit" and diff_pass)]
+    if (g.get("differential") or {}).get("status") == "FAIL":
+        fails.append("differential")
+    blocked = [k for k, v in g.items() if k not in META_GATES and isinstance(v, dict) and v.get("status") == "BLOCKED"]
+    on_final = (g.get("final_sha") or {}).get("status") == "PASS"
+    passed = bool(t.get("gated")) and on_final and not fails and not blocked
+    name = lambda ks: ", ".join(GATE_NAMES.get(k, k) for k in ks)  # noqa: E731
+    if t.get("running"):
+        step = t.get("currentStep")
+        return {"key": "running", "label": f"Running {GATE_NAMES.get(step, step)}" if step else "Running"}
+    if fails:
+        return {"key": "failed", "label": f"Failed: {name(fails)}", "gates": fails}
+    if blocked or t.get("phase") == "blocked":
+        return {"key": "blocked", "label": f"Blocked: {name(blocked)}" if blocked else "Blocked", "gates": blocked}
+    if passed and t.get("done"):
+        return {"key": "done", "label": "Done"}
+    if passed and t.get("merged"):
+        return {"key": "merged", "label": "Merged"}
+    if passed:
+        return {"key": "passed", "label": "Passed on final SHA"}
+    if t.get("phase") == "failed":
+        fg = t.get("failedGate")
+        return {"key": "failed", "label": f"Failed: {GATE_NAMES.get(fg, fg)}" if fg else "Failed: Codex", "gates": [fg] if fg else ["codex"]}
+    if t.get("phase") == "pending":
+        return {"key": "queued", "label": "Queued"}
+    if t.get("fixed"):
+        return {"key": "gates", "label": "Awaiting gates"}
+    return {"key": "pending", "label": "Pending"}
+
+
+def _sha_match(a, b):
+    a, b = (a or "").lower(), (b or "").lower()
+    n = min(len(a), len(b))
+    return n >= 7 and a[:n] == b[:n]
+
+
+def match_merge(candidates, final_sha, since):
+    """Pick the PR that merged THIS task's final SHA into develop during the campaign.
+
+    Returns (merge, mismatch): merge is set only for a verified match; mismatch describes the newest
+    PR that references the issue but merged a different SHA, merged before the campaign, or has no head SHA.
+    """
+    verified, mismatch = None, None
+    for pr in sorted(candidates, key=lambda p: p.get("mergedAt") or 0, reverse=True):
+        head = pr.get("headSha")
+        info = {k: pr.get(k) for k in ("number", "title", "mergedAt", "sha", "headSha")}
+        if since and (pr.get("mergedAt") or 0) < since:
+            mismatch = mismatch or dict(info, reason="merged before this batch started")
+        elif not head:
+            mismatch = mismatch or dict(info, reason="PR head SHA unknown (box collector too old)")
+        elif not final_sha or not (_sha_match(head, final_sha) or _sha_match(pr.get("sha"), final_sha)):
+            mismatch = mismatch or dict(info, reason=f"PR merged {str(head)[:10]}, task final SHA is {str(final_sha or 'unknown')[:10]}")
+        elif verified is None:
+            verified = info
+    return verified, (None if verified else mismatch)
+
+
 def next_gate(gates):
     """First pipeline step (gates -> merge -> closure) that has not passed yet."""
     for key in PIPELINE:
@@ -192,18 +263,19 @@ def build_state(snapshot, now=None, ai=None):
     linear_ok = bool(linear.get("available"))
     lstates = linear.get("states") or {}
 
-    merged_by_issue, titles = {}, {}
+    prs_by_issue, titles = {}, {}
     for pr in github.get("merged") or []:
         for issue in pr.get("issues") or []:
-            cur = merged_by_issue.get(issue)
-            if not cur or (pr.get("mergedAt") or 0) > (cur.get("mergedAt") or 0):
-                merged_by_issue[issue] = {k: pr.get(k) for k in ("number", "title", "mergedAt", "sha")}
+            prs_by_issue.setdefault(issue, []).append(pr)
             titles.setdefault(issue, pr.get("title"))
     closed_by_issue = {}
     for it in github.get("closedIssues") or []:
         for issue in it.get("issues") or []:
             closed_by_issue.setdefault(issue, {k: it.get(k) for k in ("number", "title", "closedAt")})
             titles[issue] = it.get("title") or titles.get(issue)
+    for issue, st in lstates.items():  # Linear is the source of truth for titles
+        if isinstance(st, dict) and st.get("title"):
+            titles[issue] = st["title"]
 
     best = {}
     batches = []
@@ -217,12 +289,14 @@ def build_state(snapshot, now=None, ai=None):
             issue = t["issue"]
             t = dict(t)
             gates = dict(t.get("gates") or {})
-            merge = merged_by_issue.get(issue)
+            final_full = t.get("finalSHA")
+            merge, mismatch = match_merge(prs_by_issue.get(issue) or [], final_full, b.get("start"))
             gh = closed_by_issue.get(issue)
             lin = lstates.get(issue)
             linear_closed = (lin or {}).get("type") in ("completed", "canceled") if linear_ok else None
             gates["merged"] = {"status": "PASS" if merge else "PENDING",
-                               **({"pr": merge["number"], "sha": (merge.get("sha") or "")[:10]} if merge else {})}
+                               **({"pr": merge["number"], "sha": (merge.get("headSha") or "")[:10]} if merge else {}),
+                               **({"note": f"PR #{mismatch['number']} not counted: {mismatch['reason']}"} if mismatch else {})}
             gates["linear"] = {"status": "PASS" if linear_closed else ("PENDING" if linear_ok else "SKIP"),
                                **({"state": lin.get("state")} if lin else {})}
             gates["gh"] = {"status": "PASS" if gh else "PENDING", **({"number": gh["number"]} if gh else {})}
@@ -230,22 +304,23 @@ def build_state(snapshot, now=None, ai=None):
             t["gates"] = gates
             t["title"] = titles.get(issue)
             t["merge"] = merge
+            t["mergeMismatch"] = mismatch
             t["ghIssue"] = gh
             t["linear"] = lin
             t["merged"] = bool(merge)
             t["ghClosed"] = bool(gh)
             t["linearClosed"] = linear_closed
-            t["done"] = bool(t.get("gated")) and bool(merge) and issues_closed
+            t["done"] = False
+            t["done"] = verdict(t)["key"] in ("passed", "merged") and bool(merge) and issues_closed
+            t["verdict"] = verdict(t)
             t["nextGate"], t["nextGateStatus"] = (None, None) if t["done"] else next_gate(gates)
-            if t["done"]:
-                t["phase"] = "done"
-            elif merge and t.get("phase") not in ("running",):
-                t["phase"] = "merged"
+            if t["verdict"]["key"] in ("done", "merged", "failed"):
+                t["phase"] = t["verdict"]["key"]
             tasks.append(t)
             agg = best.setdefault(issue, {"fixed": False, "gated": False, "merged": False, "linear": False,
                                           "gh": False, "done": False})
             agg["fixed"] |= bool(t.get("fixed"))
-            agg["gated"] |= bool(t.get("gated"))
+            agg["gated"] |= t["verdict"]["key"] in ("passed", "merged", "done")
             agg["merged"] |= t["merged"]
             agg["linear"] |= bool(linear_closed)
             agg["gh"] |= t["ghClosed"]

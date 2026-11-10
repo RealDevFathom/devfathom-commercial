@@ -42,7 +42,9 @@ SYSTEM_PROMPT = """You are the analyst inside the DevFathom campaign ops dashboa
 Linear/GitHub issues (ids like DEV-123) in batches; each task must pass machine gates (prisma generate, typecheck, \
 lint, complete_unit, host_build, docker build contract, a differential unit check against the batch baseline, \
 optionally QA/browser and security) on its final SHA, be merged into `develop`, and have its GitHub and Linear issues \
-closed. A task is "done" only when all of that holds. Batches are job roots on the worker; runs inside them are \
+closed. A task is "done" only when all of that holds. Each task carries a `verdict` (status): trust it. PASSED means every \
+required gate passed on the exact final SHA; FAILED names the failing gate; MERGED means this task's own final SHA was \
+merged into develop during the campaign (a PR that merely mentions the issue does not count, see mergeMismatch). Batches are job roots on the worker; runs inside them are \
 codex-*, gates-* and baseline-* directories.
 
 You are strictly read-only. You can look at data through the provided tools and nothing else. You cannot start, \
@@ -174,7 +176,8 @@ def _with_times(obj, depth=0):
 
 def _compact_task(t):
     gates = {k: (v or {}).get("status") for k, v in (t.get("gates") or {}).items()}
-    return {"issue": t.get("issue"), "title": t.get("title"), "phase": t.get("phase"), "nextGate": t.get("nextGate"),
+    return {"issue": t.get("issue"), "title": t.get("title"), "status": (t.get("verdict") or {}).get("label"),
+            "phase": t.get("phase"), "nextGate": t.get("nextGate"),
             "finalSHA": t.get("finalSHA"), "model": t.get("model"), "gates": gates, "last": t.get("last"),
             "merged": t.get("merged"), "done": t.get("done")}
 

@@ -152,9 +152,10 @@ def rule_insights(state, now=None):
             last = _num(t.get("last"))
             if phase not in ("done", "pending", "running") and last and now - last > IDLE_TASK_SEC:
                 idle.append(t)
-            if t.get("gated") and not t.get("merged") and last and now - last > READY_TO_MERGE_SEC:
+            vkey = (t.get("verdict") or {}).get("key")
+            if vkey == "passed" and last and now - last > READY_TO_MERGE_SEC:
                 ready.append(t)
-            if t.get("merged") and not t.get("done") and t.get("gated"):
+            if vkey == "merged":
                 unclosed.append(t)
             if phase == "blocked":
                 blocked.append(t)

@@ -1001,8 +1001,11 @@
     const rel = relatedInsights(b.id, t.issue);
     const linear = t.linearClosed === null ? 'Not configured' : t.linear ? `${t.linear.state}${t.linearClosed ? ', closed' : ''}` : 'Unknown';
     const w = Math.min(1080, window.innerWidth - 24) - 42;
+    const mm = t.mergeMismatch;
     return [
       verdictBox(t, st),
+      mm ? h('div', { class: 'verdict' }, icon('warning'), h('div', null, h('b', null, `PR #${mm.number} not counted as this task's merge. `), `${mm.reason}. `,
+        h('a', { href: `#pr=${mm.number}` }, 'Open PR detail'))) : null,
       rel.length ? h('div', { class: 'stack-sm' }, rel.map((x) => insightCard(x, true))) : null,
       h('dl', { class: 'kv' },
         kv('Batch', h('a', { href: `#batch=${encodeURIComponent(b.id)}` }, b.label || b.id)), kv('Source SHA', sha(t.sourceSHA, 10)), kv('Final SHA', sha(t.finalSHA, 10)),

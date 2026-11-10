@@ -225,6 +225,7 @@ def collect_github(repo, now, days=30):
                 out["merged"].append({
                     "number": pr.get("number"), "title": (pr.get("title") or "")[:200],
                     "mergedAt": merged_at, "sha": pr.get("merge_commit_sha"),
+                    "headSha": (pr.get("head") or {}).get("sha"),
                     "issues": refs(pr.get("title"), (pr.get("head") or {}).get("ref"), pr.get("body")),
                 })
         if len(pulls) < 100 or (iso_ts(pulls[-1].get("updated_at")) or 0) < cutoff:
@@ -286,7 +287,7 @@ def collect_linear(identifiers):
     states = {}
     for chunk_start in range(0, len(ids), 50):
         chunk = ids[chunk_start:chunk_start + 50]
-        parts = [f'q{n}: issue(id: "{ident}") {{ identifier state {{ name type }} completedAt canceledAt }}'
+        parts = [f'q{n}: issue(id: "{ident}") {{ identifier title state {{ name type }} completedAt canceledAt }}'
                  for n, ident in enumerate(chunk)]
         try:
             res = linear_query(api_key, "query {\n" + "\n".join(parts) + "\n}")
@@ -296,7 +297,7 @@ def collect_linear(identifiers):
         for val in (res.get("data") or {}).values():
             if isinstance(val, dict) and val.get("identifier"):
                 st = val.get("state") or {}
-                states[val["identifier"]] = {"state": st.get("name"), "type": st.get("type"),
+                states[val["identifier"]] = {"title": (val.get("title") or "")[:200], "state": st.get("name"), "type": st.get("type"),
                                              "completedAt": iso_ts(val.get("completedAt")),
                                              "canceledAt": iso_ts(val.get("canceledAt"))}
     return {"available": True, "states": states}

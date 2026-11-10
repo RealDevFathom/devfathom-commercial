@@ -96,12 +96,13 @@ class ServerTests(unittest.TestCase):
 
     def test_ingest_sanitizes_persists_and_merges(self):
         worker = {"batches": [{"id": "b1", "label": "B1", "tasks": [
-            {"issue": "DEV-15", "phase": "gated", "gated": True, "fixed": True, "gates": {"prisma": {"status": "PASS"}},
+            {"issue": "DEV-15", "phase": "gated", "gated": True, "fixed": True, "finalSHA": "abcdef1234",
+             "gates": {"prisma": {"status": "PASS"}, "final_sha": {"status": "PASS", "sha": "abcdef1234"}},
              "note": "see 10.1.2.3", "secretThing": "x"}]}],
             "codex": {"activeCount": 2, "cap": 50}, "system": {"cores": 4, "disks": {"/workspace": {"pct": 91, "freeBytes": 1}}},
             "killSwitch": {"pass": False}, "usage": {"weeklyPct": 96}}
         box = {"repo": "RealDevFathom/devfathom-commercial", "workers": [{"instanceId": "i-1", "state": "running", "spotPrice": 3.1}],
-               "github": {"merged": [{"number": 7, "title": "fix DEV-15", "mergedAt": 1, "sha": "abc", "issues": ["DEV-15"]}],
+               "github": {"merged": [{"number": 7, "title": "fix DEV-15", "mergedAt": 1, "sha": "abc", "headSha": "abcdef1234567890", "issues": ["DEV-15"]}],
                           "closedIssues": [{"number": 8, "title": "DEV-15", "closedAt": 2, "issues": ["DEV-15"]}]},
                "linear": {"available": True, "states": {"DEV-15": {"state": "Done", "type": "completed"}}}}
         self.assertEqual(self.ingest("worker", worker)[0].status, 200)

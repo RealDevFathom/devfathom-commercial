@@ -33,7 +33,8 @@
         "sha": "1906b53aa1b2c3d4",
         "issues": [
           "DEV-15"
-        ]
+        ],
+        "headSha": "e5f60718293a4b5c6d7e8f90123456789abcdef0"
       },
       {
         "number": 990,
@@ -42,6 +43,17 @@
         "sha": "88aa77bb66cc55dd",
         "issues": [
           "DEV-20"
+        ],
+        "headSha": "f60718293a4b5c6d7e8f90123456789abcdef012"
+      },
+      {
+        "number": 985,
+        "title": "wip(DEV-12): early pharmacy batch fix",
+        "mergedAt": 1794270000,
+        "sha": "77aa66bb55cc44dd",
+        "headSha": "9999aaaa8888bbbb7777cccc6666dddd5555eeee",
+        "issues": [
+          "DEV-12"
         ]
       }
     ],
@@ -67,17 +79,55 @@
   "linear": {
     "available": true,
     "states": {
+      "DEV-10": {
+        "title": "Counter page loses cart on refresh",
+        "state": "In Progress",
+        "type": "started"
+      },
+      "DEV-11": {
+        "title": "Batch expiry badge shows wrong colour",
+        "state": "In Progress",
+        "type": "started"
+      },
+      "DEV-12": {
+        "title": "Pharmacy batch totals ignore returns",
+        "state": "In Review",
+        "type": "started"
+      },
+      "DEV-13": {
+        "title": "Returns flow double counts refunds",
+        "state": "In Progress",
+        "type": "started"
+      },
+      "DEV-14": {
+        "title": "Supplier link page crashes without a DB",
+        "state": "Todo",
+        "type": "unstarted"
+      },
       "DEV-15": {
+        "title": "Purchasing procedures lack capability checks",
         "state": "Done",
         "type": "completed"
       },
       "DEV-20": {
+        "title": "Review counter totals drift after midnight",
         "state": "Done",
         "type": "completed"
       },
-      "DEV-12": {
+      "DEV-21": {
+        "title": "Counter smoke test flakes on slow printers",
         "state": "In Review",
         "type": "started"
+      },
+      "DEV-101": {
+        "title": "Counter v2: split tender payments",
+        "state": "In Progress",
+        "type": "started"
+      },
+      "DEV-102": {
+        "title": "Counter v2: barcode scan to cart",
+        "state": "Todo",
+        "type": "unstarted"
       }
     }
   }
