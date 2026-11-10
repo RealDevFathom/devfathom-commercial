@@ -30,6 +30,9 @@ export function LoginForm({
   initialError?: LoginErrorKey;
 }) {
   const errorId = useId();
+  const emailErrorId = useId();
+  const passwordErrorId = useId();
+  const [requiredErrors, setRequiredErrors] = useState({ email: false, password: false });
   const router = useRouter();
   const hydrated = useHydrated();
   const [showPassword, setShowPassword] = useState(false);
@@ -133,15 +136,18 @@ export function LoginForm({
 
   return (
     <>
-      {error && (
-        <div
-          id={errorId}
-          role="alert"
-          className="mb-5 rounded-[var(--radius-sm)] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-        >
-          {error}
-        </div>
-      )}
+      {/* Reserve two text-sm lines, py-3 padding, and both borders. */}
+      <div className="mb-5 min-h-[calc(4rem+2px)]">
+        {error && (
+          <div
+            id={errorId}
+            role="alert"
+            className="rounded-[var(--radius-sm)] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          >
+            {error}
+          </div>
+        )}
+      </div>
 
       {connections.length ? (
         <div className="mb-6 space-y-2">
@@ -191,11 +197,15 @@ export function LoginForm({
               autoFocus
               name="email"
               required
-              aria-invalid={invalidFields === 'credentials' || undefined}
-              aria-describedby={invalidFields === 'credentials' ? errorId : undefined}
-              onChange={() => clearError('credentials')}
+              aria-invalid={requiredErrors.email || invalidFields === 'credentials' || undefined}
+              aria-describedby={requiredErrors.email ? emailErrorId : invalidFields === 'credentials' ? errorId : undefined}
+              onInvalid={(event) => {
+                if (event.currentTarget.validity.valueMissing) setRequiredErrors((errors) => ({ ...errors, email: true }));
+              }}
+              onChange={() => { setRequiredErrors((errors) => ({ ...errors, email: false })); clearError('credentials'); }}
               className={inputClass}
             />
+            {requiredErrors.email && <p id={emailErrorId} className="text-sm text-destructive">Email is required</p>}
           </div>
 
           <div className="space-y-2">
@@ -212,11 +222,15 @@ export function LoginForm({
               autoComplete="current-password"
               name="password"
               required
-              aria-invalid={invalidFields === 'credentials' || undefined}
-              aria-describedby={invalidFields === 'credentials' ? errorId : undefined}
-              onChange={() => clearError('credentials')}
+              aria-invalid={requiredErrors.password || invalidFields === 'credentials' || undefined}
+              aria-describedby={requiredErrors.password ? passwordErrorId : invalidFields === 'credentials' ? errorId : undefined}
+              onInvalid={(event) => {
+                if (event.currentTarget.validity.valueMissing) setRequiredErrors((errors) => ({ ...errors, password: true }));
+              }}
+              onChange={() => { setRequiredErrors((errors) => ({ ...errors, password: false })); clearError('credentials'); }}
               className={inputClass}
             />
+            {requiredErrors.password && <p id={passwordErrorId} className="text-sm text-destructive">Password is required</p>}
             <div className="text-end">
               <a
                 href="/forgot-password"

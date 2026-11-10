@@ -14,6 +14,7 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/components/app-providers', () => ({ AppProviders: () => null }));
 
 import { LoginForm } from '@/app/login/login-form';
+import { SharedLoginForm } from '@/app/login/shared-login-form';
 import { PlatformLoginForm } from '@/app/platform/(auth)/login/platform-login-form';
 
 function expectCredentialError(
@@ -39,6 +40,83 @@ describe('login credential error accessibility', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
+
+  it.each(['tenant', 'shared-host'] as const)(
+    'shows and associates required field errors on empty %s submission',
+    (flow) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      render(
+        flow === 'tenant' ? (
+          <LoginForm connections={[]} ssoEnforced={false} callbackUrl="/dashboard" />
+        ) : (
+          <SharedLoginForm callbackUrl="/dashboard" />
+        )
+      );
+
+      const email = screen.getByLabelText('Email');
+      const password = screen.getByLabelText('Password');
+      fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+      const emailError = screen.getByText('Email is required');
+      const passwordError = screen.getByText('Password is required');
+      expect(emailError.id).not.toBe('');
+      expect(passwordError.id).not.toBe('');
+      expect(email).toHaveAttribute('aria-invalid', 'true');
+      expect(password).toHaveAttribute('aria-invalid', 'true');
+      expect(email).toHaveAttribute('aria-describedby', emailError.id);
+      expect(password).toHaveAttribute('aria-describedby', passwordError.id);
+      expect(mocks.signIn).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      fireEvent.change(email, { target: { value: 'owner@example.invalid' } });
+      expect(screen.queryByText('Email is required')).not.toBeInTheDocument();
+      expect(email).not.toHaveAttribute('aria-describedby');
+      expect(password).toHaveAttribute('aria-describedby', passwordError.id);
+      fireEvent.change(password, { target: { value: 'password' } });
+      expect(screen.queryByText('Password is required')).not.toBeInTheDocument();
+      expect(password).not.toHaveAttribute('aria-describedby');
+    }
+  );
+
+  it.each(['tenant', 'shared-host'] as const)(
+    'keeps the two-line banner reservation before and after a %s sign-in error',
+    async (flow) => {
+      if (flow === 'tenant') {
+        mocks.signIn.mockRejectedValueOnce(new Error('network unavailable'));
+      } else {
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('network unavailable')));
+      }
+      render(
+        flow === 'tenant' ? (
+          <LoginForm connections={[]} ssoEnforced={false} callbackUrl="/dashboard" />
+        ) : (
+          <SharedLoginForm callbackUrl="/dashboard" />
+        )
+      );
+
+      const form = screen.getByRole('button', { name: 'Sign in' }).closest('form')!;
+      const slot = form.previousElementSibling;
+      // JSDOM does not lay out text: assert the two-line height budget and persistent slot.
+      expect(slot).toHaveClass('mb-5', 'min-h-[calc(4rem+2px)]');
+      expect(slot).toBeEmptyDOMElement();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText('Email'), {
+        target: { value: 'owner@example.invalid' },
+      });
+      fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'password' } });
+      fireEvent.submit(form);
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(
+        'Unable to sign in right now. Please check your connection and try again.'
+      );
+      expect(alert.parentElement).toBe(slot);
+      expect(form.previousElementSibling).toBe(slot);
+      expect(slot).toHaveClass('mb-5', 'min-h-[calc(4rem+2px)]');
+    }
+  );
 
   it.each(['default', 'restaurant', 'pharmacy', 'hotel', 'agency'] as const)(
     'associates a server-rendered %s tenant sign-in failure with both credential fields',

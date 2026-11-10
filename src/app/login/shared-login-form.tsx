@@ -73,6 +73,9 @@ export function SharedLoginForm({
   const router = useRouter();
   const hydrated = useHydrated();
   const errorId = useId();
+  const emailErrorId = useId();
+  const passwordErrorId = useId();
+  const [requiredErrors, setRequiredErrors] = useState({ email: false, password: false });
   const [stage, setStage] = useState<Stage>('credentials');
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [showPassword, setShowPassword] = useState(false);
@@ -245,7 +248,8 @@ export function SharedLoginForm({
     return (
       <>
         {header}
-        {alert}
+        {/* Reserve two text-sm lines, py-3 padding, and both borders. */}
+        <div className="mb-5 min-h-[calc(4rem+2px)] [&>[role=alert]]:mb-0">{alert}</div>
         {/* WHA-1623: `action` is the no-JavaScript path. Once hydrated,
             onSubmitCredentials prevents it and the two-step flow runs unchanged. */}
         <form
@@ -268,10 +272,15 @@ export function SharedLoginForm({
               autoFocus
               name="email"
               required
-              aria-invalid={Boolean(error)}
-              aria-describedby={error ? errorId : undefined}
+              aria-invalid={requiredErrors.email || Boolean(error)}
+              aria-describedby={requiredErrors.email ? emailErrorId : error ? errorId : undefined}
+              onInvalid={(event) => {
+                if (event.currentTarget.validity.valueMissing) setRequiredErrors((errors) => ({ ...errors, email: true }));
+              }}
+              onChange={() => setRequiredErrors((errors) => ({ ...errors, email: false }))}
               className={inputClass}
             />
+            {requiredErrors.email && <p id={emailErrorId} className="text-sm text-destructive">Email is required</p>}
           </div>
 
           <div className="space-y-2">
@@ -288,10 +297,15 @@ export function SharedLoginForm({
               autoComplete="current-password"
               name="password"
               required
-              aria-invalid={Boolean(error)}
-              aria-describedby={error ? errorId : undefined}
+              aria-invalid={requiredErrors.password || Boolean(error)}
+              aria-describedby={requiredErrors.password ? passwordErrorId : error ? errorId : undefined}
+              onInvalid={(event) => {
+                if (event.currentTarget.validity.valueMissing) setRequiredErrors((errors) => ({ ...errors, password: true }));
+              }}
+              onChange={() => setRequiredErrors((errors) => ({ ...errors, password: false }))}
               className={inputClass}
             />
+            {requiredErrors.password && <p id={passwordErrorId} className="text-sm text-destructive">Password is required</p>}
             <div className="text-end">
               <a
                 href="/forgot-password"
