@@ -10,6 +10,7 @@ import {
 import { listPurchaseReturns, listSupplierCredits } from '@/lib/pharmacy/purchasing-console';
 import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
 import { PHARMACY_METRIC_CONTRACT, readPharmacyOwnerCommandCentre } from '@/lib/pharmacy/reports';
+import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
 
 import {
   grossMarginComparison,
@@ -143,6 +144,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
       },
     }),
     askPharmacyWorkPacks: pharmacyWorkPackTool(h),
+    askPharmacyCashCloseCheck: cashCloseCheckTool(h),
     askPharmacyFinanceInsights: tool({
       description:
         'Read-only owner pharmacy inventory-capital or leakage explanations for one exact active branch. Ledger book value is not cash or recoverable savings. Unsupported breakdowns and currency remain unknown. No clinical advice, patient data, purchases or provider calls.',
@@ -601,6 +603,111 @@ const workPackInput = z
       ),
   })
   .strict();
+
+const cashCloseCheckInput = z
+  .object({
+    branch: z
+      .string()
+      .trim()
+      .min(1)
+      .max(128)
+      .describe('One exact active tenant branch id or name. Multi-branch scope is unsupported.'),
+    businessDate: z.iso.date().describe('The pharmacy business date to check (YYYY-MM-DD).'),
+  })
+  .strict();
+
+/**
+ * #728 — owner-only AI narrative over the cash-close anomaly rules. The model
+ * narrates the returned rule findings; it never decides them. Read-only: no day
+ * lock, no signal, posting, reopen, notification or provider call.
+ *
+ * Licensing is deliberate, not incidental: like every Ask Fathom pharmacy report
+ * tool this one is gated by the `pharmacy-reports` module, while the day-close
+ * panel (`pharmacySales.closeAnomalyCheck`) sits on the counter close screen and
+ * is gated by `pharmacy-counter` with the rest of that router. A tenant licensed
+ * for only one of the two sees the check only on that surface; both enforce the
+ * same owner-only and `reports:financial` rules over the same reader.
+ */
+function cashCloseCheckTool(h: AssistantHelpers) {
+  return tool({
+    description:
+      'Read-only owner check of one Pharmacy branch business-day cash close: close and drawer variance, refunds, unmatched refunds and voids, with rule findings and a narrative. Narrate only the returned findings and numbers. It never posts, reopens a close, contacts staff, or decides misconduct.',
+    inputSchema: cashCloseCheckInput,
+    execute: async (input) => {
+      try {
+        if (
+          !h.ctx.enabledModules?.includes('pharmacy-reports') ||
+          h.ctx.role !== 'ADMIN' ||
+          !(await h.can('reports:financial'))
+        )
+          return { kind: 'refusal', message: REFUSAL };
+        const parsed = cashCloseCheckInput.safeParse(input);
+        const invalid = {
+          kind: 'invalid_input',
+          message: 'Use one exact branch and a nonfuture business date.',
+        } as const;
+        if (!parsed.success) return invalid;
+        // "Future" is judged in the workspace's own zone: at 01:00 in Karachi the
+        // pharmacy is already on a day UTC has not reached.
+        const organization = await h.db.organization.findUnique({
+          where: { id: h.ctx.organizationId },
+          select: { timezone: true },
+        });
+        if (parsed.data.businessDate > workspaceToday(organization?.timezone)) return invalid;
+        const branches = await h.db.pharmacyBranch.findMany({
+          where: { organizationId: h.ctx.organizationId, active: true },
+          orderBy: { name: 'asc' },
+          select: { id: true, name: true },
+        });
+        const selected = branches.filter(
+          (row) =>
+            row.id === parsed.data.branch ||
+            row.name.toLowerCase() === parsed.data.branch.toLowerCase()
+        );
+        if (selected.length !== 1) return { kind: 'refusal', message: REFUSAL };
+        const branchId = selected[0].id;
+        const check = await readPharmacyCashCloseCheck(
+          h.db,
+          { organizationId: h.ctx.organizationId, branchId },
+          new Date(`${parsed.data.businessDate}T00:00:00.000Z`),
+          { anonymizeStaff: true }
+        );
+        return {
+          kind: 'answer',
+          scope: { organizationId: h.ctx.organizationId, branchIds: [branchId] },
+          businessDate: check.businessDate,
+          closed: check.closed,
+          policyVersion: check.policyVersion,
+          moneyUnit: 'integer_minor' as const,
+          currency: check.currency,
+          totals: check.totals,
+          findings: check.findings.map((finding) => ({
+            kind: finding.kind,
+            severity: finding.severity,
+            exactNumbers: finding.exactNumbers,
+            explanation: finding.explanation,
+          })),
+          narrative: check.narrative,
+          freshness: {
+            retrievedAt: new Date().toISOString(),
+            limitation: check.closed
+              ? 'Read from the latest recorded Z report and the day ledger.'
+              : 'The day is still open; figures are a live preview and may change.',
+          },
+          // Open the close console on this exact branch and business day, not today/first branch.
+          drillThrough: `/pharmacy/counter/close?${new URLSearchParams({
+            branch: branchId,
+            date: parsed.data.businessDate,
+          })}`,
+          instruction:
+            'Narrate only these findings and numbers, keeping severity, policy version and the open/closed status. Findings are review prompts, not proof of theft or misconduct; never name a cause or accuse a person. Do not offer to post, reopen, adjust or message anyone.',
+        };
+      } catch {
+        return { kind: 'unavailable', message: UNAVAILABLE };
+      }
+    },
+  });
+}
 
 function pharmacyWorkPackTool(h: AssistantHelpers) {
   return tool({

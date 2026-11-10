@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   sessionStatus: 'authenticated',
   sessionRevoked: false,
   organizationId: 'org',
+  branches: [{ id: 'b', name: 'Main' }],
   loading: false,
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
@@ -14,6 +15,10 @@ const mocks = vi.hoisted(() => ({
   printZReport: vi.fn(),
   /** The zone the workspace has stored. */
   zone: '',
+  /** Findings the read-only cash-close check returns for a closed day. */
+  checkFindings: [] as Array<{ kind: string; severity: string; explanation: string }>,
+  /** The error the cash-close check query returns, if any. */
+  checkError: null as { message: string; data?: { code: string } } | null,
 }));
 /**
  * The workspace's zone in these fixtures: neither Asia/Karachi (which the screen
@@ -43,7 +48,7 @@ vi.mock('@/lib/trpc', () => ({
     pharmacySales: {
       counterBranches: {
         useQuery: () => ({
-          data: { branches: [{ id: 'b', name: 'Main' }], currency: 'USD', timezone: mocks.zone },
+          data: { branches: mocks.branches, currency: 'USD', timezone: mocks.zone },
           isSuccess: true,
         }),
       },
@@ -78,6 +83,20 @@ vi.mock('@/lib/trpc', () => ({
         },
       },
       closeDay: { useMutation: () => ({ mutate: mocks.mutate, reset: vi.fn() }) },
+      closeAnomalyCheck: {
+        useQuery: () => ({
+          isLoading: false,
+          error: mocks.checkError,
+          refetch: vi.fn(),
+          data: mocks.checkError
+            ? undefined
+            : {
+                policyVersion: 'CC01-2026-11-01',
+                narrative: 'Cash-close check for 2026-09-29 (closed). No rule flagged this close.',
+                findings: mocks.checkFindings,
+              },
+        }),
+      },
     },
   },
 }));
@@ -97,9 +116,12 @@ beforeEach(() => {
   mocks.sessionStatus = 'authenticated';
   mocks.sessionRevoked = false;
   mocks.organizationId = 'org';
+  mocks.branches = [{ id: 'b', name: 'Main' }];
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
+  mocks.checkFindings = [];
+  mocks.checkError = null;
   mocks.mutate.mockReset();
   mocks.previewInput.mockReset();
   mocks.printZReport.mockReset();
@@ -318,5 +340,73 @@ describe('day-close console', () => {
         varianceNote: 'Short by one dollar',
       })
     );
+  });
+  it('shows the read-only cash-close check only once the day is closed', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    expect(screen.queryByText('Cash-close check')).not.toBeInTheDocument();
+    mocks.close = {
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12400,
+      isFinal: true,
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: 'Short',
+    };
+    mocks.checkFindings = [
+      {
+        kind: 'UNMATCHED_REFUNDS',
+        severity: 'URGENT',
+        explanation: '4 refunds totalling USD 900.00 have no matching stock-return record.',
+      },
+    ];
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Cash-close check')).toBeInTheDocument();
+    expect(screen.getByText('1 to review')).toBeInTheDocument();
+    expect(screen.getByText('Urgent')).toBeInTheDocument();
+    expect(
+      screen.getByText('4 refunds totalling USD 900.00 have no matching stock-return record.')
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Nothing is posted, reopened or sent/)).toBeInTheDocument();
+    // Read-only: the panel offers no action beyond the existing close controls.
+    expect(screen.queryByRole('button', { name: /acknowledge|resolve|reopen/i })).toBeNull();
+  });
+  it('says a refused cash-close check is not permitted instead of offering a retry', () => {
+    mocks.close = {
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+    };
+    mocks.checkError = {
+      message: 'Financial reports permission required.',
+      data: { code: 'FORBIDDEN' },
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(
+      screen.getByText(/You don.t have permission to view the cash-close check/)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry check' })).toBeNull();
+  });
+  it('opens on the deep-linked branch and business day instead of today and the first branch', () => {
+    mocks.branches = [
+      { id: 'b', name: 'Main' },
+      { id: 'b2', name: 'Second' },
+    ];
+    render(<PharmacyDayCloseConsole initial={{ branch: 'b2', date: '2026-09-20' }} />);
+    expect(screen.getByLabelText('Branch')).toHaveValue('b2');
+    expect(screen.getByLabelText('Business date')).toHaveValue('2026-09-20');
+    expect(mocks.previewInput).toHaveBeenLastCalledWith({
+      branchId: 'b2',
+      businessDate: new Date('2026-09-20T00:00:00.000Z'),
+    });
+  });
+  it('falls back to defaults for an unknown branch or malformed day in the link', () => {
+    render(<PharmacyDayCloseConsole initial={{ branch: 'foreign', date: 'yesterday' }} />);
+    expect(screen.getByLabelText('Branch')).toHaveValue('b');
+    expect(screen.getByLabelText('Business date')).toHaveValue(workspaceToday(WORKSPACE_ZONE));
   });
 });

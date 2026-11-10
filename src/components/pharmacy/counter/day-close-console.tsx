@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { CashCloseCheckPanel } from './cash-close-check-panel';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
@@ -42,7 +43,13 @@ export function cashMinor(value: string): number | null {
   return Number.isSafeInteger(amount) && amount <= 2147483647 ? amount : null;
 }
 
-export function PharmacyDayCloseConsole() {
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+// Optional deep link (e.g. Ask Fathom's cash-close drill-through): the branch and
+// business day to open on. An unknown branch or malformed day falls back to defaults.
+export type DayCloseInitial = { branch?: string; date?: string };
+
+export function PharmacyDayCloseConsole({ initial }: { initial?: DayCloseInitial } = {}) {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
   const user = session?.user;
@@ -74,19 +81,22 @@ export function PharmacyDayCloseConsole() {
       </SectionCard>
     );
   }
-  return <DayCloseBranches key={`${user.organizationId}:${user.id}`} />;
+  return <DayCloseBranches key={`${user.organizationId}:${user.id}`} initial={initial} />;
 }
 
-function DayCloseBranches() {
+function DayCloseBranches({ initial }: { initial?: DayCloseInitial }) {
   const branches = trpc.pharmacySales.counterBranches.useQuery();
   const [selected, setSelected] = useState('');
-  const [picked, setPicked] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(
+    initial?.date && DAY.test(initial.date) ? initial.date : null
+  );
   const timeZone = branches.data?.timezone;
   // Until the operator picks a day: today in the workspace's zone, settled once
   // the zone is known, so a page left open past midnight keeps its day.
   const today = useMemo(() => (timeZone ? workspaceToday(timeZone) : ''), [timeZone]);
   const date = picked ?? today;
-  const branchId = selected || branches.data?.branches[0]?.id || '';
+  const linked = branches.data?.branches.find((b) => b.id === initial?.branch)?.id;
+  const branchId = selected || linked || branches.data?.branches[0]?.id || '';
   const currency = branches.data?.currency;
   return (
     <div className="space-y-6">
@@ -385,6 +395,8 @@ function DayCloseForm({
           </form>
         )}
       </SectionCard>
+      {/* #728: once the day is closed, the owner sees the read-only anomaly check. */}
+      {report && <CashCloseCheckPanel branchId={branchId} date={date} />}
     </div>
   );
 }

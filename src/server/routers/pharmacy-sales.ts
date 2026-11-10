@@ -39,6 +39,7 @@ import {
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
+import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
 import { workspaceTimezone } from '@/lib/timezone';
 import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
@@ -696,6 +697,41 @@ export const pharmacySalesRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) =>
           closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  // #728: the owner's read-only cash-close anomaly check (close variance, refunds,
+  // voids) with its narrative. Owner-only like the anomaly signals it sits beside;
+  // a query that takes no day lock and writes nothing, so a flag never blocks or
+  // alters the close itself. Licensed by `pharmacy-counter` with this router (it is
+  // a panel on the close screen); the Ask Fathom tool is licensed by
+  // `pharmacy-reports` like the other report tools — see `cashCloseCheckTool`.
+  closeAnomalyCheck: adminProcedure
+    .input(z.object({ branchId, businessDate: closeDate }).strict())
+    .query(async ({ ctx, input }) => {
+      // `adminProcedure` only checks the grantable `admin:access` capability; this
+      // check is owner-only, so a delegated EMPLOYEE is refused before any read.
+      if (ctx.session?.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access required.' });
+      // Refund/void analytics and staff findings are financial reporting: an owner
+      // explicitly denied `reports:financial` is refused before any evidence read,
+      // as the anomaly report and the Ask Fathom tool already do.
+      if (
+        !(await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+        }))
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Financial reports permission required.',
+        });
+      try {
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) =>
+          readPharmacyCashCloseCheck(txDb(tx), scope, input.businessDate)
         );
       } catch (error) {
         fail(error);
