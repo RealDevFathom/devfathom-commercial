@@ -37,6 +37,7 @@ import {
   CounterLotOverride,
   type CounterLotOverrideValue,
 } from './counter-cart';
+import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import {
   CounterReceiptView,
@@ -354,6 +355,11 @@ function ScopedPharmacyCounterConsole({
   const [receiptRenders, setReceiptRenders] = useState(0);
   const [autoPrint, setAutoPrint] = useState(false);
   const [receiptSettlement, setReceiptSettlement] = useState<CounterReceiptSettlement | null>(null);
+  const [settledChange, setSettledChange] = useState<{
+    branchId: string;
+    saleId: string;
+    minor: number;
+  } | null>(null);
   const receiptIntent = useRef<ReceiptIntent | null>(null);
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -585,6 +591,7 @@ function ScopedPharmacyCounterConsole({
     (nextSaleId: string | null) => {
       discardReceiptIntent();
       setReceiptSettlement(null);
+      setSettledChange(null);
       setReceiptOpen(false);
       setSaleId(nextSaleId);
       setReceiptRenders(0);
@@ -750,6 +757,42 @@ function ScopedPharmacyCounterConsole({
     attempt !== null ||
     checkingOutcome;
   const lineCount = cart?.lines.length ?? 0;
+  const settledReceipt =
+    billState === 'settled' &&
+    !receiptQuery.isError &&
+    !receiptQuery.isFetching &&
+    receiptQuery.data?.saleId === saleId &&
+    receiptQuery.data.receiptNumber === cart?.receiptNumber
+      ? receiptQuery.data
+      : null;
+  // Retain only the confirmed change, not permission to tender or print. Query
+  // staleness and background reads must not erase money still owed to the customer.
+  // Adjust during render only when the confirmed value or its scope changes.
+  const receiptChangeMinor = settledReceipt?.totals?.changeMinor;
+  if (
+    branchAuthorized &&
+    saleId &&
+    typeof receiptChangeMinor === 'number' &&
+    Number.isSafeInteger(receiptChangeMinor) &&
+    receiptChangeMinor >= 0
+  ) {
+    if (
+      settledChange?.branchId !== branchId ||
+      settledChange.saleId !== saleId ||
+      settledChange.minor !== receiptChangeMinor
+    ) {
+      setSettledChange({ branchId, saleId, minor: receiptChangeMinor });
+    }
+  } else if (
+    settledChange !== null &&
+    (!branchAuthorized || settledChange.branchId !== branchId || settledChange.saleId !== saleId)
+  ) {
+    setSettledChange(null);
+  }
+  const confirmedChangeMinor =
+    branchAuthorized && settledChange?.branchId === branchId && settledChange.saleId === saleId
+      ? settledChange.minor
+      : undefined;
 
   const refreshTenderBill = useCallback(
     async (resolution = tenderOutcome?.status) => {
@@ -1417,7 +1460,17 @@ function ScopedPharmacyCounterConsole({
         result.replayUnsafe === true &&
         tenderAcknowledgement(result.result)
       ) {
-        outcome = { status: 'accepted', message: 'Payment recorded.' };
+        outcome = {
+          status: 'accepted',
+          message: 'Payment recorded.',
+          // A blank draft amount follows today's balance; recovery must use
+          // the amount actually submitted, even after the bill has settled.
+          changeMinor:
+            original.input.type === 'CASH'
+              ? (original.input.cashReceivedMinor ?? original.input.amountMinor) -
+                original.input.amountMinor
+              : 0,
+        };
         setTenderOutcome(outcome);
         setTenderReadRequired(true);
         // This acknowledgement is historical; only fresh bill/receipt reads
@@ -2345,6 +2398,9 @@ function ScopedPharmacyCounterConsole({
                     : formatMinor(balanceMinor)}
               </p>
             </div>
+            <div className="mb-2 empty:hidden">
+              <CounterChangeDue minor={confirmedChangeMinor} />
+            </div>
             {billState === 'settled' ? (
               <div className="space-y-2">
                 <Button
@@ -2504,6 +2560,7 @@ function ScopedPharmacyCounterConsole({
         <CounterTenderPanel
           key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
           ref={tenderRef}
+          confirmedChangeMinor={confirmedChangeMinor}
           manualSettings={manualSettings.data?.settings}
           manualSettingsLoading={manualSettings.isLoading}
           manualSettingsError={manualSettings.isError}
@@ -2770,19 +2827,12 @@ function ScopedPharmacyCounterConsole({
             printReceipt();
           }
         }}
+        summary={<CounterChangeDue minor={confirmedChangeMinor} />}
         drawer
       >
         <CounterReceiptView
           branchId={branchId}
-          receipt={
-            billState === 'settled' &&
-            !receiptQuery.isError &&
-            !receiptQuery.isFetching &&
-            receiptQuery.data?.saleId === saleId &&
-            receiptQuery.data.receiptNumber === cart?.receiptNumber
-              ? receiptQuery.data
-              : null
-          }
+          receipt={settledReceipt}
           state={
             billState !== 'settled'
               ? 'idle'
@@ -2824,6 +2874,7 @@ function CounterOverlay({
   initialFocus,
   finalFocus,
   onKeyDown,
+  summary,
   drawer = false,
   children,
 }: {
@@ -2833,6 +2884,7 @@ function CounterOverlay({
   initialFocus?: RefObject<HTMLDivElement | null>;
   finalFocus: RefObject<HTMLInputElement | null>;
   onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
+  summary?: ReactNode;
   drawer?: boolean;
   children: ReactNode;
 }) {
@@ -2851,6 +2903,7 @@ function CounterOverlay({
             <DialogTitle className="text-lg font-semibold">{title}</DialogTitle>
             <DialogClose render={<Button variant="outline" className="h-11" />}>Close</DialogClose>
           </div>
+          {summary ? <div className="shrink-0 px-5 pt-5 empty:hidden">{summary}</div> : null}
           <DialogDescription className="sr-only">
             {title} for the current counter bill.
           </DialogDescription>

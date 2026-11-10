@@ -808,6 +808,52 @@ function savedAttempt(): TenderAttempt {
 }
 
 describe('PharmacyCounterConsole durable tender recovery', () => {
+  it('recovers the saved cash change after settlement when Amount was blank and the receipt read fails', async () => {
+    mocks.queries.counterCart!.data = cart({
+      totals: { grossMinor: 5000, discountMinor: 0, netMinor: 5000, tenderedMinor: 0 },
+    });
+    mocks.mutations.tender!.mockRejectedValue(new Error('Acknowledgement lost'));
+    const view = renderPayment(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '100.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText(/Payment outcome is unknown/);
+    const originalInput = mocks.mutations.tender!.mock.calls[0]![0];
+    expect(originalInput).toMatchObject({ amountMinor: 5000, cashReceivedMinor: 10000 });
+    view.unmount();
+
+    mocks.queries.counterCart!.data = cart({
+      status: 'COMPLETED',
+      receiptNumber: 42,
+      totals: { grossMinor: 5000, discountMinor: 0, netMinor: 5000, tenderedMinor: 5000 },
+    });
+    mocks.receiptRefetch.mockRejectedValue(new Error('Receipt failed'));
+    mocks.queries.counterReceipt!.isError = true;
+    mocks.outcomeQuery.mockResolvedValue({
+      status: 'ACCEPTED',
+      replayUnsafe: true,
+      result: accepted(0),
+    });
+    renderPayment(<PharmacyCounterConsole />);
+    expect(screen.getByLabelText('Amount')).toHaveValue('');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('100.00');
+    expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Check payment outcome' }));
+    await waitFor(() => expect(mocks.receiptRefetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByLabelText('Cash received')).toHaveValue(''));
+    const change = screen.getByRole('region', { name: 'Change due' });
+    expect(within(change).getByText('50.00')).toBeVisible();
+    expect(within(change).queryByText('100.00')).not.toBeInTheDocument();
+    expect(mocks.outcomeQuery).toHaveBeenCalledExactlyOnceWith(originalInput);
+    expect(readTenderAttempt(scope)).toMatchObject({
+      status: 'pending',
+      attempt: { input: originalInput, draft: { amount: '', cashReceived: '100.00' } },
+    });
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(mocks.mutations.tender).toHaveBeenCalledTimes(1);
+  });
+
   it('persists and reads back before dispatching money', async () => {
     mocks.mutations.tender!.mockImplementation(async (input) => {
       expect(readTenderAttempt(scope)).toEqual({
@@ -2247,3 +2293,148 @@ it('keeps F10 printing available inside the receipt drawer', async () => {
   expect(mocks.printReceipt).toHaveBeenCalledExactlyOnceWith(receipt, 'en', 'THERMAL', false);
   expect(mocks.mutations.tender).not.toHaveBeenCalled();
 });
+
+it.each(['stale cart', 'fetching cart', 'fetching receipt', 'failed receipt'])(
+  'keeps verified change visible after a %s until the next bill',
+  async (state) => {
+    mocks.queries.counterCart!.data = cart({
+      status: 'COMPLETED',
+      receiptNumber: 42,
+      totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+    });
+    mocks.queries.counterReceipt!.data = {
+      saleId: 'sale-a',
+      receiptNumber: 42,
+      totals: { changeMinor: 5000 },
+    };
+    const { rerender } = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    expect(screen.getByRole('region', { name: 'Change due' })).toHaveTextContent('50.00');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview receipt' }));
+    expect(
+      within(screen.getByRole('dialog', { name: 'Receipt preview' })).getByRole('region', {
+        name: 'Change due',
+      })
+    ).toHaveTextContent('50.00');
+    // Model the query transition after settlement, rather than mounting with
+    // an already stale cart that has never confirmed this bill's change.
+    const changedQuery = state.endsWith('cart')
+      ? mocks.queries.counterCart!
+      : mocks.queries.counterReceipt!;
+    const flag = state.startsWith('stale')
+      ? 'isStale'
+      : state.startsWith('fetching')
+        ? 'isFetching'
+        : 'isError';
+    changedQuery[flag] = true;
+    rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(
+      within(screen.getByRole('dialog', { name: 'Receipt preview' })).getByRole('region', {
+        name: 'Change due',
+      })
+    ).toHaveTextContent('50.00');
+    expect(mocks.receiptProps).toHaveBeenLastCalledWith(expect.objectContaining({ receipt: null }));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Receipt preview' })).not.toBeInTheDocument()
+    );
+    expect(screen.getByRole('region', { name: 'Change due' })).toHaveTextContent('50.00');
+    expect(
+      within(screen.getByLabelText('Bill total')).getByRole('region', { name: 'Change due' })
+    ).toHaveTextContent('50.00');
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    changedQuery[flag] = false;
+    rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Start next bill' }));
+    expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
+  }
+);
+
+it.each(['branch', 'account'])('clears retained change when switching %s', (scope) => {
+  mocks.queries.counterBranches = query({
+    branches: [
+      { id: 'branch-a', name: 'Synthetic branch', code: 'MT1' },
+      { id: 'branch-b', name: 'Other branch', code: 'GB1' },
+    ],
+  });
+  mocks.queries.counterCart!.data = cart({
+    status: 'COMPLETED',
+    receiptNumber: 42,
+    totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+  });
+  mocks.queries.counterReceipt!.data = {
+    saleId: 'sale-a',
+    receiptNumber: 42,
+    totals: { changeMinor: 5000 },
+  };
+  const { rerender } = render(
+    <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+  );
+  expect(screen.getByRole('region', { name: 'Change due' })).toHaveTextContent('50.00');
+  mocks.queries.counterCart!.isStale = true;
+  rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  expect(screen.getByRole('region', { name: 'Change due' })).toHaveTextContent('50.00');
+  if (scope === 'branch') {
+    fireEvent.change(screen.getByRole('combobox', { name: 'Branch' }), {
+      target: { value: 'branch-b' },
+    });
+  } else {
+    mocks.session.data.user.id = 'account-b';
+    rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  }
+  expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
+});
+
+it('updates retained change from a fresh receipt, including zero, before another background read', () => {
+  mocks.queries.counterCart!.data = cart({
+    status: 'COMPLETED',
+    receiptNumber: 42,
+    totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+  });
+  const receipt = {
+    saleId: 'sale-a',
+    receiptNumber: 42,
+    totals: { changeMinor: 5000 },
+  };
+  mocks.queries.counterReceipt!.data = receipt;
+  const { rerender } = render(
+    <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+  );
+  expect(screen.getByRole('region', { name: 'Change due' })).toHaveTextContent('50.00');
+
+  mocks.queries.counterReceipt!.data = { ...receipt, totals: { changeMinor: 2500 } };
+  rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  expect(screen.getByRole('region', { name: 'Change due' })).toHaveTextContent('25.00');
+  mocks.queries.counterReceipt!.isFetching = true;
+  rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  expect(screen.getByRole('region', { name: 'Change due' })).toHaveTextContent('25.00');
+
+  mocks.queries.counterReceipt!.isFetching = false;
+  mocks.queries.counterReceipt!.data = { ...receipt, totals: { changeMinor: 0 } };
+  rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
+  mocks.queries.counterReceipt!.isFetching = true;
+  rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
+});
+
+it.each(['foreign sale', 'wrong receipt', 'fetching', 'failed'])(
+  'withholds a change banner from a %s receipt',
+  (state) => {
+    mocks.queries.counterCart!.data = cart({
+      status: 'COMPLETED',
+      receiptNumber: 42,
+      totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+    });
+    mocks.queries.counterReceipt!.data = {
+      saleId: state === 'foreign sale' ? 'foreign' : 'sale-a',
+      receiptNumber: state === 'wrong receipt' ? 43 : 42,
+      totals: { changeMinor: 5000 },
+    };
+    if (state === 'fetching') mocks.queries.counterReceipt!.isFetching = true;
+    if (state === 'failed') mocks.queries.counterReceipt!.isError = true;
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByRole('region', { name: 'Change due' })).not.toBeInTheDocument();
+  }
+);
