@@ -44,6 +44,23 @@ describe('Z report', () => {
     expect(html).toContain('متوقع نقد');
     expect(html).toContain('Provisional');
   });
+  it('prints Urdu Z-report amounts in Urdu digits', () => {
+    const html = buildCounterBrowserZReport(report, 'ur');
+    expect(html).toContain('متوقع نقد: ۱۲۵٫۰۰');
+    expect(html).toContain('فرق: -۱٫۰۰');
+    expect(html).not.toContain('125.00');
+  });
+  it('prints Urdu tender totals in Urdu digits', () => {
+    const html = buildCounterBrowserZReport(
+      {
+        ...report,
+        tenderTotals: [{ type: 'RAAST', amountMinor: 1000, refundMinor: 100, netMinor: 900 }],
+      },
+      'ur'
+    );
+    expect(html).toContain('RAAST: ۱۰٫۰۰ · واپسی: ۱٫۰۰ · خالص: ۹٫۰۰');
+    expect(html).not.toContain('10.00');
+  });
   it('refuses invalid amounts', () => {
     expect(() => buildCounterBrowserZReport({ ...report, cashCountedMinor: NaN }, 'en')).toThrow();
   });

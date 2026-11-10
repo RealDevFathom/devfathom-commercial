@@ -174,7 +174,7 @@ describe('isolated Pharmacy browser receipt', () => {
     expect(browser).toContain('Cash received: 8.00');
     expect(browser.indexOf('Cash received: 8.00')).toBeLessThan(browser.indexOf('Change: 1.00'));
     const urdu = buildCounterBrowserReceipt(source, 'ur', 'THERMAL');
-    expect(urdu).toContain('8.00');
+    expect(urdu).toContain('نقد ادا شدہ: ۸٫۰۰');
     expect(urdu).not.toContain('Cash received:');
   });
 
@@ -203,7 +203,7 @@ describe('isolated Pharmacy browser receipt', () => {
     expect(english).toContain('Cash: 1.90');
     expect(urdu).toContain('رسید: 12');
     expect(urdu).toContain('کیشیئر: Ayesha Khan');
-    expect(urdu).toContain('نقد: 1.90');
+    expect(urdu).toContain('نقد: ۱٫۹۰');
     expect(urdu).not.toContain('Invoice:');
     expect(urdu).not.toContain('CASH:');
   });
@@ -263,7 +263,7 @@ describe('isolated Pharmacy browser receipt', () => {
 
   it.each([
     ['en', 'Expected cash: 100.00'],
-    ['ur', 'متوقع نقد: 100.00'],
+    ['ur', 'متوقع نقد: ۱۰۰٫۰۰'],
   ] as const)('renders the organization currency on a %s Z-report', (locale, expectedCash) => {
     const html = buildCounterBrowserZReport(
       {
@@ -329,6 +329,25 @@ describe('isolated Pharmacy browser receipt', () => {
     expect(html).toContain('lang="ur" dir="rtl"');
     expect(html).toContain('قابلِ ادائیگی');
   });
+
+  it.each(['THERMAL_58', 'THERMAL', 'A4'] as const)(
+    'formats Urdu %s amounts in Urdu digits',
+    (format) => {
+      const html = buildCounterBrowserReceipt(receipt, 'ur', format);
+      const text = new DOMParser()
+        .parseFromString(html, 'text/html')
+        .body.textContent!.replace(/\s+/g, ' ');
+      expect(text).toContain('مقدار: 2 یونٹ · کل رقم: ۱٫۷۹');
+      expect(text).toContain('رقم: ۱٫۷۹');
+      expect(text).toContain('کل رقم: ۲٫۰۰');
+      expect(text).toContain('رعایت: ۰٫۲۱');
+      expect(text).toContain('قابلِ ادائیگی: ۱٫۷۹');
+      expect(text).toContain('ادا شدہ: ۱٫۹۰');
+      expect(text).toContain('واپسی: ۰٫۱۱');
+      expect(text).toContain('نقد: ۱٫۹۰');
+      expect(text).not.toMatch(/\b1\.79\b|\b0\.11\b|\b1\.90\b/);
+    }
+  );
 
   it.each([
     ['en', 'THERMAL_58'],

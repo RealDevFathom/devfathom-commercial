@@ -44,17 +44,18 @@ export function receiptCashReceivedLabel(locale: CounterReceiptLocale): string {
 export function exactReceiptPriceBreakdown(
   quantity: number,
   grossMinor: number,
-  multiplicationSign = '×'
+  multiplicationSign = '×',
+  locale: CounterReceiptLocale = 'en'
 ): string {
   if (!Number.isSafeInteger(quantity) || quantity <= 0 || !Number.isSafeInteger(grossMinor)) {
     throw new Error('Receipt line pricing is invalid.');
   }
   if (grossMinor % quantity === 0) {
-    return `${quantity} ${multiplicationSign} ${formatMinor(grossMinor / quantity)}`;
+    return `${quantity} ${multiplicationSign} ${formatMinor(grossMinor / quantity, locale)}`;
   }
   // State quantity and gross directly when one integer unit price cannot
   // represent the charge. Never invent synthetic lot prices from an average.
-  return `${quantity}${multiplicationSign === 'x' ? ' - ' : ' · '}${formatMinor(grossMinor)}`;
+  return `${quantity}${multiplicationSign === 'x' ? ' - ' : ' · '}${formatMinor(grossMinor, locale)}`;
 }
 
 export function counterLinePricing(
@@ -82,7 +83,8 @@ export function counterLinePricing(
           exactReceiptPriceBreakdown(
             row.canonicalUnits / scale,
             row.grossMinor!,
-            multiplicationSign
+            multiplicationSign,
+            locale
           )
         )
         .join(' + ')}`;
@@ -90,13 +92,13 @@ export function counterLinePricing(
     return priced
       .map(
         (row) =>
-          `${labels[locale].units}: ${row.canonicalUnits}${separator}${strings.gross}: ${formatMinor(row.grossMinor!)}`
+          `${labels[locale].units}: ${row.canonicalUnits}${separator}${strings.gross}: ${formatMinor(row.grossMinor!, locale)}`
       )
       .join(' + ');
   }
   return gross === line.quantity * line.unitPriceMinor
-    ? `${strings.saleUnit[line.saleUnit]}: ${exactReceiptPriceBreakdown(line.quantity, gross, multiplicationSign)}`
-    : `${strings.quantity}: ${line.quantity} ${strings.saleUnit[line.saleUnit]}${separator}${strings.gross}: ${formatMinor(gross)}`;
+    ? `${strings.saleUnit[line.saleUnit]}: ${exactReceiptPriceBreakdown(line.quantity, gross, multiplicationSign, locale)}`
+    : `${strings.quantity}: ${line.quantity} ${strings.saleUnit[line.saleUnit]}${separator}${strings.gross}: ${formatMinor(gross, locale)}`;
 }
 
 /** Missing status on legacy callers is not evidence of issued identity. */
@@ -150,7 +152,7 @@ export function buildCounterReceiptPreview(
           presentation.identity,
           counterLinePricing(line, locale),
           ...presentation.allocations,
-          `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
+          `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor, locale)}`,
         ].join('\n');
       }),
       taxBreakdown: 'UNAVAILABLE',
@@ -166,19 +168,19 @@ export function buildCounterReceiptPreview(
       ],
       totals: [
         locale === 'ur' && receipt.currency === 'PKR' ? 'پاکستانی روپے' : receipt.currency,
-        `${strings.gross}: ${formatMinor(receipt.totals.grossMinor)}`,
-        `${strings.discount}: ${formatMinor(receipt.totals.discountMinor)}`,
-        `${strings.net}: ${formatMinor(receipt.totals.netMinor)}`,
-        `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor)}`,
+        `${strings.gross}: ${formatMinor(receipt.totals.grossMinor, locale)}`,
+        `${strings.discount}: ${formatMinor(receipt.totals.discountMinor, locale)}`,
+        `${strings.net}: ${formatMinor(receipt.totals.netMinor, locale)}`,
+        `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
         ...(cashReceived !== null
-          ? [`${receiptCashReceivedLabel(locale)}: ${formatMinor(cashReceived)}`]
+          ? [`${receiptCashReceivedLabel(locale)}: ${formatMinor(cashReceived, locale)}`]
           : []),
-        `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
+        `${strings.change}: ${formatMinor(receipt.totals.changeMinor, locale)}`,
       ],
       payments: receipt.tenders.length
         ? receipt.tenders.map(
             (tender) =>
-              `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor)}`
+              `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor, locale)}`
           )
         : [labels[locale].payments],
     }
@@ -247,14 +249,14 @@ export function buildCounterZReportPreview(
     `${labels[1]}: ${report.businessDate}`,
     `#${report.sequence} · ${report.id}`,
     report.currency,
-    ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount)}`),
+    ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount, locale)}`),
     ...(report.tenderTotals == null
       ? []
       : tenderTotalsSchema
           .parse(report.tenderTotals)
           .map(
             (row) =>
-              `${row.type}: ${formatMinor(row.amountMinor)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor)}`
+              `${row.type}: ${formatMinor(row.amountMinor, locale)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor, locale)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor, locale)}`
           )),
     `${labels[8]}: ${report.reason ?? '—'}`,
     report.isFinal ? 'Final' : 'Provisional — migration reconciliation pending',

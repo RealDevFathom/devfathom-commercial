@@ -135,6 +135,46 @@ it('labels reprints and disables unissued receipts', () => {
   expect(screen.getByRole('button', { name: 'Reprint receipt' })).toBeDisabled();
 });
 
+it('renders every Urdu receipt amount in Urdu digits', () => {
+  const input = props({ locale: 'ur' });
+  input.receipt = {
+    ...input.receipt!,
+    lines: [{ ...input.receipt!.lines[0]!, unitPriceMinor: 123_456, lineTotalMinor: 123_456 }],
+    tenders: [
+      {
+        tenderId: 'tender-1',
+        type: 'CASH',
+        amountMinor: 123_456,
+        cashReceivedMinor: 234_567,
+        changeGivenMinor: 0,
+      },
+    ],
+  };
+  const { container } = render(<CounterReceiptView {...input} />);
+  const region = screen.getByRole('region', { name: 'رسید 12' });
+  const item = within(region).getByRole('listitem');
+  // Line total (its own span) and the unit price (inside the quantity line).
+  expect(within(item).getByText('۱۲۳۴٫۵۶')).toBeTruthy();
+  expect(within(item).getByText(/×\s*۱۲۳۴٫۵۶/)).toBeTruthy();
+  // Gross, net and tendered are 100; discount and change are 0; the tender is 123456.
+  expect(within(region).getAllByText('۱٫۰۰')).toHaveLength(3);
+  expect(within(region).getAllByText('۰٫۰۰')).toHaveLength(2);
+  expect(within(region).getAllByText('۱۲۳۴٫۵۶')).toHaveLength(2);
+  expect(within(region).getByText('نقد ادا شدہ').nextElementSibling).toHaveTextContent('۲۳۴۵٫۶۷');
+  expect(container.textContent).not.toContain('1234.56');
+  expect(region.textContent).not.toMatch(/\d\.\d\d/);
+  // The settled banner's net and change follow the receipt locale too.
+  expect(screen.getByText('PKR ۱٫۰۰')).toBeTruthy();
+  expect(screen.getByText('PKR ۰٫۰۰')).toBeTruthy();
+});
+
+it('keeps English receipt amounts on ASCII digits', () => {
+  render(<CounterReceiptView {...props()} />);
+  const region = screen.getByRole('region', { name: 'Receipt 12' });
+  expect(within(region).getAllByText('1.00').length).toBeGreaterThan(0);
+  expect(region.textContent).not.toMatch(/[۰-۹]/);
+});
+
 it('shows retry on failed or permission-denied receipt reads', () => {
   const input = props({ state: 'error', error: 'You do not have permission for this action.' });
   render(<CounterReceiptView {...input} />);
@@ -386,7 +426,10 @@ it.each([undefined, null, []])('renders no evidence section for %j', (evidence) 
   expect(screen.queryByRole('region', { name: 'Camera evidence' })).toBeNull();
 });
 
-it.each(['en', 'ur'] as const)('shows exact mixed-lot pricing in the live %s receipt', (locale) => {
+it.each([
+  ['en', '2 × 1.00 + 1 × 1.01', '3.01'],
+  ['ur', '2 × ۱٫۰۰ + 1 × ۱٫۰۱', '۳٫۰۱'],
+] as const)('shows exact mixed-lot pricing in the live %s receipt', (locale, pricing, total) => {
   const input = props({ locale });
   const line = input.receipt!.lines[0]!;
   input.receipt!.lines = [
@@ -418,8 +461,8 @@ it.each(['en', 'ur'] as const)('shows exact mixed-lot pricing in the live %s rec
   ];
   render(<CounterReceiptView {...input} />);
   const item = screen.getAllByRole('listitem')[0]!;
-  expect(item).toHaveTextContent('2 × 1.00 + 1 × 1.01');
-  expect(item).toHaveTextContent('3.01');
+  expect(item).toHaveTextContent(pricing);
+  expect(item).toHaveTextContent(total);
   expect(item).not.toHaveTextContent('3 unit × 1.00');
 });
 
