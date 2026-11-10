@@ -23,7 +23,11 @@ const standardRoleKeys = [
   'auditor',
 ];
 
-function readinessDb(roles: Record<string, string[]>) {
+function readinessDb(
+  roles: Record<string, string[]>,
+  counts: { publication?: number; packLevel?: number } = {}
+) {
+  const countPacks = vi.fn(async () => counts.packLevel ?? 1);
   const countRoles = vi.fn(
     async ({ where }: { where: { organizationId: string; key: { in: string[] } } }) =>
       (roles[where.organizationId] ?? []).filter((key) => where.key.in.includes(key)).length
@@ -45,11 +49,12 @@ function readinessDb(roles: Record<string, string[]>) {
     },
     branchRegulatoryProfile: { findFirst: vi.fn(async () => ({ branchId: 'branch-1' })) },
     organizationRole: { count: countRoles },
-    medicinePublicationEntry: { count: vi.fn(async () => 1) },
+    medicinePublicationEntry: { count: vi.fn(async () => counts.publication ?? 1) },
+    packLevel: { count: countPacks },
     pharmacyInventoryLot: { count: vi.fn(async () => 1) },
     pharmacySupplier: { count: vi.fn(async () => 1) },
   } as unknown as PrismaClient;
-  return { db, countRoles };
+  return { db, countRoles, countPacks };
 }
 
 describe('optional pharmacy Owner / Operator readiness', () => {
@@ -99,6 +104,36 @@ describe('optional pharmacy Owner / Operator readiness', () => {
     expect(incomplete.ready).toBe(false);
     expect(incomplete.blocking).toEqual(['OWNER_AND_ROLE_TEMPLATES']);
     expect(countRoles).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('medicine catalogue readiness needs a saleable pack with a barcode (DEV-18)', () => {
+  const at = new Date('2026-10-01T00:00:00Z');
+
+  it.each([
+    ['a published medicine whose packs carry no barcode', { publication: 1, packLevel: 0 }],
+    ['a barcoded pack without a published medicine', { publication: 0, packLevel: 1 }],
+  ])('blocks only the catalogue gate for %s', async (_case, counts) => {
+    const { db } = readinessDb({ standard: standardRoleKeys }, counts);
+    const result = await evaluatePharmacyReadiness(db, 'standard', at);
+    expect(result.ready).toBe(false);
+    expect(result.blocking).toEqual(['MEDICINE_CATALOG_READINESS']);
+  });
+
+  it('counts only effective packs of saleable medicines that carry a barcode', async () => {
+    const { db, countPacks } = readinessDb({ standard: standardRoleKeys });
+    await expect(evaluatePharmacyReadiness(db, 'standard', at)).resolves.toMatchObject({
+      ready: true,
+    });
+    expect(countPacks).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        organizationId: 'standard',
+        effectiveFrom: { lte: at },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+        barcodes: { some: { organizationId: 'standard' } },
+        presentation: { medicine: { saleable: true } },
+      },
+    });
   });
 });
 

@@ -110,8 +110,8 @@ export const PHARMACY_GATE_GUIDANCE: Record<PharmacyOnboardingGate, GateGuidance
     linkLabel: 'Open organization',
   },
   MEDICINE_CATALOG_READINESS: {
-    todo: 'Review and publish a medicine, then define its pack for receiving.',
-    done: 'A published medicine catalog is available.',
+    todo: 'Publish a medicine, then attach the barcode printed on its pack so opening stock can be imported by barcode.',
+    done: 'A published medicine has a pack with a barcode.',
     href: '/pharmacy/medicines',
     linkLabel: 'Set up medicines and packs',
   },

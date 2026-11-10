@@ -298,6 +298,19 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
        VALUES ($1,$2,$3,$1,1,'CARTON',1,'2026-01-01T00:00:00.000Z')`,
       [`pack_${suffix}`, organizationId, `presentation_${suffix}`]
     );
+    // Catalogue readiness needs a saleable pack that carries a barcode.
+    await db.query(
+      `INSERT INTO pharmacy_medicine_barcodes
+         (id,"organizationId","presentationId","packLevelId",type,code,"normalizedCode")
+       VALUES ($1,$2,$3,$4,'GTIN',$5,$5)`,
+      [
+        `barcode_${suffix}`,
+        organizationId,
+        `presentation_${suffix}`,
+        `pack_${suffix}`,
+        `e2e${suffix}`.toLowerCase(),
+      ]
+    );
     await db.query(
       `INSERT INTO pharmacy_manufacturing_batches
          (id,"organizationId","medicineId","batchNumber","expiresAt","updatedAt")

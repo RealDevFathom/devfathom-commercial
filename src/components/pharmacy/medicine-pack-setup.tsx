@@ -50,9 +50,11 @@ export function MedicinePackSetup() {
   return (
     <SectionCard title="Packs for receiving" titleLevel={2}>
       <p className="mb-4 text-sm text-text-muted">
-        After publishing a medicine, define a pack and the number of individual units it contains.
-        Use the quantity printed on the pack; each pack here is counted directly in individual
-        units.
+        Publishing a medicine creates its default pack from the reviewed pack size. Find the
+        medicine to check that pack, attach the barcode printed on it, or add another pack you
+        receive differently. Use the quantity printed on the pack; each pack here is counted
+        directly in individual units. Opening stock is imported by matching a pack barcode or pack
+        ID.
       </p>
       <form
         className="flex flex-wrap items-end gap-3"
@@ -282,9 +284,19 @@ export function MedicinePackSetup() {
         <div className="mt-4 text-sm text-text-body">
           <p className="font-medium">Packs available now</p>
           {conversions.length ? (
-            <ul className="mt-2 space-y-1">
+            <ul className="mt-2 space-y-3">
               {conversions.map((pack) => (
-                <li key={pack.packLevelId}>{describePackConversion(pack)}</li>
+                <PackBarcodeEditor
+                  key={pack.packLevelId}
+                  packLevelId={pack.packLevelId}
+                  label={describePackConversion(pack)}
+                  barcodes={
+                    presentation.packLevels
+                      .find((level) => level.id === pack.packLevelId)
+                      ?.barcodes.map((item) => item.code) ?? []
+                  }
+                  onSaved={() => utils.pharmacyMedicine.get.invalidate({ id: medicineId })}
+                />
               ))}
             </ul>
           ) : (
@@ -301,5 +313,104 @@ export function MedicinePackSetup() {
         Return to Pharmacy setup
       </Link>
     </SectionCard>
+  );
+}
+
+/**
+ * Barcode rows are append-only in the database, so a pack that already carries
+ * a code shows it read-only; only a pack without one offers the attach form.
+ */
+function PackBarcodeEditor({
+  packLevelId,
+  label,
+  barcodes,
+  onSaved,
+}: {
+  packLevelId: string;
+  label: string;
+  barcodes: readonly string[];
+  onSaved: () => Promise<void>;
+}) {
+  const [code, setCode] = useState('');
+  const [message, setMessage] = useState('');
+  const save = trpc.pharmacyMedicine.setPackBarcode.useMutation({
+    onSuccess: async (row) => {
+      setCode(row.code);
+      setMessage(`Barcode ${row.code} saved on this pack.`);
+      await onSaved();
+    },
+  });
+  const denied =
+    save.error?.data?.code === 'FORBIDDEN' || save.error?.data?.code === 'UNAUTHORIZED';
+  const trimmed = code.trim();
+  const inputId = `pack-barcode-${packLevelId}`;
+
+  return (
+    <li className="space-y-2 rounded-sm border border-border-subtle p-3">
+      <p>{label}</p>
+      <p className="text-text-muted">
+        Pack ID:{' '}
+        <code className="break-all font-mono text-xs text-text-body select-all">{packLevelId}</code>
+      </p>
+      <p className="text-text-muted">
+        {barcodes.length
+          ? `Barcode${barcodes.length === 1 ? '' : 's'}: ${barcodes.join(', ')}`
+          : 'No barcode yet. Opening stock cannot be imported against this pack until one is attached.'}
+      </p>
+      {barcodes.length ? (
+        <p className="text-sm text-text-muted">
+          Pack barcodes are permanent once attached and cannot be edited here.
+        </p>
+      ) : (
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!trimmed) return;
+            setMessage('');
+            save.mutate({ packLevelId, code: trimmed });
+          }}
+        >
+          <label htmlFor={inputId} className="min-w-0 flex-1 space-y-2 text-sm text-text-body">
+            <span>Barcode for {label}</span>
+            <input
+              id={inputId}
+              className={control}
+              required
+              maxLength={200}
+              autoComplete="off"
+              inputMode="text"
+              value={code}
+              disabled={save.isPending}
+              onChange={(event) => {
+                setCode(event.target.value);
+                setMessage('');
+                save.reset();
+              }}
+            />
+          </label>
+          <Button
+            type="submit"
+            variant="outline"
+            className="min-h-11"
+            disabled={save.isPending || !trimmed || denied}
+          >
+            {save.isPending ? 'Saving barcode…' : 'Attach barcode'}
+          </Button>
+        </form>
+      )}
+      {save.error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {denied
+            ? 'Your account cannot attach pack barcodes. Ask your workspace administrator to check access.'
+            : `Barcode not saved: ${save.error.message}`}
+        </p>
+      ) : null}
+      {message ? (
+        <p role="status" className="text-sm text-text-body">
+          {message}
+        </p>
+      ) : null}
+    </li>
   );
 }

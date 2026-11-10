@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
     refetch: vi.fn(),
   },
   mutation: { mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null as unknown },
+  barcodeMutation: { mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null as unknown },
+  onBarcodeSaved: undefined as ((row: { code: string }) => Promise<void>) | undefined,
   invalidateMedicine: vi.fn(),
   onSuccess: undefined as (() => Promise<void>) | undefined,
 }));
@@ -30,6 +32,12 @@ vi.mock('@/lib/trpc', () => ({
         useMutation: (options: { onSuccess: () => Promise<void> }) => {
           mocks.onSuccess = options.onSuccess;
           return mocks.mutation;
+        },
+      },
+      setPackBarcode: {
+        useMutation: (options: { onSuccess: (row: { code: string }) => Promise<void> }) => {
+          mocks.onBarcodeSaved = options.onSuccess;
+          return mocks.barcodeMutation;
         },
       },
     },
@@ -59,7 +67,9 @@ beforeEach(() => {
     ],
   };
   mocks.search.error = mocks.medicine.error = mocks.mutation.error = null;
+  mocks.barcodeMutation.error = null;
   mocks.search.isFetching = mocks.medicine.isFetching = mocks.mutation.isPending = false;
+  mocks.barcodeMutation.isPending = false;
 });
 afterEach(cleanup);
 
@@ -178,6 +188,7 @@ describe('medicine pack setup', () => {
               parentPackLevelId: null,
               effectiveFrom: new Date('2020-01-01'),
               effectiveTo: null,
+              barcodes: [],
             },
             {
               id: 'later',
@@ -186,6 +197,7 @@ describe('medicine pack setup', () => {
               parentPackLevelId: null,
               effectiveFrom: new Date('2099-01-01'),
               effectiveTo: null,
+              barcodes: [],
             },
           ],
         },
@@ -195,5 +207,135 @@ describe('medicine pack setup', () => {
     fill();
     expect(screen.getByText('1 STRIP = 10 units')).toBeVisible();
     expect(screen.queryByText('1 BOX = 100 units')).not.toBeInTheDocument();
+  });
+  function publishedPack(barcodes: Array<{ code: string }>) {
+    mocks.medicine.data = {
+      presentations: [
+        {
+          id: 'presentation-secret',
+          dosageForm: 'Tablet',
+          presentation: '10 tablets',
+          packLevels: [
+            {
+              id: 'default-pack',
+              level: 'BOX',
+              unitsPerParent: 10,
+              parentPackLevelId: null,
+              effectiveFrom: new Date('2020-01-01'),
+              effectiveTo: null,
+              barcodes,
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it('attaches a barcode to the published default pack', async () => {
+    publishedPack([]);
+    render(<MedicinePackSetup />);
+    fill();
+    expect(screen.getByText(/No barcode yet/)).toBeVisible();
+    const input = screen.getByLabelText('Barcode for 1 BOX = 10 units');
+    expect(screen.getByRole('button', { name: 'Attach barcode' })).toBeDisabled();
+    fireEvent.change(input, { target: { value: ' 8964000123456 ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Attach barcode' }));
+    expect(mocks.barcodeMutation.mutate).toHaveBeenCalledExactlyOnceWith({
+      packLevelId: 'default-pack',
+      code: '8964000123456',
+    });
+    await mocks.onBarcodeSaved?.({ code: '8964000123456' });
+    await waitFor(() =>
+      expect(screen.getByText('Barcode 8964000123456 saved on this pack.')).toBeVisible()
+    );
+    expect(mocks.invalidateMedicine).toHaveBeenCalledWith({ id: 'medicine-secret' });
+  });
+
+  it('keeps the entry after an attach conflict', () => {
+    publishedPack([]);
+    const view = render(<MedicinePackSetup />);
+    fill();
+    const input = screen.getByLabelText('Barcode for 1 BOX = 10 units');
+    fireEvent.change(input, { target: { value: '2222' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Attach barcode' }));
+    expect(mocks.barcodeMutation.mutate).toHaveBeenCalledExactlyOnceWith({
+      packLevelId: 'default-pack',
+      code: '2222',
+    });
+    mocks.barcodeMutation.error = {
+      message: 'This barcode is already assigned to another pack.',
+      data: { code: 'CONFLICT' },
+    };
+    view.rerender(<MedicinePackSetup />);
+    expect(screen.getByRole('alert')).toHaveTextContent('already assigned to another pack');
+    expect(screen.getByLabelText('Barcode for 1 BOX = 10 units')).toHaveValue('2222');
+  });
+
+  it('shows every existing pack barcode read-only, since barcodes are append-only', () => {
+    publishedPack([{ code: '1111' }, { code: '3333' }]);
+    render(<MedicinePackSetup />);
+    fill();
+    expect(screen.getByText('Barcodes: 1111, 3333')).toBeVisible();
+    expect(screen.getByText(/permanent once attached/)).toBeVisible();
+    expect(screen.queryByLabelText('Barcode for 1 BOX = 10 units')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /barcode/i })).not.toBeInTheDocument();
+  });
+
+  function packRow(
+    id: string,
+    level: string,
+    unitsPerParent: number,
+    parentPackLevelId: string | null = null
+  ) {
+    return {
+      id,
+      level,
+      unitsPerParent,
+      parentPackLevelId,
+      effectiveFrom: new Date('2020-01-01'),
+      effectiveTo: null,
+      barcodes: [] as Array<{ code: string }>,
+    };
+  }
+  function withPacks(packLevels: ReturnType<typeof packRow>[]) {
+    mocks.medicine.data = {
+      presentations: [
+        { id: 'presentation-secret', dosageForm: 'Tablet', presentation: '10 x 10', packLevels },
+      ],
+    };
+  }
+  function choosePresentation() {
+    fireEvent.change(screen.getByLabelText('Medicine'), { target: { value: 'medicine-secret' } });
+    fireEvent.change(screen.getByLabelText('Presentation'), {
+      target: { value: 'presentation-secret' },
+    });
+  }
+
+  it('shows each pack ID next to its barcode', () => {
+    withPacks([
+      { ...packRow('pack_box_1', 'BOX', 100), barcodes: [{ code: '1111' }] },
+      packRow('pack_strip_1', 'STRIP', 10),
+    ]);
+    render(<MedicinePackSetup />);
+    choosePresentation();
+    expect(screen.getByText('pack_box_1')).toBeVisible();
+    expect(screen.getByText('pack_strip_1')).toBeVisible();
+    expect(screen.getByText('Barcode: 1111')).toBeVisible();
+    expect(screen.getByLabelText('Barcode for 1 STRIP = 10 units')).toHaveValue('');
+  });
+
+  it('creates independent side-by-side packs as before without a divisibility warning', () => {
+    withPacks([packRow('box', 'BOX', 100), packRow('strip', 'STRIP', 30)]);
+    render(<MedicinePackSetup />);
+    fill();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Create pack' }));
+    expect(mocks.mutation.mutate).toHaveBeenCalledExactlyOnceWith({
+      presentationId: 'presentation-secret',
+      level: 'STRIP',
+      unitsPerParent: 10,
+      effectiveFrom: new Date('2026-09-06T00:00:00Z'),
+      versionGroupId: expect.any(String),
+    });
   });
 });

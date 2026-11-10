@@ -5,6 +5,7 @@ import {
   setManualPackPrice,
 } from '@/lib/pharmacy/pricing';
 import { FileDrapNoticeSource, ingestDrapSource } from '@/lib/pharmacy/drap-monitoring';
+import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -13,6 +14,7 @@ import {
   deriveLooseUnitPrice,
   medicineDuplicateKey,
   normalizeMedicineText,
+  parseDefaultPackSize,
   parseSimpleMedicineStrength,
   PharmacyMedicineError,
 } from '@/lib/pharmacy/medicine';
@@ -26,6 +28,8 @@ import {
   REFERENCE_BATCH_MAX_ROWS,
   type ConnectorRights,
 } from '@/lib/pharmacy/reference-connectors';
+import { isEffective } from '@/lib/pharmacy/pack-conversion';
+import { annotateAudit } from '../audit';
 import {
   adminProcedure,
   auditedProtectedProcedure,
@@ -227,6 +231,65 @@ const reviewDecisionInput = z.discriminatedUnion('action', [
     })
     .strict(),
 ]);
+
+type BarcodeDb = Pick<Prisma.TransactionClient, 'medicineBarcode'>;
+
+/**
+ * Puts a scan code on one pack size. Codes are unique per tenant and barcode
+ * rows are append-only (the `pharmacy_barcodes_append_only` trigger rejects
+ * UPDATE and DELETE), so a code is only ever inserted: one already on this pack
+ * is reused, and one held anywhere else (another pack, an older unpacked
+ * publication, or another medicine) conflicts instead of being moved.
+ */
+async function attachPackBarcode(
+  db: BarcodeDb,
+  input: {
+    medicineId: string;
+    presentationId: string;
+    packLevelId: string;
+    type: 'GTIN' | 'MANUFACTURER' | 'INTERNAL';
+    code: string;
+  }
+) {
+  const normalizedCode = normalizeMedicineText(input.code);
+  if (!normalizedCode)
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Enter a barcode with letters or digits.',
+    });
+  const existing = await db.medicineBarcode.findFirst({
+    where: { normalizedCode },
+    include: { presentation: { select: { medicineId: true } } },
+  });
+  if (!existing) {
+    try {
+      return await db.medicineBarcode.create({
+        data: {
+          presentationId: input.presentationId,
+          packLevelId: input.packLevelId,
+          type: input.type,
+          code: input.code,
+          normalizedCode,
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'This barcode was just added elsewhere. Reload and retry.',
+        });
+      throw error;
+    }
+  }
+  if (existing.packLevelId === input.packLevelId) return existing;
+  throw new TRPCError({
+    code: 'CONFLICT',
+    message:
+      existing.presentation.medicineId === input.medicineId && existing.packLevelId === null
+        ? 'This barcode is already recorded for an earlier presentation of this medicine and barcodes cannot be moved. Remove it from the reviewed values, or import opening stock by pack ID.'
+        : 'This barcode is already assigned to another pack. Barcodes cannot be moved; use the code printed on this pack.',
+  });
+}
 
 function domainError(error: unknown): never {
   if (error instanceof PharmacyMedicineError) {
@@ -666,7 +729,7 @@ export const pharmacyMedicineRouter = router({
         where: { id: input.id, saleable: true },
         include: {
           strengths: { include: { ingredient: true } },
-          presentations: { include: { packLevels: true } },
+          presentations: { include: { packLevels: { include: { barcodes: true } } } },
           provenance: true,
         },
       });
@@ -789,6 +852,65 @@ export const pharmacyMedicineRouter = router({
     .mutation(async ({ ctx, input }) =>
       ctx.db.medicineBarcode.create({
         data: { ...input, normalizedCode: normalizeMedicineText(input.code) },
+      })
+    ),
+
+  /**
+   * Attach a barcode to a pack size that has none, so stock can be imported and
+   * received by scanning the pack. Barcode rows are append-only, so a pack's
+   * code cannot be edited, replaced or moved here.
+   */
+  setPackBarcode: adminProcedure
+    .input(
+      z
+        .object({
+          packLevelId: z.string().min(1).max(200),
+          type: z.enum(['GTIN', 'MANUFACTURER', 'INTERNAL']).default('GTIN'),
+          code: z.string().trim().min(1).max(200),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const pack = await tx.packLevel.findFirst({
+          where: { id: input.packLevelId },
+          include: { presentation: { select: { medicineId: true } }, barcodes: true },
+        });
+        if (!pack) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack size not found.' });
+        if (!isEffective(pack, new Date()))
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'This pack is not in effect. Attach the barcode to its current version.',
+          });
+        const normalizedCode = normalizeMedicineText(input.code);
+        const before = pack.barcodes.map((item) => item.code);
+        const current = pack.barcodes.find((item) => item.normalizedCode === normalizedCode);
+        if (current) {
+          annotateAudit(ctx, {
+            targetType: 'PackLevel',
+            targetId: pack.id,
+            changes: { barcode: { before, after: before } },
+          });
+          return current;
+        }
+        if (pack.barcodes.length > 0)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: `This pack already carries barcode ${before.join(', ')}. Pack barcodes are permanent and cannot be replaced.`,
+          });
+        const attached = await attachPackBarcode(tx, {
+          medicineId: pack.presentation.medicineId,
+          presentationId: pack.presentationId,
+          packLevelId: pack.id,
+          type: input.type,
+          code: input.code,
+        });
+        annotateAudit(ctx, {
+          targetType: 'PackLevel',
+          targetId: pack.id,
+          changes: { barcode: { before, after: [attached.code] } },
+        });
+        return attached;
       })
     ),
 
@@ -1102,6 +1224,15 @@ export const pharmacyMedicineRouter = router({
               code: 'BAD_REQUEST',
               message: 'Strength cannot be safely structured; correct it before publication.',
             });
+          // The importer and receiving resolve stock through a pack size, so a
+          // published medicine must carry one with its unit count.
+          const defaultPack = parseDefaultPackSize(values.get('pack')!);
+          if (!defaultPack)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message:
+                'Pack size cannot be safely structured; correct it to a unit count such as "10 tablets" or "3 x 10" before publication.',
+            });
           const medicine = await tx.medicine.findUniqueOrThrow({ where: { id: medicineId } });
           const ingredientName = values.get('alias') ?? values.get('productName')!;
           const ingredient = await tx.ingredient.upsert({
@@ -1124,15 +1255,24 @@ export const pharmacyMedicineRouter = router({
           await tx.medicineStrengthComponent.create({
             data: { medicineId, ingredientId: ingredient.id, ...parsedStrength },
           });
+          const packLevel = await tx.packLevel.create({
+            data: {
+              presentationId: presentation.id,
+              versionGroupId: randomUUID(),
+              version: 1,
+              level: defaultPack.level,
+              unitsPerParent: defaultPack.unitsPerParent,
+              effectiveFrom: new Date(),
+            },
+          });
           const barcode = values.get('barcode');
           if (barcode)
-            await tx.medicineBarcode.create({
-              data: {
-                presentationId: presentation.id,
-                type: 'GTIN',
-                code: barcode,
-                normalizedCode: normalizeMedicineText(barcode),
-              },
+            await attachPackBarcode(tx, {
+              medicineId,
+              presentationId: presentation.id,
+              packLevelId: packLevel.id,
+              type: 'GTIN',
+              code: barcode,
             });
           const alias = values.get('alias');
           if (alias)

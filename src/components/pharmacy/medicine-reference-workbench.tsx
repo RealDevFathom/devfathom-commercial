@@ -259,7 +259,9 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   });
   const publish = trpc.pharmacyMedicine.publishAssertions.useMutation({
     onSuccess: async () => {
-      toast.success('Assertions published in a reversible batch.');
+      toast.success(
+        'Published in a reversible batch with its default pack. Attach the pack barcode under Packs for receiving.'
+      );
       await utils.pharmacyMedicine.referenceCandidates.invalidate();
     },
     onError: (error) => toast.error(error.message),
@@ -438,7 +440,8 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
               <h3 className="text-sm font-semibold text-text-strong">Column mapping</h3>
               <p className="mt-1 text-xs text-text-muted">
                 Strength, dosage form, and pack have no defaults. Missing values stay blocked in
-                review.
+                review. Pack must state a unit count, such as 10 tablets or 3 x 10; publishing
+                creates that pack size.
               </p>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 {[

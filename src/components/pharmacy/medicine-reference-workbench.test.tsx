@@ -16,12 +16,14 @@ const mocks = vi.hoisted(() => ({
   invalidateCandidates: vi.fn(),
   confirmError: null as { message: string } | null,
   onConfirmed: undefined as (() => Promise<void>) | undefined,
+  onPublished: undefined as (() => Promise<void>) | undefined,
   runNow: vi.fn(),
+  toastSuccess: vi.fn(),
   toastError: vi.fn(),
 }));
 vi.mock('./medicine-pack-setup', () => ({ MedicinePackSetup: () => null }));
 vi.mock('@/lib/browser-uuid', () => ({ browserUuid: () => 'file-batch' }));
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: mocks.toastError } }));
+vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: mocks.toastError } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({
@@ -46,7 +48,10 @@ vi.mock('@/lib/trpc', () => ({
         useMutation: () => ({ mutateAsync: mocks.review, isPending: false }),
       },
       publishAssertions: {
-        useMutation: () => ({ mutateAsync: mocks.publish, isPending: false }),
+        useMutation: (options: { onSuccess: () => Promise<void> }) => {
+          mocks.onPublished = options.onSuccess;
+          return { mutateAsync: mocks.publish, isPending: false };
+        },
       },
     },
   },
@@ -188,6 +193,19 @@ it('records review decisions per candidate and keeps other candidates usable', a
   );
   await act(async () => settle());
   expect(within(cardA!).getByRole('button', { name: 'reject' })).toBeEnabled();
+});
+
+it('invalidates the candidate cache after publication and explains the default receiving pack', async () => {
+  mocks.candidates.data = [candidate('reviewed', ['ACCEPTED'])];
+  render(<MedicineReferenceWorkbench health={[]} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Publish assertions' }));
+  expect(mocks.publish).toHaveBeenCalledWith({ assertionIds: ['reviewed-assertion-0'] });
+  await act(async () => {
+    await mocks.onPublished?.();
+  });
+  expect(mocks.invalidateCandidates).toHaveBeenCalledOnce();
+  expect(mocks.candidates.refetch).not.toHaveBeenCalled();
+  expect(mocks.toastSuccess).toHaveBeenCalledWith(expect.stringContaining('default pack'));
 });
 
 it('says why review and publish controls are unavailable', () => {

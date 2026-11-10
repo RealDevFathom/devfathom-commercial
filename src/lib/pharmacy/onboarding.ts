@@ -255,7 +255,7 @@ export async function evaluatePharmacyReadiness(
     claims,
     branch,
     seededRoleKeys,
-    publishedEntryCount,
+    catalogReady,
     receivedLotCount,
     supplierCount,
   ] = await Promise.all([
@@ -285,19 +285,7 @@ export async function evaluatePharmacyReadiness(
     db.organizationRole.count({
       where: { organizationId, key: { in: requiredRoleKeys } },
     }),
-    // MED-05 publishes a medicine through a PUBLISHED publication batch; a
-    // catalog row that has never been published is not catalog readiness.
-    db.medicinePublicationEntry.count({
-      where: {
-        organizationId,
-        batch: { status: 'PUBLISHED' },
-        assertion: {
-          status: { in: ['ACCEPTED', 'CORRECTED'] },
-          reviewer: { not: null },
-          medicine: { saleable: true },
-        },
-      },
-    }),
+    medicineCatalogReady(db, organizationId, at),
     // INV-01 receipt: a lot exists but is only opening stock once received.
     db.pharmacyInventoryLot.count({ where: { organizationId, receivedAt: { not: null } } }),
     // With supplier checks off, an active supplier counts whether or not it is authorized.
@@ -320,7 +308,7 @@ export async function evaluatePharmacyReadiness(
     ),
     OWNER_AND_ROLE_TEMPLATES:
       requiredRoleKeys.length > 0 && seededRoleKeys >= requiredRoleKeys.length,
-    MEDICINE_CATALOG_READINESS: publishedEntryCount > 0,
+    MEDICINE_CATALOG_READINESS: catalogReady,
     OPENING_STOCK_READINESS: receivedLotCount > 0,
     PARTIES_AND_BALANCES: supplierCount > 0,
   };
@@ -329,6 +317,40 @@ export async function evaluatePharmacyReadiness(
     ...evaluateReadiness(organizationId, claims as PharmacyGateClaim[], evidence),
     supplierChecksEnabled: (await supplierPolicy).checksEnabled,
   };
+}
+
+async function medicineCatalogReady(
+  db: PrismaClient,
+  organizationId: string,
+  at: Date
+): Promise<boolean> {
+  // MED-05: without a reviewed, published, saleable medicine, pack evidence
+  // cannot satisfy this gate and does not need to be queried.
+  const publishedEntryCount = await db.medicinePublicationEntry.count({
+    where: {
+      organizationId,
+      batch: { status: 'PUBLISHED' },
+      assertion: {
+        status: { in: ['ACCEPTED', 'CORRECTED'] },
+        reviewer: { not: null },
+        medicine: { saleable: true },
+      },
+    },
+  });
+  if (publishedEntryCount === 0) return false;
+
+  // DEV-18: opening stock is scanned, so publication alone is insufficient;
+  // an effective pack of a saleable medicine must also carry a barcode.
+  const barcodedPackCount = await db.packLevel.count({
+    where: {
+      organizationId,
+      effectiveFrom: { lte: at },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      barcodes: { some: { organizationId } },
+      presentation: { medicine: { saleable: true } },
+    },
+  });
+  return barcodedPackCount > 0;
 }
 
 /**
