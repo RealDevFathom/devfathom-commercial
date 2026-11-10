@@ -75,7 +75,9 @@ export function classifyBalanceSheet(accounts: PostedAccountBalance[]): Currency
       const unmapped = new Set<string>();
       const classified = rows.map((account): ClassifiedBalance => {
         const closing = BigInt(account.closingMinor);
-        const classification = CLASSIFICATIONS[account.accountCode];
+        const classification = Object.hasOwn(CLASSIFICATIONS, account.accountCode)
+          ? CLASSIFICATIONS[account.accountCode]
+          : undefined;
         if (!classification) {
           if (closing !== zero) unmapped.add(account.accountCode);
           return {

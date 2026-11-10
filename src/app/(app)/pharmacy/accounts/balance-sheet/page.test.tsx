@@ -56,15 +56,81 @@ describe('PharmacyBalanceSheetPage', () => {
     expect(mocks.createCaller).toHaveBeenCalledOnce();
   });
 
-  it('rejects an out-of-tenant branch choice and invalid cutoff without losing the report', async () => {
+  it.each(['foreign-tenant-branch', 'inactive-branch', 'unknown-branch', ''])(
+    'rejects the explicit unavailable branch %s without reading another branch',
+    async (branch) => {
+      const html = renderToStaticMarkup(
+        await PharmacyBalanceSheetPage({
+          searchParams: Promise.resolve({ branch, cutoff: '2026-10-28' }),
+        })
+      );
+
+      expect(html).toContain('Branch unavailable');
+      expect(html).toContain('No financial rows are shown.');
+      expect(html).not.toContain('data-testid="balance-sheet"');
+      expect(html).not.toContain('data-branch="branch_1"');
+      expect(mocks.createCaller).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects repeated branch parameters instead of silently choosing a branch', async () => {
     const html = renderToStaticMarkup(
       await PharmacyBalanceSheetPage({
-        searchParams: Promise.resolve({ branch: 'outside-tenant', cutoff: '2026-02-30' }),
+        searchParams: Promise.resolve({ branch: ['branch_1', 'branch_2'] }),
+      })
+    );
+
+    expect(html).toContain('Branch unavailable');
+    expect(html).not.toContain('data-testid="balance-sheet"');
+    expect(mocks.createCaller).not.toHaveBeenCalled();
+  });
+
+  it('defaults to the first active branch only when the branch is omitted', async () => {
+    const html = renderToStaticMarkup(
+      await PharmacyBalanceSheetPage({
+        searchParams: Promise.resolve({ cutoff: '2026-10-28' }),
       })
     );
 
     expect(html).toContain('data-branch="branch_1"');
+    expect(html).toContain('data-cutoff="2026-10-28"');
+    expect(mocks.createCaller).toHaveBeenCalledOnce();
+  });
+
+  it('defaults an invalid cutoff without changing an explicitly valid branch', async () => {
+    const html = renderToStaticMarkup(
+      await PharmacyBalanceSheetPage({
+        searchParams: Promise.resolve({ branch: 'branch_2', cutoff: '2026-02-30' }),
+      })
+    );
+
+    expect(html).toContain('data-branch="branch_2"');
     expect(html).toContain('data-cutoff="2026-10-29"');
+    expect(mocks.createCaller).toHaveBeenCalledOnce();
+  });
+
+  it('does not read a report when the tenant has no active branches', async () => {
+    mocks.branches.mockResolvedValue([]);
+    const html = renderToStaticMarkup(
+      await PharmacyBalanceSheetPage({ searchParams: Promise.resolve({}) })
+    );
+
+    expect(html).toContain('No active branch');
+    expect(html).not.toContain('data-testid="balance-sheet"');
+    expect(mocks.createCaller).not.toHaveBeenCalled();
+  });
+
+  it('does not default an explicit branch when the tenant has no active branches', async () => {
+    mocks.branches.mockResolvedValue([]);
+    const html = renderToStaticMarkup(
+      await PharmacyBalanceSheetPage({
+        searchParams: Promise.resolve({ branch: 'unknown-branch' }),
+      })
+    );
+
+    expect(html).toContain('Branch unavailable');
+    expect(html).not.toContain('data-testid="balance-sheet"');
+    expect(mocks.createCaller).not.toHaveBeenCalled();
   });
 
   it('fails closed before branch or report access for a non-admin actor', async () => {

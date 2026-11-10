@@ -21,7 +21,7 @@ async function tenantContext() {
 export default async function PharmacyBalanceSheetPage({
   searchParams,
 }: {
-  searchParams: Promise<{ branch?: string; cutoff?: string }>;
+  searchParams: Promise<{ branch?: string | string[]; cutoff?: string | string[] }>;
 }) {
   const query = await searchParams;
   const ctx = await tenantContext();
@@ -47,7 +47,12 @@ export default async function PharmacyBalanceSheetPage({
     orderBy: { name: 'asc' },
     select: { id: true },
   });
-  const branch = branches.find(({ id }) => id === query.branch) ?? branches[0];
+  // Only an omitted branch may use the default. An explicit invalid scope must
+  // never return another branch's financial balances.
+  const branch =
+    query.branch === undefined
+      ? branches[0]
+      : branches.find(({ id }) => id === query.branch);
   if (!branch) {
     return (
       <main className="min-w-0 space-y-6">
@@ -56,9 +61,11 @@ export default async function PharmacyBalanceSheetPage({
           heading="Balance sheet"
           description="Classified posted balances and explicit accounting-equation gaps."
         />
-        <SectionCard title="No active branch">
-          <p className="text-sm text-text-muted">
-            An active in-tenant pharmacy branch is required.
+        <SectionCard title={query.branch === undefined ? 'No active branch' : 'Branch unavailable'}>
+          <p role="alert" className="text-sm text-text-muted">
+            {query.branch === undefined
+              ? 'An active in-tenant pharmacy branch is required.'
+              : 'The requested branch is not an active branch in your tenant. No financial rows are shown.'}
           </p>
         </SectionCard>
       </main>
@@ -66,7 +73,7 @@ export default async function PharmacyBalanceSheetPage({
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const requestedCutoff = query.cutoff ?? '';
+  const requestedCutoff = typeof query.cutoff === 'string' ? query.cutoff : '';
   const parsedCutoff = new Date(`${requestedCutoff}T00:00:00.000Z`);
   const cutoff =
     /^\d{4}-\d{2}-\d{2}$/.test(requestedCutoff) &&
