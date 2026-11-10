@@ -16,6 +16,7 @@ vi.mock('@/server/audit', () => ({
 }));
 
 import { hasModule } from '@/lib/entitlements';
+import { pharmacyRegulatoryFixture } from '@/lib/test-support/pharmacy-regulatory';
 import { recordTrpcAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
@@ -49,6 +50,7 @@ const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(va
 
 function fixture(raw: unknown = input) {
   const parsed = originalTenderSchema.parse(raw);
+  const { rules, profile } = pharmacyRegulatoryFixture(parsed.branchId);
   const prior = {
     id: 'idem-1',
     organizationId: 'org-1',
@@ -86,6 +88,14 @@ function fixture(raw: unknown = input) {
   const execute = vi.fn().mockResolvedValue(0);
   const transaction = vi.fn(async (callback) => callback(db));
   const db = only({
+    organization: only({ findUnique: vi.fn().mockResolvedValue({ status: 'ACTIVE' }) }),
+    branchRegulatoryProfile: only({
+      findFirst: vi.fn().mockResolvedValue({
+        ...profile,
+        branch: { active: true, provinceCode: 'PB', addressLine: '1 Test Road', city: 'Lahore' },
+        jurisdictionRuleSet: rules,
+      }),
+    }),
     pharmacyBranch: only({
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))

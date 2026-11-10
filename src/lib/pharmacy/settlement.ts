@@ -15,6 +15,7 @@ import { firstCloseIsFinal } from './migration/first-close';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import { assertRxSaleAllowed } from './rx-sale-gate';
+import { assertStoredPharmacyMayOperate } from './regulatory';
 import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
 import { authenticatePharmacyCommand, validateLeasedReceiptReplay } from './sales';
@@ -308,6 +309,10 @@ export async function applyPharmacyTender(
     payloadHash
   );
   if (idem.resultPayload) return { ...(idem.resultPayload as object), replayed: true };
+  // Every settlement path (counter, Khata, offline replay, delivery, sandbox) shares this gate.
+  await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+    name: 'pharmacy.sale.tender',
+  });
   await requirePharmacyDayOpen(db, scope, input.businessDate);
 
   await db.$queryRaw(

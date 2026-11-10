@@ -1,9 +1,13 @@
 // @vitest-environment node
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  retirePharmacyRegulatoryRules,
+  seedPharmacyRegulatoryProfile,
+} from '@/lib/test-support/pharmacy-regulatory';
 import type { CounterReplay } from './pharmacy-offline';
 import type { ManualTenderType } from '@/lib/pharmacy/manual-payments';
 
@@ -22,6 +26,8 @@ const ORG_A = `org_wha1191_a_${suffix}`;
 const BRANCH_A = `branch_a_${suffix}`;
 
 const ACTOR = `user_pharmacist_${suffix}`;
+/** Branches whose sale-gate regulatory profile is seeded, mapped to the rule-set id. */
+const regulatedBranches = new Map<string, string>();
 
 const NOW = new Date('2026-09-02T09:00:00.000Z');
 const LATER = new Date('2027-10-01T00:00:00.000Z');
@@ -231,6 +237,12 @@ beforeAll(async () => {
   });
 }, 180_000);
 
+afterAll(async () => {
+  if (!TEST_DATABASE_URL) return;
+  const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+  await retirePharmacyRegulatoryRules(withPlatformDb, [...regulatedBranches.values()]);
+});
+
 // Mock only the web identity/entitlement boundary; transactions, signatures,
 // stock, quota, command log, receipts and forced RLS use migrated PostgreSQL.
 vi.mock('@/lib/tenancy/tenant-actor', () => ({
@@ -254,6 +266,18 @@ vi.mock('@/lib/rate-limit', () => ({
 
 async function setup(manualType?: ManualTenderType, allowReferenceSkip = false) {
   const fixture = await scenario(ORG_A, manualType ? tag('merchant-branch') : BRANCH_A, 'transport');
+  // Replay creates and tenders the sale through the persisted regulatory gate.
+  if (!regulatedBranches.has(fixture.branchId)) {
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    regulatedBranches.set(
+      fixture.branchId,
+      await seedPharmacyRegulatoryProfile(
+        withPlatformDb,
+        (work) => inOrg(ORG_A, work),
+        fixture.branchId
+      )
+    );
+  }
   if (manualType) await inOrg(ORG_A, (db) => db.pharmacyBranch.update({
     where: { id: fixture.branchId }, data: { manualPaymentSettings: {
       [manualType]: { destination: 'Merchant till', allowReferenceSkip },
@@ -392,6 +416,53 @@ async function setup(manualType?: ManualTenderType, allowReferenceSkip = false) 
 }
 
 describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
+  it.each(['ORGANIZATION_NOT_ACTIVE', 'PROFILE_MISSING'] as const)(
+    'DEV-152 rejects offline replay with %s and rolls back every sale effect',
+    async (reason) => {
+      // A private branch with valid snapshots, quota and a leased receipt proves
+      // admission uses current persisted state, rather than the offline snapshot.
+      const f = await setup('RAAST');
+      const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+      const saleEffects = () =>
+        inOrg(ORG_A, async (db) => ({
+          sales: await db.pharmacySale.count({ where: { branchId: f.fixture.branchId } }),
+          tenders: await db.pharmacyTender.count({ where: { deviceId: f.fixture.deviceId } }),
+          movements: await db.pharmacyStockMovement.count({
+            where: { inventoryLotId: f.fixture.lotId },
+          }),
+        }));
+      const before = await f.counts();
+      const effectsBefore = await saleEffects();
+
+      if (reason === 'ORGANIZATION_NOT_ACTIVE') {
+        await withPlatformDb((db) =>
+          db.organization.update({ where: { id: ORG_A }, data: { status: 'ONBOARDING' } })
+        );
+      } else {
+        await inOrg(ORG_A, (db) =>
+          db.branchRegulatoryProfile.updateMany({
+            where: { branchId: f.fixture.branchId, effectiveTo: null },
+            data: { effectiveTo: new Date() },
+          })
+        );
+      }
+
+      try {
+        const response = await f.replay();
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual({ error: reason });
+        expect(await f.counts()).toEqual(before);
+        expect(await saleEffects()).toEqual(effectsBefore);
+      } finally {
+        if (reason === 'ORGANIZATION_NOT_ACTIVE') {
+          await withPlatformDb((db) =>
+            db.organization.update({ where: { id: ORG_A }, data: { status: 'ACTIVE' } })
+          );
+        }
+      }
+    }
+  );
+
   it.each(['RAAST', 'JAZZCASH', 'EASYPAISA'] as const)('#710 replays a %s sale exactly once with its leased receipt and capture', async (type) => {
     const f = await setup(type);
     const responses = await Promise.all([f.replay(), f.replay()]);

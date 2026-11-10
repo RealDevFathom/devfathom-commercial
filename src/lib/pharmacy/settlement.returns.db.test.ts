@@ -1,8 +1,12 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
-import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import {
+  retirePharmacyRegulatoryRules,
+  seedPharmacyRegulatoryProfile,
+} from '@/lib/test-support/pharmacy-regulatory';
 import { PHARMACY_E2E as fixture } from '../../../tests/e2e/pharmacy-counter-fixture';
 import { createSale, addSaleLine, readReturnHistory, returnSaleLine } from './sales';
 import { linkCustomerToSale, redeemSalePoints } from './customer-loyalty';
@@ -18,6 +22,7 @@ const scope = {
 const day = new Date('2026-09-29');
 const inTenant = <T>(work: Parameters<typeof withTenantDb<T>>[1]) =>
   withTenantDb(scope.organizationId, work);
+const ruleSetIds: string[] = [];
 
 async function ensureVisibilityParents() {
   await inTenant(async (db) => {
@@ -30,6 +35,7 @@ async function ensureVisibilityParents() {
         legalName: 'Settlement returns fixture',
         displayName: 'Settlement returns fixture',
         vertical: 'PHARMACY',
+        status: 'ACTIVE',
       },
     });
     await db.pharmacyBranch.upsert({
@@ -123,9 +129,19 @@ async function ensureVisibilityParents() {
       },
     });
   });
+  // The fixture branch is shared across runs, so only seed the sale gate's profile once.
+  const profile = await inTenant((db) =>
+    db.branchRegulatoryProfile.findFirst({
+      where: { branchId: scope.branchId, effectiveTo: null },
+    })
+  );
+  if (!profile)
+    ruleSetIds.push(await seedPharmacyRegulatoryProfile(withPlatformDb, inTenant, scope.branchId));
 }
 
 describe.skipIf(!enabled)('return/refund disposable database acceptance', () => {
+  afterAll(() => retirePharmacyRegulatoryRules(withPlatformDb, ruleSetIds));
+
   it('restores loyalty, splits refunds, audits cash fallback, and serializes cumulative caps', async () => {
     const url = new URL(process.env.PHARMACY_E2E_DATABASE_URL!);
     expect(url.hostname).toBe('127.0.0.1');

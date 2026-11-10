@@ -20,6 +20,7 @@ import {
   type ControlledRestorationPin,
 } from './controlled-restoration-authorization';
 import { appendControlledRestorations } from './controlled-register';
+import { assertStoredPharmacyMayOperate } from './regulatory';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
@@ -229,6 +230,10 @@ async function event(
 }
 
 export async function createSale(db: ScopedDb, scope: LedgerScope, quotation = false) {
+  // Every creation path (counter, offline replay, customer orders) shares this gate.
+  await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+    name: 'pharmacy.sale.create',
+  });
   const sale = await db.pharmacySale.create({
     data: {
       organizationId: scope.organizationId,

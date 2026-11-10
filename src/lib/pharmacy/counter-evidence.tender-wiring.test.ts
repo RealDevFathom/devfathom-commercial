@@ -6,6 +6,10 @@ vi.mock('@/lib/pharmacy/finance-postings', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/finance-postings')>()),
   postTenderEntry: vi.fn(),
 }));
+vi.mock('@/lib/pharmacy/regulatory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/regulatory')>()),
+  assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
+}));
 
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';

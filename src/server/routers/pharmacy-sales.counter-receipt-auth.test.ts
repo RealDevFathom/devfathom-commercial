@@ -32,9 +32,14 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 }));
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
+  createSale: vi.fn(async () => ({ id: 'sale-new' })),
   changeSaleStatus: vi.fn(async () => ({ sale: { id: 'sale-a', status: 'HELD' } })),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
   returnSaleLine: vi.fn(async () => ({ returnLineId: 'return-line-1' })),
+}));
+vi.mock('@/lib/pharmacy/regulatory', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/regulatory')>()),
+  assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
@@ -68,8 +73,17 @@ import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { changeSaleStatus, readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
+import {
+  changeSaleStatus,
+  createSale,
+  readReturnHistory,
+  returnSaleLine,
+} from '@/lib/pharmacy/sales';
 import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
+import {
+  assertStoredPharmacyMayOperate,
+  BranchOperationDeniedError,
+} from '@/lib/pharmacy/regulatory';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -178,6 +192,7 @@ const reads = () => [
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(hasModule).mockReturnValue(true);
+  vi.mocked(assertStoredPharmacyMayOperate).mockResolvedValue(undefined);
   vi.mocked(readCounterReceipt).mockResolvedValue({
     receiptNumber: 7,
     completedAt: '2026-10-01T00:00:00.000Z',
@@ -296,6 +311,35 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it.each<[string, (caller: Caller) => Promise<unknown>]>([
+    ['create', (caller: Caller) => caller.create({ branchId: 'branch-a', quotation: false })],
+    [
+      'settle',
+      (caller: Caller) =>
+        caller.tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type: 'CASH',
+          amountMinor: 100,
+          idempotencyKey: 'regulated-operation',
+        }),
+    ],
+  ])('maps a shared %s regulatory denial to FORBIDDEN', async (name, run) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], 'ADMIN');
+    // The gate now lives inside createSale/applyPharmacyTender so every caller shares it.
+    const denied = new BranchOperationDeniedError('PROFILE_MISSING');
+    if (name === 'create') vi.mocked(createSale).mockRejectedValueOnce(denied);
+    else vi.mocked(applyPharmacyTender).mockRejectedValueOnce(denied);
+
+    await expect(run(f.caller())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PROFILE_MISSING',
+    });
+    expect(f.db.$transaction).toHaveBeenCalled();
+  });
+
   it('supplies the regulatory identity effective at completion to browser receipt callers', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);

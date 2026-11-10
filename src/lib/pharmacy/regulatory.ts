@@ -2,6 +2,7 @@ import type { PrismaClient } from '@/generated/prisma/client';
 import { recordAudit } from '@/server/audit';
 
 export type BranchOperationDenialReason =
+  | 'ORGANIZATION_NOT_ACTIVE'
   | 'PROFILE_MISSING'
   | 'BRANCH_INACTIVE'
   | 'PROFILE_PREMISES_MISMATCH'
@@ -285,4 +286,52 @@ export async function assertStoredBranchMayOperate(
     },
     { ...action, at }
   );
+}
+
+/** Lifecycle states in which an organization may operate (docs/admin-platform/lifecycle.md). */
+const OPERATING_ORGANIZATION_STATUSES = new Set(['ACTIVE', 'GRACE']);
+
+/**
+ * Runtime gate for regulated pharmacy operations. Tenant host access is also
+ * available while onboarding, so operations must independently require the
+ * persisted organization lifecycle state as well as the branch profile.
+ *
+ * Must run inside the transaction that performs the operation. The organization
+ * row and the branch's open profile rows are share-locked so a concurrent
+ * lifecycle transition or profile revocation either commits before this read
+ * (and is seen) or waits until the operation's transaction ends.
+ */
+export async function assertStoredPharmacyMayOperate(
+  db: PrismaClient,
+  organizationId: string,
+  branchId: string,
+  action: BranchOperationAction
+): Promise<void> {
+  await db.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR SHARE`;
+  await db.$queryRaw`SELECT id FROM pharmacy_branch_regulatory_profiles
+    WHERE "organizationId" = ${organizationId} AND "branchId" = ${branchId}
+      AND "effectiveTo" IS NULL
+    FOR SHARE`;
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { status: true },
+  });
+  if (!organization || !OPERATING_ORGANIZATION_STATUSES.has(organization.status)) {
+    recordAudit({
+      organizationId,
+      actorType: 'SYSTEM',
+      source: 'SYSTEM',
+      category: 'PHARMACY_REGULATORY',
+      operation: 'OTHER',
+      action: 'pharmacy.branch_operation_denied',
+      targetType: 'PharmacyBranch',
+      targetId: branchId,
+      outcome: 'FAILURE',
+      errorCode: 'ORGANIZATION_NOT_ACTIVE',
+      errorMessage: 'Branch operation denied by regulatory guard.',
+      metadata: { operation: action.name, schedule: action.schedule ?? null },
+    });
+    throw new BranchOperationDeniedError('ORGANIZATION_NOT_ACTIVE');
+  }
+  await assertStoredBranchMayOperate(db, organizationId, branchId, action);
 }

@@ -2,13 +2,17 @@
 import { randomUUID } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import { growthReceiptMoney } from '@/lib/pharmacy/growth-evidence';
-import { beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 import { withTenantDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { createSale, addSaleLine, readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
 import { receiveLot } from '@/lib/pharmacy/stock-ledger';
 import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
 import { readCounterReceipt, readCounterCart } from '@/lib/pharmacy/counter';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  retirePharmacyRegulatoryRules,
+  seedPharmacyRegulatoryProfile,
+} from '@/lib/test-support/pharmacy-regulatory';
 import type { PharmacyInventoryLot } from '@/generated/prisma/client';
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -18,11 +22,19 @@ const scope = { organizationId: org, branchId: org + '_branch', actorId: 'review
 const day = new Date('2026-10-31');
 const tenant = <T>(fn: (db: ScopedDb) => Promise<T>) => withTenantDb(org, fn, { timeout: 30000 });
 let locationId: string;
+const ruleSetIds: string[] = [];
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
   await withPlatformDb((db) =>
     db.organization.create({
-      data: { id: org, slug: org, legalName: org, displayName: org, vertical: 'PHARMACY' },
+      data: {
+        id: org,
+        slug: org,
+        legalName: org,
+        displayName: org,
+        vertical: 'PHARMACY',
+        status: 'ACTIVE',
+      },
     })
   );
   locationId = await tenant(async (db) => {
@@ -49,6 +61,11 @@ beforeAll(async () => {
       })
     ).id;
   });
+  ruleSetIds.push(await seedPharmacyRegulatoryProfile(withPlatformDb, tenant, scope.branchId));
+});
+afterAll(async () => {
+  if (!TEST_DATABASE_URL) return;
+  await retirePharmacyRegulatoryRules(withPlatformDb, ruleSetIds);
 });
 async function cart(prices = [100, 200], quantities = [1, 1], costs = prices.map(() => 1)) {
   return tenant(async (db) => {

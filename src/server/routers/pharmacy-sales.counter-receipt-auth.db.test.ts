@@ -34,6 +34,8 @@ const ids = {
   cashier: `user_rcpt_c_${suffix}`,
   unassigned: `user_rcpt_u_${suffix}`,
   admin: `user_rcpt_admin_${suffix}`,
+  counterAdmin: `user_rcpt_cadmin_${suffix}`,
+  roleCounterAdmin: `role_rcpt_ca_${suffix}`,
   outsider: `user_rcpt_x_${suffix}`,
   legacy: `user_rcpt_legacy_${suffix}`,
   inactive: `user_rcpt_off_${suffix}`,
@@ -44,6 +46,16 @@ const ids = {
 };
 
 type SalesCaller = {
+  create: (input: { branchId: string; quotation: boolean }) => Promise<unknown>;
+  tender: (input: {
+    branchId: string;
+    saleId: string;
+    deviceId: string;
+    businessDate: Date;
+    type: 'CASH';
+    amountMinor: number;
+    idempotencyKey: string;
+  }) => Promise<unknown>;
   counterReceipt: (input: { branchId: string; saleId: string }) => Promise<unknown>;
   counterReceiptPrintJob: (input: {
     branchId: string;
@@ -149,6 +161,8 @@ beforeAll(async () => {
       { id: ids.roleDispense, key: `dispense-${suffix}`, capability: 'pharmacy:dispense' },
       { id: ids.roleReceipt, key: `receipt-${suffix}`, capability: 'pharmacy:receipt' },
       { id: ids.roleCashier, key: `cashier-${suffix}`, capability: 'pharmacy.counter' },
+      // Tendering needs the canonical counter capability, not only dispense.
+      { id: ids.roleCounterAdmin, key: `counter-admin-${suffix}`, capability: 'pharmacy:counter' },
     ]) {
       await tx.organizationRole.create({
         data: {
@@ -165,6 +179,12 @@ beforeAll(async () => {
       { id: ids.cashier, roleId: ids.roleCashier, name: 'Cashier' },
       { id: ids.unassigned, roleId: ids.roleDispense, name: 'Unassigned' },
       { id: ids.admin, roleId: ids.roleDispense, name: 'Admin', role: 'ADMIN' as const },
+      {
+        id: ids.counterAdmin,
+        roleId: ids.roleCounterAdmin,
+        name: 'Counter admin',
+        role: 'ADMIN' as const,
+      },
     ];
     for (const person of people) {
       await tx.user.create({
@@ -259,6 +279,76 @@ const dispenser = { id: ids.dispenser, role: 'EMPLOYEE' as const, organizationId
 const receiptUser = { id: ids.receiptClerk, role: 'EMPLOYEE' as const, organizationId: ids.orgA };
 
 describeIfDatabase('counter receipt authorization against Postgres', () => {
+  it('rolls back create and tender denials while preserving their regulatory audits', async () => {
+    const admin = { id: ids.counterAdmin, role: 'ADMIN' as const, organizationId: ids.orgA };
+    const before = await withTenantDb(ids.orgA, (tx) =>
+      Promise.all([tx.pharmacySale.count(), tx.pharmacyTender.count()])
+    );
+
+    await withPlatformDb((tx) =>
+      tx.organization.update({ where: { id: ids.orgA }, data: { status: 'ONBOARDING' } })
+    );
+    await expect(
+      act(ids.orgA, admin, (api) => api.create({ branchId: ids.branchA, quotation: false }))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'ORGANIZATION_NOT_ACTIVE' });
+
+    await withPlatformDb((tx) =>
+      tx.organization.update({ where: { id: ids.orgA }, data: { status: 'ACTIVE' } })
+    );
+    await expect(
+      act(ids.orgA, admin, (api) =>
+        api.tender({
+          branchId: ids.branchA,
+          saleId: ids.saleA,
+          deviceId: 'regulatory-test-device',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type: 'CASH',
+          amountMinor: 100,
+          idempotencyKey: `regulatory-denial-${suffix}`,
+        })
+      )
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'PROFILE_MISSING' });
+
+    // GRACE is an operating lifecycle state: the lifecycle check passes and the
+    // branch profile decides (still missing here).
+    await withPlatformDb((tx) =>
+      tx.organization.update({ where: { id: ids.orgA }, data: { status: 'GRACE' } })
+    );
+    try {
+      await expect(
+        act(ids.orgA, admin, (api) => api.create({ branchId: ids.branchA, quotation: false }))
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'PROFILE_MISSING' });
+    } finally {
+      await withPlatformDb((tx) =>
+        tx.organization.update({ where: { id: ids.orgA }, data: { status: 'ACTIVE' } })
+      );
+    }
+
+    const { flushAuditWritesForTest } = await import('@/server/audit');
+    await flushAuditWritesForTest();
+    const after = await withTenantDb(ids.orgA, (tx) =>
+      Promise.all([
+        tx.pharmacySale.count(),
+        tx.pharmacyTender.count(),
+        tx.auditLog.findMany({
+          where: {
+            action: 'pharmacy.branch_operation_denied',
+            targetId: ids.branchA,
+            errorCode: { in: ['ORGANIZATION_NOT_ACTIVE', 'PROFILE_MISSING'] },
+          },
+          select: { errorCode: true },
+        }),
+      ])
+    );
+    expect(after.slice(0, 2)).toEqual(before);
+    expect(after[2]).toEqual(
+      expect.arrayContaining([
+        { errorCode: 'ORGANIZATION_NOT_ACTIVE' },
+        { errorCode: 'PROFILE_MISSING' },
+      ])
+    );
+  });
+
   it('allows the assigned branch and denies the sibling sale, an empty assignment, and another organization', async () => {
     await act(ids.orgA, dispenser, async (api) => {
       await expect(

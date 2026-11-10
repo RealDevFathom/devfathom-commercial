@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
+vi.mock('./regulatory', async (original) => ({
+  ...(await original<typeof import('./regulatory')>()),
+  assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
+}));
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { applyPharmacyTender, openPharmacyDrawer, requirePharmacyDayOpen } from './settlement';
 import { closePharmacyDay, readPharmacyClose } from './day-close';

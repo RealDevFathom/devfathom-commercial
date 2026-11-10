@@ -15,6 +15,10 @@ vi.mock('./rx-sale-gate', async () => ({
   assertRxSaleAllowed: vi.fn(),
 }));
 vi.mock('./counter-evidence', () => ({ requestCounterEvidence: vi.fn() }));
+vi.mock('./regulatory', async () => ({
+  ...(await vi.importActual<typeof import('./regulatory')>('./regulatory')),
+  assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
+}));
 vi.mock('./sale-completion', () => ({ completionSaleInclude: {}, completePaidPharmacySale: vi.fn(async () => 41) }));
 import { applyPharmacyTender } from './settlement';
 import { completePaidPharmacySale } from './sale-completion';

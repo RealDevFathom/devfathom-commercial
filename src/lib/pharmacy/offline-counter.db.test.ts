@@ -32,9 +32,13 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  retirePharmacyRegulatoryRules,
+  seedPharmacyRegulatoryProfile,
+} from '@/lib/test-support/pharmacy-regulatory';
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -1164,6 +1168,20 @@ describeIfDatabase('PH-OFF OFF-03 — per-device lot quotas', () => {
 
 // Real transaction evidence for the additive settlement path (not a mocked cursor).
 describeIfDatabase('leased receipt settlement', () => {
+  // applyPharmacyTender runs the persisted regulatory gate, which needs the branch's profile.
+  const ruleSetIds: string[] = [];
+  beforeAll(async () => {
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    await inOrg(ORG_A, (db) => ensureBranch(db, ORG_A, BRANCH_A));
+    ruleSetIds.push(
+      await seedPharmacyRegulatoryProfile(withPlatformDb, (work) => inOrg(ORG_A, work), BRANCH_A)
+    );
+  });
+  afterAll(async () => {
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    await retirePharmacyRegulatoryRules(withPlatformDb, ruleSetIds);
+  });
+
   async function setup() {
     const fixture = await scenario(ORG_A, BRANCH_A, 'leased-settlement');
     const scope = scopeOf(fixture);

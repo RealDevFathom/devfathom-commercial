@@ -6,6 +6,7 @@ import { postTenderEntry } from './finance-postings';
 import { requestCounterEvidence } from './counter-evidence';
 import { lockCustomerConsent } from './consent-writer';
 import { assertRxSaleAllowed } from './rx-sale-gate';
+import { assertStoredPharmacyMayOperate } from './regulatory';
 
 import { Prisma } from '@/generated/prisma/client';
 import { pointsForNetPaid, redemptionFor } from '@/lib/commerce/loyalty-arithmetic';
@@ -156,6 +157,10 @@ export async function redeemSalePoints(
       throw new PharmacyLoyaltyError('IDEMPOTENCY_CONFLICT');
     return { points: -prior.points, amountMinor: prior.tender!.amountMinor, replayed: true };
   }
+  // A points redemption can settle the sale, so it shares the settlement gate.
+  await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+    name: 'pharmacy.sale.tender',
+  });
   const sale = await db.pharmacySale.findFirst({
     where: {
       id: input.saleId,

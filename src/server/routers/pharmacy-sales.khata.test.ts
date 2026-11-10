@@ -11,6 +11,7 @@ vi.mock('@/server/audit', async (original) => ({
   ipFromHeaders: vi.fn(),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
+  recordAudit: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
@@ -25,6 +26,8 @@ import {
 } from '@/lib/pharmacy/settlement';
 import { can, subjectFromSession } from '@/lib/abac';
 import * as abac from '@/lib/abac';
+import { pharmacyRegulatoryFixture } from '@/lib/test-support/pharmacy-regulatory';
+import { recordAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 const canSpy = vi.spyOn(abac, 'can');
@@ -54,7 +57,16 @@ function fixture(
     },
     permissionOverrides: [...overrides] as { capability: string; effect: string }[],
   };
+  const { rules, profile } = pharmacyRegulatoryFixture('branch-a');
   const db = {
+    organization: { findUnique: vi.fn().mockResolvedValue({ status: 'ACTIVE' }) },
+    branchRegulatoryProfile: {
+      findFirst: vi.fn().mockResolvedValue({
+        ...profile,
+        branch: { active: true, provinceCode: 'PB', addressLine: '1 Test Road', city: 'Lahore' },
+        jurisdictionRuleSet: rules,
+      }),
+    },
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
     user: { findUnique: vi.fn(async () => member) },
@@ -486,6 +498,46 @@ describe.each(
 });
 
 describe('Khata router trust and recovery boundary', () => {
+  it.each(['KHATA', 'CREDIT'] as const)(
+    'refuses %s for onboarding organizations and branches without a profile, even with owner override',
+    async (type) => {
+      const f = fixture();
+      f.db.organization.findUnique.mockResolvedValue({ status: 'ONBOARDING' });
+      await expect(
+        f.caller().tender({ ...input, type, ownerOverride: true })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'ORGANIZATION_NOT_ACTIVE',
+      });
+      expect(f.db.branchRegulatoryProfile.findFirst).not.toHaveBeenCalled();
+
+      f.db.organization.findUnique.mockResolvedValue({ status: 'ACTIVE' });
+      f.db.branchRegulatoryProfile.findFirst.mockResolvedValue(null);
+      await expect(
+        f.caller().tender({ ...input, type, ownerOverride: true })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'PROFILE_MISSING',
+      });
+      for (const errorCode of ['ORGANIZATION_NOT_ACTIVE', 'PROFILE_MISSING'])
+        expect(recordAudit).toHaveBeenCalledWith(
+          expect.objectContaining({ organizationId: 'org-a', targetId: 'branch-a', errorCode })
+        );
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+      // Only the gate's share locks ran; the sale row was never locked for a charge.
+      const statements = f.db.$queryRaw.mock.calls.map(([sql]) =>
+        Array.isArray(sql) ? sql.join('?') : String((sql as { sql?: string }).sql)
+      );
+      expect(statements.length).toBeGreaterThan(0);
+      for (const statement of statements) {
+        expect(statement).toContain('FOR SHARE');
+        expect(statement).not.toContain('pharmacy_sales');
+      }
+    }
+  );
+
   it.each(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET'])(
     'preserves the receipt permission boundary for a %s refund',
     async (type) => {

@@ -14,6 +14,10 @@ vi.mock('./counter-evidence', async (importOriginal) => ({
 }));
 // #659: the batch re-check has its own PostgreSQL suite (sale-batch-safety.db.test.ts).
 vi.mock('./sale-batch-safety', () => ({ assertSaleBatchesSellable: vi.fn(async () => new Map()) }));
+vi.mock('./regulatory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./regulatory')>()),
+  assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
+}));
 import { applyPharmacyTender as settle } from './settlement';
 import { hashDeviceSecret } from '@/lib/retail-terminal/device-secret';
 import { signPharmacyCommand, authenticatePharmacyCommand } from './sales';

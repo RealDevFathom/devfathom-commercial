@@ -43,6 +43,7 @@ import {
   addSaleLine,
   PharmacySaleError,
 } from '@/lib/pharmacy/sales';
+import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
 import { manualTenderCaptureSchema, validateManualTenderPolicy, manualMerchantPolicies } from '@/lib/pharmacy/manual-payments';
 import { readManualPaymentSettings } from '@/lib/pharmacy/manual-payment-settings';
@@ -710,6 +711,8 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
     } catch (error) {
       if (error instanceof CounterTransportError)
         return Response.json({ error: error.code }, { status: error.status });
+      if (error instanceof BranchOperationDeniedError)
+        return Response.json({ error: error.reason }, { status: 403 });
       if (error instanceof z.ZodError || error instanceof SyntaxError)
         return Response.json({ error: 'invalid_body' }, { status: 400 });
       if (error instanceof PharmacySaleError)
