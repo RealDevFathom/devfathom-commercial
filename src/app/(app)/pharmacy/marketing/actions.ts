@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { TRPCError } from '@trpc/server';
 import { pharmacyMarketingRouter } from '@/server/routers/pharmacy-marketing';
 import { createTRPCContext } from '@/server/trpc';
+import { previewWhatsAppCost } from '@/lib/pharmacy/whatsapp/rate-card';
 
 function exclusionsText(exclusions: Record<string, number>) {
   return (
@@ -145,7 +146,11 @@ export async function marketingAction(
         break;
       case 'preview': {
         const result = await caller.preview(target);
-        message = `Eligible now: ${result.prepared}. Exclusions: ${exclusionsText(result.exclusions)}. Nothing saved or sent.`;
+        const cost = previewWhatsAppCost(result.prepared, 'MARKETING');
+        const costText = cost
+          ? `Estimated WhatsApp cost: ${cost.recipients} recipients × ${cost.currency} ${cost.rate} (${cost.category.toLowerCase()}) = ${cost.currency} ${cost.total}.`
+          : 'Estimated WhatsApp cost unavailable: configure the current marketing rate card before sending.';
+        message = `Eligible now: ${result.prepared}. Exclusions: ${exclusionsText(result.exclusions)}. ${costText} Nothing saved or sent.`;
         break;
       }
       case 'capture': {

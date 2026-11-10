@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   context: vi.fn(),
   revalidate: vi.fn(),
@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   reviewBasket: vi.fn(),
   approve: vi.fn(),
   sandbox: vi.fn(),
+  preview: vi.fn(),
 }));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidate }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
@@ -26,6 +27,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.context.mockResolvedValue({});
 });
+afterEach(() => vi.unstubAllEnvs());
 it('passes configurable basket thresholds without accepting client evidence', async () => {
   mocks.generateBaskets.mockResolvedValue({ id: 'analysis-a', count: 1 });
   expect(
@@ -123,6 +125,16 @@ it('requires explicit campaign approval confirmation', async () => {
     error: true,
   });
   expect(mocks.approve).not.toHaveBeenCalled();
+});
+it('shows recipients times the configured marketing rate before capture', async () => {
+  vi.stubEnv(
+    'PHARMACY_WHATSAPP_RATE_CARD',
+    JSON.stringify({ currency: 'PKR', rates: { MARKETING: '2.75' } })
+  );
+  mocks.preview.mockResolvedValue({ prepared: 8, exclusions: { NO_CONSENT: 2 } });
+  const result = await marketingAction(form({ operation: 'preview', campaignId: 'c1' }));
+  expect(result.message).toContain('8 recipients × PKR 2.75 (marketing) = PKR 22');
+  expect(result.message).toContain('Nothing saved or sent');
 });
 it('passes only insight reference and editable draft settings for server-bound review', async () => {
   mocks.reviewGrowth.mockResolvedValue({ decision: 'APPROVE', campaignId: 'from-insight' });
