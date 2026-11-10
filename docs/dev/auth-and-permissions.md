@@ -27,7 +27,7 @@ A platform session never works as a tenant session, and the reverse is also true
 
   An ALLOW for one of these must name it exactly; **neither `*` nor `pharmacy:*` grants them**. A tenant admin with `*` can't dispense or sign off safety work unless they're given the exact capability too.
 - **Owner access.** `hasAllCapabilityAccess` is true only for the system `owner` role, or for an `ADMIN` with a live `*` grant. The legacy `role === 'ADMIN'` flag on its own no longer counts.
-- **Procedure builders** (`src/server/trpc.ts`): use `capabilityProcedure('ns:action')` for one capability, or `denyByDefaultProcedure` with `meta({ capabilities: [...] })`. A new procedure without a capability fails closed. **Don't add new `publicProcedure`s** for tenant or platform data. One exists today (`aiSettings.currentMonth`, listed in [known issues](known-issues.md)).
+- **Procedure builders** (`src/server/trpc.ts`): use `capabilityProcedure('ns:action')` for one capability, or `denyByDefaultProcedure` with `meta({ capabilities: [...] })`. A new procedure without a capability fails closed. **Don't add new `publicProcedure`s** for tenant or platform data. One exists today (`platformAIUsage.currentMonth`, which checks the SuperAdmin session itself; listed in [known issues](known-issues.md)).
 - **Module check.** Separately from capabilities, every tRPC path must map to a licensed module in `src/lib/module-catalog.ts`. When you add a router, add its module mapping.
 - **Navigation follows access.** The pharmacy menu comes from the `pharmacyAccess` router (`src/server/routers/pharmacy-access.ts`), so a link only appears when the user's capabilities and modules admit the page.
 
@@ -66,7 +66,7 @@ These rules stop one person from both doing and approving the same regulated wor
 | **Solo-owner exception** | When the owner is the **only** active person at the branch, they may approve their own purchase or receiving bypass by re-entering their PIN. This is recorded with policy `PHARMACY_SOLO_OWNER_PIN`. An unqualified second staff member still counts as a person, so the exception switches off as soon as anyone else is active at the branch. | `soloOwnerApprovalAllowed()` in `purchase-approval.ts` |
 | **Refunds** | Refunds need counter receipt access (`requireCounterReceiptAccess`). **Manager/owner PIN approval for refunds is a decision, not built.** | `pharmacy-sales.ts` (`refundTender`, `returnLine`) |
 
-**Known SoD gap:** `pharmacyDispensing.decideReview` records the decision without checking that the decider is different from the person who queued the review (`requestedByUserId`). A pharmacist can verify or sign their own request. This is listed in [known issues](known-issues.md); don't copy the pattern.
+**Known SoD gap:** `pharmacyDispensing.decideReview` records the decision without checking, in server code, that the decider is different from the person who queued the review (`requestedByUserId`). A database trigger (`pharmacy_review_no_self_approval`) does refuse it, so the self sign-off fails, but only as a database error. Nothing stops a review being decided twice. This is listed in [known issues](known-issues.md); check SoD in the server code, not only in the database.
 
 ## 6. Restaurant and hotel
 

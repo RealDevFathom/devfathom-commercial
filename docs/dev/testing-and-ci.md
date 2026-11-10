@@ -23,14 +23,18 @@ Static checks: `bun run typecheck` (`tsc --noEmit`; give it memory with `NODE_OP
 
 ## CI (GitHub Actions)
 
-> **Status on 10 Nov 2026: GitHub Actions is disabled for this repository** (`actions/permissions` → `enabled: false`). None of the workflows below are running. A green check on a PR doesn't exist today, so **run the checks locally and paste the results into the PR body.** TODO(confirm): when, and where, CI will run again.
+> **Status on 10 Nov 2026: GitHub Actions is off, by Saad's decision**, and all six registered workflows are disabled. None of the workflows below run.
+>
+> **Before every merge**, the deterministic checks run on the AWS worker **on the exact final commit**: lint, typecheck, unit tests, build, Prisma generate and the Docker check. **Nothing merges until they all pass.** Run the same checks locally before you open a PR and paste the results into the PR body. develop currently fails its own unit tests at `1906b530`; Codex will fix it.
+>
+> `main`'s protection is unchanged: it requires two `verify / …` checks (`verify / Lint, typecheck and formatting`, `verify / Tests, RLS, build and end-to-end`), which can't run while Actions is off. `develop` is unprotected, by Saad's decision (10 Nov 2026).
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `qa.yml` (QA gate) | Push to `develop` (and `restaurantv2`); PRs into `develop`, `staging`, `main`, `integration/**` **only when the PR has the `ci-ready` label**; manual | **Automated gate:** migrate deploy on fresh Postgres databases with non-superuser roles, Prisma generate, runtime grants, the full Vitest run plus reserved DB suites (reports, boundary, growth, catering, cohort, receipts), `test:rls`, lint and typecheck. **Browser gate:** clean build, provisioning, then the restaurant, catering, platform, agency and pharmacy counter (time-to-first-sale) lanes. Evidence is uploaded as artefacts. |
+| `qa.yml` ("QA gate": WHA-1125 automated gate, WHA-1132 browser gate) — develop's own check workflow. Disabled. Still has Azure image names (DEV-755 will remove them) | Push to `develop` (and `restaurantv2`); PRs into `develop`, `staging`, `main`, `integration/**` **only when the PR has the `ci-ready` label**; manual | **Automated gate:** migrate deploy on fresh Postgres databases with non-superuser roles, Prisma generate, runtime grants, the full Vitest run plus reserved DB suites (reports, boundary, growth, catering, cohort, receipts), `test:rls`, lint and typecheck. **Browser gate:** clean build, provisioning, then the restaurant, catering, platform, agency and pharmacy counter (time-to-first-sale) lanes. Evidence is uploaded as artefacts. |
 | `image-build.yml` | PRs with `ci-ready` | Builds the container image on native amd64. Pushes nothing. |
-| `deploy-develop.yml` | After a successful QA gate on a push to `develop`, or manual | Deploys `develop` to the develop environment. Infrastructure details are CTO-owned. |
-| `deploy-staging.yml` | Manual only | **Still targets the retired Azure staging. Don't run it.** |
-| `promote-production.yml` | Manual, with an image digest | **Still references Azure. Don't run it.** Production promotion is Saad's call. Azure removal: DEV-755 / #1437. |
+| `deploy-develop.yml` | After a successful QA gate on a push to `develop`, or manual | Deploys `develop` to the develop environment. **Disabled, and must stay disabled**, because it starts after QA gate. Infrastructure details are CTO-owned. |
+| `deploy-staging.yml` | Manual only | Disabled. **Points only at the retired Azure staging. Don't run it.** |
+| `promote-production.yml` | Manual, with an image digest | Disabled. **Points only at Azure. Don't run it.** Production promotion is Saad's call. Azure removal: DEV-755 / #1437. |
 
 Before you open a PR, run at least `typecheck`, `lint`, `format:check` and `test`, plus `test:rls` and the relevant DB and E2E suites for the area you changed.
