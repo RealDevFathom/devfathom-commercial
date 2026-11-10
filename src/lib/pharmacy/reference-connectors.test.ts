@@ -58,6 +58,8 @@ describe('medicine reference normalization and provenance', () => {
       '\'=HYPERLINK("https://example.test")'
     );
     expect(formulaSafeCell('Panadol')).toBe('Panadol');
+    expect(formulaSafeCell('\t=1+1')).toBe("' =1+1");
+    expect(formulaSafeCell('QA\r=1+1')).toBe('QA =1+1');
   });
 
   it('carries an optional tenant medicine target and rejects invalid schedule flags', async () => {

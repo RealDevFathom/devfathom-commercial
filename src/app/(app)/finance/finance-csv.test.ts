@@ -15,7 +15,11 @@ describe('financeCsvCell', () => {
       ['=', '+', '-', '@'].map((marker) => `${prefix}${marker}danger`)
     )
   )('neutralizes whitespace-prefixed agency finance formulas: %j', (value) => {
-    expect(financeCsvCell(value)).toBe(`"'${value}"`);
+    expect(financeCsvCell(value)).toBe(`"'${value.replace(/[\t\r\n]/g, ' ')}"`);
+  });
+
+  it('flattens control characters so they cannot create CSV records', () => {
+    expect(financeCsvCell('client\r\n=1+1')).toBe('"client  =1+1"');
   });
 
   it('quotes ordinary text without changing it', () => {

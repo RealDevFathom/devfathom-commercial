@@ -1,7 +1,12 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ExpiryBoard, type ExpiryBoardProps, type ExpiryBoardRow } from './expiry-board';
+import {
+  ExpiryBoard,
+  nearExpiryCsv,
+  type ExpiryBoardProps,
+  type ExpiryBoardRow,
+} from './expiry-board';
 
 afterEach(cleanup);
 
@@ -59,6 +64,17 @@ const props: ExpiryBoardProps = {
 };
 
 describe('ExpiryBoard recovery facts', () => {
+  it('prevents row injection and neutralizes formulas after invisible prefixes in CSV', () => {
+    const csv = nearExpiryCsv([
+      { ...row, batchNumber: 'QA\r=1+1', medicineName: '\t@SUM(A1:A2)' },
+    ]);
+
+    expect(csv.split('\n')).toHaveLength(2);
+    expect(csv).not.toContain('\r');
+    expect(csv).toContain('"QA =1+1"');
+    expect(csv).toContain("\"' @SUM(A1:A2)\"");
+  });
+
   it('renders cumulative 30/60/90 PKR risk and the distributor calendar', () => {
     render(<ExpiryBoard {...props} />);
 

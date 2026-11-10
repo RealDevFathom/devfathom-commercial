@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { csvCell } from '@/lib/csv';
+
 export const FISCAL_EXCEPTION_LIMITS = { days: 92, pageSize: 50, maxPageSize: 100, pages: 20 } as const;
 export const FISCAL_EXCEPTION_STATUSES = ['QUEUED', 'REJECTED', 'DEAD'] as const;
 export const FISCAL_EXCEPTION_NOTICE =
@@ -60,18 +62,6 @@ export type FiscalExceptionRegister = {
   nextPage: number | null;
   rows: FiscalExceptionRow[];
 };
-
-/** Quote every cell, flatten control characters, and neutralize spreadsheet formulas. */
-function csvCell(value: string | number | boolean | null): string {
-  const clean = Array.from(String(value ?? ''), (character) => {
-    const code = character.charCodeAt(0);
-    return code <= 0x1f || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029
-      ? ' ' : character;
-  }).join('');
-  const safe = /^[\s\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]*[=+\-@]/u.test(clean)
-    ? `'${clean}` : clean;
-  return `"${safe.replace(/"/g, '""')}"`;
-}
 
 /** Page-only export. A coverage record is present even when there are no document rows. */
 export function fiscalExceptionsCsv(register: FiscalExceptionRegister): string {
