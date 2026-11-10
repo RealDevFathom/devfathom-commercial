@@ -167,3 +167,19 @@ describe('queued receipt snapshot', () => {
     }
   });
 });
+
+it('checks the optional invoice label at the raw ASCII boundary', () => {
+  const input = {
+    ...document,
+    receiptSnapshot: {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      facts: { ...SAMPLE_RECEIPT, invoiceLabel: 'رسید' },
+    },
+  };
+  expect(PrintDocumentSchema.safeParse(input).success).toBe(true);
+  for (const run of [() => validateRawPrintDocument(input), () => renderEscPos(input)]) {
+    expect(run).toThrow(
+      expect.objectContaining({ code: 'UNSUPPORTED_PRINT_TEXT', fallback: 'BROWSER_OS' })
+    );
+  }
+});

@@ -35,6 +35,8 @@ import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptDate,
+  formatReceiptIssuedAt,
+  receiptCashReceived,
   type CounterReceipt,
   type CounterReceiptLocale,
   type PharmacyReceiptTaxIdentity,
@@ -77,11 +79,18 @@ function escPosFacts(
   reprint: boolean
 ): ReceiptPreviewFacts {
   const strings = COUNTER_RECEIPT_STRINGS.en;
-  const date = `${strings.date}: ${receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}`;
+  const date = `${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}`;
+  let cashReceived: number | null;
+  try {
+    cashReceived = receiptCashReceived(receipt.tenders);
+  } catch {
+    throw new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
+  }
   return {
     businessName: receipt.branchName,
-    invoiceNumber: `${strings.receipt} ${receipt.receiptNumber}`,
-    issuedAt: reprint ? `${date}\n${REPRINT_MARKER}` : date,
+    invoiceNumber: String(receipt.receiptNumber),
+    invoiceLabel: strings.invoice,
+    issuedAt: `${date}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}${reprint ? `\n${REPRINT_MARKER}` : ''}`,
     lines: receipt.lines.map((line) => {
       const issued = line.identityStatus === 'ISSUED';
       return [
@@ -92,16 +101,19 @@ function escPosFacts(
           const expiry = issued && allocation.expiresAt ? allocation.expiresAt : null;
           return `${strings.batch}: ${batch ?? 'Unavailable'} | ${strings.expiry}: ${
             expiry ? formatReceiptDate(expiry) : 'Unavailable'
-          } | Units: ${allocation.canonicalUnits}`;
+          } | Tablets/units: ${allocation.canonicalUnits}`;
         }),
         `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
       ].join('\n');
     }),
+    taxBreakdown: 'UNAVAILABLE',
     // The Pharmacy receipt model supplies no tax breakdown. Never invent zero tax.
     taxLines: [
+      ...(taxIdentity.address ? [taxIdentity.address] : []),
+      ...(taxIdentity.phone ? [`${strings.phone}: ${taxIdentity.phone}`] : []),
+      ...(taxIdentity.licenceNumber ? [`${strings.licence}: ${taxIdentity.licenceNumber}`] : []),
       ...(taxIdentity.ntn ? [`NTN: ${taxIdentity.ntn}`] : []),
       ...(taxIdentity.strn ? [`STRN: ${taxIdentity.strn}`] : []),
-      'Tax breakdown unavailable in receipt source',
     ],
     totals: [
       receipt.currency,
@@ -109,10 +121,14 @@ function escPosFacts(
       `${strings.discount}: ${formatMinor(receipt.totals.discountMinor)}`,
       `${strings.net}: ${formatMinor(receipt.totals.netMinor)}`,
       `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor)}`,
+      ...(cashReceived !== null ? [`Cash received: ${formatMinor(cashReceived)}`] : []),
       `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
     ],
     payments: receipt.tenders.length
-      ? receipt.tenders.map((tender) => `${tender.type}: ${formatMinor(tender.amountMinor)}`)
+      ? receipt.tenders.map(
+          (tender) =>
+            `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor)}`
+        )
       : ['Payment details unavailable'],
   };
 }
@@ -220,9 +236,21 @@ export async function readPharmacyReceiptTaxIdentity(
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
     orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
-    select: { ntn: true, strn: true },
+    select: { premises: true, licenceNumber: true, ntn: true, strn: true },
   });
-  return { ntn: profile?.ntn?.trim() || null, strn: profile?.strn?.trim() || null };
+  const premises = profile?.premises as
+    { addressLine?: unknown; city?: unknown; phone?: unknown } | undefined;
+  const address = [premises?.addressLine, premises?.city]
+    .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    .map((value) => value.trim())
+    .join(', ');
+  return {
+    address: address || null,
+    phone: typeof premises?.phone === 'string' ? premises.phone.trim() || null : null,
+    licenceNumber: profile?.licenceNumber?.trim() || null,
+    ntn: profile?.ntn?.trim() || null,
+    strn: profile?.strn?.trim() || null,
+  };
 }
 
 /** Caller must authorize configuration writes. Organization comes only from the session. */

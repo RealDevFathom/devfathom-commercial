@@ -76,6 +76,23 @@ describe('branch regulatory profile input', () => {
     }
   });
 
+  it('accepts and trims an optional pharmacy receipt phone without breaking older clients', () => {
+    expect(
+      regulatoryProfileInput.parse({ ...valid, premisesPhone: '  +92 (42) 123-4567  ' })
+    ).toMatchObject({ premisesPhone: '+92 (42) 123-4567' });
+    expect(regulatoryProfileInput.parse(valid).premisesPhone).toBeUndefined();
+    expect(regulatoryProfileInput.parse({ ...valid, premisesPhone: '   ' }).premisesPhone).toBe('');
+  });
+
+  it('bounds the pharmacy phone on the server and reports the error on its field', () => {
+    expect(fieldsOf({ ...valid, premisesPhone: '1'.repeat(61) }).premisesPhone).toEqual([
+      'A phone number is at most 60 characters.',
+    ]);
+    expect(
+      regulatoryProfileInput.safeParse({ ...valid, premisesPhone: 421234567 }).success
+    ).toBe(false);
+  });
+
   it('puts a date-format failure on the date field, naming the format in plain words', () => {
     const fields = fieldsOf({ ...valid, licenceValidTo: '01/01/2027' });
     expect(fields.licenceValidTo?.[0]).toBe('Enter the date the licence expires, as YYYY-MM-DD.');

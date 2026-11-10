@@ -574,6 +574,7 @@ export const pharmacyOnboardingRouter = router({
         const placeholderField = [
           'premisesAddressLine',
           'premisesCity',
+          'premisesPhone',
           'premisesStorageDescription',
           'licenceCategory',
           'licenceNumber',
@@ -660,6 +661,7 @@ export const pharmacyOnboardingRouter = router({
             premises: {
               addressLine: input.premisesAddressLine,
               city: input.premisesCity,
+              phone: input.premisesPhone?.trim() || null,
               storageDescription: input.premisesStorageDescription,
             },
             licenceCategory: input.licenceCategory,

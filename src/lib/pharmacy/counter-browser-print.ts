@@ -65,6 +65,18 @@ function escapeHtml(value: string | number): string {
   });
 }
 
+/** Keep ASCII identifiers/phone/date groups readable inside Urdu paper. Text
+ * stays escaped; bidi controls from source data remain subject to validation. */
+function receiptHtmlText(preview: string, locale: CounterReceiptLocale): string {
+  if (locale !== 'ur') return escapeHtml(preview);
+  return preview
+    .split(/([A-Za-z0-9][\x20-\x7e]*)/g)
+    .map((part, index) =>
+      index % 2 ? `<bdi dir="ltr">${escapeHtml(part)}</bdi>` : escapeHtml(part)
+    )
+    .join('');
+}
+
 /** Allowlisted receipt fields only: never copy the POS DOM or patient panel. */
 export function buildCounterBrowserReceipt(
   receipt: CounterReceipt,
@@ -101,7 +113,7 @@ export function buildCounterBrowserReceipt(
 <style>@page { size: ${format === 'A4' ? 'A4' : 'auto'}; margin: ${format === 'A4' ? '10mm' : '0'}; }
 * { box-sizing: border-box; } body { margin: 0; width: ${width}; max-width: 100%; padding: 3mm; font: 12px monospace; color: black; background: white; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
-</head><body><pre>${escapeHtml(preview)}</pre></body></html>`;
+</head><body><pre>${receiptHtmlText(preview, locale)}</pre></body></html>`;
 }
 
 /** Opens only an isolated receipt. Returning does not confirm physical printing. */

@@ -75,6 +75,7 @@ export const regulatoryProfileInput = z
     // equal the branch address it belongs to (#660).
     premisesAddressLine: required('Enter the street address of the premises.', 300),
     premisesCity: required('Enter the city of the premises.', 120),
+    premisesPhone: z.string().trim().max(60, 'A phone number is at most 60 characters.').optional(),
     premisesStorageDescription: required(
       'Describe how medicines are stored at these premises.',
       500

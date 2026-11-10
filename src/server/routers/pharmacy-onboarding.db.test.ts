@@ -12,6 +12,8 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { readPharmacyReceiptTaxIdentity } from '@/lib/pharmacy/receipt-print';
+
 const runtimeUrl =
   process.env.WHA1198_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL ?? '';
 const ownerUrl = process.env.PHARMACY_TEST_OWNER_DATABASE_URL ?? '';
@@ -319,12 +321,21 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
         version: 1,
         licenceValidTo: new Date(`${expiryDate}T00:00:00.000Z`),
       });
+      const identity = await readPharmacyReceiptTaxIdentity(
+        db,
+        { organizationId, branchId: secondBranchId },
+        new Date('2026-09-05T10:00:00Z')
+      );
+      expect(identity.phone).toBeNull();
     });
   });
 
   it('saves version 1 and leaves the licences step outstanding while the rules are provisional', async () => {
     await withTenantDb(organizationId, async (db) => {
-      const saved = await caller(db).saveRegulatoryProfile(profile);
+      const saved = await caller(db).saveRegulatoryProfile({
+        ...profile,
+        premisesPhone: '  +92 (42) 123-4567  ',
+      });
       expect(saved.version).toBe(1);
 
       // The profile exists; the branch still may not operate, because PK-PB's
@@ -343,8 +354,26 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
         licenceNumber: 'LIC-4471',
         // Only a grandfathered placeholder in force asks for completion.
         premisesCompletionDue: false,
+        premises: {
+          addressLine: '12 Mall Road',
+          city: 'Lahore',
+          storageDescription: profile.premisesStorageDescription,
+          phone: '+92 (42) 123-4567',
+        },
       });
       expect(listed.versions[0]?.effectiveTo).toBeNull();
+      // Exercise the supported save path and the receipt reader against the
+      // persisted profile, so a phone supplied only by a mock cannot pass.
+      const identity = await readPharmacyReceiptTaxIdentity(
+        db,
+        { organizationId, branchId },
+        new Date('2026-09-05T10:00:00Z')
+      );
+      expect(identity).toMatchObject({
+        address: '12 Mall Road, Lahore',
+        phone: '+92 (42) 123-4567',
+        licenceNumber: 'LIC-4471',
+      });
     });
   });
 
@@ -365,6 +394,18 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       expect(listed.versions.filter((version) => version.inForce)).toHaveLength(0);
       expect(listed.versions[1]?.licenceNumber).toBe('LIC-4471');
       expect(listed.versions[1]?.effectiveTo).not.toBeNull();
+      const historicalIdentity = await readPharmacyReceiptTaxIdentity(
+        db,
+        { organizationId, branchId },
+        new Date('2026-09-05T10:00:00Z')
+      );
+      expect(historicalIdentity.phone).toBe('+92 (42) 123-4567');
+      const currentIdentity = await readPharmacyReceiptTaxIdentity(
+        db,
+        { organizationId, branchId },
+        new Date('2026-10-05T10:00:00Z')
+      );
+      expect(currentIdentity.phone).toBeNull();
     });
   });
 

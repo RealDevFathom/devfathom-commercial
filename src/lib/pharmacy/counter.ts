@@ -667,9 +667,25 @@ export async function readCounterReceipt(
       saleId,
       kind: 'COMPLETED',
     },
-    select: { payload: true },
+    select: { payload: true, actorId: true },
+    orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
   });
   const snapshot = readReceiptIdentity(events, sale);
+  // The person completing payment can differ from the person opening the bill.
+  const completion = snapshot
+    ? events.find(
+        ({ payload }) =>
+          payload !== null &&
+          typeof payload === 'object' &&
+          'receiptIdentitySnapshotVersion' in payload
+      )
+    : events[0];
+  const cashier = completion?.actorId
+    ? await db.user.findFirst({
+        where: { id: completion.actorId, organizationId: scope.organizationId },
+        select: { name: true },
+      })
+    : null;
   const lines = sale.lines.map((line) => {
     const identity = snapshot?.lines.find((row) => row.saleLineId === line.id);
     const descriptiveAllocations =
@@ -721,6 +737,7 @@ export async function readCounterReceipt(
     branchName: branch.name,
     businessDate: sale.businessDate ? sale.businessDate.toISOString().slice(0, 10) : null,
     completedAt: sale.completedAt ? sale.completedAt.toISOString() : null,
+    cashierName: cashier?.name ?? null,
     currency: branch.currency,
     lines,
     tenders,

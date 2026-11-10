@@ -189,6 +189,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
       provinceCode: text('provinceCode'),
       premisesAddressLine: text('premisesAddressLine'),
       premisesCity: text('premisesCity'),
+      premisesPhone: text('premisesPhone'),
       premisesStorageDescription: text('premisesStorageDescription'),
       licenceCategory: text('licenceCategory'),
       licenceNumber: text('licenceNumber'),
@@ -405,6 +406,24 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 required
               />
             </Field>
+            <div className="sm:col-span-2">
+              <Field
+                error={errors.premisesPhone}
+                htmlFor="premisesPhone"
+                hint="Printed on customer receipts when provided."
+                label="Pharmacy phone (optional)"
+              >
+                <Input
+                  aria-describedby={errors.premisesPhone ? 'premisesPhone-error' : undefined}
+                  aria-invalid={errors.premisesPhone ? true : undefined}
+                  className="mt-1 min-h-11"
+                  id="premisesPhone"
+                  maxLength={60}
+                  name="premisesPhone"
+                  type="tel"
+                />
+              </Field>
+            </div>
             <div className="sm:col-span-2">
               <Field
                 error={errors.premisesStorageDescription}

@@ -8,13 +8,21 @@ export const ReceiptPreviewFactsSchema = z
     invoiceNumber: fact,
     issuedAt: fact,
     lines: z.array(fact).min(1).max(200),
-    taxLines: z.array(fact).min(1).max(100),
+    taxLines: z.array(fact).max(100),
     totals: z.array(fact).min(1).max(100),
     payments: z.array(fact).min(1).max(100),
     orderNumber: fact.optional(),
     channel: fact.optional(),
+    invoiceLabel: fact.optional(),
+    // Pharmacy currently has no tax-breakdown source. Empty facts need an
+    // explicit marker; ordinary queued receipts still require tax facts.
+    taxBreakdown: z.literal('UNAVAILABLE').optional(),
   })
-  .strict();
+  .strict()
+  .refine((facts) => facts.taxLines.length > 0 || facts.taxBreakdown === 'UNAVAILABLE', {
+    message: 'Tax facts or an explicit unavailable source are required.',
+    path: ['taxLines'],
+  });
 export type ReceiptPreviewFacts = z.infer<typeof ReceiptPreviewFactsSchema>;
 
 /** Fixed-cell baseline, not a claim about any particular printer's printable area. */
@@ -51,7 +59,7 @@ export function buildReceiptPreview(input: ReceiptLayout, snapshot: ReceiptPrevi
     facts.businessName,
     layout.businessText,
     layout.headerText,
-    `Invoice: ${facts.invoiceNumber}`,
+    `${facts.invoiceLabel ?? 'Invoice'}: ${facts.invoiceNumber}`,
     facts.issuedAt,
     layout.showOrderNumber && facts.orderNumber ? `Order: ${facts.orderNumber}` : '',
     layout.showChannel && facts.channel ? `Channel: ${facts.channel}` : '',

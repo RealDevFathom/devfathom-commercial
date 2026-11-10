@@ -90,3 +90,17 @@ describe('shared receipt design input', () => {
     expect(() => wrapReceiptText('test', 0)).toThrow();
   });
 });
+
+it('allows an empty tax section without hiding supplied tax facts or changing restaurant invoice labels', () => {
+  const receipt = buildReceiptPreview(DEFAULT_RECEIPT_LAYOUT, {
+    ...SAMPLE_RECEIPT,
+    taxLines: [],
+    taxBreakdown: 'UNAVAILABLE',
+  });
+  expect(receipt).toContain('Invoice: SAMPLE-001');
+  const taxed = buildReceiptPreview(DEFAULT_RECEIPT_LAYOUT, SAMPLE_RECEIPT);
+  expect(taxed).toContain('Tax (sample 5%): PKR 50.00');
+  expect(
+    buildReceiptPreview(DEFAULT_RECEIPT_LAYOUT, { ...SAMPLE_RECEIPT, invoiceLabel: 'Receipt' })
+  ).toContain('Receipt: SAMPLE-001');
+});

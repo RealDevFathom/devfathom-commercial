@@ -6,7 +6,9 @@ import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptDate,
+  formatReceiptIssuedAt,
   receiptTitle,
+  receiptCashReceived,
   type CounterReceipt,
   type CounterReceiptLine,
   type CounterReceiptLocale,
@@ -16,18 +18,23 @@ const labels = {
   en: {
     unavailable: 'Historical identity unavailable',
     unknown: 'Unavailable',
-    units: 'Canonical units',
-    tax: 'Tax breakdown unavailable in receipt source',
+    units: 'Tablets/units',
     payments: 'Payment details unavailable',
   },
   ur: {
     unavailable: 'تاریخی شناخت دستیاب نہیں',
     unknown: 'دستیاب نہیں',
-    units: 'بنیادی اکائیاں',
-    tax: 'رسید کے ماخذ میں ٹیکس کی تفصیل دستیاب نہیں',
+    units: 'گولیاں/یونٹس',
     payments: 'ادائیگی کی تفصیل دستیاب نہیں',
   },
 } as const;
+
+const cashReceivedLabels: Partial<Record<CounterReceiptLocale, string>> = { en: 'Cash received' };
+
+export function receiptCashReceivedLabel(locale: CounterReceiptLocale): string {
+  const strings = COUNTER_RECEIPT_STRINGS[locale];
+  return cashReceivedLabels[locale] ?? `${strings.tenderName.CASH} ${strings.tendered}`;
+}
 
 /**
  * Show integer-minor-unit arithmetic that exactly reconciles to the stored
@@ -123,14 +130,20 @@ export function buildCounterReceiptPreview(
   ];
   if (!amounts.every(Number.isSafeInteger)) throw new Error('Receipt amounts are invalid.');
   const strings = COUNTER_RECEIPT_STRINGS[locale];
+  const cashReceived = receiptCashReceived(receipt.tenders);
   const ntn = receipt.taxIdentity?.ntn?.trim();
   const strn = receipt.taxIdentity?.strn?.trim();
+  const identity = receipt.taxIdentity;
   return buildReceiptPreview(
     { ...DEFAULT_RECEIPT_LAYOUT, paperWidth, footerText: reprint ? strings.reprint : '' },
     {
       businessName: receipt.branchName,
-      invoiceNumber: receiptTitle(receipt, locale),
-      issuedAt: `${strings.date}: ${receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}`,
+      invoiceNumber:
+        receipt.receiptNumber === null
+          ? receiptTitle(receipt, locale)
+          : String(receipt.receiptNumber),
+      invoiceLabel: strings.invoice,
+      issuedAt: `${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}`,
       lines: receipt.lines.map((line) => {
         const presentation = counterLinePresentation(line, locale);
         return [
@@ -140,22 +153,33 @@ export function buildCounterReceiptPreview(
           `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
         ].join('\n');
       }),
+      taxBreakdown: 'UNAVAILABLE',
       // Identity is historical receipt data; the model supplies no tax breakdown.
       taxLines: [
+        ...(identity?.address?.trim() ? [identity.address.trim()] : []),
+        ...(identity?.phone?.trim() ? [`${strings.phone}: ${identity.phone.trim()}`] : []),
+        ...(identity?.licenceNumber?.trim()
+          ? [`${strings.licence}: ${identity.licenceNumber.trim()}`]
+          : []),
         ...(ntn ? [`NTN: ${ntn}`] : []),
         ...(strn ? [`STRN: ${strn}`] : []),
-        labels[locale].tax,
       ],
       totals: [
-        receipt.currency,
+        locale === 'ur' && receipt.currency === 'PKR' ? 'پاکستانی روپے' : receipt.currency,
         `${strings.gross}: ${formatMinor(receipt.totals.grossMinor)}`,
         `${strings.discount}: ${formatMinor(receipt.totals.discountMinor)}`,
         `${strings.net}: ${formatMinor(receipt.totals.netMinor)}`,
         `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor)}`,
+        ...(cashReceived !== null
+          ? [`${receiptCashReceivedLabel(locale)}: ${formatMinor(cashReceived)}`]
+          : []),
         `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
       ],
       payments: receipt.tenders.length
-        ? receipt.tenders.map((tender) => `${tender.type}: ${formatMinor(tender.amountMinor)}`)
+        ? receipt.tenders.map(
+            (tender) =>
+              `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor)}`
+          )
         : [labels[locale].payments],
     }
   );
@@ -224,8 +248,14 @@ export function buildCounterZReportPreview(
     `#${report.sequence} · ${report.id}`,
     report.currency,
     ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount)}`),
-    ...(report.tenderTotals == null ? [] : tenderTotalsSchema.parse(report.tenderTotals).map((row) =>
-      `${row.type}: ${formatMinor(row.amountMinor)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor)}`)),
+    ...(report.tenderTotals == null
+      ? []
+      : tenderTotalsSchema
+          .parse(report.tenderTotals)
+          .map(
+            (row) =>
+              `${row.type}: ${formatMinor(row.amountMinor)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor)}`
+          )),
     `${labels[8]}: ${report.reason ?? '—'}`,
     report.isFinal ? 'Final' : 'Provisional — migration reconciliation pending',
   ].join('\n');

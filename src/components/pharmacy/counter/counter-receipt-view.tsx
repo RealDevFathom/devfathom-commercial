@@ -18,6 +18,7 @@ import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptDate,
+  receiptCashReceived,
   receiptTitle,
   type CounterReceipt,
   type CounterReceiptLocale,
@@ -27,6 +28,7 @@ import {
   buildCounterReceiptPreview,
   counterLinePresentation,
   counterLinePricing,
+  receiptCashReceivedLabel,
 } from '@/lib/pharmacy/counter-receipt-presentation';
 
 export type CounterReceiptSettlement =
@@ -310,7 +312,9 @@ export function CounterReceiptView({
 
   let document: string | null = null;
   let documentError: string | null = null;
+  let cashReceived: number | null = null;
   try {
+    cashReceived = receiptCashReceived(receipt.tenders);
     document = buildCounterReceiptPreview(
       receipt,
       locale,
@@ -598,6 +602,9 @@ export function CounterReceiptView({
               [strings.discount, receipt.totals.discountMinor],
               [strings.net, receipt.totals.netMinor],
               [strings.tendered, receipt.totals.tenderedMinor],
+              ...(cashReceived !== null
+                ? [[receiptCashReceivedLabel(locale), cashReceived] as const]
+                : []),
               [strings.change, receipt.totals.changeMinor],
             ] as const
           ).map(([label, value]) => (

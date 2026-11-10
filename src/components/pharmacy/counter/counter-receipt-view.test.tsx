@@ -87,7 +87,27 @@ it('shows recorded payment, exact change and an issued receipt preview without p
   expect(preview.getByText(/Medicine/)).toBeTruthy();
   expect(preview.getByText('CASH')).toBeTruthy();
   expect(preview.getByText('Tendered').nextElementSibling).toHaveTextContent('2.00');
+  expect(preview.getByText('Cash received').nextElementSibling).toHaveTextContent('2.00');
   expect(input.onPrint).not.toHaveBeenCalled();
+});
+
+it('shows cash received separately from other tenders and omits it for incomplete legacy data', () => {
+  const input = props();
+  input.receipt!.tenders = [
+    {
+      tenderId: 'cash',
+      type: 'CASH',
+      amountMinor: 100,
+      cashReceivedMinor: 200,
+      changeGivenMinor: 100,
+    },
+    { tenderId: 'wallet', type: 'WALLET', amountMinor: 300, changeGivenMinor: null },
+  ];
+  const view = render(<CounterReceiptView {...input} />);
+  expect(screen.getByText('Cash received').nextElementSibling).toHaveTextContent('2.00');
+  input.receipt!.tenders[0]!.cashReceivedMinor = null;
+  view.rerender(<CounterReceiptView {...input} />);
+  expect(screen.queryByText('Cash received')).toBeNull();
 });
 
 it.each([{ receiptNumber: null }, { completedAt: null }])(
@@ -158,9 +178,9 @@ it('shows both allocation subrows, Unicode and one unchanged financial line', ()
   expect(region.getAllByRole('listitem')).toHaveLength(1);
   expect(region.getByText(/دوا 👩‍⚕️/)).toBeTruthy();
   expect(
-    region.getByText('Batch: <img src=x> · Expiry: 2027-01-01 · Canonical units: 3')
+    region.getByText('Batch: <img src=x> · Expiry: 2027-01-01 · Tablets/units: 3')
   ).toBeTruthy();
-  expect(region.getByText('Batch: بیچ ب · Expiry: 2028-02-02 · Canonical units: 7')).toBeTruthy();
+  expect(region.getByText('Batch: بیچ ب · Expiry: 2028-02-02 · Tablets/units: 7')).toBeTruthy();
   expect(within(region.getByRole('listitem')).getAllByText('1.00')).toHaveLength(1);
   expect(container.querySelector('img')).toBeNull();
   expect(container.querySelector('pre')).toHaveClass('whitespace-pre-wrap');
@@ -188,7 +208,7 @@ it.each(['UNAVAILABLE', undefined] as const)(
     const region = within(screen.getByRole('region', { name: 'رسید 12' }));
     expect(region.getByText('تاریخی شناخت دستیاب نہیں')).toBeTruthy();
     expect(
-      region.getByText('بیچ: دستیاب نہیں · میعاد: دستیاب نہیں · بنیادی اکائیاں: 7')
+      region.getByText('بیچ: دستیاب نہیں · میعاد: دستیاب نہیں · گولیاں/یونٹس: 7')
     ).toBeTruthy();
     expect(screen.queryByText(/LIVE_CATALOG/)).toBeNull();
   }
