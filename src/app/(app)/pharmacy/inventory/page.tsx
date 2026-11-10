@@ -23,7 +23,11 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
-import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
+import {
+  isPharmacyActionForbidden,
+  PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE,
+  pharmacyActionErrorMessage,
+} from '@/lib/pharmacy/action-error-message';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
   admittedInventoryBranchIds,
@@ -57,6 +61,9 @@ const tone = (value: string): 'neutral' | 'success' | 'warning' | 'danger' =>
       : ['APPROVED', 'RECEIVED', 'CLOSED', 'ACKNOWLEDGED'].includes(value)
         ? 'success'
         : 'neutral';
+// These recall procedures are gated by `regulatory` (pharmacy:safety), not pharmacy:inventory,
+// so a refusal on them must not be explained as missing inventory access.
+const SAFETY_GATED_ACTIONS = new Set(['create-recall', 'ack-recall', 'close-recall']);
 
 async function tenantContext() {
   const actor = await resolveTenantActor();
@@ -65,6 +72,17 @@ async function tenantContext() {
     session: actor.session,
     organization: actor.organization,
     support: actor.support,
+  });
+}
+
+/** Mirrors the `pharmacy:inventory` gate on stock-location and other inventory-control procedures. */
+async function hasInventoryAccess(context: Awaited<ReturnType<typeof tenantContext>>) {
+  const user = context?.session?.user;
+  if (!context || !user) return false;
+  return can(subjectFromSession(user), 'pharmacy:inventory', undefined, {
+    db: context.db,
+    source: 'TRPC',
+    ip: context.requestMeta.ip,
   });
 }
 
@@ -294,13 +312,14 @@ export default async function PharmacyInventoryPage({
   async function perform(data: FormData) {
     'use server';
     const branchId = field(data, 'branchId');
+    const action = field(data, 'action');
     let destination: string;
+    let actionCtx: Awaited<ReturnType<typeof tenantContext>> = null;
     try {
-      const actionCtx = await tenantContext();
+      actionCtx = await tenantContext();
       if (!actionCtx?.session?.user)
         throw new Error('Your session expired. Sign in and try again.');
       const actionCaller = pharmacyInventoryRouter.createCaller(actionCtx);
-      const action = field(data, 'action');
       if (action === 'create-location')
         await actionCaller.createLocation({
           branchId,
@@ -437,8 +456,20 @@ export default async function PharmacyInventoryPage({
     } catch (error) {
       // Keep the thrown value out of the URL entirely: it can contain database, provider,
       // authorization, or validation details that are not safe to return to the browser.
+      // Only the error class and code are read. A refusal is named as missing inventory access
+      // only when the actor genuinely lacks `pharmacy:inventory`; other refusals stay generic.
       void error;
-      destination = url(branchId, pharmacyActionErrorMessage('inventory'), 'error');
+      const accessDenied =
+        !SAFETY_GATED_ACTIONS.has(action) &&
+        isPharmacyActionForbidden(error) &&
+        !(await hasInventoryAccess(actionCtx));
+      destination = url(
+        branchId,
+        accessDenied
+          ? PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE
+          : pharmacyActionErrorMessage('inventory'),
+        'error'
+      );
     }
     redirect(destination);
   }
@@ -681,8 +712,7 @@ export default async function PharmacyInventoryPage({
             </form>
           ) : (
             <p className="mt-5 text-sm text-text-muted">
-              Adding a storage location needs the inventory permission. Ask a workspace
-              administrator to add it to your role.
+              Creating stock locations needs inventory access — ask an owner.
             </p>
           )}
           <div className="mt-6 border-t border-border-subtle pt-5">

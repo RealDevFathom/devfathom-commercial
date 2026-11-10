@@ -212,7 +212,7 @@ export default async function PharmacyPurchasingPage({
       met: workspace.stockLocations.length > 0,
       label: 'At least one stock location',
       why: 'Accepted units are received into a named location, and rejected units into a quarantine one.',
-      href: '/pharmacy',
+      href: '/pharmacy/inventory',
       action: 'Add a stock location',
     },
     {
